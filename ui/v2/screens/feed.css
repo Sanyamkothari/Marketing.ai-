@@ -1,89 +1,20 @@
 /* The Live, Proof and Operator screens (live.js, proof.js, operator.js load this file themselves).
 
-   Every class starts with `ap-` so nothing here leaks into the other screens. Colours are tokens on
-   :root, redefined for dark mode, from the v1 brand (Minfy blue #1E57BD, the same status colours).
-   Status colours always come with a word and an icon, never colour alone. Text pairs meet WCAG AA
-   (4.5:1) on their own background in both themes. */
-
-:root {
-  --ap-bg: #f5f6f8;
-  --ap-surface: #ffffff;
-  --ap-surface-2: #f3f4f6;
-  --ap-ink: #111827;
-  --ap-muted: #5b6474;
-  --ap-line: #dde1e7;
-  --ap-accent: #1e57bd;
-  --ap-accent-ink: #ffffff;
-  --ap-accent-soft: #edf2fa;
-  --ap-good: #15803d;
-  --ap-good-t: #e8f6ee;
-  --ap-warning: #9a4a07;
-  --ap-warning-t: #fef3c7;
-  --ap-critical: #b42318;
-  --ap-critical-t: #fdecec;
-  --ap-bar: #1e57bd;
-  --ap-bar-neg: #b42318;
-  --ap-radius: 10px;
-  --ap-focus: 0 0 0 3px rgba(30, 87, 189, 0.45);
-  --ap-shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
-  --ap-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --ap-bg: #0f141b;
-    --ap-surface: #171d26;
-    --ap-surface-2: #1f2731;
-    --ap-ink: #e6e9ee;
-    --ap-muted: #a3acb9;
-    --ap-line: #2f3946;
-    --ap-accent: #7fa6ef;
-    --ap-accent-ink: #0b1220;
-    --ap-accent-soft: #1b2a44;
-    --ap-good: #6fd49a;
-    --ap-good-t: #13301f;
-    --ap-warning: #f2b45c;
-    --ap-warning-t: #35260d;
-    --ap-critical: #ff8b80;
-    --ap-critical-t: #3a1714;
-    --ap-bar: #7fa6ef;
-    --ap-bar-neg: #ff8b80;
-    --ap-focus: 0 0 0 3px rgba(127, 166, 239, 0.55);
-    --ap-shadow: none;
-  }
-}
-
-:root[data-theme="dark"] {
-  --ap-bg: #0f141b;
-  --ap-surface: #171d26;
-  --ap-surface-2: #1f2731;
-  --ap-ink: #e6e9ee;
-  --ap-muted: #a3acb9;
-  --ap-line: #2f3946;
-  --ap-accent: #7fa6ef;
-  --ap-accent-ink: #0b1220;
-  --ap-accent-soft: #1b2a44;
-  --ap-good: #6fd49a;
-  --ap-good-t: #13301f;
-  --ap-warning: #f2b45c;
-  --ap-warning-t: #35260d;
-  --ap-critical: #ff8b80;
-  --ap-critical-t: #3a1714;
-  --ap-bar: #7fa6ef;
-  --ap-bar-neg: #ff8b80;
-  --ap-focus: 0 0 0 3px rgba(127, 166, 239, 0.55);
-  --ap-shadow: none;
-}
+   The shared `ap-` classes those screens are built from, drawn with the design system's tokens (styles.css,
+   DESIGN.md section 2): white cards on the page ground with 1px hairlines and no shadow, 24/16/14/12 type, the
+   near-black primary button, pale pills, tabular figures. Light and dark both follow the tokens. The old `--ap-*`
+   names are aliases in styles.css, so proof.css can keep reading them. Live's own parts are in live.css (`lv-`).
+   Status colours always come with a word, never colour alone. */
 
 /* ---- page frame -------------------------------------------------------------------------------- */
 
 .ap-page {
-  color: var(--ap-ink);
-  max-width: 1180px;
+  color: var(--text);
+  max-width: calc(var(--canvas) + 2 * var(--pad));
   margin: 0 auto;
-  padding: 16px;
-  font-size: 14px;
-  line-height: 1.55;
+  padding: var(--pad);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
   box-sizing: border-box;
 }
 /* Inside the app shell, .main already gives the page its gutter and width; a second padding pushed these
@@ -98,37 +29,43 @@
   box-sizing: border-box;
 }
 .ap-head {
-  margin-bottom: 16px;
+  margin-bottom: var(--pad);
 }
 .ap-h1 {
-  font-size: 26px;
-  line-height: 1.25;
-  margin: 0 0 4px;
+  font-size: var(--fs-title);
+  line-height: 32px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
 }
 .ap-h2 {
-  font-size: 17px;
-  line-height: 1.4;
+  font-size: var(--fs-section);
+  line-height: 24px;
+  font-weight: 600;
   margin: 0 0 12px;
 }
 .ap-h3 {
-  font-size: 14px;
-  margin: 16px 0 6px;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: 600;
+  margin: 20px 0 8px;
 }
 .ap-sub {
-  margin: 0;
-  color: var(--ap-muted);
+  margin: 4px 0 0;
+  color: var(--muted);
+  max-width: 72ch;
   overflow-wrap: anywhere;
 }
 .ap-muted {
-  color: var(--ap-muted);
+  color: var(--muted);
 }
 .ap-small {
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
 }
 .ap-mono {
-  font-family: var(--ap-mono);
-  font-size: 12.5px;
+  font-family: var(--mono);
+  font-size: var(--fs-small);
 }
 .ap-sr {
   position: absolute;
@@ -138,132 +75,167 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+/* An error inside the block that failed: a small red mark and the words, not a red fill. */
 .ap-error {
-  color: var(--ap-critical);
-  background: var(--ap-critical-t);
-  border-radius: 6px;
-  padding: 8px 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 10px 12px;
   margin: 0;
 }
+.ap-error::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--negative);
+  transform: translateY(-1px);
+}
 .ap-warn-text {
-  color: var(--ap-warning);
+  color: var(--warning);
 }
 .ap-plain {
   margin: 0;
   padding-left: 18px;
 }
+.ap-plain li::marker {
+  color: var(--faint);
+}
 
 .ap-card {
-  background: var(--ap-surface);
-  border: 1px solid var(--ap-line);
-  border-radius: var(--ap-radius);
-  box-shadow: var(--ap-shadow);
-  padding: 16px;
-  margin-bottom: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: none;
+  padding: var(--card-pad);
+  margin-bottom: var(--gap);
   min-width: 0;
 }
 .ap-card p {
   margin: 0 0 8px;
 }
+.ap-card p:last-child {
+  margin-bottom: 0;
+}
 
 .ap-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 0 16px;
+  gap: 0 var(--gap);
 }
 @media (min-width: 900px) {
   .ap-grid {
-    grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   }
 }
 
-/* ---- controls ---------------------------------------------------------------------------------- */
+/* ---- controls: the same shapes as .btn and the fields in styles.css ---------------------------- */
 
 .ap-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   font: inherit;
-  font-weight: 600;
-  min-height: 40px;
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: 1px solid var(--ap-line);
-  background: var(--ap-surface);
-  color: var(--ap-ink);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  min-height: var(--control-height);
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--control);
+  background: var(--surface);
+  color: var(--text);
   cursor: pointer;
+  white-space: nowrap;
 }
 .ap-btn:hover {
-  background: var(--ap-surface-2);
+  background: var(--raised);
 }
 .ap-btn:disabled {
-  opacity: 0.55;
+  color: var(--faint);
+  background: var(--raised);
+  border-color: var(--border);
   cursor: not-allowed;
 }
 .ap-btn[aria-busy="true"] {
   cursor: progress;
 }
 .ap-btn-primary {
-  background: var(--ap-accent);
-  border-color: var(--ap-accent);
-  color: var(--ap-accent-ink);
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-ink);
 }
 .ap-btn-primary:hover {
-  background: var(--ap-accent);
-  filter: brightness(1.08);
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
 }
 .ap-btn-danger {
-  background: var(--ap-critical);
-  border-color: var(--ap-critical);
-  color: var(--ap-surface);
+  background: var(--surface);
+  border-color: var(--negative);
+  color: var(--negative);
 }
 .ap-btn-danger:hover {
-  background: var(--ap-critical);
-  filter: brightness(1.08);
+  background: var(--pill-negative-bg);
 }
 .ap-btn-quiet {
   background: transparent;
+  border-color: transparent;
+}
+.ap-btn-quiet:hover {
+  background: var(--raised);
 }
 .ap-btn-sm {
-  min-height: 32px;
-  padding: 4px 10px;
-  font-size: 12.5px;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: var(--fs-small);
 }
 .ap-link {
   font: inherit;
-  font-weight: 600;
-  color: var(--ap-accent);
+  font-weight: 500;
+  color: var(--text);
   background: none;
   border: 0;
   padding: 0;
   cursor: pointer;
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-decoration-color: var(--control);
+  text-underline-offset: 3px;
+}
+.ap-link:hover {
+  text-decoration-color: currentColor;
 }
 .ap-page :focus-visible {
-  outline: none;
-  box-shadow: var(--ap-focus);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
   border-radius: 4px;
 }
 .ap-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 8px 0;
+  margin: 12px 0 0;
 }
 .ap-input {
   font: inherit;
-  min-height: 40px;
-  padding: 6px 10px;
-  border: 1px solid var(--ap-line);
-  border-radius: 8px;
-  background: var(--ap-surface);
-  color: var(--ap-ink);
+  min-height: var(--control-height);
+  padding: 0 10px;
+  border: 1px solid var(--control);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
   width: 100%;
 }
 .ap-filters {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 10px;
-  margin-bottom: 12px;
+  gap: 12px;
+  margin-bottom: var(--gap);
 }
 .ap-field {
   display: flex;
@@ -273,10 +245,13 @@
   min-width: 0;
 }
 .ap-field-label {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--ap-muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 500;
+  color: var(--muted);
 }
+
+/* ---- pills: pale tint, dark ink of the same hue, 12/500 ---------------------------------------- */
 
 .ap-chips {
   display: flex;
@@ -287,74 +262,49 @@
 .ap-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--ap-line);
-  background: var(--ap-surface-2);
-  color: var(--ap-ink);
+  gap: 6px;
+  height: 22px;
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 500;
+  padding: 0 8px;
+  border-radius: var(--radius-chip);
+  border: 0;
+  background: var(--pill-neutral-bg);
+  color: var(--pill-neutral-ink);
   white-space: nowrap;
 }
 .ap-chip-quiet {
-  background: transparent;
-  color: var(--ap-muted);
+  background: var(--pill-neutral-bg);
+  color: var(--pill-neutral-ink);
 }
 .ap-status-active {
-  background: var(--ap-good-t);
-  color: var(--ap-good);
-  border-color: transparent;
-}
-.ap-status-active::before {
-  content: "●";
+  background: var(--pill-positive-bg);
+  color: var(--pill-positive-ink);
 }
 .ap-status-paused,
 .ap-chip-paused {
-  background: var(--ap-warning-t);
-  color: var(--ap-warning);
-  border-color: transparent;
+  background: var(--pill-warning-bg);
+  color: var(--pill-warning-ink);
 }
-.ap-status-paused::before,
-.ap-chip-paused::before {
-  content: "❚❚";
-  font-size: 9px;
+.ap-chip.ap-status-active::before,
+.ap-chip.ap-status-paused::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
-/* ---- live -------------------------------------------------------------------------------------- */
-
-.ap-live-head {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-}
-.ap-head-text {
-  flex: 1 1 320px;
-  min-width: 0;
-}
-.ap-pause {
-  flex: 0 1 280px;
-}
-.ap-pause .ap-btn {
-  width: 100%;
-  min-height: 48px;
-  font-size: 15px;
-}
-.ap-pause p {
-  margin: 6px 0 0;
-}
+/* ---- the briefing and the feed (Proof and Operator reuse the list and fold shapes) -------------- */
 
 .ap-headline {
-  font-size: 16px;
+  font-size: var(--fs-section);
+  line-height: 24px;
   font-weight: 600;
 }
 .ap-brief-sec + .ap-brief-sec {
-  border-top: 1px solid var(--ap-line);
-}
-.ap-brief-sec .ap-h3 {
-  margin-top: 10px;
+  border-top: 1px solid var(--rule);
 }
 
 .ap-feed {
@@ -364,7 +314,7 @@
 }
 .ap-feed-item {
   padding: 12px 0;
-  border-top: 1px solid var(--ap-line);
+  border-top: 1px solid var(--rule);
 }
 .ap-feed-item:first-child {
   border-top: 0;
@@ -372,146 +322,121 @@
 .ap-feed-item p {
   margin: 2px 0 0;
 }
-.ap-feed-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-}
 .ap-what {
-  font-weight: 600;
+  font-weight: 500;
 }
 .ap-why {
   overflow-wrap: anywhere;
 }
 .ap-why-label {
-  font-weight: 600;
+  font-weight: 500;
 }
 .ap-feed-nothing .ap-what {
-  color: var(--ap-muted);
+  color: var(--muted);
 }
-.ap-left-alone {
+
+/* A fold (left alone, decided batches, raw JSON, the options it weighed): a quiet row with a chevron. */
+.ap-left-alone,
+.ap-json,
+.ap-bids {
   margin-top: 12px;
-  border-top: 1px solid var(--ap-line);
-  padding-top: 10px;
 }
 .ap-left-alone > summary,
 .ap-json > summary,
 .ap-bids > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--control-height);
   cursor: pointer;
-  font-weight: 600;
-  min-height: 32px;
-  display: list-item;
-  padding: 4px 0;
+  font-weight: 500;
+  color: var(--text);
+  list-style: none;
+  border-radius: var(--radius-control);
+}
+.ap-left-alone > summary::-webkit-details-marker,
+.ap-json > summary::-webkit-details-marker,
+.ap-bids > summary::-webkit-details-marker {
+  display: none;
+}
+.ap-left-alone > summary::before,
+.ap-json > summary::before,
+.ap-bids > summary::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(-45deg);
+  margin: 0 4px 0 2px;
+}
+.ap-left-alone[open] > summary::before,
+.ap-json[open] > summary::before,
+.ap-bids[open] > summary::before {
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+.ap-left-alone > summary:hover,
+.ap-json > summary:hover,
+.ap-bids > summary:hover {
+  color: var(--muted);
 }
 
-.ap-inbox {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.ap-alert {
-  border-left: 4px solid var(--ap-line);
-  padding: 8px 10px;
-  margin-bottom: 10px;
-  background: var(--ap-surface-2);
-  border-radius: 0 6px 6px 0;
-}
-.ap-alert p {
-  margin: 4px 0 0;
-}
-.ap-alert-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-}
-.ap-sev {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 700;
-  font-size: 12.5px;
-}
-.ap-sev-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  font-size: 11px;
-  font-weight: 800;
-  color: var(--ap-surface);
-  background: var(--ap-muted);
-}
-.ap-sev-critical {
-  border-left-color: var(--ap-critical);
-}
-.ap-sev-critical .ap-sev {
-  color: var(--ap-critical);
-}
-.ap-sev-critical .ap-sev-icon {
-  background: var(--ap-critical);
-}
-.ap-sev-warning {
-  border-left-color: var(--ap-warning);
-}
-.ap-sev-warning .ap-sev {
-  color: var(--ap-warning);
-}
-.ap-sev-warning .ap-sev-icon {
-  background: var(--ap-warning);
-}
-.ap-sev-info {
-  border-left-color: var(--ap-accent);
-}
-.ap-sev-info .ap-sev {
-  color: var(--ap-accent);
-}
-.ap-sev-info .ap-sev-icon {
-  background: var(--ap-accent);
-}
+/* ---- tiles (Proof's figures): one container split by hairlines, like .kpis ---------------------- */
 
 .ap-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
-  margin: 0 0 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  margin: 0 0 var(--gap);
 }
 .ap-tile {
-  background: var(--ap-surface-2);
-  border-radius: 8px;
-  padding: 10px 12px;
+  background: var(--surface);
+  padding: 16px;
   min-width: 0;
 }
 .ap-tile dt {
-  font-size: 12.5px;
-  color: var(--ap-muted);
-  font-weight: 600;
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  color: var(--muted);
+  font-weight: 500;
 }
 .ap-tile dd {
-  margin: 2px 0 0;
+  margin: 4px 0 0;
+}
+.ap-tile dd.ap-muted,
+.ap-tile dd.ap-small {
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
 }
 .ap-tile-value {
   font-size: 20px;
-  font-weight: 700;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.ap-tile-bad {
-  background: var(--ap-critical-t);
+.ap-tile-bad .ap-tile-value {
+  color: var(--negative);
 }
 .ap-tile-flag {
-  font-size: 12.5px;
-  color: var(--ap-critical);
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--negative);
 }
 
-/* ---- customer side panel ----------------------------------------------------------------------- */
+/* ---- customer side panel: the one floating surface here, so it has the float shadow ------------ */
 
 .ap-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 20, 27, 0.45);
+  background: rgba(0, 0, 0, 0.32);
   z-index: 40;
 }
 .ap-panel {
@@ -519,22 +444,26 @@
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(460px, 100vw);
-  background: var(--ap-surface);
-  color: var(--ap-ink);
-  border-left: 1px solid var(--ap-line);
+  width: min(480px, 100vw);
+  background: var(--surface);
+  color: var(--text);
+  border-left: 1px solid var(--border);
   z-index: 41;
   display: flex;
   flex-direction: column;
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-float);
+}
+.ap-panel:focus {
+  outline: none;
 }
 .ap-panel-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--ap-line);
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 12px 10px var(--pad);
+  border-bottom: 1px solid var(--border);
 }
 .ap-panel-head .ap-h2 {
   margin: 0;
@@ -542,21 +471,25 @@
 }
 .ap-panel-body {
   overflow-y: auto;
-  padding: 12px 16px 24px;
+  padding: 4px var(--pad) var(--pad);
 }
 .ap-facts {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
   margin: 0;
 }
 .ap-facts > div {
   display: grid;
-  grid-template-columns: minmax(110px, 40%) minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: minmax(120px, 42%) minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.ap-facts > div:last-child {
+  border-bottom: 0;
 }
 .ap-facts dt {
-  color: var(--ap-muted);
+  color: var(--muted);
 }
 .ap-facts dd {
   margin: 0;
@@ -565,40 +498,47 @@
 .ap-timeline {
   list-style: none;
   margin: 0;
-  padding: 0 0 0 14px;
-  border-left: 2px solid var(--ap-line);
+  padding: 0 0 0 16px;
+  border-left: 1px solid var(--border);
 }
 .ap-tl-item {
   position: relative;
-  padding: 6px 0 10px 8px;
+  padding: 0 0 16px 4px;
+}
+.ap-tl-item:last-child {
+  padding-bottom: 0;
 }
 .ap-tl-item::before {
   content: "";
   position: absolute;
   left: -20px;
-  top: 12px;
-  width: 10px;
-  height: 10px;
+  top: 4px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--ap-line);
+  background: var(--surface);
+  border: 1px solid var(--control);
 }
 .ap-tl-decision::before {
-  background: var(--ap-accent);
+  background: var(--muted);
+  border-color: var(--muted);
 }
 .ap-tl-item p {
   margin: 2px 0 0;
 }
 .ap-tl-when {
   display: block;
-  font-size: 12px;
-  color: var(--ap-muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
 }
 .ap-bids ol {
   margin: 4px 0 0;
   padding-left: 18px;
 }
 
-/* ---- proof chart ------------------------------------------------------------------------------- */
+/* ---- proof chart: one hue for the bars, neutrals for the rest --------------------------------- */
 
 /* The chart is drawn in a 480-unit viewBox; at most 480px wide its text is the size the CSS says. */
 .ap-chart {
@@ -611,32 +551,32 @@
 .ap-chart text {
   font-family: inherit;
   font-size: 14px;
-  fill: var(--ap-ink);
+  fill: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 .ap-chart .ap-chart-note {
-  font-size: 12.5px;
-  fill: var(--ap-muted);
+  font-size: 12px;
+  fill: var(--muted);
 }
 .ap-chart .ap-chart-label {
-  font-weight: 600;
+  font-weight: 500;
 }
 /* Value notes start where the bars start, which is the zero line when nothing is negative; nudge them off it. */
 .ap-chart .ap-chart-note:not([text-anchor]) {
   transform: translateX(6px);
 }
 .ap-bar {
-  fill: var(--ap-bar);
-  opacity: 0.85;
+  fill: var(--accent);
 }
 .ap-bar-neg {
-  fill: var(--ap-bar-neg);
+  fill: var(--negative);
 }
 .ap-err {
-  stroke: var(--ap-ink);
-  stroke-width: 2;
+  stroke: var(--text);
+  stroke-width: 1.5;
 }
 .ap-zero {
-  stroke: var(--ap-muted);
+  stroke: var(--control);
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
@@ -644,37 +584,41 @@
   font: inherit;
   width: 100%;
   min-height: 120px;
-  padding: 10px;
-  border: 1px solid var(--ap-line);
-  border-radius: 8px;
-  background: var(--ap-surface-2);
-  color: var(--ap-ink);
+  padding: 10px 12px;
+  border: 1px solid var(--control);
+  border-radius: var(--radius-control);
+  background: var(--raised);
+  color: var(--text);
   resize: vertical;
 }
 
-/* ---- operator ---------------------------------------------------------------------------------- */
+/* ---- operator: a dense table, 12px grey sentence-case headers, hairline rows ------------------- */
 
 .ap-table-wrap {
   overflow-x: auto;
   max-width: 100%;
-  border: 1px solid var(--ap-line);
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
   margin-bottom: 8px;
 }
 .ap-table {
   border-collapse: collapse;
   width: 100%;
-  font-size: 12.5px;
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
 }
 .ap-table th,
 .ap-table td {
   text-align: left;
   vertical-align: top;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--ap-line);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
 }
 .ap-table th {
-  background: var(--ap-surface-2);
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 500;
+  border-bottom-color: var(--border);
   position: sticky;
   top: 0;
 }
@@ -700,32 +644,41 @@
   min-width: 240px;
 }
 .ap-json {
-  border-top: 1px solid var(--ap-line);
-  padding: 6px 0;
+  border-top: 1px solid var(--rule);
+  padding: 4px 0;
 }
 .ap-pre {
-  font-family: var(--ap-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  background: var(--ap-surface-2);
-  color: var(--ap-ink);
-  border-radius: 8px;
-  padding: 10px;
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+  line-height: 18px;
+  background: var(--raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 12px;
   margin: 0;
   max-height: 420px;
   overflow: auto;
   white-space: pre;
 }
 
-@media (max-width: 520px) {
+@media (max-width: 719px) {
   .ap-page {
-    padding: 12px;
+    padding: var(--pad);
   }
-  .ap-h1 {
-    font-size: 22px;
+  .ap-btn {
+    min-height: var(--touch);
   }
-  .ap-pause {
-    flex-basis: 100%;
+  .ap-btn-sm {
+    min-height: 36px;
+  }
+  .ap-input {
+    min-height: var(--touch);
+  }
+  .ap-left-alone > summary,
+  .ap-json > summary,
+  .ap-bids > summary {
+    min-height: var(--touch);
   }
   .ap-facts > div {
     grid-template-columns: minmax(0, 1fr);
@@ -742,12 +695,28 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .ap-btn,
+  .ap-link {
+    transition:
+      background-color var(--t-hover) var(--ease-out),
+      border-color var(--t-hover) var(--ease-out),
+      color var(--t-hover) var(--ease-out),
+      text-decoration-color var(--t-hover) var(--ease-out);
+  }
   .ap-panel {
-    animation: ap-slide 160ms ease-out;
+    animation: ap-slide var(--t-ui) var(--ease-out);
+  }
+  .ap-backdrop {
+    animation: ap-fade var(--t-ui) var(--ease-out);
   }
   @keyframes ap-slide {
     from {
-      transform: translateX(24px);
+      transform: translateX(16px);
+      opacity: 0;
+    }
+  }
+  @keyframes ap-fade {
+    from {
       opacity: 0;
     }
   }

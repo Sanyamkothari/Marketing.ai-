@@ -4,7 +4,7 @@
 // API reports. Every number on it comes from the API (or the sample files in mock mode); nothing is made up, and
 // a part the server does not report says so in words.
 
-import { card, clear, dash, el, emptyState, errorBox, int, loading, num, pct, pill, table, when } from "../components.js";
+import { card, clear, dash, el, emptyState, errorBox, freshness, int, notice, num, pageHead, pct, pill, skeleton, skeletonKpis, skeletonLines, table, when } from "../components.js";
 
 const V1_APP = "/";
 const V1_CONNECTIONS = "/#/connections";
@@ -32,13 +32,15 @@ const NOTHING = Object.freeze({ value: null, error: null });
 const call = (api, name, ...args) => (typeof api[name] === "function" ? settle(api[name](...args)) : Promise.resolve(NOTHING));
 
 // ---- 1. how to bring data in ----------------------------------------------------------------------------------
-function howToConnect() {
+// The two ways, one under the other with a hairline between them. Its first button is the screen's one primary,
+// unless the Data Doctor is waiting for an answer: then "Answer in the Data Doctor" is, and this one steps back.
+function howToConnect({ waiting = false } = {}) {
   return card({
     title: "Bring your data in",
     level: 2,
     className: "cn-how",
     body: [
-      el("p", {}, "Autonomy learns from what your customers did: what they bought, when, and how they answered your messages. Bring that history in one of two ways."),
+      el("p", { class: "cn-lead" }, "Autonomy learns from what your customers did: what they bought, when, and how they answered your messages. Bring that history in one of two ways."),
       el(
         "ol",
         { class: "cn-ways" },
@@ -49,11 +51,11 @@ function howToConnect() {
           el("p", {}, "CSV, Excel, or a zip of them. Two files are enough:"),
           el(
             "ul",
-            { class: "plain-list cn-files" },
+            { class: "cn-files" },
             el("li", {}, el("strong", {}, "Customers: "), "one row per customer, with their id, email or phone number, and whether they agreed to hear from you."),
             el("li", {}, el("strong", {}, "Orders: "), "one row per order, with the order id, the customer id, the date, the amount and what they bought."),
           ),
-          el("p", { class: "muted small" }, "Your column names do not need to match anything. The Data Doctor works out which column is which."),
+          el("p", { class: "cn-hint" }, "Your column names do not need to match anything. The Data Doctor works out which column is which."),
         ),
         el(
           "li",
@@ -70,7 +72,7 @@ function howToConnect() {
       ),
     ],
     actions: [
-      el("a", { class: "btn btn-primary", href: V1_APP }, "Open the Data Doctor"),
+      el("a", { class: ["btn", waiting ? "btn-secondary" : "btn-primary"], href: V1_APP }, "Open the Data Doctor"),
       el("a", { class: "btn btn-secondary", href: V1_CONNECTIONS }, "Connect a database"),
     ],
   });
@@ -83,9 +85,12 @@ const isSimulated = (report) => {
 };
 
 // ---- 2. what is connected -------------------------------------------------------------------------------------
-function connectedCard(report, reportError, datasets) {
-  const title = "What is connected";
-  if (reportError) return card({ title, level: 2, body: [errorBox("Could not load what is connected.", reportError)] });
+// The screen's answer: the totals as one divided strip, then where they came from.
+const CONNECTED = "What is connected";
+
+function connectedCard(report, reportError, datasets, retry) {
+  const title = CONNECTED;
+  if (reportError) return card({ title, level: 2, body: [errorBox("Could not load what is connected.", reportError, { retry })] });
   if (!report) return datasetsCard(datasets);
   const sources = Array.isArray(report.sources) ? report.sources : [];
   if (!sources.length && !report.customers) {
@@ -100,10 +105,15 @@ function connectedCard(report, reportError, datasets) {
   return card({
     title,
     level: 2,
+    meta: freshness(report.as_of, { label: "Checked" }) || null,
     className: "cn-connected",
     body: [
-      el("dl", { class: "cn-totals" }, totals.map(([k, v]) => el("div", { class: "cn-total" }, el("dt", {}, k), el("dd", {}, int(v))))),
-      simulated ? el("p", { class: "cn-note", role: "note" }, "This is a simulated sample shop, not real customers. Connect your own data to see your business here.") : null,
+      el(
+        "dl",
+        { class: "kpis cn-totals", style: { "--kpi-count": String(Math.max(1, totals.length)) } },
+        totals.map(([k, v]) => el("div", { class: "kpi cn-total" }, el("dt", { class: "kpi-label" }, k), el("dd", { class: "kpi-value" }, int(v)))),
+      ),
+      simulated ? notice("This is a simulated sample shop, not real customers. Connect your own data to see your business here.", { role: "note" }) : null,
       sources.length
         ? table({
             caption: "Where it came from",
@@ -111,23 +121,22 @@ function connectedCard(report, reportError, datasets) {
               {
                 key: "name",
                 label: "Source",
-                format: (v, r) => [el("span", { class: "cn-source-kind" }, SOURCE_KIND_WORDS[r.kind] || SOURCE_KIND_WORDS.other), " ", el("span", { class: "muted small" }, `(${dash(v)})`)],
+                format: (v, r) => [el("span", { class: "cn-source-kind" }, SOURCE_KIND_WORDS[r.kind] || SOURCE_KIND_WORDS.other), " ", el("span", { class: "cn-source-name" }, `(${dash(v)})`)],
               },
-              { key: "customers", label: "Customers", align: "right", format: (v) => int(v) },
+              { key: "customers", label: "Customers", align: "right", lead: true, format: (v) => int(v) },
               { key: "orders", label: "Orders", align: "right", format: (v) => int(v) },
-              { key: "updated_at", label: "Latest data", format: (v) => when(v) },
+              { key: "updated_at", label: "Latest data", align: "right", format: (v) => when(v) },
             ],
             rows: sources,
           })
         : null,
-      el("p", { class: "muted small" }, `Checked ${when(report.as_of)}.`),
     ],
   });
 }
 
 /** The older v1 report (GET /datasets), used only when this API has no /v2/data/status. */
 function datasetsCard(datasets) {
-  const title = "What is connected";
+  const title = CONNECTED;
   if (!Array.isArray(datasets)) {
     return card({
       title,
@@ -147,9 +156,9 @@ function datasetsCard(datasets) {
         columns: [
           { key: "dataset_id", label: "Dataset" },
           { key: "use_case", label: "Built for" },
-          { key: "n_entities", label: "Customers", align: "right", format: (v) => int(v) },
+          { key: "n_entities", label: "Customers", align: "right", lead: true, format: (v) => int(v) },
           { key: "n_rows", label: "Rows", align: "right", format: (v) => int(v) },
-          { key: "built_at", label: "Built", format: (v) => when(v) },
+          { key: "built_at", label: "Built", align: "right", format: (v) => when(v) },
         ],
         rows: datasets.slice(0, 10),
       }),
@@ -167,7 +176,7 @@ function fixedCard(report) {
       level: 2,
       className: "cn-fixed",
       body: [
-        el("p", {}, "The Data Doctor reads files the way real exports come: a title row above the column names, a \u201cTotal\u201d row at the end, \u201cN/A\u201d in empty cells, dates it cannot read, duplicate or missing ids, and personal details that should be hidden."),
+        el("p", { class: "cn-lead" }, "The Data Doctor reads files the way real exports come: a title row above the column names, a \u201cTotal\u201d row at the end, \u201cN/A\u201d in empty cells, dates it cannot read, duplicate or missing ids, and personal details that should be hidden."),
         emptyState("Its report is not linked to Autonomy yet", "So its fixes are not shown here. Open the Data Doctor to see what it found in your files."),
       ],
       actions: [el("a", { class: "btn btn-secondary", href: V1_APP }, "See it in the Data Doctor")],
@@ -184,11 +193,11 @@ function fixedCard(report) {
         ? el(
             "ul",
             { class: "cn-fix-list" },
-            fixes.map((f) => el("li", {}, el("span", { class: "cn-fix-what" }, f.what), el("span", { class: "cn-fix-rows" }, rows(f.rows)))),
+            fixes.map((f) => el("li", {}, el("span", { class: "cn-fix-what" }, f.what), el("span", { class: "cn-fix-rows num" }, rows(f.rows)))),
           )
         : el("p", {}, "Nothing needed fixing."),
       el("h3", { class: "cn-sub" }, "What it could not use"),
-      problems.length ? el("ul", { class: "plain-list cn-problems" }, problems.map((p) => el("li", {}, p))) : el("p", { class: "muted" }, "Nothing: every row could be used."),
+      problems.length ? el("ul", { class: "cn-problems" }, problems.map((p) => el("li", {}, p))) : el("p", { class: "muted" }, "Nothing: every row could be used."),
     ],
   });
 }
@@ -205,8 +214,8 @@ function questionsCard(report) {
     "When the Data Doctor wants to change your data, it shows you the change and how many rows it touches, then waits for your yes.",
   );
   let body;
-  if (!linked) body = [promise, el("p", { class: "muted" }, "Its questions will show here once its report is linked. Until then, they wait for you in the Data Doctor.")];
-  else if (!questions.length) body = [promise, el("p", {}, "Nothing is waiting for you right now.")];
+  if (!linked) body = [promise, el("p", { class: "muted cn-after" }, "Its questions will show here once its report is linked. Until then, they wait for you in the Data Doctor.")];
+  else if (!questions.length) body = [promise, el("p", { class: "muted cn-after" }, "Nothing is waiting for you right now.")];
   else
     body = [
       promise,
@@ -218,7 +227,7 @@ function questionsCard(report) {
             "li",
             { class: "cn-question" },
             el("p", { class: "cn-question-text" }, q.text),
-            el("p", { class: "muted small" }, `Would change ${rows(q.rows_affected)}. Nothing changes until you answer.`),
+            el("p", { class: "cn-question-meta" }, `Would change ${rows(q.rows_affected)}. Nothing changes until you answer.`),
           ),
         ),
       ),
@@ -239,9 +248,9 @@ function channelStatus(c) {
   return pill("Not set up yet", "neutral");
 }
 
-function channelsCard(channels, error) {
+function channelsCard(channels, error, retry) {
   const title = "How messages go out";
-  if (error) return card({ title, level: 2, body: [errorBox("Could not load the channels.", error)] });
+  if (error) return card({ title, level: 2, body: [errorBox("Could not load the channels.", error, { retry })] });
   if (!Array.isArray(channels)) {
     return card({ title, level: 2, body: [emptyState("Channel status is not available here", "This server does not report its channels yet.")] });
   }
@@ -250,7 +259,7 @@ function channelsCard(channels, error) {
       "li",
       { class: "cn-channel" },
       el("div", { class: "cn-channel-head" }, el("span", { class: "cn-channel-name" }, CHANNEL_NAMES[c.channel] || c.channel), channelStatus(c)),
-      c.paused ? el("p", { class: "cn-channel-why small" }, c.paused_reason || "Paused by a safety check.") : null,
+      c.paused ? el("p", { class: "cn-channel-why" }, c.paused_reason || "Paused by a safety check.") : null,
     );
   const block = (mode, heading, words) => {
     const list = channels.filter((c) => c.mode === mode);
@@ -259,7 +268,7 @@ function channelsCard(channels, error) {
       "div",
       { class: "cn-channel-group" },
       el("h3", { class: "cn-sub" }, heading),
-      el("p", { class: "muted small" }, words),
+      el("p", { class: "cn-group-words" }, words),
       el("ul", { class: "cn-channel-list" }, list.map(line)),
     );
   };
@@ -295,16 +304,18 @@ export const HEALTH_LINES = Object.freeze([
 
 function healthCard(health, limits, simulated) {
   if (!health) return null;
+  const asOf = when(health.as_of);
   const rules = new Map(((limits && limits.rules) || []).map((r) => [r.metric, r]));
   const selfPauses = (health.alerts || []).filter((a) => a.auto_paused);
   return card({
     title: "Sending health: less spam, healthier lists",
     level: 2,
+    meta: `As of ${asOf}`,
     className: "cn-health",
     body: [
       el(
         "p",
-        {},
+        { class: "cn-lead" },
         `Every message has a cost: annoyance, unsubscribes, spam complaints. Autonomy weighs that cost before each message, so doing nothing often wins. ${simulated ? "Here is how the simulated sample shop's lists are holding up (not real customers)." : "Here is how your lists are holding up."}`,
       ),
       el(
@@ -315,9 +326,9 @@ function healthCard(health, limits, simulated) {
           return el(
             "li",
             { class: "cn-health-line" },
-            el("div", { class: "cn-health-head" }, el("span", { class: "cn-health-label" }, line.label), el("strong", { class: "cn-health-value" }, dash(health[line.key], line.fmt))),
-            el("p", { class: "muted small" }, line.words),
-            rule && rule.words ? el("p", { class: "cn-health-limit small" }, el("strong", {}, "Safety stop: "), rule.words) : null,
+            el("div", { class: "cn-health-head" }, el("span", { class: "cn-health-label" }, line.label), el("span", { class: "cn-health-value num" }, dash(health[line.key], line.fmt))),
+            el("p", { class: "cn-health-words" }, line.words),
+            rule && rule.words ? el("p", { class: "cn-health-limit" }, el("strong", {}, "Safety stop: "), rule.words) : null,
           );
         }),
       ),
@@ -328,22 +339,53 @@ function healthCard(health, limits, simulated) {
             el("h3", { class: "cn-sub" }, "It paused itself"),
             el(
               "ul",
-              { class: "plain-list" },
-              selfPauses.map((a) => el("li", {}, a.message, " ", el("span", { class: "muted small" }, `(${when(a.at)})`))),
+              { class: "cn-paused-list" },
+              selfPauses.map((a) => el("li", {}, a.message, " ", el("span", { class: "cn-when" }, `(${when(a.at)})`))),
             ),
           )
         : null,
-      el("p", { class: "muted small" }, `As of ${when(health.as_of)}.${rules.size ? " The safety stops shown are the ones for the goal you have open." : ""}`),
+      rules.size ? el("p", { class: "cn-foot" }, "The safety stops shown are the ones for the goal you have open.") : null,
     ],
   });
 }
 
 // ---- the screen -----------------------------------------------------------------------------------------------
-const head = () => [el("h1", {}, "Connect"), el("p", { class: "lede" }, "Bring your customer data in, and see what Autonomy is working from.")];
+// One question: what is Autonomy working from, and is anything waiting for me? "What is connected" answers it, at
+// the top of the wider column (7 of 12); what the Data Doctor is asking, the channels and how to bring data in sit in
+// the narrower one beside it.
+const head = () => pageHead({ title: "Connect", sub: "Bring your customer data in, and see what Autonomy is working from." });
+
+/** While the API answers: the real frame with grey blocks where the numbers go, so nothing jumps when they land. */
+function skeletonScreen() {
+  return [
+    head(),
+    el(
+      "div",
+      { class: "grid cn-grid", "aria-busy": "true" },
+      el(
+        "div",
+        { class: "span-7 stack cn-col" },
+        card({ title: CONNECTED, level: 2, body: [skeletonKpis(["Customers", "Orders", "Products in those orders"]), skeletonLines(3)] }),
+        card({ title: "Sending health: less spam, healthier lists", level: 2, body: [skeletonLines(5)] }),
+      ),
+      el(
+        "div",
+        { class: "span-5 stack cn-col" },
+        card({ title: "How messages go out", level: 2, body: [skeletonLines(4)] }),
+        howToConnect(),
+      ),
+    ),
+  ];
+}
+
+/** Put a card in its phone place (`cn-o1`...): on a desktop the two columns keep their own order. */
+const at = (node, n) => (node && node.classList.add(`cn-o${n}`), node);
+const column = (cls, nodes) => el("div", { class: [cls, "stack cn-col"] }, nodes.filter(Boolean));
 
 export async function render(root, ctx) {
-  clear(root, ...head(), loading());
+  clear(root, ...skeletonScreen());
   const api = ctx.api;
+  const retry = () => render(root, ctx);
   const [report, channels, health, limits] = await Promise.all([
     call(api, "getDataReport"),
     call(api, "listChannels"),
@@ -352,13 +394,27 @@ export async function render(root, ctx) {
   ]);
   // Only an API without /v2/data/status falls back to the older v1 datasets list.
   const datasets = !report.value && !report.error ? (await call(api, "getDataStatus")).value : null;
+  const r = report.value;
+  const waiting = Boolean(r && r.doctor_connected && Array.isArray(r.questions) && r.questions.length);
+  const hasData = Boolean(r && (Number(r.customers) || (Array.isArray(r.sources) && r.sources.length))) || (Array.isArray(datasets) && datasets.length > 0);
+  // Two columns, 7 + 5. The left one answers the screen's question (what it works from, what was fixed, how the
+  // lists hold up); the right one holds what waits for you and how to bring more in. With nothing connected yet,
+  // "Bring your data in" is the next action, so it goes to the top of its column (and second on a phone).
+  const connected = at(connectedCard(r, report.error, datasets, retry), 1);
+  const how = at(howToConnect({ waiting }), hasData ? 6 : 2);
+  const asks = at(r ? questionsCard(r) : null, hasData ? 2 : 3);
+  const fixed = at(r ? fixedCard(r) : null, hasData ? 3 : 4);
+  const healthBlock = at(healthCard(health.value, limits.value, isSimulated(r)), hasData ? 4 : 6);
+  const channelBlock = at(channelsCard(channels.value, channels.error, retry), 5);
   clear(
     root,
-    ...head(),
-    el("div", { class: "grid-2 cn-top" }, howToConnect(), connectedCard(report.value, report.error, datasets)),
-    report.value ? el("div", { class: "grid-2 cn-doctor" }, fixedCard(report.value), questionsCard(report.value)) : null,
-    channelsCard(channels.value, channels.error),
-    healthCard(health.value, limits.value, isSimulated(report.value)),
-    el("p", { class: "cn-next" }, el("a", { href: "#/goal" }, "Next: say what you want to achieve →")),
+    head(),
+    el(
+      "div",
+      { class: "grid cn-grid" },
+      column("span-7", [connected, fixed, healthBlock]),
+      column("span-5", hasData ? [asks, channelBlock, how] : [how, asks, channelBlock]),
+    ),
+    el("p", { class: "cn-next" }, el("a", { href: "#/goal" }, "Next: say what you want to achieve \u2192")),
   );
 }

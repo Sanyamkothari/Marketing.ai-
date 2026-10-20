@@ -155,24 +155,26 @@ function drawPause() {
   const scope = $("pause-scope");
   const live = running();
   const targets = live.length ? [] : resumeTargets();
-  b.classList.remove("btn-danger", "btn-primary");
+  // Near-black with a pause glyph while anything sends; Resume, in the negative colour, only while paused (the
+  // stopped state is plain at a glance). screens/shell.css draws the glyphs.
+  b.classList.remove("btn-danger", "btn-primary", "is-resume");
   if (live.length) {
     b.textContent = "Pause";
-    b.classList.add("btn-danger");
+    b.classList.add("btn-primary");
     b.disabled = false;
     b.setAttribute("aria-label", `Pause all sending: stops ${live.length === 1 ? "the 1 running goal" : `all ${live.length} running goals`} at once`);
     b.title = "Stops all sending, for every goal, at once. You can resume any time.";
     if (scope) scope.textContent = "Stops all sending";
   } else if (targets.length) {
     b.textContent = "Resume";
-    b.classList.add("btn-primary");
+    b.classList.add("btn-danger", "is-resume");
     b.disabled = false;
     b.setAttribute("aria-label", targets.length === 1 ? `Resume sending for: ${targets[0].text || targets[0].goal_id}` : `Resume sending for the ${targets.length} goals you paused`);
     b.title = "Lets the agent act again inside the approved plan.";
     if (scope) scope.textContent = "Nothing is being sent";
   } else {
     b.textContent = "Pause";
-    b.classList.add("btn-danger");
+    b.classList.add("btn-primary");
     b.disabled = true;
     b.removeAttribute("aria-label");
     b.title = shell.goals.length ? "Nothing is sending right now, so there is nothing to pause." : "Nothing is sending: there is no goal yet.";
@@ -453,7 +455,7 @@ function drawSelfPause(paused) {
   badge.title = words;
 }
 
-/** The "to approve" link in the top bar, made once next to the inbox (index.html stays as it is). */
+/** The "to approve" link in the top bar: index.html has it; made here, next to the inbox, if a page lacks it. */
 function batchLink() {
   const existing = $("batch-link");
   if (existing) return existing;
@@ -462,11 +464,11 @@ function batchLink() {
   const link = el(
     "a",
     { id: "batch-link", class: "inbox-link batch-link", href: "#/live" },
-    // `wordmark-text` is the class styles.css hides on a phone, so there the badge is only its count and the
+    // `topbar-label` is hidden visually on a phone (styles.css), so there the link is only its count and the
     // goal switcher keeps its room; the link's aria-label and title still say what it is.
-    el("span", { class: "wordmark-text", "aria-hidden": "true" }, "To approve"),
-    // The brand colour, not the inbox's red: a batch waiting is a task, not an alarm.
-    el("span", { id: "batch-count", class: "count", style: { background: "var(--brand)", color: "var(--brand-ink)" } }),
+    el("span", { class: "topbar-label", "aria-hidden": "true" }, "To approve"),
+    // The accent, not the inbox's red: a batch waiting is a task, not an alarm.
+    el("span", { id: "batch-count", class: "count count-accent" }),
   );
   showBadge(link, false);
   inbox.before(link);
@@ -662,7 +664,19 @@ export async function route({ focus = true } = {}) {
   shell.firstRender = false;
 }
 
+/** ?theme=light or ?theme=dark forces a theme (styles.css reads [data-theme]); otherwise the system's setting. */
+function applyTheme() {
+  try {
+    const theme = new URLSearchParams((typeof location !== "undefined" && location.search) || "").get("theme");
+    const root = typeof document !== "undefined" ? document.documentElement : null;
+    if (root && root.setAttribute && (theme === "light" || theme === "dark")) root.setAttribute("data-theme", theme);
+  } catch {
+    /* the system's setting stands */
+  }
+}
+
 function start() {
+  applyTheme();
   $("goal-select").addEventListener("change", (e) => {
     const id = e.target.value;
     if (!id) return;

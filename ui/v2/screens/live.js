@@ -100,12 +100,22 @@ export function pct(fraction) {
 
 /** An estimate always with its range: "$4,300 (range $900 to $7,700)". Never a bare point. */
 export function range(est, fmt) {
-  if (!est || !present(est.point) || !present(est.low) || !present(est.high)) return DASH;
+  const parts = rangeParts(est, fmt);
+  return parts ? `${parts.point} ${parts.range}` : DASH;
+}
+
+/**
+ * The same estimate in two pieces, for a figure set large with its range right under it: {point: "$4,300",
+ * range: "(range $900 to $7,700)"}. Null when any of the three is missing. `range()` is built from this, so
+ * the two never disagree.
+ */
+export function rangeParts(est, fmt) {
+  if (!est || !present(est.point) || !present(est.low) || !present(est.high)) return null;
   // One precision for the three: when any of them is $100 or more, all are shown in whole units, so a range
   // never reads "$823.54 to $3,254".
   const whole = [est.point, est.low, est.high].some((v) => Math.abs(Number(v)) >= 100);
   const f = (v) => fmt(whole ? Math.round(Number(v)) : v);
-  return `${f(est.point)} (range ${f(est.low)} to ${f(est.high)})`;
+  return { point: f(est.point), range: `(range ${f(est.low)} to ${f(est.high)})` };
 }
 
 /** A timestamp in the viewer's time zone: "20 Oct, 14:00". */
@@ -339,10 +349,11 @@ const AUTONOMY_SENTENCE = {
   approve: "Approve: nothing goes out until you approve each batch, with one click.",
   autopilot: "Autopilot: it acts on its own, inside the limits you set in the plan.",
 };
+/** Severity in words, with a pale pill tone (the word is always there; colour is never the only signal). */
 const SEVERITY = {
-  critical: { icon: "✕", word: "Critical" },
-  warning: { icon: "!", word: "Warning" },
-  info: { icon: "i", word: "Info" },
+  critical: { word: "Critical", tone: "bad" },
+  warning: { word: "Warning", tone: "warn" },
+  info: { word: "Info", tone: "quiet" },
 };
 /** The groups in a business owner's words (operator.js keeps the short `groupLabel`). */
 const GROUP_WORDS = {
@@ -575,7 +586,13 @@ export function messageWords(content, offer = null) {
 }
 
 /** Only a web address or a path can be an image source (never `javascript:` or `data:` from the API). */
-const safeSrc = (url) => (present(url) && /^(https?:\/\/|\/|\.\/)/i.test(String(url)) ? String(url) : null);
+// `asset_url` may hold several pictures separated by spaces (a carousel): the row shows the first. A host under the
+// reserved ".invalid" name can never load (RFC 6761), so it is not requested at all.
+const safeSrc = (url) => {
+  const first = present(url) ? String(url).trim().split(/\s+/)[0] : "";
+  if (!/^(https?:\/\/|\/|\.\/)/i.test(first)) return null;
+  return /^https?:\/\/[^/]*\.invalid(?::\d+)?(?:\/|$)/i.test(first) ? null : first;
+};
 
 /** A feed row: {d: Decision, x: ActivityRow | null}. Newest first, split into contacted and left alone. */
 export function splitRows(rows) {
@@ -603,14 +620,79 @@ function maybe(api, name, ...args) {
   }
 }
 
+// ---- markup for this screen --------------------------------------------------------------------------
+// Built with `h` and the design system's classes (styles.css: .page-head, .card, .card-head, .kpis, .pill, .list,
+// .error-box, .skeleton), plus `lv-` classes in live.css for what is Live's own. The older `ap-` names stay on the
+// elements tests and other screens look for (ap-panel, ap-left-alone, ap-tile-value, ...).
+
+/** The pale pill for a tone: words first, a small dot when the state is a real outcome. */
+// "info" (scheduled, approved) is neutral: the accent is kept for data and focus, never for a status.
+const PILL_TONE = { good: "pill-positive", warn: "pill-warning", info: "pill-neutral", bad: "pill-negative", quiet: "pill-neutral" };
+function chip(label, tone, extra = "") {
+  const dot = tone && tone !== "quiet" ? " pill-dot" : "";
+  return h("span", { class: `pill ${PILL_TONE[tone] || "pill-neutral"}${dot} lv-state lv-state-${tone || "quiet"} ${extra}`.trim() }, label);
+}
+
+/**
+ * A row's status in a long list: a small dot in the tone's colour and the word in grey, with no fill, so twenty
+ * rows of "Waiting for your approval" read as a quiet column rather than a stripe of amber pills.
+ */
+function statusMark(label, tone) {
+  return h("span", { class: `lv-row-status lv-mark lv-mark-${tone || "quiet"} lv-state lv-state-${tone || "quiet"}` }, label);
+}
+
+/** Grey blocks at the size of what is coming, so nothing jumps when it lands. Heights in px. */
+function skeletonBlock(heights = [20, 20, 20]) {
+  return h("div", { class: "skeleton-stack lv-skeleton", role: "status" },
+    h("span", { class: "visually-hidden" }, "Loading…"),
+    ...heights.map((px, i) => h("span", { class: "skeleton", "aria-hidden": "true", style: `height: ${px}px; width: ${i === heights.length - 1 && heights.length > 1 ? 64 : 100}%` })));
+}
+
+/** A card: its title and a grey meta on one line, and a body that starts as grey blocks. */
+function liveSection(title, { extraClass = "", id = null, skeleton = [20, 20, 20] } = {}) {
+  const heading = h("h2", { class: "card-title", id });
+  heading.textContent = title;
+  const meta = h("span", { class: "card-meta" });
+  const body = h("div", { class: "lv-body" }, skeletonBlock(skeleton));
+  const card = h("section", { class: `card lv-card ${extraClass}`.trim(), "aria-labelledby": id },
+    h("div", { class: "card-head" }, heading, meta), body);
+  return { card, heading, meta, body };
+}
+
+/** The empty state inside a card: the card keeps its title; one sentence says what will appear. */
+const lvEmpty = (sentence) => h("p", { class: "lv-empty" }, sentence);
+
+/** The error inside the block that failed: what failed, the API's reason, and Retry when there is one. */
+function lvFailed(what, e, retry = null) {
+  const again = typeof retry === "function" ? h("button", { type: "button", class: "link-btn" }, "Retry") : null;
+  if (again) again.addEventListener("click", retry);
+  return h("div", { class: "error-box lv-error", role: "alert" },
+    h("p", { class: "empty-title" }, `Couldn't load ${what}`, h("span", { class: "lv-error-why" }, `: ${errText(e)}`)),
+    again && h("div", { class: "error-actions" }, again));
+}
+
+/** One KPI cell: label over value over a note, inside a `.kpis` strip. */
+function kpiCell(label, value, note = null, extra = "") {
+  const missing = value === DASH;
+  return h("div", { class: `kpi ${extra}`.trim() },
+    h("dt", { class: "kpi-label" }, label),
+    h("dd", { class: `kpi-value${missing ? " is-missing" : ""}` }, value),
+    note && h("dd", { class: "kpi-note" }, note));
+}
+
 // ---- the screen -------------------------------------------------------------------------------------
 
 export async function render(root, ctx) {
   ensureStyles();
   const api = ctx.api;
   const announcer = h("p", { class: "ap-sr", role: "status", "aria-live": "polite" });
-  const page = h("div", { class: "ap-page ap-live" });
+  const page = h("div", { class: "ap-page ap-live lv-page" });
   root.replaceChildren(page);
+  const retry = () => render(root, ctx);
+  const goTo = (label, where) =>
+    typeof ctx.navigate === "function" && h("button", { class: "btn btn-primary", type: "button", onclick: () => ctx.navigate(where) }, label);
+  const head = (sub) =>
+    h("header", { class: "page-head lv-head" }, h("div", { class: "lv-head-text" }, h("h1", { class: "page-title" }, "Live"), sub && h("p", { class: "page-sub" }, sub)));
 
   let bundle;
   try {
@@ -618,19 +700,19 @@ export async function render(root, ctx) {
   } catch (e) {
     if (notFound(e)) {
       page.append(
-        pageHead("Live", `There is no goal ${ctx.goalId}.`),
-        h("div", { class: "ap-card" }, empty("It may have been removed, or the link is mistyped. Pick a goal from the switcher at the top."),
-          typeof ctx.navigate === "function" && h("button", { class: "ap-btn", type: "button", onclick: () => ctx.navigate("goal") }, "Go to Goal")),
+        head(`There is no goal ${ctx.goalId}.`),
+        h("div", { class: "empty" }, h("p", { class: "empty-title" }, "Goal not found"),
+          h("p", null, "It may have been removed, or the link is mistyped. Pick a goal from the switcher at the top."), goTo("Go to Goal", "goal")),
         announcer,
       );
-    } else page.append(pageHead("Live"), failed("the goal", e), announcer);
+    } else page.append(head(null), lvFailed("the goal", e, retry), announcer);
     return;
   }
   if (!bundle || !bundle.goal) {
     page.append(
-      pageHead("Live", "Nothing is running yet."),
-      h("div", { class: "ap-card" }, empty("Set a goal and approve its plan, and the agent's work shows up here."),
-        typeof ctx.navigate === "function" && h("button", { class: "ap-btn", type: "button", onclick: () => ctx.navigate("goal") }, "Set a goal")),
+      head("Nothing is running yet."),
+      h("div", { class: "empty" }, h("p", { class: "empty-title" }, "No goal yet"),
+        h("p", null, "Set a goal and approve its plan, and the agent's work shows up here."), goTo("Set a goal", "goal")),
       announcer,
     );
     return;
@@ -646,22 +728,24 @@ export async function render(root, ctx) {
   const pauseWord = ctx.pauseAllInTopBar ? "Pause this goal" : "Pause everything";
 
   // Header: what goal, its status and autonomy level in one sentence, and (only when there is no top bar) Pause.
-  const statusChip = h("span", { class: "ap-chip" });
-  const autonomyChip = h("span", { class: "ap-chip ap-chip-quiet lv-autonomy" });
-  const autonomyLine = h("p", { class: "ap-muted ap-small lv-autonomy-line" });
-  const pauseBtn = h("button", { type: "button", class: "ap-btn" });
-  const pauseHint = h("p", { class: "ap-muted ap-small" });
+  const statusChip = h("span", { class: "pill" });
+  const autonomyChip = h("span", { class: "pill pill-neutral lv-autonomy" });
+  const autonomyLine = h("p", { class: "lv-autonomy-line" });
+  const pauseBtn = h("button", { type: "button", class: "btn" });
+  const pauseHint = h("p", { class: "lv-pause-hint" });
   const selfPause = h("div", { class: "lv-selfpause-slot" });
   const paintHeader = () => {
+    const tone = goal.status === "active" ? "pill-positive pill-dot" : goal.status === "paused" ? "pill-warning pill-dot" : "pill-neutral";
     statusChip.textContent = STATUS_WORDS[goal.status] || String(goal.status || DASH);
-    statusChip.setAttribute("class", `ap-chip ap-status-${goal.status || "unknown"}`);
+    statusChip.setAttribute("class", `pill ${tone} ap-status-${goal.status || "unknown"}`);
     autonomyChip.textContent = `Autonomy: ${AUTONOMY_WORDS[goal.autonomy] || goal.autonomy || DASH}`;
-    autonomyChip.setAttribute("class", `ap-chip ap-chip-quiet lv-autonomy lv-autonomy-${goal.autonomy || "unknown"}`);
+    autonomyChip.setAttribute("class", `pill pill-neutral lv-autonomy lv-autonomy-${goal.autonomy || "unknown"}`);
     autonomyLine.textContent = [AUTONOMY_SENTENCE[goal.autonomy], present(state.since) ? `At this level since ${day(state.since)}.` : null].filter(Boolean).join(" ");
     const paused = goal.status === "paused";
     const canToggle = goal.status === "active" || paused;
     pauseBtn.textContent = paused ? "Resume" : pauseWord;
-    pauseBtn.setAttribute("class", paused ? "ap-btn ap-btn-primary" : "ap-btn ap-btn-danger");
+    // Pause is a red hairline (it stops sending); while paused, Resume is the one thing to do, so it is primary.
+    pauseBtn.setAttribute("class", paused ? "btn btn-primary lv-pause-btn" : "btn btn-danger lv-pause-btn");
     pauseBtn.disabled = !canToggle;
     pauseBtn.setAttribute("aria-pressed", paused ? "true" : "false");
     if (topbarPause) {
@@ -680,7 +764,8 @@ export async function render(root, ctx) {
     paintSelfPause();
     paintBatches();
   };
-  // The red banner when Autonomy paused itself (a stop rule fired), naming why. Drawn from the inbox's alerts.
+  // The banner when Autonomy paused itself (a stop rule fired), naming why. Drawn from the inbox's alerts. Red
+  // when the whole goal stopped; a calm amber notice when only some sending (a channel) paused.
   function paintSelfPause() {
     const auto = state.alerts.filter((a) => a.auto_paused);
     if (!auto.length) {
@@ -692,21 +777,21 @@ export async function render(root, ctx) {
     const shown = auto.slice(0, 3);
     selfPause.replaceChildren(
       h("section", { class: `lv-selfpause ${goalStopped ? "lv-selfpause-goal" : ""}`.trim(), role: goalStopped ? "alert" : null, "aria-labelledby": "lv-selfpause-title" },
-        h("h2", { class: "ap-h2", id: "lv-selfpause-title" },
-          h("span", { class: "lv-selfpause-icon", "aria-hidden": "true" }, "❚❚"),
+        h("h2", { class: "lv-selfpause-title", id: "lv-selfpause-title" },
+          h("span", { class: "lv-selfpause-icon", "aria-hidden": "true" }),
           goalStopped ? "This goal paused itself" : `Autonomy paused some sending on its own (${auto.length})`),
         goalStopped && h("p", { class: "lv-selfpause-why" }, latestGoalStop.message || humanize(latestGoalStop.code)),
-        h("ul", { class: "ap-plain lv-selfpause-list" }, ...shown.filter((a) => !goalStopped || a !== latestGoalStop).map((a) =>
-          h("li", null, h("span", { class: "ap-muted ap-small" }, `${when(a.at)} · `), a.message || humanize(a.code),
-            !present(a.goal_id) && h("span", { class: "ap-muted ap-small" }, " (every goal)")))),
-        h("p", { class: "ap-muted ap-small" },
+        h("ul", { class: "lv-selfpause-list" }, ...shown.filter((a) => !goalStopped || a !== latestGoalStop).map((a) =>
+          h("li", null, h("span", { class: "lv-selfpause-when" }, when(a.at)), h("span", null, a.message || humanize(a.code),
+            !present(a.goal_id) && h("span", { class: "lv-selfpause-scope" }, " (every goal)"))))),
+        h("p", { class: "lv-selfpause-foot" },
           "It does this by itself when complaints, unsubscribes or delivery problems pass the limits in your plan. ",
           goalStopped ? "Nothing more goes out for this goal until you resume it." : "The rest keeps running. Every pause is in the Inbox.")));
   }
 
   // Batches: shown only while the goal is at "approve each batch", loaded once per goal.
-  const batchSec = section("Waiting for your approval", "ap-batches");
-  const batchSlot = h("div", { class: "ap-batch-slot" });
+  const batchSec = liveSection("Waiting for your approval", { extraClass: "ap-batches lv-batches", skeleton: [16, 56, 56] });
+  const batchSlot = h("div", { class: "ap-batch-slot lv-batch-slot" });
   function paintBatches() {
     if (goal.autonomy !== "approve") {
       batchSlot.replaceChildren();
@@ -718,7 +803,7 @@ export async function render(root, ctx) {
     state.batchLoad = loadBatches();
   }
   async function loadBatches() {
-    batchSec.body.replaceChildren(h("p", { class: "ap-muted" }, "Loading…"));
+    batchSec.body.replaceChildren(skeletonBlock([16, 56, 56]));
     let rows;
     try {
       // An API client without batches (an older build) is "not listed yet", not an error.
@@ -726,7 +811,10 @@ export async function render(root, ctx) {
     } catch (e) {
       state.batchesFor = null; // try again on the next change
       batchSec.heading.textContent = "Waiting for your approval";
-      batchSec.body.replaceChildren(failed("the batches waiting for you", e));
+      batchSec.body.replaceChildren(lvFailed("the batches waiting for you", e, () => {
+        state.batchesFor = goalId;
+        state.batchLoad = loadBatches();
+      }));
       return;
     }
     state.batches = rows;
@@ -796,25 +884,35 @@ export async function render(root, ctx) {
 
   const header = h(
     "header",
-    { class: "ap-head ap-live-head" },
-    h("div", { class: "ap-head-text" }, h("h1", { class: "ap-h1" }, "Live"), h("p", { class: "ap-sub" }, goal.text || goalId),
-      h("div", { class: "ap-chips" }, statusChip, autonomyChip), autonomyLine),
-    topbarPause ? h("div", { class: "ap-pause" }, pauseHint) : h("div", { class: "ap-pause" }, pauseBtn, pauseHint),
+    { class: "page-head lv-head" },
+    h("div", { class: "lv-head-text" },
+      h("h1", { class: "page-title" }, "Live"),
+      h("p", { class: "page-sub lv-goal" }, goal.text || goalId),
+      h("div", { class: "lv-status" }, statusChip, autonomyChip),
+      autonomyLine),
+    h("div", { class: "lv-pause" }, topbarPause ? null : pauseBtn, pauseHint),
   );
 
-  const todaySec = section("Yesterday", "lv-today");
-  todaySec.heading.setAttribute("id", "lv-today-title");
-  const briefingSec = section("The full briefing", "ap-briefing");
-  const learnedSec = section("What it learned");
-  const healthSec = section("Customer health and safety stops");
-  const inboxSec = section("Inbox");
-  const feedSec = section("Every decision, with its reason");
+  const todaySec = liveSection("Yesterday", { extraClass: "lv-today", id: "lv-today-title", skeleton: [24, 16, 92, 20, 20, 20] });
+  const briefingSec = liveSection("The full briefing", { extraClass: "ap-briefing lv-briefing", skeleton: [20, 16, 40, 40] });
+  const learnedSec = liveSection("What it learned", { extraClass: "lv-learned-card", skeleton: [20, 20] });
+  const healthSec = liveSection("Customer health and safety stops", { extraClass: "lv-health-card", skeleton: [36, 36, 36, 36, 36] });
+  const inboxSec = liveSection("Inbox", { extraClass: "lv-inbox-card", skeleton: [56, 56] });
+  const feedSec = liveSection("Every decision, with its reason", { extraClass: "lv-feed-card", skeleton: [40, 64, 64, 64, 64] });
+  // Two rows of 8 + 4. The first answers "what happened, and what needs me?" (yesterday and the batches beside
+  // the inbox and health, two columns of about the same height); the second is the long feed beside what it
+  // learned and the full briefing. On a phone the columns stack in this same order, so the inbox and health come
+  // before the long feed and the reading order matches the DOM.
   page.append(
     header,
     selfPause,
-    h("div", { class: "ap-grid" },
-      h("div", { class: "ap-col-main" }, todaySec.card, batchSlot, feedSec.card, briefingSec.card),
-      h("div", { class: "ap-col-side" }, inboxSec.card, healthSec.card, learnedSec.card)),
+    h("div", { class: "grid lv-grid lv-grid-top" },
+      // On Approve the batches waiting for a person come first: they are the one thing that needs the marketer.
+      h("div", { class: "span-8 stack lv-main" }, batchSlot, todaySec.card),
+      h("div", { class: "span-4 stack lv-side" }, inboxSec.card, healthSec.card)),
+    h("div", { class: "grid lv-grid lv-grid-feed" },
+      h("div", { class: "span-8 stack lv-main" }, feedSec.card),
+      h("div", { class: "span-4 stack lv-side" }, learnedSec.card, briefingSec.card)),
     announcer,
   );
 
@@ -846,7 +944,8 @@ export async function render(root, ctx) {
 
   // Yesterday: the pitch's daily briefing for this goal.
   todaySec.heading.textContent = todayValue ? dayName(todayValue.date, todayValue.as_of).title : "Day by day";
-  if (today.status === "rejected") todaySec.body.replaceChildren(failed("yesterday's numbers", today.reason));
+  if (todayValue && present(todayValue.as_of)) todaySec.meta.textContent = `As of ${when(todayValue.as_of)}`;
+  if (today.status === "rejected") todaySec.body.replaceChildren(lvFailed("yesterday's numbers", today.reason, retry));
   else {
     todaySec.body.replaceChildren(...todayView(todayValue, {
       goal, brief, currency, proof: proof.status === "fulfilled" ? proof.value : null, proofError: proof.status === "rejected" ? proof.reason : null,
@@ -861,12 +960,19 @@ export async function render(root, ctx) {
   learnedSec.body.replaceChildren(...learnedView(learned));
 
   // The full (often weekly) briefing.
-  if (briefing.status === "rejected") briefingSec.body.replaceChildren(failed("today's briefing", briefing.reason));
-  else briefingSec.body.replaceChildren(...briefingView(briefingValue));
+  if (briefing.status === "rejected") briefingSec.body.replaceChildren(lvFailed("today's briefing", briefing.reason, retry));
+  else {
+    if (briefingValue) briefingSec.meta.textContent = `${briefingValue.period === "weekly" ? "Weekly" : "Daily"} · as of ${when(briefingValue.as_of)}`;
+    briefingSec.body.replaceChildren(...briefingView(briefingValue));
+  }
 
   // Activity feed
-  if (feed.status === "rejected") feedSec.body.replaceChildren(failed("the activity feed", feed.reason));
-  else feedSec.body.replaceChildren(...feedView(feed.value, { brief, contentIndex, autonomy: goal.autonomy, today: todayValue, openCustomer }));
+  if (feed.status === "rejected") feedSec.body.replaceChildren(lvFailed("the activity feed", feed.reason, retry));
+  else {
+    const n = (feed.value?.rows || []).length;
+    if (n) feedSec.meta.textContent = `The latest ${count(n)} ${n === 1 ? "decision" : "decisions"}`;
+    feedSec.body.replaceChildren(...feedView(feed.value, { brief, contentIndex, autonomy: goal.autonomy, today: todayValue, openCustomer }));
+  }
 
   // Inbox: alerts from both endpoints; one failing still shows the other's.
   const lists = [];
@@ -876,71 +982,71 @@ export async function render(root, ctx) {
   state.alerts = merged;
   inboxSec.heading.textContent = merged.length ? `Inbox (${merged.length})` : "Inbox";
   inboxSec.body.replaceChildren(
-    ...(alerts.status === "rejected" ? [failed("alerts", alerts.reason)] : []),
+    ...(alerts.status === "rejected" ? [lvFailed("alerts", alerts.reason, retry)] : []),
     ...inboxView(merged),
   );
   paintHeader();
 
   // Health
-  if (health.status === "rejected") healthSec.body.replaceChildren(failed("customer health", health.reason));
-  else healthSec.body.replaceChildren(...healthView(health.value, brief, state.limits));
+  if (health.status === "rejected") healthSec.body.replaceChildren(lvFailed("customer health", health.reason, retry));
+  else {
+    const asOf = health.value?.as_of || state.limits?.as_of;
+    if (present(asOf)) healthSec.meta.textContent = `As of ${when(asOf)}`;
+    healthSec.body.replaceChildren(...healthView(health.value, brief, state.limits));
+  }
 
   if (state.batchLoad) await state.batchLoad;
 }
 
 // ---- the sections -----------------------------------------------------------------------------------
 
+const BATCH_TONE = { pending: "warn", approved: "good", sent: "good", rejected: "quiet" };
+
 function batchesView(batches, currency, decide, breakdowns = new Map()) {
   if (batches === null) {
-    return [empty("Batches to approve will be listed here. This server does not list them yet, so check back after the next update.")];
+    return [lvEmpty("Batches to approve will be listed here. This server does not list them yet, so check back after the next update.")];
   }
   const { pending, decided } = splitBatches(batches);
   const out = [];
-  if (!pending.length) out.push(empty("Nothing is waiting for you. The agent holds each new batch here until you approve it."));
+  if (!pending.length) out.push(lvEmpty("Nothing is waiting for you. The agent holds each new batch here until you approve it."));
   else {
-    out.push(h("p", { class: "ap-muted ap-small" }, "Nothing in a batch is sent until you approve it. Each message still follows the plan's limits. One click approves the whole batch."));
-    out.push(h("ul", { class: "ap-feed ap-batches-list", "aria-label": "Batches waiting for approval, newest first" }, ...pending.map((b) => {
+    out.push(h("p", { class: "lv-intro" }, "Nothing in a batch is sent until you approve it. Each message still follows the plan's limits. One click approves the whole batch. The expected numbers are its own forecast before sending, not a result."));
+    out.push(h("ul", { class: "list lv-batch-list ap-batches-list", "aria-label": "Batches waiting for approval, newest first" }, ...pending.map((b, i) => {
       const words = breakdowns.get(b.batch_id)?.words;
       const label = words || b.summary || `A batch of ${count(b.n_contacts)} contacts`;
-      const approve = h("button", { type: "button", class: "ap-btn ap-btn-primary", "aria-label": `Approve batch: ${label}` }, "Approve");
-      const reject = h("button", { type: "button", class: "ap-btn", "aria-label": `Reject batch: ${label}` }, "Reject");
+      // One primary per screen: the newest batch's Approve. Older batches keep the same button as a secondary.
+      const approve = h("button", { type: "button", class: `btn ${i === 0 ? "btn-primary" : "btn-secondary"} btn-sm`, "aria-label": `Approve batch: ${label}` }, "Approve");
+      const reject = h("button", { type: "button", class: "btn btn-secondary btn-sm", "aria-label": `Reject batch: ${label}` }, "Reject");
       approve.addEventListener("click", () => decide(b, true, [approve, reject]));
       reject.addEventListener("click", () => decide(b, false, [approve, reject]));
-      return h("li", { class: "ap-feed-item ap-batch" },
-        h("p", { class: "ap-what ap-batch-summary" }, label),
-        h("p", { class: "ap-muted ap-small" }, batchFacts(b, currency)),
-        h("p", { class: "ap-muted ap-small" }, "Expected numbers are its own forecast before sending, not a result."),
-        h("div", { class: "ap-actions" }, approve, reject));
+      return h("li", { class: "lv-batch ap-batch" },
+        h("div", { class: "lv-batch-text" },
+          h("p", { class: "row-title lv-batch-summary" }, label),
+          h("p", { class: "row-meta lv-batch-facts" }, batchFacts(b, currency))),
+        h("div", { class: "lv-batch-actions" }, reject, approve));
     })));
   }
   if (decided.length) {
-    out.push(h("details", { class: "ap-left-alone" },
+    out.push(h("details", { class: "ap-left-alone lv-fold" },
       h("summary", null, `Decided (${decided.length})`),
-      h("ul", { class: "ap-feed ap-feed-quiet ap-batches-list" }, ...decided.map((b) =>
-        h("li", { class: "ap-feed-item ap-batch" },
-          h("p", null, h("span", { class: `ap-chip ap-chip-quiet ap-batch-${b.status}` }, BATCH_WORDS[b.status] || String(b.status)), " ", b.summary || `A batch of ${count(b.n_contacts)} contacts`),
-          h("p", { class: "ap-muted ap-small" }, [batchFacts(b, currency), present(b.decided_at) ? `decided ${when(b.decided_at)}${present(b.decided_by) ? ` by ${b.decided_by}` : ""}` : null].filter(Boolean).join(" · ")))))));
+      h("ul", { class: "list lv-batch-list ap-batches-list" }, ...decided.map((b) =>
+        h("li", { class: "lv-batch lv-batch-done ap-batch" },
+          h("div", { class: "lv-batch-text" },
+            h("p", { class: "lv-batch-summary" }, chip(BATCH_WORDS[b.status] || String(b.status), BATCH_TONE[b.status] || "quiet", `ap-batch-${b.status}`), " ", b.summary || `A batch of ${count(b.n_contacts)} contacts`),
+            h("p", { class: "row-meta" }, [batchFacts(b, currency), present(b.decided_at) ? `decided ${when(b.decided_at)}${present(b.decided_by) ? ` by ${b.decided_by}` : ""}` : null].filter(Boolean).join(" · "))))))));
   }
   return out;
 }
 
-/** One big number with its label and a short note. */
-const bigNumber = (label, value, note, extra = "") =>
-  h("div", { class: `lv-big-item ${extra}`.trim() }, h("dt", null, label), h("dd", { class: "lv-big-value" }, value), note && h("dd", { class: "lv-big-note" }, note));
-
-/** A smaller fact tile in the "what came of it" row. */
-const stat = (label, value, note, extra = "") =>
-  h("div", { class: `lv-stat ${extra}`.trim() }, h("dt", null, label), h("dd", { class: "lv-stat-value" }, value), note && h("dd", { class: "lv-stat-note" }, note));
-
 function todayView(today, { goal, brief, currency, proof, proofError, navigate }) {
   if (!today) {
-    return [empty("The day-by-day count is not available from this server yet. The full briefing below has the overview.")];
+    return [lvEmpty("The day-by-day count is not available from this server yet. The full briefing, further down, has the overview.")];
   }
   if (!today.customers_considered) {
     return [
       h("p", { class: "lv-say" }, "Nothing was decided for this goal yet."),
-      h("p", { class: "ap-muted ap-small" }, checkedLine(today)),
-      ...(today.notes || []).filter((n) => !/^Purchases are/.test(n)).map((n) => h("p", { class: "ap-muted ap-small" }, n)),
+      h("p", { class: "lv-checked" }, checkedLine(today)),
+      ...(today.notes || []).filter((n) => !/^Purchases are/.test(n)).map((n) => h("p", { class: "lv-foot" }, n)),
     ];
   }
   const cur = today.currency || currency;
@@ -957,81 +1063,97 @@ function todayView(today, { goal, brief, currency, proof, proofError, navigate }
   const reasonList = reasons.length
     ? h("ul", { class: "lv-reasons", "aria-label": `Why ${count(today.left_alone)} customers were left alone` }, ...reasons.map((r) =>
       h("li", { class: `lv-reason lv-reason-${r.code}` },
-        h("span", { class: "lv-reason-n" }, count(r.n)),
         h("span", { class: "lv-reason-words" }, r.words || humanize(r.code),
-          r.code === "weekly_cap" && present(cap) && h("span", { class: "ap-muted" }, ` (your limit: ${cap} a week)`),
+          r.code === "weekly_cap" && present(cap) && h("span", { class: "lv-reason-cap" }, ` (your limit: ${cap} a week)`),
           r.code === "no_effect" && h("span", { class: "lv-reason-hint" }, "This is where people who would buy anyway end up: a message, or a discount, would only cost you."),
           r.code === "holdout" && h("span", { class: "lv-reason-hint" }, "A small random group, so the Proof page can show the real difference.")),
-        h("span", { class: "lv-reason-bar", "aria-hidden": "true" }, h("span", { style: `width: ${Math.max(2, Math.round((100 * (Number(r.n) || 0)) / maxN))}%` })))))
-    : empty("Nobody was left alone that day.");
+        h("span", { class: "lv-reason-bar", "aria-hidden": "true" }, h("span", { style: `width: ${Math.max(2, Math.round((100 * (Number(r.n) || 0)) / maxN))}%` })),
+        h("span", { class: "lv-reason-n num" }, count(r.n)))))
+    : lvEmpty("Nobody was left alone that day.");
 
   const profit = profitWords(proof, cur);
+  // A sure result is set large with its range right under it (never the bare point); "Not sure yet" is a word.
+  const parts = profit.sure ? rangeParts(proof.incremental_profit, (v) => money(v, cur)) : null;
+  const profitValue = parts
+    ? h("dd", { class: "kpi-value lv-money" }, parts.point, h("span", { class: "lv-kpi-range" }, ` ${parts.range}`))
+    : h("dd", { class: "kpi-value lv-unsure" }, profit.value);
   // The runtime's ledger (what the budget limit counts) prices the messages sent; the discounts customers used
-  // are counted on Proof, so the two spend figures differ and the tile says which one it is.
-  const spentNote = [
-    present(today.budget_left) ? `${money(today.budget_left, cur)} left.` : null,
-    "The cost of the messages sent, as the budget limit counts it. Proof's spend also counts the discounts customers used.",
-  ].filter(Boolean).join(" ");
-  const spentShare = present(today.spend_to_date) && present(today.budget) && Number(today.budget) > 0
+  // are counted on Proof, so the two spend figures differ and the footnote says which one this is.
+  const spent = present(today.spend_to_date);
+  const spentShare = spent && present(today.budget) && Number(today.budget) > 0
     ? Math.min(100, Math.max(0, (100 * Number(today.spend_to_date)) / Number(today.budget))) : null;
+  const spentCell = h("div", { class: "kpi lv-spent" },
+    h("dt", { class: "kpi-label" }, "Spent on messages"),
+    spent
+      ? h("dd", { class: "kpi-value" }, money(today.spend_to_date, cur), h("span", { class: "lv-kpi-of" }, ` of ${money(today.budget, cur)}`))
+      : h("dd", { class: "kpi-value is-missing" }, DASH),
+    spentShare !== null && h("dd", { class: "lv-budget", role: "img", "aria-label": `Spent ${money(today.spend_to_date, cur)} of the ${money(today.budget, cur)} budget` },
+      h("span", { class: "lv-budget-fill", style: `width: ${spentShare.toFixed(1)}%` })),
+    h("dd", { class: "kpi-note" }, spent ? (present(today.budget_left) ? `${money(today.budget_left, cur)} left.` : "The cost of the messages sent.") : "Spend is not recorded yet."));
+
+  const messagesNote = shadow ? "Shadow mode sends nothing." : today.autonomy === "approve" && !Number(today.messages_sent)
+    ? "None yet: a batch goes out only after you approve it." : present(today.delivered) ? `${count(today.delivered)} delivered` : null;
 
   return [
     h("p", { class: "lv-say" }, briefingSentence(today)),
-    h("p", { class: "ap-muted ap-small lv-checked" }, checkedLine(today)),
-    h("dl", { class: "lv-big" },
-      bigNumber(shadow ? "Would have contacted" : today.autonomy === "approve" ? "Picked to contact" : "Contacted", count(today.contacted), groupNote),
-      bigNumber("Left alone", count(today.left_alone), "Doing nothing is a decision too. Each one has a reason.", "lv-big-quiet")),
-    h("h3", { class: "ap-h3" }, `Why it left ${count(today.left_alone)} alone`),
-    reasonList,
-    h("p", { class: "ap-muted ap-small" }, "It looks for people whose behaviour a message can change, and weighs the cost of bothering someone every time, so leaving people alone often wins."),
-    h("h3", { class: "ap-h3" }, `What came of it ${d.in}`),
-    h("dl", { class: "lv-stats" },
-      stat("Messages sent", count(today.messages_sent), shadow ? "Shadow mode sends nothing." : today.autonomy === "approve" && !Number(today.messages_sent) ? "None yet: a batch goes out only after you approve it." : present(today.delivered) ? `${count(today.delivered)} delivered` : null),
-      stat("Purchases", count(today.purchases), present(today.revenue) ? `${money(today.revenue, cur)} in sales, from every purchase by these customers, not only extra ones` : null),
-      stat("Extra profit so far", profit.value, proofError ? `Couldn't load the proof: ${errText(proofError)}` : profit.note, profit.sure ? "lv-stat-sure" : "lv-stat-unsure"),
-      stat("Spent on messages", present(today.spend_to_date) ? `${money(today.spend_to_date, cur)} of ${money(today.budget, cur)}` : DASH,
-        present(today.spend_to_date) ? spentNote : "Spend is not recorded yet.")),
-    spentShare !== null && h("div", { class: "lv-budget", role: "img", "aria-label": `Spent ${money(today.spend_to_date, cur)} of the ${money(today.budget, cur)} budget` },
-      h("span", { class: "lv-budget-fill", style: `width: ${spentShare.toFixed(1)}%` })),
-    h("p", { class: "ap-muted ap-small" }, "Extra profit is measured against a small random group of customers it never contacts, since the goal started. ",
-      typeof navigate === "function" && present(goal?.goal_id)
-        ? h("a", { class: "ap-link", href: `#/proof/${encodeURIComponent(goal.goal_id)}` }, "See how it is measured on Proof")
-        : null),
-    ...(today.notes || []).filter((n) => !/^Purchases are every purchase/.test(n)).map((n) => h("p", { class: "ap-muted ap-small" }, n)),
+    h("p", { class: "lv-checked" }, checkedLine(today)),
+    h("dl", { class: "kpis lv-big", style: "--kpi-count: 2" },
+      kpiCell(shadow ? "Would have contacted" : today.autonomy === "approve" ? "Picked to contact" : "Contacted", count(today.contacted), groupNote, "lv-big-item"),
+      kpiCell("Left alone", count(today.left_alone), "Doing nothing is a decision too. Each one has a reason.", "lv-big-item lv-big-quiet")),
+    h("div", { class: "lv-block" },
+      h("h3", { class: "lv-subhead" }, `Why it left ${count(today.left_alone)} alone`),
+      reasonList,
+      h("p", { class: "lv-foot" }, "It looks for people whose behaviour a message can change, and weighs the cost of bothering someone every time, so leaving people alone often wins.")),
+    h("div", { class: "lv-block" },
+      h("h3", { class: "lv-subhead" }, `What came of it ${d.in}`),
+      h("dl", { class: "kpis lv-stats", style: "--kpi-count: 4" },
+        kpiCell("Messages sent", count(today.messages_sent), messagesNote),
+        kpiCell("Purchases", count(today.purchases), present(today.revenue) ? `${money(today.revenue, cur)} in sales, from every purchase by these customers, not only extra ones` : null),
+        h("div", { class: `kpi lv-profit ${profit.sure ? "lv-stat-sure" : "lv-stat-unsure"}` },
+          h("dt", { class: "kpi-label" }, "Extra profit so far"),
+          profitValue,
+          h("dd", { class: "kpi-note" }, proofError ? `Couldn't load the proof: ${errText(proofError)}` : profit.note)),
+        spentCell),
+      h("p", { class: "lv-foot" },
+        "Extra profit is measured against a small random group of customers it never contacts, since the goal started. ",
+        "Spent on messages is the cost of the messages sent, as the budget limit counts it; Proof's spend also counts the discounts customers used. ",
+        typeof navigate === "function" && present(goal?.goal_id)
+          ? h("a", { href: `#/proof/${encodeURIComponent(goal.goal_id)}` }, "See how it is measured on Proof")
+          : null)),
+    ...(today.notes || []).filter((n) => !/^Purchases are every purchase/.test(n)).map((n) => h("p", { class: "lv-foot" }, n)),
   ].filter(Boolean);
 }
 
 function learnedView(learned) {
   if (!learned || !learned.length) {
-    return [empty("Nothing new yet. As it watches what happens after each message, it notes here what it changed.")];
+    return [lvEmpty("Nothing new yet. As it watches what happens after each message, it notes here what it changed.")];
   }
-  return [h("ul", { class: "ap-plain lv-learned" }, ...learned.map((t) => h("li", null, t)))];
+  return [h("ul", { class: "list lv-learned" }, ...learned.map((t) => h("li", null, t)))];
 }
 
 function briefingView(briefing) {
-  if (!briefing) return [empty("No briefing yet. The first one arrives after the agent's first full day.")];
+  if (!briefing) return [lvEmpty("No briefing yet. The first one arrives after the agent's first full day.")];
   return [
-    h("p", { class: "ap-headline" }, briefing.headline || DASH),
-    h("p", { class: "ap-muted ap-small" }, `${briefing.period === "weekly" ? "Weekly" : "Daily"} briefing · as of ${when(briefing.as_of)}`),
-    ...(briefing.sections || []).map((sec) =>
-      h("div", { class: "ap-brief-sec" }, h("h3", { class: "ap-h3" }, sec.title || DASH), h("p", null, sec.body || DASH)),
-    ),
+    h("p", { class: "lv-headline" }, briefing.headline || DASH),
+    h("div", { class: "lv-brief-secs" }, ...(briefing.sections || []).map((sec) =>
+      h("div", { class: "ap-brief-sec lv-brief-sec" }, h("h3", { class: "lv-brief-title" }, sec.title || DASH), h("p", null, sec.body || DASH)),
+    )),
     /holdout/i.test([briefing.headline, ...(briefing.sections || []).map((x) => `${x.title} ${x.body}`)].join(" ")) &&
-      h("p", { class: "ap-muted ap-small" }, "“The holdout” means the small random group of people we never contact, so the difference can be measured."),
+      h("p", { class: "lv-foot" }, "“The holdout” means the small random group of people we never contact, so the difference can be measured."),
   ].filter(Boolean);
 }
 
 function feedView(feed, opts) {
   const { acted, leftAlone } = splitRows(feed?.rows);
-  if (!acted.length && !leftAlone.length) return [empty("No decisions yet. They appear here as the agent makes them.")];
+  if (!acted.length && !leftAlone.length) return [lvEmpty("No decisions yet. They appear here as the agent makes them.")];
 
   const find = findCustomerForm(opts.openCustomer);
-  const intro = h("p", { class: "ap-muted ap-small" },
-    `The latest ${count(acted.length + leftAlone.length)} decisions. Tap a customer to see everything it decided for them, and why.`,
+  const intro = h("p", { class: "lv-intro" },
+    "Tap a customer to see everything it decided for them, and why.",
     opts.today ? " The full counts for the day are in the card at the top." : "");
-  const list = h("ol", { class: "ap-feed", "aria-label": "Customers contacted, newest first" });
+  const list = h("ol", { class: "list lv-feed ap-feed", "aria-label": "Customers contacted, newest first" });
   let shown = 0;
-  const more = h("button", { type: "button", class: "ap-btn ap-btn-quiet" });
+  const more = h("button", { type: "button", class: "btn btn-secondary btn-sm lv-more" });
   const showMore = () => {
     acted.slice(shown, shown + FEED_PAGE).forEach((r) => list.append(feedItem(r, opts)));
     shown = Math.min(acted.length, shown + FEED_PAGE);
@@ -1041,21 +1163,20 @@ function feedView(feed, opts) {
   more.addEventListener("click", showMore);
   showMore();
 
-  const aloneList = h("ol", { class: "ap-feed ap-feed-quiet" }, ...leftAlone.map((r) => feedItem(r, opts)));
+  const aloneList = h("ol", { class: "list lv-feed ap-feed ap-feed-quiet" }, ...leftAlone.map((r) => feedItem(r, opts)));
   const alone = h(
     "details",
-    { class: "ap-left-alone" },
+    { class: "ap-left-alone lv-fold" },
     h("summary", null, `Left alone (${leftAlone.length})`),
-    h("p", { class: "ap-muted ap-small" }, "Choosing not to contact someone is a decision too. Each one says why."),
+    h("p", { class: "lv-intro" }, "Choosing not to contact someone is a decision too. Each one says why."),
     aloneList,
   );
 
   // replaceChildren() turns `false` into the text "false", so drop the parts that are not shown.
   return [
-    intro,
-    find,
-    h("h3", { class: "ap-h3" }, `Contacted, in these decisions (${acted.length})`),
-    acted.length ? list : empty("Nobody contacted in this window."),
+    h("div", { class: "lv-feed-tools" }, intro, find),
+    h("h3", { class: "lv-subhead" }, `Contacted, in these decisions (${acted.length})`),
+    acted.length ? list : lvEmpty("Nobody contacted in this window."),
     acted.length > FEED_PAGE ? more : null,
     leftAlone.length > 0 ? alone : null,
   ].filter(Boolean);
@@ -1063,10 +1184,10 @@ function feedView(feed, opts) {
 
 /** "Open a customer": any customer, by id, not only the ones in the latest decisions. */
 function findCustomerForm(openCustomer) {
-  const input = h("input", { class: "ap-input", id: "lv-find", name: "customer", type: "search", autocomplete: "off", placeholder: "e.g. cust_1042" });
-  const btn = h("button", { type: "submit", class: "ap-btn" }, "Open");
+  const input = h("input", { class: "lv-find-input", id: "lv-find", name: "customer", type: "search", autocomplete: "off", placeholder: "e.g. cust_1042" });
+  const btn = h("button", { type: "submit", class: "btn btn-secondary" }, "Open");
   const form = h("form", { class: "lv-find", role: "search" },
-    h("label", { for: "lv-find", class: "ap-field-label" }, "Look up any customer by their id"),
+    h("label", { for: "lv-find", class: "lv-find-label" }, "Look up any customer by their id"),
     h("div", { class: "lv-find-row" }, input, btn));
   form.addEventListener("submit", (e) => {
     if (e && typeof e.preventDefault === "function") e.preventDefault();
@@ -1079,8 +1200,8 @@ function findCustomerForm(openCustomer) {
 /** The customer's name when the data has one, with the id small; else the id alone. */
 function whoButton(customerId, name, openCustomer) {
   const btn = present(name)
-    ? h("button", { type: "button", class: "ap-link lv-who", "aria-label": `Open ${name} (customer ${customerId})` }, name, h("span", { class: "lv-id" }, customerId))
-    : h("button", { type: "button", class: "ap-link", "aria-label": `Open customer ${customerId}` }, customerId);
+    ? h("button", { type: "button", class: "lv-who", "aria-label": `Open ${name} (customer ${customerId})` }, name, h("span", { class: "lv-id" }, customerId))
+    : h("button", { type: "button", class: "lv-who lv-who-id", "aria-label": `Open customer ${customerId}` }, customerId);
   btn.addEventListener("click", () => openCustomer(customerId, btn, present(name) ? name : null));
   return btn;
 }
@@ -1100,10 +1221,6 @@ function comboParts(d, x, contentIndex, brief = null) {
   return parts;
 }
 
-function chip(label, tone) {
-  return h("span", { class: `ap-chip lv-state lv-state-${tone}` }, label);
-}
-
 function feedItem(row, opts) {
   const { d, x } = row;
   const acted = d.kind === "act" && d.action;
@@ -1116,36 +1233,38 @@ function feedItem(row, opts) {
   if (acted && !combo.some((p) => p.startsWith("send time"))) meta.push(`send at ${when(d.action.send_at)}`);
   return h(
     "li",
-    { class: `ap-feed-item ${acted ? "" : "ap-feed-nothing"}`.trim() },
-    h("div", { class: "ap-feed-top" }, who,
-      status && chip(status.word, status.tone),
-      h("span", { class: "ap-what" }, describeAction(d, opts.brief)),
-      d.group && d.group !== "agent" && h("span", { class: "ap-chip ap-chip-quiet" }, GROUP_CHIP[d.group] || groupLabel(d.group))),
+    { class: `lv-row ap-feed-item ${acted ? "" : "ap-feed-nothing lv-row-alone"} ${img ? "lv-row-img" : ""}`.trim().replace(/\s+/g, " ") },
+    h("div", { class: "lv-row-top ap-feed-top" },
+      h("div", { class: "lv-row-what" }, who,
+        h("span", { class: "lv-action ap-what" }, describeAction(d, opts.brief)),
+        d.group && d.group !== "agent" && chip(GROUP_CHIP[d.group] || groupLabel(d.group), "quiet", "lv-group")),
+      status && statusMark(status.word, status.tone)),
+    img && h("img", { class: "lv-thumb", src: img, alt: "The image in this message", loading: "lazy", width: "56", height: "56",
+      // An image that cannot load leaves the row rather than showing a broken-image mark.
+      onerror: (e) => e?.target?.remove?.() }),
     !acted && x?.left_alone && h("p", { class: "lv-alone-why" }, x.left_alone.words),
-    combo.length > 0 && h("p", { class: "lv-combo" }, combo.join(" · ")),
-    img && h("img", { class: "lv-thumb", src: img, alt: "The image in this message", loading: "lazy", width: "96", height: "96" }),
-    h("p", { class: "ap-why" }, d.reason || DASH),
-    h("p", { class: "ap-muted ap-small" }, meta.join(" · ")),
+    h("p", { class: "lv-why ap-why" }, d.reason || DASH),
+    h("p", { class: "lv-combo" }, [...combo, ...meta].join(" · ")),
   );
 }
 
 function inboxView(alerts) {
-  if (!alerts.length) return [empty("Nothing needs you. Questions and automatic pauses land here.")];
+  if (!alerts.length) return [lvEmpty("Nothing needs you. Questions and automatic pauses land here.")];
   return [
     h(
       "ul",
-      { class: "ap-inbox" },
+      { class: "list lv-inbox ap-inbox" },
       ...alerts.map((a) => {
         const sev = SEVERITY[a.severity] || SEVERITY.info;
         return h(
           "li",
-          { class: `ap-alert ap-sev-${a.severity || "info"}` },
-          h("div", { class: "ap-alert-top" },
-            h("span", { class: "ap-sev" }, h("span", { class: "ap-sev-icon", "aria-hidden": "true" }, sev.icon), sev.word),
-            a.auto_paused && h("span", { class: "ap-chip ap-chip-paused" }, "Auto-paused"),
-            h("span", { class: "ap-muted ap-small" }, when(a.at))),
-          h("p", null, a.message || DASH),
-          !present(a.goal_id) && h("p", { class: "ap-muted ap-small" }, "Affects every goal"),
+          { class: `lv-alert ap-alert ap-sev-${a.severity || "info"}` },
+          h("div", { class: "lv-alert-top" },
+            chip(sev.word, sev.tone, "ap-sev"),
+            a.auto_paused && chip("Auto-paused", "quiet", "ap-chip-paused"),
+            h("span", { class: "lv-alert-when" }, when(a.at))),
+          h("p", { class: "lv-alert-msg" }, a.message || DASH),
+          !present(a.goal_id) && h("p", { class: "lv-meta" }, "Affects every goal"),
         );
       }),
     ),
@@ -1168,7 +1287,7 @@ export function unsubscribeNote(rule) {
 }
 
 function healthView(health, brief, limits) {
-  if (!health && !limits) return [empty("No health numbers yet.")];
+  if (!health && !limits) return [lvEmpty("No health numbers yet.")];
   const rules = new Map((limits?.rules || []).map((r) => [r.metric, r]));
   const cap = brief?.envelope?.max_contacts_per_week;
   const delivery = rules.get("delivery_rate_below");
@@ -1193,19 +1312,22 @@ function healthView(health, brief, limits) {
   ];
   const others = (limits?.rules || []).filter((r) => !["delivery_rate_below", "complaint_rate", "unsubscribe_multiple"].includes(r.metric));
   return [
-    h("dl", { class: "ap-tiles" }, ...tiles.map((t) =>
-      h("div", { class: `ap-tile ${t.bad ? "ap-tile-bad" : ""}`.trim() },
-        h("dt", null, t.label),
-        h("dd", { class: "ap-tile-value" }, t.value, t.bad && h("span", { class: "ap-tile-flag" }, " · over the limit")),
-        t.note && h("dd", { class: "ap-muted ap-small" }, t.note)),
+    // A list of figures against their limits, label left and value right, not a grid of tiles.
+    h("dl", { class: "lv-metrics" }, ...tiles.map((t) =>
+      h("div", { class: `lv-metric ap-tile ${t.bad ? "ap-tile-bad lv-metric-bad" : ""}`.trim() },
+        h("dt", { class: "lv-metric-label" }, t.label),
+        h("dd", { class: `lv-metric-value ap-tile-value num${t.value === DASH ? " is-missing" : ""}` }, t.value,
+          t.bad && h("span", { class: "visually-hidden" }, " · over the limit")),
+        t.bad && h("dd", { class: "lv-metric-flag" }, chip("Over the limit", "bad")),
+        t.note && h("dd", { class: "lv-metric-note" }, t.note)),
     )),
-    others.length > 0 && h("h3", { class: "ap-h3" }, "Other safety stops"),
-    others.length > 0 && h("ul", { class: "ap-plain lv-stops" }, ...others.map((r) =>
+    others.length > 0 && h("h3", { class: "lv-subhead" }, "Other safety stops"),
+    others.length > 0 && h("ul", { class: "list lv-stops" }, ...others.map((r) =>
       h("li", null, r.words || humanize(r.metric),
-        r.metric === "spend_pace" && present(r.current) && h("span", { class: "ap-muted" }, ` Now: spending at ${pct(r.current)} of the planned pace.`),
-        r.judged === false && h("span", { class: "ap-muted" }, " (not running yet)")))),
-    limits && h("p", { class: "ap-muted ap-small" }, "Each stop pauses sending by itself, without waiting for you. You can always press Pause yourself."),
-    h("p", { class: "ap-muted ap-small" }, `As of ${when(health?.as_of || limits?.as_of)}`),
+        r.metric === "spend_pace" && present(r.current) && h("span", { class: "lv-stop-now" }, ` Now: spending at ${pct(r.current)} of the planned pace.`),
+        r.judged === false && h("span", { class: "lv-stop-now" }, " (not running yet)")))),
+    limits && h("p", { class: "lv-foot" }, "Each stop pauses sending by itself, without waiting for you. You can always press Pause yourself."),
+    !present(health?.as_of || limits?.as_of) && h("p", { class: "lv-foot" }, `As of ${DASH}`),
   ].filter(Boolean);
 }
 
@@ -1216,11 +1338,11 @@ function healthView(health, brief, limits) {
  * while it is open (Tab wraps), and goes back to the button that opened it; Escape and the backdrop close it.
  */
 function customerPanel(host, ctx, customerId, opts, opener, onClosed) {
-  const title = h("h2", { class: "ap-h2", id: "ap-panel-title" }, ...panelTitle(customerId, opts.name));
-  const closeBtn = h("button", { type: "button", class: "ap-btn ap-btn-quiet", "aria-label": "Close customer panel" }, "Close");
-  const body = h("div", { class: "ap-panel-body" }, h("p", { class: "ap-muted" }, "Loading…"));
-  const panel = h("aside", { class: "ap-panel", role: "dialog", "aria-modal": "true", "aria-labelledby": "ap-panel-title", tabindex: "-1" },
-    h("div", { class: "ap-panel-head" }, title, closeBtn), body);
+  const title = h("h2", { class: "lv-panel-title", id: "ap-panel-title" }, ...panelTitle(customerId, opts.name));
+  const closeBtn = h("button", { type: "button", class: "btn btn-ghost btn-sm lv-panel-close", "aria-label": "Close customer panel" }, "Close");
+  const body = h("div", { class: "ap-panel-body lv-panel-body" }, skeletonBlock([40, 20, 20, 20, 20, 120]));
+  const panel = h("aside", { class: "ap-panel lv-panel", role: "dialog", "aria-modal": "true", "aria-labelledby": "ap-panel-title", tabindex: "-1" },
+    h("div", { class: "ap-panel-head lv-panel-head" }, title, closeBtn), body);
   const backdrop = h("div", { class: "ap-backdrop" });
   let open = true;
   const onKey = (e) => {
@@ -1260,7 +1382,7 @@ function customerPanel(host, ctx, customerId, opts, opener, onClosed) {
 
   // The insight (reading hours, offer habit, refill, delivery states) is extra: without it the panel still shows.
   const insightLoad = maybe(ctx.api, "getCustomerInsight", customerId).catch(() => null);
-  Promise.all([call(ctx.api, "getCustomer", customerId), insightLoad]).then(
+  const load = () => Promise.all([call(ctx.api, "getCustomer", customerId), insightLoad]).then(
     ([bundle, insight]) => {
       if (!open) return;
       const name = insight?.display_name || opts.name;
@@ -1269,9 +1391,13 @@ function customerPanel(host, ctx, customerId, opts, opener, onClosed) {
     },
     (e) => {
       if (!open) return;
-      body.replaceChildren(notFound(e) ? empty(`No details for customer ${customerId} yet.`) : failed(`customer ${customerId}`, e));
+      body.replaceChildren(notFound(e) ? lvEmpty(`No details for customer ${customerId} yet.`) : lvFailed(`customer ${customerId}`, e, () => {
+        body.replaceChildren(skeletonBlock([40, 20, 20, 20]));
+        load();
+      }));
     },
   );
+  load();
   return close;
 }
 
@@ -1284,7 +1410,11 @@ const PREFERENCE_WORDS = { no_discounts: "No discounts" };
 function knowList(st, insight, opts) {
   const items = [];
   const add = (label, text, note = null) => {
-    if (present(text)) items.push(h("li", null, h("strong", null, `${label}: `), text, note && h("span", { class: "ap-muted ap-small lv-basis" }, ` ${note}`)));
+    if (present(text)) {
+      items.push(h("li", { class: "lv-know-item" },
+        h("span", { class: "lv-know-label" }, label, h("span", { class: "visually-hidden" }, ": ")),
+        h("span", { class: "lv-know-text" }, text, note && h("span", { class: "lv-basis" }, ` ${note}`))));
+    }
   };
   add("Reading hours", insight?.best_hour_words || null, present(insight?.reads_counted) && present(insight?.best_hour) ? `(from ${count(insight.reads_counted)} opens, clicks and replies)` : null);
   add("Offers", insight?.offer_habit_words || offerHabitFromSensitivity(st.offer_sensitivity));
@@ -1297,10 +1427,13 @@ function knowList(st, insight, opts) {
   return items;
 }
 
+/** A titled group in the panel, split from the one above by a hairline. */
+const panelSection = (title, ...kids) => h("section", { class: "lv-panel-sec" }, h("h3", { class: "lv-panel-h" }, title), ...kids);
+
 function customerView(bundle, insight, opts) {
   const { currency, brief } = opts;
   const st = bundle?.state;
-  if (!st) return [empty("We have no record of this customer.")];
+  if (!st) return [lvEmpty("We have no record of this customer.")];
   const rows = [
     ["Group", GROUP_WORDS[st.group] || groupLabel(st.group)],
     ["Where", [st.country, st.timezone].filter(present).join(" · ") || DASH],
@@ -1316,33 +1449,40 @@ function customerView(bundle, insight, opts) {
   for (const [k, v] of Object.entries(st.preferences || {})) {
     rows.push(["Asked for", PREFERENCE_WORDS[k] && String(v) === "true" ? PREFERENCE_WORDS[k] : `${humanize(k)}: ${v}`]);
   }
+  const NUMERIC = new Set(["Purchases", "Spent with you", "Average order", "Messages (last 7 / 30 days)"]);
 
   const channels = Object.entries(st.channels || {}).map(([ch, cs]) => {
     const reach = cs.unsubscribed ? "unsubscribed" : cs.address_known === false ? "no address" : cs.consent === false ? "has not agreed to messages" : "can contact";
     const counts = present(cs.sends) ? ` · ${count(cs.sends)} sent · ${count(cs.delivers)} delivered · ${count(cs.clicks)} ${Number(cs.clicks) === 1 ? "click" : "clicks"} · ${count(cs.replies)} ${Number(cs.replies) === 1 ? "reply" : "replies"}` : "";
-    return h("li", null, h("strong", null, channelLabel(ch)), `: ${reach}${counts}`);
+    return h("li", { class: "lv-channel" }, h("span", { class: "row-title" }, channelLabel(ch)), h("span", { class: "lv-channel-facts" }, `: ${reach}${counts}`));
   });
 
   const items = insight?.items || null;
   const entries = timeline(bundle).map(({ at, kind, item }) => {
     if (kind === "event") {
-      return h("li", { class: "ap-tl-item ap-tl-event" },
-        h("span", { class: "ap-tl-when" }, when(at)),
-        h("span", null, describeEvent(item, currency, items)));
+      return h("li", { class: "ap-tl-item ap-tl-event lv-tl-item" },
+        h("span", { class: "ap-tl-when lv-tl-when" }, when(at)),
+        h("span", { class: "lv-tl-event" }, describeEvent(item, currency, items)));
     }
     return decisionEntry(at, item, insight, opts);
   });
   const know = knowList(st, insight, opts);
 
   return [
-    h("h3", { class: "ap-h3" }, "What it knows about them"),
-    know.length ? h("ul", { class: "ap-plain lv-know" }, ...know) : empty("Nothing worked out yet beyond the facts below."),
-    h("dl", { class: "ap-facts" }, ...rows.map(([k, v]) => h("div", null, h("dt", null, k), h("dd", null, v)))),
-    h("h3", { class: "ap-h3" }, "Channels"),
-    channels.length ? h("ul", { class: "ap-plain" }, ...channels) : empty("No channels known."),
-    h("h3", { class: "ap-h3" }, "Every decision and what happened"),
-    entries.length ? h("ol", { class: "ap-timeline" }, ...entries) : empty("Nothing has happened yet."),
-    brief && h("p", { class: "ap-muted ap-small" }, "Forecasts are what it expected before acting, not results. Results are on Proof."),
+    panelSection("What it knows about them",
+      know.length ? h("ul", { class: "lv-know" }, ...know) : lvEmpty("Nothing worked out yet beyond the facts below.")),
+    panelSection("Facts",
+      h("dl", { class: "lv-facts ap-facts" }, ...rows.map(([k, v]) => {
+        // A value we do not have is a faint dash, so the facts we do have stand out.
+        const missing = /^[\s/\u2014]+$/.test(String(v));
+        const cls = [NUMERIC.has(k) ? "num" : null, missing ? "is-missing" : null].filter(Boolean).join(" ") || null;
+        return h("div", null, h("dt", null, k), h("dd", { class: cls }, v));
+      }))),
+    panelSection("Channels",
+      channels.length ? h("ul", { class: "list lv-channels" }, ...channels) : lvEmpty("No channels known.")),
+    panelSection("Every decision and what happened",
+      entries.length ? h("ol", { class: "ap-timeline lv-timeline" }, ...entries) : lvEmpty("Nothing has happened yet."),
+      brief && h("p", { class: "lv-foot" }, "Forecasts are what it expected before acting, not results. Results are on Proof.")),
   ].filter(Boolean);
 }
 
@@ -1358,19 +1498,20 @@ function decisionEntry(at, d, insight, opts) {
     ? `The bar a message had to clear: ${fineMoney(d.attention_price, currency)} (the cost of bothering them again).` : null;
   const forecast = acted && present(d.expected_net) ? `Its forecast before sending: ${netWords(d.expected_net, currency)}.` : null;
   const ruled = (d.blocked_by || []).map(ruleWords);
-  return h("li", { class: "ap-tl-item ap-tl-decision" },
-    h("span", { class: "ap-tl-when" }, when(at)),
-    h("span", { class: "ap-what" }, acted ? `Decided: ${describeAction(d, brief)}` : "Decided: leave them alone"),
-    status && h("span", null, " ", chip(status.word, status.tone)),
+  return h("li", { class: "ap-tl-item ap-tl-decision lv-tl-item lv-tl-decision" },
+    h("span", { class: "ap-tl-when lv-tl-when" }, when(at)),
+    h("div", { class: "lv-tl-head" },
+      h("span", { class: "lv-action ap-what" }, acted ? `Decided: ${describeAction(d, brief)}` : "Decided: leave them alone"),
+      status && h("span", null, " ", chip(status.word, status.tone))),
     alone && h("p", { class: "lv-alone-why" }, alone.words),
     combo.length > 0 && h("p", { class: "lv-combo" }, combo.join(" · ")),
-    h("p", { class: "ap-why" }, h("span", { class: "ap-why-label" }, "Why: "), d.reason || DASH),
-    (forecast || bar) && h("p", { class: "ap-muted ap-small" }, [forecast, bar].filter(Boolean).join(" ")),
-    holdout && h("p", { class: "ap-muted ap-small" }, "In the small random group it never contacts, so Proof can measure the difference."),
-    ruled.length > 0 && h("p", { class: "ap-muted ap-small" }, `Ruled out: ${ruled.join("; ")}.`),
-    (d.bids || []).length > 0 && h("details", { class: "ap-bids" }, h("summary", null, `Options it weighed (${d.bids.length})`),
-      h("p", { class: "ap-muted ap-small" }, "Each line is its own estimate before sending, not a result."),
-      h("ol", null, ...bidLabels(d.bids, opts).map((label, i) => bidItem(d.bids[i], d, label, opts)))),
+    h("p", { class: "lv-why ap-why" }, h("span", { class: "ap-why-label" }, "Why: "), d.reason || DASH),
+    (forecast || bar) && h("p", { class: "lv-meta" }, [forecast, bar].filter(Boolean).join(" ")),
+    holdout && h("p", { class: "lv-meta" }, "In the small random group it never contacts, so Proof can measure the difference."),
+    ruled.length > 0 && h("p", { class: "lv-meta" }, `Ruled out: ${ruled.join("; ")}.`),
+    (d.bids || []).length > 0 && h("details", { class: "ap-bids lv-fold lv-bids" }, h("summary", null, `Options it weighed (${d.bids.length})`),
+      h("p", { class: "lv-meta" }, "Each line is its own estimate before sending, not a result."),
+      h("ol", { class: "lv-bid-list" }, ...bidLabels(d.bids, opts).map((label, i) => bidItem(d.bids[i], d, label, opts)))),
   );
 }
 
@@ -1394,8 +1535,9 @@ function bidItem(b, d, label, { currency }) {
   const lift = upliftWords(b.uplift);
   const v = Number(b.expected_net);
   const net = Number.isFinite(v) && v < 0 ? `would lose ${fineMoney(-v, currency)}` : `would add ${fineMoney(b.expected_net, currency)}`;
-  return h("li", { class: verdict === "Chosen" ? "lv-bid-chosen" : null },
-    h("strong", null, label),
+  const chosen = verdict === "Chosen";
+  return h("li", { class: chosen ? "lv-bid lv-bid-chosen" : "lv-bid" },
+    h("span", { class: "lv-bid-name" }, label),
     `: ${lift ? `${capital(lift)}; ` : ""}${net} after ${costs.length ? costs.join(" and ") : "its costs"}. `,
-    h("span", { class: verdict === "Chosen" ? "lv-verdict lv-verdict-chosen" : "lv-verdict" }, verdict));
+    chosen ? chip(verdict, "good", "lv-verdict lv-verdict-chosen") : h("span", { class: "lv-verdict" }, verdict));
 }

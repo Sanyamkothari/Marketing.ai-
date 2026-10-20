@@ -1,177 +1,784 @@
-/* Proof screen (screens/proof.js). Classes start with `pf-`; the shared `ap-` cards, tiles and chart come from
-   feed.css. Only feed.css's colour tokens are used (light and dark mode follow them), with light fallbacks.
-   A verdict is never colour alone: it always has its icon and its words. Text pairs are the feed.css pairs,
-   which meet WCAG AA in both themes. */
+/* Proof (screens/proof.js) and Operator (screens/operator.js). index.html links this file for every screen, so
+   every rule is scoped to `.ap-proof` or `.ap-operator`. The frame is the design system's (styles.css: .card,
+   .kpis, .grid, .pill, .notice, .empty, .error-box, .btn, tables); only what those screens add lives here, in the
+   section-2 tokens, so light and dark follow styles.css. A verdict is never colour alone: the words are always
+   there, the coloured mark is decoration. */
 
-/* ---- the verdict, before any number ---------------------------------------------------------- */
+/* feed.css sets a looser line height on its pages; these two follow the design system's 14/20. */
+.ap-proof,
+.ap-operator {
+  line-height: var(--lh-body);
+  color: var(--text);
+}
+
+/* Small print under a full-width card stays at a reading measure. */
+.ap-proof .card > p.meta {
+  max-width: 110ch;
+}
+
+.ap-proof .card > :last-child,
+.ap-operator .card > :last-child {
+  margin-bottom: 0;
+}
+
+/* ---- the title row ------------------------------------------------------------------------------------------ */
+
+.ap-proof .pf-head-line {
+  margin: 4px 0 0;
+}
+
+/* ---- the verdict, before any number ------------------------------------------------------------------------- */
 
 .ap-proof .pf-verdict {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 8px;
-  padding: 6px 12px 6px 6px;
-  border-radius: 999px;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.3;
-  background: var(--ap-surface-2, #f3f4f6);
-  color: var(--ap-ink, #111827);
-}
-.ap-proof .pf-verdict-icon {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  font-size: 15px;
-  font-weight: 800;
-  background: var(--ap-ink, #111827);
-  color: var(--ap-surface, #ffffff);
-}
-.ap-proof .pf-tone-good {
-  background: var(--ap-good-t, #e8f6ee);
-  color: var(--ap-good, #15803d);
-}
-.ap-proof .pf-tone-good .pf-verdict-icon {
-  background: var(--ap-good, #15803d);
-  color: var(--ap-good-t, #e8f6ee);
-}
-.ap-proof .pf-tone-warn {
-  background: var(--ap-warning-t, #fef3c7);
-  color: var(--ap-warning, #9a4a07);
-}
-.ap-proof .pf-tone-warn .pf-verdict-icon {
-  background: var(--ap-warning, #9a4a07);
-  color: var(--ap-warning-t, #fef3c7);
-}
-.ap-proof .pf-tone-bad {
-  background: var(--ap-critical-t, #fdecec);
-  color: var(--ap-critical, #b42318);
-}
-.ap-proof .pf-tone-bad .pf-verdict-icon {
-  background: var(--ap-critical, #b42318);
-  color: var(--ap-critical-t, #fdecec);
-}
-.ap-proof .pf-verdict-text {
-  font-size: 15px;
-  max-width: 70ch;
-  margin: 0 0 12px;
-}
-
-/* ---- how it is measured ---------------------------------------------------------------------- */
-
-.ap-proof .pf-method {
-  margin-top: 4px;
-  padding: 10px 12px;
-  border-left: 3px solid var(--ap-accent, #1e57bd);
-  border-radius: 0 8px 8px 0;
-  background: var(--ap-accent-soft, #edf2fa);
-}
-.ap-proof .pf-method p {
-  margin: 0;
-}
-.ap-proof .pf-details {
-  margin-top: 6px;
-}
-.ap-proof .pf-details summary {
-  cursor: pointer;
-  font-weight: 600;
-  color: var(--ap-accent, #1e57bd);
-  min-height: 32px;
   display: flex;
   align-items: center;
-}
-.ap-proof .pf-details ul {
-  margin-top: 4px;
-}
-.ap-proof .pf-details li + li {
-  margin-top: 4px;
-}
-
-/* ---- what to do next ------------------------------------------------------------------------- */
-
-.ap-proof .pf-advice-good {
-  border-color: var(--ap-good, #15803d);
-  border-width: 2px;
-}
-.ap-proof .pf-advice p:last-child {
-  margin-bottom: 0;
-}
-.ap-proof .pf-link-btn {
-  display: inline-flex;
-  align-items: center;
-  text-decoration: none;
-  max-width: 100%;
-  white-space: normal;
-}
-
-/* ---- the forecast ---------------------------------------------------------------------------- */
-
-.ap-proof .pf-forecast {
-  border-style: dashed;
-}
-.ap-proof .pf-chip {
-  display: inline-block;
-  margin-left: 4px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--ap-line, #dde1e7);
-  background: var(--ap-surface-2, #f3f4f6);
-  color: var(--ap-muted, #5b6474);
-  font-size: 12.5px;
+  gap: 10px;
+  margin: 0 0 8px;
+  color: var(--text);
   font-weight: 600;
-  vertical-align: middle;
-  white-space: nowrap;
 }
 
-/* ---- the product fact (general guidance, not this shop's number) ----------------------------- */
+.ap-proof .pf-verdict-lg {
+  font-size: var(--fs-title);
+  line-height: 32px;
+  letter-spacing: -0.01em;
+}
 
-.ap-proof .pf-fact {
-  margin: 0 0 16px;
-  padding: 12px 16px;
-  border: 1px solid var(--ap-line, #dde1e7);
-  border-left: 3px solid var(--ap-muted, #5b6474);
-  border-radius: var(--ap-radius, 10px);
-  background: var(--ap-surface-2, #f3f4f6);
-  color: var(--ap-ink, #111827);
+.ap-proof .pf-verdict-sm {
+  font-size: var(--fs-section);
+  line-height: 24px;
 }
-.ap-proof .pf-fact p {
-  margin: 0 0 6px;
-  max-width: 75ch;
+
+.ap-proof .pf-verdict-mark {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--faint);
 }
-.ap-proof .pf-fact p:last-child {
-  margin-bottom: 0;
+
+.ap-proof .pf-verdict-sm .pf-verdict-mark {
+  width: 8px;
+  height: 8px;
 }
-.ap-proof .pf-fact-label {
+
+.ap-proof .pf-tone-good .pf-verdict-mark {
+  background: var(--positive);
+}
+
+.ap-proof .pf-tone-warn .pf-verdict-mark {
+  background: var(--warning);
+}
+
+.ap-proof .pf-tone-bad .pf-verdict-mark {
+  background: var(--negative);
+}
+
+.ap-proof .pf-verdict-text {
+  max-width: 72ch;
+  margin: 0 0 20px;
+  color: var(--muted);
+}
+
+.ap-proof .pf-unsure {
+  color: var(--warning);
+}
+
+/* ---- KPI strips inside a card ------------------------------------------------------------------------------- */
+/* Inside a card the strip is open: no box of its own (a box in a box reads as a card in a card), cells split by
+   hairlines, and the first value sits on the card's own left edge. */
+.ap-proof .card .kpis {
+  border: 0;
+  border-radius: 0;
+  background: none;
+  gap: 0;
+  overflow: visible;
+}
+
+.ap-proof .card .kpi {
+  background: none;
+  padding: 0 var(--card-pad);
+  border-left: 1px solid var(--border);
+}
+
+.ap-proof .card .kpi:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.ap-proof .card .kpi:last-child {
+  padding-right: 0;
+}
+
+/* The answer figure leads: the proof's own money stays at 28; the figures that support it sit at 24. */
+.ap-proof .pf-groups .kpi-value:not(.is-missing),
+.ap-proof .pf-rule .kpi-value:not(.is-missing),
+.ap-proof .pf-forecast-side .kpi-value:not(.is-missing) {
+  font-size: var(--fs-title);
+  line-height: 32px;
+}
+
+/* ---- figures next to their chart ---------------------------------------------------------------------------- */
+
+.ap-proof .pf-figure {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--gap) var(--pad);
+  align-items: start;
+  margin: 0 0 var(--gap);
+}
+
+.ap-proof .pf-figure .kpis {
+  margin: 0;
+}
+
+@media (min-width: 900px) {
+  /* The chart keeps its natural 480px and ends on the card's right edge; the figures take the rest. */
+  .ap-proof .pf-figure-pair {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 480px);
+    column-gap: 40px;
+  }
+}
+
+.ap-proof .pf-chart {
+  margin: 0;
+  min-width: 0;
+}
+
+.ap-proof .pf-chart figcaption {
+  margin-top: 4px;
+}
+
+/* The chart: one hue (the accent) for the estimate, ink for its range, a dashed grey zero. */
+.ap-proof .ap-chart {
+  margin: 0;
+}
+
+.ap-proof .ap-chart text {
+  fill: var(--muted);
   font-size: 14px;
-  margin: 0 0 2px;
-  text-transform: none;
-}
-.ap-proof .pf-fact code,
-.ap-proof .pf-fact a {
-  overflow-wrap: anywhere;
-}
-.ap-proof .pf-fact a {
-  color: var(--ap-accent, #1e57bd);
 }
 
-/* ---- the chart ------------------------------------------------------------------------------- */
+.ap-proof .ap-chart .ap-chart-label {
+  fill: var(--text);
+  font-weight: 500;
+}
+
+.ap-proof .ap-chart .ap-chart-note {
+  fill: var(--faint);
+  font-size: 12px;
+}
+
+/* Square bars: a rounded end would sit on the zero line. */
+.ap-proof .ap-bar {
+  fill: var(--accent);
+  rx: 0;
+}
+
+.ap-proof .ap-bar-neg {
+  fill: var(--negative);
+}
+
+.ap-proof .ap-err {
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+.ap-proof .ap-zero {
+  stroke: var(--faint);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
 
 /* A halo in the card's colour keeps a value readable wherever it sits on the axis. */
 .ap-proof .ap-chart .pf-chart-note {
   paint-order: stroke;
-  stroke: var(--ap-surface, #ffffff);
+  stroke: var(--surface);
   stroke-width: 4px;
   stroke-linejoin: round;
 }
 
-@media (max-width: 520px) {
-  .ap-proof .pf-verdict {
+/* ---- how it is measured: the result card's quiet footer ---------------------------------------------------- */
+
+.ap-proof .pf-method,
+.ap-proof .card > .pf-method:last-child {
+  margin: 20px calc(-1 * var(--card-pad)) calc(-1 * var(--card-pad));
+  padding: 16px var(--card-pad);
+  border-top: 1px solid var(--rule);
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.ap-proof .pf-method p {
+  margin: 0;
+  max-width: 110ch;
+}
+
+.ap-proof .pf-method strong {
+  color: var(--text);
+}
+
+.ap-proof .pf-details,
+.ap-operator .op-json {
+  margin-top: 4px;
+}
+
+.ap-proof .pf-details > summary,
+.ap-operator .op-json > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  color: var(--text);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.ap-proof .pf-details > summary::-webkit-details-marker,
+.ap-operator .op-json > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A small chevron drawn with two borders: right when closed, down when open. */
+.ap-proof .pf-details > summary::before,
+.ap-operator .op-json > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  margin-right: 2px;
+}
+
+.ap-proof .pf-details[open] > summary::before,
+.ap-operator .op-json[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ap-proof .pf-details > summary::before,
+  .ap-operator .op-json > summary::before {
+    transition: transform var(--t-hover) var(--ease-out);
+  }
+}
+
+.ap-proof .pf-bullets {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  max-width: 96ch;
+}
+
+.ap-proof .pf-bullets li + li {
+  margin-top: 4px;
+}
+
+/* ---- what to do next ---------------------------------------------------------------------------------------- */
+
+.ap-proof .pf-advice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap) var(--pad);
+}
+
+.ap-proof .pf-advice-body {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+
+.ap-proof .pf-advice .card-title {
+  margin-bottom: 4px;
+}
+
+.ap-proof .pf-advice-text {
+  margin: 0;
+  max-width: 96ch;
+  color: var(--muted);
+}
+
+.ap-proof .pf-advice-action .btn {
+  text-decoration: none;
+  white-space: normal;
+  text-align: center;
+}
+
+.ap-proof .pf-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 500;
+}
+
+.ap-proof .pf-advice-good .pf-eyebrow::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--positive);
+}
+
+/* ---- the forecast ------------------------------------------------------------------------------------------- */
+
+.ap-proof .pf-lede {
+  margin: 0 0 var(--gap);
+  color: var(--muted);
+  max-width: 96ch;
+}
+
+/* Beside the simple rule the card is narrow: the forecast takes the whole first row, the two counts share the
+   second. */
+.ap-proof .pf-forecast-side .kpis {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ap-proof .pf-forecast-side .kpis > .kpi:first-child {
+  grid-column: 1 / -1;
+}
+
+/* The phone rule spans an odd last cell; here the first one already does, so the last two share a row. */
+.ap-proof .pf-forecast-side .kpis > .kpi:last-child:nth-child(odd) {
+  grid-column: auto;
+}
+
+.ap-proof .pf-forecast-side .kpis > .kpi:first-child {
+  padding: 0 0 16px;
+}
+
+.ap-proof .pf-forecast-side .kpis > .kpi:nth-child(2) {
+  padding: 16px var(--card-pad) 0 0;
+  border-left: 0;
+  border-top: 1px solid var(--border);
+}
+
+.ap-proof .pf-forecast-side .kpis > .kpi:nth-child(3) {
+  padding: 16px 0 0 var(--card-pad);
+  border-top: 1px solid var(--border);
+}
+
+.ap-proof .pf-forecast .meta {
+  margin: 0 0 4px;
+}
+
+/* ---- the product fact (general guidance, not this shop's number) -------------------------------------------- */
+
+.ap-proof .pf-fact p {
+  max-width: 72ch;
+}
+
+.ap-proof .pf-fact > .meta:first-of-type {
+  margin: -4px 0 12px;
+}
+
+.ap-proof .pf-source code,
+.ap-proof .pf-source a {
+  overflow-wrap: anywhere;
+}
+
+/* ---- notes and the shareable text --------------------------------------------------------------------------- */
+
+.ap-proof .pf-notes > .meta {
+  margin: -4px 0 8px;
+}
+
+.ap-proof .pf-note-list > li {
+  padding: 10px 0;
+}
+
+.ap-proof .pf-note-list > li:first-child {
+  padding-top: 4px;
+}
+
+.ap-proof .pf-note-list > li:last-child {
+  padding-bottom: 0;
+}
+
+.ap-proof .pf-share .card-head {
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.ap-proof .pf-share-hint {
+  margin: 0 0 12px;
+}
+
+.ap-proof .pf-summary {
+  display: block;
+  width: 100%;
+  min-height: 116px;
+  height: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  resize: vertical;
+  field-sizing: content;
+  max-height: 360px;
+}
+
+/* ---- loading ------------------------------------------------------------------------------------------------ */
+
+.ap-proof .pf-lines {
+  max-width: 72ch;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 20px;
+}
+
+/* ---- phones ------------------------------------------------------------------------------------------------- */
+
+@media (max-width: 719px) {
+  /* Two columns of open cells: a hairline between the columns, and one above every row after the first. */
+  .ap-proof .card .kpi,
+  .ap-proof .card .kpi:last-child {
+    padding: 0 0 12px;
+  }
+
+  .ap-proof .card .kpi:nth-child(even) {
+    padding-left: 16px;
+  }
+
+  .ap-proof .card .kpi:nth-child(odd) {
+    border-left: 0;
+  }
+
+  .ap-proof .card .kpi:nth-child(n + 3) {
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  .ap-proof .card .kpis {
+    margin-bottom: 4px;
+  }
+
+  .ap-proof .pf-forecast-side .kpis > .kpi:nth-child(2) {
+    padding: 12px 16px 12px 0;
+    border-left: 0;
+  }
+
+  .ap-proof .pf-forecast-side .kpis > .kpi:nth-child(3) {
+    padding: 12px 0 12px 16px;
+    border-left: 1px solid var(--border);
+  }
+
+  .ap-proof .pf-advice-action,
+  .ap-proof .pf-advice-action .btn {
+    width: 100%;
+  }
+
+  .ap-proof .pf-details > summary,
+  .ap-operator .op-json > summary {
+    min-height: var(--touch);
+  }
+
+  /* The chart shrinks to the card (about 0.7 of its 480-unit viewBox); bigger text in viewBox units keeps it
+     near 11px. */
+  .ap-proof .ap-chart text {
+    font-size: 17px;
+  }
+
+  .ap-proof .ap-chart .ap-chart-note {
     font-size: 16px;
   }
-  .ap-proof .pf-chip {
-    margin: 4px 0 0;
+}
+
+/* One figure (the simple rule): the figure, then its chart under it at full size. */
+.ap-proof .pf-figure-single .kpis {
+  max-width: 320px;
+}
+
+/* ---- Operator (screens/operator.js) ------------------------------------------------------------------------- */
+/* A power tool for the team: the same quiet frame, denser tables, raw JSON in grey wells. */
+
+.ap-operator .op-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 0 0 var(--gap);
+}
+
+.ap-operator .op-field {
+  flex: 1 1 160px;
+  gap: 4px;
+  min-width: 0;
+  font-weight: 400;
+}
+
+.ap-operator .op-field-narrow {
+  flex: 0 1 132px;
+}
+
+.ap-operator .op-field-wide {
+  flex: 1 1 280px;
+  max-width: 420px;
+}
+
+.ap-operator .op-label {
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 500;
+}
+
+.ap-operator .op-field input,
+.ap-operator .op-field select {
+  width: 100%;
+}
+
+.ap-operator .op-out {
+  min-height: 0;
+}
+
+/* An empty output (no lookup yet) takes no room, so the form is the card's last child and the card ends on it. */
+.ap-operator .op-out:empty {
+  display: none;
+}
+
+/* The goal's own fields in one row of label and value pairs. */
+.ap-operator .op-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 32px;
+  margin: 0 0 var(--gap);
+  padding: 12px 0 0;
+  border-top: 1px solid var(--rule);
+}
+
+.ap-operator .op-facts dt {
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 500;
+}
+
+.ap-operator .op-facts dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+/* Raw JSON: one row per block with a rule between, the JSON in a grey well when open. */
+.ap-operator .op-json-list {
+  border-top: 1px solid var(--rule);
+}
+
+.ap-operator .op-json {
+  margin: 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.ap-operator .op-json > summary {
+  display: flex;
+  min-height: 40px;
+}
+
+.ap-operator .op-json > summary .meta {
+  margin-left: auto;
+  font-weight: 400;
+}
+
+.ap-operator .op-json-body {
+  position: relative;
+  padding: 0 0 12px;
+}
+
+.ap-operator .op-json-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+
+.ap-operator .op-pre {
+  margin: 0;
+  padding: 12px 120px 12px 12px;
+  max-height: 400px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--raised);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+  line-height: 18px;
+  /* Long JSON lines wrap inside the well instead of scrolling it sideways; indentation is kept. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ap-operator .op-note {
+  margin: 8px 0 0;
+}
+
+.ap-operator .op-detail:not(:empty) {
+  margin-top: var(--gap);
+}
+
+/* The tables: dense, every short cell on one line, only the reason wraps; the wrapper scrolls sideways. */
+.ap-operator .op-table-wrap {
+  margin: 0 0 var(--gap);
+}
+
+/* 200 rows would push the customer lookup thousands of pixels down: on a wide screen the table scrolls inside
+   its card, its header stays in view, and a rule closes the scrolled area. */
+@media (min-width: 640px) {
+  .ap-operator .op-table-wrap {
+    max-height: min(640px, 70vh);
+    overflow: auto;
+    border-bottom: 1px solid var(--border);
+    overscroll-behavior: contain;
+  }
+
+  .ap-operator .op-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--surface);
+  }
+
+  /* The header's rule, drawn on the cell so it stays with the header while the rows scroll under it. */
+  .ap-operator .op-table thead th::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .ap-operator .op-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+}
+
+.ap-operator .op-table {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.ap-operator .op-table th,
+.ap-operator .op-table td {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.ap-operator .op-table th:first-child,
+.ap-operator .op-table td:first-child {
+  padding-left: 0;
+}
+
+.ap-operator .op-table th:last-child,
+.ap-operator .op-table td:last-child {
+  padding-right: 0;
+}
+
+/* Two-word headers ("Attention price") may wrap, so the table fits a desktop card with its JSON buttons. */
+.ap-operator .op-table th {
+  white-space: normal;
+  vertical-align: bottom;
+}
+
+.ap-operator .op-table td {
+  padding-top: 10px;
+  padding-bottom: 9px;
+}
+
+.ap-operator .op-table .mono,
+.ap-operator .op-id {
+  font-size: var(--fs-small);
+}
+
+.ap-operator .op-nowrap {
+  white-space: nowrap;
+}
+
+.ap-operator .op-reason {
+  min-width: 240px;
+  color: var(--muted);
+}
+
+.ap-operator .op-raw {
+  text-align: right;
+  padding-top: 5px;
+  padding-bottom: 4px;
+}
+
+.ap-operator .op-id {
+  text-decoration: underline;
+  text-decoration-color: var(--control);
+  text-underline-offset: 3px;
+}
+
+.ap-operator .op-summary {
+  margin: 0 0 12px;
+  font-weight: 500;
+}
+
+.ap-operator .op-loading {
+  padding: 8px 0;
+}
+
+@media (max-width: 639px) {
+  .ap-operator .op-field-narrow,
+  .ap-operator .op-field-wide {
+    flex: 1 1 140px;
+    max-width: none;
+  }
+
+  .ap-operator .op-filters .btn {
+    flex: 1 1 100%;
+  }
+
+  .ap-operator .op-reason {
+    min-width: 0;
+    flex-basis: 100%;
+  }
+
+  .ap-operator .op-table th,
+  .ap-operator .op-table td,
+  .ap-operator .op-raw {
+    padding: 0;
+  }
+
+  .ap-operator .op-table tr {
+    gap: 4px 12px;
+  }
+
+  /* A mono value (an id, the policy) keeps its label in the text face. */
+  .ap-operator .op-table td[data-label]::before {
+    font-family: var(--font);
+  }
+
+  .ap-operator .op-table td.is-key[data-label]::before {
+    content: attr(data-label) " ";
+    color: var(--faint);
+    font-size: var(--fs-small);
+    font-weight: 400;
+  }
+
+  .ap-operator .op-raw {
+    flex-basis: 100%;
+    text-align: left;
+  }
+
+  .ap-operator .op-raw .btn {
+    padding-left: 0;
+  }
+
+  .ap-operator .op-pre {
+    padding-right: 12px;
+    padding-top: 48px;
   }
 }

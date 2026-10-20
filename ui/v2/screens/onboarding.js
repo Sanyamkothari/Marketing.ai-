@@ -12,7 +12,7 @@
 // ("not yet run with a real business", "3-10% is typical") are labelled as facts about Autonomy or as general
 // guidance, never as numbers about this business. Every number about the business comes from the API.
 
-import { button, clear, el, errorBox, int, loading, money, present, range, when } from "../components.js";
+import { button, card, clear, el, errorBox, int, money, notice, pageHead, present, range, skeleton, when } from "../components.js";
 
 /** The Shadow trial the pitch asks for: two weeks. */
 export const TRIAL_DAYS = 14;
@@ -57,8 +57,11 @@ const STATE_WORDS = {
   unknown: "Can't tell yet",
 };
 
+/** The pill tone for each state: green only for done, the accent only for the step being done now. */
+const STATE_TONE = { done: "positive", now: "accent", next: "neutral", later: "neutral", past: "neutral", unknown: "warning" };
+
 function stateTag(state) {
-  return el("span", { class: ["ob-state", `ob-state-${state}`] }, STATE_WORDS[state] || state);
+  return el("span", { class: ["pill", `pill-${STATE_TONE[state] || "neutral"}`, "ob-state", `ob-state-${state}`] }, STATE_WORDS[state] || state);
 }
 
 /** One step of the path: number, title, state (in words, not only colour), what the data says, and actions. */
@@ -71,7 +74,7 @@ function step(n, title, state, body, actions = []) {
       "div",
       { class: "ob-step-body" },
       el("div", { class: "ob-step-head" }, el("h3", { class: "ob-step-title" }, el("span", { class: "visually-hidden" }, `Step ${n}: `), title), stateTag(state)),
-      body,
+      el("div", { class: "ob-step-text" }, body),
       actions.length ? el("div", { class: "ob-actions" }, actions) : null,
     ),
   );
@@ -116,7 +119,7 @@ function dataStep(report, err) {
         sources.length ? `, from ${plural(sources.length, "source", "sources")}.` : ".",
       ),
       questions.length
-        ? el("p", { class: "ob-attention" }, `The Data Doctor has ${plural(questions.length, "question", "questions")} for you. It won't change anything until you answer.`)
+        ? el("p", { class: "notice ob-attention" }, `The Data Doctor has ${plural(questions.length, "question", "questions")} for you. It won't change anything until you answer.`)
         : null,
     ],
     [link(questions.length ? "Answer on Connect" : "See your data", "#/connect")],
@@ -165,7 +168,11 @@ function shadowFacts(goal, today, expected) {
     if (reasons.length) {
       out.push(
         el("p", { class: "ob-sub" }, "Why it left people alone:"),
-        el("ul", { class: "ob-reasons" }, reasons.map((r) => el("li", {}, `${r.words || r.code}: ${int(r.n)}`))),
+        el(
+          "ul",
+          { class: "ob-reasons" },
+          reasons.map((r) => el("li", {}, el("span", {}, r.words || r.code), el("span", { class: "visually-hidden" }, ": "), el("span", { class: "num" }, int(r.n)))),
+        ),
       );
     }
   }
@@ -241,7 +248,7 @@ function shadowStep(goal, day, today, expected) {
 // ---- step 4: Approve with a small budget -----------------------------------------------------------------------------
 function budgetForm(ctx, goal, rerender) {
   const id = `ob-budget-${goal.goal_id}`;
-  const input = el("input", { id, type: "number", min: "0", step: "any", inputmode: "decimal", value: present(goal.budget) ? String(goal.budget) : "", "aria-describedby": `${id}-help` });
+  const input = el("input", { id, class: "tabular", type: "number", min: "0", step: "any", inputmode: "decimal", value: present(goal.budget) ? String(goal.budget) : "", "aria-describedby": `${id}-help` });
   const msg = el("p", { class: "ob-form-msg", role: "status" });
   const save = button("Save budget", null, { kind: "secondary", type: "submit" });
   const form = el(
@@ -271,7 +278,7 @@ function budgetForm(ctx, goal, rerender) {
     },
     el("label", { for: id }, `Budget for this goal (${goal.currency || "USD"})`),
     el("div", { class: "ob-budget-row" }, input, save),
-    el("p", { id: `${id}-help`, class: "ob-muted" }, `Now ${money(goal.budget, goal.currency)}. Lowering it is always allowed. Raising it above an approved plan needs a new plan.`),
+    el("p", { id: `${id}-help`, class: "field-hint" }, `Now ${money(goal.budget, goal.currency)}. Lowering it is always allowed. Raising it above an approved plan needs a new plan.`),
     msg,
   );
   return form;
@@ -330,7 +337,7 @@ function proofStep(goal, proof, proofErr) {
   const title = "Switch to Autopilot when Proof shows real extra profit";
   const guidance = el(
     "p",
-    { class: "ob-guidance" },
+    { class: "notice notice-neutral ob-guidance" },
     el("strong", {}, "What to expect, in general: "),
     "well-run AI marketing typically adds 3–10% in real, measured extra profit. That is general guidance about the field, not a number about your shop; the Proof page shows your real number, with its range.",
   );
@@ -362,14 +369,20 @@ function proofStep(goal, proof, proofErr) {
 }
 
 // ---- the page --------------------------------------------------------------------------------------------------------
+// One question: where am I on the safe path, and what is next? The path is the biggest block (8 of 12 columns); the
+// ask, the honest status and the control promise sit in the rail beside it (under it on a phone).
+
+const TITLE = "Getting started";
+const SUB = "Getting started is safe. Autonomy starts by watching, not sending. You let it do more one step at a time, and only when the numbers say so.";
+
 function honestNote() {
   return el(
-    "aside",
-    { class: "ob-honest", "aria-labelledby": "ob-honest-title" },
-    el("h2", { id: "ob-honest-title", class: "ob-honest-title" }, "Honest status"),
+    "section",
+    { class: "card ob-honest", "aria-labelledby": "ob-honest-title" },
+    el("h2", { id: "ob-honest-title", class: "card-title" }, "Honest status"),
     el(
       "p",
-      {},
+      { class: "notice ob-honest-notice" },
       "Autonomy has been tested on simulated shops and on past shop data. It has not yet run with a real business, so it is not proven on yours. That is why it starts in Shadow mode, where it decides but sends nothing: risk-free.",
     ),
     el(
@@ -388,8 +401,8 @@ function honestNote() {
 function theAsk(hasGoals) {
   return el(
     "section",
-    { class: "ob-ask", "aria-labelledby": "ob-ask-title" },
-    el("h2", { id: "ob-ask-title" }, "What we ask: your customer data and one goal"),
+    { class: "card ob-ask", "aria-labelledby": "ob-ask-title" },
+    el("h2", { id: "ob-ask-title", class: "card-title" }, "What we ask: your customer data and one goal"),
     el(
       "p",
       {},
@@ -399,18 +412,59 @@ function theAsk(hasGoals) {
   );
 }
 
+function controlNote() {
+  return card({
+    title: "You stay in control at every step",
+    level: 2,
+    className: "ob-control",
+    body: [el("p", { class: "ob-footnote" }, "The big Pause button at the top stops all sending at once, and Autonomy also pauses itself if complaints or unsubscribes spike.")],
+  });
+}
+
+const rail = (hasGoals) => el("div", { class: "span-4 stack ob-rail" }, theAsk(hasGoals), honestNote(), controlNote());
+
+/** The path's frame: the card with its title, "Step n of 5" on the right when one step is current, and its rows. */
+function pathCard(title, meta, children) {
+  return el(
+    "section",
+    { class: "card card-flush span-8 ob-path", "aria-labelledby": "ob-path-title" },
+    el(
+      "div",
+      { class: "card-head ob-path-head" },
+      el("h2", { id: "ob-path-title", class: "card-title" }, title),
+      present(meta) ? el("span", { class: "card-meta" }, meta) : null,
+    ),
+    children,
+  );
+}
+
+/** While the goals load: the path's rows at their real size, numbers and all, so nothing jumps when they land. */
+function pathSkeleton() {
+  const row = (n) =>
+    el(
+      "li",
+      { class: "ob-step ob-step-later" },
+      el("span", { class: "ob-num", "aria-hidden": "true" }, String(n)),
+      el("div", { class: "ob-step-body" }, skeleton({ width: "55%", height: "20px" }), skeleton({ width: "85%", height: "16px", className: "ob-skel-line" })),
+    );
+  return el("ol", { class: "ob-steps", "aria-busy": "true" }, [1, 2, 3, 4, 5].map(row), el("li", { class: "visually-hidden", role: "status" }, "Loading your path…"));
+}
+
 /** Choose the goal the path follows: the one in the switcher, else the first running one, else the first. */
 function focusGoal(goals, ctx) {
   const byId = (id) => goals.find((g) => g.goal_id === id);
   return (ctx.goalId && byId(ctx.goalId)) || goals.find((g) => g.status === "active") || goals[0] || null;
 }
 
+const frame = (path, hasGoals) => [pageHead({ title: TITLE, sub: SUB }), el("div", { class: "grid ob-grid" }, path, rail(hasGoals))];
+
 export async function render(root, ctx) {
-  clear(root, el("h1", {}, "Getting started is safe"), loading());
+  clear(root, ...frame(pathCard("Your path", null, pathSkeleton()), true));
   const api = ctx.api;
   const [goalsR, dataR] = await Promise.allSettled([api.listGoals(), typeof api.getDataReport === "function" ? api.getDataReport() : Promise.resolve(null)]);
   if (goalsR.status === "rejected") {
-    clear(root, el("h1", {}, "Getting started is safe"), errorBox("We couldn't load your goals.", goalsR.reason));
+    const failed = pathCard("Your path", null, el("div", { class: "ob-error" }, errorBox("We couldn't load your goals.", goalsR.reason, { retry: () => render(root, ctx) })));
+    clear(root, ...frame(failed, true));
     return;
   }
   const goals = Array.isArray(goalsR.value) ? goalsR.value : [];
@@ -449,25 +503,12 @@ export async function render(root, ctx) {
   const isState = (s, state) => String(s.getAttribute("class") || "").split(/\s+/).includes(`ob-step-${state}`);
   const current = steps.find((s) => isState(s, "now")) || steps.find((s) => isState(s, "next"));
   if (current) current.setAttribute("aria-current", "step");
+  const at = current ? steps.indexOf(current) + 1 : null;
 
-  clear(
-    root,
-    el("h1", {}, "Getting started is safe"),
-    el(
-      "p",
-      { class: "lede" },
-      "Autonomy starts by watching, not sending. You let it do more one step at a time, and only when the numbers say so.",
-    ),
-    el(
-      "div",
-      { class: "ob-top" },
-      theAsk(goals.length > 0),
-      honestNote(),
-    ),
-    el(
-      "section",
-      { class: "ob-path", "aria-labelledby": "ob-path-title" },
-      el("h2", { id: "ob-path-title" }, goals.length ? "Your path" : "Two steps to start"),
+  const path = pathCard(
+    goals.length ? "Your path" : "Two steps to start",
+    goals.length && at ? `Step ${at} of 5` : null,
+    [
       el("ol", { class: "ob-steps" }, steps),
       goals.length
         ? null
@@ -476,11 +517,7 @@ export async function render(root, ctx) {
             { class: "ob-muted ob-then" },
             "Then: two weeks in Shadow mode, where it decides but sends nothing; then Approve mode for one goal, with a small budget; then Autopilot, only when the Proof page shows real extra profit.",
           ),
-    ),
-    el(
-      "p",
-      { class: "ob-muted ob-footnote" },
-      "You stay in control at every step: the big Pause button at the top stops all sending at once, and Autonomy also pauses itself if complaints or unsubscribes spike.",
-    ),
+    ],
   );
+  clear(root, ...frame(path, goals.length > 0));
 }

@@ -30,16 +30,13 @@ import {
   call,
   count,
   day,
-  empty,
   ensureStyles,
   errText,
-  failed,
   h,
   money,
   notFound,
   notify,
   num,
-  pageHead,
   pct,
   present,
   range,
@@ -289,32 +286,49 @@ export function estimateChart(rows, fmt, label) {
   return s("svg", { viewBox: `0 0 ${W} ${H}`, class: "ap-chart", role: "img", "aria-label": `${label}. ${described}` }, ...parts);
 }
 
-/** A stat tile whose value is an estimate with its range, or "not enough data yet". */
-function estimateTile(title, est, baseFmt, hint) {
+// ---- the markup (DESIGN.md: hairline cards, one divided KPI strip per block, tabular figures, pale pills) -----
+
+/** Inline size for a skeleton block or a KPI strip's column count, as a style attribute (h() sets attributes). */
+const css = (rules) => Object.entries(rules).map(([k, v]) => `${k}: ${v}`).join("; ");
+
+/** A KPI cell whose value is an estimate with its range, or "not enough data yet" in grey (never a zero). */
+function estimateCell(title, est, baseFmt, hint) {
   const fmt = estimateFormat(est, baseFmt);
   const ok = complete(est);
   return h(
     "div",
-    { class: "ap-tile" },
-    h("dt", null, title),
-    h("dd", { class: "ap-tile-value" }, ok ? fmt(est.point) : NOT_ENOUGH),
-    ok && h("dd", { class: "ap-small" }, `Range ${fmt(est.low)} to ${fmt(est.high)}`),
-    ok && straddlesZero(est) && h("dd", { class: "ap-small ap-warn-text" }, "Not sure yet: the range includes zero"),
-    hint && h("dd", { class: "ap-muted ap-small" }, hint),
+    { class: "kpi" },
+    h("dt", { class: "kpi-label" }, title),
+    h("dd", { class: ok ? "kpi-value" : "kpi-value is-missing" }, ok ? fmt(est.point) : NOT_ENOUGH),
+    ok && h("dd", { class: "kpi-range tabular" }, `Range ${fmt(est.low)} to ${fmt(est.high)}`),
+    ok && straddlesZero(est) && h("dd", { class: "kpi-note pf-unsure" }, "Not sure yet: the range includes zero"),
+    hint && h("dd", { class: "kpi-note" }, hint),
   );
 }
 
-function plainTile(title, value, hint) {
-  return h("div", { class: "ap-tile" }, h("dt", null, title), h("dd", { class: "ap-tile-value" }, value),
-    hint && h("dd", { class: "ap-muted ap-small" }, hint));
+function plainCell(title, value, hint) {
+  const shown = present(value) && value !== DASH;
+  return h(
+    "div",
+    { class: "kpi" },
+    h("dt", { class: "kpi-label" }, title),
+    h("dd", { class: shown ? "kpi-value" : "kpi-value is-missing" }, shown ? value : DASH),
+    hint && h("dd", { class: "kpi-note" }, hint),
+  );
 }
 
-/** The verdict line: an icon (hidden from screen readers) and the words, so it never relies on colour alone. */
-function verdictLine(v, id) {
+/** One container split by hairlines (styles.css .kpis), as a description list. */
+function kpis(cells, extra = "") {
+  const list = cells.filter(Boolean);
+  return h("dl", { class: `kpis ${extra}`.trim(), style: css({ "--kpi-count": String(Math.max(1, list.length)) }) }, ...list);
+}
+
+/** The verdict line: a small mark (hidden from screen readers) and the words, so it never relies on colour alone. */
+function verdictLine(v, id, size = "lg") {
   return h(
     "p",
-    { class: `pf-verdict pf-tone-${v.tone}`, id },
-    h("span", { class: "pf-verdict-icon", "aria-hidden": "true" }, v.icon),
+    { class: `pf-verdict pf-verdict-${size} pf-tone-${v.tone}`, id },
+    h("span", { class: "pf-verdict-mark", "aria-hidden": "true" }),
     h("span", { class: "pf-verdict-title" }, v.title),
   );
 }
@@ -338,6 +352,17 @@ function profitSentence(v, est, fmt, goal, hasNotes) {
   return `${NOT_ENOUGH}. Proof needs the agent, the simple rule and the people we never contact to run side by side for a while, and each decision only counts once the days it is given to work have passed.${why}`;
 }
 
+/** The figures of a block next to their chart (stacked on a narrow screen). The chart is null without a range. */
+function figure(strip, chart, kind = "pair") {
+  return h(
+    "div",
+    { class: `pf-figure pf-figure-${kind}` },
+    strip,
+    chart && h("figure", { class: "pf-chart" }, chart,
+      h("figcaption", { class: "meta" }, "Each bar is the best estimate; the line across it is its 95% range.")),
+  );
+}
+
 /** "How this is measured": one plain line, with the detail folded away. */
 function methodBlock(proof) {
   const holdout = proof && present(proof.holdout_n) ? ` (${count(proof.holdout_n)} so far)` : "";
@@ -356,7 +381,7 @@ function methodBlock(proof) {
       h("summary", null, "More about the method"),
       h(
         "ul",
-        { class: "ap-plain" },
+        { class: "pf-bullets" },
         h("li", null, "Each customer is put in one of three groups at random: the agent decides for most of them, a simple rule decides for some, and the people we never contact get nothing at all."),
         h("li", null, "Because the groups are picked at random, they would buy about the same if left alone. The difference in profit between them is what the messages and offers really added."),
         h("li", null, "A decision counts once the days it is given to work have passed, so the newest decisions are not in yet."),
@@ -370,16 +395,35 @@ function planHref(goal, screen = "plan") {
   return goal?.goal_id ? `#/${screen}/${encodeURIComponent(goal.goal_id)}` : `#/${screen}`;
 }
 
+/** The block that failed: one sentence with the server's words, and a Retry that draws the page again. */
+function failedBox(what, error, retry) {
+  return h(
+    "div",
+    { class: "error-box", role: "alert" },
+    h("p", { class: "empty-title" }, `Couldn't load ${what}: ${errText(error)}`),
+    typeof retry === "function" && h("div", { class: "error-actions" }, h("button", { type: "button", class: "link-btn", onclick: retry }, "Retry")),
+  );
+}
+
+function emptyBox(title, text) {
+  return h("div", { class: "empty", role: "status" }, h("p", { class: "empty-title" }, title), text && h("p", null, text));
+}
+
 function adviceCard(advice, goal) {
   const tone = advice.key === "ready" || advice.key === "autopilot-backed" ? "good" : "neutral";
   return h(
     "section",
-    { class: `ap-card pf-advice pf-advice-${tone}`, "aria-labelledby": "pf-advice-title" },
-    h("h2", { class: "ap-h2", id: "pf-advice-title" }, advice.title),
-    h("p", null, advice.text),
+    { class: `card pf-advice pf-advice-${tone} span-12`, "aria-labelledby": "pf-advice-title" },
+    h(
+      "div",
+      { class: "pf-advice-body" },
+      h("p", { class: "pf-eyebrow" }, "Next step"),
+      h("h2", { class: "card-title", id: "pf-advice-title" }, advice.title),
+      h("p", { class: "pf-advice-text" }, advice.text),
+    ),
     advice.link &&
-      h("p", { class: "ap-actions" },
-        h("a", { class: advice.primary ? "ap-btn ap-btn-primary pf-link-btn" : "ap-btn pf-link-btn", href: planHref(goal, advice.screen || "plan") }, advice.link)),
+      h("div", { class: "pf-advice-action" },
+        h("a", { class: advice.primary ? "btn btn-primary" : "btn btn-secondary", href: planHref(goal, advice.screen || "plan") }, advice.link)),
   );
 }
 
@@ -400,42 +444,45 @@ function forecastBody(expected, goal, currency) {
   const shadow = goal?.autonomy === "shadow";
   const est = expected.expected_net;
   const since = present(expected.since) ? ` since ${day(expected.since)}` : "";
-  if (!complete(est)) return [h("p", null, String(expected.words || "There is no forecast yet."))];
+  if (!complete(est)) return [emptyBox("No forecast yet", String(expected.words || "There is no forecast yet."))];
   const kids = [
     h(
       "p",
-      null,
+      { class: "pf-lede" },
       shadow
         ? `For the contacts it would have made${since} (nothing was sent, because this goal is in Shadow mode), it expects this much extra profit over the ${count(expected.horizon_days)} days after each contact:`
         : `For the contacts it decided on${since}, it expects this much extra profit over the ${count(expected.horizon_days)} days after each contact:`,
     ),
-    h(
-      "dl",
-      { class: "ap-tiles" },
-      estimateTile("Expected extra profit", est, m, "its own forecast"),
-      plainTile(shadow ? "Contacts it would make" : "Contacts", count(expected.with_forecast), `to ${count(expected.customers)} customers`),
-      plainTile("Expected spend", m(expected.expected_spend), "on discounts and messages"),
-    ),
+    kpis([
+      estimateCell("Expected extra profit", est, m, "its own forecast"),
+      plainCell(shadow ? "Contacts it would make" : "Contacts", count(expected.with_forecast), `to ${count(expected.customers)} customers`),
+      plainCell("Expected spend", m(expected.expected_spend), "on discounts and messages"),
+    ]),
   ];
   if (present(expected.contacts) && present(expected.with_forecast) && Number(expected.contacts) !== Number(expected.with_forecast)) {
-    kids.push(h("p", { class: "ap-muted ap-small" },
+    kids.push(h("p", { class: "meta" },
       `Of ${count(expected.contacts)} contacts, ${count(expected.with_forecast)} carry a forecast of their own; only those are added up.`));
   }
-  if (straddlesZero(est)) kids.push(h("p", { class: "ap-small ap-warn-text" }, "Even its own forecast is not sure yet: the range includes zero."));
-  kids.push(h("p", { class: "ap-muted ap-small" },
+  if (straddlesZero(est)) kids.push(h("p", { class: "meta pf-unsure" }, "Even its own forecast is not sure yet: the range includes zero."));
+  kids.push(h("p", { class: "meta" },
     "A forecast is what it thinks will happen, not proof. Only the comparison with the people we never contact shows what really happened."));
   return kids;
 }
 
-function forecastCard(result, goal, currency) {
+function forecastCard(result, goal, currency, { span, retry }) {
   let body;
-  if (result.state === "error") body = [failed("the forecast", result.error)];
-  else if (result.state === "none") body = [empty("No forecast to show yet: it has not decided on any contacts for this goal.")];
+  if (result.state === "error") body = [failedBox("the forecast", result.error, retry)];
+  else if (result.state === "none") body = [emptyBox("No forecast yet", "No forecast to show yet: it has not decided on any contacts for this goal.")];
   else body = forecastBody(result.expected, goal, result.expected.currency || currency);
   return h(
     "section",
-    { class: "ap-card pf-forecast", "aria-labelledby": "pf-forecast-title" },
-    h("h2", { class: "ap-h2", id: "pf-forecast-title" }, "What it expects to earn ", h("span", { class: "pf-chip" }, "Its own forecast, not proof")),
+    { class: `card pf-forecast ${span}`, "aria-labelledby": "pf-forecast-title" },
+    h(
+      "div",
+      { class: "card-head" },
+      h("h2", { class: "card-title", id: "pf-forecast-title" }, "What it expects to earn "),
+      h("span", { class: "pill pill-neutral pf-chip" }, "Its own forecast, not proof"),
+    ),
     ...body,
   );
 }
@@ -454,13 +501,18 @@ function docLink() {
 }
 
 /** The 3-10% guidance, labelled as a fact about AI marketing in general, never as this shop's number. */
-function expectFact(proof, measured) {
+function expectFact(proof, measured, span) {
   const share = proof && complete(proof.incremental_profit_share) ? proof.incremental_profit_share : null;
   return h(
     "aside",
-    { class: "pf-fact", "aria-labelledby": "pf-fact-title" },
-    h("h2", { class: "pf-fact-label", id: "pf-fact-title" }, "What to expect"),
-    h("p", { class: "ap-small ap-muted" }, "General guidance about AI marketing, not a result from your business."),
+    { class: `card pf-fact ${span}`, "aria-labelledby": "pf-fact-title" },
+    h(
+      "div",
+      { class: "card-head" },
+      h("h2", { class: "card-title", id: "pf-fact-title" }, "What to expect"),
+      h("span", { class: "pill pill-neutral" }, "General guidance"),
+    ),
+    h("p", { class: "meta" }, "General guidance about AI marketing, not a result from your business."),
     h(
       "p",
       null,
@@ -468,10 +520,10 @@ function expectFact(proof, measured) {
     ),
     share
       ? h("p", null, h("strong", null, "This goal so far: "), `${range(share, pct)} extra profit${straddlesZero(share) ? " (not sure yet: the range includes zero)" : ""}.`)
-      : h("p", null, measured
+      : h("p", { class: "muted" }, measured
           ? "Your own result is the one at the top of this page, in money, with its range. It is measured, not taken from this guidance."
           : "Your own result will show at the top of this page, in money, with its range, once there is enough data."),
-    h("p", { class: "ap-small ap-muted" }, "Source: published results measured against an untouched group, summarised in ", docLink(), "."),
+    h("p", { class: "meta pf-source" }, "Source: published results measured against an untouched group, summarised in ", docLink(), "."),
   );
 }
 
@@ -493,7 +545,7 @@ async function copyText(text, fallbackField) {
   }
 }
 
-function ruleCardFor(proof, m) {
+function ruleCardFor(proof, m, span) {
   const rv = ruleVerdict(proof.lift_vs_baseline);
   const lift = proof.lift_vs_baseline;
   const r = complete(lift) ? range(lift, estimateFormat(lift, m)) : null;
@@ -505,48 +557,107 @@ function ruleCardFor(proof, m) {
   }[rv.key];
   return h(
     "section",
-    { class: "ap-card", "aria-labelledby": "pf-rule-title" },
-    h("h2", { class: "ap-h2", id: "pf-rule-title" }, "Compared with a simple rule anyone could set up"),
-    verdictLine(rv, "pf-rule-verdict"),
+    { class: `card pf-rule ${span}`, "aria-labelledby": "pf-rule-title" },
+    h("div", { class: "card-head" }, h("h2", { class: "card-title", id: "pf-rule-title" }, "Compared with a simple rule anyone could set up")),
+    verdictLine(rv, "pf-rule-verdict", "sm"),
     h("p", { class: "pf-verdict-text" }, sentence),
-    h("p", { class: "ap-muted ap-small" },
+    complete(lift) &&
+      figure(kpis([estimateCell("Extra profit per customer", lift, m)]),
+        estimateChart([{ label: "Per customer", est: lift }], m, "Extra profit per customer compared with the simple rule, with its 95% range"), "single"),
+    h("p", { class: "meta" },
       `The simple rule treats everyone in the audience the same way, like the usual "10% off to everyone who hasn't bought in 60 days" email. ${count(proof.baseline_n)} customers, picked at random, get the simple rule instead of the agent.`),
-    complete(lift) && h("dl", { class: "ap-tiles" }, estimateTile("Extra profit per customer", lift, m)),
-    estimateChart([{ label: "Per customer", est: lift }], m, "Extra profit per customer compared with the simple rule, with its 95% range"),
   );
 }
 
 function groupsCardFor(proof, m) {
   return h(
     "section",
-    { class: "ap-card", "aria-labelledby": "pf-groups-title" },
-    h("h2", { class: "ap-h2", id: "pf-groups-title" }, "Spend and the three groups"),
-    h("dl", { class: "ap-tiles" },
-      plainTile("Spend so far", m(proof.spend), "on discounts and messages"),
-      estimateTile("Return on spend", proof.roi, times, `Extra profit for each ${m(1)} spent`)),
-    h("dl", { class: "ap-tiles" },
-      plainTile("People we never contact", count(proof.holdout_n), "picked at random, left alone"),
-      plainTile("Agent decides", count(proof.agent_n), "customers"),
-      plainTile("Simple rule", count(proof.baseline_n), "customers")),
+    { class: "card pf-groups span-12", "aria-labelledby": "pf-groups-title" },
+    h("div", { class: "card-head" }, h("h2", { class: "card-title", id: "pf-groups-title" }, "Spend and the three groups")),
+    kpis([
+      plainCell("Spend so far", m(proof.spend), "on discounts and messages"),
+      estimateCell("Return on spend", proof.roi, times, `Extra profit for each ${m(1)} spent`),
+      plainCell("People we never contact", count(proof.holdout_n), "picked at random, left alone"),
+      plainCell("Agent decides", count(proof.agent_n), "customers"),
+      plainCell("Simple rule", count(proof.baseline_n), "customers"),
+    ], "pf-groups-strip"),
+  );
+}
+
+function notesCardFor(proof, span) {
+  const gloss = notesGloss(proof.notes);
+  return h(
+    "section",
+    { class: `card pf-notes ${span}`, "aria-labelledby": "pf-notes-title" },
+    h("div", { class: "card-head" }, h("h2", { class: "card-title", id: "pf-notes-title" }, "Notes from the measurement")),
+    gloss && h("p", { class: "meta" }, gloss),
+    h("ul", { class: "list pf-note-list" }, ...proof.notes.map((n) => h("li", null, String(n)))),
   );
 }
 
 function shareCardFor(proof, goal, ctx, announcer) {
   const summary = proofSummaryText(proof, goal);
-  const field = h("textarea", { class: "ap-summary", readonly: true, rows: 6, id: "ap-proof-summary" });
+  const field = h("textarea", { class: "pf-summary", readonly: true, rows: 5, id: "ap-proof-summary" });
   field.value = summary;
-  const copyBtn = h("button", { type: "button", class: "ap-btn ap-btn-primary" }, "Copy summary");
+  const copyBtn = h("button", { type: "button", class: "btn btn-secondary btn-sm" }, "Copy summary");
   copyBtn.addEventListener("click", async () => {
     const ok = await copyText(summary, field);
     notify(ctx, ok ? "Summary copied." : "Couldn't copy; the text is selected, so press Ctrl+C (or Cmd+C).", ok ? "good" : "critical", announcer);
   });
   return h(
     "section",
-    { class: "ap-card" },
-    h("h2", { class: "ap-h2" }, h("label", { for: "ap-proof-summary" }, "Ready to share")),
+    { class: "card pf-share span-12" },
+    h(
+      "div",
+      { class: "card-head" },
+      h("h2", { class: "card-title" }, h("label", { for: "ap-proof-summary" }, "Ready to share")),
+      copyBtn,
+    ),
+    h("p", { class: "meta pf-share-hint" }, "Plain text with every figure and its range, for an email or a report."),
     field,
-    h("div", { class: "ap-actions" }, copyBtn),
   );
+}
+
+/** The title row: "Proof", the goal, and the date the proof is as of (a stamp, only when the API sent one). */
+function head(sub, { asOf, line } = {}) {
+  return h(
+    "div",
+    { class: "page-head pf-head" },
+    h("div", null,
+      h("h1", { class: "page-title" }, "Proof"),
+      present(sub) && h("p", { class: "page-sub" }, sub),
+      present(line) && h("p", { class: "meta pf-head-line" }, line)),
+    present(asOf) && h("div", { class: "page-actions" }, h("span", { class: "stamp" }, `As of ${day(asOf)}`)),
+  );
+}
+
+const block = (w, hgt, extra = "") => h("span", { class: `skeleton ${extra}`.trim(), "aria-hidden": "true", style: css({ width: w, height: hgt }) });
+
+/** While the proof loads: the title, and the result block at its real size in grey (nothing shifts after). */
+function loadingView() {
+  return [
+    h("div", { class: "page-head pf-head" }, h("div", null,
+      h("h1", { class: "page-title" }, "Proof"),
+      h("p", { class: "page-sub" }, block("320px", "20px", "skeleton-inline")),
+      h("p", { class: "meta pf-head-line" }, block("240px", "16px", "skeleton-inline")))),
+    h(
+      "div",
+      { class: "grid" },
+      h(
+        "section",
+        { class: "card pf-hero span-12", role: "status", "aria-busy": "true" },
+        h("span", { class: "visually-hidden" }, "Loading the proof…"),
+        h("div", { class: "card-head" }, h("h2", { class: "card-title" }, "Extra profit compared with people we never contact")),
+        h("p", { class: "pf-verdict pf-verdict-lg" }, block("220px", "28px", "skeleton-inline")),
+        h("div", { class: "pf-lines" }, block("100%", "16px"), block("70%", "16px")),
+        h("div", { class: "pf-figure pf-figure-pair" },
+          h("div", { class: "kpis", style: css({ "--kpi-count": "2" }) },
+            ...["Extra profit", "Extra revenue"].map((l) => h("div", { class: "kpi" }, h("p", { class: "kpi-label" }, l),
+              h("p", { class: "kpi-value" }, block("110px", "28px", "skeleton-inline")), h("p", { class: "kpi-range" }, block("140px", "12px", "skeleton-inline"))))),
+          block("100%", "120px")),
+      ),
+    ),
+  ];
 }
 
 export async function render(root, ctx) {
@@ -554,6 +665,8 @@ export async function render(root, ctx) {
   const announcer = h("p", { class: "ap-sr", role: "status", "aria-live": "polite" });
   const page = h("div", { class: "ap-page ap-proof" });
   root.replaceChildren(page);
+  page.append(...loadingView());
+  const retry = () => render(root, ctx);
 
   let bundle = null;
   let goalError = null;
@@ -567,13 +680,10 @@ export async function render(root, ctx) {
 
   // No such goal: say so, rather than "not enough data yet" (the API answers null proof for an unknown goal).
   if (goalError && notFound(goalError)) {
-    page.append(pageHead("Proof", `There is no goal ${ctx.goalId}.`),
-      h("div", { class: "ap-card" }, empty("It may have been removed, or the link is mistyped. Pick a goal from the switcher at the top.")), announcer);
+    page.replaceChildren(head(`There is no goal ${ctx.goalId}.`),
+      h("section", { class: "card" }, emptyBox("No such goal", "It may have been removed, or the link is mistyped. Pick a goal from the switcher at the top.")), announcer);
     return;
   }
-
-  page.append(pageHead("Proof", goal ? goal.text : "The whole programme"));
-  if (goalError) page.append(h("p", { class: "ap-muted ap-small" }, `Couldn't load the goal (${errText(goalError)}); amounts are shown without a currency.`));
 
   // The forecast loads alongside the proof; either failing leaves the other standing.
   const forecastP = fetchForecast(ctx, goal);
@@ -596,55 +706,66 @@ export async function render(root, ctx) {
   // 1. The verdict first, then the money against the people we never contact, then how it is measured.
   const resultCard = h(
     "section",
-    { class: "ap-card pf-result", "aria-labelledby": "pf-result-title" },
-    h("h2", { class: "ap-h2", id: "pf-result-title" }, "Extra profit compared with people we never contact"),
+    { class: "card pf-hero span-12", "aria-labelledby": "pf-result-title" },
+    h("div", { class: "card-head" }, h("h2", { class: "card-title", id: "pf-result-title" }, "Extra profit compared with people we never contact")),
   );
   if (proofError) {
-    resultCard.append(failed("proof", proofError));
+    resultCard.append(failedBox("proof", proofError, retry));
   } else {
     const verdict = profitVerdict(proof?.incremental_profit);
     resultCard.append(verdictLine(verdict, "pf-verdict"), h("p", { class: "pf-verdict-text" }, profitSentence(verdict, proof?.incremental_profit, m, goal, Boolean(proof?.notes?.length))));
     if (proof && (proof.incremental_profit || proof.incremental_revenue)) {
-      resultCard.append(
-        h("dl", { class: "ap-tiles" },
-          estimateTile("Extra profit", proof.incremental_profit, m, "after the cost of discounts and messages"),
-          estimateTile("Extra revenue", proof.incremental_revenue, m)),
-      );
       const chart = estimateChart(
         [{ label: "Extra profit", est: proof.incremental_profit }, { label: "Extra revenue", est: proof.incremental_revenue }], m,
         "Extra money compared with people we never contact, with 95% ranges");
-      if (chart) resultCard.append(chart);
+      resultCard.append(figure(
+        kpis([
+          estimateCell("Extra profit", proof.incremental_profit, m, "after the cost of discounts and messages"),
+          estimateCell("Extra revenue", proof.incremental_revenue, m),
+        ]),
+        chart,
+      ));
     }
     resultCard.append(methodBlock(proof));
   }
 
   // 2. What to do with the autonomy dial. 3. The simple rule. 4. Its own forecast (first in Shadow).
   const advice = proofError ? null : autopilotAdvice(goal, proof);
-  const forecastEl = forecast.state === "skip" || (forecast.state === "none" && !shadow) ? null : forecastCard(forecast, goal, currency);
-
-  const notes = proof && (proof.notes || []).length
-    ? h("section", { class: "ap-card", "aria-labelledby": "pf-notes-title" },
-        h("h2", { class: "ap-h2", id: "pf-notes-title" }, "Notes from the measurement"),
-        notesGloss(proof.notes) && h("p", { class: "ap-muted ap-small" }, notesGloss(proof.notes)),
-        h("ul", { class: "ap-plain" }, ...proof.notes.map((n) => h("li", null, String(n)))))
+  const showForecast = !(forecast.state === "skip" || (forecast.state === "none" && !shadow));
+  // Side by side with the simple rule (7 + 5) unless it leads in Shadow, where it is the main figure. While the
+  // simple rule has no range yet its card is one sentence, so both go full width rather than leave a hole beside
+  // the forecast.
+  const ruleEarly = !complete(proof?.lift_vs_baseline);
+  const forecastEl = showForecast
+    ? forecastCard(forecast, goal, currency, { span: shadow || !proof || ruleEarly ? "span-12" : "span-5 pf-forecast-side", retry })
     : null;
+  const ruleSpan = !shadow && !ruleEarly && forecastEl ? "span-7" : "span-12";
 
-  const asOf = proof ? `As of ${day(proof.as_of)} · ` : "";
-  const level = goal ? `${asOf}Autonomy level: ${autonomyName(goal.autonomy)} · ` : asOf;
+  const hasNotes = Boolean(proof && (proof.notes || []).length);
+  const notes = hasNotes ? notesCardFor(proof, "span-7") : null;
+
+  const level = goal ? `Autonomy level: ${autonomyName(goal.autonomy)} · ranges are 95% ranges` : "Ranges are 95% ranges";
 
   // append() turns null into the text "null", so leave out what is not there.
-  page.append(
+  page.replaceChildren(
     ...[
-      h("p", { class: "ap-muted ap-small" }, `${level}ranges are 95% ranges`),
-      resultCard,
-      shadow ? forecastEl : null,
-      advice ? adviceCard(advice, goal) : null,
-      proof ? ruleCardFor(proof, m) : null,
-      shadow ? null : forecastEl,
-      proof ? groupsCardFor(proof, m) : null,
-      expectFact(proof, direction(proof?.incremental_profit) !== "early"),
-      notes,
-      proof ? shareCardFor(proof, goal, ctx, announcer) : null,
+      head(goal ? goal.text : "The whole programme", { asOf: proof?.as_of, line: level }),
+      goalError && h("p", { class: "notice" }, `Couldn't load the goal (${errText(goalError)}); amounts are shown without a currency.`),
+      h(
+        "div",
+        { class: "grid pf-grid" },
+        ...[
+          resultCard,
+          shadow ? forecastEl : null,
+          advice ? adviceCard(advice, goal) : null,
+          proof ? ruleCardFor(proof, m, ruleSpan) : null,
+          shadow ? null : forecastEl,
+          proof ? groupsCardFor(proof, m) : null,
+          expectFact(proof, direction(proof?.incremental_profit) !== "early", hasNotes ? "span-5" : "span-12"),
+          notes,
+          proof ? shareCardFor(proof, goal, ctx, announcer) : null,
+        ].filter(Boolean),
+      ),
       announcer,
     ].filter(Boolean),
   );

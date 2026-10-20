@@ -181,6 +181,14 @@ async function shoot(send, sessionId, shot) {
   consoleErrors.length = 0;
   await send("Page.navigate", { url: APP_URL + shot.hash }, sessionId);
   await sleep(SETTLE_MS);
+  // Slow blocks (Live's feed and briefing) draw grey skeletons first; wait up to 15 s more for them to fill.
+  for (let waited = 0; waited < 15000; waited += 250) {
+    const { result: busy } = await send("Runtime.evaluate",
+      { expression: "document.querySelectorAll('main .skeleton').length", returnByValue: true }, sessionId);
+    if (!busy.value) break;
+    await sleep(250);
+  }
+  await sleep(300);
   const { result: overflow } = await send("Runtime.evaluate",
     { expression: OVERFLOW_PROBE, returnByValue: true }, sessionId);
   const { result: scrolls } = await send("Runtime.evaluate",

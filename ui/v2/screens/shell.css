@@ -1,33 +1,124 @@
-/* The shell: the goal's autonomy badge, the red "Paused itself" badge, the one big Pause button, the slim note
-   under the bar, the Getting started link and a small Operator link. Colours are styles.css's tokens, so light
-   and dark mode follow them; every badge carries its meaning in words, never only in colour. */
+/* The shell (DESIGN.md section 5): a quiet top bar on the page ground (the wordmark, the goal switcher, the
+   goal's autonomy badge and the red "Paused itself" badge, To approve, Inbox, and the one big Pause), the five
+   numbered steps as a tab row on a full-width hairline under it, and the slim note under that. No coloured bar,
+   no shadow. The bars run to the window's edges; their contents sit on the canvas's edges (1200px centred, 24px
+   padding, 16px on a phone), the same edges as .main. Every badge carries its meaning in words. */
 
-/* ---- badges next to the goal switcher --------------------------------------------------------------------- */
-/* The badges have their own short row under the goal switcher, at every width: next to it they pushed Inbox and
-   Pause onto a second line on a laptop. The row starts under the switcher (past the wordmark) on wider screens. */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--ground);
+}
+
+/* The canvas's edges inside a full-width bar. */
+.topbar-row,
+.nav,
+.goal-note {
+  padding-left: max(var(--pad), calc((100% - var(--canvas)) / 2));
+  padding-right: max(var(--pad), calc((100% - var(--canvas)) / 2));
+}
+
+/* ---- the top row ------------------------------------------------------------------------------------------- */
+/* Wide, one row: the badges keep their words whole and the goal switcher is the part that gives way. Below
+   1100px a grid gives the badges their own short line under the switcher, and the right cluster never wraps. */
 .topbar-row {
-  flex-wrap: wrap;
-  row-gap: 4px;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  margin: 0;
 }
 
+.wordmark {
+  grid-area: mark;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--control-height);
+  padding: 0 4px 0 0;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.wordmark:hover {
+  color: var(--text);
+}
+
+.wordmark-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+/* The goal switcher reads like a breadcrumb after the name: a hairline, then a quiet select. */
 .goal-switcher {
-  flex: 1 1 0;
+  grid-area: goal;
+  flex: 0 100 372px; /* gives way long before the badges do */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 160px;
 }
 
+.goal-switcher::before {
+  content: "";
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  flex: none;
+}
+
+.goal-switcher select {
+  width: 100%;
+  max-width: 360px;
+  min-width: 0;
+  min-height: var(--control-height);
+  padding: 0 30px 0 8px;
+  border-color: transparent;
+  background-color: transparent;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.goal-switcher select:hover {
+  border-color: transparent;
+  background-color: var(--active);
+}
+
+.goal-switcher select:focus-visible {
+  border-color: var(--accent);
+  background-color: var(--surface);
+}
+
+.goal-switcher select:disabled {
+  background-color: transparent;
+  border-color: transparent;
+}
+
+/* ---- the badges -------------------------------------------------------------------------------------------- */
 .goal-badges {
+  grid-area: badges;
+  flex: 0 1 auto;
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
   min-width: 0;
-  order: 5;
-  flex: 1 0 100%;
-}
-
-@media (min-width: 720px) {
-  .goal-badges {
-    padding-left: 132px;
-  }
+  overflow: hidden;
 }
 
 .goal-badges:not(:has(> a:not([hidden]))) {
@@ -39,14 +130,18 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  border-radius: var(--pill);
-  border: 1px solid transparent;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.3;
+  height: 22px;
+  min-width: 0;
+  padding: 0 8px;
+  border-radius: var(--radius-chip);
+  font-size: var(--fs-small);
+  font-weight: 500;
+  line-height: var(--lh-small);
   text-decoration: none;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
 }
 
 .autonomy-badge[hidden],
@@ -55,10 +150,11 @@
   display: none;
 }
 
-.autonomy-badge::before {
+.autonomy-badge::before,
+.selfpause-badge::before {
   content: "";
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: currentColor;
   flex: none;
@@ -67,155 +163,403 @@
 .autonomy-badge:hover,
 .selfpause-badge:hover {
   text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-/* Shadow: dashed, because nothing real happens yet. */
+/* Shadow: a hollow dot, because nothing real happens yet. */
 .autonomy-shadow {
-  background: var(--neutral-t);
-  color: var(--neutral);
-  border: 1px dashed var(--muted);
+  background: var(--pill-neutral-bg);
+  color: var(--pill-neutral-ink);
 }
 
 .autonomy-shadow::before {
   background: transparent;
-  border: 2px solid currentColor;
-  width: 9px;
-  height: 9px;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+  width: 7px;
+  height: 7px;
 }
 
+/* Approve: neutral like the other levels; the accent stays on the To approve count beside it. */
 .autonomy-approve {
-  background: var(--brand-tint);
-  color: var(--brand);
-  border-color: var(--brand);
+  background: var(--pill-neutral-bg);
+  color: var(--pill-neutral-ink);
+}
+
+.autonomy-approve::before {
+  background: var(--accent);
 }
 
 .autonomy-autopilot {
-  background: var(--good-t);
-  color: var(--good);
-  border-color: var(--good);
+  background: var(--pill-positive-bg);
+  color: var(--pill-positive-ink);
 }
 
 .autonomy-paused {
-  background: var(--warning-t);
-  color: var(--warning);
-  border-color: var(--warning);
+  background: var(--pill-warning-bg);
+  color: var(--pill-warning-ink);
 }
 
 .autonomy-draft {
-  background: var(--neutral-t);
-  color: var(--neutral);
-  border-color: var(--border);
+  background: var(--pill-neutral-bg);
+  color: var(--pill-neutral-ink);
+}
+
+.autonomy-draft::before {
+  background: var(--faint);
 }
 
 .selfpause-badge {
-  background: var(--critical-t);
-  color: var(--critical);
-  border-color: var(--critical);
+  background: var(--pill-negative-bg);
+  color: var(--pill-negative-ink);
 }
 
 .selfpause-badge::before {
-  content: "!";
-  display: inline-grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--critical);
-  color: var(--surface);
-  font-size: 11px;
-  font-weight: 800;
+  background: var(--negative);
 }
 
-/* ---- the inbox count: red only when something needs a look ------------------------------------------------- */
-.count.count-quiet {
-  background: var(--neutral);
-  color: var(--surface);
+/* ---- the right cluster: To approve, Inbox, Pause ----------------------------------------------------------- */
+.topbar-actions {
+  grid-area: actions;
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
 }
 
-/* ---- the one big Pause button ------------------------------------------------------------------------------- */
-.pause-scope {
-  max-width: 88px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.2;
-  text-align: right;
-}
-
-.topbar-actions .pause-big {
-  min-height: 42px;
-  padding: 9px 20px;
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-}
-
-/* ---- nav: Getting started, and Operator mode kept small and out of the way ------------------------------------- */
-.start-link {
+.inbox-link {
   display: inline-flex;
   align-items: center;
-  margin-left: auto;
-  padding: 10px 10px 12px;
-  color: var(--brand);
-  font-weight: 600;
-  font-size: 14px;
+  gap: 6px;
+  height: var(--control-height);
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  color: var(--text);
+  font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
-  border-bottom: 3px solid transparent;
 }
 
-.start-link:hover {
-  text-decoration: underline;
+.inbox-link:hover {
+  background: var(--active);
+  color: var(--text);
 }
 
-.start-link.is-current {
-  border-bottom-color: var(--brand);
+/* A count is a small tabular figure on a pill: red only when something needs a look, the accent for a batch
+   waiting (a task, not an alarm), neutral otherwise. */
+.count {
+  display: inline-block;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-chip);
+  background: var(--negative);
+  color: var(--primary-ink); /* white on light red, near-black on dark red: both over 4.5:1 */
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.count[hidden] {
+  display: none;
+}
+
+.count.count-quiet {
+  background: var(--pill-neutral-bg);
+  color: var(--pill-neutral-ink);
+}
+
+.count.count-accent {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.pause-scope {
+  margin: 0 4px 0 8px;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  white-space: nowrap;
+}
+
+/* The one big Pause: solid near-black with a pause glyph. While paused it says Resume, in the negative colour,
+   so the stopped state is plain at a glance. */
+.topbar-actions .pause-big {
+  min-width: 92px;
+  padding: 0 14px 0 12px;
+  font-weight: 600;
+}
+
+.pause-big::before {
+  content: "";
+  width: 8px;
+  height: 10px;
+  border-left: 3px solid currentColor;
+  border-right: 3px solid currentColor;
+  flex: none;
+}
+
+.pause-big.is-resume::before {
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid currentColor;
+  border-right: 0;
+}
+
+/* A larger hit area than the button's face, so a 34px button is a 44px target. */
+.pause-big::after {
+  content: "";
+  position: absolute;
+  inset: -5px -2px;
+}
+
+/* ---- the steps --------------------------------------------------------------------------------------------- */
+/* Underline tabs on a full-width hairline; the current step in ink with a 2px rule, the others grey. */
+.nav {
+  display: flex;
+  align-items: stretch;
+  gap: 24px;
+  height: 44px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.nav::-webkit-scrollbar {
+  display: none;
+}
+
+.nav-list {
+  display: flex;
+  align-items: stretch;
+  gap: 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-list li {
+  display: flex;
+}
+
+.nav-link,
+.start-link,
+.operator-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: -1px;
+  padding: 0 1px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.nav-link:hover,
+.start-link:hover,
+.operator-link:hover {
+  color: var(--text);
+}
+
+.nav-link.is-current,
+.start-link.is-current,
+.operator-link.is-current {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+
+.nav-step {
+  color: var(--faint);
+  font-size: var(--fs-small);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.nav-link.is-current .nav-step {
+  color: var(--muted);
+}
+
+.start-link {
+  margin-left: auto;
 }
 
 .nav .operator-link {
-  margin-left: 0;
-  font-size: 12px;
+  font-size: var(--fs-small);
   font-weight: 400;
-  color: var(--muted);
+  color: var(--faint);
 }
 
-/* ---- the slim note under the bar ------------------------------------------------------------------------------ */
+.nav .operator-link:hover,
+.nav .operator-link.is-current {
+  color: var(--text);
+}
+
+/* ---- the slim note under the steps ------------------------------------------------------------------------- */
+/* Shadow (nothing is being sent), paused, or first run: one quiet line, always in view. */
 .goal-note {
-  border-top: 1px solid var(--border);
-  padding: 7px max(var(--gutter), calc((100% - var(--max)) / 2 + var(--gutter)));
-  font-size: 14px;
-  line-height: 1.45;
-  color: var(--ink);
+  padding-top: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 18px;
 }
 
-.goal-note-shadow {
-  background: var(--brand-tint);
+.goal-note strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.goal-note-shadow strong::before,
+.goal-note-paused strong::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 8px;
+  border-radius: 50%;
+  vertical-align: 2px;
+  box-shadow: inset 0 0 0 1.5px var(--muted);
 }
 
 .goal-note-paused {
-  background: var(--warning-t);
+  background: var(--notice-bg);
+  border-bottom-color: var(--notice-border);
+  color: var(--notice-ink);
 }
 
-.goal-note-start {
-  background: var(--surface-2);
+.goal-note-paused strong {
+  color: var(--notice-ink);
+}
+
+.goal-note-paused strong::before {
+  box-shadow: none;
+  background: var(--notice-ink);
 }
 
 .goal-note-more {
-  color: var(--ink);
+  color: var(--muted);
+}
+
+.goal-note-trial {
+  color: var(--text);
 }
 
 .goal-note-link {
-  margin-left: 6px;
-  font-weight: 600;
+  margin-left: 8px;
+  color: var(--text);
+  font-weight: 500;
   white-space: nowrap;
 }
 
-/* ---- phones --------------------------------------------------------------------------------------------------- */
+.goal-note-paused .goal-note-link {
+  color: inherit;
+}
+
+/* ---- the sample-data notice, on the canvas under the bar --------------------------------------------------- */
+.mode-banner {
+  max-width: var(--canvas);
+  width: calc(100% - 2 * var(--pad));
+  margin: 16px auto 0;
+  padding: 8px 12px;
+  border: 1px solid var(--notice-border);
+  border-radius: var(--radius-control);
+  background: var(--notice-bg);
+  color: var(--notice-ink);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.mode-banner[hidden] {
+  display: none;
+}
+
+.mode-banner strong {
+  font-weight: 600;
+}
+
+.mode-banner + .main {
+  padding-top: 16px;
+}
+
+/* ---- narrower desktops and tablets: the badges take their own line ----------------------------------------- */
+@media (max-width: 1099px) {
+  .topbar-row {
+    display: grid;
+    column-gap: 12px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: 56px auto;
+    grid-template-areas:
+      "mark goal actions"
+      "badges badges badges";
+  }
+
+  .goal-switcher {
+    min-width: 0;
+  }
+
+  .goal-badges {
+    padding-bottom: 8px;
+    margin-top: -4px;
+  }
+}
+
+/* ---- phones ------------------------------------------------------------------------------------------------ */
+/* One 48px row (the mark, the goal, To approve, Inbox, Pause), the badges on a short line under it, then the
+   steps scrolling sideways in their own row with a fade on the right to say there is more. */
 @media (max-width: 719px) {
+  .topbar-row {
+    column-gap: 6px;
+    grid-template-rows: 48px auto;
+    min-height: 48px;
+  }
+
+  .wordmark {
+    padding-right: 0;
+  }
+
+  .goal-switcher {
+    gap: 6px;
+  }
+
+  .goal-switcher::before {
+    display: none;
+  }
+
+  .goal-switcher select {
+    max-width: none;
+    min-height: 40px;
+    padding-left: 6px;
+  }
+
+  /* One line for the autonomy badge; "Paused itself" (an alarm) may take a second. */
+  .goal-badges {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
   .autonomy-badge,
   .selfpause-badge {
-    font-size: 12px;
-    padding: 3px 8px;
-    white-space: normal;
+    max-width: 100%;
+  }
+
+  .topbar-actions {
+    gap: 2px;
+  }
+
+  .inbox-link {
+    height: 40px;
+    padding: 0 6px;
   }
 
   .pause-scope {
@@ -223,27 +567,43 @@
   }
 
   .topbar-actions .pause-big {
-    min-height: 40px;
-    padding: 8px 14px;
-    font-size: 15px;
+    min-width: 0;
+    min-height: 36px;
+    padding: 0 12px 0 10px;
+  }
+
+  .nav {
+    gap: 20px;
+    padding-right: 40px;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  }
+
+  .nav-list {
+    gap: 20px;
+  }
+
+  .nav-link,
+  .start-link,
+  .operator-link {
+    gap: 6px;
+  }
+
+  .start-link {
+    margin-left: 0;
   }
 
   .nav .operator-link:not(.is-asked) {
     display: none;
   }
 
-  .start-link {
-    margin-left: 0;
-    padding: 10px 6px 12px;
-  }
-
-  .goal-note {
-    font-size: 13px;
-    padding: 6px var(--gutter);
-  }
-
   /* On a phone the note keeps its first sentence and its link; the detail is on Getting started and Live. */
   .goal-note .goal-note-more {
+    display: none;
+  }
+
+  /* The trial day is in the autonomy badge right above. */
+  .goal-note .goal-note-trial {
     display: none;
   }
 }

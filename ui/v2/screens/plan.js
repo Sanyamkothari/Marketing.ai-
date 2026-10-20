@@ -9,7 +9,7 @@
 // or a sentence saying it is not known. The only numbers not about this business are the product test in
 // "How we tested this", which is labelled as a fact about Autonomy, with its source.
 
-import { button, card, clear, dash, el, emptyState, errorBox, goalStatusWords, hour, humanize, int, loading, money, pct, pill, present, slotted, statusTone, when } from "../components.js";
+import { button, card, clear, dash, el, emptyState, errorBox, goalStatusWords, hour, humanize, int, kpiStrip, money, notice, pageHead, pct, pill, present, skeletonKpis, skeletonLines, slotted, statusTone, when } from "../components.js";
 
 /** The autonomy dial, in the order of how much the agent may do alone. One sentence each, in plain words. */
 export const AUTONOMY = Object.freeze([
@@ -211,17 +211,60 @@ function offerWords(offer, currency) {
 
 const fact = (term, ...desc) => [el("dt", {}, term), el("dd", {}, desc)];
 
+/** A card with an id, so the steps under the title can jump to it (the shim DOM's `id` is read-only). */
+const withId = (node, id) => {
+  node.setAttribute("id", id);
+  return node;
+};
+
+/** The labels of the limits strip, also drawn while the plan loads so nothing shifts when it lands. */
+const LIMIT_LABELS = Object.freeze(["Matching customers", "Budget", "Most messages a week", "Quiet hours"]);
+
+/**
+ * The plan's limits at a glance, each from the brief or the plan facts: who matches today (and how many of them
+ * are never contacted), the budget, the weekly cap and the quiet hours. A value the API did not send is the em dash.
+ */
+function limitsStrip(goal, brief, facts) {
+  const env = (brief && brief.envelope) || {};
+  const cur = goal.currency;
+  const counted = facts && present(facts.audience_n);
+  const quiet = present(env.quiet_start_hour) && present(env.quiet_end_hour) ? `${hour(env.quiet_start_hour)}–${hour(env.quiet_end_hour)}` : null;
+  const strip = kpiStrip(
+    [
+      {
+        label: LIMIT_LABELS[0],
+        value: counted ? int(facts.audience_n) : null,
+        note: counted ? (present(facts.holdout_n) ? `Today; ${int(facts.holdout_n)} of them are never contacted` : "Today") : "Not counted by this server yet",
+      },
+      {
+        label: LIMIT_LABELS[1],
+        value: money(present(env.budget) ? env.budget : goal.budget, cur),
+        note: present(env.max_daily_spend) ? `At most ${money(env.max_daily_spend, cur)} a day` : null,
+      },
+      {
+        label: LIMIT_LABELS[2],
+        value: present(env.max_contacts_per_week) ? int(env.max_contacts_per_week) : null,
+        note: present(env.max_contacts_per_week) ? "Per customer, across all goals" : null,
+      },
+      { label: LIMIT_LABELS[3], value: quiet, note: quiet ? "In each customer's own time" : null },
+    ],
+    { label: "The plan's limits at a glance" },
+  );
+  strip.classList.add("plan-limits");
+  return strip;
+}
+
 function whoFact(brief, facts) {
   const filters = (brief.audience && brief.audience.filters) || [];
   const words = facts && Array.isArray(facts.audience_words) && facts.audience_words.length ? facts.audience_words : filters.map(filterWords);
   const size = audienceSentences(facts);
   return fact(
     "Who it will contact",
-    el("p", {}, dash(brief.audience && brief.audience.description)),
+    el("p", { class: "fact-lead" }, dash(brief.audience && brief.audience.description)),
     words.length ? el("ul", { class: "plain-list muted" }, words.map((w) => el("li", {}, w))) : null,
     size
-      ? el("p", { class: "plan-audience" }, el("strong", {}, size.headline), size.split ? ` ${size.split}` : "")
-      : el("p", { class: "muted small" }, "How many customers match is not available from this server yet."),
+      ? el("p", { class: "plan-audience" }, el("strong", {}, size.headline), size.split ? el("span", { class: "muted" }, ` ${size.split}`) : "")
+      : el("p", { class: "muted small plan-audience" }, "How many customers match is not available from this server yet."),
   );
 }
 
@@ -243,14 +286,15 @@ function briefCard(goal, brief, facts) {
   const cur = goal.currency;
   const offers = env.offers || [];
   const followUps = brief.follow_ups || [];
-  return card({
+  const node = card({
     title: "The plan in plain words",
     level: 2,
     className: "brief",
+    meta: present(brief.version) ? `Version ${brief.version}` : null,
     body: [
       el(
         "dl",
-        { class: "facts facts-wide" },
+        { class: "facts facts-wide plan-facts" },
         whoFact(brief, facts),
         fact("What it is trying to do", OBJECTIVE_WORDS[brief.objective] || humanize(brief.objective), el("p", { class: "muted small" }, `Each contact is judged on what happens within ${int(brief.horizon_days)} days.`)),
         fact(
@@ -263,7 +307,7 @@ function briefCard(goal, brief, facts) {
         fact("Quiet hours", present(env.quiet_start_hour) && present(env.quiet_end_hour) ? `Nothing sent from ${hour(env.quiet_start_hour)} to ${hour(env.quiet_end_hour)}, in each customer's own time` : "—"),
         fact(
           "Budget",
-          money(env.budget, cur),
+          el("span", { class: "tabular" }, money(env.budget, cur)),
           present(env.max_daily_spend) ? el("p", { class: "muted small" }, `At most ${money(env.max_daily_spend, cur)} a day.`) : null,
         ),
         fact(
@@ -276,6 +320,7 @@ function briefCard(goal, brief, facts) {
       brief.rationale ? el("blockquote", { class: "rationale" }, el("p", { class: "small muted" }, "Why this plan"), el("p", {}, brief.rationale)) : null,
     ],
   });
+  return withId(node, "plan-brief");
 }
 
 /**
@@ -305,8 +350,9 @@ function hardRulesCard(goal, brief, facts) {
     title: "Rules it can never break",
     level: 2,
     className: "plan-rules",
+    meta: plural(rules.length, "rule", "rules"),
     body: [
-      el("p", { class: "muted" }, "These are built into how it decides. No setting, batch or Autopilot can get round them, however good a message looks."),
+      el("p", { class: "muted card-lede" }, "These are built into how it decides. No setting, batch or Autopilot can get round them, however good a message looks."),
       el(
         "ul",
         { class: "rule-list" },
@@ -330,9 +376,9 @@ function stopRulesCard(brief) {
     level: 2,
     className: "plan-stops",
     body: [
-      el("p", { class: "muted" }, "It watches these as it sends, and stops on its own if one is crossed. You hear about it in the Inbox."),
-      rules.length ? el("ul", { class: "plain-list" }, rules.map((r) => el("li", {}, stopRuleWords(r)))) : el("p", {}, "No automatic pauses are set for this plan."),
-      el("p", { class: "muted small" }, "You can also stop everything yourself at any time with the Pause button at the top."),
+      el("p", { class: "muted card-lede" }, "It watches these as it sends, and stops on its own if one is crossed. You hear about it in the Inbox."),
+      rules.length ? el("ul", { class: "rule-list stop-list" }, rules.map((r) => el("li", { class: "rule" }, stopRuleWords(r)))) : el("p", {}, "No automatic pauses are set for this plan."),
+      el("p", { class: "muted small plan-stops-foot" }, "You can also stop everything yourself at any time with the Pause button at the top."),
     ],
   });
 }
@@ -359,8 +405,7 @@ function productsCard(data) {
       el(
         "aside",
         { class: "product-fact", "aria-label": "How we tested this: a fact about Autonomy, not about your shop" },
-        el("p", { class: "product-fact-label" }, "How we tested this"),
-        el("p", { class: "small muted" }, "A fact about Autonomy in general, not a result from your shop."),
+        el("p", { class: "product-fact-label" }, "How we tested this", el("span", { class: "product-fact-tag" }, "A fact about Autonomy in general, not a result from your shop.")),
         el(
           "p",
           {},
@@ -372,23 +417,42 @@ function productsCard(data) {
   });
 }
 
+/** The picture(s) a message carries: `asset_url` may hold several, separated by spaces (a carousel). */
+const assetUrls = (item) => String(item.asset_url || "").split(/\s+/).filter(Boolean);
+
 function mediaBlock(item) {
   const what = `${channelName(item.channel)} message about ${humanize(item.theme).toLowerCase()}`;
-  if (present(item.asset_url)) {
+  const urls = assetUrls(item);
+  if (urls.length) {
+    const kind = item.format === "video" ? "video" : "picture";
+    const missing = () => el("p", { class: "message-media-missing small" }, `The ${kind} for this message could not be loaded here.`);
+    // A host under the reserved ".invalid" name can never load (RFC 6761): say so without asking for it.
+    if (/^https?:\/\/[^/]*\.invalid(?::\d+)?(?:\/|$)/i.test(urls[0])) return missing();
+    const caption = el(
+      "figcaption",
+      { class: "small muted" },
+      urls.length > 1 ? `The first of the ${int(urls.length)} pictures it sends with this message` : `The ${kind} it sends with this message`,
+    );
+    let figure;
+    const fail = () => {
+      if (figure && figure.parentNode) figure.replaceWith(missing());
+    };
     if (item.format === "video") {
-      return el(
+      figure = el(
         "figure",
         { class: "message-media" },
-        el("video", { src: item.asset_url, controls: true, preload: "none", "aria-label": `Video sent with the ${what}` }),
-        el("figcaption", { class: "small muted" }, "The video it sends with this message"),
+        el("video", { src: urls[0], controls: true, preload: "none", "aria-label": `Video sent with the ${what}`, onerror: fail }),
+        caption,
       );
+      return figure;
     }
-    return el(
+    figure = el(
       "figure",
       { class: "message-media" },
-      el("img", { src: item.asset_url, alt: `Picture sent with the ${what}`, loading: "lazy", decoding: "async" }),
-      el("figcaption", { class: "small muted" }, "The picture it sends with this message"),
+      el("img", { src: urls[0], alt: `Picture sent with the ${what}`, loading: "lazy", decoding: "async", onerror: fail }),
+      caption,
     );
+    return figure;
   }
   if (IMAGE_FORMATS.has(item.format)) {
     return el("p", { class: "message-media-missing small" }, "This message has room for a picture, but none is attached yet.");
@@ -398,8 +462,13 @@ function mediaBlock(item) {
 
 function verdictLine(review) {
   if (review && review.passed === false) return el("p", { class: "editor-verdict small" }, el("strong", {}, "Failed the editor."), " It will never be sent. It stays here so you can see why.");
-  if (review && review.passed === true) return el("p", { class: "editor-verdict small" }, el("strong", {}, "Passed the editor."));
   return null;
+}
+
+/** "Checked by the editor: passed" on one line, so a message that passed reads in two short lines, not four. */
+function editorTitle(review, words = "Checked by the editor") {
+  const result = review && review.passed === true ? "passed" : review && review.passed === false ? "failed" : null;
+  return el("p", { class: "editor-title small" }, words, result ? [": ", el("strong", { class: `editor-result editor-result-${result}` }, result)] : null);
 }
 
 function checklist(item, review, hasFacts) {
@@ -407,6 +476,7 @@ function checklist(item, review, hasFacts) {
     return el(
       "div",
       { class: ["editor", review && review.passed === false ? "editor-failed" : null] },
+      editorTitle(review, "The editor"),
       verdictLine(review),
       el("p", { class: "small muted" }, "The editor's checklist is not available from this server; its notes are below."),
     );
@@ -439,7 +509,7 @@ function checklist(item, review, hasFacts) {
   return el(
     "div",
     { class: ["editor", review.passed === false ? "editor-failed" : "editor-passed"] },
-    el("p", { class: "editor-title small" }, "Checked by the editor"),
+    editorTitle(review),
     el("ul", { class: "check-list" }, items),
     verdict,
   );
@@ -452,7 +522,7 @@ function rawNotes(item, review) {
 }
 
 function contentCard(ctx, item, review, hasFacts, offers, onChange) {
-  const article = el("article", { class: "card message", "aria-label": `${channelName(item.channel)} message, ${humanize(item.theme)}` });
+  const article = el("article", { class: "message", "aria-label": `${channelName(item.channel)} message, ${humanize(item.theme)}` });
 
   const set = async (next, buttons) => {
     for (const b of buttons) b.disabled = true;
@@ -474,13 +544,13 @@ function contentCard(ctx, item, review, hasFacts, offers, onChange) {
     if (review && review.passed === false && item.status !== "approved") {
       return el("p", { class: "small muted message-never" }, "There is no Approve button: a message the editor failed is never sent.");
     }
-    const approve = button(item.status === "rejected" ? "Use it again" : "Approve", null, { kind: "secondary", ariaLabel: `Approve message ${item.content_id}` });
-    const reject = button(item.status === "approved" ? "Don't use this one" : "Reject", null, { kind: "ghost", ariaLabel: `Reject message ${item.content_id}` });
+    const approve = button(item.status === "rejected" ? "Use it again" : "Approve", null, { kind: "secondary", size: "sm", ariaLabel: `Approve message ${item.content_id}` });
+    const reject = button(item.status === "approved" ? "Don't use this one" : "Reject", null, { kind: "ghost", size: "sm", ariaLabel: `Reject message ${item.content_id}` });
     approve.addEventListener("click", () => set("approved", [approve, reject]));
     reject.addEventListener("click", () => set("rejected", [approve, reject]));
-    if (item.status === "approved") return el("div", { class: "card-actions" }, reject, el("span", { class: "small muted" }, "Optional"));
-    if (item.status === "rejected") return el("div", { class: "card-actions" }, approve);
-    return el("div", { class: "card-actions" }, approve, reject);
+    if (item.status === "approved") return el("div", { class: "message-actions" }, reject, el("span", { class: "small muted" }, "Optional"));
+    if (item.status === "rejected") return el("div", { class: "message-actions" }, approve);
+    return el("div", { class: "message-actions" }, approve, reject);
   }
 
   function draw() {
@@ -488,30 +558,39 @@ function contentCard(ctx, item, review, hasFacts, offers, onChange) {
     const offerLabel = offer ? offer.label : item.offer_id === "none" ? "No offer" : item.offer_id;
     const state = messageState(item, review);
     const hasMedia = present(item.asset_url) || IMAGE_FORMATS.has(item.format);
+    article.setAttribute("data-state", state.key);
     clear(
       article,
-      el("div", { class: "message-head" }, pill(channelName(item.channel), "neutral"), pill(state.label, state.tone)),
-      mediaBlock(item),
-      item.subject ? el("p", { class: "message-subject" }, slotted(item.subject)) : null,
-      el("p", { class: "message-body" }, slotted(item.body)),
       el(
-        "ul",
-        { class: "labels", "aria-label": "Labels" },
-        el("li", {}, el("span", { class: "muted" }, "Theme "), humanize(item.theme)),
-        el("li", {}, el("span", { class: "muted" }, "Tone "), humanize(item.tone)),
-        el("li", {}, el("span", { class: "muted" }, "Offer "), offerLabel),
-        el("li", {}, el("span", { class: "muted" }, "Picture "), hasMedia ? humanize(item.format) : "None, text only"),
-        item.template_name ? el("li", { class: "label-template" }, el("span", { class: "muted" }, "WhatsApp template "), item.template_name) : null,
+        "div",
+        { class: "message-main" },
+        el("div", { class: "message-head" }, el("span", { class: "message-channel" }, channelName(item.channel)), pill(state.label, state.tone)),
+        mediaBlock(item),
+        item.subject ? el("p", { class: "message-subject" }, slotted(item.subject)) : null,
+        el("p", { class: "message-body" }, slotted(item.body)),
+        el(
+          "ul",
+          { class: "labels", "aria-label": "Labels" },
+          el("li", {}, el("span", { class: "muted" }, "Theme "), humanize(item.theme)),
+          el("li", {}, el("span", { class: "muted" }, "Tone "), humanize(item.tone)),
+          el("li", {}, el("span", { class: "muted" }, "Offer "), offerLabel),
+          el("li", {}, el("span", { class: "muted" }, "Picture "), hasMedia ? humanize(item.format) : "None, text only"),
+          item.template_name ? el("li", { class: "label-template" }, el("span", { class: "muted" }, "WhatsApp template "), item.template_name) : null,
+        ),
+        checklist(item, review, hasFacts),
+        rawNotes(item, review),
       ),
-      checklist(item, review, hasFacts),
-      rawNotes(item, review),
-      actions(),
+      // The failed message's "no Approve button" sentence reads under the message; buttons sit on the top line.
+      el("div", { class: ["message-side", item.status !== "retired" && review && review.passed === false && item.status !== "approved" ? "message-side-end" : null] }, actions()),
     );
   }
 
   draw();
   return article;
 }
+
+/** How many messages show before "Show all"; only ready or turned-off messages fold, so one that needs a look always shows. */
+const FIRST_MESSAGES = 8;
 
 function contentSection(ctx, goal, brief, content, facts) {
   const offers = (brief && brief.envelope && brief.envelope.offers) || [];
@@ -520,6 +599,36 @@ function contentSection(ctx, goal, brief, content, facts) {
   const reviewOf = (c) => (hasFacts ? reviews.get(c.content_id) : reviewFromNotes(c));
   const counts = el("p", { class: "plan-counts", role: "status" });
   const items = [...content];
+  let expanded = items.length <= FIRST_MESSAGES + 2;
+  let cards = [];
+  const more = el("div", { class: "message-more" });
+
+  /** Show the first few and every message that needs a look; the rest fold behind one "Show all" button. */
+  const fold = () => {
+    let hidden = 0;
+    cards.forEach((node, i) => {
+      const key = messageState(items[i], reviewOf(items[i])).key;
+      const show = expanded || i < FIRST_MESSAGES || !(key === "ready" || key === "off");
+      if (show) node.removeAttribute("hidden");
+      else {
+        node.setAttribute("hidden", "");
+        hidden += 1;
+      }
+    });
+    clear(
+      more,
+      hidden
+        ? button(`Show all ${int(items.length)} messages`, () => {
+            expanded = true;
+            fold();
+          }, { kind: "secondary", size: "sm" })
+        : null,
+      hidden ? el("span", { class: "small muted" }, `${int(hidden)} more, all ready to send or turned off`) : null,
+    );
+    if (!hidden) more.setAttribute("hidden", "");
+    else more.removeAttribute("hidden");
+  };
+
   const recount = () => {
     const by = { ready: 0, waiting: 0, failed: 0, off: 0, other: 0 };
     for (const c of items) by[messageState(c, reviewOf(c)).key] += 1;
@@ -530,36 +639,37 @@ function contentSection(ctx, goal, brief, content, facts) {
     counts.textContent = `${bits.join(", ")}. Only messages that are ready to send ever go out.`;
   };
   recount();
+  cards = items.map((item, i) =>
+    contentCard(ctx, item, reviewOf(item), hasFacts, offers, (next) => {
+      items[i] = next;
+      recount();
+      fold();
+    }),
+  );
+  fold();
   const summary = editorSummary(facts);
   return el(
     "section",
-    { class: "section", "aria-labelledby": "library" },
-    el("h2", { id: "library" }, "The messages it wrote"),
+    { class: "plan-library", "aria-labelledby": "library" },
+    el(
+      "div",
+      { class: "section-head" },
+      el("h2", { id: "library", class: "section-title" }, "The messages it wrote"),
+      items.length ? el("span", { class: "card-meta" }, plural(items.length, "message", "messages")) : null,
+    ),
     el(
       "p",
-      {},
+      { class: "plan-library-lede" },
       "An AI copywriter wrote these, and a second AI acts as a strict editor. It checks every message: on brand, no false claims, no made-up numbers, an unsubscribe line, and the channel's rules. ",
       el("strong", {}, "Nothing goes out without passing."),
     ),
-    summary ? el("p", { class: "plan-editor-summary" }, el("strong", {}, summary)) : null,
+    el("div", { class: "plan-tally" }, summary ? el("p", { class: "plan-editor-summary" }, summary) : null, counts),
     el(
       "p",
-      { class: "muted" },
+      { class: "muted small plan-library-note" },
       "You do not need to approve the messages that passed the editor one by one: turning one off is optional. Highlighted words are filled in for each customer, and the agent learns which themes, tones and offers work for whom.",
     ),
-    counts,
-    items.length
-      ? el(
-          "div",
-          { class: "card-grid" },
-          items.map((item, i) =>
-            contentCard(ctx, item, reviewOf(item), hasFacts, offers, (next) => {
-              items[i] = next;
-              recount();
-            }),
-          ),
-        )
-      : emptyState("No messages yet", "The copywriter is still writing them."),
+    items.length ? el("div", { class: "message-list" }, cards, more) : emptyState("No messages yet", "The copywriter is still writing them."),
   );
 }
 
@@ -583,9 +693,8 @@ function dial(ctx, goal, brief, facts, onApproved) {
   });
   const fieldset = el("fieldset", { class: "dial" }, el("legend", {}, "How much should it do on its own?"), el("div", { class: "dial-options" }, options));
   const done = goal.status === "done";
-  const go = button(approved ? "Save autonomy level" : "Approve plan", null, { kind: "primary", disabled: done || !brief });
-  go.classList.add("btn-lg");
-  const note = el("p", { class: "muted small", role: "status" });
+  const go = button(approved ? "Save autonomy level" : "Approve plan", null, { kind: "primary", size: "lg", block: true, disabled: done || !brief });
+  const note = el("p", { class: "muted small dial-note", role: "status" });
   if (approved) {
     const since = facts && present(facts.autonomy_since) ? ` At this level since ${when(facts.autonomy_since, { time: false })}.` : "";
     note.textContent = `Approved by ${dash(brief.approved_by)} on ${when(brief.approved_at)}. Plan version ${dash(brief.version)}.${since}`;
@@ -606,30 +715,86 @@ function dial(ctx, goal, brief, facts, onApproved) {
     }
   });
 
-  return card({
+  const node = card({
     title: "You approve once",
     level: 2,
     className: "dial-card",
+    meta: approved ? "Approved" : "Not approved yet",
     body: [
-      el("p", {}, "Read the plan and the messages above, then approve once. From then on it works inside this plan, at the level you choose here. You can change the level or pause at any time."),
+      el("p", { class: "muted card-lede" }, "Read the plan and the messages, then approve once. From then on it works inside this plan, at the level you choose here. You can change the level or pause at any time."),
       fieldset,
-      el(
-        "p",
-        { class: "small plan-start-note" },
-        "New to Autonomy? It has not yet run with a real business, so start in Shadow: for two weeks it shows you what it would do and why, and sends nothing. ",
-        el("a", { href: "#/start" }, "How getting started works"),
+      notice(
+        el(
+          "p",
+          {},
+          "New to Autonomy? It has not yet run with a real business, so start in Shadow: for two weeks it shows you what it would do and why, and sends nothing. ",
+          el("a", { href: "#/start" }, "How getting started works"),
+        ),
+        { tone: "warning" },
       ),
-      note,
+      el("div", { class: "dial-go" }, go, note),
     ],
-    actions: [go],
   });
+  return withId(node, "plan-approve");
+}
+
+/** The three things to do here, as quiet steps that jump to their block (the page can be long). */
+function stepsNav(root) {
+  const steps = [
+    ["plan-brief", "Read the plan"],
+    ["library", "Look at the messages it wrote"],
+    ["plan-approve", "Choose how much it does alone, and approve once"],
+  ];
+  const jump = (id) => {
+    const target = typeof document.getElementById === "function" ? document.getElementById(id) : null;
+    if (!target || typeof target.scrollIntoView !== "function") return;
+    target.scrollIntoView({ block: "start" });
+    const heading = target.matches && target.matches("h2") ? target : target.querySelector && target.querySelector("h2");
+    if (heading) {
+      heading.setAttribute("tabindex", "-1");
+      heading.focus({ preventScroll: true });
+    }
+  };
+  return el(
+    "ol",
+    { class: "plan-steps", "aria-label": "What to do on this page" },
+    steps.map(([id, words], i) =>
+      el("li", {}, el("button", { type: "button", class: "plan-step", onclick: () => jump(id), "aria-label": `Step ${i + 1}: ${words}` }, words)),
+    ),
+  );
+}
+
+/** Keeps the decision card clear of the sticky top bar, whose height changes with the note under it. */
+function stickBelowTopBar(aside) {
+  if (typeof document.querySelector !== "function") return;
+  const bar = document.querySelector(".topbar");
+  if (bar && bar.offsetHeight) aside.style.setProperty("--plan-sticky-top", `${bar.offsetHeight + 16}px`);
+}
+
+/** The screen while the goal loads: the same frame at the real size, grey where the words will be. */
+function loadingView(root) {
+  return [
+    pageHead({ title: "Plan", sub: "Loading the plan…" }),
+    stepsNav(root),
+    (() => {
+      const strip = skeletonKpis(LIMIT_LABELS);
+      strip.setAttribute("class", `${strip.getAttribute("class") || "kpis"} plan-limits plan-limits-loading`);
+      return strip;
+    })(),
+    el(
+      "div",
+      { class: "plan-layout" },
+      el("div", { class: "plan-main" }, el("section", { class: "card" }, el("h2", { class: "card-title" }, "The plan in plain words"), skeletonLines(9, { label: "Loading the plan…" }))),
+      el("div", { class: "plan-aside" }, el("section", { class: "card" }, el("h2", { class: "card-title" }, "You approve once"), skeletonLines(6))),
+    ),
+  ];
 }
 
 /** A promise's value, or null when it fails or sends nothing: the extra facts are optional, the plan is not. */
 const settle = (p) => Promise.resolve(p).then((v) => v ?? null, () => null);
 
 export async function render(root, ctx) {
-  clear(root, el("h1", {}, "Plan"), loading("Loading the plan…"));
+  clear(root, loadingView(root));
   const api = ctx.api;
   const factsP = typeof api.getPlanFacts === "function" ? settle(api.getPlanFacts(ctx.goalId)) : Promise.resolve(null);
   const dataP = typeof api.getDataReport === "function" ? settle(api.getDataReport()) : Promise.resolve(null);
@@ -641,16 +806,16 @@ export async function render(root, ctx) {
     const missing = err && err.status === 404;
     clear(
       root,
-      el("h1", {}, "Plan"),
+      pageHead({ title: "Plan" }),
       missing
         ? emptyState("This goal was not found", "It may have been removed, or the link is mistyped. Pick another goal from the switcher at the top.", button("Go to Goal", () => ctx.navigate("goal"), { kind: "primary" }))
-        : errorBox("Could not load this goal's plan.", err),
+        : errorBox("Could not load this goal's plan.", err, { retry: () => render(root, ctx) }),
     );
     return;
   }
   const goal = (detail && detail.goal) || ctx.goal;
   if (!goal) {
-    clear(root, el("h1", {}, "Plan"), emptyState("This goal was not found", "Pick another goal from the switcher at the top."));
+    clear(root, pageHead({ title: "Plan" }), emptyState("This goal was not found", "Pick another goal from the switcher at the top."));
     return;
   }
   const brief = (detail && detail.brief) || null;
@@ -665,43 +830,51 @@ export async function render(root, ctx) {
   };
 
   const level = AUTONOMY.find((a) => a.value === goal.autonomy);
-  clear(
-    root,
-    el("h1", {}, "Plan"),
-    el(
-      "div",
-      { class: "plan-head" },
-      el("p", { class: "lede" }, `“${goal.text}”`),
-      el(
-        "p",
-        { class: "plan-head-tags" },
-        pill(goalStatusWords(goal.status), statusTone(goal.status)),
-        level ? pill(`Autonomy: ${level.label}`, "info") : null,
-        el("span", { class: "muted" }, `Budget ${money(goal.budget, goal.currency)}`),
-      ),
-      el(
-        "ol",
-        { class: "plan-steps", "aria-label": "What to do on this page" },
-        el("li", {}, "Read the plan"),
-        el("li", {}, "Look at the messages it wrote"),
-        el("li", {}, "Choose how much it does alone, and approve once"),
-      ),
-    ),
-    brief ? briefCard(goal, brief, facts) : emptyState("The plan is still being drafted", "The Strategist has not finished this plan yet. Check back in a moment."),
-    brief ? el("div", { class: "plan-pair" }, hardRulesCard(goal, brief, facts), stopRulesCard(brief)) : null,
-    brief ? productsCard(data) : null,
-    contentSection(ctx, goal, brief, content || [], facts),
-    brief ? dial(ctx, goal, brief, facts, rerender) : null,
+  const liveLink =
     goal.status === "active" || goal.status === "paused"
       ? el(
           "p",
-          {},
+          { class: "plan-live-link" },
           el(
             "a",
             { href: `#/live/${encodeURIComponent(goal.goal_id)}` },
             goal.autonomy === "approve" ? "Approve its batches on the Live screen →" : "See it working on the Live screen →",
           ),
         )
-      : null,
+      : null;
+  const aside = brief ? el("div", { class: "plan-aside" }, dial(ctx, goal, brief, facts, rerender), liveLink) : null;
+  if (aside) stickBelowTopBar(aside);
+
+  clear(
+    root,
+    pageHead({
+      title: "Plan",
+      sub: `“${goal.text}”`,
+      actions: [
+        el(
+          "p",
+          { class: "plan-head-tags" },
+          pill(goalStatusWords(goal.status), goal.status === "draft" ? "neutral" : statusTone(goal.status), { dot: true }),
+          level ? pill(`Autonomy: ${level.label}`, "neutral") : null,
+        ),
+      ],
+    }),
+    brief ? stepsNav(root) : null,
+    brief ? limitsStrip(goal, brief, facts) : null,
+    el(
+      "div",
+      { class: ["plan-layout", brief ? null : "plan-layout-single"] },
+      el(
+        "div",
+        { class: "plan-main" },
+        brief ? briefCard(goal, brief, facts) : emptyState("The plan is still being drafted", "The Strategist has not finished this plan yet. Check back in a moment."),
+        brief ? hardRulesCard(goal, brief, facts) : null,
+        brief ? stopRulesCard(brief) : null,
+        brief ? productsCard(data) : null,
+      ),
+      contentSection(ctx, goal, brief, content || [], facts),
+      aside,
+      aside ? null : liveLink,
+    ),
   );
 }

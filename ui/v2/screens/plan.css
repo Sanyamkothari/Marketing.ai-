@@ -1,108 +1,343 @@
-/* Plan screen (screens/plan.js). Only the tokens of styles.css are used, so light and dark mode follow them.
-   Status is never colour alone: every mark comes with its word (visible, or for screen readers). */
+/* Plan screen (screens/plan.js): "what will it do, within what limits?". The plan in plain words is the biggest
+   block; the limits sit in one divided strip above it; the one decision (You approve once) rides in a sticky
+   column on the right on wide screens, and comes last, after the messages, on narrow ones. Only the tokens of
+   styles.css are used, so light and dark mode follow them. Status is never colour alone: every mark comes with
+   its word (visible, or for screen readers). Hairlines, no resting shadows, no tinted boxes for decoration. */
 
+/* ---- the title row and the three steps --------------------------------------------------------------------- */
 .plan-head-tags {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 10px;
+  gap: 8px;
+  margin: 4px 0 0;
 }
 
-/* The three things to do here, as a quiet numbered strip. */
+/* The three things to do here, in order. No numbers: the top bar's steps already carry 1-5. */
 .plan-steps {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 18px;
+  align-items: baseline;
+  gap: 0 12px;
   list-style: none;
-  counter-reset: plan-step;
   padding: 0;
-  margin: 8px 0 16px;
+  margin: calc(-1 * var(--gap)) 0 var(--pad);
+}
+
+.plan-step {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
   color: var(--muted);
-  font-size: 14px;
+  font: inherit;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  text-align: left;
+  cursor: pointer;
 }
 
 .plan-steps li {
-  counter-increment: plan-step;
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: baseline;
+  gap: 12px;
 }
 
-.plan-steps li::before {
-  content: counter(plan-step);
-  display: inline-grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 1.5px solid var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--ink);
+.plan-steps li + li::before {
+  content: "\2192";
+  color: var(--faint);
+}
+
+.plan-step:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--control);
+  text-underline-offset: 3px;
+}
+
+/* On a phone the three steps stay one row that scrolls sideways, like the top bar's steps. */
+@media (max-width: 719px) {
+  .plan-steps {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin: -8px calc(-1 * var(--pad)) 12px 0;
+    padding-right: var(--pad);
+    white-space: nowrap;
+  }
+
+  .plan-steps::-webkit-scrollbar {
+    display: none;
+  }
+
+  .plan-steps li {
+    flex: none;
+  }
+
+  .plan-step {
+    min-height: var(--touch);
+  }
+}
+
+/* The limits strip: one container split by hairlines, the same left and right edges as the blocks below. */
+.main > .kpis {
+  margin-bottom: var(--gap);
+}
+
+.plan-limits .kpi-value {
+  white-space: nowrap;
+}
+
+/* While loading, each cell keeps the note line's room too, so the strip does not grow when the plan lands. */
+.plan-limits-loading .kpi::after {
+  content: "";
+  display: block;
+  height: var(--lh-small);
+  margin-top: 4px;
+}
+
+/* "21:00–09:00" fits a 390px phone's column on one line; narrower phones may wrap it at the dash. */
+@media (max-width: 379px) {
+  .plan-limits .kpi-value {
+    white-space: normal;
+  }
+}
+
+/* ---- the layout -------------------------------------------------------------------------------------------- */
+/* One column on narrow screens: the plan, the messages, then the decision (the order of the three steps). */
+.plan-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--gap);
+  align-items: start;
+}
+
+.plan-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+.plan-main > .card,
+.plan-aside > .card {
+  margin-bottom: 0;
+}
+
+.plan-library {
+  min-width: 0;
+  margin-top: var(--gap);
+}
+
+.plan-aside {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Targets of the steps clear the sticky top bar. */
+#plan-brief,
+#plan-approve,
+#library {
+  scroll-margin-top: 140px;
+}
+
+#library:focus,
+.card-title:focus {
+  outline: none;
+}
+
+@media (min-width: 1024px) {
+  .plan-layout {
+    grid-template-columns: minmax(0, 1fr) 360px;
+    grid-template-areas:
+      "main aside"
+      "library aside";
+    column-gap: var(--pad);
+  }
+
+  .plan-layout-single {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "main"
+      "library";
+  }
+
+  .plan-main {
+    grid-area: main;
+  }
+
+  .plan-library {
+    grid-area: library;
+  }
+
+  .plan-aside {
+    grid-area: aside;
+    align-self: start;
+  }
+}
+
+/* The decision stays in reach while the plan and the messages scroll, when the window is tall enough for it. */
+@media (min-width: 1024px) and (min-height: 860px) {
+  .plan-aside {
+    position: sticky;
+    top: var(--plan-sticky-top, 128px);
+  }
+}
+
+/* ---- the plan in plain words ------------------------------------------------------------------------------- */
+/* One fact a row, a rule between rows: the label in grey on the left, the words on the right. */
+.plan-facts {
+  column-gap: 0;
+}
+
+.plan-facts dt,
+.plan-facts dd {
+  margin: 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.plan-facts dt {
+  padding-right: var(--pad);
+}
+
+.plan-facts dt:first-of-type,
+.plan-facts dd:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.plan-facts dd p {
+  margin: 4px 0 0;
+}
+
+.plan-facts dd > p:first-child,
+.plan-facts .fact-lead {
+  margin-top: 0;
+}
+
+.plan-facts dd .plain-list {
+  margin-top: 4px;
 }
 
 .plan-audience {
   margin: 8px 0 0;
-  padding: 8px 10px;
-  border-radius: var(--r-sm);
-  background: var(--brand-tint);
 }
 
-/* Rules it can never break, and when it pauses itself: side by side on wider screens. */
-.plan-pair {
-  display: grid;
-  gap: 16px;
-  margin-bottom: 16px;
+.plan-audience strong {
+  font-weight: 600;
 }
 
-.plan-pair > .card {
-  margin-bottom: 0;
+@media (max-width: 719px) {
+  .plan-facts dt {
+    padding-bottom: 2px;
+  }
+
+  .plan-facts dd {
+    border-top: 0;
+    padding-top: 0;
+  }
 }
 
+.brief .rationale {
+  margin: 4px 0 0;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--rule);
+  border-radius: 0;
+  background: none;
+}
+
+.brief .rationale p {
+  margin: 0;
+}
+
+.brief .rationale p + p {
+  margin-top: 4px;
+}
+
+/* The grey sentence under a card title. */
+.card-lede {
+  margin: -4px 0 12px;
+}
+
+/* ---- rules it can never break, when it pauses itself ------------------------------------------------------- */
 .rule-list {
   list-style: none;
   padding: 0;
-  margin: 8px 0 0;
+  margin: 0;
 }
 
 .rule {
   display: flex;
   gap: 10px;
-  align-items: flex-start;
-  padding: 6px 0;
-  border-top: 1px solid var(--border);
+  align-items: baseline;
+  padding: 10px 0;
+  border-top: 1px solid var(--rule);
 }
 
 .rule:first-child {
   border-top: 0;
+  padding-top: 4px;
 }
 
+.rule:last-child {
+  padding-bottom: 0;
+}
+
+/* A plain check in the positive ink: no circle, no fill. */
 .rule-mark {
   flex: none;
-  display: inline-grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  margin-top: 2px;
-  border-radius: 50%;
-  background: var(--good-t);
-  color: var(--good);
-  font-size: 12px;
-  font-weight: 700;
+  width: 14px;
+  color: var(--positive);
+  font-size: var(--fs-small);
+  font-weight: 600;
 }
 
-/* Products it may suggest, and the labelled product fact. */
+.rule-name {
+  font-weight: 600;
+}
+
+/* Two columns of rules where there is room. */
+@media (min-width: 1180px) {
+  .plan-rules .rule-list {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: var(--pad);
+  }
+
+  .plan-rules .rule:nth-child(2) {
+    border-top: 0;
+    padding-top: 4px;
+  }
+
+  .plan-rules .rule:nth-last-child(2):nth-child(odd) {
+    padding-bottom: 0;
+  }
+}
+
+.plan-stops-foot {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+/* ---- products it may suggest, and the labelled product fact ------------------------------------------------ */
+/* A quiet grey aside: it is a fact about Autonomy, not about this shop, so it must not look like a result. */
 .product-fact {
   margin-top: 12px;
-  padding: 12px 14px;
+  padding: 12px 16px;
   border: 1px solid var(--border);
-  border-left: 4px solid var(--info);
-  border-radius: 0 var(--r-sm) var(--r-sm) 0;
-  background: var(--surface-2);
+  border-radius: var(--radius-control);
+  background: var(--raised);
 }
 
 .product-fact p {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
 }
 
 .product-fact p:last-child {
@@ -110,25 +345,193 @@
 }
 
 .product-fact-label {
-  font-weight: 700;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  font-weight: 600;
+}
+
+.product-fact-tag {
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 400;
 }
 
 .product-fact code {
   overflow-wrap: anywhere;
 }
 
-/* The messages. Long WhatsApp template names and slot-heavy bodies must never push past a phone's edge. */
+/* ---- the messages ------------------------------------------------------------------------------------------ */
+/* One framed list, one message a row: the message on the left, the editor's checklist and the choice on the
+   right. Long WhatsApp template names and slot-heavy bodies must never push past a phone's edge. */
+.plan-library .section-head {
+  margin: 0 0 4px;
+}
+
+.plan-library-lede {
+  max-width: 80ch;
+  margin: 0 0 12px;
+}
+
+.plan-tally {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 16px;
+  margin: 0 0 4px;
+}
+
+.plan-tally p {
+  margin: 0;
+}
+
 .plan-editor-summary {
-  margin-bottom: 4px;
+  font-weight: 600;
 }
 
 .plan-counts {
-  font-size: 14px;
+  font-size: var(--fs-body);
   color: var(--muted);
 }
 
+.plan-library-note {
+  max-width: 80ch;
+  margin: 0 0 var(--gap);
+}
+
+.message-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
 .message {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px var(--card-pad);
+  border-top: 1px solid var(--border);
   overflow-wrap: anywhere;
+}
+
+.message:first-child {
+  border-top: 0;
+}
+
+.message[hidden] {
+  display: none;
+}
+
+/* From 760px the choice (Approve / Reject) sits on the message's top line, right-aligned, so the message keeps
+   the full width of the list; the failed message's sentence stays under the editor's verdict. */
+@media (min-width: 760px) {
+  .message {
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: var(--gap);
+    row-gap: 0;
+  }
+
+  .message-main {
+    display: contents;
+  }
+
+  .message-main > * {
+    grid-column: 1 / -1;
+  }
+
+  .message-main > .message-head {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .message-side {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: start;
+    margin-top: -3px;
+  }
+
+  .message-side-end {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    margin-top: 0;
+    order: 1;
+  }
+
+  .message-main > .editor-notes {
+    order: 2;
+  }
+
+  .message-side .message-actions {
+    margin-top: 0;
+    justify-content: flex-end;
+  }
+
+  .message-side .message-actions .btn-ghost:first-child {
+    margin-left: 0;
+  }
+
+  .message-side-end .message-never {
+    margin-top: 6px;
+  }
+}
+
+.message-main,
+.message-side {
+  min-width: 0;
+}
+
+.message-main > :last-child {
+  margin-bottom: 0;
+}
+
+.message-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.message-channel {
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 500;
+}
+
+.message-subject {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.message-body {
+  margin: 0;
+  white-space: pre-wrap;
+  max-width: 68ch;
+}
+
+/* A {{slot}}: what changes for each customer. Grey, not the accent: there are many of them on this page. */
+.message .slot {
+  display: inline;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  padding: 1px 3px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: var(--fs-small);
+  font-weight: 500;
+}
+
+.message .labels {
+  margin-top: 8px;
+  gap: 4px 16px;
+  color: var(--text);
 }
 
 .message .labels li,
@@ -138,157 +541,268 @@
 }
 
 .message-media {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
+  max-width: 320px;
 }
 
 .message-media img,
 .message-media video {
   display: block;
   width: 100%;
-  max-height: 220px;
+  max-height: 180px;
   object-fit: cover;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-control);
   border: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--raised);
 }
 
 .message-media figcaption {
   margin-top: 4px;
 }
 
+/* Where the picture would be: a quiet slot with the reason, not a broken image or a dashed box. */
 .message-media-missing {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   padding: 6px 10px;
-  border: 1px dashed var(--border);
-  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--raised);
   color: var(--muted);
+  width: fit-content;
+  max-width: 100%;
 }
 
-/* The strict editor's checklist on each message. */
+/* The strict editor's checklist on each message: one wrapped line of words with a plain mark, no box. */
 .editor {
-  margin-top: 10px;
-  padding: 8px 10px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border);
-  background: var(--surface-2);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.editor > .editor-title {
+  flex-basis: 100%;
 }
 
 .editor p {
   margin: 0;
 }
 
-.editor-failed {
-  border-color: var(--critical);
-  background: var(--critical-t);
-}
-
-.editor-none {
-  background: var(--info-t);
-}
-
 .editor-title {
-  font-weight: 600;
   color: var(--muted);
-  margin-bottom: 4px;
+}
+
+.editor-result {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.editor-result-failed {
+  color: var(--negative);
+}
+
+/* Not checked yet: the same hairline-topped line as the checklist, no box. */
+.editor-none {
+  display: block;
 }
 
 .check-list {
   list-style: none;
   padding: 0;
-  margin: 0 0 4px;
+  margin: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
-  font-size: 13px;
+  gap: 4px 16px;
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
 }
 
 .check {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 4px;
+  gap: 2px 4px;
 }
 
+/* A failed check takes its own line after the ones that passed, with the editor's reason under it. */
 .check-fail {
   flex-basis: 100%;
+  order: 1;
 }
 
 .check-mark {
-  font-weight: 700;
+  flex: none;
+  width: 12px;
+  font-weight: 600;
 }
 
 .check-pass .check-mark {
-  color: var(--good);
+  color: var(--positive);
 }
 
 .check-fail .check-mark,
 .check-fail .check-words {
-  color: var(--critical);
+  color: var(--negative);
   font-weight: 600;
 }
 
-.check-none .check-mark {
+.check-none .check-mark,
+.check-none .check-words {
   color: var(--muted);
 }
 
 .check-note {
   flex-basis: 100%;
   padding-left: 16px;
-  color: var(--ink);
+  color: var(--text);
 }
 
-.editor-verdict {
-  margin-top: 4px;
+.editor .editor-verdict {
+  flex-basis: 100%;
+}
+
+.editor-failed .editor-verdict strong {
+  color: var(--negative);
 }
 
 .editor-notes {
   margin-top: 8px;
 }
 
+.editor-none + .editor-notes,
+.editor + .editor-notes {
+  margin-top: 6px;
+}
+
 .editor-notes summary {
   cursor: pointer;
-  color: var(--brand);
+  color: var(--muted);
   width: max-content;
   max-width: 100%;
 }
 
+.editor-notes summary:hover {
+  color: var(--text);
+}
+
 .editor-notes summary:focus-visible {
-  outline: 3px solid var(--focus);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 2px;
 }
 
-.message .card-actions {
+.editor-notes .plain-list {
+  overflow-wrap: anywhere;
+}
+
+.message-actions {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.message-actions .btn-ghost:first-child {
+  margin-left: -8px;
 }
 
 .message-never {
-  margin: auto 0 0;
-  padding-top: 12px;
+  margin: 0;
 }
 
-/* The dial's hint under each level; the start note under it. */
+/* Under 760px the choice comes last in the message; the grid gap above it is the space. */
+@media (max-width: 759px) {
+  .message-side .message-actions {
+    margin-top: 0;
+  }
+
+  .editor-notes summary {
+    padding: 6px 0;
+  }
+}
+
+.message-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px var(--card-pad);
+  border-top: 1px solid var(--border);
+}
+
+.message-more[hidden] {
+  display: none;
+}
+
+/* ---- you approve once -------------------------------------------------------------------------------------- */
+.dial-card .card-head {
+  margin-bottom: 8px;
+}
+
+.dial-card .dial legend {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  margin-bottom: 8px;
+}
+
+/* In the side column the three levels stack: each one a row with its radio, its hint and its sentence. */
+.plan-aside .dial-options {
+  grid-template-columns: 1fr;
+}
+
+.dial-card .dial-option label {
+  gap: 2px;
+  padding: 12px;
+}
+
+.dial-card .dial-option input:checked + label {
+  box-shadow: none;
+  border-color: var(--primary);
+}
+
+.dial-hint,
+.dial-text {
+  padding-left: 22px;
+}
+
 .dial-hint {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 500;
+  color: var(--text);
 }
 
-.dial-hint-start {
-  color: var(--good);
+.dial-card .dial-text {
+  margin-top: 2px;
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
 }
 
-.plan-start-note {
-  margin: 12px 0 4px;
-  padding: 8px 10px;
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+.dial-card .notice {
+  margin: 12px 0 0;
 }
 
-@media (min-width: 720px) {
-  .plan-pair {
-    grid-template-columns: 1fr 1fr;
-    align-items: start;
+.dial-go {
+  margin-top: var(--gap);
+}
+
+.dial-note {
+  margin: 8px 0 0;
+}
+
+.plan-live-link {
+  margin: 0;
+  padding: 0 4px;
+  font-size: var(--fs-body);
+}
+
+/* Narrow: the decision comes after the messages, full width, its three levels side by side when they fit. */
+@media (min-width: 720px) and (max-width: 1023px) {
+  .plan-aside .dial-options {
+    grid-template-columns: repeat(3, 1fr);
   }
 }
