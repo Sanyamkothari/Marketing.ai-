@@ -14,6 +14,13 @@ The library code never sleeps and never reads the clock: `Worker.run_once(now)` 
 `python -m autonomy.runtime.worker` entry point loops on the wall clock, with a sleep between
 polls.
 
+**Send jobs have one owner: a `Worker` with a send handler.** The runtime's tick never claims a
+`send_message` job on its own. A runtime ticked with no worker at all (the tests, the API's
+operator tick) runs this same handler inside its tick, through a worker of its own marked
+`hosted`; as soon as a (non-hosted) `Worker` in the process has a send handler for the runtime's
+dispatcher, the tick leaves send jobs to it (see `worker_owns_sends`). Production builds the
+runtime with `run_send_jobs=False`, so only the worker process runs sends.
+
 A failing job is retried with exponential backoff (1, 2, 4, ... minutes, capped at an hour) up to
 `max_attempts`, then left FAILED with its last error for an operator. A handler raises
 `PermanentJobError` for a job that can never succeed (a bad signature, an unreadable payload), and
@@ -26,11 +33,12 @@ import argparse
 import json
 import logging
 import sys
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from autonomy.channels import SEND_JOB_KIND, Dispatcher
+from autonomy.channels import SEND_JOB_KIND, Dispatcher, DispatchReport
 from autonomy.contracts import Channel, Event, Job, stable_id
 from autonomy.interfaces import ChannelAdapter, DecisionLog, JobQueue, StateStore
 
@@ -42,6 +50,7 @@ __all__ = [
     "JobHandler",
     "JobOutcome",
     "PermanentJobError",
+    "SendHandler",
     "Worker",
     "main",
     "next_tick_at",
@@ -51,6 +60,7 @@ __all__ = [
     "tick_job",
     "webhook_handler",
     "webhook_job",
+    "worker_owns_sends",
 ]
 
 log = logging.getLogger(__name__)
@@ -112,11 +122,17 @@ class Worker:
     backoff_cap: timedelta = DEFAULT_BACKOFF_CAP
     outcomes: list[JobOutcome] = field(default_factory=list)
     """Every outcome so far, oldest first: the demo and the tests read it."""
+    hosted: bool = False
+    """True for the worker a runtime runs inside its own tick. A hosted worker never takes over
+    send jobs from the runtime; any other worker with a `SendHandler` does (`worker_owns_sends`)."""
 
     def __post_init__(self) -> None:
         if self.max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
         self.handlers = dict(self.handlers)
+        sender = self.handlers.get(SEND_KIND)
+        if not self.hosted and isinstance(sender, SendHandler):
+            _SEND_OWNERS.add(sender.dispatcher)
 
     @property
     def kinds(self) -> tuple[str, ...]:
@@ -231,19 +247,57 @@ def _scheduled_at(job: Job) -> datetime:
     return parsed if parsed.tzinfo is not None else run_at
 
 
-def send_handler(dispatcher: Dispatcher, decisions: DecisionLog, states: StateStore) -> JobHandler:
-    """Finish a `send_message` job through the dispatcher.
+_SEND_OWNERS: weakref.WeakSet[Dispatcher] = weakref.WeakSet()
+"""Dispatchers whose send jobs a (non-hosted) `Worker` in this process runs."""
+
+
+def worker_owns_sends(dispatcher: Dispatcher) -> bool:
+    """True when a `Worker` built in this process runs this dispatcher's send jobs.
+
+    The runtime asks this before running send jobs in its tick, so one process never has two
+    claimers (with two sets of retry rules) for the same queue."""
+    return dispatcher in _SEND_OWNERS
+
+
+class SendHandler:
+    """Finish a `send_message` job through the dispatcher: the one code path for queued sends.
 
     A skip (the customer unsubscribed, the goal was paused, ...) is a finished job: the dispatcher
-    reported why. A provider failure raises, so the worker retries with backoff."""
+    reported why. A provider failure raises, so the worker retries with backoff. `on_report`, if
+    given, sees every dispatch report first (failures included), which is how a runtime hosting
+    the handler folds the SEND and FAIL events into state in the same tick."""
 
-    def handle(job: Job, now: datetime) -> None:
-        report = dispatcher.run_send_job(job, decisions, states, now)
+    def __init__(
+        self,
+        dispatcher: Dispatcher,
+        decisions: DecisionLog,
+        states: StateStore,
+        *,
+        on_report: Callable[[DispatchReport], None] | None = None,
+    ) -> None:
+        self.dispatcher = dispatcher
+        self.decisions = decisions
+        self.states = states
+        self.on_report = on_report
+
+    def __call__(self, job: Job, now: datetime) -> None:
+        report = self.dispatcher.run_send_job(job, self.decisions, self.states, now)
+        if self.on_report is not None:
+            self.on_report(report)
         if report.failed:
             reasons = "; ".join(r.reason or "provider error" for r in report.failed)
             raise RuntimeError(f"send failed: {reasons}")
 
-    return handle
+
+def send_handler(
+    dispatcher: Dispatcher,
+    decisions: DecisionLog,
+    states: StateStore,
+    *,
+    on_report: Callable[[DispatchReport], None] | None = None,
+) -> SendHandler:
+    """A `SendHandler` for a worker. A worker given it owns the dispatcher's send jobs."""
+    return SendHandler(dispatcher, decisions, states, on_report=on_report)
 
 
 def webhook_job(channel: Channel, headers: Mapping[str, str], body: bytes, *, received_at: datetime) -> Job:

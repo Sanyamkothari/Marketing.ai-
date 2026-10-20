@@ -80,6 +80,10 @@ class ContentStatusRequest(Contract):
     status: ContentStatus
 
 
+class BatchDecisionRequest(Contract):
+    """Approving or rejecting a batch needs nothing more than its id: send `{}` or no body at all."""
+
+
 class GoalWithBrief(Contract):
     goal: Goal
     brief: Brief
@@ -254,14 +258,22 @@ def list_batches(
     return _run(services.list_batches, goal_id, status)
 
 
-@router.post("/batches/{batch_id}/approve")
-def approve_batch(batch_id: str, services: ServicesDep) -> Batch:
+BatchBody = Annotated[BatchDecisionRequest | None, Body()]
+
+_BATCH_ERRORS: dict[int | str, dict[str, Any]] = {
+    404: {"description": "No batch with this id; the detail names it"},
+    409: {"description": "The batch is no longer pending (already approved, rejected, sent or expired)"},
+}
+
+
+@router.post("/batches/{batch_id}/approve", responses=_BATCH_ERRORS)
+def approve_batch(batch_id: str, services: ServicesDep, body: BatchBody = None) -> Batch:  # noqa: ARG001
     """Approve a pending batch; the runtime sends it on its next tick. 409 if it is no longer pending."""
     return _run(services.approve_batch, batch_id)
 
 
-@router.post("/batches/{batch_id}/reject")
-def reject_batch(batch_id: str, services: ServicesDep) -> Batch:
+@router.post("/batches/{batch_id}/reject", responses=_BATCH_ERRORS)
+def reject_batch(batch_id: str, services: ServicesDep, body: BatchBody = None) -> Batch:  # noqa: ARG001
     """Reject a pending batch; nothing in it is sent. 409 if it is no longer pending."""
     return _run(services.reject_batch, batch_id)
 

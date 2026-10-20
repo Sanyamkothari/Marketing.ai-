@@ -10,7 +10,9 @@
 //   node docs/v2/screenshots/capture.mjs         # writes the PNGs next to this file
 //
 // Environment: CHROME (browser binary), APP_URL (default http://127.0.0.1:8010/v2/app/),
-// OUT_DIR (default this folder), GOAL_ID (default goal_winback, the demo goal).
+// OUT_DIR (default this folder), GOAL_ID and APPROVE_GOAL_ID. By default the goals come from the API's
+// GET /v2/goals: the autopilot goal for the six screens, and the goal at the APPROVE level for the
+// extra "batches" shots (its Live screen, with the batches waiting for a person).
 // It also prints any element that sticks out past the right edge of the viewport, because the page
 // hides horizontal overflow and a clipped element is otherwise easy to miss.
 
@@ -25,8 +27,25 @@ const CHROME =
   process.env.CHROME ?? "/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell";
 const APP_URL = process.env.APP_URL ?? "http://127.0.0.1:8010/v2/app/";
 const OUT_DIR = process.env.OUT_DIR ?? HERE;
-const GOAL = process.env.GOAL_ID ?? "goal_winback";
 const SETTLE_MS = 2500;
+
+/** The demo's goals, from the API unless GOAL_ID / APPROVE_GOAL_ID say otherwise. */
+async function pickGoals() {
+  let goals = [];
+  if (!process.env.GOAL_ID || !process.env.APPROVE_GOAL_ID) {
+    const res = await fetch(new URL("/v2/goals", APP_URL));
+    if (!res.ok) throw new Error(`GET /v2/goals answered ${res.status}; is the demo API running?`);
+    goals = await res.json();
+  }
+  const pick = (level) => goals.find((g) => g.autonomy === level)?.goal_id ?? null;
+  return {
+    goal: process.env.GOAL_ID ?? pick("autopilot") ?? goals[0]?.goal_id ?? "goal_winback",
+    approveGoal: process.env.APPROVE_GOAL_ID ?? pick("approve"),
+  };
+}
+
+const { goal: GOAL, approveGoal: APPROVE_GOAL } = await pickGoals();
+console.log(`goals: ${GOAL} (screens), ${APPROVE_GOAL ?? "none"} (batches)`);
 
 const DESKTOP = { name: "desktop", width: 1440, height: 900, mobile: false };
 const PHONE = { name: "phone", width: 390, height: 844, mobile: true };
@@ -39,6 +58,8 @@ const SCREENS = [
   ["proof", `#/proof/${GOAL}`],
   ["operator", `#/operator/${GOAL}`],
 ];
+// The APPROVE goal's Live screen, where its batches wait for Approve or Reject.
+if (APPROVE_GOAL) SCREENS.push(["batches", `#/live/${APPROVE_GOAL}`]);
 
 const SHOTS = [];
 for (const device of [DESKTOP, PHONE]) {
@@ -109,7 +130,8 @@ const OVERFLOW_PROBE = `(() => {
     }
     if (scrolled) continue;
     const name = el.tagName.toLowerCase() + (el.className && typeof el.className === "string" ? "." + el.className.trim().split(/\\s+/).join(".") : "");
-    out.push(name + " right=" + Math.round(r.right));
+    const text = (el.textContent || "").trim().replace(/\\s+/g, " ").slice(0, 40);
+    out.push(name + " right=" + Math.round(r.right) + (text ? " " + JSON.stringify(text) : ""));
   }
   return out.slice(0, 12);
 })()`;

@@ -8,12 +8,17 @@
   flow back into the event store. The world's own SEND events are dropped, because the dispatcher
   has already recorded the one SEND each message gets.
 - **The agents run on a scripted model** (`demo_llm()`), so the outer loop is deterministic and
-  offline: the Strategist falls back to its template briefs, the Creative writes from a fixed copy
-  book that passes the Critic's rules, the Critic's judge approves, and the Analyst writes its
-  template briefing. Every number still comes from code.
+  offline: the Strategist falls back to its template briefs and keeps the plan as it is each week,
+  the Creative writes from a fixed copy book that passes the Critic's rules, the Critic's judge
+  approves, and the Analyst writes its template briefing. Every number still comes from code.
 - **Two goals, two autonomy levels.** "Win back lapsed customers" runs on AUTOPILOT; "turn one-time
   buyers into repeat buyers" runs at APPROVE, so its ACT decisions are held in a pending `Batch`.
-  The demo plays the marketer and approves each batch, and the runtime sends it.
+  The demo plays the marketer and approves each batch, and the runtime sends it. For the API's
+  demo, `approve_goal_days` starts the APPROVE goal late (a second goal the marketer added recently)
+  and `hold_last_batches` leaves the last day's batches pending, so the app has batches to show.
+- **Costs are close to real ones** (`DEMO_CHANNEL_COST`): a tenth of a cent per email, four cents
+  per WhatsApp marketing message, and the offers' own cost per redemption, so spend and return on
+  spend are numbers a marketer would believe.
 - **Every day**, a `tick` job runs through the worker: `AutonomyRuntime.tick` folds new events,
   checks the circuit breakers, decides for every customer in each goal's audience (with a
   probability on every decision), batches or dispatches, learns nightly and runs the weekly
@@ -95,7 +100,7 @@ from autonomy.interfaces import (
 )
 from autonomy.proof import Costs, group_assigner, proof_rewards, proof_summary
 from autonomy.runtime.batches import BatchStore, InMemoryBatchStore
-from autonomy.runtime.service import AutonomyRuntime, RuntimeConfig, TickReport, standard_breakers
+from autonomy.runtime.service import AutonomyRuntime, RuntimeConfig, SpendFn, TickReport, standard_breakers
 from autonomy.runtime.worker import (
     SEND_KIND,
     TICK_KIND,
@@ -120,6 +125,7 @@ __all__ = [
     "SpendTrackingEventStore",
     "build_system",
     "demo_llm",
+    "goal_pacing",
     "health_at",
     "live_demo_worker",
     "proof_at",
@@ -138,6 +144,11 @@ PLAN_DAYS = 30
 """Spend pace is judged against the budget spread evenly over this many days."""
 FALLBACK_MC_DRAWS = 200
 """Monte Carlo draws for the fallback policy's logged probabilities: enough for a demo, and fast."""
+DEMO_CHANNEL_COST: dict[Channel, float] = {Channel.EMAIL: 0.001, Channel.WHATSAPP: 0.04}
+"""What one message costs. Email: about $1 per thousand through an email service. WhatsApp: Meta
+charges per marketing-template message, by country, from about $0.01 (India) to over $0.10
+(Germany); $0.04 sits between the US and UK rates. Offers cost what each `OfferOption` says per
+redemption (free shipping $4, 10% off $6)."""
 
 
 @dataclass(frozen=True)
@@ -223,6 +234,31 @@ _JUDGE_ANSWER = json.dumps(
 _CHANNEL = re.compile(r"^Channel: (\w+)\.", re.MULTILINE)
 _THEME = re.compile(r"^Theme: (\w+)\.", re.MULTILINE)
 _COUNT = re.compile(r"^Write (\d+) distinct variants\.", re.MULTILINE)
+_KEEP_CHANNELS = re.compile(r"^- channels: (.*)$", re.MULTILINE)
+_KEEP_OFFER = re.compile(r"^  - (\w+): ", re.MULTILINE)
+_KEEP_CAP = re.compile(r"^- weekly cap: (\d+)$", re.MULTILINE)
+_KEEP_REASON = (
+    "The agent is still learning who responds to what, and the plan's limits are holding, "
+    "so the plan stays as the marketer approved it."
+)
+
+
+def _adjust_answer(prompt: str) -> str:
+    """The Strategist's weekly review: keep every channel, offer, follow-up and the weekly cap.
+
+    Without this the scripted model would answer in prose, and the brief's rationale (shown on the
+    Plan screen) would carry the parse error instead of a reason."""
+    channels = _KEEP_CHANNELS.search(prompt)
+    cap = _KEEP_CAP.search(prompt)
+    return json.dumps(
+        {
+            "keep_channels": [c.strip() for c in channels.group(1).split(",")] if channels else [],
+            "keep_offer_ids": _KEEP_OFFER.findall(prompt),
+            "max_contacts_per_week": int(cap.group(1)) if cap else 0,
+            "keep_follow_up_days": None,
+            "rationale": _KEEP_REASON,
+        }
+    )
 
 
 def _creative_answer(prompt: str) -> str:
@@ -248,11 +284,14 @@ def _creative_answer(prompt: str) -> str:
 
 def _script(system: str, prompt: str) -> str:  # noqa: ARG001
     """Deterministic answers for every agent. Anything not scripted gets prose, which no agent can
-    parse, so the Strategist and the Analyst fall back to their templates, as designed."""
+    parse, so the Strategist's first brief and the Analyst fall back to their templates, as
+    designed. The Strategist's weekly review is scripted to keep the plan unchanged."""
     if "Score these criteria" in prompt:
         return _JUDGE_ANSWER
     if "distinct variants." in prompt:
         return _creative_answer(prompt)
+    if prompt.startswith("Adjust this brief for the coming week"):
+        return _adjust_answer(prompt)
     return "The demo model answers in prose here, so the agent uses its template."
 
 
@@ -276,6 +315,23 @@ class DemoStores:
     batches: BatchStore = field(default_factory=InMemoryBatchStore)
     briefings: list[Briefing] = field(default_factory=list)
     alerts: list[Alert] = field(default_factory=list)
+
+
+def goal_pacing(goals: Iterable[Goal], start: datetime, *, plan_days: int = PLAN_DAYS) -> SpendFn:
+    """Planned spend to date for the demo's goals: each budget spread evenly over `plan_days`.
+
+    Elapsed time counts from each goal's own `starts_at` (falling back to `start`), so a goal added
+    part-way through has had no time to spend yet and the spend-pace breaker can still catch it.
+    The simulation and the API demo both pace with this, so they match each other."""
+    listed = list(goals)
+    budgets = {g.goal_id: g.budget for g in listed}
+    goal_start: dict[str, datetime] = {g.goal_id: g.starts_at for g in listed}
+
+    def planned(goal_id: str, now: datetime) -> float:
+        elapsed = max(0.0, (now - goal_start.get(goal_id, start)) / timedelta(days=1))
+        return budgets.get(goal_id, 0.0) * min(1.0, elapsed / plan_days)
+
+    return planned
 
 
 class SpendTrackingEventStore:
@@ -605,9 +661,15 @@ def _address(customer_id: str, channel: Channel) -> str:
 
 
 def _setup_goals(
-    stores: DemoStores, start: datetime, customers: int
+    stores: DemoStores,
+    start: datetime,
+    customers: int,
+    goal_starts: Mapping[GoalKind, datetime] | None = None,
 ) -> tuple[list[Goal], list[Brief], Strategist, Analyst]:
-    """Goal -> Strategist brief -> approval -> Creative library -> Critic -> active, for each demo goal."""
+    """Goal -> Strategist brief -> approval -> Creative library -> Critic -> active, for each demo goal.
+
+    A goal in `goal_starts` is planned, approved and stamped at that later time (the marketer added it
+    part-way through), and the runtime leaves it alone until then because of its `starts_at`."""
     llm = demo_llm()
     orchestrator = Orchestrator(stores.workspace)
     strategist = Strategist(llm)
@@ -622,23 +684,25 @@ def _setup_goals(
     )
     goals: list[Goal] = []
     briefs: list[Brief] = []
+    starts = goal_starts or {}
     for spec in DEMO_GOALS:
+        at = max(start, starts.get(spec.kind, start))
         goal = Goal(
             goal_id=stable_id("goal", BUSINESS_ID, spec.kind.value),
             business_id=BUSINESS_ID,
             text=spec.text,
             kind=spec.kind,
             budget=spec.budget,
-            starts_at=start,
-            created_at=start,
+            starts_at=at,
+            created_at=at,
         )
         orchestrator.create(goal)
-        orchestrator.attach_brief(goal, strategist.draft_brief(goal, business_facts=facts, now=start))
-        approved = orchestrator.approve(goal, approved_by=APPROVER, now=start, autonomy=spec.autonomy)
-        drafts = creative.build_library(approved, brand_voice=BRAND_VOICE, n_per_cell=1, now=start)
+        orchestrator.attach_brief(goal, strategist.draft_brief(goal, business_facts=facts, now=at))
+        approved = orchestrator.approve(goal, approved_by=APPROVER, now=at, autonomy=spec.autonomy)
+        drafts = creative.build_library(approved, brand_voice=BRAND_VOICE, n_per_cell=1, now=at)
         reviewed = critic.review(drafts, BrandRules.from_brief(approved, brand_voice=BRAND_VOICE))
         orchestrator.add_library(goal, reviewed)
-        goals.append(orchestrator.activate(goal, now=start))
+        goals.append(orchestrator.activate(goal, now=at))
         briefs.append(approved)
     return goals, briefs, strategist, Analyst(llm)
 
@@ -653,18 +717,23 @@ def build_system(
     stores: DemoStores | None = None,
     folder: StateFolder | None = None,
     live: bool = False,
+    channel_cost: Mapping[Channel, float] | None = None,
+    goal_starts: Mapping[GoalKind, datetime] | None = None,
 ) -> DemoSystem:
     """Build the agents' plan, the Gym world, the stores, the runtime and the worker.
 
     `live` hands each send to the world as soon as the worker runs it and lets the world catch up
-    to `now` at each tick, for running on a wall-clock worker loop."""
+    to `now` at each tick, for running on a wall-clock worker loop. `channel_cost` replaces the
+    scenario's message costs (default `DEMO_CHANNEL_COST`); the world, the policy, the budget and the
+    proof all use the same figures. `goal_starts` starts some goals later than `start`."""
     if start.tzinfo is None:
         raise ValueError("start must be timezone-aware")
     stores = stores if stores is not None else DemoStores()
     folder = folder if folder is not None else ProductionFolder()
-    goals, briefs, strategist, analyst = _setup_goals(stores, start, customers)
+    goals, briefs, strategist, analyst = _setup_goals(stores, start, customers, goal_starts)
     content = [c for g in goals for c in stores.workspace.content(goal_id=g.goal_id)]
-    spec = get_scenario(scenario, n_customers=customers, days=days, seed=seed)
+    cost = dict(channel_cost if channel_cost is not None else DEMO_CHANNEL_COST)
+    spec = get_scenario(scenario, n_customers=customers, days=days, seed=seed, channel_cost=cost)
     envelope = briefs[0].envelope
     world = GymWorld(
         spec,
@@ -685,15 +754,11 @@ def build_system(
     bridge = GymBridge(world, stores.decisions, immediate=live)
     adapters = bridge.adapters()
     dispatcher = Dispatcher(adapters, _address, stores.workspace, events, stores.queue)
-    budgets = {g.goal_id: g.budget for g in goals}
+    planned = goal_pacing(goals, start)
     horizon = max(b.horizon_days for b in briefs)
 
     def spend(goal_id: str, now: datetime) -> float:  # noqa: ARG001
         return events.spend[goal_id]
-
-    def planned(goal_id: str, now: datetime) -> float:
-        elapsed = max(0.0, (now - start) / timedelta(days=1))
-        return budgets.get(goal_id, 0.0) * min(1.0, elapsed / PLAN_DAYS)
 
     def weekly_briefing(goal: Goal, brief: Brief, now: datetime) -> Briefing:  # noqa: ARG001
         proof = proof_at(stores.decisions, events, costs, now, horizon, seed=seed)
@@ -784,6 +849,8 @@ class DemoResult:
     health: HealthStatus
     violations: list[str]
     """The Gym's own record of contacts that broke a rule (no consent, unsubscribed, quiet hours)."""
+    costs: Costs
+    """The message and offer costs the run used, so whoever serves it prices spend the same way."""
     sent: int
     """Messages the dispatcher sent (SEND events it recorded)."""
     contacts: int
@@ -820,18 +887,41 @@ def run_demo(
     start: datetime = DEFAULT_START,
     stores: DemoStores | None = None,
     folder: StateFolder | None = None,
+    channel_cost: Mapping[Channel, float] | None = None,
+    approve_goal_days: int | None = None,
+    hold_last_batches: bool = False,
 ) -> DemoResult:
-    """Run the whole system on a Gym shop for `days` days; see the module docstring."""
+    """Run the whole system on a Gym shop for `days` days; see the module docstring.
+
+    `approve_goal_days` starts the APPROVE goal at the daily sweep that many days before the end
+    (None, or a number of at least `days`: with the other goal, at the start). `hold_last_batches`
+    stops the demo approving batches on the last day, so they are still pending at the end, as they
+    would be for a marketer who has not looked yet."""
     if days < 1:
         raise ValueError("days must be at least 1")
-    system = build_system(
-        scenario, days=days, customers=customers, seed=seed, start=start, stores=stores, folder=folder
-    )
+    if approve_goal_days is not None and approve_goal_days < 1:
+        raise ValueError("approve_goal_days must be at least 1 (None starts it with the other goal)")
     # The first daily sweep at or after `start` (an earlier one would come before the goals start).
     first = start.astimezone(UTC).replace(hour=DECIDE_HOUR, minute=0, second=0, microsecond=0)
     if first < start:
         first += timedelta(days=1)
+    goal_starts: dict[GoalKind, datetime] = {}
+    if approve_goal_days is not None and approve_goal_days < days:
+        late = first + timedelta(days=days - approve_goal_days)
+        goal_starts = {g.kind: late for g in DEMO_GOALS if g.autonomy is AutonomyLevel.APPROVE}
+    system = build_system(
+        scenario,
+        days=days,
+        customers=customers,
+        seed=seed,
+        start=start,
+        stores=stores,
+        folder=folder,
+        channel_cost=channel_cost,
+        goal_starts=goal_starts,
+    )
     for day in range(days):
+        system.cycle.auto_approve = not (hold_last_batches and day == days - 1)
         system.day(first + timedelta(days=day))
     end = first + timedelta(days=days)
     system.step_to(end)
@@ -861,6 +951,7 @@ def run_demo(
         proof=proof,
         health=health,
         violations=system.world.violations(),
+        costs=cycle.costs,
         sent=system.events.sends,
         contacts=len(system.world.contacts),
         sleeping_dogs_contacted=system.world.sleeping_dogs_contacted_share(),

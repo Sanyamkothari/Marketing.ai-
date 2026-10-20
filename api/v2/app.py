@@ -9,7 +9,9 @@ in `api/main.py` instead (with `attach_services`), so nothing here is needed in 
     python -m api.v2.app --openapi          # rewrite docs/v2/openapi.json and exit
 
 The demo is a Gym shop run by the whole system (`autonomy.runtime.demo.run_demo`) for `--days`
-simulated days, ending at today's 09:00 UTC sweep; `POST /v2/runtime/tick` keeps it running.
+simulated days, ending at today's 09:00 UTC sweep; `POST /v2/runtime/tick` keeps it running. The
+win-back goal has run on autopilot all along; the repeat-purchase goal started ten days ago at the
+APPROVE level, and its latest batch is waiting for the marketer.
 """
 
 from __future__ import annotations
@@ -39,10 +41,16 @@ LOCAL_ORIGINS = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
 DEFAULT_PORT = 8010
 FAKE_CUSTOMERS = 200
 FAKE_DAYS = 7
-DEMO_CUSTOMERS = 1000
-DEMO_DAYS = 30
-"""Enough customers and days for outcome windows to close and every proof group to pass its minimum
-size, so the proof page shows numbers. Simulating it takes about half a minute."""
+DEMO_CUSTOMERS = 1200
+DEMO_DAYS = 56
+"""Eight weeks: long enough for six weeks of 14-day outcome windows to close and for every proof
+group to pass its minimum size, so the proof page puts numbers (with ranges) on the agent's effect.
+Simulating it takes about 35 seconds on a laptop; `--customers` and `--days` trade realism for speed."""
+DEMO_APPROVE_GOAL_DAYS = 10
+"""The APPROVE goal starts this many days before the end of the demo, as a second goal the marketer
+added recently. It is shorter than the 14-day outcome window, so none of that goal's outcomes is in
+the proof yet and the autopilot goal's proof stays its own (one shared holdout cannot tell two goals
+apart, so a goal's own proof is withheld once another goal's outcomes count)."""
 SCHEMA_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 """The demo's "now" when it is built only to print the schema (the schema does not depend on it)."""
 
@@ -129,7 +137,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     if not args.fake:
         print(f"simulating {customers:,} customers over {days} days; this takes a little while ...")
     services = build_demo_services(
-        now, n_customers=customers, days=days, clock=lambda: datetime.now(UTC), simulation=not args.fake
+        now,
+        n_customers=customers,
+        days=days,
+        clock=lambda: datetime.now(UTC),
+        simulation=not args.fake,
+        approve_goal_days=DEMO_APPROVE_GOAL_DAYS,
+        hold_batches=True,  # the last day's batch waits for the marketer
     )
     uvicorn.run(create_app(services), host=args.host, port=args.port)
 

@@ -25,9 +25,18 @@ and the operator endpoint call it by hand. Each tick does, in order:
    pending `Batch`; AUTOPILOT logs and dispatches.
 6. **Nightly**, once a day at `nightly_hour`: each goal's policy gets `nightly(decisions,
    events_by_customer, now)` with its own goal's decisions, if it has the hook (the fast learning
-   loop).
+   loop). A policy built in this process (the first tick after a start, or a materially new brief)
+   first replays `replay_lookback` of the decision log and events through the same hook, so what
+   it learned survives restarts.
 7. **Weekly**, once a week, when an analyst and a strategist are configured: the Orchestrator's
    weekly cycle (Analyst report, then the Strategist's narrowing of the brief).
+
+Every alert and briefing a tick produces is written to the runtime's `AlertStore` and
+`BriefingStore` (`autonomy.runtime.stores`), so a worker's ticks reach the API. Spend per goal
+(budget left and the spend-pace breaker) comes from a `SpendLedger` over the event log: channel
+cost per SEND plus offer cost per redemption; planned spend paces the goal's budget evenly over its
+period (`EvenPacing`). Queued sends belong to the worker (`autonomy.runtime.worker`); see
+`RuntimeConfig.run_send_jobs`. The full guide is `docs/v2/RUNTIME.md`.
 
 Nothing here reads the clock: every step takes `now`, so the same ticks over the same events give
 the same decisions. Decision ids are derived from (goal, customer, trigger), which is what makes a
@@ -35,21 +44,24 @@ repeated tick a no-op. No LLM runs per customer: the policy is maths, and the Co
 only runs on replies.
 
 Each goal gets its own policy, built by `policy_factory([brief], content)` and rebuilt only when
-the brief or its approved content changes. One policy per goal keeps autonomy levels apart: a goal
-in shadow can never win a customer's attention away from a goal on autopilot. Customers are still
-protected across goals: a customer contacted (or held for approval) by one goal in a tick is not
-contacted by another in the same tick, and the contact caps in `decide()` read the SENDs every goal
-made.
+the brief changes materially (audience, envelope, horizon, objective, follow-ups) or its approved
+content changes; a new version that only restates the same plan keeps the policy and what it
+learned. One policy per goal keeps autonomy levels apart: a goal in shadow can never win a
+customer's attention away from a goal on autopilot. Customers are still protected across goals:
+a customer contacted (or held for approval) by one goal in a tick is not contacted by another in
+the same tick, and the contact caps in `decide()` read the SENDs every goal made.
 """
 
 from __future__ import annotations
 
+import json
+import math
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AwareDatetime, BaseModel, Field
@@ -58,12 +70,12 @@ from autonomy.agents.conversation import Conversation, ReplyOutcome
 from autonomy.agents.orchestrator import AdjustFn, AnalystFn, Orchestrator, WeeklyOutcome
 from autonomy.channels.breakers import DEFAULT_GUARDS, BreakerResult, Guards, evaluate_goals
 from autonomy.channels.dispatcher import (
-    SEND_JOB_KIND,
     Dispatcher,
     DispatchReport,
     DispatchResult,
 )
 from autonomy.contracts import (
+    NO_OFFER,
     Alert,
     AutonomyLevel,
     Batch,
@@ -85,6 +97,7 @@ from autonomy.contracts import (
 )
 from autonomy.data.rebuild import apply_events, rebuild_states
 from autonomy.decide.audience import matches
+from autonomy.decide.bidders import DEFAULT_CHANNEL_COSTS
 from autonomy.interfaces import (
     DecisionLog,
     EventStore,
@@ -104,24 +117,36 @@ from autonomy.runtime.batches import (
     mark_sent,
     reject,
 )
-
-if TYPE_CHECKING:
-    from autonomy.runtime.worker import Worker
+from autonomy.runtime.stores import (
+    AlertStore,
+    BriefingStore,
+    InMemoryAlertStore,
+    InMemoryBriefingStore,
+)
+from autonomy.runtime.worker import SEND_KIND, Worker, send_handler, worker_owns_sends
 
 __all__ = [
+    "MATERIAL_BRIEF_FIELDS",
     "TRIGGER_TYPES",
     "AutonomyRuntime",
     "BreakersFn",
+    "EvenPacing",
     "PersonReadsReplies",
     "PolicyFactory",
     "RuntimeConfig",
     "RuntimeCursor",
     "SpendFn",
+    "SpendLedger",
+    "SplitMismatchError",
+    "StandardBreakers",
     "TickReport",
     "Trigger",
     "build_worker",
+    "check_split",
     "make_batch",
+    "material_brief",
     "standard_breakers",
+    "tick_slot",
 ]
 
 PolicyFactory = Callable[[Sequence[Brief], Sequence[ContentItem]], Policy]
@@ -144,8 +169,15 @@ TRIGGER_TYPES: frozenset[EventType] = frozenset({EventType.REPLY, EventType.CART
 TIME_OPS: frozenset[str] = frozenset({"days_since_gt", "days_since_lt"})
 """Audience filters that change with time alone; crossing one is the lapse trigger."""
 
+MATERIAL_BRIEF_FIELDS: frozenset[str] = frozenset(
+    {"goal_id", "objective", "audience", "horizon_days", "envelope", "follow_ups"}
+)
+"""The parts of a brief a policy is built from. A new version that changes none of them (only its
+id, version, rationale, author or approval) keeps the goal's policy and what it has learned."""
+
 MAX_SEND_JOBS_PER_TICK = 10_000
 SOURCE = "runtime"
+DEFAULT_HORIZON_DAYS = 14
 
 
 class Trigger(StrEnum):
@@ -176,7 +208,19 @@ class RuntimeConfig:
     nightly_rebuild: bool = True
     one_contact_per_tick: bool = True
     """A customer contacted (or held for approval) by one goal is not decided by another that tick."""
-    run_send_jobs: bool = True
+    run_send_jobs: bool | None = None
+    """Whether the tick runs queued sends that are due. Send jobs have one owner, a `Worker` with a
+    send handler: None (the default) runs them through a hosted worker only while no worker in this
+    process owns this runtime's dispatcher's sends; False never does (production, where the worker
+    process owns them); True always does."""
+    replay_lookback: timedelta = timedelta(days=30)
+    """How much of the decision log a newly built policy replays through `nightly()`."""
+    plan_days: int = 30
+    """A goal with no end date has its budget paced evenly over this many days from its start."""
+    holdout_share: float | None = None
+    baseline_share: float | None = None
+    """The business's one proof split. When set, a brief whose envelope asks for other shares is
+    refused (its goal does not run, and a critical alert says why). None: not checked."""
     seed: int = 0
     worker: str = "runtime"
 
@@ -192,6 +236,16 @@ class RuntimeConfig:
             raise ValueError(f"unknown time zone {self.timezone!r}") from err
         if self.late_window < timedelta(0) or self.trigger_window < timedelta(0):
             raise ValueError("windows cannot be negative")
+        if self.replay_lookback < timedelta(0):
+            raise ValueError("replay_lookback cannot be negative")
+        if self.plan_days < 1:
+            raise ValueError("plan_days must be at least 1")
+        for name in ("holdout_share", "baseline_share"):
+            share = getattr(self, name)
+            if share is not None and not 0 <= share <= 0.5:
+                raise ValueError(f"{name} is a share from 0 to 0.5")
+        if (self.holdout_share is None) != (self.baseline_share is None):
+            raise ValueError("set both holdout_share and baseline_share, or neither")
 
 
 class RuntimeCursor(BaseModel):
@@ -228,6 +282,8 @@ class TickReport:
     swept_goals: list[str] = field(default_factory=list)
     nightly_ran: bool = False
     weekly: list[WeeklyOutcome] = field(default_factory=list)
+    replayed_goals: list[str] = field(default_factory=list)
+    """Goals whose policy was built this tick and replayed the decision log to relearn."""
 
     @property
     def sent(self) -> list[DispatchResult]:
@@ -278,27 +334,274 @@ class PersonReadsReplies:
         return [(fallback, 0.0) for _ in texts]
 
 
+@dataclass(frozen=True)
+class StandardBreakers:
+    """The circuit breakers of `autonomy.channels.breakers`, per goal, with its own stop rules.
+
+    Without `spend_fn` and `planned_fn` spend pace is never judged; without baselines the
+    unsubscribe multiple is never judged. A breaker never guesses. The runtime fills a missing
+    `spend_fn` and `planned_fn` with its own `SpendLedger` and `EvenPacing` (see `filled`), so the
+    spend-pace rule works without any wiring.
+    """
+
+    baselines: Mapping[str, float] = field(default_factory=dict)
+    spend_fn: SpendFn | None = None
+    planned_fn: SpendFn | None = None
+    guards: Guards = DEFAULT_GUARDS
+
+    def filled(self, *, spend_fn: SpendFn | None, planned_fn: SpendFn | None) -> StandardBreakers:
+        """These breakers with any missing spend or planned-spend source taken from the arguments."""
+        return replace(
+            self,
+            spend_fn=self.spend_fn if self.spend_fn is not None else spend_fn,
+            planned_fn=self.planned_fn if self.planned_fn is not None else planned_fn,
+        )
+
+    def __call__(self, briefs: Sequence[Brief], recent: Sequence[Event], now: datetime) -> BreakerResult:
+        spend_fn, planned_fn = self.spend_fn, self.planned_fn
+        spend = {b.goal_id: spend_fn(b.goal_id, now) for b in briefs} if spend_fn else {}
+        planned = {b.goal_id: planned_fn(b.goal_id, now) for b in briefs} if planned_fn else {}
+        return evaluate_goals(briefs, recent, dict(self.baselines), spend, planned, now, guards=self.guards)
+
+
 def standard_breakers(
     *,
     baselines: Mapping[str, float] | None = None,
     spend_fn: SpendFn | None = None,
     planned_fn: SpendFn | None = None,
     guards: Guards = DEFAULT_GUARDS,
-) -> BreakersFn:
-    """The circuit breakers of `autonomy.channels.breakers`, per goal, with its own stop rules.
+) -> StandardBreakers:
+    """The standard circuit breakers (see `StandardBreakers`)."""
+    return StandardBreakers(
+        baselines=dict(baselines or {}), spend_fn=spend_fn, planned_fn=planned_fn, guards=guards
+    )
 
-    Without `spend_fn` and `planned_fn` spend pace is never judged (planned spend 0 is below every
-    guard); without baselines the unsubscribe multiple is never judged. Both are deliberate: a
-    breaker never guesses.
+
+# --- spend ---------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _OfferSend:
+    """A SEND that carried an offer: it is paid for when a purchase in its window uses the offer."""
+
+    ts: datetime
+    decision_id: str
+    goal_id: str
+    offer_id: str
+
+
+class SpendLedger:
+    """Money spent per goal, read from the event log: channel cost per SEND, offer cost per redemption.
+
+    A SEND costs its channel's price (`channel_costs`, by default the bidders' own
+    `DEFAULT_CHANNEL_COSTS`; a channel missing from the table costs what the decision's chosen bid
+    said). An offer costs money only when it is used: a PURCHASE whose `attrs["offer_id"]` names the
+    offer of a decision sent to that customer within the goal's outcome window (`horizon_days` of
+    its brief) pays that offer once, charged at the purchase. The price is the purchase's
+    `attrs["offer_cost"]` if the shop reported one, else the brief's `cost_per_redemption`. The
+    latest qualifying send is charged (last touch), and each decision pays its offer at most once.
+
+    The runtime feeds it every event it folds (`observe`) and rebuilds it with state, so it is
+    always derived from the log: idempotent by event id, and nothing to persist. Use it as a
+    `SpendFn`: `ledger(goal_id, now)`.
     """
-    base = dict(baselines or {})
 
-    def run(briefs: Sequence[Brief], recent: Sequence[Event], now: datetime) -> BreakerResult:
-        spend = {b.goal_id: spend_fn(b.goal_id, now) for b in briefs} if spend_fn else {}
-        planned = {b.goal_id: planned_fn(b.goal_id, now) for b in briefs} if planned_fn else {}
-        return evaluate_goals(briefs, recent, base, spend, planned, now, guards=guards)
+    def __init__(
+        self,
+        decisions: DecisionLog,
+        workspace: Workspace,
+        *,
+        channel_costs: Mapping[Channel, float] | None = None,
+    ) -> None:
+        self.decisions = decisions
+        self.workspace = workspace
+        self.channel_costs: dict[Channel, float] = dict(
+            DEFAULT_CHANNEL_COSTS if channel_costs is None else channel_costs
+        )
+        self._seen: set[str] = set()
+        self._charges: dict[str, list[tuple[datetime, float]]] = defaultdict(list)
+        self._offer_sends: dict[str, list[_OfferSend]] = defaultdict(list)
+        self._unmatched: dict[str, list[Event]] = defaultdict(list)
+        self._paid: set[str] = set()
+        self._briefs: dict[str, Brief] | None = None
 
-    return run
+    def reset(self) -> None:
+        """Forget everything; the caller replays the log next (the runtime's full rebuild)."""
+        self._seen.clear()
+        self._charges.clear()
+        self._offer_sends.clear()
+        self._unmatched.clear()
+        self._paid.clear()
+        self._briefs = None
+
+    def refresh(self) -> None:
+        """Read the briefs again (outcome windows and offer prices) the next time they are needed."""
+        self._briefs = None
+
+    def observe(self, events: Iterable[Event]) -> None:
+        for e in events:
+            self.observe_one(e)
+
+    def observe_one(self, e: Event) -> None:
+        if e.type is EventType.SEND:
+            self._send(e)
+        elif e.type is EventType.PURCHASE:
+            self._purchase(e)
+
+    def spent(self, goal_id: str, now: datetime) -> float:
+        """Channel and offer cost charged to the goal at or before `now`."""
+        return math.fsum(amount for ts, amount in self._charges.get(goal_id, ()) if ts <= now)
+
+    def __call__(self, goal_id: str, now: datetime) -> float:
+        return self.spent(goal_id, now)
+
+    # --- internals ---
+
+    def _send(self, e: Event) -> None:
+        if e.event_id in self._seen:
+            return
+        self._seen.add(e.event_id)
+        goal = e.attrs.get("goal_id")
+        offer = e.attrs.get("offer_id")
+        priced = e.channel is not None and e.channel in self.channel_costs
+        decision: Decision | None = None
+        if (not isinstance(goal, str) or not isinstance(offer, str) or not priced) and e.decision_id:
+            decision = self.decisions.get(e.decision_id)
+        if decision is not None and decision.action is not None:
+            goal = goal if isinstance(goal, str) else decision.action.goal_id
+            offer = offer if isinstance(offer, str) else decision.action.offer_id
+        if not isinstance(goal, str):
+            return  # not a send any goal made
+        if priced:
+            assert e.channel is not None
+            cost = self.channel_costs[e.channel]
+        else:
+            chosen = None
+            if decision is not None and decision.action is not None:
+                chosen = next((b for b in decision.bids if b.action == decision.action), None)
+            cost = max(chosen.channel_cost, 0.0) if chosen is not None else 0.0
+        if cost > 0:
+            self._charges[goal].append((e.ts, cost))
+        if isinstance(offer, str) and offer != NO_OFFER.offer_id and e.decision_id:
+            self._offer_sends[e.customer_id].append(_OfferSend(e.ts, e.decision_id, goal, offer))
+            waiting = self._unmatched.get(e.customer_id)
+            if waiting:
+                self._unmatched[e.customer_id] = [p for p in waiting if not self._match(p)]
+
+    def _purchase(self, e: Event) -> None:
+        offer = e.attrs.get("offer_id")
+        if not isinstance(offer, str) or offer == NO_OFFER.offer_id or e.event_id in self._seen:
+            return
+        self._seen.add(e.event_id)
+        if not self._match(e):
+            # Its send may still arrive (a late event); it is matched then.
+            self._unmatched[e.customer_id].append(e)
+
+    def _match(self, purchase: Event) -> bool:
+        offer = purchase.attrs.get("offer_id")
+        candidates = [
+            s
+            for s in self._offer_sends.get(purchase.customer_id, ())
+            if s.offer_id == offer
+            and s.decision_id not in self._paid
+            and s.ts <= purchase.ts <= s.ts + timedelta(days=self._horizon(s.goal_id))
+        ]
+        if not candidates:
+            return False
+        send = max(candidates, key=lambda s: (s.ts, s.decision_id))
+        reported = purchase.attrs.get("offer_cost")
+        if isinstance(reported, int | float) and not isinstance(reported, bool):
+            cost = max(float(reported), 0.0)
+        else:
+            cost = self._offer_price(send.goal_id, send.offer_id)
+        self._paid.add(send.decision_id)
+        if cost > 0:
+            self._charges[send.goal_id].append((purchase.ts, cost))
+        return True
+
+    def _brief(self, goal_id: str) -> Brief | None:
+        if self._briefs is None:
+            latest: dict[str, Brief] = {}
+            for b in self.workspace.briefs():
+                known = latest.get(b.goal_id)
+                if known is None or b.version > known.version:
+                    latest[b.goal_id] = b
+            self._briefs = latest
+        return self._briefs.get(goal_id)
+
+    def _horizon(self, goal_id: str) -> int:
+        brief = self._brief(goal_id)
+        return brief.horizon_days if brief is not None else DEFAULT_HORIZON_DAYS
+
+    def _offer_price(self, goal_id: str, offer_id: str) -> float:
+        brief = self._brief(goal_id)
+        if brief is None:
+            return 0.0
+        found = next((o for o in brief.envelope.offers if o.offer_id == offer_id), None)
+        return found.cost_per_redemption if found is not None else 0.0
+
+
+class EvenPacing:
+    """Planned spend to date: the goal's budget spread evenly from its start to its end.
+
+    The budget is the smaller of the goal's and its latest brief's. A goal with no end date is
+    paced over `plan_days` (the "$5k this month" a marketer usually means). Before the start the
+    plan is 0; after the end, the whole budget. This is the spend-pace breaker's denominator.
+    """
+
+    def __init__(self, workspace: Workspace, *, plan_days: int = 30) -> None:
+        if plan_days < 1:
+            raise ValueError("plan_days must be at least 1")
+        self.workspace = workspace
+        self.plan_days = plan_days
+
+    def __call__(self, goal_id: str, now: datetime) -> float:
+        goal = next((g for g in self.workspace.goals() if g.goal_id == goal_id), None)
+        if goal is None:
+            return 0.0
+        budget = goal.budget
+        briefs = self.workspace.briefs(goal_id)
+        if briefs:
+            budget = min(budget, max(briefs, key=lambda b: b.version).envelope.budget)
+        end = goal.ends_at if goal.ends_at is not None else goal.starts_at + timedelta(days=self.plan_days)
+        span = (end - goal.starts_at).total_seconds()
+        if span <= 0:
+            return budget if now >= goal.starts_at else 0.0
+        share = (now - goal.starts_at).total_seconds() / span
+        return budget * min(1.0, max(0.0, share))
+
+
+# --- the business's one split ----------------------------------------------------------------------
+
+
+class SplitMismatchError(ValueError):
+    """A brief asks for holdout or baseline shares other than the business's one split."""
+
+
+def check_split(brief: Brief, holdout_share: float, baseline_share: float) -> None:
+    """Refuse a brief whose envelope asks for a different proof split than the business uses.
+
+    Every customer is split once for the whole business (`autonomy.proof.split`), so proof for one
+    goal can be compared with proof for another, and a customer is never holdout for one goal and
+    treated by another. A brief cannot change that split; the message says what to do instead.
+    """
+    env = brief.envelope
+    if math.isclose(env.holdout_share, holdout_share, abs_tol=1e-9) and math.isclose(
+        env.baseline_share, baseline_share, abs_tol=1e-9
+    ):
+        return
+    raise SplitMismatchError(
+        f"Brief {brief.brief_id} (goal {brief.goal_id}, version {brief.version}) asks for a "
+        f"{env.holdout_share:.0%} holdout and a {env.baseline_share:.0%} baseline, but this business "
+        f"splits every customer once: {holdout_share:.0%} holdout and {baseline_share:.0%} baseline. "
+        "Set the brief's envelope to those shares, or change AUTONOMY_HOLDOUT_SHARE and "
+        "AUTONOMY_BASELINE_SHARE for the whole business."
+    )
+
+
+def material_brief(brief: Brief) -> str:
+    """The parts of a brief a policy is built from, as stable JSON (see `MATERIAL_BRIEF_FIELDS`)."""
+    return json.dumps(brief.model_dump(mode="json", include=set(MATERIAL_BRIEF_FIELDS)), sort_keys=True)
 
 
 def make_batch(goal_id: str, acts: Sequence[Decision], now: datetime) -> Batch:
@@ -396,13 +699,21 @@ class AutonomyRuntime:
         analyst: AnalystFn | None = None,
         strategist: AdjustFn | None = None,
         spend_fn: SpendFn | None = None,
+        planned_fn: SpendFn | None = None,
         assign_group: GroupFn | None = None,
         config: RuntimeConfig | None = None,
         cursor: RuntimeCursor | None = None,
+        alerts: AlertStore | None = None,
+        briefings: BriefingStore | None = None,
+        channel_costs: Mapping[Channel, float] | None = None,
     ) -> None:
         """`conversation` defaults to one over `text_signals`, else over `PersonReadsReplies`: STOP
         is always honoured. `strategist` is the weekly adjustment, e.g. `Strategist.adjust_brief`;
-        the weekly cycle runs only when both it and `analyst` are given."""
+        the weekly cycle runs only when both it and `analyst` are given.
+
+        `spend_fn` defaults to a `SpendLedger` over the log (priced with `channel_costs`) and
+        `planned_fn` to `EvenPacing`; `StandardBreakers` without their own spend sources get these.
+        `alerts` and `briefings` default to in-memory stores; production passes SQL ones."""
         self.events = events
         self.states = states
         self.decisions = decisions
@@ -416,10 +727,21 @@ class AutonomyRuntime:
         self.conversation = conversation or Conversation(text_signals or PersonReadsReplies())
         self.analyst = analyst
         self.strategist = strategist
-        self.spend_fn = spend_fn
         self.assign_group = assign_group
         self.config = config or RuntimeConfig()
         self.cursor = cursor or RuntimeCursor()
+        self.alert_store: AlertStore = alerts if alerts is not None else InMemoryAlertStore()
+        self.briefing_store: BriefingStore = briefings if briefings is not None else InMemoryBriefingStore()
+        self.spend_ledger: SpendLedger | None = None
+        if spend_fn is None:
+            self.spend_ledger = SpendLedger(decisions, workspace, channel_costs=channel_costs)
+            spend_fn = self.spend_ledger
+        self.spend_fn: SpendFn = spend_fn
+        self.planned_fn: SpendFn = (
+            planned_fn if planned_fn is not None else EvenPacing(workspace, plan_days=self.config.plan_days)
+        )
+        if isinstance(breakers_fn, StandardBreakers):
+            self.breakers_fn = breakers_fn.filled(spend_fn=self.spend_fn, planned_fn=self.planned_fn)
         self._tz = ZoneInfo(self.config.timezone)
         self._seen: dict[str, datetime] = {}
         """Ids (and times) of events already folded, near the watermark."""
@@ -453,6 +775,18 @@ class AutonomyRuntime:
     def paused_channels(self) -> frozenset[Channel]:
         return frozenset(self._paused_channels)
 
+    def record(self, *, alerts: Iterable[Alert] = (), briefings: Iterable[Briefing] = ()) -> None:
+        """Store alerts and briefings made outside a tick (a daily briefing, an operator's note)."""
+        self.alert_store.put(alerts)
+        self.briefing_store.put(briefings)
+
+    def check_brief(self, brief: Brief) -> None:
+        """Raise `SplitMismatchError` if the brief asks for another proof split than the business's.
+
+        The API calls this before it approves a brief; the tick also refuses to run such a goal."""
+        if self.config.holdout_share is not None and self.config.baseline_share is not None:
+            check_split(brief, self.config.holdout_share, self.config.baseline_share)
+
     # --- the tick ------------------------------------------------------------------------------
 
     def tick(self, now: datetime) -> TickReport:
@@ -462,6 +796,8 @@ class AutonomyRuntime:
         report = TickReport(now=now)
         local = now.astimezone(self._tz)
         self._start_day(local.date())
+        if self.spend_ledger is not None:
+            self.spend_ledger.refresh()  # a weekly brief may have moved a window or an offer price
 
         # The nightly rebuild is this tick's fold, not a step after deciding: events that arrive
         # while the tick runs (the API stores webhooks at any time) must still reach the replies
@@ -479,6 +815,9 @@ class AutonomyRuntime:
         self._weekly(now, local, report)
 
         self.cursor.last_tick = now if self.cursor.last_tick is None else max(self.cursor.last_tick, now)
+        # Written last, once: every process (the API, an operator) reads them from here.
+        self.alert_store.put(report.alerts)
+        self.briefing_store.put(report.briefings)
         return report
 
     # --- 1. fold ---------------------------------------------------------------------------------
@@ -495,6 +834,8 @@ class AutonomyRuntime:
             apply_events(new, self.states, self.folder, now=now)
             self._mark_seen(new)
             self._assign_groups({e.customer_id for e in new})
+            if self.spend_ledger is not None:
+                self.spend_ledger.observe(new)
         report.events_folded += len(new)
         self._advance_watermark(now)
         return new
@@ -507,7 +848,10 @@ class AutonomyRuntime:
         nothing, so it returns every recent event (replies and triggers skip what was handled).
         """
         floor = now - max(self.config.late_window, self.config.trigger_window)
-        recording = _RecordingEvents(self.events, floor)
+        ledger = self.spend_ledger
+        if ledger is not None:
+            ledger.reset()  # rebuilt from the same scan of the log as state
+        recording = _RecordingEvents(self.events, floor, ledger.observe_one if ledger is not None else None)
         rebuild_states(recording, self.states, self.folder, now)
         # Everything folded, future-dated events included, is marked so it is never folded again.
         fresh = [
@@ -549,6 +893,8 @@ class AutonomyRuntime:
         if fresh:
             apply_events(fresh, self.states, self.folder, now=now)
             self._mark_seen(fresh)
+            if self.spend_ledger is not None:
+                self.spend_ledger.observe(fresh)
 
     # --- 2. replies ------------------------------------------------------------------------------
 
@@ -681,29 +1027,26 @@ class AutonomyRuntime:
         return any(d.action is not None and d.action.channel in paused for d in decided)
 
     def _run_send_jobs(self, now: datetime, report: TickReport) -> None:
-        """Send queued messages that are due (a decision's send_at was in the future)."""
-        if self.queue is None or self.dispatcher is None or not self.config.run_send_jobs:
-            return
-        # The worker's retry rules, so a send failed here is retried exactly as the worker would.
-        from autonomy.runtime.worker import DEFAULT_MAX_ATTEMPTS, retry_delay
+        """Run queued sends that are due, when this runtime hosts the send worker (see the config).
 
-        for _ in range(MAX_SEND_JOBS_PER_TICK):
-            job = self.queue.claim([SEND_JOB_KIND], worker=self.config.worker, now=now)
-            if job is None:
-                return
-            retry_at = now + retry_delay(job.attempts) if job.attempts < DEFAULT_MAX_ATTEMPTS else None
-            try:
-                result = self.dispatcher.run_send_job(job, self.decisions, self.states, now)
-            except Exception as err:  # retried later, then left failed; the tick carries on
-                self.queue.fail(job.job_id, f"{type(err).__name__}: {err}"[:500], retry_at=retry_at)
-                continue
-            if result.failed:
-                # The provider refused or was down. Completing the job would drop the message.
-                reasons = "; ".join(r.reason or "provider error" for r in result.failed)
-                self.queue.fail(job.job_id, f"send failed: {reasons}"[:500], retry_at=retry_at)
-            else:
-                self.queue.complete(job.job_id)
+        Send jobs have one owner, a `Worker` with a send handler. When no worker runs them in this
+        process (tests, the API's operator tick), the tick hosts that same handler, so the claim,
+        the retry rules and the give-up are exactly the worker's."""
+        if self.queue is None or self.dispatcher is None or not self._hosts_sends():
+            return
+        dispatcher = self.dispatcher
+
+        def take(result: DispatchReport) -> None:
             self._take_dispatch(result, now, report)
+
+        handler = send_handler(dispatcher, self.decisions, self.states, on_report=take)
+        hosted = Worker(self.queue, {SEND_KIND: handler}, name=self.config.worker, hosted=True)
+        hosted.drain(now, limit=MAX_SEND_JOBS_PER_TICK)
+
+    def _hosts_sends(self) -> bool:
+        if self.config.run_send_jobs is not None:
+            return self.config.run_send_jobs
+        return self.dispatcher is not None and not worker_owns_sends(self.dispatcher)
 
     def _take_dispatch(self, result: DispatchReport, now: datetime, report: TickReport) -> None:
         report.dispatch.merge(result)
@@ -714,7 +1057,7 @@ class AutonomyRuntime:
     def _decide(
         self, now: datetime, local: datetime, new_events: Sequence[Event], report: TickReport
     ) -> None:
-        running = self._running(now)
+        running = self._running(now, report)
         if not running:
             return
         day = self._today()
@@ -909,15 +1252,51 @@ class AutonomyRuntime:
         today = local.date()
         self.cursor.nightly_on = today
         report.nightly_ran = True
-        running = self._running(now)
+        # A policy built earlier in this tick replayed the log before deciding; learning again now
+        # adds this tick's decisions (nightly() keeps everything by id, so nothing counts twice).
+        running = self._running(now, report)
+        self._learn(running, now, self.config.nightly_lookback, report, code="nightly.error")
+
+    def _replay(self, built: Sequence[_Running], now: datetime, report: TickReport) -> None:
+        """Relearn what new policies lost: replay the decision log and events through `nightly()`.
+
+        A policy's learning lives in memory. Without this, a restart (or a weekly brief that
+        changed the plan) would decide with priors only until the nightly run, and that run would
+        relearn only what is still in its window. The replay hands the policy `replay_lookback` of
+        its goal's decisions and their events at once; `nightly()` keeps decisions and events by
+        id, so a later nightly run does not count them twice.
+        """
+        learners = [r for r in built if callable(getattr(r.policy, "nightly", None))]
+        if not learners or self.config.replay_lookback <= timedelta(0):
+            return
+        fed = self._learn(
+            learners, now, self.config.replay_lookback, report, code="replay.error", skip_empty=True
+        )
+        report.replayed_goals.extend(fed)
+
+    def _learn(
+        self,
+        running: Sequence[_Running],
+        now: datetime,
+        lookback: timedelta,
+        report: TickReport,
+        *,
+        code: str,
+        skip_empty: bool = False,
+    ) -> list[str]:
+        """Hand each goal's policy its own decisions since `now - lookback` and their events.
+
+        Returns the goals whose policy learned (a call that raised is an alert, not a learn). With
+        `skip_empty`, a goal with no decisions in the window is not called (a replay of nothing
+        teaches nothing)."""
         learners: list[tuple[_Running, Callable[..., object]]] = []
         for run in running:
             nightly = getattr(run.policy, "nightly", None)
             if callable(nightly):
                 learners.append((run, nightly))
         if not learners:
-            return
-        since = now - self.config.nightly_lookback
+            return []
+        since = now - lookback
         decided = [d for d in self.decisions.scan(since=since) if d.made_at <= now]
         customers = {d.customer_id for d in decided}
         by_customer: dict[str, list[Event]] = defaultdict(list)
@@ -936,12 +1315,16 @@ class AutonomyRuntime:
             )
             for d in decided
         }
+        day = now.astimezone(self._tz).date().isoformat()
+        fed: list[str] = []
         for run, fn in learners:
             # Each policy learns from its own goal's decisions only. Handing it every goal's would
             # count a holdout customer's "do nothing" once per goal, and as control for goals whose
             # audience they are not in. Decisions no goal can be found for go to every policy.
             gid = run.goal.goal_id
             mine = [d for d in decided if owner[d.decision_id] in (gid, None)]
+            if skip_empty and not mine:
+                continue
             mine_customers = {d.customer_id for d in mine}
             outcomes: dict[str, list[Event]] = {}
             for c, evs in by_customer.items():
@@ -953,12 +1336,15 @@ class AutonomyRuntime:
             except Exception as err:  # learning failing must never stop deciding
                 self._alert(
                     report,
-                    code="nightly.error",
-                    key=f"{run.goal.goal_id}:{today.isoformat()}",
+                    code=code,
+                    key=f"{gid}:{day}",
                     severity="warning",
-                    goal_id=run.goal.goal_id,
-                    message=f"Nightly learning failed ({type(err).__name__}); decisions use what was learned before.",
+                    goal_id=gid,
+                    message=f"Learning failed ({type(err).__name__}); decisions use what was learned before.",
                 )
+            else:
+                fed.append(gid)
+        return fed
 
     # --- 7. weekly -------------------------------------------------------------------------------
 
@@ -1023,27 +1409,55 @@ class AutonomyRuntime:
                 out.append((goal, brief))
         return out
 
-    def _running(self, now: datetime) -> list[_Running]:
-        """Active goals inside their dates with an approved brief, each with its (cached) policy."""
+    def _running(self, now: datetime, report: TickReport) -> list[_Running]:
+        """Active goals inside their dates with an approved brief, each with its (cached) policy.
+
+        A goal's policy is rebuilt only when its brief changes materially or its approved content
+        changes; a newly built policy replays the log first (`_replay`). A brief that asks for a
+        proof split other than the business's is refused: its goal does not run."""
         out: list[_Running] = []
+        built: list[_Running] = []
         for goal, brief in self._goals_with_briefs():
             if not _sendable(goal, now, require_level=False):
+                continue
+            try:
+                self.check_brief(brief)
+            except SplitMismatchError as err:
+                self._refuse(goal, report, str(err))
                 continue
             content = sorted(
                 self.workspace.content(goal_id=goal.goal_id, approved_only=True), key=lambda c: c.content_id
             )
-            key: tuple[object, ...] = (
-                brief.brief_id,
-                brief.version,
-                brief.envelope,
-                tuple(c.content_id for c in content),
-            )
+            key: tuple[object, ...] = (material_brief(brief), tuple(c.content_id for c in content))
             cached = self._policies.get(goal.goal_id)
-            if cached is None or cached[0] != key:
+            fresh = cached is None or cached[0] != key
+            if fresh:
                 cached = (key, self.policy_factory([brief], content))
                 self._policies[goal.goal_id] = cached
-            out.append(_Running(goal=goal, brief=brief, content=content, policy=cached[1]))
+            assert cached is not None
+            run = _Running(goal=goal, brief=brief, content=content, policy=cached[1])
+            out.append(run)
+            if fresh:
+                built.append(run)
+        if built:
+            self._replay(built, now, report)
         return out
+
+    def _refuse(self, goal: Goal, report: TickReport, why: str) -> None:
+        """Alert (once a day per goal) that a goal's brief was refused, so a person fixes it."""
+        day = self._today()
+        key = ("brief.split_mismatch", goal.goal_id)
+        if key in day.alerted:
+            return
+        day.alerted.add(key)
+        self._alert(
+            report,
+            code="brief.split_mismatch",
+            key=f"{goal.goal_id}:{day.day.isoformat()}",
+            severity="critical",
+            goal_id=goal.goal_id,
+            message=f"This goal is not running. {why}",
+        )
 
     def _fresh_states(self, customer_ids: Iterable[str], now: datetime) -> dict[str, CustomerState]:
         out: dict[str, CustomerState] = {}
@@ -1096,9 +1510,13 @@ class _RecordingEvents:
     those events, so the runtime marks as folded what was folded, not what a second scan finds.
     """
 
-    def __init__(self, inner: EventStore, floor: datetime) -> None:
+    def __init__(
+        self, inner: EventStore, floor: datetime, observe: Callable[[Event], None] | None = None
+    ) -> None:
         self.inner = inner
         self.floor = floor
+        self.observe = observe
+        """Also sees every event scanned (the spend ledger rebuilds from the same pass)."""
         self.recent: list[Event] = []
 
     def append(self, events: Iterable[Event]) -> int:
@@ -1113,6 +1531,8 @@ class _RecordingEvents:
         for e in self.inner.scan(since=since, until=until):
             if e.ts >= self.floor:
                 self.recent.append(e)
+            if self.observe is not None:
+                self.observe(e)
             yield e
 
     def for_decision(self, decision_id: str) -> list[Event]:
@@ -1178,34 +1598,29 @@ def build_worker(
     with tick, send and webhook handlers, and a repeating tick job seeded at `start`.
 
     This is wiring for the entry point, so with no `start` it takes the wall clock, rounded down to
-    the tick interval: a restart within one interval queues the same seed job (the id is its time),
-    not a second chain of ticks. The tick leaves queued sends to the worker's send handler.
+    the tick interval counted from the Unix epoch. Every tick job sits on that one grid, so a
+    restart queues either the same job as the running chain (the id is its time) or one whose
+    successor is the chain's next job, and the two chains merge at once instead of running twice.
+    The worker owns send jobs: the runtime is built with `run_send_jobs=False`.
     """
-    from dataclasses import replace
-    from datetime import UTC
-
     from autonomy.runtime.settings import RuntimeSettings, build_runtime
     from autonomy.runtime.worker import (
-        SEND_KIND,
         TICK_KIND,
         WEBHOOK_KIND,
-        Worker,
-        send_handler,
         tick_handler,
         tick_job,
         webhook_handler,
     )
 
     settings = RuntimeSettings.from_env(environ)
-    runtime = build_runtime(settings, environ=environ)
+    runtime = build_runtime(settings, environ=environ, run_send_jobs=False)
     runtime.config = replace(runtime.config, run_send_jobs=False, worker=name)
     if runtime.queue is None or runtime.dispatcher is None:  # build_runtime always sets both
         raise RuntimeError("the runtime has no queue or dispatcher")
-    every = settings.tick_every_minutes
+    every = timedelta(minutes=settings.tick_every_minutes)
     if start is None:
-        wall = datetime.now(UTC)
-        start = wall.replace(second=0, microsecond=0) - timedelta(minutes=wall.minute % every)
-    runtime.queue.enqueue(tick_job(start, every_minutes=every))
+        start = tick_slot(datetime.now(UTC), every)
+    runtime.queue.enqueue(tick_job(start, every_minutes=settings.tick_every_minutes))
     events = runtime.events
     return Worker(
         queue=runtime.queue,
@@ -1216,3 +1631,13 @@ def build_worker(
         },
         name=name,
     )
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def tick_slot(at: datetime, every: timedelta) -> datetime:
+    """The start of the tick interval holding `at`, on a grid of `every` counted from the Unix epoch."""
+    if every <= timedelta(0):
+        raise ValueError("the tick interval must be positive")
+    return _EPOCH + every * ((at - _EPOCH) // every)

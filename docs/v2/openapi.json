@@ -757,6 +757,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/BatchDecisionRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -767,6 +784,12 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No batch with this id; the detail names it"
+          },
+          "409": {
+            "description": "The batch is no longer pending (already approved, rejected, sent or expired)"
           },
           "422": {
             "description": "Validation Error",
@@ -800,6 +823,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/BatchDecisionRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -810,6 +850,12 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No batch with this id; the detail names it"
+          },
+          "409": {
+            "description": "The batch is no longer pending (already approved, rejected, sent or expired)"
           },
           "422": {
             "description": "Validation Error",
@@ -958,6 +1004,30 @@
             "title": "Follow Up Step",
             "description": "0 = first contact, 1 = first follow-up, ...",
             "default": 0
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id",
+            "description": "The product this action is about (refill, recommendation)"
+          },
+          "asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Id",
+            "description": "The approved image/video used, when the format needs one"
           }
         },
         "additionalProperties": false,
@@ -1213,6 +1283,13 @@
         ],
         "title": "Batch",
         "description": "One goal's ACT decisions from one sweep, held for a person when the goal is at APPROVE level."
+      },
+      "BatchDecisionRequest": {
+        "properties": {},
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BatchDecisionRequest",
+        "description": "Approving or rejecting a batch needs nothing more than its id: send `{}` or no body at all."
       },
       "BatchStatus": {
         "type": "string",

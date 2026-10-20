@@ -5,11 +5,13 @@ holds *references* to secrets, never the secrets: `whatsapp_access_token_ref` na
 variable (or mounted secret) that holds the token, so settings can be logged and shown safely.
 
 `build_runtime(settings)` wires the SQL stores (`autonomy.store`, Postgres or SQLite), the
-production `StateFolder` (`autonomy.data.folder`), the batch store, the channel adapters the
-settings configure, the dispatcher, the circuit breakers and the per-goal policy, and returns an
-`AutonomyRuntime`. Anything can be overridden by argument, which is how tests and the demo swap in
-fakes. Heavy or optional packages (boto3 for SES, httpx for WhatsApp and webhooks) are imported only
-when that channel is configured.
+production `StateFolder` (`autonomy.data.folder`), the batch, alert and briefing stores, the channel
+adapters the settings configure, the dispatcher, the circuit breakers and the per-goal policy, and
+returns an `AutonomyRuntime`. The business has one proof split (`holdout_share`, `baseline_share`):
+customers are assigned with it, and briefs that ask for other shares are refused. Send jobs belong
+to the worker process, so the runtime is built with `run_send_jobs=False`. Anything can be
+overridden by argument, which is how tests and the demo swap in fakes. Heavy or optional packages
+(boto3 for SES, httpx for WhatsApp and webhooks) are imported only when that channel is configured.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from __future__ import annotations
 import importlib
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import timedelta
 from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -40,6 +43,7 @@ from autonomy.runtime.service import (
     SpendFn,
     standard_breakers,
 )
+from autonomy.runtime.stores import SqlAlertStore, SqlBriefingStore, create_record_tables
 from autonomy.store import (
     SqlDecisionLog,
     SqlEventStore,
@@ -81,8 +85,13 @@ class RuntimeSettings(BaseModel):
     tick_every_minutes: int = Field(default=5, ge=1)
     seed: int = 0
     split_salt: str = Field(default="autonomy-split", min_length=1)
-    holdout_share: float = Field(default=0.10, ge=0, le=0.5)
-    baseline_share: float = Field(default=0.10, ge=0, le=0.5)
+    holdout_share: float = Field(
+        default=0.10, ge=0, le=0.5, description="The business's one holdout share; briefs must match it"
+    )
+    baseline_share: float = Field(
+        default=0.10, ge=0, le=0.5, description="The business's one baseline share; briefs must match it"
+    )
+    plan_days: int = Field(default=30, ge=1, description="Days a goal with no end date paces its budget over")
     late_window_hours: float = Field(default=48.0, ge=0)
     trigger_window_hours: float = Field(default=24.0, ge=0)
     batch_max_age_hours: float = Field(default=72.0, gt=0)
@@ -155,6 +164,7 @@ class RuntimeSettings(BaseModel):
             late_window=timedelta(hours=self.late_window_hours),
             trigger_window=timedelta(hours=self.trigger_window_hours),
             batch_max_age=timedelta(hours=self.batch_max_age_hours),
+            plan_days=self.plan_days,
             seed=self.seed,
         )
 
@@ -272,14 +282,24 @@ def build_runtime(
     analyst: AnalystFn | None = None,
     strategist: AdjustFn | None = None,
     spend_fn: SpendFn | None = None,
+    planned_fn: SpendFn | None = None,
     breakers_fn: BreakersFn | None = None,
     baselines: Mapping[str, float] | None = None,
+    channel_costs: Mapping[Channel, float] | None = None,
+    run_send_jobs: bool | None = False,
 ) -> AutonomyRuntime:
-    """The production runtime on SQL stores. Creates the tables it needs (safe to call twice)."""
+    """The production runtime on SQL stores. Creates the tables it needs (safe to call twice).
+
+    Spend defaults to the runtime's `SpendLedger` (channel cost per send, priced by
+    `channel_costs`, plus offer cost per redemption) and planned spend to `EvenPacing`; the
+    standard breakers get both. `run_send_jobs=False` leaves queued sends to the worker process
+    (`python -m autonomy.runtime.worker`), their one owner; pass None for a single process that
+    ticks with no worker."""
     settings = settings or RuntimeSettings.from_env(environ)
     engine = engine or engine_for(settings.database_url)
     create_all(engine)
     create_batch_tables(engine)
+    create_record_tables(engine)
 
     events = SqlEventStore(engine)
     states = SqlStateStore(engine)
@@ -305,15 +325,26 @@ def build_runtime(
         queue=queue,
         dispatcher=dispatcher,
         batches=SqlBatchStore(engine),
-        breakers_fn=breakers_fn or standard_breakers(baselines=baselines, spend_fn=spend_fn),
+        breakers_fn=breakers_fn
+        or standard_breakers(baselines=baselines, spend_fn=spend_fn, planned_fn=planned_fn),
         text_signals=text_signals,
         analyst=analyst,
         strategist=strategist,
         spend_fn=spend_fn,
+        planned_fn=planned_fn,
         assign_group=group_assigner(
             settings.split_salt,
             holdout_share=settings.holdout_share,
             baseline_share=settings.baseline_share,
         ),
-        config=settings.config(),
+        # The same shares the customers were split with: a brief asking for others is refused.
+        config=replace(
+            settings.config(),
+            holdout_share=settings.holdout_share,
+            baseline_share=settings.baseline_share,
+            run_send_jobs=run_send_jobs,
+        ),
+        alerts=SqlAlertStore(engine),
+        briefings=SqlBriefingStore(engine),
+        channel_costs=channel_costs,
     )
