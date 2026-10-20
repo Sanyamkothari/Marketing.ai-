@@ -168,7 +168,8 @@ def _trips(customer: IntArray, basket: IntArray, t: IntArray, window: int) -> In
     baskets["trip"] = trip
     lines = pd.DataFrame({"c": customer, "b": basket})
     merged = lines.merge(baskets[["c", "b", "trip"]], on=["c", "b"], how="left", sort=False)
-    return merged["trip"].to_numpy(dtype=np.int64)
+    out: npt.NDArray[np.int64] = merged["trip"].to_numpy(dtype=np.int64)
+    return out
 
 
 @dataclass(frozen=True, eq=False)
