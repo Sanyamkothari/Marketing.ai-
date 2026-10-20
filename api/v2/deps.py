@@ -354,6 +354,12 @@ class Services:
         )
         if item is None:
             raise NotFoundError(f"no content item {content_id!r}")
+        # "Nothing goes out without passing" (docs/v2/PITCH.md): a person may reject or retire any
+        # message, but may approve only one the strict editor (the Critic) has passed.
+        if status is ContentStatus.APPROVED and not editor_passed(item):
+            raise ConflictError(
+                "the editor has not passed this message; edit it and run it through the editor again"
+            )
         updated: ContentItem = item.model_copy(update={"status": status})
         self.workspace.put_content([updated])
         return updated
@@ -927,6 +933,11 @@ def _difference(a: Sequence[float], b: Sequence[float], *, scale: float) -> Esti
     )
 
 
+def editor_passed(item: ContentItem) -> bool:
+    """Whether the Critic's last word on this item was a pass (its notes end with "approved...")."""
+    return bool(item.critic_notes) and item.critic_notes[-1].startswith("approved")
+
+
 def _demo_content(start: datetime, goal_id: str) -> list[ContentItem]:
     """The sample library plus one draft waiting for review, so the content screen has work to show."""
     items = sample_content(start, goal_id)
@@ -936,7 +947,8 @@ def _demo_content(start: datetime, goal_id: str) -> list[ContentItem]:
             "theme": Theme.URGENCY,
             "subject": "Your favourites are going fast",
             "body": "Hi {{first_name}}, a few {{top_category}} picks are almost gone.",
-            "status": ContentStatus.DRAFT,
+            "status": ContentStatus.DRAFT,  # passed the editor; waiting for a person's yes
+            "critic_notes": ("rules: all passed", "judge: brand voice 5, honesty 5", "approved"),
         }
     )
     return [*items, draft]

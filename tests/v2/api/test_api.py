@@ -281,6 +281,10 @@ def test_content_status_endpoint(client: Any) -> None:
     assert ContentItem.model_validate(r.json()).status is ContentStatus.APPROVED
     assert client.post("/v2/content/ci_missing/status", json={"status": "approved"}).status_code == 404
     assert client.post("/v2/content/ci_0/status", json={"status": "maybe"}).status_code == 422
+    # Nothing goes out without passing the editor: rejected or unchecked copy cannot be approved.
+    assert client.post("/v2/content/ci_0/status", json={"status": "rejected"}).status_code == 200
+    r = client.post("/v2/content/ci_0/status", json={"status": "approved"})
+    assert r.status_code == 409 and "editor" in r.text
 
 
 def test_decisions_and_customer_endpoints(client: Any) -> None:
