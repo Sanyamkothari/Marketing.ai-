@@ -414,6 +414,19 @@ def test_published_openapi_matches_the_routes(client: Any, tmp_path: Path) -> No
         ("/v2/channels", "get"),
         ("/v2/opportunities/sized", "get"),
         ("/v2/batches/{batch_id}/breakdown", "get"),
+        # The SaaS connectors (api/v2/connectors.py; docs/v2/CONNECTORS.md): connect once, then health in words.
+        ("/v2/connectors", "get"),
+        ("/v2/connectors/connections", "get"),
+        ("/v2/connectors/connections/{connection_id}", "get"),
+        ("/v2/connectors/connections/{connection_id}", "delete"),
+        ("/v2/connectors/connections/{connection_id}/sync", "post"),
+        ("/v2/connectors/connections/{connection_id}/setup", "get"),
+        ("/v2/connectors/webhooks/{kind}", "post"),
+        ("/v2/connectors/webhooks/{kind}/{connection_id}", "post"),
+        ("/v2/connectors/{kind}/connect", "post"),
+        ("/v2/connectors/{kind}/callback", "get"),
+        ("/v2/connectors/{kind}/install", "get"),
+        ("/v2/connectors/{kind}/key", "post"),
     }
     # The marketer app's routes are all there; the standalone engines (/v2/engines/...) add their own.
     assert expected <= ops(live)

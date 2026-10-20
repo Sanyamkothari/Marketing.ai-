@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +31,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from api.v2.connectors import (
+    CONNECTORS_PREFIX,
+    ConnectorServices,
+    attach_connector_services,
+    local_connector_services,
+)
+from api.v2.connectors import router as connectors_router
 from api.v2.deps import Services, attach_services, build_demo_services
 from api.v2.engines.router import router as engines_router
 from api.v2.routes import router
@@ -57,17 +65,30 @@ SCHEMA_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def create_app(
-    services: Services, *, ui_dir: Path | None = None, cors_origin_regex: str = LOCAL_ORIGINS
+    services: Services,
+    *,
+    ui_dir: Path | None = None,
+    cors_origin_regex: str = LOCAL_ORIGINS,
+    connectors: ConnectorServices | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Autonomy API",
         version="2.0.0",
         description=(
-            "The v2 marketer app's API: goals, plans, approvals, batches, decisions, proof, webhooks "
-            "and the operator's runtime tick."
+            "The v2 marketer app's API: goals, plans, approvals, batches, decisions, proof, webhooks, "
+            "the SaaS connectors (/v2/connectors) and the operator's runtime tick."
         ),
     )
     attach_services(app, services)
+    # The SaaS connectors (/v2/connectors, docs/v2/CONNECTORS.md). Without wiring of its own, the demo gets an
+    # in-memory engine over the same event store, so the Connect screen shows the platforms it can connect.
+    attach_connector_services(
+        app,
+        connectors
+        or local_connector_services(
+            business_id=services.business_id, sink=services.events.append, environ=os.environ
+        ),
+    )
     app.add_exception_handler(RequestValidationError, _validation_error)
     app.add_middleware(
         CORSMiddleware,
@@ -80,6 +101,7 @@ def create_app(
     folder = UI_DIR if ui_dir is None else ui_dir
     if folder.is_dir():
         app.mount("/v2/app", StaticFiles(directory=folder, html=True), name="v2-app")
+    app.include_router(connectors_router)
     app.include_router(router)
     app.include_router(engines_router)  # the six standalone engines, /v2/engines/... (docs/v2/ENGINES.md)
     return app
@@ -96,10 +118,14 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-async def _validation_error(request: Request, exc: Exception) -> JSONResponse:  # noqa: ARG001
-    """FastAPI's own 422, made safe for inputs JSON cannot encode (otherwise it raises a 500)."""
+async def _validation_error(request: Request, exc: Exception) -> JSONResponse:
+    """FastAPI's own 422, made safe for inputs JSON cannot encode (otherwise it raises a 500).
+
+    Under /v2/connectors the refused input is left out: a body there may carry a pasted API key or token."""
     errors = exc.errors() if isinstance(exc, RequestValidationError) else []
-    detail = [{k: _json_safe(v) for k, v in e.items() if k != "ctx"} for e in errors]
+    secret = request.url.path.startswith(CONNECTORS_PREFIX)
+    drop = {"ctx", "input"} if secret else {"ctx"}
+    detail = [{k: _json_safe(v) for k, v in e.items() if k not in drop} for e in errors]
     return JSONResponse(status_code=422, content={"detail": detail})
 
 

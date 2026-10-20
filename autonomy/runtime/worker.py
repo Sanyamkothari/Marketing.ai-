@@ -11,6 +11,10 @@ Three kinds of job keep Autonomy moving between requests:
 - `gateway_send_decision` (only when the runtime sends through a `DispatchGateway`) finishes a
   decision the gateway held for quiet hours, a rate limit or a retry; the gateway re-runs its
   compliance gate and the dispatcher its checks (`gateway_handler`).
+- `connector_sync`, `connector_webhook` and `connector_daily` (only when SaaS connectors are wired)
+  keep Shopify, Klaviyo and the other connectors in sync: each sync job queues its successor on the
+  stream's cadence, so seeding a connection once keeps it running (`connector_handlers`, and
+  `docs/v2/CONNECTORS.md`).
 
 Both send handlers take an optional `gate`: the runtime's mandate check, run again when a held
 message comes due, so a mandate revoked (or a daily cap reached) while it waited stops it.
@@ -51,8 +55,12 @@ from autonomy.interfaces import ChannelAdapter, DecisionLog, JobQueue, StateStor
 
 if TYPE_CHECKING:
     from autonomy.channels.gateway import DispatchGateway
+    from autonomy.connectors.shopify import ShopifyPrivacyDesk
+    from autonomy.connectors.sync import ConnectorEngine
+    from autonomy.interfaces import EventStore
 
 __all__ = [
+    "CONNECTOR_KINDS",
     "DEFAULT_KINDS",
     "GATEWAY_KIND",
     "SEND_KIND",
@@ -65,6 +73,7 @@ __all__ = [
     "SendGate",
     "SendHandler",
     "Worker",
+    "connector_handlers",
     "gateway_handler",
     "main",
     "next_tick_at",
@@ -85,6 +94,8 @@ WEBHOOK_KIND = "webhook_event"
 GATEWAY_KIND = "gateway_send_decision"
 """The gateway's held-decision job kind (`autonomy.channels.gateway.GATEWAY_DECISION_JOB`)."""
 DEFAULT_KINDS: tuple[str, ...] = (TICK_KIND, SEND_KIND, WEBHOOK_KIND)
+CONNECTOR_KINDS: tuple[str, ...] = ("connector_sync", "connector_webhook", "connector_daily")
+"""The SaaS connector job kinds (`autonomy.connectors.sync.JOB_KINDS`)."""
 
 DEFAULT_MAX_ATTEMPTS = 5
 DEFAULT_BACKOFF = timedelta(minutes=1)
@@ -440,6 +451,26 @@ def webhook_handler(
         ingest(events)
 
     return handle
+
+
+def connector_handlers(
+    engine: ConnectorEngine,
+    queue: JobQueue,
+    *,
+    events: EventStore | None = None,
+    privacy_desk: ShopifyPrivacyDesk | None = None,
+) -> dict[str, JobHandler]:
+    """Handlers for the connector jobs, to merge into a `Worker`'s `handlers`.
+
+    Each sync job re-queues its own successor (live lanes on the stream's cadence, history lanes
+    until the backfill is done) and the daily job re-seeds any chain that ended, so a connection
+    seeded once (`ConnectorEngine.seed`) keeps syncing. Connector jobs handle their own retries,
+    so they never ask the worker to retry a platform failure. With `events`, Klaviyo's hourly
+    setup-and-delivery watch runs too; with `privacy_desk`, Shopify's privacy job
+    (`autonomy.connectors.wiring.worker_handlers`)."""
+    from autonomy.connectors.wiring import worker_handlers
+
+    return worker_handlers(engine, queue, events=events, privacy_desk=privacy_desk)
 
 
 # --- the command line ----------------------------------------------------------------------------
