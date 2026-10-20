@@ -687,7 +687,7 @@ def plan_findings(ledger: Ledger | None, *, side_table: bool = False) -> list[Fi
                 count=ledger.lost_total,
                 message=f"{who} out {ledger.lost_total:,} of {ledger.start:,} {ledger.unit} "
                 f"({ledger.lost_pct:.1f}%), more than the {LOSS_STOP_PCT:g}% we allow without asking."
-                + _who_were_lost(ledger.lost_by_outcome),
+                + (_who_were_lost(ledger.lost_by_outcome) if ledger.rate_start is not None else ""),
                 detail=f"Most from {_naming(ledger.top_loss_steps)}." + (f" By outcome, {by}." if by else ""),
             )
         )
@@ -697,7 +697,7 @@ def plan_findings(ledger: Ledger | None, *, side_table: bool = False) -> list[Fi
             Finding(
                 level="stop",
                 code="PLAN_MOVES_OUTCOME_RATE",
-                message=f"These steps change the share of customers who are a yes from {ledger.rate_start:.1f}% "
+                message=f"These steps change the share of {ledger.unit} who are a yes from {ledger.rate_start:.1f}% "
                 f"to {ledger.rate_end:.1f}% ({ledger.rate_move:+.1f} points), more than the {points} we allow "
                 "without asking.",
                 detail=f"The outcome rate moves most at {_naming(ledger.top_rate_steps)}.",

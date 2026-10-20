@@ -221,6 +221,18 @@ def test_the_plan_stop_is_one_plain_sentence_with_the_expert_detail_kept_apart()
     assert "step" not in gate.message.replace("This step", "") and "outcome" not in gate.message
 
 
+def test_the_plan_stop_does_not_say_who_was_a_yes_when_the_outcome_is_not_a_yes_or_no() -> None:
+    # an amount outcome: most lost rows hold 0, but 0 is not a "no" here, so the stop does not claim it
+    gone = [1] * 87 + [0] * 913
+    frame = pd.DataFrame({"id": range(1_000), "gone": gone, "spend": [0] * 80 + [37] * 7 + [12] * 913})
+    step = RecipeStep(
+        order=1, kind=RecipeStepKind.REMOVE_ROWS, column="gone", params={"operator": "equals", "values": [1]}
+    )
+    result = run_guarded(frame, [step], primary_key="id", target="spend", **RUN)
+    gate = next(f for f in result.findings if f.code == "PLAN_LOSES_TOO_MUCH")
+    assert "a yes" not in gate.message
+
+
 def test_the_outcome_rate_moving_more_than_a_point_trips_the_gate_even_with_small_loss() -> None:
     # 1,000 customers, 100 positive; a step drops 40 of the positives (4% of customers): rate 10% -> 6.25%
     frame = pd.DataFrame({"id": range(1_000), "y": [1] * 100 + [0] * 900, "drop": [1] * 40 + [0] * 960})

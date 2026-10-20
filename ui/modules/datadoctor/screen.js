@@ -138,8 +138,8 @@ function mainHtml(entry) {
   if (!s.screen && s.busy === "upload") {
     // The first files are being read: the chat is already there and says so (the start card returns if it fails).
     const bubble = `<div class="ddc-row ddc-agent" data-dds-reading><span class="ddc-avatar" aria-hidden="true">DD</span><div class="ddc-stack"><div class="ddc-bubble" data-dds-progress role="status"><span class="ddc-spin" aria-hidden="true"></span><span>${esc(progressText("upload"))}</span> <span class="dds-why">${userText(
-      plain(s.uploadName || ""),
-    )}</span></div></div></div>`;
+      plain(s.uploadFirst || ""),
+    )}${s.uploadMore ? esc(` and ${s.uploadMore} more`) : ""}</span></div></div></div>`;
     return `<div class="dds ddc" data-dds data-dds-place="${esc(host.place)}"><section class="ddc-conv" aria-label="Conversation with Data Doctor" data-dds-conversation>${bubble}</section></div>`;
   }
   if (!s.screen) {
@@ -415,7 +415,7 @@ function draw(entry) {
  * counted: a reply that lands above it is what the person is taken to (the newest message, else the first new card).
  */
 function followChat(entry) {
-  const cards = [...entry.main.querySelectorAll("[data-dds-conversation] > :not([data-dds-composer])")].filter((el) => !el.querySelector("[data-dds-ready]"));
+  const cards = [...entry.main.querySelectorAll("[data-dds-conversation] > :not([data-dds-composer]):not([data-dds-reading])")].filter((el) => !el.querySelector("[data-dds-ready]"));
   const seen = entry.cardsSeen;
   entry.cardsSeen = cards.length;
   if (!(seen > 0 && cards.length > seen)) return;
@@ -525,11 +525,12 @@ async function uploadGoal(host) {
 }
 
 /** Put the files the server now holds (uploaded, or imported from a connection) into the open case, or a new one. */
-async function bringIn(entry, name, getUploads) {
+async function bringIn(entry, name, getUploads, first = name, more = 0) {
   const s = entry.state;
   const host = entry.host;
   s.uploadNote = `Reading ${name}…`;
-  s.uploadName = name;
+  s.uploadFirst = first;
+  s.uploadMore = more;
   await act(
     entry,
     "upload",
@@ -575,7 +576,7 @@ function upload(entry, files) {
       }
     }
     return [...sent.values()];
-  });
+  }, list[0].name, list.length - 1);
 }
 
 /** "Pick from a connection": the picker's import answers what `POST /uploads` does, so it carries on as a file does. */
