@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <title>Autonomy</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231E57BD'/%3E%3Cpath d='M9 23 16 8l7 15' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231D1F20'/%3E%3Cpath d='M10 23 16 9l6 14' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <link rel="preload" href="./fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="./styles.css">
     <link rel="stylesheet" href="./screens/shell.css">
     <link rel="stylesheet" href="./screens/connect.css">
@@ -34,12 +35,16 @@
           <a id="selfpause-badge" class="selfpause-badge" href="#/live" hidden></a>
         </div>
         <div class="topbar-actions">
+          <a id="batch-link" class="inbox-link batch-link" href="#/live" hidden style="display: none">
+            <span class="topbar-label" aria-hidden="true">To approve</span>
+            <span id="batch-count" class="count count-accent"></span>
+          </a>
           <a id="inbox-link" class="inbox-link" href="#/live" aria-label="Alerts inbox">
             <span aria-hidden="true">Inbox</span>
             <span id="inbox-count" class="count" hidden></span>
           </a>
           <span id="pause-scope" class="pause-scope" aria-hidden="true">Stops all sending</span>
-          <button id="pause-button" type="button" class="btn btn-danger pause-big" disabled>Pause</button>
+          <button id="pause-button" type="button" class="btn btn-primary pause-big" disabled>Pause</button>
         </div>
       </div>
       <nav class="nav" aria-label="Screens">

@@ -18,10 +18,8 @@ import {
   count,
   describeAction,
   describeEvent,
-  empty,
   ensureStyles,
   errText,
-  failed,
   groupLabel,
   h,
   money,
@@ -29,7 +27,6 @@ import {
   notFound,
   notify,
   num,
-  pageHead,
   present,
   resolveGoal,
   timeline,
@@ -61,10 +58,10 @@ export function filterDecisions(decisions, { kind = "", group = "", channel = ""
 /** Pretty JSON for the viewer. `undefined` (never sent) reads as the em dash. */
 export const pretty = (value) => (value === undefined ? DASH : JSON.stringify(value, null, 2));
 
-/** A collapsible raw-JSON block with its own copy button. */
-function jsonBlock(title, value, ctx, announcer, open = false) {
+/** A collapsible raw-JSON block with its own copy button. `meta` is a short grey note on its row (a count). */
+function jsonBlock(title, value, ctx, announcer, open = false, meta = null) {
   const text = pretty(value);
-  const copy = h("button", { type: "button", class: "ap-btn ap-btn-quiet ap-btn-sm" }, "Copy JSON");
+  const copy = h("button", { type: "button", class: "btn btn-ghost btn-sm" }, "Copy JSON");
   copy.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(text);
@@ -73,17 +70,80 @@ function jsonBlock(title, value, ctx, announcer, open = false) {
       notify(ctx, `Couldn't copy: ${errText(e)}`, "critical", announcer);
     }
   });
-  return h("details", { class: "ap-json", open }, h("summary", null, title), h("div", { class: "ap-actions" }, copy), h("pre", { class: "ap-pre", tabindex: "0" }, text));
+  return h(
+    "details",
+    { class: "op-json", open },
+    h("summary", null, h("span", null, title), present(meta) && h("span", { class: "meta" }, meta)),
+    h("div", { class: "op-json-body" }, h("div", { class: "op-json-actions" }, copy), h("pre", { class: "op-pre", tabindex: "0" }, text)),
+  );
 }
 
-function field(label, control) {
-  return h("label", { class: "ap-field" }, h("span", { class: "ap-field-label" }, label), control);
+function field(label, control, extra = "") {
+  return h("label", { class: `field op-field ${extra}`.trim() }, h("span", { class: "op-label" }, label), control);
 }
 
 function select(options, value = "") {
-  const el = h("select", { class: "ap-input" }, ...options.map(([v, text]) => h("option", { value: v }, text)));
+  const el = h("select", null, ...options.map(([v, text]) => h("option", { value: v }, text)));
   el.value = value;
   return el;
+}
+
+/** Grey blocks at the size of what is loading (nothing shifts when it lands), with a screen-reader word. */
+function loadingBlock(lines = 3) {
+  return h(
+    "div",
+    { class: "skeleton-stack op-loading", role: "status" },
+    h("span", { class: "visually-hidden" }, "Loading…"),
+    ...Array.from({ length: lines }, (_, i) => h("span", { class: "skeleton", "aria-hidden": "true", style: i === lines - 1 ? "width: 60%" : "width: 100%" })),
+  );
+}
+
+/** The block that failed: the API's words and a Retry for that block only. */
+function failedBox(what, error, retry) {
+  return h(
+    "div",
+    { class: "error-box", role: "alert" },
+    h("p", { class: "empty-title" }, `Couldn't load ${what}: ${errText(error)}`),
+    typeof retry === "function" && h("div", { class: "error-actions" }, h("button", { type: "button", class: "link-btn", onclick: retry }, "Retry")),
+  );
+}
+
+function emptyBox(sentence) {
+  return h("div", { class: "empty", role: "status" }, h("p", null, sentence));
+}
+
+/** A table head: 12px grey sentence-case labels; `num` columns right-aligned. */
+function thead(cols) {
+  return h("thead", null, h("tr", null, ...cols.map(([label, num]) => h("th", { scope: "col", class: num ? "num" : null }, label))));
+}
+
+/** A cell that keeps its header as a label when the table folds into two-line rows on a phone. */
+function td(label, cls, ...kids) {
+  return h("td", { class: cls || null, "data-label": label || null }, ...kids);
+}
+
+/** The goal's own fields, raw, as label and value pairs. */
+function goalFacts(goal) {
+  const pairs = [
+    ["Status", goal?.status],
+    ["Autonomy", goal?.autonomy],
+    ["Currency", goal?.currency],
+    ["Budget", goal?.budget, "tabular"],
+  ];
+  return h(
+    "dl",
+    { class: "op-facts" },
+    ...pairs.map(([label, value, cls]) => h("div", null, h("dt", null, label), h("dd", { class: cls || null }, present(value) ? String(value) : DASH))),
+  );
+}
+
+function card(title, meta, ...kids) {
+  return h(
+    "section",
+    { class: "card span-12" },
+    h("div", { class: "card-head" }, h("h2", { class: "card-title" }, title), meta),
+    ...kids,
+  );
 }
 
 export async function render(root, ctx) {
@@ -92,42 +152,53 @@ export async function render(root, ctx) {
   const announcer = h("p", { class: "ap-sr", role: "status", "aria-live": "polite" });
   const page = h("div", { class: "ap-page ap-operator" });
   root.replaceChildren(page);
-  page.append(pageHead("Operator", "Raw data and power tools for the people running the agent. Everything here is exactly what the API returned."));
+  page.append(
+    h(
+      "div",
+      { class: "page-head" },
+      h("div", null,
+        h("h1", { class: "page-title" }, "Operator"),
+        h("p", { class: "page-sub" }, "Raw data and power tools for the people running the agent. Everything here is exactly what the API returned.")),
+    ),
+  );
+  const grid = h("div", { class: "grid op-grid" });
+  page.append(grid);
 
   // ---- goal picker + raw JSON
-  const goalInput = h("input", { class: "ap-input ap-mono", id: "ap-op-goal", autocomplete: "off", spellcheck: "false" });
-  const goalForm = h("form", { class: "ap-filters" }, field("Goal id", goalInput), h("button", { type: "submit", class: "ap-btn" }, "Load"));
-  const goalOut = h("div", null, h("p", { class: "ap-muted" }, "Loading…"));
-  page.append(h("section", { class: "ap-card" }, h("h2", { class: "ap-h2" }, "Goal, brief and content"), goalForm, goalOut));
+  const goalInput = h("input", { class: "mono", id: "ap-op-goal", autocomplete: "off", spellcheck: "false" });
+  const goalForm = h("form", { class: "op-filters" }, field("Goal id", goalInput, "op-field-wide"), h("button", { type: "submit", class: "btn btn-secondary" }, "Load"));
+  const goalOut = h("div", { class: "op-out" }, loadingBlock(3));
+  grid.append(card("Goal, brief and content", h("span", { class: "card-meta" }, "Raw JSON, as the API sent it"), goalForm, goalOut));
 
   // ---- decisions
-  const custFilter = h("input", { class: "ap-input ap-mono", autocomplete: "off", spellcheck: "false", placeholder: "any" });
+  const custFilter = h("input", { class: "mono", autocomplete: "off", spellcheck: "false", placeholder: "any" });
   const limitSel = select(LIMITS.map((n) => [String(n), String(n)]), "200");
   const kindSel = select([["", "Any"], ["act", "Act"], ["nothing", "Left alone"]]);
   const groupSel = select([["", "Any"], ["agent", "Agent"], ["baseline", "Simple rule"], ["holdout", "Holdout"]]);
   const channelSel = select([["", "Any"], ...["email", "whatsapp", "sms", "push", "web", "webhook"].map((c) => [c, channelLabel(c)])]);
-  const textFilter = h("input", { class: "ap-input", type: "search", autocomplete: "off", placeholder: "words in the reason, or an id" });
+  const textFilter = h("input", { type: "search", autocomplete: "off", placeholder: "words in the reason, or an id" });
   const decForm = h(
     "form",
-    { class: "ap-filters" },
+    { class: "op-filters" },
     field("Customer id", custFilter),
-    field("How many", limitSel),
-    field("Kind", kindSel),
-    field("Group", groupSel),
-    field("Channel", channelSel),
-    field("Search", textFilter),
-    h("button", { type: "submit", class: "ap-btn" }, "Fetch"),
+    field("How many", limitSel, "op-field-narrow"),
+    field("Kind", kindSel, "op-field-narrow"),
+    field("Group", groupSel, "op-field-narrow"),
+    field("Channel", channelSel, "op-field-narrow"),
+    field("Search", textFilter, "op-field-wide"),
+    h("button", { type: "submit", class: "btn btn-primary" }, "Fetch"),
   );
-  const decCount = h("p", { class: "ap-muted ap-small", "aria-live": "polite" });
-  const decTable = h("div", { class: "ap-table-wrap" });
-  const decDetail = h("div");
-  page.append(h("section", { class: "ap-card" }, h("h2", { class: "ap-h2" }, "Decisions"), decForm, decCount, decTable, decDetail));
+  const decCount = h("span", { class: "card-meta tabular", "aria-live": "polite" });
+  const decTable = h("div", { class: "op-out" });
+  const decDetail = h("div", { class: "op-detail" });
+  grid.append(card("Decisions", decCount, decForm, decTable, decDetail));
 
   // ---- customer lookup
-  const lookupInput = h("input", { class: "ap-input ap-mono", autocomplete: "off", spellcheck: "false", required: true, placeholder: "cust_…" });
-  const lookupForm = h("form", { class: "ap-filters" }, field("Customer id", lookupInput), h("button", { type: "submit", class: "ap-btn" }, "Look up"));
-  const lookupOut = h("div");
-  page.append(h("section", { class: "ap-card" }, h("h2", { class: "ap-h2" }, "Customer lookup"), lookupForm, lookupOut), announcer);
+  const lookupInput = h("input", { class: "mono", autocomplete: "off", spellcheck: "false", required: true, placeholder: "cust_…" });
+  const lookupForm = h("form", { class: "op-filters" }, field("Customer id", lookupInput, "op-field-wide"), h("button", { type: "submit", class: "btn btn-secondary" }, "Look up"));
+  const lookupOut = h("div", { class: "op-out" });
+  grid.append(card("Customer lookup", h("span", { class: "card-meta" }, "State, decisions and events for one customer"), lookupForm, lookupOut));
+  page.append(announcer);
 
   let bundle = null;
   let goalId = present(ctx.goalId) ? ctx.goalId : null;
@@ -137,16 +208,16 @@ export async function render(root, ctx) {
   const currency = () => bundle?.goal?.currency;
 
   async function loadGoal(id) {
-    goalOut.replaceChildren(h("p", { class: "ap-muted" }, "Loading…"));
+    goalOut.replaceChildren(loadingBlock(3));
     try {
       bundle = await resolveGoal({ ...ctx, goalId: id });
     } catch (e) {
       bundle = null;
-      goalOut.replaceChildren(failed(present(id) ? `goal ${id}` : "a goal", e));
+      goalOut.replaceChildren(failedBox(present(id) ? `goal ${id}` : "a goal", e, () => loadGoal(id)));
       return;
     }
     if (!bundle) {
-      goalOut.replaceChildren(empty("No goals yet."));
+      goalOut.replaceChildren(emptyBox("No goals yet."));
       return;
     }
     goalId = bundle.goal?.goal_id ?? id;
@@ -163,13 +234,19 @@ export async function render(root, ctx) {
     }
     goalOut.replaceChildren(
       ...[
-        h("p", { class: "ap-small" }, `Status ${bundle.goal?.status ?? DASH} · autonomy ${bundle.goal?.autonomy ?? DASH} · currency ${bundle.goal?.currency ?? DASH}`),
-        jsonBlock("Goal", bundle.goal, ctx, announcer, true),
-        jsonBlock("Brief", bundle.brief, ctx, announcer),
-        jsonBlock(`Content (${(bundle.content || []).length})`, bundle.content, ctx, announcer),
-        jsonBlock("Proof", bundle.proof, ctx, announcer),
-        Array.isArray(batches) ? jsonBlock(`Batches (${batches.length})`, batches, ctx, announcer) : null,
-        batchNote ? h("p", { class: "ap-muted ap-small" }, batchNote) : null,
+        goalFacts(bundle.goal),
+        h(
+          "div",
+          { class: "op-json-list" },
+          ...[
+            jsonBlock("Goal", bundle.goal, ctx, announcer),
+            jsonBlock("Brief", bundle.brief, ctx, announcer),
+            jsonBlock("Content", bundle.content, ctx, announcer, false, `${(bundle.content || []).length} items`),
+            jsonBlock("Proof", bundle.proof, ctx, announcer),
+            Array.isArray(batches) ? jsonBlock("Batches", batches, ctx, announcer, false, `${batches.length} batches`) : null,
+          ].filter(Boolean),
+        ),
+        batchNote ? h("p", { class: "meta op-note" }, batchNote) : null,
       ].filter(Boolean),
     );
   }
@@ -178,46 +255,46 @@ export async function render(root, ctx) {
     const rows = filterDecisions(decisions, { kind: kindSel.value, group: groupSel.value, channel: channelSel.value, text: textFilter.value });
     decCount.textContent = `Showing ${count(rows.length)} of ${count(decisions.length)} fetched`;
     if (!rows.length) {
-      decTable.replaceChildren(empty("No decisions match."));
+      decTable.replaceChildren(emptyBox("No decisions match."));
       return;
     }
-    const head = ["Made", "Customer", "Kind", "Group", "Action", "Prob.", "Exp. net", "Attention price", "Policy", "Reason", ""];
+    const cols = [["Made"], ["Customer"], ["Kind"], ["Group"], ["Action"], ["Prob.", true], ["Exp. net", true], ["Attention price", true], ["Policy"], ["Reason"], [h("span", { class: "visually-hidden" }, "Raw")]];
     const table = h(
       "table",
-      { class: "ap-table" },
-      h("thead", null, h("tr", null, ...head.map((t) => h("th", { scope: "col" }, t)))),
+      { class: "table-stack op-table" },
+      thead(cols),
       h("tbody", null, ...rows.map((d) => {
-        const who = h("button", { type: "button", class: "ap-link ap-mono" }, d.customer_id);
+        const who = h("button", { type: "button", class: "link-btn mono op-id" }, d.customer_id);
         who.addEventListener("click", () => {
           lookupInput.value = d.customer_id;
           lookup(d.customer_id);
         });
-        const view = h("button", { type: "button", class: "ap-btn ap-btn-quiet ap-btn-sm", "aria-label": `Show JSON of ${d.decision_id}` }, "JSON");
+        const view = h("button", { type: "button", class: "btn btn-ghost btn-sm", "aria-label": `Show JSON of ${d.decision_id}` }, "JSON");
         view.addEventListener("click", () => {
-          decDetail.replaceChildren(jsonBlock(`Decision ${d.decision_id}`, d, ctx, announcer, true));
+          decDetail.replaceChildren(h("div", { class: "op-json-list" }, jsonBlock(`Decision ${d.decision_id}`, d, ctx, announcer, true)));
         });
         return h(
           "tr",
           null,
-          h("td", { class: "ap-nowrap" }, when(d.made_at)),
-          h("td", null, who),
-          h("td", null, d.kind === "act" ? "Act" : "Left alone"),
-          h("td", null, groupLabel(d.group)),
-          h("td", null, describeAction(d, brief())),
-          h("td", { class: "ap-num" }, num(d.probability, 3)),
-          h("td", { class: "ap-num" }, money(d.expected_net, currency())),
-          h("td", { class: "ap-num" }, money(d.attention_price, currency())),
-          h("td", { class: "ap-mono" }, d.policy_version ?? DASH),
-          h("td", { class: "ap-reason" }, d.reason || DASH, (d.blocked_by || []).length > 0 && h("span", { class: "ap-muted ap-small" }, ` [ruled out: ${d.blocked_by.join(", ")}]`)),
-          h("td", null, view),
+          td(null, "op-nowrap", when(d.made_at)),
+          td("Customer", "op-nowrap", who),
+          td("Kind", "op-nowrap", d.kind === "act" ? "Act" : "Left alone"),
+          td("Group", "op-nowrap", groupLabel(d.group)),
+          td("Action", "op-nowrap", describeAction(d, brief())),
+          td("Prob.", "num", num(d.probability, 3)),
+          td("Exp. net", "num is-key", money(d.expected_net, currency())),
+          td("Attention price", "num", money(d.attention_price, currency())),
+          td("Policy", "mono op-nowrap", d.policy_version ?? DASH),
+          td("Reason", "op-reason", d.reason || DASH, (d.blocked_by || []).length > 0 && h("span", { class: "meta" }, ` [ruled out: ${d.blocked_by.join(", ")}]`)),
+          td(null, "op-raw", view),
         );
       })),
     );
-    decTable.replaceChildren(table);
+    decTable.replaceChildren(h("div", { class: "table-wrap op-table-wrap" }, table));
   }
 
   async function loadDecisions() {
-    decTable.replaceChildren(h("p", { class: "ap-muted" }, "Loading…"));
+    decTable.replaceChildren(loadingBlock(6));
     decDetail.replaceChildren();
     const query = { limit: Number(limitSel.value) };
     if (present(goalId)) query.goal_id = goalId;
@@ -227,52 +304,56 @@ export async function render(root, ctx) {
     } catch (e) {
       decisions = [];
       decCount.textContent = "";
-      decTable.replaceChildren(failed("decisions", e));
+      decTable.replaceChildren(failedBox("decisions", e, loadDecisions));
       return;
     }
     paintDecisions();
-    decDetail.replaceChildren(jsonBlock(`All fetched decisions (${decisions.length})`, decisions, ctx, announcer));
+    decDetail.replaceChildren(h("div", { class: "op-json-list" }, jsonBlock("All fetched decisions", decisions, ctx, announcer, false, `${decisions.length} decisions`)));
   }
 
   async function lookup(id) {
     const cid = String(id || "").trim();
     if (!cid) {
-      lookupOut.replaceChildren(h("p", { class: "ap-error", role: "alert" }, "Type a customer id first."));
+      lookupOut.replaceChildren(h("p", { class: "field-error", role: "alert" }, "Type a customer id first."));
       return;
     }
-    lookupOut.replaceChildren(h("p", { class: "ap-muted" }, "Loading…"));
+    lookupOut.replaceChildren(loadingBlock(3));
     let found;
     try {
       found = await call(api, "getCustomer", cid);
     } catch (e) {
-      lookupOut.replaceChildren(notFound(e) ? empty(`No customer ${cid}.`) : failed(`customer ${cid}`, e));
+      lookupOut.replaceChildren(notFound(e) ? emptyBox(`No customer ${cid}.`) : failedBox(`customer ${cid}`, e, () => lookup(cid)));
       return;
     }
     if (!found || !found.state) {
-      lookupOut.replaceChildren(empty(`No customer ${cid}.`));
+      lookupOut.replaceChildren(emptyBox(`No customer ${cid}.`));
       return;
     }
     const rows = timeline(found).map(({ at, kind, item }) =>
       h(
         "tr",
         null,
-        h("td", { class: "ap-nowrap" }, when(at)),
-        h("td", null, kind === "event" ? "Event" : "Decision"),
-        h("td", null, kind === "event" ? describeEvent(item, currency()) : describeAction(item, brief())),
-        h("td", { class: "ap-mono" }, kind === "event" ? item.decision_id ?? DASH : item.decision_id),
-        h("td", { class: "ap-reason" }, kind === "decision" ? item.reason || DASH : item.source ?? DASH),
+        td(null, "op-nowrap", when(at)),
+        td("Type", "op-nowrap", kind === "event" ? "Event" : "Decision"),
+        td("What", null, kind === "event" ? describeEvent(item, currency()) : describeAction(item, brief())),
+        td("Decision", "mono op-nowrap", kind === "event" ? item.decision_id ?? DASH : item.decision_id),
+        td("Why / source", "op-reason", kind === "decision" ? item.reason || DASH : item.source ?? DASH),
       ),
     );
     lookupOut.replaceChildren(
-      h("p", { class: "ap-small" }, `${found.state.customer_id} · ${groupLabel(found.state.group)} · ${count(found.state.purchases)} purchases · ${money(found.state.revenue, currency())} revenue · state version ${found.state.version ?? DASH}`),
+      h("p", { class: "op-summary tabular" }, `${found.state.customer_id} · ${groupLabel(found.state.group)} · ${count(found.state.purchases)} purchases · ${money(found.state.revenue, currency())} revenue · state version ${found.state.version ?? DASH}`),
       rows.length
-        ? h("div", { class: "ap-table-wrap" }, h("table", { class: "ap-table" },
-            h("thead", null, h("tr", null, ...["When", "Type", "What", "Decision", "Why / source"].map((t) => h("th", { scope: "col" }, t)))),
+        ? h("div", { class: "table-wrap op-table-wrap" }, h("table", { class: "table-stack op-table" },
+            thead([["When"], ["Type"], ["What"], ["Decision"], ["Why / source"]]),
             h("tbody", null, ...rows)))
-        : empty("No events or decisions."),
-      jsonBlock("State", found.state, ctx, announcer),
-      jsonBlock(`Decisions (${(found.decisions || []).length})`, found.decisions, ctx, announcer),
-      jsonBlock(`Events (${(found.events || []).length})`, found.events, ctx, announcer),
+        : emptyBox("No events or decisions."),
+      h(
+        "div",
+        { class: "op-json-list" },
+        jsonBlock("State", found.state, ctx, announcer),
+        jsonBlock("Decisions", found.decisions, ctx, announcer, false, `${(found.decisions || []).length} decisions`),
+        jsonBlock("Events", found.events, ctx, announcer, false, `${(found.events || []).length} events`),
+      ),
     );
   }
 

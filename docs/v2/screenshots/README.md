@@ -12,7 +12,7 @@ redemption (free shipping $4, 10% off $6). They were taken on 20 Oct 2026 in hea
 
 Desktop is a 1440×900 viewport and phone is 390×844 (with mobile emulation). Each shot covers at most
 the first two viewport heights (1440×1800 or 390×1688), so long screens such as Live and Operator stop
-part-way down. The PNGs are reduced to a 256-colour palette to keep the folder small (about 1.8 MB).
+part-way down. The PNGs are reduced to a 256-colour palette to keep the folder small (about 1.9 MB).
 
 | Screen | Desktop, light | Phone, light | Desktop, dark | Phone, dark |
 | --- | --- | --- | --- | --- |
@@ -52,10 +52,11 @@ whose last column is cut off at its frame). Two shots in this folder came back w
 with the real agent" below.
 
 The script writes full-colour PNGs. To make them as small as the committed ones, convert them to a
-palette with Pillow:
+palette with Pillow. Use the max-coverage method: the default (median cut) turns the few pixels of accent blue
+into slate grey, and the fast octree merges the 1px row rules into white.
 
 ```sh
-python3 -c "import glob; from PIL import Image; [Image.open(f).convert('RGB').quantize(256, dither=Image.Dither.NONE).save(f, optimize=True) for f in glob.glob('docs/v2/screenshots/*.png')]"
+python3 -c "import glob; from PIL import Image; [Image.open(f).convert('RGB').quantize(256, method=Image.Quantize.MAXCOVERAGE, dither=Image.Dither.NONE).save(f, optimize=True) for f in glob.glob('docs/v2/screenshots/*.png')]"
 ```
 
 ## What the screenshots showed, and what was fixed
@@ -119,3 +120,21 @@ Still visible:
   say "holdout" and "the $0.02 cost of another message". The screens add a plain line next to them.
 - **The goal switcher** still cuts long goal text short (a native `<select>`); each screen repeats the full goal
   text under its title.
+
+## Retaken for the premium design system (20 Oct 2026)
+
+All 22 shots were retaken after every screen moved to the design system in [DESIGN.md](../DESIGN.md) (tokens,
+Inter, hairline cards, one near-black primary per screen, pale pills, open KPI strips inside cards). None of the
+22 shots, and none of the same routes in mock mode (`?mock=1`), raised a console error or scrolled sideways at
+390px. `capture.mjs` now waits (up to 15 s after the 2.5 s settle) until no grey loading block is left in the
+page, so slow blocks such as Live's feed are shot filled in, not as skeletons.
+
+Changed since the round before, and visible in these shots:
+
+- **Every screen** opens with the same page head (a 24px noun title, a grey line, actions or a stamp on the
+  right) and lays its blocks on the 12-column grid (8 + 4 or 7 + 5).
+- **Live on Approve** (the batches shots): the batches waiting for approval come first, above Yesterday, and
+  only the newest batch's Approve is a primary button.
+- **Operator**: the raw JSON wraps inside its grey well, so nothing scrolls sideways any more.
+- **Message pictures** in the demo point at `assets.demo.invalid`, a name that can never load: Plan says the
+  picture could not be loaded here, and Live leaves the thumbnail out, without asking the network for them.

@@ -1,359 +1,887 @@
-/* Live screen (live.js): the parts the daily briefing, the feed's delivery labels, the self-pause banner and the
-   customer panel's "what it knows" add on top of feed.css. Every class starts with `lv-` so nothing leaks into
-   other screens. Colours are feed.css's `--ap-*` tokens (light and dark), so both themes follow on their own.
-   Status colours always come with a word, never colour alone. */
+/* Live screen (live.js): "What happened, and what needs me?"
+
+   The page is built from the design system (styles.css: .page-head, .grid/.span-8/.span-4, .card, .card-head,
+   .kpis, .pill, .list, .error-box, .skeleton); this file holds what is Live's own, every class starting with
+   `lv-`. Only the section-2 tokens are used, so light and dark follow on their own. The biggest block is
+   "Yesterday": the pitch's sentence, two big numbers, why it left people alone, and what came of it. The side
+   column is the inbox, health against the plan's limits, and what it learned. Status colour always comes with
+   a word. Sizes are 24 (title), 28 (KPI), 16 (card titles, the sentence), 14 (body) and 12 (labels). */
 
 /* ---- header ---------------------------------------------------------------------------------------- */
 
+.lv-head {
+  align-items: flex-start;
+}
+.lv-head-text {
+  min-width: 0;
+  flex: 1 1 420px;
+}
+.lv-goal {
+  color: var(--muted);
+}
+.lv-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
 .lv-autonomy-line {
-  margin: 6px 0 0;
-  max-width: 60ch;
+  margin: 8px 0 0;
+  max-width: 96ch;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
 }
-.lv-autonomy-shadow {
-  border-style: dashed;
-  color: var(--ap-ink);
+.lv-pause {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex: 0 1 300px;
+  min-width: 0;
 }
-.lv-autonomy-approve,
-.lv-autonomy-autopilot {
-  color: var(--ap-accent);
-  border-color: var(--ap-accent);
+.lv-pause-hint {
+  margin: 0;
+  max-width: 300px;
+  text-align: right;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
 }
 
-/* ---- "it paused itself" banner ---------------------------------------------------------------------- */
+/* ---- "it paused itself" --------------------------------------------------------------------------- */
+/* Some sending paused (a channel): the calm amber notice. The whole goal stopped: a pale red panel, still words
+   first, no left bar and no icon in a circle. */
 
 .lv-selfpause-slot:empty {
   display: none;
 }
 .lv-selfpause {
-  margin: 0 0 16px;
+  margin: 0 0 var(--gap);
   padding: 12px 16px;
-  border-radius: var(--ap-radius);
-  border: 1px solid var(--ap-warning);
-  border-left-width: 6px;
-  background: var(--ap-warning-t);
-  color: var(--ap-ink);
-}
-.lv-selfpause .ap-h2 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 4px;
-  color: var(--ap-warning);
+  border: 1px solid var(--notice-border);
+  border-radius: var(--radius-card);
+  background: var(--notice-bg);
+  color: var(--notice-ink);
+  font-size: 13px;
+  line-height: 18px;
 }
 .lv-selfpause-goal {
-  border-color: var(--ap-critical);
-  background: var(--ap-critical-t);
+  border-color: color-mix(in srgb, var(--negative) 30%, var(--surface));
+  background: var(--pill-negative-bg);
+  color: var(--pill-negative-ink);
 }
-.lv-selfpause-goal .ap-h2 {
-  color: var(--ap-critical);
+.lv-selfpause-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: 600;
+  color: inherit;
 }
+/* A small pause glyph drawn in CSS: two bars in the banner's ink. */
 .lv-selfpause-icon {
-  font-size: 11px;
+  flex: none;
+  width: 8px;
+  height: 10px;
+  border-left: 3px solid currentColor;
+  border-right: 3px solid currentColor;
 }
 .lv-selfpause-why {
-  font-weight: 600;
-  margin: 0 0 4px;
+  margin: 6px 0 0 18px;
+  font-weight: 500;
 }
 .lv-selfpause-list {
-  margin: 4px 0;
+  list-style: none;
+  margin: 6px 0 0 18px;
+  padding: 0;
 }
-.lv-selfpause-list li + li {
-  margin-top: 2px;
+.lv-selfpause-list li {
+  display: flex;
+  gap: 12px;
+  padding: 2px 0;
 }
-.lv-selfpause p {
-  margin: 4px 0 0;
+.lv-selfpause-when {
+  flex: none;
+  min-width: 92px;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+.lv-selfpause-scope {
+  opacity: 0.85;
+}
+.lv-selfpause-foot {
+  margin: 6px 0 0 18px;
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  opacity: 0.9;
 }
 
-/* ---- yesterday ---------------------------------------------------------------------------------------- */
+/* ---- the frame: 8 + 4 columns, cards keep their own height --------------------------------------- */
 
-.lv-today {
-  border-top: 4px solid var(--ap-accent);
+.lv-grid {
+  margin-bottom: 0;
 }
-.lv-say {
-  font-size: 18px;
-  line-height: 1.4;
+.lv-grid-top {
+  margin-bottom: var(--gap);
+}
+/* Sentences break evenly instead of leaving one word on the last line. */
+.lv-page p,
+.lv-page li {
+  text-wrap: pretty;
+}
+.lv-grid .card {
+  margin-bottom: 0;
+}
+.lv-batch-slot:empty {
+  display: none;
+}
+.lv-card > .card-head {
+  margin-bottom: 16px;
+}
+.lv-card .card-meta {
+  font-variant-numeric: tabular-nums;
+}
+.lv-card .card-meta:empty {
+  display: none;
+}
+.lv-body > :last-child {
+  margin-bottom: 0;
+}
+.lv-skeleton .skeleton:first-of-type {
+  margin-top: 0;
+}
+.lv-empty {
+  margin: 0;
+  color: var(--muted);
+}
+.lv-error {
+  margin: 0 0 12px;
+}
+.lv-error:last-child {
+  margin-bottom: 0;
+}
+/* The title and the API's reason read as one sentence, with the small red mark inline before it. */
+.lv-error .empty-title {
+  display: block;
+  margin: 0;
+}
+.lv-error .empty-title::before {
+  display: inline-block;
+  vertical-align: middle;
+  margin: -2px 8px 0 0;
+}
+.lv-error-why {
+  font-weight: 400;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.lv-intro {
+  margin: 0;
+  max-width: 64ch;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+}
+.lv-foot {
+  margin: 12px 0 0;
+  max-width: 80ch;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+}
+.lv-foot a {
+  color: var(--muted);
+}
+.lv-subhead {
+  margin: 0 0 8px;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
   font-weight: 600;
-  margin: 0 0 4px;
+}
+.lv-meta {
+  margin: 2px 0 0;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+}
+
+/* ---- yesterday: the biggest block --------------------------------------------------------------------- */
+
+/* The day's answer in one sentence: the size of a card title but regular weight, so the bold "Yesterday" above
+   it stays the heading and the sentence reads as the lead. */
+.lv-say {
+  margin: 0;
+  max-width: 62ch;
+  font-size: var(--fs-section);
+  line-height: 24px;
+  font-weight: 400;
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 .lv-checked {
-  margin: 0 0 12px;
+  margin: 4px 0 20px;
+  max-width: 80ch;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
 }
-.lv-big {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0 0 14px;
-}
-.lv-big-item {
-  background: var(--ap-accent-soft);
-  border-radius: 8px;
-  padding: 12px 14px;
-  min-width: 0;
-}
-.lv-big-quiet {
-  background: var(--ap-surface-2);
-}
-.lv-big-item dt {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ap-muted);
-}
-.lv-big-item dd {
+.lv-today .kpis {
   margin: 0;
 }
-.lv-big-value {
-  font-size: 32px;
-  line-height: 1.15;
-  font-weight: 700;
+.lv-big .kpi-value {
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
 }
-.lv-big-note {
-  font-size: 12.5px;
-  color: var(--ap-muted);
-  margin-top: 2px;
+.lv-big-quiet .kpi-value {
+  color: var(--text);
+}
+.lv-block {
+  margin-top: var(--pad);
 }
 
+/* Why it left people alone: one row per reason, the words, a thin bar, the count on the right. */
 .lv-reasons {
   list-style: none;
-  margin: 0 0 8px;
+  margin: 0;
   padding: 0;
+  border-top: 1px solid var(--border);
 }
 .lv-reason {
   display: grid;
-  grid-template-columns: minmax(56px, auto) minmax(0, 1fr);
-  column-gap: 12px;
-  row-gap: 4px;
+  grid-template-columns: minmax(0, 1fr) minmax(80px, 180px) 72px;
+  column-gap: 16px;
   align-items: baseline;
-  padding: 8px 0;
-  border-top: 1px solid var(--ap-line);
-}
-.lv-reason:first-child {
-  border-top: 0;
-}
-.lv-reason-n {
-  font-weight: 700;
-  font-size: 16px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--rule);
 }
 .lv-reason-words {
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+.lv-reason-cap {
+  color: var(--muted);
 }
 .lv-reason-hint {
   display: block;
-  font-size: 12.5px;
-  color: var(--ap-muted);
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
 }
 .lv-reason-bar {
-  grid-column: 2;
+  align-self: center;
   display: block;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--ap-surface-2);
+  height: 4px;
+  border-radius: 2px;
+  background: var(--active);
   overflow: hidden;
 }
 .lv-reason-bar > span {
   display: block;
   height: 100%;
-  background: var(--ap-bar);
-  border-radius: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.lv-reason-n {
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
-.lv-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 10px;
-  margin: 0 0 10px;
-}
-.lv-stat {
-  background: var(--ap-surface-2);
-  border-radius: 8px;
-  padding: 10px 12px;
-  min-width: 0;
-}
-.lv-stat dt {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--ap-muted);
-}
-.lv-stat dd {
-  margin: 2px 0 0;
-}
-.lv-stat-value {
-  font-size: 19px;
-  font-weight: 700;
+/* What came of it: one strip of four. A money figure keeps its range right under it. */
+.lv-stats .kpi-value {
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
 }
-.lv-stat-note {
-  font-size: 12.5px;
-  color: var(--ap-muted);
+.lv-kpi-range {
+  display: block;
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 400;
+  letter-spacing: 0;
 }
-.lv-stat-sure {
-  background: var(--ap-good-t);
+.lv-kpi-of {
+  display: block;
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 400;
+  letter-spacing: 0;
 }
-.lv-stat-sure .lv-stat-value {
-  color: var(--ap-good);
-}
-.lv-stat-unsure .lv-stat-value {
-  color: var(--ap-warning);
+/* "Not sure yet" is an answer in words, so it is set as words, at the height of a figure. */
+.kpi-value.lv-unsure {
+  font-size: var(--fs-section);
+  line-height: 36px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text);
 }
 .lv-budget {
-  height: 8px;
-  border-radius: 4px;
-  background: var(--ap-surface-2);
-  border: 1px solid var(--ap-line);
+  display: block;
+  height: 4px;
+  margin: 8px 0 0;
+  border-radius: 2px;
+  background: var(--active);
   overflow: hidden;
-  margin: 0 0 10px;
 }
 .lv-budget-fill {
   display: block;
   height: 100%;
-  background: var(--ap-accent);
+  border-radius: 2px;
+  background: var(--accent);
+}
+.lv-stats .kpi-note {
+  overflow-wrap: anywhere;
 }
 
-.lv-learned li + li {
-  margin-top: 6px;
+/* ---- batches waiting for approval ------------------------------------------------------------------------- */
+
+.lv-batches .lv-intro {
+  margin-bottom: 8px;
 }
-.lv-stops li + li {
-  margin-top: 4px;
+.lv-batch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px var(--gap);
+}
+.lv-batch-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.lv-batch-text p {
+  margin: 0;
+}
+.lv-batch-summary {
+  overflow-wrap: anywhere;
+}
+.lv-batch-facts {
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.lv-batch-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.lv-batch-done .pill {
+  margin-right: 4px;
 }
 
 /* ---- the feed ------------------------------------------------------------------------------------------ */
 
-.lv-find {
-  margin: 4px 0 12px;
+.lv-feed-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px var(--pad);
+  padding-bottom: var(--gap);
+  margin-bottom: var(--gap);
+  border-bottom: 1px solid var(--rule);
 }
-.lv-find label {
+.lv-feed-tools .lv-intro {
+  flex: 1 1 280px;
+}
+.lv-find {
+  flex: 0 1 320px;
+  min-width: 0;
+  margin: 0;
+}
+.lv-find-label {
   display: block;
-  font-size: 13px;
-  font-weight: 600;
   margin-bottom: 4px;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 500;
 }
 .lv-find-row {
   display: flex;
   gap: 8px;
 }
-.lv-find-row .ap-input {
+.lv-find-input {
   flex: 1 1 auto;
   min-width: 0;
-  max-width: 320px;
+}
+
+.lv-feed > .lv-row {
+  padding: 14px 0;
+  border-top: 0;
+}
+.lv-feed > .lv-row:first-child {
+  padding-top: 8px;
+}
+.lv-row::after {
+  content: "";
+  display: block;
+  clear: both;
+}
+.lv-row-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.lv-row-what {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-width: 0;
+}
+.lv-row-status {
+  flex: none;
+}
+/* The status in a long list: a 6px dot in the tone's colour, the word in grey, no fill. */
+.lv-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.lv-mark::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--control);
+}
+.lv-mark-good::before {
+  background: var(--positive);
+}
+.lv-mark-warn::before {
+  background: var(--warning);
+}
+.lv-mark-bad::before {
+  background: var(--negative);
+}
+.lv-mark-bad {
+  color: var(--negative);
 }
 .lv-who {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  font-weight: 600;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 500;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+}
+.lv-who:hover {
+  text-decoration-color: var(--control);
+}
+.lv-who-id {
+  font-variant-numeric: tabular-nums;
 }
 .lv-id {
-  font-size: 12px;
+  font-family: var(--mono);
+  font-size: var(--fs-small);
   font-weight: 400;
-  color: var(--ap-muted);
-  font-family: var(--ap-mono);
+  color: var(--faint);
 }
-.ap-h2 .lv-id {
-  font-size: 13px;
+.lv-action {
+  font-weight: 400;
+  color: var(--muted);
 }
-.lv-state {
-  font-weight: 600;
-}
-.lv-state-good {
-  background: var(--ap-good-t);
-  color: var(--ap-good);
-  border-color: transparent;
-}
-.lv-state-good::before {
-  content: "✓";
-}
-.lv-state-warn {
-  background: var(--ap-warning-t);
-  color: var(--ap-warning);
-  border-color: transparent;
-}
-.lv-state-info {
-  background: var(--ap-accent-soft);
-  color: var(--ap-accent);
-  border-color: transparent;
-}
-.lv-state-bad {
-  background: var(--ap-critical-t);
-  color: var(--ap-critical);
-  border-color: transparent;
-}
-.lv-state-bad::before {
-  content: "✕";
-}
-.lv-state-quiet {
-  background: transparent;
-  color: var(--ap-muted);
-  border-style: dashed;
+.lv-why {
+  margin: 4px 0 0;
+  max-width: 80ch;
+  overflow-wrap: anywhere;
 }
 .lv-combo {
-  font-size: 13px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
   overflow-wrap: anywhere;
 }
 .lv-alone-why {
-  font-weight: 600;
-  color: var(--ap-muted);
+  margin: 4px 0 0;
+  font-weight: 500;
 }
 .lv-thumb {
-  display: block;
-  width: 96px;
-  height: 96px;
+  float: right;
+  width: 56px;
+  height: 56px;
+  margin: 6px 0 0 var(--gap);
   object-fit: cover;
-  border-radius: 6px;
-  border: 1px solid var(--ap-line);
-  margin: 6px 0;
-  background: var(--ap-surface-2);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border);
+  background: var(--raised);
+  /* An image that cannot load keeps its grey square; its alt text stays for screen readers only. */
+  color: transparent;
+  overflow: hidden;
+  font-size: 0;
+}
+.lv-more {
+  margin-top: 8px;
+}
+.lv-page .lv-fold {
+  margin-top: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--rule);
+}
+.lv-fold > .lv-intro {
+  margin: 0 0 4px;
+}
+
+/* ---- the side column: inbox, health, learned -------------------------------------------------------------- */
+
+.lv-alert {
+  padding: 12px 0;
+}
+.lv-inbox > .lv-alert:first-child {
+  padding-top: 0;
+}
+.lv-alert-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.lv-alert-when {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* "Auto-paused" is a fact about the alert, not a second alarm: neutral, beside the severity. */
+.lv-alert .pill.ap-chip-paused {
+  background: var(--pill-neutral-bg);
+  color: var(--pill-neutral-ink);
+}
+.lv-alert-msg {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+/* Health: a figure list against the plan's limits, label left and value right, the limit underneath. */
+.lv-metrics {
+  margin: 0;
+}
+.lv-metric.ap-tile {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: baseline;
+  padding: 10px 0;
+  background: none;
+  border-bottom: 1px solid var(--rule);
+}
+.lv-metric.ap-tile:first-child {
+  padding-top: 0;
+}
+.lv-metric.ap-tile:last-child {
+  border-bottom: 0;
+}
+.lv-metric.ap-tile dt {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: 400;
+  color: var(--text);
+}
+.lv-metric.ap-tile dd {
+  margin: 0;
+}
+.lv-metric .lv-metric-value {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+.lv-metric .lv-metric-value.is-missing {
+  color: var(--faint);
+  font-weight: 400;
+}
+.lv-metric-bad .lv-metric-value {
+  color: var(--negative);
+}
+.lv-metric-flag,
+.lv-metric-note {
+  grid-column: 1 / -1;
+}
+.lv-metric-flag {
+  margin-top: 4px !important;
+}
+.lv-metric-note {
+  margin-top: 2px !important;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+}
+.lv-health-card .lv-subhead {
+  margin-top: var(--pad);
+}
+.lv-stops > li {
+  padding: 8px 0;
+}
+.lv-stops > li:first-child {
+  padding-top: 0;
+}
+.lv-stop-now {
+  color: var(--muted);
+}
+.lv-learned > li {
+  padding: 10px 0;
+}
+.lv-learned > li:first-child {
+  padding-top: 0;
+}
+
+/* ---- the full briefing ---------------------------------------------------------------------------------- */
+
+/* It sits in the side column beside the feed: the headline, then one section under another. */
+.lv-headline {
+  margin: 0 0 12px;
+  max-width: 72ch;
+  font-weight: 500;
+}
+.lv-brief-secs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  border-top: 1px solid var(--rule);
+}
+.lv-brief-secs > .lv-brief-sec,
+.lv-brief-secs > .lv-brief-sec + .lv-brief-sec {
+  padding: 12px 0;
+  border-top: 0;
+  border-bottom: 1px solid var(--rule);
+}
+.lv-brief-secs > .lv-brief-sec:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.lv-brief-title {
+  margin: 0 0 2px;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 500;
+}
+.lv-brief-sec p {
+  margin: 0;
 }
 
 /* ---- the customer panel ------------------------------------------------------------------------------ */
 
-.lv-know {
+.lv-panel-title {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-section);
+  line-height: 24px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.lv-panel-title .lv-id {
+  margin-left: 4px;
+}
+.lv-panel-close {
+  flex: none;
+}
+.lv-panel-body .lv-skeleton {
+  margin-top: 20px;
+}
+.lv-panel-sec {
+  padding: 20px 0;
+  border-top: 1px solid var(--border);
+}
+.lv-panel-sec:first-child {
+  border-top: 0;
+}
+.lv-panel-sec:last-child {
+  padding-bottom: 0;
+}
+.lv-panel-h {
   margin: 0 0 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--ap-accent-soft);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: 600;
 }
-.lv-know li + li {
-  margin-top: 6px;
+.lv-know {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
 }
-.ap-panel .ap-h3 {
-  margin-top: 14px;
+.lv-know-label {
+  display: block;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  font-weight: 500;
 }
-.lv-bid-chosen {
+.lv-know-text {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.lv-basis {
+  color: var(--faint);
+  font-size: var(--fs-small);
+}
+/* Label left, value right: a little under half for the label, so "Messages (last 7 / 30 days)" keeps one line. */
+.lv-panel .lv-facts > div {
+  grid-template-columns: minmax(0, 9fr) minmax(0, 11fr);
+  align-items: baseline;
+  gap: 16px;
+}
+.lv-facts > div {
+  padding: 8px 0;
+}
+.lv-facts dd.is-missing {
+  color: var(--faint);
+}
+.lv-facts > div:first-child {
+  padding-top: 0;
+}
+.lv-facts dd {
+  text-align: right;
+}
+.lv-channels > li {
+  padding: 8px 0;
+}
+.lv-channels > li:first-child {
+  padding-top: 0;
+}
+.lv-channel-facts {
+  color: var(--muted);
+}
+.lv-tl-head {
+  margin-top: 2px;
+}
+.lv-tl-head .pill {
+  margin-left: 2px;
+}
+.lv-tl-event {
+  color: var(--muted);
+}
+.lv-bids {
+  margin-top: 4px;
+}
+.lv-bid-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.lv-bid {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: 18px;
+}
+.lv-bid-name {
+  color: var(--text);
+  font-weight: 500;
+}
+.lv-bid-chosen .lv-bid-name {
   font-weight: 600;
 }
 .lv-verdict {
-  color: var(--ap-muted);
+  color: var(--text);
 }
-.lv-verdict-chosen {
-  color: var(--ap-good);
-}
-.lv-verdict-chosen::before {
-  content: "✓ ";
-}
-.ap-bids li + li {
-  margin-top: 4px;
+.lv-verdict.pill {
+  vertical-align: baseline;
 }
 
-@media (max-width: 520px) {
-  .lv-say {
-    font-size: 16px;
+/* ---- narrow screens --------------------------------------------------------------------------------------- */
+
+@media (max-width: 899px) {
+  .lv-brief-secs {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .lv-big-value {
-    font-size: 26px;
+}
+
+@media (max-width: 719px) {
+  .lv-pause {
+    flex: 1 1 100%;
+    align-items: stretch;
   }
-  .lv-reason {
-    grid-template-columns: minmax(44px, auto) minmax(0, 1fr);
-    column-gap: 8px;
+  .lv-pause-btn {
+    width: 100%;
   }
-  .lv-find-row .ap-input {
+  .lv-pause-hint {
     max-width: none;
+    text-align: left;
   }
-  .lv-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .lv-checked {
+    margin-bottom: var(--gap);
+  }
+  /* Words and count on one line, the bar under them. */
+  .lv-reason {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 6px;
+  }
+  .lv-reason-words {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .lv-reason-n {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .lv-reason-bar {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .lv-feed-tools {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .lv-feed-tools .lv-intro,
+  .lv-find {
+    flex: none;
+  }
+  .lv-batch {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .lv-batch-actions .btn {
+    flex: 1 1 0;
+  }
+  .lv-row-top {
+    flex-wrap: wrap;
+  }
+  .lv-selfpause-list li {
+    flex-direction: column;
+    gap: 0;
+  }
+  .lv-selfpause-why,
+  .lv-selfpause-list,
+  .lv-selfpause-foot {
+    margin-left: 0;
+  }
+  .ap-panel-body {
+    padding: 4px var(--pad) var(--pad);
+  }
+  /* The panel's facts stay label left, value right on a phone; there is room. */
+  .lv-panel .lv-facts > div {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+  }
+  .lv-thumb {
+    width: 40px;
+    height: 40px;
+    margin-left: 12px;
   }
 }

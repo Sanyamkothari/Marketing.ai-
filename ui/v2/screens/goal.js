@@ -5,7 +5,7 @@
 // opportunities the Analyst found, each with how many customers it is about and why, one click from a plan.
 // Every number shown comes from the API or from the marketer's own words.
 
-import { button, card, clear, el, emptyState, errorBox, goalStatusWords, humanize, int, loading, money, pill, present, statusTone } from "../components.js";
+import { button, card, clear, el, emptyState, errorBox, goalStatusWords, humanize, int, money, pageHead, pill, present, skeleton, skeletonLines, statusTone } from "../components.js";
 
 /**
  * Starting points. The first is the pitch's own example, amount included: it is the marketer's words to change,
@@ -130,8 +130,8 @@ function goalForm(ctx, defaultCurrency) {
     options.map((c) => el("option", { value: c, selected: c === defaultCurrency }, c)),
   );
   currency.value = defaultCurrency;
-  const submit = el("button", { type: "submit", class: "btn btn-primary btn-lg" }, "Make a plan");
-  const status = el("p", { class: "muted", role: "status" });
+  const submit = el("button", { type: "submit", class: "btn btn-primary" }, "Make a plan");
+  const status = el("p", { class: "gl-status", role: "status" });
 
   // ---- reading the words: the amount and the period ----
   let reading = null; // the latest POST /v2/goals/read answer for the words in the box
@@ -203,7 +203,8 @@ function goalForm(ctx, defaultCurrency) {
 
   const chips = el(
     "div",
-    { class: "chips", role: "group", "aria-label": "Examples" },
+    { class: "chips gl-examples", role: "group", "aria-label": "Examples" },
+    el("span", { class: "gl-examples-label", "aria-hidden": "true" }, "Try"),
     EXAMPLES.map((ex) =>
       el(
         "button",
@@ -255,7 +256,7 @@ function goalForm(ctx, defaultCurrency) {
     el("label", { for: text.id, class: "big-label" }, "What do you want to achieve?"),
     el(
       "p",
-      { id: `${id}-text-help`, class: "muted" },
+      { id: `${id}-text-help`, class: "gl-help" },
       "Plain words are best. Say who, what you want them to do, and how much you want to spend. For example: “",
       EXAMPLES[0].text,
       ".”",
@@ -266,13 +267,13 @@ function goalForm(ctx, defaultCurrency) {
     chips,
     el(
       "div",
-      { class: "form-row" },
+      { class: "form-row gl-money" },
       el(
         "div",
         { class: "field" },
         el("label", { for: budget.id }, "Budget"),
         budget,
-        el("p", { id: `${id}-budget-help`, class: "muted small" }, "The most it may spend on offers and messages. If your words name an amount, it is filled in for you."),
+        el("p", { id: `${id}-budget-help`, class: "field-hint" }, "The most it may spend on offers and messages. If your words name an amount, it is filled in for you."),
         budgetError,
       ),
       el("div", { class: "field field-narrow" }, el("label", { for: currency.id }, "Currency"), currency),
@@ -280,7 +281,7 @@ function goalForm(ctx, defaultCurrency) {
     el("div", { class: "form-actions" }, submit, status),
     el(
       "p",
-      { class: "gl-safe small" },
+      { class: "gl-safe" },
       el("strong", {}, "Nothing is sent yet. "),
       "Every new goal starts in Shadow: Autonomy decides and shows you what it would do, but sends nothing. Messages go out only after you approve the plan and choose to move it out of Shadow.",
     ),
@@ -288,11 +289,14 @@ function goalForm(ctx, defaultCurrency) {
 }
 
 // ---- opportunities ------------------------------------------------------------------------------------------
-function opportunityCard(ctx, opp) {
+// One card, one row per opportunity: the count of customers (the figure the pitch leads with) and what they did,
+// then the goal in its own words and why, then the suggested budget and the one-click ask. A row list rather than a
+// grid of cards, so one opportunity or five read the same and no half-empty row is left behind.
+function opportunityRow(ctx, opp) {
   const goal = opp.goal;
   const sized = present(opp.audience_n);
   const label = "Yes, draft a plan";
-  const start = button(label, null, { kind: "primary", ariaLabel: `Yes, draft a plan: ${goal.text}` });
+  const start = button(label, null, { kind: "secondary", ariaLabel: `Yes, draft a plan: ${goal.text}` });
   start.addEventListener("click", () =>
     startGoal(ctx, { text: goal.text, budget: goal.budget, currency: goal.currency, kind: goal.kind, objective: goal.objective }, (on) => {
       start.disabled = on;
@@ -300,48 +304,66 @@ function opportunityCard(ctx, opp) {
     }),
   );
   const none = sized && Number(opp.audience_n) === 0;
-  return card({
-    className: "opportunity gl-opp",
-    body: [
-      sized
-        ? el(
-            "p",
-            { class: "gl-opp-count" },
-            el("span", { class: "gl-opp-n" }, int(opp.audience_n)),
-            " ",
-            el("span", { class: "gl-opp-words" }, `${opportunityWords(goal.kind, opp.audience_n)}.`),
-          )
-        : null,
-      el("h3", { class: "card-title gl-opp-title" }, goal.text),
+  return el(
+    "li",
+    { class: ["opportunity", "gl-opp", !sized && "gl-opp-unsized"] },
+    sized
+      ? el(
+          "p",
+          { class: "gl-opp-count" },
+          el("span", { class: "gl-opp-n" }, int(opp.audience_n)),
+          " ",
+          el("span", { class: "gl-opp-words" }, `${opportunityWords(goal.kind, opp.audience_n)}.`),
+        )
+      : null,
+    el(
+      "div",
+      { class: "gl-opp-main" },
+      el("h3", { class: "gl-opp-title" }, goal.text),
       present(opp.reason) ? el("p", { class: "gl-opp-why" }, el("strong", {}, "Why: "), opp.reason) : null,
-      el("p", {}, pill(GOAL_KIND_WORDS[goal.kind] || humanize(goal.kind), "info"), " ", el("span", { class: "muted small" }, `Aims for ${humanize(goal.objective).toLowerCase()}`)),
-      el("dl", { class: "facts" }, el("dt", {}, "Suggested budget"), el("dd", {}, money(goal.budget, goal.currency))),
+      el(
+        "p",
+        { class: "gl-opp-meta" },
+        pill(GOAL_KIND_WORDS[goal.kind] || humanize(goal.kind), "neutral"),
+        " ",
+        el("span", {}, `Aims for ${humanize(goal.objective).toLowerCase()}`),
+      ),
+    ),
+    el(
+      "div",
+      { class: "gl-opp-act" },
+      el("dl", { class: "gl-opp-budget" }, el("dt", {}, "Suggested budget"), el("dd", { class: "tabular" }, money(goal.budget, goal.currency))),
       el("p", { class: "gl-opp-ask" }, none ? "No customers match today. Want a plan anyway?" : sized ? "Want me to handle them?" : "Want me to handle this?"),
-    ],
-    actions: [start],
-  });
+      start,
+    ),
+  );
 }
 
-function opportunitiesSection(ctx, list, error) {
+function opportunitiesSection(ctx, list, error, retry) {
   let body;
-  if (error) body = errorBox("Could not load the opportunities.", error);
-  else if (!list.length) body = emptyState("No opportunities found yet", "When the Analyst spots one in your data, it shows up here.");
-  else body = el("div", { class: "card-grid gl-opps" }, list.map((o) => opportunityCard(ctx, o)));
+  if (error) body = el("div", { class: "gl-pad" }, errorBox("Could not load the opportunities.", error, { retry }));
+  else if (!list.length) body = el("div", { class: "gl-pad" }, emptyState("No opportunities found yet", "When the Analyst spots one in your data, it shows up here."));
+  else body = el("ul", { class: "gl-opps" }, list.map((o) => opportunityRow(ctx, o)));
   return el(
     "section",
-    { class: "section", "aria-labelledby": "opps" },
-    el("h2", { id: "opps" }, "Or pick one it found for you"),
-    el("p", { class: "muted" }, "Spotted in your data, counted from your customers today. Each one starts in Shadow, and you see its plan before anything is sent."),
+    { class: "card card-flush gl-opps-card", "aria-labelledby": "opps" },
+    el(
+      "div",
+      { class: "card-head gl-opps-head" },
+      el("div", {}, el("h2", { id: "opps", class: "card-title" }, "Or pick one it found for you"), el("p", { class: "gl-sub" }, "Spotted in your data, counted from your customers today. Each one starts in Shadow, and you see its plan before anything is sent.")),
+      list.length && !error ? el("span", { class: "card-meta" }, `${int(list.length)} found`) : null,
+    ),
     body,
   );
 }
 
+// ---- the rail: your goals, or what happens next ----------------------------------------------------------------
 function goalsList(goals) {
   if (!goals.length) return null;
   return el(
     "section",
-    { class: "section", "aria-labelledby": "your-goals" },
-    el("h2", { id: "your-goals" }, "Your goals"),
+    { class: "card gl-goals", "aria-labelledby": "your-goals" },
+    el("div", { class: "card-head" }, el("h2", { id: "your-goals", class: "card-title" }, "Your goals"), el("span", { class: "card-meta" }, `${int(goals.length)} ${goals.length === 1 ? "goal" : "goals"}`)),
     el(
       "ul",
       { class: "goal-list" },
@@ -351,15 +373,35 @@ function goalsList(goals) {
         return el(
           "li",
           {},
-          el("a", { href: `#/plan/${encodeURIComponent(g.goal_id)}` }, g.text || g.goal_id),
-          " ",
-          pill(goalStatusWords(g.status), statusTone(g.status)),
-          " ",
-          auto ? el("span", { class: "gl-autonomy" }, pill(auto[0], auto[1]), el("span", { class: "muted small" }, ` ${auto[2]}`)) : null,
-          el("span", { class: "muted small" }, ` · ${money(g.budget, g.currency)} budget${end ? ` · until ${end}` : ""}`),
+          el("a", { class: "row-title gl-goal-link", href: `#/plan/${encodeURIComponent(g.goal_id)}` }, g.text || g.goal_id),
+          el(
+            "div",
+            { class: "gl-goal-pills" },
+            pill(goalStatusWords(g.status), g.status === "draft" ? "neutral" : statusTone(g.status)),
+            " ",
+            auto ? el("span", { class: "gl-autonomy" }, pill(auto[0], "neutral"), el("span", { class: "gl-autonomy-words" }, ` ${auto[2]}`)) : null,
+          ),
+          el("p", { class: "row-meta gl-goal-meta" }, `${money(g.budget, g.currency)} budget${end ? ` · until ${end}` : ""}`),
         );
       }),
     ),
+  );
+}
+
+/** With no goal yet, the rail says what happens after "Make a plan": the safe path, in the pitch's own order. */
+function nextSteps() {
+  return el(
+    "section",
+    { class: "card gl-next", "aria-labelledby": "gl-next-title" },
+    el("h2", { id: "gl-next-title", class: "card-title" }, "What happens next"),
+    el(
+      "ol",
+      { class: "gl-next-list" },
+      el("li", {}, el("strong", {}, "You check the plan. "), "It shows in plain words who it will contact, with what message, and within which limits."),
+      el("li", {}, el("strong", {}, "It runs in Shadow. "), "It decides every day what it would do, and why, but sends nothing."),
+      el("li", {}, el("strong", {}, "You choose when it sends. "), "First you approve each batch, inside a small budget."),
+    ),
+    el("p", { class: "gl-next-link" }, el("a", { href: "#/start" }, "See the whole path in Getting started")),
   );
 }
 
@@ -381,17 +423,37 @@ async function loadOpportunities(api) {
   }
 }
 
+// ---- the screen -----------------------------------------------------------------------------------------------
+// One question: what do you want to achieve? The box answers it, in 8 of 12 columns; your goals (or what happens
+// next) sit beside it; the opportunities it found run full width underneath.
+const head = () => pageHead({ title: "Goal", sub: "Tell Autonomy what you want, in your own words. It drafts a plan you can check before anything is sent." });
+
+function skeletonScreen() {
+  return [
+    head(),
+    el(
+      "div",
+      { class: "grid gl-grid" },
+      el("div", { class: "card goal-box span-8", "aria-busy": "true" }, skeleton({ width: "220px", height: "24px" }), skeleton({ height: "100px", className: "gl-skel-box" }), skeletonLines(2)),
+      card({ title: "Your goals", level: 2, className: "span-4", body: [skeletonLines(3)] }),
+    ),
+  ];
+}
+
 export async function render(root, ctx) {
-  const head = [el("h1", {}, "Goal"), el("p", { class: "lede" }, "Tell Autonomy what you want, in your own words. It drafts a plan you can check before anything is sent.")];
-  clear(root, ...head, loading());
+  clear(root, ...skeletonScreen());
   const [goals, opps] = await Promise.all([ctx.api.listGoals().catch(() => []), loadOpportunities(ctx.api)]);
   const goalList = Array.isArray(goals) ? goals : [];
   const defaultCurrency = (ctx.goal && ctx.goal.currency) || (goalList[0] && goalList[0].currency) || "USD";
   clear(
     root,
-    ...head,
-    card({ className: "goal-box", body: [goalForm(ctx, defaultCurrency)] }),
-    opportunitiesSection(ctx, opps.list, opps.error),
-    goalsList(goalList),
+    head(),
+    el(
+      "div",
+      { class: "grid gl-grid" },
+      el("section", { class: "card goal-box span-8", "aria-label": "Your goal, in your own words" }, goalForm(ctx, defaultCurrency)),
+      el("div", { class: "span-4 stack gl-rail" }, goalsList(goalList) || nextSteps()),
+    ),
+    opportunitiesSection(ctx, opps.list, opps.error, () => render(root, ctx)),
   );
 }
