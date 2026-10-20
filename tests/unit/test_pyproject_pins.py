@@ -145,6 +145,7 @@ def test_mypy_is_globally_strict_over_engine_api_and_scripts(pyproject: dict[str
         "engine",
         "api",
         "scripts",
+        "autonomy",  # v2 (plan-v2.md): held to the same strict bar
         "alembic",  # the migrations own the Postgres schema, so they are held to the same bar
         "tests/fixtures/make_data.py",
         "tests/fixtures/make_docs.py",
@@ -177,11 +178,12 @@ def test_the_package_version_matches_the_engine_version(pyproject: dict[str, Any
     assert pyproject["project"]["version"] == __version__
 
 
-def test_wheel_packages_are_the_three_source_packages(pyproject: dict[str, Any]) -> None:
+def test_wheel_packages_are_the_source_packages(pyproject: dict[str, Any]) -> None:
     assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"] == [
         "engine",
         "api",
         "scripts",
+        "autonomy",  # v2
     ]
 
 
@@ -203,6 +205,7 @@ def test_pytest_finds_the_packages_without_an_editable_install(pyproject: dict[s
         "aws",
         "statistical",  # Plan J M90 (DEC-1300 (e)): collected only with MARKETING_AI_STATISTICAL=1
         "frozen",  # v1: tests of frozen features, run nightly rather than on every push
+        "v1bridge",  # v2: tests that bridge into the v1 engine
     }
     assert "-rs" in ini["addopts"], "a skip must always print its reason (DEC-344)"
 
