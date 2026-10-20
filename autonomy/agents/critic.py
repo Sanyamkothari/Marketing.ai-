@@ -4,7 +4,9 @@ Two stages, cheapest and surest first:
 
 1. **Rules** (code, deterministic): channel length limits, only allowed `{{slots}}`, balanced braces,
    no ALL-CAPS shouting, no banned phrases, no discount numbers other than the approved offer's, no
-   links outside the allowed domains, and an unsubscribe hint in every email. An item that breaks
+   links outside the allowed domains, an unsubscribe hint in every email, and for an image,
+   carousel or video item: a format the channel can carry, built only from the brand's approved
+   assets of the right kind, each with alt text. An item that breaks
    a rule is rejected with the reasons and never reaches the judge: there is no point paying a
    model to score copy we already know is unsendable.
 2. **Judge** (an LLM, ideally from a different model family than the Creative, to avoid a model
@@ -15,13 +17,17 @@ Two stages, cheapest and surest first:
 
 The judge never sees numbers it could change and never decides per customer; it only says yes or
 no to a template, with reasons a person can read.
+
+Out of scope for now: checking that the words do not promise something the image or video
+contradicts (copy saying "in blue" beside a red shoe). The rules cannot see inside an image; the
+judge is shown the asset's alt text, which catches some of it, but nothing here guarantees it.
 """
 
 from __future__ import annotations
 
 import random
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -33,8 +39,12 @@ from autonomy.agents.creative import (
     CHANNEL_BODY_MAX,
     EMAIL_SUBJECT_MAX,
     SLOT_PATTERN,
+    ApprovedAsset,
     has_unsubscribe_hint,
+    is_approved,
+    media_kind,
 )
+from autonomy.channels.render import CAROUSEL_MAX, CAROUSEL_MIN, FORMAT_MEDIA, FORMAT_SUPPORT, asset_urls
 from autonomy.contracts import (
     NO_OFFER,
     Brief,
@@ -42,6 +52,7 @@ from autonomy.contracts import (
     ContentItem,
     ContentStatus,
     Contract,
+    Format,
     OfferKind,
     OfferOption,
 )
@@ -111,8 +122,26 @@ _BARE_DOMAIN = re.compile(
 _URL_TRAILING = ".,;:!?'\")]}>"
 
 
+class AssetRef(Contract):
+    """What the Critic needs to know about one approved asset: enough to check a format item."""
+
+    asset_id: str
+    kind: str = Field(description="'image', 'video' or 'carousel_card'")
+    url: str
+    alt_text: str = ""
+
+    @classmethod
+    def of(cls, asset: ApprovedAsset) -> AssetRef:
+        return cls(
+            asset_id=asset.asset_id,
+            kind=media_kind(asset),
+            url=asset.url.strip(),
+            alt_text=(asset.alt_text or "").strip(),
+        )
+
+
 class BrandRules(Contract):
-    """The client's rules for copy. Offers are the approved ones; anything else is unapproved."""
+    """The client's rules for copy. Offers and assets are the approved ones; anything else is unapproved."""
 
     brand_voice: str = ""
     offers: tuple[OfferOption, ...] = (NO_OFFER,)
@@ -122,13 +151,29 @@ class BrandRules(Contract):
     allowed_slots: tuple[str, ...] = ALLOWED_SLOTS
     banned_phrases: tuple[str, ...] = DEFAULT_BANNED_PHRASES
     allowed_caps: tuple[str, ...] = DEFAULT_ALLOWED_CAPS
+    approved_assets: tuple[AssetRef, ...] = Field(
+        default=(), description="The brand's approved images and videos. Empty: text items only."
+    )
 
     @classmethod
-    def from_brief(cls, brief: Brief, *, brand_voice: str, allowed_domains: Sequence[str] = ()) -> BrandRules:
-        """Rules whose approved offers are exactly the brief's envelope offers."""
+    def from_brief(
+        cls,
+        brief: Brief,
+        *,
+        brand_voice: str,
+        allowed_domains: Sequence[str] = (),
+        assets: Iterable[ApprovedAsset] = (),
+    ) -> BrandRules:
+        """Rules whose approved offers are the brief's envelope offers, and assets the approved ones given."""
         return cls(
-            brand_voice=brand_voice, offers=brief.envelope.offers, allowed_domains=tuple(allowed_domains)
+            brand_voice=brand_voice,
+            offers=brief.envelope.offers,
+            allowed_domains=tuple(allowed_domains),
+            approved_assets=tuple(AssetRef.of(a) for a in assets if is_approved(a)),
         )
+
+    def asset_by_url(self, url: str) -> AssetRef | None:
+        return next((a for a in self.approved_assets if a.url == url), None)
 
 
 class CriterionScore(BaseModel):
@@ -171,6 +216,44 @@ def _hosts(text: str) -> list[str]:
 
 def _host_allowed(host: str, allowed: Sequence[str]) -> bool:
     return any(host == d or host.endswith(f".{d}") for d in (a.lower().strip() for a in allowed) if d)
+
+
+def format_problems(item: ContentItem, rules: BrandRules) -> list[str]:
+    """What is wrong with the item's format and media; empty for a sound text or media item.
+
+    A media item must be one the channel can carry and must use only approved assets of the
+    right kind, each with alt text (for screen readers, and for inboxes that block images). A text
+    item must carry no media, so its label means what it says.
+    """
+    urls = asset_urls(item.asset_url)
+    if item.format is Format.TEXT:
+        return ["a text item carries an asset; label it with its image or video format"] if urls else []
+    problems: list[str] = []
+    if item.format not in FORMAT_SUPPORT.get(item.channel, (Format.TEXT,)):
+        problems.append(f"{item.channel.value} cannot carry the {item.format.value} format")
+    if not urls:
+        return [*problems, f"a {item.format.value} item needs an approved asset"]
+    if item.format is Format.CAROUSEL:
+        if not CAROUSEL_MIN <= len(urls) <= CAROUSEL_MAX:
+            problems.append(f"a carousel needs {CAROUSEL_MIN} to {CAROUSEL_MAX} images; it has {len(urls)}")
+        if len(set(urls)) != len(urls):
+            problems.append("a carousel repeats an image")
+    elif len(urls) != 1:
+        problems.append(f"a {item.format.value} item uses exactly one asset; it has {len(urls)}")
+    kinds = FORMAT_MEDIA[item.format]
+    for url in dict.fromkeys(urls):
+        asset = rules.asset_by_url(url)
+        if asset is None:
+            problems.append(f"asset is not an approved asset: {url}")
+            continue
+        if not asset.alt_text.strip():
+            problems.append(f"asset {asset.asset_id} has no alt text")
+        if asset.kind not in kinds:
+            problems.append(
+                f"a {item.format.value} item needs {' or '.join(sorted(kinds))} assets; "
+                f"{asset.asset_id} is {asset.kind}"
+            )
+    return problems
 
 
 def check_rules(item: ContentItem, rules: BrandRules) -> list[str]:
@@ -237,6 +320,9 @@ def check_rules(item: ContentItem, rules: BrandRules) -> list[str]:
     for host in _hosts(text):
         if not _host_allowed(host, rules.allowed_domains):
             problems.append(f"link to a domain that is not allowed: {host}")
+
+    # Format and media.
+    problems.extend(format_problems(item, rules))
     return problems
 
 
@@ -323,6 +409,12 @@ def _judge_prompt(item: ContentItem, rules: BrandRules, order: Sequence[str]) ->
         f"- theme: {item.theme.value}; tone: {item.tone.value}",
         f"- approved offer: {offer.label if offer.kind is not OfferKind.NONE else 'none'}",
     ]
+    if item.format is not Format.TEXT:
+        described = [
+            ref.alt_text if (ref := rules.asset_by_url(url)) is not None else "an approved asset"
+            for url in asset_urls(item.asset_url)
+        ]
+        lines.append(f"- format: {item.format.value}, shown with: {' | '.join(described)}")
     if item.subject:
         lines.append(f"- subject: {item.subject}")
     lines += [f"- body:\n{item.body}", "", "Score these criteria, in this order:"]
