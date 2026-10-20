@@ -21,10 +21,12 @@
   margin-bottom: 0;
 }
 
-/* ---- the title row ------------------------------------------------------------------------------------------ */
+/* ---- card titles with their (i) --------------------------------------------------------------------------- */
 
-.ap-proof .pf-head-line {
-  margin: 4px 0 0;
+.ap-proof .pf-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
 }
 
 /* ---- the verdict, before any number ------------------------------------------------------------------------- */
@@ -76,8 +78,40 @@
 
 .ap-proof .pf-verdict-text {
   max-width: 72ch;
-  margin: 0 0 20px;
+  margin: 0 0 16px;
   color: var(--muted);
+}
+
+.ap-proof .pf-verdict-text:last-child {
+  margin-bottom: 0;
+}
+
+/* The one sentence under the verdict: the money leads at the KPI size, its range and the comparison follow. */
+.ap-proof .pf-lede {
+  max-width: 80ch;
+  margin: 0 0 24px;
+  color: var(--muted);
+  font-size: var(--fs-section);
+  line-height: 24px;
+}
+
+.ap-proof .pf-lede-num {
+  margin-right: 2px;
+  color: var(--text);
+  font-size: var(--fs-kpi);
+  line-height: 36px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.ap-proof .pf-lede-range {
+  color: var(--text);
+}
+
+.ap-proof .pf-lede-early {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  margin-bottom: 20px;
 }
 
 .ap-proof .pf-unsure {
@@ -110,7 +144,8 @@
   padding-right: 0;
 }
 
-/* The answer figure leads: the proof's own money stays at 28; the figures that support it sit at 24. */
+/* The answer leads at 28 (the lead sentence's money); the figures that support it sit at 24. */
+.ap-proof .pf-hero-strip .kpi-value:not(.is-missing),
 .ap-proof .pf-groups .kpi-value:not(.is-missing),
 .ap-proof .pf-rule .kpi-value:not(.is-missing),
 .ap-proof .pf-forecast-side .kpi-value:not(.is-missing) {
@@ -145,8 +180,21 @@
   min-width: 0;
 }
 
-.ap-proof .pf-chart figcaption {
-  margin-top: 4px;
+/* The chart's description opens on hover, focus or tap; the focus ring follows the chart. */
+.ap-proof .pf-chart .ap-chart.has-info {
+  display: block;
+  cursor: help;
+  border-radius: var(--radius-control);
+}
+
+/* The dotted underline is for words; on the chart it would underline every label in it. */
+.ap-proof .pf-chart .ap-chart.has-info:not(.btn):not(.info-dot):not(.pill):not(a):not(label) {
+  text-decoration: none;
+}
+
+.ap-proof .pf-chart .ap-chart.has-info:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
 }
 
 /* The chart: one hue (the accent) for the estimate, ink for its range, a dashed grey zero. */
@@ -198,25 +246,40 @@
   stroke-linejoin: round;
 }
 
-/* ---- how it is measured: the result card's quiet footer ---------------------------------------------------- */
+/* ---- how it is measured: one folded block at the bottom --------------------------------------------------- */
 
-.ap-proof .pf-method,
-.ap-proof .card > .pf-method:last-child {
-  margin: 20px calc(-1 * var(--card-pad)) calc(-1 * var(--card-pad));
-  padding: 16px var(--card-pad);
-  border-top: 1px solid var(--rule);
-  border-radius: 0 0 var(--radius-card) var(--radius-card);
-  background: var(--raised);
+.ap-proof .pf-method {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.ap-proof .pf-method .pf-details {
+  margin: 0;
+}
+
+.ap-proof .pf-method-body {
+  padding: 12px 0 12px;
   color: var(--muted);
 }
 
-.ap-proof .pf-method p {
-  margin: 0;
-  max-width: 110ch;
+.ap-proof .pf-method-body .kpis {
+  margin: 0 0 16px;
 }
 
-.ap-proof .pf-method strong {
+.ap-proof .pf-notes {
+  margin-top: 16px;
+}
+
+.ap-proof .pf-notes-title {
+  margin: 0 0 4px;
   color: var(--text);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: 600;
+}
+
+.ap-proof .pf-notes .meta {
+  margin: 0 0 4px;
 }
 
 .ap-proof .pf-details,
@@ -291,7 +354,7 @@
 }
 
 .ap-proof .pf-advice .card-title {
-  margin-bottom: 4px;
+  margin: 0 0 4px;
 }
 
 .ap-proof .pf-advice-text {
@@ -327,7 +390,7 @@
 
 /* ---- the forecast ------------------------------------------------------------------------------------------- */
 
-.ap-proof .pf-lede {
+.ap-proof .pf-lede-small {
   margin: 0 0 var(--gap);
   color: var(--muted);
   max-width: 96ch;
@@ -363,56 +426,76 @@
   border-top: 1px solid var(--border);
 }
 
-.ap-proof .pf-forecast .meta {
-  margin: 0 0 4px;
+
+/* On a wide screen the side card has room for its three figures in one row, so it stands as tall as the simple
+   rule beside it instead of twice as tall. */
+@media (min-width: 1200px) {
+  .ap-proof .pf-forecast-side .kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ap-proof .pf-forecast-side .kpis > .kpi:first-child {
+    grid-column: auto;
+    padding: 0 16px 0 0;
+  }
+
+  .ap-proof .pf-forecast-side .kpis > .kpi:nth-child(2) {
+    padding: 0 16px;
+    border-top: 0;
+    border-left: 1px solid var(--border);
+  }
+
+  .ap-proof .pf-forecast-side .kpis > .kpi:nth-child(3) {
+    padding: 0 0 0 16px;
+    border-top: 0;
+    border-left: 1px solid var(--border);
+  }
+}
+
+/* Cards side by side share one height, so a short card never leaves a hole beside a tall one. */
+.ap-proof .pf-grid {
+  align-items: stretch;
 }
 
 /* ---- the product fact (general guidance, not this shop's number) -------------------------------------------- */
 
 .ap-proof .pf-fact p {
   max-width: 72ch;
+  margin: 0;
 }
 
-.ap-proof .pf-fact > .meta:first-of-type {
-  margin: -4px 0 12px;
+.ap-proof .pf-fact p + p {
+  margin-top: 8px;
 }
 
-.ap-proof .pf-source code,
-.ap-proof .pf-source a {
-  overflow-wrap: anywhere;
-}
-
-/* ---- notes and the shareable text --------------------------------------------------------------------------- */
-
-.ap-proof .pf-notes > .meta {
-  margin: -4px 0 8px;
-}
-
-.ap-proof .pf-note-list > li {
-  padding: 10px 0;
-}
-
-.ap-proof .pf-note-list > li:first-child {
-  padding-top: 4px;
-}
-
-.ap-proof .pf-note-list > li:last-child {
-  padding-bottom: 0;
-}
+/* ---- the shareable text ------------------------------------------------------------------------------------- */
 
 .ap-proof .pf-share .card-head {
   align-items: center;
   margin-bottom: 4px;
 }
 
-.ap-proof .pf-share-hint {
-  margin: 0 0 12px;
+.ap-proof .pf-share .card-title label {
+  cursor: default;
+}
+
+.ap-proof .pf-share-text > summary {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.ap-proof .pf-share-text > summary:hover {
+  color: var(--text);
+}
+
+.ap-proof .pf-share-text[open] > summary {
+  margin-bottom: 8px;
 }
 
 .ap-proof .pf-summary {
   display: block;
   width: 100%;
-  min-height: 116px;
+  min-height: 84px;
   height: auto;
   padding: 12px;
   border: 1px solid var(--border);
@@ -424,7 +507,7 @@
   line-height: var(--lh-body);
   resize: vertical;
   field-sizing: content;
-  max-height: 360px;
+  max-height: 124px;
 }
 
 /* ---- loading ------------------------------------------------------------------------------------------------ */
@@ -494,8 +577,8 @@
   }
 }
 
-/* One figure (the simple rule): the figure, then its chart under it at full size. */
-.ap-proof .pf-figure-single .kpis {
+/* One figure (the simple rule). */
+.ap-proof .pf-single {
   max-width: 320px;
 }
 
@@ -545,6 +628,10 @@
 /* An empty output (no lookup yet) takes no room, so the form is the card's last child and the card ends on it. */
 .ap-operator .op-out:empty {
   display: none;
+}
+
+.ap-operator .op-filters:has(+ .op-out:empty:last-child) {
+  margin-bottom: 0;
 }
 
 /* The goal's own fields in one row of label and value pairs. */
@@ -705,8 +792,14 @@
 }
 
 .ap-operator .op-reason {
-  min-width: 240px;
+  min-width: 200px;
   color: var(--muted);
+}
+
+.ap-operator .op-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
 }
 
 .ap-operator .op-raw {

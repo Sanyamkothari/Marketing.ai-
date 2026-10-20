@@ -362,7 +362,10 @@ test("the shell: autonomy badge, Paused itself, inbox count, Pause all sending, 
     const pause = $("pause-button");
     assert.equal(pause.textContent, "Pause");
     assert.match(pause.getAttribute("aria-label"), /Pause all sending/);
-    assert.equal($("pause-scope").textContent, "Stops all sending");
+    // "Stops all sending" is the Pause button's description now (shown on hover and focus), linked for screen readers.
+    assert.match($("pause-scope").textContent, /^Stops all sending, for every goal, at once/);
+    assert.equal($("pause-scope").getAttribute("role"), "tooltip");
+    assert.ok(pause.getAttribute("aria-describedby").split(" ").includes("pause-scope"));
     await pause.click();
     await until(() => pause.textContent === "Resume", "Resume after pausing all");
     const toasts = document.getElementById("toasts");

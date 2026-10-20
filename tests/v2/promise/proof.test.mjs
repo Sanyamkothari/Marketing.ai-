@@ -3,6 +3,10 @@
 // A tiny fake document stands in for a browser (no jsdom, no npm). Each test renders ui/v2/screens/proof.js
 // against a fake API built from the real mock JSON files (proof.json, expected.json, goal_detail.json), changing
 // only the ranges, so every number checked here comes from a file with the API's shape.
+//
+// Explanations live in descriptions (DESIGN.md section 6): hidden `role="tooltip"` boxes linked to the word they
+// explain by aria-describedby. Their words are still in the DOM, so a promise that moved into one is checked
+// there, through `tipFor(root, "the word")`, never dropped.
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -70,6 +74,15 @@ class FakeElement extends FakeNode {
     this.hidden = false;
     this.disabled = false;
     this.value = "";
+    this.style = { setProperty(k, v) { this[k] = v; } };
+    this.dataset = {};
+  }
+  // components.js (the page head and the descriptions) sets classes through className.
+  get className() {
+    return this.attributes.class || "";
+  }
+  set className(v) {
+    this.attributes.class = String(v);
   }
   setAttribute(k, v) {
     this.attributes[k] = String(v);
@@ -119,6 +132,7 @@ const fakeDocument = {
   execCommand: () => true,
 };
 globalThis.document = fakeDocument;
+globalThis.Node = FakeNode;
 
 function all(node) {
   const out = [];
@@ -165,6 +179,18 @@ async function draw(opts) {
   return { root, text: root.textContent, toasts };
 }
 
+/** What a reader sees of a node: its text without the closed descriptions inside it. */
+const visible = (node) =>
+  node instanceof FakeElement ? (node.getAttribute("role") === "tooltip" && node.hidden ? "" : node.childNodes.map(visible).join("")) : node.textContent;
+/** The description (a hidden tooltip) of the element whose own text is `text`. */
+function tipFor(root, text) {
+  const target = all(root).find((n) => n.getAttribute("aria-describedby") && n.textContent === text);
+  assert.ok(target, `"${text}" has a description`);
+  const tip = all(root).find((n) => n.id === target.getAttribute("aria-describedby"));
+  assert.equal(tip.getAttribute("role"), "tooltip");
+  assert.equal(tip.hidden, true, "closed until hovered, focused or tapped");
+  return tip.textContent;
+}
 const verdictOf = (root) => all(root).find((n) => n.id === "pf-verdict").textContent;
 const withProfit = (est) => ({ ...mock("proof.json"), incremental_profit: est });
 const order = (text, ...parts) => {
@@ -190,19 +216,21 @@ test("direction only compares the range's ends with zero", () => {
 test("a real result leads with the verdict, then the money against people we never contact, with its range", async () => {
   const { root, text } = await draw();
   assert.match(verdictOf(root), /Real extra profit/);
-  order(text, "Extra profit compared with people we never contact", "Real extra profit", "$4,300 (range $900 to $7,700)", "How this is measured");
-  assert.ok(text.includes("Range $900 to $7,700"));
-  assert.ok(text.includes("Range $6,100 to $22,300"));
-  assert.ok(text.includes("1,015 so far"));
-  assert.ok(text.includes('not "attributed revenue"') || text.includes('It is not "attributed revenue"'));
+  // One sentence leads: the money with its range, measured against the people we never contact.
+  order(visible(root), "Real extra profit", "$4,300 extra profit (likely $900 to $7,700), measured against people we never contact.", "How this is measured");
+  assert.ok(text.includes("$6,100 to $22,300"));
+  // "How this is measured" (row 50) is the description of "people we never contact", and the folded block at the bottom.
+  const method = tipFor(root, "people we never contact");
+  assert.ok(method.includes("1,015 so far"));
+  assert.ok(method.includes('It is not "attributed revenue"'));
+  assert.equal(byTag(root, "summary").find((n) => n.textContent === "How this is measured").parentNode.tagName, "details");
   assert.ok(!text.includes("Not sure yet"));
   assert.ok(noJunk(text));
 });
 
 test("a range that includes zero says 'Not sure yet' before any number", async () => {
   const { root, text } = await draw({ proof: withProfit({ point: 600, low: -200, high: 1400 }) });
-  order(text, "Not sure yet", "$600 (range -$200 to $1,400)");
-  assert.ok(text.includes("The range includes zero"));
+  order(text, "Not sure yet", "$600 extra profit (likely -$200 to $1,400)", "the range includes zero");
   assert.match(verdictOf(root), /Not sure yet/);
   assert.ok(!text.includes("Ready for Autopilot"));
   assert.ok(text.includes("Not ready for Autopilot yet"));
@@ -251,11 +279,12 @@ test("'Ready for Autopilot' links to the Plan dial only when the low end is abov
 // ---- what it expects to earn, before a message goes out (row 54) -----------------------------------------
 
 test("Shadow shows its own forecast, labelled as a forecast, straight after the verdict", async () => {
-  const { text } = await draw({ goal: { autonomy: "shadow" }, proof: null });
-  order(text, "Too early to tell", "In Shadow mode it sends nothing", "What it expects to earn", "Its own forecast, not proof", "$3,900", "Range $1,500 to $6,300", "Not ready for Autopilot yet");
+  const { root, text } = await draw({ goal: { autonomy: "shadow" }, proof: null });
+  order(text, "Too early to tell", "In Shadow mode it sends nothing", "What it expects to earn", "Its own forecast, not proof", "$3,900", "$1,500 to $6,300", "Not ready for Autopilot yet");
   assert.ok(text.includes("nothing was sent"));
-  assert.ok(text.includes("over the 14 days after each contact"));
-  assert.ok(text.includes("Of 4,620 contacts, 4,410 carry a forecast"));
+  assert.match(text, /over the 14 days after each contact/i);
+  assert.ok(tipFor(root, "Contacts it would make").includes("Of 4,620 contacts, 4,410 carry a forecast"));
+  assert.ok(tipFor(root, "Expected extra profit").includes("not proof"));
   assert.ok(text.includes("switch to Approve each batch with a small budget"));
   assert.ok(noJunk(text));
 });
@@ -278,8 +307,10 @@ test("3-10% is shown only as labelled general guidance, with its source", async 
   const { root, text } = await draw();
   const fact = byTag(root, "aside").find((a) => a.textContent.includes("3-10%"));
   assert.ok(fact, "the guidance is in its own labelled aside");
-  assert.ok(fact.textContent.includes("General guidance about AI marketing, not a result from your business."));
-  assert.ok(fact.textContent.includes(proofScreen.EXPECT_DOC));
+  assert.ok(fact.textContent.includes("General guidance"), "labelled on the card");
+  const about = tipFor(fact, "General guidance");
+  assert.ok(about.includes("General guidance about AI marketing, not a result from your business."));
+  assert.ok(about.includes(proofScreen.EXPECT_DOC));
   assert.equal((text.match(/3-10%/g) || []).length, 1);
   // Nothing about pricing: there are no pricing terms in the API yet.
   assert.ok(!/paid in results|billed|fee/i.test(text));
@@ -299,6 +330,27 @@ test("the shareable summary leads with the people we never contact and says the 
   assert.match(text, /It beats the simple rule/);
   const unsure = proofScreen.proofSummaryText(withProfit({ point: 1, low: -1, high: 3 }), goal);
   assert.match(unsure, /not sure yet/);
+});
+
+test("return on spend has one precision everywhere: the figure and the share text agree", async () => {
+  const roi = { point: 90.12, low: 40.4, high: 180.6 };
+  const { root } = await draw({ proof: { ...mock("proof.json"), roi } });
+  const cell = byClass(root, "kpi").find((k) => k.textContent.startsWith("Return on spend"));
+  assert.equal(byClass(cell, "kpi-value")[0].textContent, "90.1×");
+  assert.equal(byClass(cell, "kpi-range")[0].textContent, "40.4× to 180.6×");
+  assert.ok(byTag(root, "textarea")[0].value.includes("return on spend 90.1× (range 40.4× to 180.6×)"));
+});
+
+test("each card is its title, its numbers and at most one sentence; the rest is in descriptions", async () => {
+  const { root } = await draw({ goal: { autonomy: "approve" } });
+  for (const card of byClass(root, "card")) {
+    const sentences = byTag(card, "p").filter((p) => !all(card).some((t) => t.getAttribute("role") === "tooltip" && all(t).includes(p)))
+      .filter((p) => !/kpi|pf-eyebrow|pf-verdict(?!-text)/.test(p.getAttribute("class") || ""));
+    assert.ok(sentences.length <= 1, `${card.getAttribute("class")}: ${sentences.map((p) => p.textContent).join(" | ")}`);
+  }
+  const hero = byClass(root, "pf-hero")[0];
+  assert.equal(byTag(hero, "text").filter((t) => /\$/.test(t.textContent)).length, 0, "the chart does not repeat the ranges as text");
+  assert.match(tipFor(hero, "Return on spend"), /Extra profit for each \$1 spent/);
 });
 
 test("the chart's zero line runs through each bar only, never through the value written under it", async () => {

@@ -168,6 +168,7 @@ from autonomy.runtime.worker import (
 
 __all__ = [
     "BUSINESS_ID",
+    "DEMO_FIRST_NAMES",
     "DEMO_GOALS",
     "HERO_GOALS",
     "HERO_PRODUCTS",
@@ -188,6 +189,8 @@ __all__ = [
     "SpendTrackingEventStore",
     "build_system",
     "certify_mandate",
+    "demo_catalogue",
+    "demo_first_name",
     "demo_llm",
     "goal_pacing",
     "health_at",
@@ -195,8 +198,10 @@ __all__ = [
     "hero_story",
     "live_demo_worker",
     "main",
+    "product_name",
     "proof_at",
     "run_demo",
+    "with_first_names",
 ]
 
 BUSINESS_ID = "demo_shop"
@@ -784,6 +789,80 @@ def _unit(*parts: object) -> float:
     """A deterministic number in [0, 1) from its parts (a stable hash), for the product layer."""
     digest = hashlib.sha256("\x1f".join(str(p) for p in parts).encode()).hexdigest()
     return int(digest[:13], 16) / float(16**13)
+
+
+# --- what people read: first names for the demo's customers, names for its products ---------------
+
+DEMO_FIRST_NAMES: tuple[str, ...] = (
+    # Africa
+    "Amara", "Kwame", "Zainab", "Tendai", "Chidi", "Nia", "Kofi", "Ayana", "Thabo", "Fatou",
+    "Sipho", "Adaeze", "Jabari", "Imani", "Lerato", "Oluwaseun", "Makena", "Tariq", "Nala", "Kagiso",
+    "Ama", "Babajide", "Wanjiru", "Moussa", "Folake", "Yaw", "Ifeoma", "Bongani", "Esi", "Abebe",
+    # Middle East and North Africa
+    "Layla", "Omar", "Yasmin", "Karim", "Noor", "Samir", "Rania", "Hassan", "Leila", "Youssef",
+    "Dalia", "Rami", "Salma", "Ziad", "Mariam", "Tamar", "Eitan", "Shira", "Arash", "Darya",
+    # South Asia
+    "Priya", "Arjun", "Ananya", "Rohan", "Kavya", "Vikram", "Meera", "Aditya", "Isha", "Sanjay",
+    "Divya", "Rahul", "Nisha", "Farhan", "Ayesha", "Imran", "Sana", "Nimal", "Tharushi", "Anil",
+    "Lakshmi", "Dev", "Pooja", "Ravi", "Shreya",
+    # East and South-East Asia
+    "Mei", "Wei", "Yuki", "Haruto", "Sakura", "Kenji", "Hana", "Jun", "Min-jun", "Seo-yeon",
+    "Ji-woo", "Linh", "Minh", "Thanh", "Anh", "Siti", "Budi", "Putri", "Arif", "Dewi",
+    "Malee", "Niran", "Ploy", "Jasmine", "Rizal", "Mai", "Xiu", "Chen", "Hiro", "Aiko",
+    # Europe
+    "Sofia", "Lukas", "Emma", "Matteo", "Chloé", "Lars", "Ingrid", "Sven", "Freya", "Oskar",
+    "Elena", "Mateusz", "Zofia", "Nikos", "Eleni", "Dmitri", "Anya", "Ivan", "Katya", "Bram",
+    "Femke", "Joost", "Siobhan", "Liam", "Aoife", "Niamh", "Rhys", "Cerys", "Hamish", "Isla",
+    "Pablo", "Lucía", "Javier", "Inés", "Tiago", "Beatriz", "Giulia", "Luca", "Chiara", "Marco",
+    "Léa", "Hugo", "Camille", "Élodie", "Jonas", "Leonie", "Felix", "Mila", "Annika", "Henrik",
+    # The Americas
+    "Valentina", "Santiago", "Camila", "Diego", "Mariana", "Mateo", "Gabriela", "Joaquín", "Lucas",
+    "Ximena", "Rafael", "Daniela", "Thiago", "Fernanda", "Andrés", "Paola", "Emilio", "Renata",
+    "Ethan", "Olivia", "Noah", "Ava", "Maya", "Caleb", "Harper", "Jordan", "Riley", "Marcus",
+    "Keisha", "Darnell", "Tyrone", "Aaliyah", "Dakota", "Sequoia", "Talia", "Grace", "Owen", "Zoe",
+    # Oceania
+    "Aroha", "Tama", "Mere", "Wiremu", "Leilani", "Kai", "Malia", "Sione", "Ruby", "Jack",
+)  # fmt: skip
+"""About 200 first names from around the world, for the demo's simulated customers. First names
+only: no surnames and no addresses, so nothing here reads as a real person's details."""
+
+
+def demo_first_name(customer_id: str) -> str:
+    """The demo customer's first name: the same for the same id on every run (a stable hash of it)."""
+    return DEMO_FIRST_NAMES[int(_unit("first_name", customer_id) * len(DEMO_FIRST_NAMES))]
+
+
+def with_first_names(events: Iterable[Event]) -> list[Event]:
+    """The events with a `first_name` on every signup that has none, as a shop's sign-up data has.
+
+    The Gym simulates customers by id only. The API never makes a name up (it shows the one the
+    data has), so the demo puts one in its data here, at the edge, and nowhere else."""
+    out: list[Event] = []
+    for e in events:
+        if e.type is EventType.SIGNUP and not e.attrs.get("first_name"):
+            e = e.model_copy(update={"attrs": {**e.attrs, "first_name": demo_first_name(e.customer_id)}})
+        out.append(e)
+    return out
+
+
+def product_name(item_id: str, products: Sequence[DemoProduct] = HERO_PRODUCTS) -> str:
+    """The product's name in the demo shop ("Organic cotton tee"), else its id in words ("Tee organic")."""
+    for p in products:
+        if p.item_id == item_id:
+            return p.name
+    words = " ".join(item_id.replace("-", " ").replace("_", " ").split())
+    return words[:1].upper() + words[1:] if words else item_id
+
+
+def demo_catalogue(
+    events: Iterable[Event] = (), products: Sequence[DemoProduct] = HERO_PRODUCTS
+) -> dict[str, str]:
+    """item_id -> name for every demo product and every other item the events mention, for display."""
+    names = {p.item_id: p.name for p in products}
+    for e in events:
+        if e.item_id and e.item_id not in names:
+            names[e.item_id] = product_name(e.item_id, products)
+    return names
 
 
 def hero_assets(now: datetime) -> list[Asset]:
@@ -1946,6 +2025,7 @@ def build_system(
     from autonomy.gym.score import policy_view
 
     history = policy_view(world.reset(seed))  # the Gym's truth bookkeeping never reaches the agent
+    history = with_first_names(history)  # the Gym's customers are ids; a shop's have first names
     kinds = {g.goal_id: g.kind for g in goals}
     layer: HeroLayer | None = None
     if mandates is not None:

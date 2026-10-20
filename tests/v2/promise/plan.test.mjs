@@ -202,6 +202,9 @@ const articles = (root) => root.querySelectorAll("article");
 const cardFor = (root, contentId) =>
   articles(root).find((a) => a.querySelectorAll("button").some((b) => (b.getAttribute("aria-label") || "").endsWith(` ${contentId}`))) || null;
 const cardByIndex = (root, i) => articles(root)[i];
+/** What a person sees without opening a description: the text with every `role="tooltip"` box left out. */
+const visibleText = (node) =>
+  node.childNodes.map((n) => (n instanceof Element ? (n.getAttribute("role") === "tooltip" || n.hidden ? "" : visibleText(n)) : n.textContent)).join("");
 
 // ---- with the sample files (mock mode) ---------------------------------------------------------------------
 
@@ -217,8 +220,9 @@ test("Plan (sample data): who it will contact, counted by the API, in words for 
   assert.ok(text.includes(`${C.int(facts.holdout_n)} of them are people we never contact`));
   assert.ok(text.includes(`${C.int(facts.baseline_n)} get a simple fixed rule`));
   assert.ok(text.includes(`It looks after the other ${C.int(facts.agent_n)} one by one.`));
-  // "people we never contact" comes before the word holdout
-  assert.ok(text.indexOf("people we never contact (the “holdout”)") >= 0);
+  // "people we never contact", never the word "holdout" (DESIGN.md section 6)
+  assert.ok(text.includes("are people we never contact"));
+  assert.ok(!/holdout/i.test(text), "the screen never says holdout");
   // offers, channels, how often, quiet hours and budget (row 17)
   for (const s of ["Offers it may use", "Free shipping", "10% off", "Email, WhatsApp", "2 per customer per week", "from 21:00 to 09:00", "$5,000"]) assert.ok(text.includes(s), s);
 });
@@ -232,7 +236,13 @@ test("Plan (sample data): every rule it can never break, and when it pauses itse
   assert.ok(rules, "the card is there");
   assert.ok(rules.textContent.includes("Rules it can never break"));
   for (const r of facts.hard_rules) assert.ok(rules.textContent.includes(r.words), r.code);
-  for (const name of ["Consent.", "Unsubscribes.", "Quiet hours.", "Weekly limit.", "Budget.", "Complaints."]) assert.ok(rules.textContent.includes(name), name);
+  // each rule shows by name; its own words, with the plan's value, are that name's description
+  for (const r of facts.hard_rules) {
+    const tip = rules.querySelectorAll("span").find((s) => s.getAttribute("role") === "tooltip" && s.textContent === r.words);
+    assert.ok(tip, `${r.code} has its words in a description`);
+  }
+  const names = rules.querySelectorAll(".rule-name").map((n) => n.textContent);
+  for (const name of ["Consent", "Unsubscribes", "Quiet hours", "Weekly limit", "Budget", "Complaints", "No-discount requests", "People we never contact"]) assert.ok(names.includes(name), name);
   const stops = byClass(root, "plan-stops")[0];
   assert.ok(stops.textContent.includes("When it pauses itself"));
   assert.ok(stops.textContent.includes("If complaints go above 0.08% of delivered messages, pause the whole goal."));
@@ -277,6 +287,10 @@ test("Plan (sample data): the editor's checklist on every message, and nothing g
   assert.ok(art.querySelectorAll(".check-fail").length >= 1);
   assert.ok(!art.querySelectorAll("button").some((b) => (b.getAttribute("aria-label") || "").startsWith("Approve")), "no approve button");
   assert.ok(art.textContent.includes("a message the editor failed is never sent"));
+  // ... said once on the card (the pill), with the why in the pill's description, not four times
+  assert.equal(visibleText(art).match(/never (be )?sent/gi).length, 1, visibleText(art));
+  const pillTip = art.querySelectorAll("span").find((n) => n.getAttribute("role") === "tooltip" && n.textContent.includes("There is no Approve button"));
+  assert.ok(pillTip, "the no-Approve sentence is the pill's description");
   // WhatsApp template names are shown (and wrap on a phone: plan.css)
   assert.ok(text.includes("WhatsApp template winback_6"));
 });

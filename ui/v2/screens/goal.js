@@ -3,9 +3,11 @@
 // screen says what it read, so the budget never has to be typed twice. The Strategist answers with a plan
 // (POST /v2/goals -> {goal, brief}) and we go straight to the Plan screen to review it. Below the box: the
 // opportunities the Analyst found, each with how many customers it is about and why, one click from a plan.
-// Every number shown comes from the API or from the marketer's own words.
+// Every number shown comes from the API or from the marketer's own words. Words (DESIGN.md section 6): each field is
+// its label and one hint; the rest (what the budget covers, why an opportunity was found, what Shadow means) is a
+// description on the label, number or pill it explains.
 
-import { button, card, clear, el, emptyState, errorBox, goalStatusWords, humanize, int, money, pageHead, pill, present, skeleton, skeletonLines, statusTone } from "../components.js";
+import { button, card, clear, el, emptyState, errorBox, goalStatusWords, humanize, info, int, money, pageHead, pill, present, skeleton, skeletonLines, statusTone, titleInfo, withInfo } from "../components.js";
 
 /**
  * Starting points. The first is the pitch's own example, amount included: it is the marketer's words to change,
@@ -254,13 +256,7 @@ function goalForm(ctx, defaultCurrency) {
     "form",
     { class: "goal-form", novalidate: true, onsubmit: onSubmit },
     el("label", { for: text.id, class: "big-label" }, "What do you want to achieve?"),
-    el(
-      "p",
-      { id: `${id}-text-help`, class: "gl-help" },
-      "Plain words are best. Say who, what you want them to do, and how much you want to spend. For example: “",
-      EXAMPLES[0].text,
-      ".”",
-    ),
+    el("p", { id: `${id}-text-help`, class: "gl-help" }, "Say who, what you want them to do, and how much to spend."),
     text,
     textError,
     readNote,
@@ -271,9 +267,10 @@ function goalForm(ctx, defaultCurrency) {
       el(
         "div",
         { class: "field" },
-        el("label", { for: budget.id }, "Budget"),
+        // The (i) is a button inside the label, so a tap opens the description instead of focusing the box.
+        el("label", { for: budget.id, class: "gl-label" }, "Budget", info("The most it may spend on offers and messages.", { label: "What the budget covers" })),
         budget,
-        el("p", { id: `${id}-budget-help`, class: "field-hint" }, "The most it may spend on offers and messages. If your words name an amount, it is filled in for you."),
+        el("p", { id: `${id}-budget-help`, class: "field-hint" }, "Filled in when your words name an amount."),
         budgetError,
       ),
       el("div", { class: "field field-narrow" }, el("label", { for: currency.id }, "Currency"), currency),
@@ -282,8 +279,10 @@ function goalForm(ctx, defaultCurrency) {
     el(
       "p",
       { class: "gl-safe" },
-      el("strong", {}, "Nothing is sent yet. "),
-      "Every new goal starts in Shadow: Autonomy decides and shows you what it would do, but sends nothing. Messages go out only after you approve the plan and choose to move it out of Shadow.",
+      withInfo(
+        el("span", {}, "Nothing is sent yet: every new goal starts in Shadow."),
+        "In Shadow, Autonomy decides and shows you what it would do, but sends nothing. Messages go out only after you approve the plan and choose to move it out of Shadow.",
+      ),
     ),
   );
 }
@@ -304,30 +303,18 @@ function opportunityRow(ctx, opp) {
     }),
   );
   const none = sized && Number(opp.audience_n) === 0;
+  // Why it was found, and that the count is today's, is the count's description (the headline already says what they did).
+  const why = [present(opp.reason) ? `Why: ${opp.reason}` : "", sized ? "Counted from your customers today." : ""].filter(Boolean).join(" ");
   return el(
     "li",
     { class: ["opportunity", "gl-opp", !sized && "gl-opp-unsized"] },
-    sized
-      ? el(
-          "p",
-          { class: "gl-opp-count" },
-          el("span", { class: "gl-opp-n" }, int(opp.audience_n)),
-          " ",
-          el("span", { class: "gl-opp-words" }, `${opportunityWords(goal.kind, opp.audience_n)}.`),
-        )
-      : null,
+    sized ? el("p", { class: "gl-opp-count" }, withInfo(el("span", { class: "gl-opp-n" }, int(opp.audience_n)), why), " ", el("span", { class: "gl-opp-words" }, `${opportunityWords(goal.kind, opp.audience_n)}.`)) : null,
     el(
       "div",
       { class: "gl-opp-main" },
       el("h3", { class: "gl-opp-title" }, goal.text),
-      present(opp.reason) ? el("p", { class: "gl-opp-why" }, el("strong", {}, "Why: "), opp.reason) : null,
-      el(
-        "p",
-        { class: "gl-opp-meta" },
-        pill(GOAL_KIND_WORDS[goal.kind] || humanize(goal.kind), "neutral"),
-        " ",
-        el("span", {}, `Aims for ${humanize(goal.objective).toLowerCase()}`),
-      ),
+      !sized && present(opp.reason) ? el("p", { class: "gl-opp-why" }, why) : null,
+      el("p", { class: "gl-opp-meta" }, withInfo(pill(GOAL_KIND_WORDS[goal.kind] || humanize(goal.kind), "neutral"), `Aims for ${humanize(goal.objective).toLowerCase()}.`)),
     ),
     el(
       "div",
@@ -350,8 +337,7 @@ function opportunitiesSection(ctx, list, error, retry) {
     el(
       "div",
       { class: "card-head gl-opps-head" },
-      el("div", {}, el("h2", { id: "opps", class: "card-title" }, "Or pick one it found for you"), el("p", { class: "gl-sub" }, "Spotted in your data, counted from your customers today. Each one starts in Shadow, and you see its plan before anything is sent.")),
-      list.length && !error ? el("span", { class: "card-meta" }, `${int(list.length)} found`) : null,
+      el("h2", { id: "opps", class: "card-title" }, titleInfo("Or pick one it found for you", "Spotted in your data by the Analyst. Each one starts in Shadow, and you see its plan before anything is sent.", { label: "About these suggestions" })),
     ),
     body,
   );
@@ -363,7 +349,7 @@ function goalsList(goals) {
   return el(
     "section",
     { class: "card gl-goals", "aria-labelledby": "your-goals" },
-    el("div", { class: "card-head" }, el("h2", { id: "your-goals", class: "card-title" }, "Your goals"), el("span", { class: "card-meta" }, `${int(goals.length)} ${goals.length === 1 ? "goal" : "goals"}`)),
+    el("h2", { id: "your-goals", class: "card-title" }, "Your goals"),
     el(
       "ul",
       { class: "goal-list" },
@@ -379,7 +365,7 @@ function goalsList(goals) {
             { class: "gl-goal-pills" },
             pill(goalStatusWords(g.status), g.status === "draft" ? "neutral" : statusTone(g.status)),
             " ",
-            auto ? el("span", { class: "gl-autonomy" }, pill(auto[0], "neutral"), el("span", { class: "gl-autonomy-words" }, ` ${auto[2]}`)) : null,
+            auto ? withInfo(pill(auto[0], "neutral"), `${auto[0]}: ${auto[2]}.`) : null,
           ),
           el("p", { class: "row-meta gl-goal-meta" }, `${money(g.budget, g.currency)} budget${end ? ` · until ${end}` : ""}`),
         );
@@ -397,9 +383,9 @@ function nextSteps() {
     el(
       "ol",
       { class: "gl-next-list" },
-      el("li", {}, el("strong", {}, "You check the plan. "), "It shows in plain words who it will contact, with what message, and within which limits."),
-      el("li", {}, el("strong", {}, "It runs in Shadow. "), "It decides every day what it would do, and why, but sends nothing."),
-      el("li", {}, el("strong", {}, "You choose when it sends. "), "First you approve each batch, inside a small budget."),
+      el("li", {}, withInfo(el("span", {}, "You check the plan."), "It shows in plain words who it will contact, with what message, and within which limits.")),
+      el("li", {}, withInfo(el("span", {}, "It runs in Shadow."), "It decides every day what it would do, and why, but sends nothing.")),
+      el("li", {}, withInfo(el("span", {}, "You choose when it sends."), "First you approve each batch, inside a small budget.")),
     ),
     el("p", { class: "gl-next-link" }, el("a", { href: "#/start" }, "See the whole path in Getting started")),
   );
@@ -426,7 +412,8 @@ async function loadOpportunities(api) {
 // ---- the screen -----------------------------------------------------------------------------------------------
 // One question: what do you want to achieve? The box answers it, in 8 of 12 columns; your goals (or what happens
 // next) sit beside it; the opportunities it found run full width underneath.
-const head = () => pageHead({ title: "Goal", sub: "Tell Autonomy what you want, in your own words. It drafts a plan you can check before anything is sent." });
+// The form's own label asks the question, so the head has no grey line: what happens next is its description.
+const head = () => pageHead({ title: "Goal", info: "Tell Autonomy what you want, in your own words. It drafts a plan you can check before anything is sent." });
 
 function skeletonScreen() {
   return [

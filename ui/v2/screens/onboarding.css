@@ -1,8 +1,9 @@
-/* Getting started (#/start): the safe path (8 of 12 columns) beside a rail with the ask, the honest status and the
-   control promise. `ob-` classes only; everything else comes from styles.css (DESIGN.md section 9).
+/* Getting started (#/start): the safe path (8 of 12 columns) beside a rail with the ask (first run only), the honest
+   status and the control promise. `ob-` classes only; everything else comes from styles.css (DESIGN.md section 9).
 
-   The path is one hairline card with the five steps as rows: a small number on a thin connector line, the title,
-   the state as a pale pill (a word, colour only as a second signal), what the data says, and the step's actions.
+   The path is one hairline card with the five steps as rows: a small number on a thin connector line, the title
+   (what the step means is its description), the state as a pale pill (a word, colour only as a second signal), one
+   short line of what the data says, and the step's actions.
    The current step has the one filled number; done steps are a pale green; the rest stay grey. */
 
 .ob-grid {
@@ -126,41 +127,6 @@
   font-weight: 500;
 }
 
-.ob-sub {
-  margin: 12px 0 4px;
-  color: var(--muted);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-  font-weight: 500;
-}
-
-/* Why it left people alone: the reason on the left, the count right-aligned in tabular figures. */
-.ob-reasons {
-  list-style: none;
-  margin: 0 0 12px;
-  padding: 0;
-  max-width: 520px;
-}
-
-.ob-reasons li {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 16px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--rule);
-}
-
-.ob-reasons li:last-child {
-  border-bottom: 0;
-}
-
-.ob-reasons .num {
-  flex: none;
-  color: var(--text);
-  font-weight: 500;
-}
-
 .ob-attention.notice {
   margin: 4px 0 8px;
 }
@@ -247,26 +213,19 @@
 }
 
 .ob-honest-notice.notice {
-  margin: 0 0 12px;
+  margin: 0;
 }
 
-.ob-details summary {
-  cursor: pointer;
-  width: fit-content;
-  color: var(--text);
-  font-weight: 500;
-  text-decoration: underline;
-  text-decoration-color: var(--control);
-  text-underline-offset: 3px;
+/* A rail card's title with its (i) on the same line. */
+.ob-card-title {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 12px;
 }
 
-.ob-details summary:hover {
-  text-decoration-color: currentColor;
-}
-
-.ob-details p {
-  margin: 8px 0 0;
-  color: var(--muted);
+.ob-card-title .card-title {
+  margin: 0;
 }
 
 .ob-footnote {

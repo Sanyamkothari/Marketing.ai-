@@ -19,7 +19,7 @@ think Linear, Stripe Dashboard or Mercury, not a landing page.
 1. **The data is the design.** No decoration that doesn't carry meaning: no gradients, glows,
    glass, icons in coloured circles, sparklines on every number, emoji or illustrations.
 2. **One quiet surface system.** Off-white page, white cards, 1px hairline borders, no shadows on
-   resting cards. Shadows only on things that float (menus, popovers, dialogs, toasts).
+   resting cards. Shadows only on things that float (menus, descriptions, dialogs, toasts).
 3. **One accent, used sparingly.** The brand blue appears on data (the proof bar, the selected
    thing) and on focus only, about 3% of pixels. The primary button is near-black.
 4. **Type does the hierarchy.** One face (Inter, self-hosted), four sizes, three weights, tabular
@@ -101,7 +101,10 @@ At most 6 sizes on a screen. Weight 700 does one job per screen at most.
   pause glyph, turning red only while paused). Height 34px (44px on a phone), radius 6, 150 ms hover.
 - **Segmented control** for the autonomy dial (Shadow | Approve | Autopilot): one rounded track,
   with the selected segment on white plus a hairline border. One sentence under it explains the
-  choice.
+  chosen level; each segment's own sentence opens on hover over it.
+- **Description:** a short floating box (max 280px, 13px, radius 6, `--shadow-float`) behind a dotted
+  underline or a quiet (i). Hover after 150 ms, keyboard focus, or tap; tap again, tap outside or Esc
+  closes it. It never shifts the layout and stays inside the window at 390px.
 - **Cards / panels:** white, 1px `--border`, radius 8, padding 20, **no shadow**. Group KPIs in
   *one* card split by hairlines, not four floating cards.
 - **KPI strip:** label (12, `--muted`) over value (28/600) over range (12, `--faint`). No icons, no
@@ -118,7 +121,7 @@ At most 6 sizes on a screen. Weight 700 does one job per screen at most.
   link.
 - **Notices** (for example "Not proven on your business yet: start in Shadow"): `#fffbeb` with a
   `#fde68a` border and `#92400e` 12–13px text. Calm, not alarming.
-- **Toasts / dialogs:** the only things with `--shadow-float`.
+- **Toasts / dialogs / descriptions:** the only things with `--shadow-float`.
 
 ---
 
@@ -142,11 +145,55 @@ At most 6 sizes on a screen. Weight 700 does one job per screen at most.
 
 ## 6. Words
 
-- Plain English for a business owner. Say "people we never contact" first; "holdout" only in small
-  print.
-- Sentence case everywhere. No exclamation marks. Numbers come from the API, money always with its
-  range, and "Not sure yet" when the range includes zero.
-- The product's honest status shows where it matters, quietly (a notice), never as a banner.
+**Numbers first, explanations on hover.** The founder's rule (20 Oct 2026): "there is too much text on each page";
+"instead of giving a link on how is this measured, if we hover over something we show the description then only".
+
+1. **One sentence per card, at most.** A card is its title, its numbers, and at most ONE short sentence (what to do,
+   or what the number says). Money always carries its range, but the range can be the short line
+   ("$781 to $3,213"), not a sentence.
+2. **Everything else is a description** (`withInfo` / `info`, section 9): how a number is measured, what it means,
+   thresholds and limits, method notes, the sample-data or Shadow detail, the other choices' sentences, and teaching
+   copy ("Doing nothing is a decision too"). It opens on hover (150 ms), on keyboard focus, and on tap on a touch
+   screen; its words stay in the DOM, so screen readers and tests still find every promise.
+3. **Say each thing once.** No card repeats another card's numbers; no page head repeats the top bar. If two blocks
+   need the same fact, one shows it and the other links to it.
+4. **No promise lost.** Every promise in `PROMISE_MAP.md` / `PITCH.md` stays reachable: on screen, or in a
+   description on the thing it is about. Never invent a number to fill a gap; "Not sure yet" when a range includes
+   zero.
+5. **Plain English** for a business owner. "People we never contact", never "holdout" (not even in small print).
+   Sentence case everywhere. No exclamation marks. The product's honest status shows where it matters, quietly (a
+   notice of one sentence, the detail in its description), never as a banner.
+
+**What goes where.**
+
+| On the page | In a description |
+|---|---|
+| The title, the numbers and their ranges | How each number is measured, and the period it covers |
+| One sentence: the verdict or the next step | Why, the thresholds, the method, the source |
+| The status in a pill ("Running", "Waiting for you") | What that status means and what changes it |
+| The chosen option's one sentence (the dial) | The other options' sentences, and when to pick each |
+| A short notice ("Not proven on your business yet: start in Shadow") | The rest of the honest status |
+
+**Word budget** (visible words, `document.body.innerText` with hidden elements left out, demo API, 1440 wide,
+light; the top bar and nav are about 50 of them, and each (i) glyph counts as one). "Before" was measured on 20 Oct
+2026 before the declutter pass, "After" when it finished; the target was about half. A phone (390) gives the same
+counts within a few words, and dark the same as light.
+
+| Route | Before | Target | After | Change |
+|---|---:|---:|---:|---:|
+| `#/start` Getting started | 413 | 200 | 223 | −46% |
+| `#/connect` | 661 | 330 | 256 | −61% |
+| `#/goal` | 311 | 160 | 185 | −41% |
+| `#/plan/<id>` (win-back, Autopilot) | 1,705 | 850 | 593 | −65% |
+| `#/live/<id>` (win-back, Autopilot) | 1,843 | 900 | 475 | −74% |
+| `#/live/<id>` (repeat purchase, a batch waiting) | 1,387 | 700 | 407 | −71% |
+| `#/proof/<id>` | 664 | 330 | 212 | −68% |
+| `#/operator` (lists all 200 decisions) | 7,994 | 4,000 | 3,941 | −51% |
+
+With the sample data (`?mock=1`): start 265, connect 320, goal 264, plan 680, live 538, proof 244, operator 345.
+Getting started and Goal stay a little over target: what is left there is the form, the goal list, the opportunity
+headlines and the steps' own words. Proof's share text is folded ("Show the text"); the counter cannot see a
+textarea's value, so the before figure was really about 80 words higher.
 
 ---
 
@@ -194,9 +241,13 @@ sizes `--fs-*` / `--lh-*`, `--radius-card|control|chip`, `--gap --card-pad --pad
 delete your screen's own `:root` token blocks (feed.css) once nothing reads them. `--shadow` and `--ap-shadow`
 are `none` on purpose. `?theme=light|dark` forces a theme (`[data-theme]` on `<html>`).
 
-**Page frame.** `.main` is the canvas (1200px centred, 24px padding, 16px on a phone). Start a screen with
-`pageHead({title, sub, actions, stamp})` → `.page-head` > `h1.page-title` + `p.page-sub`, actions and a
-`freshness(iso, {onRefresh})` stamp on the right. Lay blocks out with `.grid` (12 columns, 16px gap, cards keep
+**Page frame.** `.main` is the canvas (1200px centred, 24px padding, 16px on a phone). Start EVERY screen with
+the one page head, `pageHead({title, sub, status, actions, stamp, info})` → `.page-head` > `.page-head-main`
+(`.page-title-row` holding `h1.page-title`, an optional (i) and `.page-status` with the status pills, then one
+`p.page-sub` line) and `.page-actions` on the right (the screen's primary action and/or a
+`freshness(iso, {onRefresh})` stamp). `status` takes `pill()`s (the goal's state, its autonomy level); `sub` is ONE
+short line (the goal's words, or one fact); anything longer goes in `info`, the title's description. Do not build
+your own head (`.lv-head`, `.ap-head`, a grey line for the level): use this one. Lay blocks out with `.grid` (12 columns, 16px gap, cards keep
 their own height) and `.span-3 … .span-9` on the children (full width on a phone); `.stack` for a vertical run,
 `.row` for an inline cluster, `.section-head` for a heading row between blocks.
 
@@ -205,7 +256,8 @@ their own height) and `.span-3 … .span-9` on the children (full width on a pho
 | Card / panel | `.card` (`.panel`), `.card-head` > `.card-title` + `.card-meta`, `.card-actions`, `.card-flush` for an edge-to-edge table, `.divider` | `card({title, meta, body, actions, flush})` |
 | Buttons | `.btn` + `.btn-primary` (one per screen) / `.btn-secondary` / `.btn-ghost` / `.btn-danger` (= destructive); `.btn-sm`, `.btn-lg`, `.btn-block`; `.link-btn` for Retry, View all | `button(label, onClick, {kind, size, block, disabled})` |
 | Fields | `.field` > `label` + input + `.field-hint` / `.field-error`; `.form-row`, `.form-actions` | — |
-| Autonomy dial | `.segmented` (radios in one track) + `.segmented-note` (the one sentence) | `segmented({legend, options, value, onChange, note})` |
+| Description | `.has-info` (dotted underline) or `.info-dot` (the (i)), `.info-tip` (the box, `role="tooltip"`, `hidden` until open), `.info-host` (a `display: contents` wrapper) | `withInfo(target, text)` → wrapper to put where the target goes; `info(text, {label})` → an (i); `titleInfo(text, about)` → a title's words with its (i) kept on the last word; `describe(target, tipEl)` for a box already in the page |
+| Autonomy dial | `.segmented` (radios in one track; `.dial-track` spans its card) + `.segmented-note` (the one sentence, for the chosen option) | `segmented({legend, options: [{value, label, hint, text}], value, onChange})`: each option's `hint` + `text` become its segment's description |
 | KPIs | `.kpis` > `.kpi` > `.kpi-label`, `.kpi-value`, `.kpi-range` / `.kpi-note` (one container split by hairlines; 2 columns on a phone) | `kpiStrip([{label, value, range, note}])`; pass money through `range()` so it always carries its range |
 | Tables | `.table-wrap` > `table.table-stack`; `th.num` / `td.num` right-aligned; `td.is-key` is the figure kept on line 1 under 640px | `table({columns: [{key, label, align, lead, format}], rows, empty})` |
 | Lists of rows | `.list` > `li` with `.row-title` and `.row-meta` (one rule between rows) | — |
@@ -217,6 +269,28 @@ their own height) and `.span-3 … .span-9` on the children (full width on a pho
 | Freshness | `.stamp` | `freshness(iso, {label, onRefresh})` |
 | Floating | `.toast` (bottom right), `.dialog` (`<dialog>`, the only other shadow) | `toast(message, tone)`, `dialog({title, body, actions}).showModal()` |
 | Numbers | `.num` / `.tabular` (tabular figures; `.num` also right-aligns) | `int`, `num`, `pct`, `money`, `range`, `dash` |
+
+**Descriptions, in practice.**
+
+```js
+import { el, info, kpiStrip, pageHead, pill, withInfo } from "../components.js";
+
+pageHead({ title: "Proof", sub: goal.text, status: [pill("Running", "good")], actions: [shareButton],
+           info: "Extra profit compares the people we contact with people we never contact, picked at random." });
+kpiStrip([{ label: withInfo(el("span", {}, "Extra profit"), "Orders from people we contact, minus …"),
+            value: money(e.point, cur), range: `${money(e.low, cur)} to ${money(e.high, cur)}` }]);
+el("h2", { class: "card-title" }, "Rules it can never break", info("Built into how it decides; no setting can get round them."));
+```
+
+- Put the description on the thing it explains: the KPI label, the number, the pill, a row label (a dotted
+  underline, `withInfo`). A page title, card title or section title takes an (i) after its words instead
+  (`info()`, 8px after the words on their centre line, the same on every screen), and so does anything with no word
+  to underline. Sub-headings inside a card (a step, a group label) are labels: they take the underline.
+- One to three short sentences, plain words, no links (it cannot be clicked: put a link on the page instead).
+- On a button or a link the click is the action, so its description shows on hover and keyboard focus only; give the
+  control an `aria-label` with the same words for touch screens. The top bar's Pause does this (`#pause-scope`).
+- Tests: the words are in the DOM (`textContent` finds them; `[role=tooltip]`, `aria-describedby` on the target).
+  When a sentence moves into a description, point the test at the description; never drop the promise check.
 
 **Rules of thumb.** Ink links (`a` is `--text` with a grey underline); the accent only on data, focus and the one
 selected thing. One `.btn-primary` per screen. A card's period or stamp goes in `.card-meta`, not in its title.
@@ -250,18 +324,44 @@ keeps its range, and the UI, app, promise and API tests pass with no promise che
 | Live | 8 | 8 | 8.5 | 8 | 8.5 |
 | Proof, Operator | 8 | 8 | 8 | 7.5 | 8 |
 
-**Still not premium enough.**
-- The autonomy dial is three described radio cards, not the segmented control of section 4: the tests pin all
-  three levels' sentences on screen (promises 3 and 19), which a segmented track would hide.
-- The page head is not yet one pattern: Plan puts its status pills on the right, Live puts them under the title
-  (Pause takes the right), Proof writes the level as a grey line. One shared slot for status would be calmer.
-- Live: on Approve, the side column ends well before the main column (cards keep their own height), and the
-  feed shows raw product ids (`bars_trail`) when the data has no names. The weekly briefing from the runtime
-  still leads with a bare money figure and the word "holdout".
-- Plan: a message the editor failed says so four times; the limits strip repeats three facts from the plan card
-  below it; `--rule` hairlines are very faint in dark mode.
-- Proof: the share text and the KPI round the return on spend differently (90× against 90.1×); the chart repeats
-  each bar's range as text. Operator on a phone still lists all 200 decisions before the customer lookup.
+**The declutter pass (20 Oct 2026).** The founder: "there is too much text on each page". Every screen now follows
+section 6: numbers first, each card its title, its numbers and at most one short sentence, and every explanation in a
+description that opens on hover, keyboard focus or tap. Visible words fell by 41% to 74% per screen (the word budget
+in section 6). Each screen was rebuilt by one worker and reviewed by a critic against screenshots, then a last pass
+made the shared parts consistent:
+
+- One page head everywhere (`pageHead` with `status`): Live, Proof and Operator dropped their own heads and the grey
+  autonomy line, since the top bar's badge shows the level.
+- Descriptions look and behave the same on every screen: one box style (13px, at most 280px, `--shadow-float`), a
+  dotted underline on words, numbers and labels, an (i) 8px after every page, card and section title, on the
+  title's centre line. A Playwright pass on every route (demo and `?mock=1`) opened all of them: hover at 1440,
+  tap on a 390 phone in dark mode (every box inside the window, closed by a tap outside), and keyboard Tab (every
+  target opens on focus, Esc closes). No console errors, no sideways scroll at 390.
+- Said once: Plan's limits strip holds the audience, budget, weekly limit and quiet hours, and the plan card no
+  longer repeats them; a message the editor failed says so once; Live's Yesterday says its two counts once, in the
+  pitch's sentence; Proof says the profit once, in its one sentence, and the chart's ranges are in its description;
+  an Inbox item the self-pause banner already names is one quiet line ("Named in the banner above") with its words
+  in the description; Connect shows one source as a line, not a table that repeats the totals.
+- "Holdout" is gone from the screens (Live rewrites the runtime's briefing words; Proof glosses the API's notes).
+- The leftover `.dial-option` styles are deleted from styles.css and plan.css.
+
+**Still wordy, or not premium enough.**
+- Plan is the longest marketer screen (593 words): four ready messages, each with its own "Don't use this one" and
+  "Checked by the editor" line. One bulk line for the ready messages would cut it further.
+- Operator lists all 200 decisions (3,941 words; about 6 lines a row on a phone). It is the technical screen, so
+  it stays complete; loading 50 by default on a phone is the next step.
+- Getting started is 23 words over target and Goal 25 (the form, the goal list and the opportunity headlines). On
+  the demo, Goal's opportunity count repeats the API's goal headline ("396 … signed up but never bought"); the API
+  should leave the count out of its suggested goal text.
+- In the Shadow state, Getting started says the trial day three times (badge, note, step 3), because promise 58 and
+  a test pin all three.
+- Data, not UI: Live's weekly briefing and Proof are two API figures for nearly the same profit ($1,846 against
+  $1,906), and the Approve goal's briefing carries the programme-wide figure while its own Proof says "Not sure
+  yet". The briefing headline now sits only in a description, with its range. The runtime still writes "holdout";
+  the screen rewrites it. Batch facts carry a forecast without a range because the API sends none.
+- Proof's forecast card's one sentence reads like a fragment ("Over the 14 days after each contact it decided on
+  since …"); a test pins the wording. In the too-early state the main card is sparse at 1440.
+- `--rule` hairlines are very faint in dark mode.
 - Error boxes cannot show "the time of the last good data" yet, because nothing records it.
-- The demo data has no product names, no first names and pictures on a host that never resolves, so the real-data
-  screenshots look sparser than the product will.
+- The demo data has no product names and pictures on a host that never resolves, so the real-data screenshots look
+  sparser than the product will.

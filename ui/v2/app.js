@@ -19,7 +19,7 @@
 // no plan has been approved; with no goal at all it is the first page.
 
 import { createApi, routeMissing } from "./api.js";
-import { button, clear, el, emptyState, errorBox, goalStatusWords, humanize, int, loading, present, range, toast, when } from "./components.js";
+import { button, clear, describe, el, emptyState, errorBox, goalStatusWords, humanize, info, int, loading, present, range, toast, when } from "./components.js";
 import { TRIAL_DAYS, rangeVerdict, trialDay, trialWords } from "./screens/onboarding.js";
 
 /** The screens, in the order a marketer meets them. `goal: true` means the address carries a goal id. */
@@ -78,6 +78,24 @@ const shell = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+/**
+ * The shell's explanations live in descriptions (components.js describe), not on the bar: each top-bar control gets
+ * one box, made once right after it and re-worded on every redraw. Without a real DOM (the node tests) the words
+ * stay in the control's aria-label only.
+ */
+function setInfo(target, text) {
+  if (!target) return;
+  const tipId = `${target.id}-info`;
+  let tip = $(tipId);
+  if (!tip) {
+    if (typeof target.after !== "function") return;
+    tip = el("span", { id: tipId });
+    target.after(tip);
+    describe(target, tip);
+  }
+  tip.textContent = text;
+}
 
 function remember(goalId) {
   try {
@@ -158,27 +176,25 @@ function drawPause() {
   // Near-black with a pause glyph while anything sends; Resume, in the negative colour, only while paused (the
   // stopped state is plain at a glance). screens/shell.css draws the glyphs.
   b.classList.remove("btn-danger", "btn-primary", "is-resume");
+  b.removeAttribute("title"); // the words are in its description (#pause-scope), not a browser tooltip
   if (live.length) {
     b.textContent = "Pause";
     b.classList.add("btn-primary");
     b.disabled = false;
     b.setAttribute("aria-label", `Pause all sending: stops ${live.length === 1 ? "the 1 running goal" : `all ${live.length} running goals`} at once`);
-    b.title = "Stops all sending, for every goal, at once. You can resume any time.";
-    if (scope) scope.textContent = "Stops all sending";
+    if (scope) scope.textContent = "Stops all sending, for every goal, at once. You can resume any time.";
   } else if (targets.length) {
     b.textContent = "Resume";
     b.classList.add("btn-danger", "is-resume");
     b.disabled = false;
     b.setAttribute("aria-label", targets.length === 1 ? `Resume sending for: ${targets[0].text || targets[0].goal_id}` : `Resume sending for the ${targets.length} goals you paused`);
-    b.title = "Lets the agent act again inside the approved plan.";
-    if (scope) scope.textContent = "Nothing is being sent";
+    if (scope) scope.textContent = "Nothing is being sent. Resume lets the agent act again inside the approved plan.";
   } else {
     b.textContent = "Pause";
     b.classList.add("btn-primary");
     b.disabled = true;
     b.removeAttribute("aria-label");
-    b.title = shell.goals.length ? "Nothing is sending right now, so there is nothing to pause." : "Nothing is sending: there is no goal yet.";
-    if (scope) scope.textContent = "Nothing is sending";
+    if (scope) scope.textContent = shell.goals.length ? "Nothing is sending right now, so there is nothing to pause." : "Nothing is sending: there is no goal yet.";
   }
 }
 
@@ -221,7 +237,7 @@ function drawAutonomyBadge() {
   badge.setAttribute("href", hashFor("plan", g.goal_id));
   // The spoken name starts with the visible words, so voice control ("click Autopilot") finds it.
   badge.setAttribute("aria-label", `${info.text}. ${info.long}`);
-  badge.title = info.long;
+  setInfo(badge, info.long);
 }
 
 function drawNav(activeId) {
@@ -273,8 +289,9 @@ function drawBanner() {
   }
   clear(
     banner,
-    el("strong", {}, "Sample data. "),
-    `${api.reason} Nothing you do here reaches a customer, and changes last until you reload.`,
+    el("strong", {}, "Sample data."),
+    " Nothing you do here reaches a customer.",
+    info(`${api.reason || ""} Changes last until you reload.`.trim(), { label: "About the sample data" }),
   );
   banner.hidden = false;
 }
@@ -311,7 +328,8 @@ function drawGoalNote(activeId = parseHash(location.hash).screen) {
       " ",
       el("span", {}, "Autonomy is deciding, but nothing is being sent."),
       trial ? el("span", { class: "goal-note-trial" }, ` Shadow trial: ${trial}.`) : null,
-      shadowDetail(g, facts),
+      // What it would have done and its own forecast: one hover (or tap) away, not on the bar.
+      info(shadowDetail(g, facts), { label: "What it would have done so far" }),
       activeId === START.id ? null : el("a", { class: "goal-note-link", href: "#/start" }, trial && trialDay(facts.since) > TRIAL_DAYS ? "What's next" : "About the trial"),
     );
     note.hidden = false;
@@ -323,7 +341,8 @@ function drawGoalNote(activeId = parseHash(location.hash).screen) {
       note,
       el("strong", {}, "Paused: nothing is being sent for this goal."),
       " ",
-      g.autonomy === "shadow" ? "It is not deciding either, so the Shadow trial is on hold. " : "",
+      g.autonomy === "shadow" ? info("It is not deciding either, so the Shadow trial is on hold.", { label: "About the Shadow trial" }) : null,
+      " ",
       // The big button says Resume only while nothing else runs; otherwise it pauses the others, so point to Live.
       !running().length
         ? "Press Resume at the top when you want it to act again."
@@ -339,8 +358,10 @@ function drawGoalNote(activeId = parseHash(location.hash).screen) {
     clear(
       note,
       el("strong", {}, "New here? Getting started is safe."),
-      " ",
-      el("span", { class: "goal-note-more" }, "Shadow first (it decides but sends nothing), then Approve with a small budget, then Autopilot when Proof shows real extra profit. It has not yet run with a real business, so start in Shadow. "),
+      info(
+        "Shadow first (it decides but sends nothing), then Approve with a small budget, then Autopilot when Proof shows real extra profit. It has not yet run with a real business, so start in Shadow.",
+        { label: "How getting started works" },
+      ),
       el("a", { class: "goal-note-link", href: "#/start" }, "See the steps"),
     );
     note.hidden = false;
@@ -350,7 +371,8 @@ function drawGoalNote(activeId = parseHash(location.hash).screen) {
   clear(note);
 }
 
-/** "On 19 Oct it would have contacted 412 and left 1,688 alone. Its own forecast: $a – $b (not proof)." */
+/** "On 19 Oct it would have contacted 412 and left 1,688 alone. Its own forecast: $a – $b (not proof)." The words of
+ * the Shadow note's description, or null when nothing is known yet. */
 function shadowDetail(goal, facts) {
   if (!facts) return null;
   const parts = [];
@@ -365,7 +387,7 @@ function shadowDetail(goal, facts) {
     const unsure = rangeVerdict(e.expected_net) === "unsure";
     parts.push(` Its own forecast so far: ${range(e.expected_net, e.currency || goal.currency)} extra profit${unsure ? ", so not sure yet" : ""} (a forecast, not proof).`);
   }
-  return parts.length ? el("span", { class: "goal-note-more" }, parts.join("")) : null;
+  return parts.length ? parts.join("").trim() : null;
 }
 
 /** Fetch what the Shadow note needs for the current goal (once a minute per goal), then redraw the note. */
@@ -452,7 +474,7 @@ function drawSelfPause(paused) {
   badge.setAttribute("href", hashFor("live", shell.goalId));
   const words = `Autonomy paused sending on its own ${paused.length === 1 ? "once" : `${paused.length} times`}. Latest, ${when(latest.at)}: ${latest.message || humanize(latest.code)} Open the Inbox on the Live page.`;
   badge.setAttribute("aria-label", `${text}. ${words}`);
-  badge.title = words;
+  setInfo(badge, words);
 }
 
 /** The "to approve" link in the top bar: index.html has it; made here, next to the inbox, if a page lacks it. */
@@ -507,7 +529,7 @@ async function loadBatchBadge() {
   link.setAttribute("href", hashFor("live", g.goal_id));
   $("batch-count").textContent = String(pending);
   link.setAttribute("aria-label", `${pending} ${pending === 1 ? "batch" : "batches"} waiting for your approval`);
-  link.title = "Approve or reject them on the Live screen. Nothing in a batch is sent until you approve it.";
+  setInfo(link, "Approve or reject them on the Live screen. Nothing in a batch is sent until you approve it.");
 }
 
 /** Reload the goal list (after a screen created, approved, paused or resumed one) and redraw the bar. */
@@ -693,6 +715,8 @@ function start() {
     }
   });
   $("pause-button").addEventListener("click", togglePause);
+  // "Stops all sending" is the Pause button's description (hover or keyboard focus), not words on the bar.
+  if ($("pause-scope")) describe($("pause-button"), $("pause-scope"));
   // The skip link's "#main" would change the hash and the router would call it an unknown page: move focus
   // to the content instead, leaving the address alone.
   const skip = $("skip-link");

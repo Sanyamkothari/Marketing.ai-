@@ -15,6 +15,12 @@
    Tapping a customer opens a panel with what it knows about them in words (reading hours, offer habit, refill
    due, what they might like next), every decision with its reason, the options it weighed and why each lost.
 
+   Words (DESIGN.md section 6): each card is its title, its numbers and at most one short sentence. Every
+   explanation (how a number is measured, thresholds, the full reason of a decision, its message and send time) is a
+   description on the label or number it explains: it opens on hover, keyboard focus or tap (components.js
+   withInfo / info / describe), and its words stay in the DOM. A feed row is one line: the person, the action, a
+   short reason and what happened.
+
    Pausing: the top bar's Pause stops every goal (ctx.pauseAllInTopBar), so the page keeps a per-goal "Pause this
    goal". With ctx.pauseInTopBar the page only shows the goal's state, following api.onGoalChange.
 
@@ -32,7 +38,7 @@
    components.js; the formatters kept here are the ones whose wording the feed and the proof page need
    ("$4,300 (range $900 to $7,700)", a date without the year). */
 
-import { EM_DASH, num, present } from "../components.js";
+import { EM_DASH, describe, info, num, pageHead as pageHeadBlock, present, withInfo } from "../components.js";
 
 // ---- tiny helpers shared by live.js, proof.js and operator.js ------------------------------------------
 
@@ -425,6 +431,57 @@ export function ruleWords(raw) {
 }
 const CHANNEL_CODES = new Set(["email", "whatsapp", "sms", "push", "web", "webhook"]);
 
+/**
+ * A left-alone reason's short label, for the bars and the feed rows. The API's full words (`r.words`) go in the
+ * label's description, so nothing is lost. A code not listed here shows the API's own words.
+ */
+const REASON_SHORT = {
+  weekly_cap: "Weekly limit reached",
+  max_contacts_per_week: "Weekly limit reached",
+  holdout: "People we never contact",
+  simple_rule: "Simple rule's group",
+  not_worth_it: "Not worth bothering them",
+  no_effect: "A message would not help",
+  testing_rest: "Kept as a check",
+  nothing_to_offer: "No message fits yet",
+  too_soon: "Messaged hours ago",
+  open_complaint: "Open complaint",
+  snoozed: "Asked for a pause",
+  no_budget: "Budget used up",
+  pacing: "Slowing down",
+  quiet_hours: "Quiet hours",
+  offer_needs_approval: "Offer needs your approval",
+  no_discounts: "Asked for no discounts",
+  offer_not_allowed: "Offer not in your plan",
+  no_brief: "No approved plan",
+  channel_paused: "Channel paused",
+  unsubscribed: "Unsubscribed",
+  no_consent: "Has not agreed to messages",
+  no_address: "No address for them",
+};
+export const reasonShort = (code, words) => REASON_SHORT[code] || (present(words) ? String(words) : humanize(code));
+
+/**
+ * A decision's reason cut to its point, for a one-line feed row: the part after "Sent a … by email:" up to the first
+ * clause break, at most about 70 characters. The full reason is the row's description.
+ */
+export function shortReason(reason) {
+  if (!present(reason)) return DASH;
+  const text = String(reason).replace(/\s+/g, " ").trim();
+  const colon = text.indexOf(": ");
+  const why = colon > 0 && colon < 80 ? text.slice(colon + 2) : text;
+  const clause = (why.match(/^(.*?)(?:[,;]\s|\.\s|\.$|$)/) || [null, why])[1] || why;
+  return capital(snippet(clause, 70));
+}
+
+/** The runtime's briefing still says "the holdout"; on screen it is "people we never contact" (DESIGN.md section 6). */
+export const plainGroupWords = (text) =>
+  present(text)
+    ? String(text)
+      .replace(/\bin the (?:no-contact )?holdout\b/gi, "among the people we never contact")
+      .replace(/\b(?:the )?(?:no-contact )?holdout\b/gi, (_m, at) => (at === 0 ? "People we never contact" : "people we never contact"))
+    : text;
+
 /** A day label from the counted date ("2026-10-19") and the API's as_of: Yesterday, Today so far, or On 19 Oct. */
 export function dayName(date, asOf) {
   const d = present(date) ? Date.parse(`${String(date).slice(0, 10)}T00:00:00Z`) : Number.NaN;
@@ -443,16 +500,26 @@ const people = (n) => `${count(n)} ${Number(n) === 1 ? "customer" : "customers"}
  * here's why." Shadow says it would have (it sent nothing); Approve says it picked them (each batch waits).
  */
 export function briefingSentence(today) {
-  if (!today) return DASH;
+  const parts = briefingParts(today);
+  return parts ? parts.map((p) => (typeof p === "string" ? p : p.text)).join("") : DASH;
+}
+
+/**
+ * The same sentence in pieces, so the Yesterday card can set its two counts as figures with a description each:
+ * plain strings, and {key: "contacted" | "left", text} for the counts. `briefingSentence` joins these.
+ */
+export function briefingParts(today) {
+  if (!today) return null;
   const d = dayName(today.date, today.as_of);
-  const alone = `left ${count(today.left_alone)} alone, and here's why.`;
+  const who = { key: "contacted", text: people(today.contacted) };
+  const alone = [", left ", { key: "left", text: count(today.left_alone) }, " alone, and here's why."];
   if (today.sends_nothing || today.autonomy === "shadow") {
-    return `${d.lead} I would have contacted ${people(today.contacted)} (Shadow mode, so nothing was sent), ${alone}`;
+    return [`${d.lead} I would have contacted `, who, " (Shadow mode, so nothing was sent)", ...alone];
   }
   if (today.autonomy === "approve") {
-    return `${d.lead} I picked ${people(today.contacted)} to contact (each batch waits for your approval), ${alone}`;
+    return [`${d.lead} I picked `, who, " to contact (each batch waits for your approval)", ...alone];
   }
-  return `${d.lead} I contacted ${people(today.contacted)}, ${alone}`;
+  return [`${d.lead} I contacted `, who, ...alone];
 }
 
 /** "Made a decision for each of 2,100 customers yesterday. Last check: 19 Oct, 09:00. Next check: 21 Oct, 09:00." */
@@ -637,8 +704,19 @@ function chip(label, tone, extra = "") {
  * A row's status in a long list: a small dot in the tone's colour and the word in grey, with no fill, so twenty
  * rows of "Waiting for your approval" read as a quiet column rather than a stripe of amber pills.
  */
+// On a phone a feed row's first line holds the name, the action and this mark, so the longer states get a short
+// word there; the full words stay in the row for screen readers (live.css hides them visually only).
+const MARK_SHORT = {
+  "Waiting for your approval": "To approve",
+  "Approved, goes out on the next run": "Approved",
+  "Not sent: batch turned down": "Not sent",
+  "Would send (Shadow)": "Would send",
+  "Failed to deliver": "Failed",
+};
 function statusMark(label, tone) {
-  return h("span", { class: `lv-row-status lv-mark lv-mark-${tone || "quiet"} lv-state lv-state-${tone || "quiet"}` }, label);
+  const short = MARK_SHORT[label];
+  return h("span", { class: `lv-row-status lv-mark lv-mark-${tone || "quiet"} lv-state lv-state-${tone || "quiet"}${short ? " lv-mark-has-short" : ""}` },
+    short ? [h("span", { class: "lv-mark-long" }, label), h("span", { class: "lv-mark-short", "aria-hidden": "true" }, short)] : label);
 }
 
 /** Grey blocks at the size of what is coming, so nothing jumps when it lands. Heights in px. */
@@ -649,15 +727,39 @@ function skeletonBlock(heights = [20, 20, 20]) {
 }
 
 /** A card: its title and a grey meta on one line, and a body that starts as grey blocks. */
+// `about(text)` puts a quiet (i) after the title holding the card's explanation; `setMeta(text, more)` fills the grey
+// meta and, with `more`, gives it a description (the meta is a fact, its detail opens on hover or tap).
 function liveSection(title, { extraClass = "", id = null, skeleton = [20, 20, 20] } = {}) {
   const heading = h("h2", { class: "card-title", id });
   heading.textContent = title;
+  const aboutSlot = h("span", { class: "info-host lv-about" });
   const meta = h("span", { class: "card-meta" });
+  const metaTip = h("span", { class: "info-tip", hidden: true });
   const body = h("div", { class: "lv-body" }, skeletonBlock(skeleton));
   const card = h("section", { class: `card lv-card ${extraClass}`.trim(), "aria-labelledby": id },
-    h("div", { class: "card-head" }, heading, meta), body);
-  return { card, heading, meta, body };
+    h("div", { class: "card-head" }, h("div", { class: "lv-title-row" }, heading, aboutSlot), h("span", { class: "info-host" }, meta, metaTip)), body);
+  let metaWired = false;
+  const about = (text) => aboutSlot.replaceChildren(...[present(text) ? info(text, { label: `About ${title}` }) : null].filter(Boolean));
+  const setMeta = (text, more = null) => {
+    meta.textContent = present(text) ? String(text) : "";
+    if (!present(more)) return;
+    if (!metaWired) describe(meta, metaTip);
+    metaWired = true;
+    metaTip.replaceChildren(...[more].flat().filter(Boolean));
+  };
+  return { card, heading, meta, body, about, setMeta };
 }
+
+/** A label (or any words) with a description that opens on hover, focus or tap. No text: the plain label. */
+function explained(label, text, cls = null) {
+  const target = typeof label === "object" && label ? label : h("span", { class: cls }, label);
+  const words = [text].flat().filter((t) => present(t) && t !== false);
+  if (!words.length) return target;
+  return withInfo(target, words.length === 1 && typeof words[0] === "string" ? words[0] : tipLines(words));
+}
+
+/** Several sentences in one description, each on its own line. */
+const tipLines = (lines) => lines.filter(present).map((l) => (typeof l === "object" ? l : h("span", { class: "lv-tip-line" }, l)));
 
 /** The empty state inside a card: the card keeps its title; one sentence says what will appear. */
 const lvEmpty = (sentence) => h("p", { class: "lv-empty" }, sentence);
@@ -672,10 +774,10 @@ function lvFailed(what, e, retry = null) {
 }
 
 /** One KPI cell: label over value over a note, inside a `.kpis` strip. */
-function kpiCell(label, value, note = null, extra = "") {
+function kpiCell(label, value, note = null, extra = "", about = null) {
   const missing = value === DASH;
   return h("div", { class: `kpi ${extra}`.trim() },
-    h("dt", { class: "kpi-label" }, label),
+    h("dt", { class: "kpi-label" }, explained(label, about)),
     h("dd", { class: `kpi-value${missing ? " is-missing" : ""}` }, value),
     note && h("dd", { class: "kpi-note" }, note));
 }
@@ -691,8 +793,7 @@ export async function render(root, ctx) {
   const retry = () => render(root, ctx);
   const goTo = (label, where) =>
     typeof ctx.navigate === "function" && h("button", { class: "btn btn-primary", type: "button", onclick: () => ctx.navigate(where) }, label);
-  const head = (sub) =>
-    h("header", { class: "page-head lv-head" }, h("div", { class: "lv-head-text" }, h("h1", { class: "page-title" }, "Live"), sub && h("p", { class: "page-sub" }, sub)));
+  const head = (sub) => pageHeadBlock({ title: "Live", sub });
 
   let bundle;
   try {
@@ -702,7 +803,7 @@ export async function render(root, ctx) {
       page.append(
         head(`There is no goal ${ctx.goalId}.`),
         h("div", { class: "empty" }, h("p", { class: "empty-title" }, "Goal not found"),
-          h("p", null, "It may have been removed, or the link is mistyped. Pick a goal from the switcher at the top."), goTo("Go to Goal", "goal")),
+          h("p", null, "It may have been removed, or the link is mistyped."), goTo("Go to Goal", "goal")),
         announcer,
       );
     } else page.append(head(null), lvFailed("the goal", e, retry), announcer);
@@ -727,40 +828,54 @@ export async function render(root, ctx) {
   const topbarPause = Boolean(ctx.pauseInTopBar);
   const pauseWord = ctx.pauseAllInTopBar ? "Pause this goal" : "Pause everything";
 
-  // Header: what goal, its status and autonomy level in one sentence, and (only when there is no top bar) Pause.
+  // Header: the one page head (components.js pageHead): "Live", the goal's words, its status pill and Pause. The
+  // autonomy level is the top bar's badge inside the app, so here its sentence (and since when) is the status pill's
+  // description; outside the app (no top bar) the level gets its own pill. What Pause does is Pause's description.
+  const ownAutonomyPill = !ctx.pauseAllInTopBar && !topbarPause;
   const statusChip = h("span", { class: "pill" });
+  const statusTip = h("span", { class: "info-tip", hidden: true });
+  describe(statusChip, statusTip);
   const autonomyChip = h("span", { class: "pill pill-neutral lv-autonomy" });
-  const autonomyLine = h("p", { class: "lv-autonomy-line" });
+  const autonomyTip = h("span", { class: "info-tip", hidden: true });
+  if (ownAutonomyPill) describe(autonomyChip, autonomyTip);
   const pauseBtn = h("button", { type: "button", class: "btn" });
-  const pauseHint = h("p", { class: "lv-pause-hint" });
+  const pauseTip = h("span", { class: "info-tip", hidden: true });
+  describe(pauseBtn, pauseTip);
   const selfPause = h("div", { class: "lv-selfpause-slot" });
   const paintHeader = () => {
     const tone = goal.status === "active" ? "pill-positive pill-dot" : goal.status === "paused" ? "pill-warning pill-dot" : "pill-neutral";
     statusChip.textContent = STATUS_WORDS[goal.status] || String(goal.status || DASH);
-    statusChip.setAttribute("class", `pill ${tone} ap-status-${goal.status || "unknown"}`);
-    autonomyChip.textContent = `Autonomy: ${AUTONOMY_WORDS[goal.autonomy] || goal.autonomy || DASH}`;
-    autonomyChip.setAttribute("class", `pill pill-neutral lv-autonomy lv-autonomy-${goal.autonomy || "unknown"}`);
-    autonomyLine.textContent = [AUTONOMY_SENTENCE[goal.autonomy], present(state.since) ? `At this level since ${day(state.since)}.` : null].filter(Boolean).join(" ");
+    statusChip.setAttribute("class", `pill ${tone} has-info ap-status-${goal.status || "unknown"}`);
+    autonomyChip.textContent = AUTONOMY_WORDS[goal.autonomy] || goal.autonomy || DASH;
+    autonomyChip.setAttribute("class", `pill pill-neutral has-info lv-autonomy lv-autonomy-${goal.autonomy || "unknown"}`);
+    const level = [AUTONOMY_SENTENCE[goal.autonomy], present(state.since) ? `At this level since ${day(state.since)}.` : null].filter(Boolean).join(" ");
     const paused = goal.status === "paused";
     const canToggle = goal.status === "active" || paused;
     pauseBtn.textContent = paused ? "Resume" : pauseWord;
     // Pause is a red hairline (it stops sending); while paused, Resume is the one thing to do, so it is primary.
-    pauseBtn.setAttribute("class", paused ? "btn btn-primary lv-pause-btn" : "btn btn-danger lv-pause-btn");
+    pauseBtn.setAttribute("class", paused ? "btn btn-primary has-info lv-pause-btn" : "btn btn-danger has-info lv-pause-btn");
     pauseBtn.disabled = !canToggle;
     pauseBtn.setAttribute("aria-pressed", paused ? "true" : "false");
+    let hint;
     if (topbarPause) {
-      pauseHint.textContent = canToggle
+      hint = canToggle
         ? paused
           ? "Paused: the agent decides nothing and sends nothing until you press Resume at the top."
-          : "Running. Pause, at the top, stops every send for this goal at once."
+          : "Pause, at the top, stops every send for this goal at once."
         : "This goal is not running yet, so there is nothing to pause.";
     } else {
-      pauseHint.textContent = canToggle
+      hint = canToggle
         ? paused
           ? "Paused: the agent decides nothing and sends nothing until you resume."
           : "Stops every send for this goal at once. You can resume any time."
         : "This goal is not running, so there is nothing to pause.";
     }
+    pauseTip.textContent = hint;
+    // A tap on a button is its action, so the same words are its accessible name for touch screens.
+    pauseBtn.setAttribute("aria-label", `${pauseBtn.textContent}. ${hint}`);
+    autonomyTip.textContent = level;
+    statusTip.replaceChildren(...tipLines([ownAutonomyPill ? null : level, topbarPause || ownAutonomyPill ? hint : null]));
+    if (!statusTip.childNodes.length) statusTip.textContent = hint;
     paintSelfPause();
     paintBatches();
   };
@@ -779,18 +894,20 @@ export async function render(root, ctx) {
       h("section", { class: `lv-selfpause ${goalStopped ? "lv-selfpause-goal" : ""}`.trim(), role: goalStopped ? "alert" : null, "aria-labelledby": "lv-selfpause-title" },
         h("h2", { class: "lv-selfpause-title", id: "lv-selfpause-title" },
           h("span", { class: "lv-selfpause-icon", "aria-hidden": "true" }),
-          goalStopped ? "This goal paused itself" : `Autonomy paused some sending on its own (${auto.length})`),
+          goalStopped ? "This goal paused itself" : `Autonomy paused some sending on its own (${auto.length})`,
+          info([
+            "It does this by itself when complaints, unsubscribes or delivery problems pass the limits in your plan. ",
+            goalStopped ? "Nothing more goes out for this goal until you resume it." : "The rest keeps running. Every pause is in the Inbox.",
+          ].join(""), { label: "Why it paused" })),
         goalStopped && h("p", { class: "lv-selfpause-why" }, latestGoalStop.message || humanize(latestGoalStop.code)),
         h("ul", { class: "lv-selfpause-list" }, ...shown.filter((a) => !goalStopped || a !== latestGoalStop).map((a) =>
           h("li", null, h("span", { class: "lv-selfpause-when" }, when(a.at)), h("span", null, a.message || humanize(a.code),
-            !present(a.goal_id) && h("span", { class: "lv-selfpause-scope" }, " (every goal)"))))),
-        h("p", { class: "lv-selfpause-foot" },
-          "It does this by itself when complaints, unsubscribes or delivery problems pass the limits in your plan. ",
-          goalStopped ? "Nothing more goes out for this goal until you resume it." : "The rest keeps running. Every pause is in the Inbox.")));
+            !present(a.goal_id) && h("span", { class: "lv-selfpause-scope" }, " (every goal)")))))));
   }
 
   // Batches: shown only while the goal is at "approve each batch", loaded once per goal.
   const batchSec = liveSection("Waiting for your approval", { extraClass: "ap-batches lv-batches", skeleton: [16, 56, 56] });
+  batchSec.about("Nothing in a batch is sent until you approve it. Each message still follows the plan's limits. One click approves the whole batch. The expected numbers are its own forecast before sending, not a result.");
   const batchSlot = h("div", { class: "ap-batch-slot lv-batch-slot" });
   function paintBatches() {
     if (goal.autonomy !== "approve") {
@@ -882,37 +999,32 @@ export async function render(root, ctx) {
     });
   }
 
-  const header = h(
-    "header",
-    { class: "page-head lv-head" },
-    h("div", { class: "lv-head-text" },
-      h("h1", { class: "page-title" }, "Live"),
-      h("p", { class: "page-sub lv-goal" }, goal.text || goalId),
-      h("div", { class: "lv-status" }, statusChip, autonomyChip),
-      autonomyLine),
-    h("div", { class: "lv-pause" }, topbarPause ? null : pauseBtn, pauseHint),
-  );
+  const header = pageHeadBlock({
+    title: "Live",
+    sub: goal.text || goalId,
+    status: [h("span", { class: "info-host" }, statusChip, statusTip), ownAutonomyPill && h("span", { class: "info-host" }, autonomyChip, autonomyTip)],
+    actions: topbarPause ? [] : [h("span", { class: "info-host" }, pauseBtn, pauseTip)],
+  });
+  header.setAttribute("class", "page-head lv-head");
 
-  const todaySec = liveSection("Yesterday", { extraClass: "lv-today", id: "lv-today-title", skeleton: [24, 16, 92, 20, 20, 20] });
-  const briefingSec = liveSection("The full briefing", { extraClass: "ap-briefing lv-briefing", skeleton: [20, 16, 40, 40] });
+  const todaySec = liveSection("Yesterday", { extraClass: "lv-today", id: "lv-today-title", skeleton: [24, 92, 20, 20, 20] });
+  const briefingSec = liveSection("Briefing", { extraClass: "ap-briefing lv-briefing", skeleton: [40, 20, 20] });
   const learnedSec = liveSection("What it learned", { extraClass: "lv-learned-card", skeleton: [20, 20] });
-  const healthSec = liveSection("Customer health and safety stops", { extraClass: "lv-health-card", skeleton: [36, 36, 36, 36, 36] });
+  const healthSec = liveSection("Health and safety stops", { extraClass: "lv-health-card", skeleton: [20, 20, 20, 20, 20] });
   const inboxSec = liveSection("Inbox", { extraClass: "lv-inbox-card", skeleton: [56, 56] });
-  const feedSec = liveSection("Every decision, with its reason", { extraClass: "lv-feed-card", skeleton: [40, 64, 64, 64, 64] });
-  // Two rows of 8 + 4. The first answers "what happened, and what needs me?" (yesterday and the batches beside
-  // the inbox and health, two columns of about the same height); the second is the long feed beside what it
-  // learned and the full briefing. On a phone the columns stack in this same order, so the inbox and health come
-  // before the long feed and the reading order matches the DOM.
+  const feedSec = liveSection("Every decision", { extraClass: "lv-feed-card", skeleton: [40, 24, 24, 24, 24, 24] });
+  feedSec.about("Each row is one decision: who, what it chose, the reason in short, and what happened. Hover or tap the reason for the whole of it, the message and the send time; tap a name for everything it decided for that person. Leaving someone alone is a decision too, with its own reason, under the list.");
+  // Two columns of 8 + 4, each a stack of its own, so a short card never leaves a gap beside a tall one: the main
+  // column is the batches (on Approve, the one thing that needs the marketer), yesterday and the long feed; the side
+  // column is the inbox, health, what it learned and the briefing. On a phone the cards are one column in the order
+  // of the questions (batches, yesterday, inbox, health, then the feed, what it learned and the briefing), set in
+  // live.css, so the inbox and health still come before the long feed.
   page.append(
     header,
     selfPause,
-    h("div", { class: "grid lv-grid lv-grid-top" },
-      // On Approve the batches waiting for a person come first: they are the one thing that needs the marketer.
-      h("div", { class: "span-8 stack lv-main" }, batchSlot, todaySec.card),
-      h("div", { class: "span-4 stack lv-side" }, inboxSec.card, healthSec.card)),
-    h("div", { class: "grid lv-grid lv-grid-feed" },
-      h("div", { class: "span-8 stack lv-main" }, feedSec.card),
-      h("div", { class: "span-4 stack lv-side" }, learnedSec.card, briefingSec.card)),
+    h("div", { class: "grid lv-grid" },
+      h("div", { class: "span-8 stack lv-main" }, batchSlot, todaySec.card, feedSec.card),
+      h("div", { class: "span-4 stack lv-side" }, inboxSec.card, healthSec.card, learnedSec.card, briefingSec.card)),
     announcer,
   );
 
@@ -944,7 +1056,10 @@ export async function render(root, ctx) {
 
   // Yesterday: the pitch's daily briefing for this goal.
   todaySec.heading.textContent = todayValue ? dayName(todayValue.date, todayValue.as_of).title : "Day by day";
-  if (todayValue && present(todayValue.as_of)) todaySec.meta.textContent = `As of ${when(todayValue.as_of)}`;
+  // The meta is the time of the numbers; how many it looked at and when it checks next are its description.
+  if (todayValue && present(todayValue.as_of)) todaySec.setMeta(`As of ${when(todayValue.as_of)}`, checkedLine(todayValue));
+  const otherNotes = (todayValue?.notes || []).filter((n) => !/^Purchases are/.test(n));
+  if (otherNotes.length) todaySec.about(otherNotes.join(" "));
   if (today.status === "rejected") todaySec.body.replaceChildren(lvFailed("yesterday's numbers", today.reason, retry));
   else {
     todaySec.body.replaceChildren(...todayView(todayValue, {
@@ -962,15 +1077,24 @@ export async function render(root, ctx) {
   // The full (often weekly) briefing.
   if (briefing.status === "rejected") briefingSec.body.replaceChildren(lvFailed("today's briefing", briefing.reason, retry));
   else {
-    if (briefingValue) briefingSec.meta.textContent = `${briefingValue.period === "weekly" ? "Weekly" : "Daily"} · as of ${when(briefingValue.as_of)}`;
-    briefingSec.body.replaceChildren(...briefingView(briefingValue));
+    // Beside a Yesterday card with numbers, the headline repeats them: it is the meta's description instead.
+    const showHeadline = !(todayValue && todayValue.customers_considered);
+    const range = briefingValue ? headlineRange(briefingValue, currency) : null;
+    if (briefingValue) {
+      briefingSec.setMeta(`${briefingValue.period === "weekly" ? "Weekly" : "Daily"} · ${day(briefingValue.as_of).replace(/ \d{4}$/, "")}`, tipLines([
+        showHeadline ? null : plainGroupWords(briefingValue.headline),
+        showHeadline || !range ? null : `Range ${range}.`,
+        `As of ${when(briefingValue.as_of)}.`,
+      ]));
+    }
+    briefingSec.body.replaceChildren(...briefingView(briefingValue, { showHeadline, currency }));
   }
 
   // Activity feed
   if (feed.status === "rejected") feedSec.body.replaceChildren(lvFailed("the activity feed", feed.reason, retry));
   else {
     const n = (feed.value?.rows || []).length;
-    if (n) feedSec.meta.textContent = `The latest ${count(n)} ${n === 1 ? "decision" : "decisions"}`;
+    if (n) feedSec.setMeta(`Latest ${count(n)}`, `The latest ${count(n)} ${n === 1 ? "decision" : "decisions"} for this goal, newest first.`);
     feedSec.body.replaceChildren(...feedView(feed.value, { brief, contentIndex, autonomy: goal.autonomy, today: todayValue, openCustomer }));
   }
 
@@ -983,7 +1107,7 @@ export async function render(root, ctx) {
   inboxSec.heading.textContent = merged.length ? `Inbox (${merged.length})` : "Inbox";
   inboxSec.body.replaceChildren(
     ...(alerts.status === "rejected" ? [lvFailed("alerts", alerts.reason, retry)] : []),
-    ...inboxView(merged),
+    ...inboxView(merged, new Set(merged.filter((a) => a.auto_paused).slice(0, 3))),
   );
   paintHeader();
 
@@ -991,7 +1115,8 @@ export async function render(root, ctx) {
   if (health.status === "rejected") healthSec.body.replaceChildren(lvFailed("customer health", health.reason, retry));
   else {
     const asOf = health.value?.as_of || state.limits?.as_of;
-    if (present(asOf)) healthSec.meta.textContent = `As of ${when(asOf)}`;
+    if (present(asOf)) healthSec.setMeta(`As of ${when(asOf)}`);
+    if (state.limits) healthSec.about("Each stop pauses sending by itself, without waiting for you. You can always press Pause yourself. Hover or tap a figure's name for its limit.");
     healthSec.body.replaceChildren(...healthView(health.value, brief, state.limits));
   }
 
@@ -1004,13 +1129,12 @@ const BATCH_TONE = { pending: "warn", approved: "good", sent: "good", rejected: 
 
 function batchesView(batches, currency, decide, breakdowns = new Map()) {
   if (batches === null) {
-    return [lvEmpty("Batches to approve will be listed here. This server does not list them yet, so check back after the next update.")];
+    return [lvEmpty("Batches to approve show here. This server does not list them yet.")];
   }
   const { pending, decided } = splitBatches(batches);
   const out = [];
-  if (!pending.length) out.push(lvEmpty("Nothing is waiting for you. The agent holds each new batch here until you approve it."));
+  if (!pending.length) out.push(lvEmpty("Nothing is waiting for you."));
   else {
-    out.push(h("p", { class: "lv-intro" }, "Nothing in a batch is sent until you approve it. Each message still follows the plan's limits. One click approves the whole batch. The expected numbers are its own forecast before sending, not a result."));
     out.push(h("ul", { class: "list lv-batch-list ap-batches-list", "aria-label": "Batches waiting for approval, newest first" }, ...pending.map((b, i) => {
       const words = breakdowns.get(b.batch_id)?.words;
       const label = words || b.summary || `A batch of ${count(b.n_contacts)} contacts`;
@@ -1038,109 +1162,154 @@ function batchesView(batches, currency, decide, breakdowns = new Map()) {
   return out;
 }
 
-function todayView(today, { goal, brief, currency, proof, proofError, navigate }) {
+/** Why a left-alone reason's people end up there, for the reason's description (beyond the API's own words). */
+function reasonHint(code, cap) {
+  if (code === "weekly_cap" && present(cap)) return `Your limit: ${cap} a week.`;
+  if (code === "no_effect") return "This is where people who would buy anyway end up: a message, or a discount, would only cost you.";
+  if (code === "holdout") return "A small random group, so the Proof page can show the real difference.";
+  return null;
+}
+
+// Yesterday: the pitch's one sentence (its two counts set as figures), one strip of three numbers (each label holds
+// how it is measured), and why it left people alone as short labelled bars (each label holds the API's full words).
+// When it checked and checks next is the card's meta's description; only an overdue check shows as a line, because
+// it is a problem.
+function todayView(today, { brief, currency, proof, proofError }) {
   if (!today) {
-    return [lvEmpty("The day-by-day count is not available from this server yet. The full briefing, further down, has the overview.")];
+    return [lvEmpty("The day-by-day count is not available from this server yet.")];
   }
   if (!today.customers_considered) {
-    return [
-      h("p", { class: "lv-say" }, "Nothing was decided for this goal yet."),
-      h("p", { class: "lv-checked" }, checkedLine(today)),
-      ...(today.notes || []).filter((n) => !/^Purchases are/.test(n)).map((n) => h("p", { class: "lv-foot" }, n)),
-    ];
+    return [h("p", { class: "lv-say" }, "Nothing was decided for this goal yet.")];
   }
   const cur = today.currency || currency;
-  const d = dayName(today.date, today.as_of);
   const byGroup = today.contacted_by_group || {};
   const groupNote = present(byGroup.baseline) && byGroup.baseline > 0
     ? `${count(byGroup.agent || 0)} chosen by Autonomy, ${count(byGroup.baseline)} by the simple rule we compare it with.`
-    : today.sends_nothing ? "Shadow mode: nobody was actually messaged." : null;
+    : null;
   const shadow = today.sends_nothing || today.autonomy === "shadow";
   const reasons = today.reasons || [];
   const maxN = Math.max(1, ...reasons.map((r) => Number(r.n) || 0));
   const cap = brief?.envelope?.max_contacts_per_week;
 
   const reasonList = reasons.length
-    ? h("ul", { class: "lv-reasons", "aria-label": `Why ${count(today.left_alone)} customers were left alone` }, ...reasons.map((r) =>
-      h("li", { class: `lv-reason lv-reason-${r.code}` },
-        h("span", { class: "lv-reason-words" }, r.words || humanize(r.code),
-          r.code === "weekly_cap" && present(cap) && h("span", { class: "lv-reason-cap" }, ` (your limit: ${cap} a week)`),
-          r.code === "no_effect" && h("span", { class: "lv-reason-hint" }, "This is where people who would buy anyway end up: a message, or a discount, would only cost you."),
-          r.code === "holdout" && h("span", { class: "lv-reason-hint" }, "A small random group, so the Proof page can show the real difference.")),
+    ? h("ul", { class: "lv-reasons", "aria-label": `Why ${count(today.left_alone)} customers were left alone` }, ...reasons.map((r) => {
+      const short = reasonShort(r.code, r.words);
+      const full = [short !== r.words ? r.words : null, reasonHint(r.code, cap)].filter(Boolean);
+      return h("li", { class: `lv-reason lv-reason-${r.code}` },
+        h("span", { class: "lv-reason-words" }, explained(short, full.length ? full.join(". ").replace(/\.\./g, ".") : null)),
         h("span", { class: "lv-reason-bar", "aria-hidden": "true" }, h("span", { style: `width: ${Math.max(2, Math.round((100 * (Number(r.n) || 0)) / maxN))}%` })),
-        h("span", { class: "lv-reason-n num" }, count(r.n)))))
+        h("span", { class: "lv-reason-n num" }, count(r.n)));
+    }))
     : lvEmpty("Nobody was left alone that day.");
 
   const profit = profitWords(proof, cur);
-  // A sure result is set large with its range right under it (never the bare point); "Not sure yet" is a word.
-  const parts = profit.sure ? rangeParts(proof.incremental_profit, (v) => money(v, cur)) : null;
-  const profitValue = parts
-    ? h("dd", { class: "kpi-value lv-money" }, parts.point, h("span", { class: "lv-kpi-range" }, ` ${parts.range}`))
-    : h("dd", { class: "kpi-value lv-unsure" }, profit.value);
+  // A sure result is set large with its range right under it (never the bare point); "Not sure yet" is a word, and
+  // its best estimate's range stays on screen too.
+  const est = proof && proof.incremental_profit;
+  const parts = rangeParts(est, (v) => money(v, cur));
+  const rangeLine = parts ? parts.range.replace(/^\(range /, "Range ").replace(/\)$/, "") : null;
+  const profitCell = h("div", { class: `kpi lv-profit ${profit.sure ? "lv-stat-sure" : "lv-stat-unsure"}` },
+    h("dt", { class: "kpi-label" }, explained("Extra profit so far", [
+      "Measured against a small random group of customers it never contacts, since the goal started.",
+      proofError ? `Couldn't load the proof: ${errText(proofError)}` : profit.note,
+    ])),
+    profit.sure && parts
+      ? h("dd", { class: "kpi-value lv-money" }, parts.point)
+      : h("dd", { class: "kpi-value lv-unsure" }, profit.value),
+    rangeLine && h("dd", { class: "kpi-range lv-kpi-range" }, rangeLine),
+    proofError && h("dd", { class: "kpi-note" }, "Couldn't load the proof"));
+
   // The runtime's ledger (what the budget limit counts) prices the messages sent; the discounts customers used
-  // are counted on Proof, so the two spend figures differ and the footnote says which one this is.
+  // are counted on Proof, so the two spend figures differ and the description says which one this is.
   const spent = present(today.spend_to_date);
   const spentShare = spent && present(today.budget) && Number(today.budget) > 0
     ? Math.min(100, Math.max(0, (100 * Number(today.spend_to_date)) / Number(today.budget))) : null;
   const spentCell = h("div", { class: "kpi lv-spent" },
-    h("dt", { class: "kpi-label" }, "Spent on messages"),
+    h("dt", { class: "kpi-label" }, explained("Spent on messages", "The cost of the messages sent, as the budget limit counts it. Proof's spend also counts the discounts customers used.")),
     spent
       ? h("dd", { class: "kpi-value" }, money(today.spend_to_date, cur), h("span", { class: "lv-kpi-of" }, ` of ${money(today.budget, cur)}`))
       : h("dd", { class: "kpi-value is-missing" }, DASH),
     spentShare !== null && h("dd", { class: "lv-budget", role: "img", "aria-label": `Spent ${money(today.spend_to_date, cur)} of the ${money(today.budget, cur)} budget` },
       h("span", { class: "lv-budget-fill", style: `width: ${spentShare.toFixed(1)}%` })),
-    h("dd", { class: "kpi-note" }, spent ? (present(today.budget_left) ? `${money(today.budget_left, cur)} left.` : "The cost of the messages sent.") : "Spend is not recorded yet."));
+    spent && present(today.budget_left) && h("dd", { class: "kpi-note" }, `${money(today.budget_left, cur)} left`));
 
-  const messagesNote = shadow ? "Shadow mode sends nothing." : today.autonomy === "approve" && !Number(today.messages_sent)
-    ? "None yet: a batch goes out only after you approve it." : present(today.delivered) ? `${count(today.delivered)} delivered` : null;
+  // The two counts are figures inside the pitch's sentence, so the strip below does not show them a second time.
+  // What was sent and delivered, and the agent against simple-rule split, are the contacted figure's description.
+  const sent = shadow ? "Nothing sent." : today.autonomy === "approve" && !Number(today.messages_sent)
+    ? "None sent yet: a batch goes out only after you approve it."
+    : [present(today.messages_sent) ? `${count(today.messages_sent)} sent` : null, present(today.delivered) ? `${count(today.delivered)} delivered` : null].filter(Boolean).join(" · ") || null;
+  const about = {
+    contacted: [sent, groupNote, shadow ? "Shadow mode: nobody was actually messaged." : null],
+    left: ["Doing nothing is a decision too. Each one has a reason, below."],
+  };
+  const tips = [];
+  const figure = (part) => {
+    const node = h("strong", { class: "lv-say-n num" }, part.text);
+    const words = (about[part.key] || []).filter(present);
+    if (!words.length) return node;
+    // The box sits after the sentence (it is fixed-positioned when open), so the sentence's own text stays whole.
+    const tip = h("span", { class: "info-tip" }, ...tipLines(words));
+    describe(node, tip);
+    tips.push(tip);
+    return node;
+  };
+  const say = h("p", { class: "lv-say" }, ...briefingParts(today).map((p) => (typeof p === "string" ? p : figure(p))));
 
   return [
-    h("p", { class: "lv-say" }, briefingSentence(today)),
-    h("p", { class: "lv-checked" }, checkedLine(today)),
-    h("dl", { class: "kpis lv-big", style: "--kpi-count: 2" },
-      kpiCell(shadow ? "Would have contacted" : today.autonomy === "approve" ? "Picked to contact" : "Contacted", count(today.contacted), groupNote, "lv-big-item"),
-      kpiCell("Left alone", count(today.left_alone), "Doing nothing is a decision too. Each one has a reason.", "lv-big-item lv-big-quiet")),
+    say,
+    tips.length > 0 && h("span", { class: "info-host" }, ...tips),
+    today.run_overdue && present(today.next_run_at) && h("p", { class: "lv-checked lv-overdue" }, `The next check was due ${when(today.next_run_at)} and has not run yet.`),
+    h("dl", { class: "kpis lv-stats", style: "--kpi-count: 3" },
+      kpiCell("Purchases", count(today.purchases), present(today.revenue) ? `${money(today.revenue, cur)} in sales` : null, "",
+        "Every purchase by these customers, not only extra ones. The extra ones are the extra profit."),
+      profitCell,
+      spentCell),
     h("div", { class: "lv-block" },
-      h("h3", { class: "lv-subhead" }, `Why it left ${count(today.left_alone)} alone`),
-      reasonList,
-      h("p", { class: "lv-foot" }, "It looks for people whose behaviour a message can change, and weighs the cost of bothering someone every time, so leaving people alone often wins.")),
-    h("div", { class: "lv-block" },
-      h("h3", { class: "lv-subhead" }, `What came of it ${d.in}`),
-      h("dl", { class: "kpis lv-stats", style: "--kpi-count: 4" },
-        kpiCell("Messages sent", count(today.messages_sent), messagesNote),
-        kpiCell("Purchases", count(today.purchases), present(today.revenue) ? `${money(today.revenue, cur)} in sales, from every purchase by these customers, not only extra ones` : null),
-        h("div", { class: `kpi lv-profit ${profit.sure ? "lv-stat-sure" : "lv-stat-unsure"}` },
-          h("dt", { class: "kpi-label" }, "Extra profit so far"),
-          profitValue,
-          h("dd", { class: "kpi-note" }, proofError ? `Couldn't load the proof: ${errText(proofError)}` : profit.note)),
-        spentCell),
-      h("p", { class: "lv-foot" },
-        "Extra profit is measured against a small random group of customers it never contacts, since the goal started. ",
-        "Spent on messages is the cost of the messages sent, as the budget limit counts it; Proof's spend also counts the discounts customers used. ",
-        typeof navigate === "function" && present(goal?.goal_id)
-          ? h("a", { href: `#/proof/${encodeURIComponent(goal.goal_id)}` }, "See how it is measured on Proof")
-          : null)),
-    ...(today.notes || []).filter((n) => !/^Purchases are every purchase/.test(n)).map((n) => h("p", { class: "lv-foot" }, n)),
+      h("h3", { class: "lv-subhead" }, explained("Why it left them alone",
+        "It looks for people whose behaviour a message can change, and weighs the cost of bothering someone every time, so leaving people alone often wins.")),
+      reasonList),
   ].filter(Boolean);
 }
 
 function learnedView(learned) {
   if (!learned || !learned.length) {
-    return [lvEmpty("Nothing new yet. As it watches what happens after each message, it notes here what it changed.")];
+    return [lvEmpty("Nothing new yet: it notes here what it changes as it learns.")];
   }
   return [h("ul", { class: "list lv-learned" }, ...learned.map((t) => h("li", null, t)))];
 }
 
-function briefingView(briefing) {
+// The briefing (often weekly): one line per section, whose words open on hover or tap. Its headline is visible only
+// when there is no Yesterday card: beside one it repeats Yesterday's counts or its extra profit, so it moves into the
+// meta's description (DESIGN.md section 6, "say each thing once").
+function briefingView(briefing, { showHeadline = true, currency = null } = {}) {
   if (!briefing) return [lvEmpty("No briefing yet. The first one arrives after the agent's first full day.")];
+  const secs = (briefing.sections || []).filter((sec) => present(sec.title) || present(sec.body));
+  const range = headlineRange(briefing, currency);
   return [
-    h("p", { class: "lv-headline" }, briefing.headline || DASH),
-    h("div", { class: "lv-brief-secs" }, ...(briefing.sections || []).map((sec) =>
-      h("div", { class: "ap-brief-sec lv-brief-sec" }, h("h3", { class: "lv-brief-title" }, sec.title || DASH), h("p", null, sec.body || DASH)),
-    )),
-    /holdout/i.test([briefing.headline, ...(briefing.sections || []).map((x) => `${x.title} ${x.body}`)].join(" ")) &&
-      h("p", { class: "lv-foot" }, "“The holdout” means the small random group of people we never contact, so the difference can be measured."),
+    showHeadline && h("p", { class: "lv-headline" }, plainGroupWords(briefing.headline) || DASH),
+    showHeadline && range && h("p", { class: "kpi-range lv-headline-range" }, `Range ${range}`),
+    secs.length > 0 && h("ul", { class: "lv-brief-secs" }, ...secs.map((sec) =>
+      h("li", { class: "ap-brief-sec lv-brief-sec" },
+        explained(h("span", { class: "lv-brief-title" }, plainGroupWords(sec.title) || "More"), plainGroupWords(sec.body) || DASH)))),
   ].filter(Boolean);
+}
+
+/**
+ * The range of the money figure in a briefing's headline, from the briefing's own numbers: when a section has
+ * `x`, `x_low` and `x_high` and the headline shows `x` ("an extra $1,846"), "$636 to $3,056". Null when the
+ * headline has no such figure, so nothing is guessed.
+ */
+export function headlineRange(briefing, currency) {
+  const text = String(briefing?.headline || "");
+  if (!text) return null;
+  for (const sec of briefing.sections || []) {
+    const nums = sec?.numbers || {};
+    for (const key of Object.keys(nums)) {
+      const parts = rangeParts({ point: nums[key], low: nums[`${key}_low`], high: nums[`${key}_high`] }, (v) => money(v, currency));
+      if (parts && text.includes(parts.point)) return parts.range.replace(/^\(range /, "").replace(/\)$/, "");
+    }
+  }
+  return null;
 }
 
 function feedView(feed, opts) {
@@ -1148,9 +1317,6 @@ function feedView(feed, opts) {
   if (!acted.length && !leftAlone.length) return [lvEmpty("No decisions yet. They appear here as the agent makes them.")];
 
   const find = findCustomerForm(opts.openCustomer);
-  const intro = h("p", { class: "lv-intro" },
-    "Tap a customer to see everything it decided for them, and why.",
-    opts.today ? " The full counts for the day are in the card at the top." : "");
   const list = h("ol", { class: "list lv-feed ap-feed", "aria-label": "Customers contacted, newest first" });
   let shown = 0;
   const more = h("button", { type: "button", class: "btn btn-secondary btn-sm lv-more" });
@@ -1164,18 +1330,11 @@ function feedView(feed, opts) {
   showMore();
 
   const aloneList = h("ol", { class: "list lv-feed ap-feed ap-feed-quiet" }, ...leftAlone.map((r) => feedItem(r, opts)));
-  const alone = h(
-    "details",
-    { class: "ap-left-alone lv-fold" },
-    h("summary", null, `Left alone (${leftAlone.length})`),
-    h("p", { class: "lv-intro" }, "Choosing not to contact someone is a decision too. Each one says why."),
-    aloneList,
-  );
+  const alone = h("details", { class: "ap-left-alone lv-fold" }, h("summary", null, `Left alone (${leftAlone.length})`), aloneList);
 
   // replaceChildren() turns `false` into the text "false", so drop the parts that are not shown.
   return [
-    h("div", { class: "lv-feed-tools" }, intro, find),
-    h("h3", { class: "lv-subhead" }, `Contacted, in these decisions (${acted.length})`),
+    h("div", { class: "lv-feed-tools" }, h("h3", { class: "lv-subhead" }, `Contacted (${acted.length})`), find),
     acted.length ? list : lvEmpty("Nobody contacted in this window."),
     acted.length > FEED_PAGE ? more : null,
     leftAlone.length > 0 ? alone : null,
@@ -1184,11 +1343,9 @@ function feedView(feed, opts) {
 
 /** "Open a customer": any customer, by id, not only the ones in the latest decisions. */
 function findCustomerForm(openCustomer) {
-  const input = h("input", { class: "lv-find-input", id: "lv-find", name: "customer", type: "search", autocomplete: "off", placeholder: "e.g. cust_1042" });
+  const input = h("input", { class: "lv-find-input", id: "lv-find", name: "customer", type: "search", autocomplete: "off", placeholder: "Customer id", "aria-label": "Look up any customer by their id" });
   const btn = h("button", { type: "submit", class: "btn btn-secondary" }, "Open");
-  const form = h("form", { class: "lv-find", role: "search" },
-    h("label", { for: "lv-find", class: "lv-find-label" }, "Look up any customer by their id"),
-    h("div", { class: "lv-find-row" }, input, btn));
+  const form = h("form", { class: "lv-find", role: "search" }, h("div", { class: "lv-find-row" }, input, btn));
   form.addEventListener("submit", (e) => {
     if (e && typeof e.preventDefault === "function") e.preventDefault();
     const id = String(input.value || "").trim();
@@ -1197,7 +1354,7 @@ function findCustomerForm(openCustomer) {
   return form;
 }
 
-/** The customer's name when the data has one, with the id small; else the id alone. */
+/** The customer's first name when the data has one, with the id small and muted; else the id alone. */
 function whoButton(customerId, name, openCustomer) {
   const btn = present(name)
     ? h("button", { type: "button", class: "lv-who", "aria-label": `Open ${name} (customer ${customerId})` }, name, h("span", { class: "lv-id" }, customerId))
@@ -1221,6 +1378,9 @@ function comboParts(d, x, contentIndex, brief = null) {
   return parts;
 }
 
+// One line per decision: the person (first name, id muted), the action, the reason in short and what happened. The
+// whole reason, the message, the send time and when it decided are the short reason's description (hover or tap),
+// and everything else about the person is one tap away in the side panel.
 function feedItem(row, opts) {
   const { d, x } = row;
   const acted = d.kind === "act" && d.action;
@@ -1231,25 +1391,33 @@ function feedItem(row, opts) {
   const combo = comboParts(d, x, opts.contentIndex, opts.brief);
   const meta = [`Decided ${when(d.made_at)}`];
   if (acted && !combo.some((p) => p.startsWith("send time"))) meta.push(`send at ${when(d.action.send_at)}`);
+  const alone = !acted && x?.left_alone ? x.left_alone : null;
+  const short = alone ? reasonShort(alone.code, alone.words) : shortReason(d.reason);
+  const why = explained(h("span", { class: "lv-why ap-why" }, short), [
+    alone && h("span", { class: "lv-tip-line lv-alone-why" }, alone.words),
+    h("span", { class: "lv-tip-line" }, d.reason || DASH),
+    h("span", { class: "lv-tip-line lv-combo" }, [...combo, ...meta].join(" · ")),
+  ]);
   return h(
     "li",
     { class: `lv-row ap-feed-item ${acted ? "" : "ap-feed-nothing lv-row-alone"} ${img ? "lv-row-img" : ""}`.trim().replace(/\s+/g, " ") },
-    h("div", { class: "lv-row-top ap-feed-top" },
-      h("div", { class: "lv-row-what" }, who,
+    h("div", { class: "lv-row-who" }, who),
+    h("div", { class: "lv-row-what" },
+      img && h("img", { class: "lv-thumb", src: img, alt: "The image in this message", loading: "lazy", width: "24", height: "24",
+        // An image that cannot load leaves the row rather than showing a broken-image mark.
+        onerror: (e) => e?.target?.remove?.() }),
+      h("span", { class: "lv-row-act" },
         h("span", { class: "lv-action ap-what" }, describeAction(d, opts.brief)),
         d.group && d.group !== "agent" && chip(GROUP_CHIP[d.group] || groupLabel(d.group), "quiet", "lv-group")),
-      status && statusMark(status.word, status.tone)),
-    img && h("img", { class: "lv-thumb", src: img, alt: "The image in this message", loading: "lazy", width: "56", height: "56",
-      // An image that cannot load leaves the row rather than showing a broken-image mark.
-      onerror: (e) => e?.target?.remove?.() }),
-    !acted && x?.left_alone && h("p", { class: "lv-alone-why" }, x.left_alone.words),
-    h("p", { class: "lv-why ap-why" }, d.reason || DASH),
-    h("p", { class: "lv-combo" }, [...combo, ...meta].join(" · ")),
+      why),
+    status && statusMark(status.word, status.tone),
   );
 }
 
-function inboxView(alerts) {
-  if (!alerts.length) return [lvEmpty("Nothing needs you. Questions and automatic pauses land here.")];
+// `inBanner`: the self-pauses the amber banner above already names. Say each thing once: their row keeps its chips
+// and time, and its words become the description of a short line.
+function inboxView(alerts, inBanner = new Set()) {
+  if (!alerts.length) return [lvEmpty("Nothing needs you.")];
   return [
     h(
       "ul",
@@ -1263,7 +1431,9 @@ function inboxView(alerts) {
             chip(sev.word, sev.tone, "ap-sev"),
             a.auto_paused && chip("Auto-paused", "quiet", "ap-chip-paused"),
             h("span", { class: "lv-alert-when" }, when(a.at))),
-          h("p", { class: "lv-alert-msg" }, a.message || DASH),
+          inBanner.has(a) && present(a.message)
+            ? h("p", { class: "lv-alert-msg lv-alert-named" }, explained("Named in the banner above", a.message))
+            : h("p", { class: "lv-alert-msg" }, a.message || DASH),
           !present(a.goal_id) && h("p", { class: "lv-meta" }, "Affects every goal"),
         );
       }),
@@ -1286,6 +1456,12 @@ export function unsubscribeNote(rule) {
   return rule.words || null;
 }
 
+/** The other safety stops' short names (the plan's own words are each one's description). */
+const STOP_SHORT = { spend_pace: "Spending pace", whatsapp_quality: "WhatsApp quality" };
+
+// Health: one compact list, a figure's name on the left and its value on the right. Each limit (where it pauses,
+// and what) is the name's description; a figure past its limit says so in a red pill. The other safety stops
+// follow in the same list, each with "On", "Not running yet" or its current figure.
 function healthView(health, brief, limits) {
   if (!health && !limits) return [lvEmpty("No health numbers yet.")];
   const rules = new Map((limits?.rules || []).map((r) => [r.metric, r]));
@@ -1306,27 +1482,29 @@ function healthView(health, brief, limits) {
     { label: "Unsubscribes", value: pct(unsubNow), note: unsubscribeNote(unsub),
       bad: Boolean(unsub?.judged) && present(unsubNow) && present(unsub?.pause_at) && unsubNow >= unsub.pause_at },
     { label: "Blocks", value: pct(health?.block_rate), note: null, bad: false },
-    { label: "Contacts per customer per week", value: num(health?.contacts_per_customer_week, 2),
-      note: present(cap) ? `Hard cap ${cap} per customer` : null,
+    { label: "Weekly messages per customer", value: num(health?.contacts_per_customer_week, 2),
+      note: ["Messages per customer per week, on average.", present(cap) ? `Hard cap ${cap} per customer` : null].filter(Boolean).join(" "),
       bad: present(health?.contacts_per_customer_week) && present(cap) && health.contacts_per_customer_week > cap },
   ];
   const others = (limits?.rules || []).filter((r) => !["delivery_rate_below", "complaint_rate", "unsubscribe_multiple"].includes(r.metric));
+  for (const r of others) {
+    const now = r.metric === "spend_pace" && present(r.current) ? ` Now: spending at ${pct(r.current)} of the planned pace.` : "";
+    tiles.push({
+      label: STOP_SHORT[r.metric] || humanize(r.metric),
+      value: r.judged === false ? "Not running yet" : r.metric === "spend_pace" && present(r.current) ? pct(r.current) : "On",
+      note: `${r.words || humanize(r.metric)}${now}`,
+      bad: false,
+      stop: true,
+    });
+  }
   return [
-    // A list of figures against their limits, label left and value right, not a grid of tiles.
     h("dl", { class: "lv-metrics" }, ...tiles.map((t) =>
-      h("div", { class: `lv-metric ap-tile ${t.bad ? "ap-tile-bad lv-metric-bad" : ""}`.trim() },
-        h("dt", { class: "lv-metric-label" }, t.label),
-        h("dd", { class: `lv-metric-value ap-tile-value num${t.value === DASH ? " is-missing" : ""}` }, t.value,
+      h("div", { class: `lv-metric ${t.stop ? "lv-metric-stop" : "ap-tile"} ${t.bad ? "ap-tile-bad lv-metric-bad" : ""}`.trim() },
+        h("dt", { class: "lv-metric-label" }, explained(t.label, t.note)),
+        h("dd", { class: `lv-metric-value ${t.stop ? "" : "ap-tile-value "}num${t.value === DASH ? " is-missing" : ""}${t.stop && !/\d/.test(t.value) ? " lv-metric-word" : ""}` }, t.value,
           t.bad && h("span", { class: "visually-hidden" }, " · over the limit")),
-        t.bad && h("dd", { class: "lv-metric-flag" }, chip("Over the limit", "bad")),
-        t.note && h("dd", { class: "lv-metric-note" }, t.note)),
+        t.bad && h("dd", { class: "lv-metric-flag" }, chip("Over the limit", "bad"))),
     )),
-    others.length > 0 && h("h3", { class: "lv-subhead" }, "Other safety stops"),
-    others.length > 0 && h("ul", { class: "list lv-stops" }, ...others.map((r) =>
-      h("li", null, r.words || humanize(r.metric),
-        r.metric === "spend_pace" && present(r.current) && h("span", { class: "lv-stop-now" }, ` Now: spending at ${pct(r.current)} of the planned pace.`),
-        r.judged === false && h("span", { class: "lv-stop-now" }, " (not running yet)")))),
-    limits && h("p", { class: "lv-foot" }, "Each stop pauses sending by itself, without waiting for you. You can always press Pause yourself."),
     !present(health?.as_of || limits?.as_of) && h("p", { class: "lv-foot" }, `As of ${DASH}`),
   ].filter(Boolean);
 }
@@ -1413,7 +1591,8 @@ function knowList(st, insight, opts) {
     if (present(text)) {
       items.push(h("li", { class: "lv-know-item" },
         h("span", { class: "lv-know-label" }, label, h("span", { class: "visually-hidden" }, ": ")),
-        h("span", { class: "lv-know-text" }, text, note && h("span", { class: "lv-basis" }, ` ${note}`))));
+        // How it worked it out ("from 14 opens, clicks and replies") is the words' description.
+        h("span", { class: "lv-know-text" }, explained(text, note ? capital(String(note).replace(/^\((.*)\)$/, "$1")) : null))));
     }
   };
   add("Reading hours", insight?.best_hour_words || null, present(insight?.reads_counted) && present(insight?.best_hour) ? `(from ${count(insight.reads_counted)} opens, clicks and replies)` : null);
@@ -1428,7 +1607,8 @@ function knowList(st, insight, opts) {
 }
 
 /** A titled group in the panel, split from the one above by a hairline. */
-const panelSection = (title, ...kids) => h("section", { class: "lv-panel-sec" }, h("h3", { class: "lv-panel-h" }, title), ...kids);
+const panelSection = (title, about, ...kids) =>
+  h("section", { class: "lv-panel-sec" }, h("h3", { class: "lv-panel-h" }, title, present(about) ? info(about, { label: `About ${title}` }) : null), ...kids);
 
 function customerView(bundle, insight, opts) {
   const { currency, brief } = opts;
@@ -1469,20 +1649,20 @@ function customerView(bundle, insight, opts) {
   const know = knowList(st, insight, opts);
 
   return [
-    panelSection("What it knows about them",
+    panelSection("What it knows about them", null,
       know.length ? h("ul", { class: "lv-know" }, ...know) : lvEmpty("Nothing worked out yet beyond the facts below.")),
-    panelSection("Facts",
+    panelSection("Facts", null,
       h("dl", { class: "lv-facts ap-facts" }, ...rows.map(([k, v]) => {
         // A value we do not have is a faint dash, so the facts we do have stand out.
         const missing = /^[\s/\u2014]+$/.test(String(v));
         const cls = [NUMERIC.has(k) ? "num" : null, missing ? "is-missing" : null].filter(Boolean).join(" ") || null;
         return h("div", null, h("dt", null, k), h("dd", { class: cls }, v));
       }))),
-    panelSection("Channels",
+    panelSection("Channels", null,
       channels.length ? h("ul", { class: "list lv-channels" }, ...channels) : lvEmpty("No channels known.")),
     panelSection("Every decision and what happened",
-      entries.length ? h("ol", { class: "ap-timeline lv-timeline" }, ...entries) : lvEmpty("Nothing has happened yet."),
-      brief && h("p", { class: "lv-foot" }, "Forecasts are what it expected before acting, not results. Results are on Proof.")),
+      brief ? "Forecasts, and each option it weighed, are its own estimate before acting, not results. Results are on Proof." : null,
+      entries.length ? h("ol", { class: "ap-timeline lv-timeline" }, ...entries) : lvEmpty("Nothing has happened yet.")),
   ].filter(Boolean);
 }
 
@@ -1497,20 +1677,25 @@ function decisionEntry(at, d, insight, opts) {
   const bar = !holdout && present(d.attention_price) && (Number(d.attention_price) > 0 || (d.bids || []).length > 0)
     ? `The bar a message had to clear: ${fineMoney(d.attention_price, currency)} (the cost of bothering them again).` : null;
   const forecast = acted && present(d.expected_net) ? `Its forecast before sending: ${netWords(d.expected_net, currency)}.` : null;
-  const ruled = (d.blocked_by || []).map(ruleWords);
+  // A left-alone decision already says its rule on the line under it; "Ruled out" does not say it again.
+  const same = (a, b) => String(a || "").replace(/\.$/, "").trim().toLowerCase() === String(b || "").replace(/\.$/, "").trim().toLowerCase();
+  const ruled = (d.blocked_by || []).map(ruleWords).filter((w) => !(alone && same(w, alone.words)));
+  // The decision, what happened, the message and the reason in short stay on the panel; the whole reason is the short
+  // reason's description, and its forecast, the bar a message had to clear and the group note are the action's.
+  const head = acted ? `Decided: ${describeAction(d, brief)}` : "Decided: leave them alone";
+  const notes = [forecast, bar, holdout ? "In the small random group it never contacts, so Proof can measure the difference." : null].filter(Boolean);
   return h("li", { class: "ap-tl-item ap-tl-decision lv-tl-item lv-tl-decision" },
     h("span", { class: "ap-tl-when lv-tl-when" }, when(at)),
     h("div", { class: "lv-tl-head" },
-      h("span", { class: "lv-action ap-what" }, acted ? `Decided: ${describeAction(d, brief)}` : "Decided: leave them alone"),
+      explained(h("span", { class: "lv-action ap-what" }, head), notes.length ? notes.join(" ") : null),
       status && h("span", null, " ", chip(status.word, status.tone))),
     alone && h("p", { class: "lv-alone-why" }, alone.words),
     combo.length > 0 && h("p", { class: "lv-combo" }, combo.join(" · ")),
-    h("p", { class: "lv-why ap-why" }, h("span", { class: "ap-why-label" }, "Why: "), d.reason || DASH),
-    (forecast || bar) && h("p", { class: "lv-meta" }, [forecast, bar].filter(Boolean).join(" ")),
-    holdout && h("p", { class: "lv-meta" }, "In the small random group it never contacts, so Proof can measure the difference."),
+    // The reason in short, as in the feed; the whole of it is the short reason's description (hover, focus or tap).
+    h("p", { class: "lv-why ap-why" }, h("span", { class: "ap-why-label" }, "Why: "),
+      present(d.reason) && shortReason(d.reason) !== d.reason ? explained(shortReason(d.reason), d.reason) : d.reason || DASH),
     ruled.length > 0 && h("p", { class: "lv-meta" }, `Ruled out: ${ruled.join("; ")}.`),
     (d.bids || []).length > 0 && h("details", { class: "ap-bids lv-fold lv-bids" }, h("summary", null, `Options it weighed (${d.bids.length})`),
-      h("p", { class: "lv-meta" }, "Each line is its own estimate before sending, not a result."),
       h("ol", { class: "lv-bid-list" }, ...bidLabels(d.bids, opts).map((label, i) => bidItem(d.bids[i], d, label, opts)))),
   );
 }

@@ -231,6 +231,83 @@ test("el sets text as text, never as markup", () => {
   assert.equal(n.hasAttribute("hidden"), false);
 });
 
+// ---- descriptions, the page head, the segmented dial ---------------------------------------------------------
+test("withInfo: the words sit in the DOM as a hidden tooltip, linked to the target, opened on hover and tap", async () => {
+  const label = C.el("span", {}, "Extra profit");
+  const host = C.withInfo(label, "Orders from people we contact, minus what the same number of people we never contact bought.");
+  const tip = host.querySelector(".info-tip");
+  assert.ok(host.className.includes("info-host"));
+  assert.equal(tip.getAttribute("role"), "tooltip");
+  assert.equal(tip.hidden, true, "closed until asked: no visible words");
+  assert.equal(label.getAttribute("aria-describedby"), tip.id);
+  assert.equal(label.getAttribute("tabindex"), "0", "a label becomes reachable by keyboard");
+  assert.ok(label.className.includes("has-info"));
+  assert.ok(host.textContent.includes("people we never contact"), "tests and screen readers find the words");
+  await label.dispatch("pointerenter", { pointerType: "mouse" });
+  assert.equal(tip.hidden, true, "not before the hover delay");
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(tip.hidden, false, "open on hover after ~150 ms");
+  await label.dispatch("pointerleave", { pointerType: "mouse" });
+  assert.equal(tip.hidden, true);
+  await label.dispatch("click", { pointerType: "touch" });
+  assert.equal(tip.hidden, false, "a tap opens it");
+  await label.dispatch("click", { pointerType: "touch" });
+  assert.equal(tip.hidden, true, "a second tap closes it");
+  await label.dispatch("click", { pointerType: "touch" });
+  await label.dispatch("keydown", { key: "Escape" });
+  assert.equal(tip.hidden, true, "Esc closes it");
+  assert.equal(C.withInfo(label, ""), label, "no words, no description");
+});
+
+test("info: a quiet (i) button holding the description; on a button the action keeps the click", async () => {
+  const node = C.info("Counted from the orders data.", { label: "How this is counted" });
+  const dot = node.querySelector(".info-dot");
+  assert.equal(dot.tagName, "BUTTON");
+  assert.equal(dot.getAttribute("aria-label"), "How this is counted");
+  await dot.dispatch("click", { pointerType: "mouse" });
+  assert.equal(node.querySelector(".info-tip").hidden, false, "a click on the (i) opens it");
+  await dot.dispatch("keydown", { key: "Escape" });
+  assert.equal(C.info(null), null);
+  const pause = C.button("Pause", null);
+  C.withInfo(pause, "Stops all sending.");
+  assert.equal(pause.getAttribute("tabindex"), null, "a button is focusable already");
+  assert.equal(pause.listeners.click, undefined, "no tap toggle on a button: the action wins");
+});
+
+test("pageHead: title with its status pills, one line, the action on the right, the rest in a description", () => {
+  const head = C.pageHead({ title: "Proof", sub: "Did it make money?", status: [C.pill("Running", "good")], actions: [C.button("Share", null)], info: "How Proof is measured." });
+  assert.ok(head.className.includes("page-head"));
+  const row = head.querySelector(".page-title-row");
+  assert.equal(row.querySelector("h1").textContent, "Proof");
+  assert.ok(row.querySelector(".page-status").textContent.includes("Running"));
+  assert.ok(row.querySelector(".info-tip").textContent.includes("How Proof is measured."));
+  assert.equal(head.querySelector(".page-sub").textContent, "Did it make money?");
+  assert.ok(head.querySelector(".page-actions").textContent.includes("Share"));
+});
+
+test("segmented: one sentence under the track for the chosen option; every option's sentence in a description", async () => {
+  const options = [
+    { value: "shadow", label: "Shadow", hint: "Recommended to start", text: "Sends nothing." },
+    { value: "approve", label: "Approve", text: "You approve each batch." },
+    { value: "autopilot", label: "Autopilot", text: "Acts on its own." },
+  ];
+  const chosen = [];
+  const field = C.segmented({ legend: "Level", options, value: "approve", onChange: (v) => chosen.push(v) });
+  const note = field.querySelector(".segmented-note");
+  assert.equal(note.textContent, "You approve each batch.");
+  const tips = field.querySelectorAll(".info-tip");
+  assert.equal(tips.length, 3);
+  assert.ok(tips.every((t) => t.hidden && t.getAttribute("role") === "tooltip"));
+  for (const o of options) assert.ok(field.textContent.includes(o.text), o.value);
+  assert.ok(tips[0].textContent.startsWith("Recommended to start. "));
+  const inputs = field.querySelectorAll("input");
+  assert.equal(inputs[0].getAttribute("aria-describedby"), tips[0].id);
+  inputs[2].checked = true;
+  await inputs[2].dispatch("change");
+  assert.equal(note.textContent, "Acts on its own.", "the sentence follows the choice");
+  assert.deepEqual(chosen, ["autopilot"]);
+});
+
 // ---- routing -------------------------------------------------------------------------------------------------
 test("hash routes", () => {
   assert.deepEqual(parseHash("#/plan/goal_1"), { screen: "plan", goalId: "goal_1" });

@@ -70,6 +70,15 @@ class FakeElement extends FakeNode {
     this.hidden = false;
     this.disabled = false;
     this.value = "";
+    this.style = { setProperty(k, v) { this[k] = v; } };
+    this.dataset = {};
+  }
+  // components.js (the page head and the descriptions) sets classes through className.
+  get className() {
+    return this.attributes.class || "";
+  }
+  set className(v) {
+    this.attributes.class = String(v);
   }
   setAttribute(k, v) {
     this.attributes[k] = String(v);
@@ -119,6 +128,7 @@ const fakeDocument = {
   execCommand: () => true,
 };
 globalThis.document = fakeDocument;
+globalThis.Node = FakeNode;
 
 function all(node) {
   const out = [];
@@ -261,6 +271,17 @@ test("ordering compares instants, not text, so mixed offsets sort right", () => 
   assert.deepEqual(tl.map((x) => x.kind), ["decision", "event"]);
 });
 
+test("a decision row shows the start of the reason's why, never words that are not in it", () => {
+  const r = "Sent a quality message by email with no discount: the top option's estimate is uncertain, so a close alternative won this draw.";
+  assert.equal(operator.reasonPreview(r), "The top option's estimate is uncertain…");
+  assert.equal(operator.reasonPreview("Left alone: no consent."), "No consent");
+  assert.equal(operator.reasonPreview(""), "—");
+  for (const d of mock("decisions.json")) {
+    const words = operator.reasonPreview(d.reason).replace(/…$/, "").toLowerCase();
+    assert.ok(String(d.reason).toLowerCase().includes(words), d.decision_id);
+  }
+});
+
 test("the operator filters narrow the decisions", () => {
   const rows = mock("decisions.json");
   const acts = operator.filterDecisions(rows, { kind: "act" });
@@ -375,13 +396,13 @@ test("Proof shows ranges, group sizes, a chart and copies a summary", async () =
   const { ctx, toasts } = makeCtx(fakeApi());
   await proofScreen.render(root, ctx);
   const text = root.textContent;
-  assert.ok(text.includes("Range $900 to $7,700"));
-  assert.ok(text.includes("Range $0.05 to $0.71"));
+  assert.ok(text.includes("(likely $900 to $7,700)"));
+  assert.ok(text.includes("$0.05 to $0.71"));
   assert.ok(text.includes("8,120") && text.includes("1,015"));
   assert.ok(text.includes("$1,840"));
-  assert.ok(text.includes("Range 0.5× to 4.2×"));
+  assert.ok(text.includes("0.5× to 4.2×"));
   const charts = byTag(root, "svg");
-  assert.equal(charts.length, 2);
+  assert.equal(charts.length, 1, "one chart: the simple rule's single figure needs none");
   assert.equal(byClass(charts[0], "ap-bar").length, 2);
   assert.match(charts[0].getAttribute("aria-label"), /range/);
   const field = byTag(root, "textarea")[0];
@@ -393,7 +414,7 @@ test("Proof shows ranges, group sizes, a chart and copies a summary", async () =
 test("Proof with no notes renders no stray text", async () => {
   const root = new FakeElement("main");
   await proofScreen.render(root, makeCtx(fakeApi({ getProof: async () => ({ ...mock("proof.json"), notes: [] }) })).ctx);
-  assert.ok(root.textContent.includes("Range $900 to $7,700"));
+  assert.ok(root.textContent.includes("(likely $900 to $7,700)"));
   assert.ok(noJunk(root.textContent));
 });
 
@@ -431,13 +452,21 @@ test("Operator shows raw JSON, a filterable decisions table and customer lookup"
   const acts = mock("decisions.json").filter((d) => d.kind === "act").length;
   assert.equal(rowsNow(), acts);
   assert.ok(root.textContent.includes(`Showing ${acts} of ${total} fetched`));
-  // Customer lookup by id.
+  // Each row shows the start of the reason; the whole reason is that cell's description (hover, focus or tap).
+  const row = byTag(byTag(root, "tbody")[0], "tr")[0];
+  const id = byTag(row, "button").find((b) => (b.getAttribute("aria-label") || "").startsWith("Show JSON of ")).getAttribute("aria-label").slice(13);
+  const cell = byClass(row, "op-reason")[0];
+  const tip = all(cell).find((n) => n.getAttribute("role") === "tooltip");
+  assert.equal(tip.textContent, mock("decisions.json").find((d) => d.decision_id === id).reason);
+  assert.equal(tip.hidden, true);
+  // Customer lookup by id: the second form, above the long decisions list.
   const forms = byTag(root, "form");
-  const lookupInput = byTag(forms[2], "input")[0];
+  assert.ok(byTag(forms[1], "button").some((b) => b.textContent === "Look up"));
+  const lookupInput = byTag(forms[1], "input")[0];
   lookupInput.value = "cust_1042";
-  await forms[2].fire("submit");
+  await forms[1].fire("submit");
   assert.ok(root.textContent.includes("cust_1042 · Agent · 6 purchases · $412.50 revenue"));
   lookupInput.value = "cust_nobody";
-  await forms[2].fire("submit");
+  await forms[1].fire("submit");
   assert.ok(root.textContent.includes("No customer cust_nobody."));
 });
