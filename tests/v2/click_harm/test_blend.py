@@ -288,8 +288,12 @@ def test_purchases_take_off_a_gain_but_never_add_to_it() -> None:
     assert plain_uplift(bidder(harm, True), "stranger") == pytest.approx(before, abs=1e-12)
 
 
-def test_the_click_model_turns_purchase_weighting_on() -> None:
-    assert GoalBidder(sample_brief(NOW), sample_content(NOW), ClickResponseModel()).purchase_weighted
+def test_purchase_weighting_is_off_by_default_and_can_be_switched_on() -> None:
+    # Off by default: the full CI Gym showed no gain beyond seed noise (docs/v2/GYM_CI_RESULTS.md).
+    assert not GoalBidder(sample_brief(NOW), sample_content(NOW), ClickResponseModel()).purchase_weighted
+    assert GoalBidder(
+        sample_brief(NOW), sample_content(NOW), ClickResponseModel(), purchase_weighted=True
+    ).purchase_weighted
     assert not GoalBidder(sample_brief(NOW), sample_content(NOW), model()).purchase_weighted
     assert not GoalBidder(
         sample_brief(NOW), sample_content(NOW), ClickResponseModel(), purchase_weighted=False

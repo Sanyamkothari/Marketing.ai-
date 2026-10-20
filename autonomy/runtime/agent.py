@@ -476,10 +476,11 @@ class ClickResponseModel(BetaResponseModel):
     uplift read from clicks credits them with a message's full gain while their buying drops.
     Bidders that see `uplift_from_clicks` weigh each customer's click gain against their own
     purchases inside and outside message weeks (`autonomy.decide.bidders.ContactHarm.purchase_shift`),
-    by how well each is measured: see docs/v2/CLICK_HARM.md.
+    by how well each is measured: see docs/v2/CLICK_HARM.md. Off by default: the full CI Gym
+    (docs/v2/GYM_CI_RESULTS.md) showed no gain beyond seed noise and no sleeping dog spared.
     """
 
-    uplift_from_clicks = True
+    uplift_from_clicks = False
     """Read by `GoalBidder`: this model's uplift is implied by clicks, so its bids are weighed
     against each customer's purchases."""
 
