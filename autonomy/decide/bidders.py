@@ -67,7 +67,7 @@ import math
 import re
 import weakref
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
 from typing import Literal, Protocol
@@ -401,7 +401,7 @@ class HarmFit:
     spread: float = HARM_RATIO_SD
     """How far a band's (log) ratio was let stray from the business's: as far as the bands really
     differ beyond their own noise."""
-    segment_ratios: Mapping[str, float] = MappingProxyType({})
+    segment_ratios: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
     """Posterior mean ratio per segment, shrunk towards the business's."""
     holdout: int = 0
     """Holdout customers whose buying since the start set the organic baseline (0: not read)."""
