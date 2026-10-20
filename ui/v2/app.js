@@ -2,8 +2,12 @@
 // plus Operator mode, and a hash router that loads each screen as an ES module.
 //
 // Every screen module exports `render(root, ctx)`, where ctx = {api, goalId, navigate, toast} (plus `goal`, the
-// current Goal object or null, and `refreshGoals()`, for screens that change a goal). A screen that fails to
-// load shows a placeholder instead of breaking the app, so screens can be built and shipped one at a time.
+// current Goal object or null, `refreshGoals()`, for screens that change a goal, and `pauseInTopBar`, which tells
+// a screen that the top bar's Pause button is the one pause control). A screen that fails to load shows a
+// placeholder instead of breaking the app, so screens can be built and shipped one at a time.
+//
+// When the current goal is at "approve each batch", the top bar also shows how many batches wait for approval;
+// it links to the Live screen, where they are approved or rejected.
 
 import { createApi } from "./api.js";
 import { button, clear, el, emptyState, errorBox, humanize, loading, toast } from "./components.js";
@@ -51,6 +55,7 @@ const shell = {
   seq: 0,
   modules: new Map(),
   firstRender: true,
+  badgeSeq: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -200,7 +205,10 @@ async function loadGoals() {
 async function loadInbox() {
   try {
     const alerts = await api.listAlerts();
-    const open = (Array.isArray(alerts) ? alerts : []).filter((a) => a.severity !== "info");
+    // Count what the Live inbox shows for this goal: its own alerts and the account-wide ones, not other goals'.
+    const open = (Array.isArray(alerts) ? alerts : []).filter(
+      (a) => a.severity !== "info" && (!a.goal_id || !shell.goalId || a.goal_id === shell.goalId),
+    );
     const count = $("inbox-count");
     count.hidden = open.length === 0;
     count.textContent = String(open.length);
@@ -208,6 +216,61 @@ async function loadInbox() {
   } catch {
     /* the inbox count is a hint; the Live screen shows the inbox itself */
   }
+}
+
+/** The "to approve" link in the top bar, made once next to the inbox (index.html stays as it is). */
+function batchLink() {
+  const existing = $("batch-link");
+  if (existing) return existing;
+  const inbox = $("inbox-link");
+  if (!inbox || typeof inbox.before !== "function") return null;
+  const link = el(
+    "a",
+    { id: "batch-link", class: "inbox-link batch-link", href: "#/live" },
+    // `wordmark-text` is the class styles.css hides on a phone, so there the badge is only its count and the
+    // goal switcher keeps its room; the link's aria-label and title still say what it is.
+    el("span", { class: "wordmark-text", "aria-hidden": "true" }, "To approve"),
+    // The brand colour, not the inbox's red: a batch waiting is a task, not an alarm.
+    el("span", { id: "batch-count", class: "count", style: { background: "var(--brand)", color: "var(--brand-ink)" } }),
+  );
+  showBadge(link, false);
+  inbox.before(link);
+  return link;
+}
+
+/** `.inbox-link` sets `display`, which beats the `hidden` attribute, so set both. */
+function showBadge(link, on) {
+  link.hidden = !on;
+  link.style.display = on ? "" : "none";
+}
+
+/**
+ * Show how many batches wait for approval, for the current goal at "approve each batch". Hidden otherwise, and
+ * hidden too when the API has no batch route yet (listBatches answers null) or the call fails: it is a hint, and
+ * the Live screen says what is going on.
+ */
+async function loadBatchBadge() {
+  const link = batchLink();
+  if (!link) return;
+  const seq = ++shell.badgeSeq;
+  const g = currentGoal();
+  if (!g || g.autonomy !== "approve" || typeof api.listBatches !== "function") {
+    showBadge(link, false);
+    return;
+  }
+  let rows = null;
+  try {
+    rows = await api.listBatches(g.goal_id);
+  } catch {
+    rows = null;
+  }
+  if (seq !== shell.badgeSeq) return;
+  const pending = (Array.isArray(rows) ? rows : []).filter((b) => b.status === "pending").length;
+  showBadge(link, pending > 0);
+  link.setAttribute("href", hashFor("live", g.goal_id));
+  $("batch-count").textContent = String(pending);
+  link.setAttribute("aria-label", `${pending} ${pending === 1 ? "batch" : "batches"} waiting for your approval`);
+  link.title = "Approve or reject them on the Live screen. Nothing in a batch is sent until you approve it.";
 }
 
 /** Reload the goal list (after a screen created, approved, paused or resumed one) and redraw the bar. */
@@ -228,7 +291,9 @@ async function togglePause() {
     const next = pausing ? await api.pauseGoal(g.goal_id) : await api.resumeGoal(g.goal_id);
     if (!(next && next.goal_id)) await loadGoals(); // a full Goal updates the bar through onGoalChange
     toast(pausing ? "Paused. Nothing more will be sent for this goal until you resume." : "Resumed. The agent is acting inside the plan again.", pausing ? "warning" : "good");
-    route({ focus: false }); // redraw the screen, but leave keyboard focus on the button just pressed
+    // Live follows the change itself (api.onGoalChange), keeping its feed and any open customer panel. Other
+    // screens are redrawn, leaving keyboard focus on the button just pressed.
+    if (parseHash(location.hash).screen !== "live" || !(next && next.goal_id)) route({ focus: false });
   } catch (err) {
     toast(`Could not change the goal. ${err.message || ""}`.trim(), "critical");
     drawPause();
@@ -309,7 +374,7 @@ export async function route({ focus = true } = {}) {
       return;
     }
     clear(root);
-    const ctx = { api, goalId: shell.goalId, goal: currentGoal(), navigate, toast, refreshGoals };
+    const ctx = { api, goalId: shell.goalId, goal: currentGoal(), navigate, toast, refreshGoals, pauseInTopBar: Boolean($("pause-button")) };
     try {
       await mod.render(root, ctx);
     } catch (err) {
@@ -330,7 +395,11 @@ function start() {
     const { screen } = parseHash(location.hash);
     const current = ALL.find((s) => s.id === screen);
     if (current && (current.goal || current === OPERATOR)) navigate(current.id, id);
-    else drawTopbar(screen);
+    else {
+      drawTopbar(screen);
+      loadInbox();
+      loadBatchBadge();
+    }
   });
   $("pause-button").addEventListener("click", togglePause);
   // The skip link's "#main" would change the hash and the router would call it an unknown page: move focus
@@ -349,9 +418,15 @@ function start() {
     shell.goals = known ? shell.goals.map((g) => (g.goal_id === goal.goal_id ? goal : g)) : [...shell.goals, goal];
     drawSwitcher();
     drawPause();
+    loadBatchBadge(); // the autonomy may have moved to or from "approve each batch"
   });
-  window.addEventListener("hashchange", () => route());
-  route().then(loadInbox);
+  if (typeof api.onBatchChange === "function") api.onBatchChange(() => loadBatchBadge());
+  const afterRoute = () => {
+    loadInbox();
+    loadBatchBadge();
+  };
+  window.addEventListener("hashchange", () => route().then(afterRoute));
+  route().then(afterRoute);
 }
 
 if (typeof document !== "undefined" && document.getElementById("main")) start();

@@ -7,7 +7,9 @@
 // its own: it is used when the page is opened with ?mock=1, or when /v2 cannot be reached (no server, or a
 // server without the v2 routes). In mock mode the writes (create, approve, pause, content status) change an
 // in-memory copy for this page load only, so a click-through behaves; a reload starts again from the files.
-// The mock never computes a result: a goal made in mock mode has no proof, no briefing and no decisions.
+// The mock never computes a result: a goal made in mock mode has no proof, no briefing, no decisions and no
+// batches. A customer the sample file does not hold is pieced together from that customer's sample decisions
+// (group, channels, contact times); what the decisions cannot tell (purchases, revenue, events) stays missing.
 
 export class ApiError extends Error {
   constructor(status, code, message, body) {
@@ -30,6 +32,7 @@ export const MOCK_FILES = Object.freeze({
   proof: "proof.json",
   health: "health.json",
   alerts: "alerts.json",
+  batches: "batches.json",
 });
 
 // The values Goal.kind and Goal.objective may take (autonomy/contracts/goals.py), for the mock's checks.
@@ -53,13 +56,43 @@ export function mockParam(search) {
   return ["1", "true", "yes", ""].includes(v.toLowerCase());
 }
 
-/** The message a FastAPI error body carries: `{detail: "..."}`, `{detail: {message}}` or a 422 list. */
-function errorMessage(body, status) {
+/** "budget" from a 422 item's `loc` (["body", "budget"]): the field the person can fix, in words. */
+function fieldOf(item) {
+  const loc = Array.isArray(item && item.loc) ? item.loc.filter((p) => !["body", "query", "path"].includes(p)) : [];
+  const last = loc.length ? String(loc[loc.length - 1]) : "";
+  return last ? last.charAt(0).toUpperCase() + last.slice(1).replace(/_/g, " ") : "";
+}
+
+/**
+ * The message a FastAPI error body carries: `{detail: "..."}`, `{detail: {message}}` or a 422 list. A 422 list
+ * names the field each problem is in ("Budget: Input should be greater than or equal to 0"), because the
+ * validator's own words do not say which box to fix.
+ */
+export function errorMessage(body, status) {
   const detail = body && typeof body === "object" ? body.detail : null;
   if (typeof detail === "string") return detail;
   if (detail && typeof detail === "object" && !Array.isArray(detail) && detail.message) return String(detail.message);
-  if (Array.isArray(detail) && detail.length) return detail.map((d) => d && (d.msg || JSON.stringify(d))).join("; ");
+  if (Array.isArray(detail) && detail.length) {
+    return detail
+      .map((d) => {
+        const msg = d && typeof d === "object" ? d.msg || JSON.stringify(d) : String(d);
+        const field = fieldOf(d);
+        return field ? `${field}: ${msg}` : msg;
+      })
+      .join("; ");
+  }
   return `The Autonomy API answered ${status}.`;
+}
+
+/**
+ * True when a 404 means "this server has no such route" (FastAPI's own `{"detail": "Not Found"}`), not "no such
+ * thing". The batch endpoints arrive in a later API build, so a missing route is "not available yet", while a
+ * 404 that names the batch is a real answer.
+ */
+export function routeMissing(err) {
+  if (!err || (err.status !== 404 && err.status !== 405)) return false;
+  const detail = err.body && typeof err.body === "object" ? err.body.detail : err.body;
+  return err.status === 405 || detail === undefined || detail === null || detail === "Not Found";
 }
 
 function goalOfDecision(d) {
@@ -89,6 +122,7 @@ export function createApi(options = {}) {
   let probing = forced !== null && forced !== undefined ? Promise.resolve() : null;
   const listeners = new Set();
   const goalListeners = new Set();
+  const batchListeners = new Set();
 
   /** Tell subscribers a goal changed (paused, resumed, approved), so the shell's bar stays true. */
   function goalChanged(goal) {
@@ -101,6 +135,19 @@ export function createApi(options = {}) {
       }
     }
     return goal;
+  }
+
+  /** Tell subscribers a batch was approved or rejected, so the top bar's "to approve" count stays true. */
+  function batchChanged(batch) {
+    if (!batch || !batch.batch_id) return batch;
+    for (const fn of batchListeners) {
+      try {
+        fn(batch);
+      } catch {
+        /* a listener's failure is its own */
+      }
+    }
+    return batch;
   }
 
   function setMock(why) {
@@ -196,7 +243,7 @@ export function createApi(options = {}) {
   async function state() {
     if (store) return store;
     const [goals, detail] = await Promise.all([loadMock(MOCK_FILES.goals), loadMock(MOCK_FILES.goalDetail)]);
-    store = { goals: Array.isArray(goals) ? goals : [], details: new Map(), template: detail || null, primary: null, made: 0 };
+    store = { goals: Array.isArray(goals) ? goals : [], details: new Map(), template: detail || null, primary: null, made: 0, batches: null };
     if (detail && detail.goal) {
       store.primary = detail.goal.goal_id;
       if (!store.goals.some((x) => x.goal_id === detail.goal.goal_id)) store.goals.unshift(detail.goal);
@@ -245,12 +292,54 @@ export function createApi(options = {}) {
     return goal;
   }
 
+  /** The sample batches, loaded once and then changed in memory by approve and reject. */
+  async function mockBatches(s) {
+    if (!s.batches) {
+      const rows = await loadMock(MOCK_FILES.batches);
+      s.batches = Array.isArray(rows) ? rows : [];
+    }
+    return s.batches;
+  }
+
+  /**
+   * A customer the sample file does not hold, from their sample decisions: who they are (id, group) and which
+   * channels the agent picked for them (it only picks a channel it may use, so the address and consent are known
+   * there). Purchases, revenue, contacts and events are not in a decision (a planned send is not a contact yet),
+   * so they stay missing and the screens show an em dash. A customer with no sample decision is a 404, like the
+   * real API.
+   */
+  async function mockCustomer(id) {
+    const c = await loadMock(MOCK_FILES.customer);
+    if (c && c.state && c.state.customer_id === id) return c;
+    const all = (await loadMock(MOCK_FILES.decisions)) || [];
+    const mine = (Array.isArray(all) ? all : []).filter((d) => d && d.customer_id === id);
+    if (!mine.length) throw notFound(`Customer ${id}`);
+    const byTime = [...mine].sort((a, b) => Date.parse(b.made_at) - Date.parse(a.made_at));
+    const acts = byTime.filter((d) => d.kind === "act" && d.action);
+    const channels = {};
+    for (const d of acts) {
+      const ch = d.action.channel;
+      if (!channels[ch]) channels[ch] = { address_known: true, consent: true, unsubscribed: false };
+    }
+    const state = {
+      customer_id: id,
+      as_of: byTime[0].made_at,
+      group: byTime[0].group,
+      channels,
+      top_categories: [],
+      preferences: {},
+      scores: {},
+      open_complaint: false,
+    };
+    return { state, decisions: byTime, events: [] };
+  }
+
   async function mockRequest(method, path, body) {
     const url = new URL(path, "http://mock.invalid");
     const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
     const q = url.searchParams;
     const s = await state();
-    const key = `${method} /${parts.map((p, i) => (i > 0 && ["goals", "content", "customers"].includes(parts[i - 1]) ? "{id}" : p)).join("/")}`;
+    const key = `${method} /${parts.map((p, i) => (i > 0 && ["goals", "content", "customers", "batches"].includes(parts[i - 1]) ? "{id}" : p)).join("/")}`;
     const id = parts[1];
 
     switch (key) {
@@ -325,10 +414,23 @@ export function createApi(options = {}) {
         const limit = Number(q.get("limit"));
         return Number.isFinite(limit) && limit > 0 ? rows.slice(0, limit) : rows;
       }
-      case "GET /customers/{id}": {
-        const c = await loadMock(MOCK_FILES.customer);
-        if (c && c.state && c.state.customer_id === id) return c;
-        throw notFound(`Customer ${id}`);
+      case "GET /customers/{id}":
+        return mockCustomer(id);
+      case "GET /batches": {
+        const goalId = q.get("goal_id");
+        const rows = await mockBatches(s);
+        // Like the decisions: the sample batches belong to the sample goal, and a goal made here has none.
+        return clone(goalId ? rows.filter((b) => b.goal_id === goalId) : rows);
+      }
+      case "POST /batches/{id}/approve":
+      case "POST /batches/{id}/reject": {
+        const rows = await mockBatches(s);
+        const i = rows.findIndex((b) => b.batch_id === id);
+        if (i < 0) throw notFound(`Batch ${id}`);
+        if (rows[i].status !== "pending") throw new ApiError(409, "CONFLICT", `This batch was already ${rows[i].status}.`, null);
+        // Approving never pretends to send: the batch stays "approved" here, because nothing is sent in mock mode.
+        rows[i] = { ...rows[i], status: parts[2] === "approve" ? "approved" : "rejected", decided_by: "you", decided_at: now().toISOString() };
+        return clone(rows[i]);
       }
       case "GET /briefing":
       case "GET /proof": {
@@ -380,6 +482,11 @@ export function createApi(options = {}) {
       goalListeners.add(fn);
       return () => goalListeners.delete(fn);
     },
+    /** Call `fn(batch)` after any screen approves or rejects a batch. Returns an unsubscribe function. */
+    onBatchChange(fn) {
+      batchListeners.add(fn);
+      return () => batchListeners.delete(fn);
+    },
 
     /** GET /v2/goals -> [Goal] */
     listGoals: () => get("/goals"),
@@ -426,6 +533,22 @@ export function createApi(options = {}) {
     listAlerts: () => get("/alerts"),
     /** GET /v2/opportunities -> [Goal] */
     listOpportunities: () => get("/opportunities"),
+    /**
+     * GET /v2/batches?goal_id= -> [Batch], or null when this API build has no batch route yet (it answers
+     * FastAPI's own 404), so a screen can say "not available" instead of showing an error or an empty inbox.
+     */
+    listBatches: (goalId) =>
+      get(`/batches${query({ goal_id: goalId })}`).then(
+        (rows) => (Array.isArray(rows) ? rows : []),
+        (err) => {
+          if (routeMissing(err)) return null;
+          throw err;
+        },
+      ),
+    /** POST /v2/batches/{id}/approve -> Batch */
+    approveBatch: (batchId) => post(`/batches/${enc(batchId)}/approve`).then(batchChanged),
+    /** POST /v2/batches/{id}/reject -> Batch */
+    rejectBatch: (batchId) => post(`/batches/${enc(batchId)}/reject`).then(batchChanged),
 
     /**
      * What data is connected, from the v1 app's GET /datasets (the Data Doctor builds those). Null when it is
@@ -465,6 +588,7 @@ export function createApi(options = {}) {
     getAlerts: api.listAlerts,
     opportunities: api.listOpportunities,
     getOpportunities: api.listOpportunities,
+    batches: api.listBatches,
   });
   return api;
 }

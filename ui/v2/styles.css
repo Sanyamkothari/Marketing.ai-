@@ -171,11 +171,12 @@ a:hover {
   background: var(--surface);
   color: var(--brand);
   border-radius: var(--r-sm);
-  box-shadow: var(--pop);
 }
 
+/* The shadow only while focused: parked above the page, its blur still showed in the top-left corner. */
 .skip-link:focus {
   top: 8px;
+  box-shadow: var(--pop);
 }
 
 .muted {
@@ -511,6 +512,7 @@ label {
 .grid-2 {
   display: grid;
   gap: 16px;
+  margin-bottom: 16px;
 }
 
 .grid-2 > .card {
@@ -923,6 +925,66 @@ th {
   font-size: 14px;
 }
 
+/* ---- phones ---------------------------------------------------------------------------------------------- */
+/* The top bar is sticky, so on a phone it must stay short: one row (the mark, the goal, Inbox, Pause) plus
+   the nav. The wordmark's text is hidden there (the link keeps its aria-label), and the nav is tightened so
+   the five steps fit at 390px; Operator mode scrolls into view, and the fade on the right says there is more. */
+@media (max-width: 719px) {
+  .topbar-row {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+
+  .wordmark-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .goal-switcher {
+    flex: 1 1 auto;
+  }
+
+  .topbar-actions {
+    gap: 4px;
+  }
+
+  .inbox-link {
+    padding: 8px 6px;
+  }
+
+  .topbar-actions .btn {
+    padding: 8px 12px;
+  }
+
+  .nav {
+    gap: 4px;
+    padding-right: 32px;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+
+  .nav-list {
+    gap: 0;
+  }
+
+  .nav-link,
+  .operator-link {
+    gap: 5px;
+    padding: 10px 6px 12px;
+    font-size: 14px;
+  }
+
+  .nav-step {
+    width: 18px;
+    height: 18px;
+    font-size: 11px;
+  }
+}
+
 /* ---- wider screens --------------------------------------------------------------------------------------- */
 @media (min-width: 720px) {
   :root {
@@ -933,9 +995,15 @@ th {
     font-size: 28px;
   }
 
+  /* Cards in a row keep their own height, so a short empty state does not become a tall empty box. */
   .grid-2 {
     grid-template-columns: 1fr 1fr;
-    margin-bottom: 16px;
+    align-items: start;
+  }
+
+  /* A budget is a short number; a field the full width of the page made it look like a text box. */
+  .form-row .field:not(.field-narrow) {
+    flex: 0 1 320px;
   }
 
   .facts {

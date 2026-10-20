@@ -86,6 +86,12 @@
   line-height: 1.55;
   box-sizing: border-box;
 }
+/* Inside the app shell, .main already gives the page its gutter and width; a second padding pushed these
+   screens 16px in from the top bar and the other screens, and cost a phone 24px of width. */
+.main .ap-page {
+  max-width: none;
+  padding: 0;
+}
 .ap-page *,
 .ap-page *::before,
 .ap-page *::after {
@@ -594,10 +600,11 @@
 
 /* ---- proof chart ------------------------------------------------------------------------------- */
 
+/* The chart is drawn in a 480-unit viewBox; at most 480px wide its text is the size the CSS says. */
 .ap-chart {
   display: block;
   width: 100%;
-  max-width: 640px;
+  max-width: 480px;
   height: auto;
   margin: 4px 0 8px;
 }
@@ -612,6 +619,10 @@
 }
 .ap-chart .ap-chart-label {
   font-weight: 600;
+}
+/* Value notes start where the bars start, which is the zero line when nothing is negative; nudge them off it. */
+.ap-chart .ap-chart-note:not([text-anchor]) {
+  transform: translateX(6px);
 }
 .ap-bar {
   fill: var(--ap-bar);
@@ -666,7 +677,16 @@
   background: var(--ap-surface-2);
   position: sticky;
   top: 0;
+}
+/* Short cells (time, ids, channel and offer, policy names) read badly broken over lines; only the reason
+   wraps, and on a narrow screen the table scrolls sideways inside .ap-table-wrap instead. Two-word headers
+   ("Attention price", "Exp. net") may wrap: with every cell on one line, whole headers made the decisions
+   table about 30px wider than a desktop card and cut off its JSON buttons. */
+.ap-table td {
   white-space: nowrap;
+}
+.ap-table td.ap-reason {
+  white-space: normal;
 }
 .ap-num {
   text-align: right;
@@ -710,6 +730,14 @@
   .ap-facts > div {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
+  }
+  /* The chart shrinks to the card (about 0.7 of its 480-unit viewBox), which made its text about 9px.
+     Bigger text in viewBox units keeps it near 11px; the longest labels still fit their columns. */
+  .ap-chart text {
+    font-size: 17px;
+  }
+  .ap-chart .ap-chart-note {
+    font-size: 16px;
   }
 }
 

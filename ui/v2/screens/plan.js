@@ -273,7 +273,15 @@ export async function render(root, ctx) {
   try {
     detail = await ctx.api.getGoal(ctx.goalId);
   } catch (err) {
-    clear(root, el("h1", {}, "Plan"), errorBox("Could not load this goal's plan.", err));
+    // A 404 is an answer (no such goal: a stale link or a goal from another workspace), not a failure.
+    const missing = err && err.status === 404;
+    clear(
+      root,
+      el("h1", {}, "Plan"),
+      missing
+        ? emptyState("This goal was not found", "It may have been removed, or the link is mistyped. Pick another goal from the switcher at the top.", button("Go to Goal", () => ctx.navigate("goal"), { kind: "primary" }))
+        : errorBox("Could not load this goal's plan.", err),
+    );
     return;
   }
   const goal = (detail && detail.goal) || ctx.goal;
@@ -302,6 +310,16 @@ export async function render(root, ctx) {
     brief ? briefCard(goal, brief) : emptyState("The plan is still being drafted", "The Strategist has not finished this plan yet. Check back in a moment."),
     contentSection(ctx, goal, brief, content || []),
     brief ? dial(ctx, goal, brief, rerender) : null,
-    goal.status === "active" || goal.status === "paused" ? el("p", {}, el("a", { href: `#/live/${encodeURIComponent(goal.goal_id)}` }, "See it working on the Live screen →")) : null,
+    goal.status === "active" || goal.status === "paused"
+      ? el(
+          "p",
+          {},
+          el(
+            "a",
+            { href: `#/live/${encodeURIComponent(goal.goal_id)}` },
+            goal.autonomy === "approve" ? "Approve its batches on the Live screen →" : "See it working on the Live screen →",
+          ),
+        )
+      : null,
   );
 }

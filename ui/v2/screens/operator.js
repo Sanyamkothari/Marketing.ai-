@@ -2,7 +2,8 @@
    (plan-v2.md section 9).
 
    Three tools on one page:
-     - the raw JSON of the goal, its brief, its content library and its proof, exactly as the API sent it;
+     - the raw JSON of the goal, its brief, its content library, its proof and its approval batches,
+       exactly as the API sent them;
      - a decisions table with filters (customer, kind, group, channel, words in the reason) and the
        raw JSON of any row;
      - a customer lookup by id: state, decisions and events, as a table and as raw JSON.
@@ -150,12 +151,26 @@ export async function render(root, ctx) {
     }
     goalId = bundle.goal?.goal_id ?? id;
     goalInput.value = goalId || "";
+    // Batches: null when this API build has no batch route; an error here never hides the rest.
+    let batches;
+    let batchNote = null;
+    try {
+      batches = typeof api?.listBatches === "function" ? await api.listBatches(goalId) : null;
+      if (batches === null) batchNote = "This API does not list batches yet.";
+    } catch (e) {
+      batches = undefined;
+      batchNote = `Couldn't load batches: ${errText(e)}`;
+    }
     goalOut.replaceChildren(
-      h("p", { class: "ap-small" }, `Status ${bundle.goal?.status ?? DASH} · autonomy ${bundle.goal?.autonomy ?? DASH} · currency ${bundle.goal?.currency ?? DASH}`),
-      jsonBlock("Goal", bundle.goal, ctx, announcer, true),
-      jsonBlock("Brief", bundle.brief, ctx, announcer),
-      jsonBlock(`Content (${(bundle.content || []).length})`, bundle.content, ctx, announcer),
-      jsonBlock("Proof", bundle.proof, ctx, announcer),
+      ...[
+        h("p", { class: "ap-small" }, `Status ${bundle.goal?.status ?? DASH} · autonomy ${bundle.goal?.autonomy ?? DASH} · currency ${bundle.goal?.currency ?? DASH}`),
+        jsonBlock("Goal", bundle.goal, ctx, announcer, true),
+        jsonBlock("Brief", bundle.brief, ctx, announcer),
+        jsonBlock(`Content (${(bundle.content || []).length})`, bundle.content, ctx, announcer),
+        jsonBlock("Proof", bundle.proof, ctx, announcer),
+        Array.isArray(batches) ? jsonBlock(`Batches (${batches.length})`, batches, ctx, announcer) : null,
+        batchNote ? h("p", { class: "ap-muted ap-small" }, batchNote) : null,
+      ].filter(Boolean),
     );
   }
 

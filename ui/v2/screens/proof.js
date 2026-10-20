@@ -20,6 +20,7 @@ import {
   failed,
   h,
   money,
+  notFound,
   notify,
   num,
   pageHead,
@@ -33,6 +34,15 @@ const NOT_ENOUGH = "Not enough data yet";
 
 /** Return on spend as a multiple: 2.3 reads "2.3×" (each unit spent brought 2.3 back in extra profit). */
 export const times = (v) => (present(v) ? `${num(v, 1)}×` : DASH);
+
+/**
+ * One precision for the whole estimate: when any of its numbers is 1,000 or more, all three are shown whole, so a
+ * range never reads "$1,418 (range $766.92 to $2,068)". Rounding is for display only; the API's values are kept.
+ */
+export function estimateFormat(est, fmt) {
+  const big = Boolean(est) && [est.point, est.low, est.high].some((v) => present(v) && Math.abs(Number(v)) >= 1000);
+  return big ? (v) => fmt(present(v) ? Math.round(Number(v)) : v) : fmt;
+}
 
 /** True when an estimate's range runs through zero, so we cannot yet say which way it goes. */
 export const straddlesZero = (est) => Boolean(est) && est.low <= 0 && est.high >= 0;
@@ -52,8 +62,8 @@ export function proofSummaryText(proof, goal) {
   const revenue = proof.incremental_revenue;
   if (profit || revenue) {
     const bits = [];
-    if (profit) bits.push(`${range(profit, m)} in extra profit`);
-    if (revenue) bits.push(`${range(revenue, m)} in extra revenue`);
+    if (profit) bits.push(`${range(profit, estimateFormat(profit, m))} in extra profit`);
+    if (revenue) bits.push(`${range(revenue, estimateFormat(revenue, m))} in extra revenue`);
     out.push(`Compared with leaving customers alone, the agent made ${bits.join(" and ")}.`);
     if (profit && straddlesZero(profit)) out.push("The profit range includes zero, so the gain is not yet certain.");
   } else {
@@ -61,7 +71,7 @@ export function proofSummaryText(proof, goal) {
   }
   const lift = proof.lift_vs_baseline;
   if (lift) {
-    out.push(`Against the simple rule, it made ${range(lift, m)} more profit per customer.`);
+    out.push(`Against the simple rule, it made ${range(lift, estimateFormat(lift, m))} more profit per customer.`);
     if (straddlesZero(lift)) out.push("That range includes zero, so it has not yet clearly beaten the simple rule.");
   } else {
     out.push("There is not enough data yet to compare with the simple rule.");
@@ -70,7 +80,7 @@ export function proofSummaryText(proof, goal) {
     `Groups: ${count(proof.agent_n)} customers decided by the agent, ${count(proof.baseline_n)} by the simple rule, and ${count(proof.holdout_n)} never contacted.`,
   );
   const spend = `Spend so far: ${m(proof.spend)}`;
-  out.push(proof.roi ? `${spend}; return on spend ${range(proof.roi, times)}.` : `${spend}.`);
+  out.push(proof.roi ? `${spend}; return on spend ${range(proof.roi, estimateFormat(proof.roi, times))}.` : `${spend}.`);
   for (const note of proof.notes || []) out.push(String(note));
   out.push("Ranges are 95% intervals.");
   return out.join(" ");
@@ -94,7 +104,7 @@ export function estimateChart(rows, fmt, label) {
   const H = top + rows.length * rowH + 20;
   const x = (v) => L + ((v - lo) / span) * (W - L - R);
   const x0 = x(0);
-  const described = rows.map((r) => `${r.label}: ${r.est ? range(r.est, fmt) : NOT_ENOUGH}`).join("; ");
+  const described = rows.map((r) => `${r.label}: ${r.est ? range(r.est, estimateFormat(r.est, fmt)) : NOT_ENOUGH}`).join("; ");
 
   const parts = [s("title", null, `${label}. ${described}`)];
   rows.forEach((r, i) => {
@@ -111,7 +121,7 @@ export function estimateChart(rows, fmt, label) {
       s("line", { x1: x(r.est.low), x2: x(r.est.high), y1: cy, y2: cy, class: "ap-err" }),
       s("line", { x1: x(r.est.low), x2: x(r.est.low), y1: cy - 7, y2: cy + 7, class: "ap-err" }),
       s("line", { x1: x(r.est.high), x2: x(r.est.high), y1: cy - 7, y2: cy + 7, class: "ap-err" }),
-      s("text", { x: L, y: cy + 27, class: "ap-chart-note" }, range(r.est, fmt)),
+      s("text", { x: L, y: cy + 27, class: "ap-chart-note" }, range(r.est, estimateFormat(r.est, fmt))),
     );
   });
   parts.push(
@@ -122,7 +132,8 @@ export function estimateChart(rows, fmt, label) {
 }
 
 /** A stat tile whose value is an estimate with its range, or "not enough data yet". */
-function estimateTile(title, est, fmt, hint) {
+function estimateTile(title, est, baseFmt, hint) {
+  const fmt = estimateFormat(est, baseFmt);
   return h(
     "div",
     { class: "ap-tile" },
@@ -172,6 +183,13 @@ export async function render(root, ctx) {
   }
   const goal = bundle?.goal || null;
   const goalId = goal?.goal_id ?? (present(ctx.goalId) ? ctx.goalId : null);
+
+  // No such goal: say so, rather than "not enough data yet" (the API answers null proof for an unknown goal).
+  if (goalError && notFound(goalError)) {
+    page.append(pageHead("Proof", `There is no goal ${ctx.goalId}.`),
+      h("div", { class: "ap-card" }, empty("It may have been removed, or the link is mistyped. Pick a goal from the switcher at the top.")), announcer);
+    return;
+  }
 
   page.append(pageHead("Proof", goal ? goal.text : "The whole programme"));
   if (goalError) page.append(h("p", { class: "ap-muted ap-small" }, `Couldn't load the goal (${errText(goalError)}); amounts are shown without a currency.`));

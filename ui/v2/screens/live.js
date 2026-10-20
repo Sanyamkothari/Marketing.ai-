@@ -1,10 +1,15 @@
 /* Live: what the agent is doing right now, and why (plan-v2.md section 9, screen 4).
 
-   One page holds today's briefing, the activity feed (every decision with its reason sentence, the
-   "left alone" ones folded away with a count), the inbox of alerts (and what paused itself), the
-   customer health numbers next to the limits in the approved brief, and one button that pauses or
-   resumes the goal. Clicking a customer opens a side panel with their state and a timeline of
-   events and decisions, each decision with its "why".
+   One page holds the batches waiting for approval (when the goal is at "approve each batch"), today's
+   briefing, the activity feed (every decision with its reason sentence, the "left alone" ones folded
+   away with a count), the inbox of alerts (and what paused itself), and the customer health numbers
+   next to the limits in the approved brief. Clicking a customer opens a side panel with their state
+   and a timeline of events and decisions, each decision with its "why".
+
+   Pausing: inside the app the top bar's Pause button is the one control (ctx.pauseInTopBar), and this
+   page only shows the goal's state, following every change through api.onGoalChange. Two buttons that
+   did the same thing with different words were confusing. Drawn on its own (no top bar), the page
+   keeps its own Pause button so it never loses the one-click stop.
 
    Rules this file keeps, because the marketer reads these numbers as facts:
      - a value the API did not send is an em dash, never a guess or a zero;
@@ -281,6 +286,28 @@ export function timeline(bundle) {
 
 // ---- the screen -------------------------------------------------------------------------------------
 
+/** Batches waiting for a person, newest first, then the decided ones, most recently decided first. */
+export function splitBatches(batches) {
+  const rows = [...(batches || [])];
+  return {
+    pending: rows.filter((b) => b.status === "pending").sort(newestFirst((b) => b.created_at)),
+    decided: rows.filter((b) => b.status !== "pending").sort(newestFirst((b) => b.decided_at || b.created_at)),
+  };
+}
+
+const BATCH_WORDS = { pending: "Waiting for you", approved: "Approved", rejected: "Rejected", sent: "Sent" };
+
+/** "3 contacts · expected net profit $6.34 · expected spend $0.10 · prepared 20 Oct, 13:00" */
+export function batchFacts(batch, currency) {
+  const n = batch.n_contacts;
+  return [
+    `${count(n)} ${Number(n) === 1 ? "contact" : "contacts"}`,
+    `expected net profit ${money(batch.expected_net, currency)}`,
+    `expected spend ${money(batch.expected_spend, currency)}`,
+    `prepared ${when(batch.created_at)}`,
+  ].join(" · ");
+}
+
 const FEED_PAGE = 20;
 const STATUS_WORDS = { active: "Running", paused: "Paused", draft: "Not started", done: "Finished" };
 const AUTONOMY_WORDS = { shadow: "Shadow (sends nothing)", approve: "Approve each batch", autopilot: "Autopilot" };
@@ -301,7 +328,14 @@ export async function render(root, ctx) {
   try {
     bundle = await resolveGoal(ctx);
   } catch (e) {
-    page.append(pageHead("Live"), failed("the goal", e), announcer);
+    if (notFound(e)) {
+      page.append(
+        pageHead("Live", `There is no goal ${ctx.goalId}.`),
+        h("div", { class: "ap-card" }, empty("It may have been removed, or the link is mistyped. Pick a goal from the switcher at the top."),
+          typeof ctx.navigate === "function" && h("button", { class: "ap-btn", type: "button", onclick: () => ctx.navigate("goal") }, "Go to Goal")),
+        announcer,
+      );
+    } else page.append(pageHead("Live"), failed("the goal", e), announcer);
     return;
   }
   if (!bundle || !bundle.goal) {
@@ -318,9 +352,10 @@ export async function render(root, ctx) {
   const brief = bundle.brief || null;
   const goalId = goal.goal_id;
   const currency = goal.currency;
-  const state = { panelClose: null };
+  const state = { panelClose: null, batches: undefined, batchesFor: null, batchLoad: null };
+  const topbarPause = Boolean(ctx.pauseInTopBar);
 
-  // Header: what goal, its status, and the one-click pause.
+  // Header: what goal, its status, and (only when there is no top bar) the one-click pause.
   const statusChip = h("span", { class: "ap-chip" });
   const autonomyChip = h("span", { class: "ap-chip ap-chip-quiet" });
   const pauseBtn = h("button", { type: "button", class: "ap-btn" });
@@ -335,12 +370,69 @@ export async function render(root, ctx) {
     pauseBtn.setAttribute("class", paused ? "ap-btn ap-btn-primary" : "ap-btn ap-btn-danger");
     pauseBtn.disabled = !canToggle;
     pauseBtn.setAttribute("aria-pressed", paused ? "true" : "false");
-    pauseHint.textContent = canToggle
-      ? paused
-        ? "Paused: the agent decides nothing and sends nothing until you resume."
-        : "Stops every send for this goal at once. You can resume any time."
-      : "This goal is not running, so there is nothing to pause.";
+    if (topbarPause) {
+      pauseHint.textContent = canToggle
+        ? paused
+          ? "Paused: the agent decides nothing and sends nothing until you press Resume at the top."
+          : "Running. Pause, at the top, stops every send for this goal at once."
+        : "This goal is not running yet, so there is nothing to pause.";
+    } else {
+      pauseHint.textContent = canToggle
+        ? paused
+          ? "Paused: the agent decides nothing and sends nothing until you resume."
+          : "Stops every send for this goal at once. You can resume any time."
+        : "This goal is not running, so there is nothing to pause.";
+    }
+    paintBatches();
   };
+  // Batches: shown only while the goal is at "approve each batch", loaded once per goal.
+  const batchSec = section("Waiting for your approval", "ap-batches");
+  const batchSlot = h("div", { class: "ap-batch-slot" });
+  function paintBatches() {
+    if (goal.autonomy !== "approve") {
+      batchSlot.replaceChildren();
+      return;
+    }
+    if (batchSec.card.parentNode !== batchSlot) batchSlot.replaceChildren(batchSec.card);
+    if (state.batchesFor === goalId) return;
+    state.batchesFor = goalId;
+    state.batchLoad = loadBatches();
+  }
+  async function loadBatches() {
+    batchSec.body.replaceChildren(h("p", { class: "ap-muted" }, "Loading…"));
+    let rows;
+    try {
+      // An API client without batches (an older build) is "not listed yet", not an error.
+      rows = typeof api?.listBatches === "function" ? await api.listBatches(goalId) : null;
+    } catch (e) {
+      state.batchesFor = null; // try again on the next change
+      batchSec.heading.textContent = "Waiting for your approval";
+      batchSec.body.replaceChildren(failed("the batches waiting for you", e));
+      return;
+    }
+    state.batches = rows;
+    drawBatches();
+  }
+  function drawBatches() {
+    const rows = state.batches;
+    const pending = rows ? splitBatches(rows).pending.length : 0;
+    batchSec.heading.textContent = pending ? `Waiting for your approval (${pending})` : "Waiting for your approval";
+    batchSec.body.replaceChildren(...batchesView(rows, currency, decide));
+  }
+  async function decide(batch, approving, buttons) {
+    for (const b of buttons) b.disabled = true;
+    try {
+      const updated = await call(api, approving ? "approveBatch" : "rejectBatch", batch.batch_id);
+      const next = updated && updated.batch_id ? updated : { ...batch, status: approving ? "approved" : "rejected" };
+      state.batches = (state.batches || []).map((b) => (b.batch_id === next.batch_id ? next : b));
+      notify(ctx, approving ? `Approved. ${count(batch.n_contacts)} ${Number(batch.n_contacts) === 1 ? "message goes" : "messages go"} out inside the plan.` : "Rejected. Nothing in that batch will be sent.", approving ? "good" : "info", announcer);
+      drawBatches();
+    } catch (e) {
+      notify(ctx, `Couldn't ${approving ? "approve" : "reject"} the batch: ${errText(e)}`, "critical", announcer);
+      for (const b of buttons) b.disabled = false;
+    }
+  }
+
   pauseBtn.addEventListener("click", async () => {
     const resuming = goal.status === "paused";
     pauseBtn.disabled = true;
@@ -377,7 +469,7 @@ export async function render(root, ctx) {
     { class: "ap-head ap-live-head" },
     h("div", { class: "ap-head-text" }, h("h1", { class: "ap-h1" }, "Live"), h("p", { class: "ap-sub" }, goal.text || goalId),
       h("div", { class: "ap-chips" }, statusChip, autonomyChip)),
-    h("div", { class: "ap-pause" }, pauseBtn, pauseHint),
+    topbarPause ? h("div", { class: "ap-pause" }, pauseHint) : h("div", { class: "ap-pause" }, pauseBtn, pauseHint),
   );
 
   const briefingSec = section("Today's briefing", "ap-briefing");
@@ -386,7 +478,7 @@ export async function render(root, ctx) {
   const feedSec = section("Activity");
   page.append(
     header,
-    h("div", { class: "ap-grid" }, h("div", { class: "ap-col-main" }, briefingSec.card, feedSec.card),
+    h("div", { class: "ap-grid" }, h("div", { class: "ap-col-main" }, batchSlot, briefingSec.card, feedSec.card),
       h("div", { class: "ap-col-side" }, inboxSec.card, healthSec.card)),
     announcer,
   );
@@ -425,6 +517,40 @@ export async function render(root, ctx) {
   // Health
   if (health.status === "rejected") healthSec.body.replaceChildren(failed("customer health", health.reason));
   else healthSec.body.replaceChildren(...healthView(health.value, brief));
+
+  if (state.batchLoad) await state.batchLoad;
+}
+
+function batchesView(batches, currency, decide) {
+  if (batches === null) {
+    return [empty("Batches to approve will be listed here. This server does not list them yet, so check back after the next update.")];
+  }
+  const { pending, decided } = splitBatches(batches);
+  const out = [];
+  if (!pending.length) out.push(empty("Nothing is waiting for you. The agent holds each new batch here until you approve it."));
+  else {
+    out.push(h("p", { class: "ap-muted ap-small" }, "Nothing in a batch is sent until you approve it. Each message still follows the plan's limits."));
+    out.push(h("ul", { class: "ap-feed ap-batches-list", "aria-label": "Batches waiting for approval, newest first" }, ...pending.map((b) => {
+      const label = b.summary || `A batch of ${count(b.n_contacts)} contacts`;
+      const approve = h("button", { type: "button", class: "ap-btn ap-btn-primary", "aria-label": `Approve batch: ${label}` }, "Approve");
+      const reject = h("button", { type: "button", class: "ap-btn", "aria-label": `Reject batch: ${label}` }, "Reject");
+      approve.addEventListener("click", () => decide(b, true, [approve, reject]));
+      reject.addEventListener("click", () => decide(b, false, [approve, reject]));
+      return h("li", { class: "ap-feed-item ap-batch" },
+        h("p", { class: "ap-what ap-batch-summary" }, label),
+        h("p", { class: "ap-muted ap-small" }, batchFacts(b, currency)),
+        h("div", { class: "ap-actions" }, approve, reject));
+    })));
+  }
+  if (decided.length) {
+    out.push(h("details", { class: "ap-left-alone" },
+      h("summary", null, `Decided (${decided.length})`),
+      h("ul", { class: "ap-feed ap-feed-quiet ap-batches-list" }, ...decided.map((b) =>
+        h("li", { class: "ap-feed-item ap-batch" },
+          h("p", null, h("span", { class: `ap-chip ap-chip-quiet ap-batch-${b.status}` }, BATCH_WORDS[b.status] || String(b.status)), " ", b.summary || `A batch of ${count(b.n_contacts)} contacts`),
+          h("p", { class: "ap-muted ap-small" }, [batchFacts(b, currency), present(b.decided_at) ? `decided ${when(b.decided_at)}${present(b.decided_by) ? ` by ${b.decided_by}` : ""}` : null].filter(Boolean).join(" · ")))))));
+  }
+  return out;
 }
 
 function briefingView(briefing) {
