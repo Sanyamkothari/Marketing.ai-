@@ -1700,6 +1700,177 @@
         }
       }
     },
+    "/v2/engines/studio/assemble": {
+      "post": {
+        "tags": [
+          "engines",
+          "studio"
+        ],
+        "summary": "Assemble Route",
+        "description": "Assemble one customer's message and certify it (200 with REJECTED when a check fails).",
+        "operationId": "assemble_route_v2_engines_studio_assemble_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssembleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssembleResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/dispatch/send": {
+      "post": {
+        "tags": [
+          "engines",
+          "dispatch"
+        ],
+        "summary": "Send",
+        "operationId": "send_v2_engines_dispatch_send_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/dispatch/webhooks/{provider}": {
+      "post": {
+        "tags": [
+          "engines",
+          "dispatch"
+        ],
+        "summary": "Webhook",
+        "operationId": "webhook_v2_engines_dispatch_webhooks__provider__post",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/dispatch/messages/{idempotency_key}": {
+      "get": {
+        "tags": [
+          "engines",
+          "dispatch"
+        ],
+        "summary": "Message",
+        "operationId": "message_v2_engines_dispatch_messages__idempotency_key__get",
+        "parameters": [
+          {
+            "name": "idempotency_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Idempotency Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v2/engines/measurement/summary": {
       "post": {
         "tags": [
@@ -2119,6 +2290,273 @@
           "autonomy"
         ],
         "title": "ApproveRequest"
+      },
+      "AssembleRequest": {
+        "properties": {
+          "template": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContentItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id",
+            "description": "A content_id in the library"
+          },
+          "library": {
+            "items": {
+              "$ref": "#/components/schemas/ContentItem"
+            },
+            "type": "array",
+            "title": "Library",
+            "description": "Templates to pick from, alongside the server's own library",
+            "default": []
+          },
+          "customer_facts": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Customer Facts"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Channel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Defaults to the template's channel"
+          },
+          "creative_arm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Theme"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The theme to send; picks the template when none is named"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country",
+            "description": "ISO code; defaults to the facts' 'country'"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/Purpose",
+            "default": "promotional"
+          },
+          "offer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OfferOption"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The offer the decision granted, if any"
+          },
+          "allowed_domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Domains",
+            "default": []
+          },
+          "approved_assets": {
+            "items": {
+              "$ref": "#/components/schemas/AssetRef"
+            },
+            "type": "array",
+            "title": "Approved Assets",
+            "default": []
+          },
+          "pack_settings": {
+            "$ref": "#/components/schemas/PackSettings"
+          },
+          "cta_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cta Url"
+          },
+          "sender_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sender Id",
+            "description": "SMS header; India takes it from the DLT registration"
+          },
+          "allowed_numbers": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Allowed Numbers",
+            "description": "Numbers the brand vouches for (store hours, a short code) beyond facts and offer",
+            "default": []
+          },
+          "now": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Now"
+          },
+          "judge": {
+            "type": "boolean",
+            "title": "Judge",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "now"
+        ],
+        "title": "AssembleRequest",
+        "description": "One customer's message to assemble. Give `template`, or `template_id`, or a `creative_arm`."
+      },
+      "AssembleResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "CERTIFIED",
+              "REJECTED"
+            ],
+            "title": "Status"
+          },
+          "content_id": {
+            "type": "string",
+            "title": "Content Id"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "rendered_payload": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RenderedPayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "critic_audit": {
+            "$ref": "#/components/schemas/CriticAudit"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons",
+            "description": "Why it was rejected; empty when certified"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "content_id",
+          "channel",
+          "country",
+          "rendered_payload",
+          "critic_audit"
+        ],
+        "title": "AssembleResponse"
+      },
+      "AssetRef": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "title": "Asset Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "'image', 'video' or 'carousel_card'"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "alt_text": {
+            "type": "string",
+            "title": "Alt Text",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "asset_id",
+          "kind",
+          "url"
+        ],
+        "title": "AssetRef",
+        "description": "What the Critic needs to know about one approved asset: enough to check a format item."
       },
       "Audience": {
         "properties": {
@@ -3270,6 +3708,96 @@
         ],
         "title": "ColumnProfile"
       },
+      "ConsentProof": {
+        "properties": {
+          "consent_id": {
+            "type": "string",
+            "title": "Consent Id"
+          },
+          "purpose": {
+            "type": "string",
+            "title": "Purpose",
+            "description": "What they agreed to, e.g. 'promotional', 'transactional', 'service'"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "captured_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Captured At"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "Where it was captured: 'web_form', 'checkout', 'dlt_portal', 'ivr'..."
+          },
+          "evidence_hash": {
+            "type": "string",
+            "title": "Evidence Hash",
+            "description": "SHA-256 hex of the evidence; the evidence stays with the client"
+          },
+          "recipient": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipient",
+            "description": "The address it covers; None if not recorded"
+          },
+          "customer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Id"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "consent_id",
+          "purpose",
+          "channel",
+          "captured_at",
+          "source",
+          "evidence_hash"
+        ],
+        "title": "ConsentProof",
+        "description": "One person's agreement to be contacted, as captured, with a hash of the evidence."
+      },
       "ContentItem": {
         "properties": {
           "content_id": {
@@ -3410,6 +3938,52 @@
           "status"
         ],
         "title": "ContentStatusRequest"
+      },
+      "CriticAudit": {
+        "properties": {
+          "rule_problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rule Problems"
+          },
+          "pack": {
+            "type": "string",
+            "title": "Pack"
+          },
+          "pack_checks": {
+            "items": {
+              "$ref": "#/components/schemas/PackCheckOut"
+            },
+            "type": "array",
+            "title": "Pack Checks"
+          },
+          "slot_check": {
+            "$ref": "#/components/schemas/SlotCheck"
+          },
+          "pii_leaks": {
+            "items": {
+              "$ref": "#/components/schemas/PiiLeak"
+            },
+            "type": "array",
+            "title": "Pii Leaks"
+          },
+          "hallucination_check": {
+            "$ref": "#/components/schemas/HallucinationCheck"
+          },
+          "judge": {
+            "$ref": "#/components/schemas/JudgeAudit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pack",
+          "slot_check",
+          "hallucination_check",
+          "judge"
+        ],
+        "title": "CriticAudit"
       },
       "CustomerDetail": {
         "properties": {
@@ -3818,6 +4392,43 @@
           "nothing"
         ],
         "title": "DecisionKind"
+      },
+      "DltRegistration": {
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "title": "Template Id",
+            "description": "The DLT content template id"
+          },
+          "header": {
+            "type": "string",
+            "title": "Header",
+            "description": "The registered sender id (header) the SMS goes out under"
+          },
+          "entity_id": {
+            "type": "string",
+            "title": "Entity Id",
+            "description": "The principal entity (PE) id of the brand"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/Purpose",
+            "default": "promotional"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "template_id",
+          "header",
+          "entity_id",
+          "text"
+        ],
+        "title": "DltRegistration",
+        "description": "One SMS template as registered on India's DLT platform, with the ids an operator checks.\n\n`text` is the template exactly as registered, with variable slots tagged `{#var#}`,\n`{#numeric#}`, `{#alphanumeric#}`, `{#url#}` or `{#cbn#}` (a call-back number)."
       },
       "EngineIndex": {
         "properties": {
@@ -4890,6 +5501,35 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "HallucinationCheck": {
+        "properties": {
+          "passed": {
+            "type": "boolean",
+            "title": "Passed"
+          },
+          "numbers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Numbers",
+            "description": "Every number the customer reads"
+          },
+          "unsupported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unsupported",
+            "description": "Numbers no fact or offer backs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "passed"
+        ],
+        "title": "HallucinationCheck"
+      },
       "HealthStatus": {
         "properties": {
           "as_of": {
@@ -5052,6 +5692,42 @@
           "salt"
         ],
         "title": "HoldoutAssignResponse"
+      },
+      "JudgeAudit": {
+        "properties": {
+          "requested": {
+            "type": "boolean",
+            "title": "Requested"
+          },
+          "ran": {
+            "type": "boolean",
+            "title": "Ran",
+            "default": false
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passed"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "requested"
+        ],
+        "title": "JudgeAudit"
       },
       "KeyCheck": {
         "properties": {
@@ -5924,6 +6600,190 @@
         ],
         "title": "MeasurementSummary"
       },
+      "Media": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "image",
+              "video"
+            ],
+            "title": "Kind"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "url"
+        ],
+        "title": "Media"
+      },
+      "MessageRecord": {
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key"
+          },
+          "message_id": {
+            "type": "string",
+            "title": "Message Id"
+          },
+          "decision_id": {
+            "type": "string",
+            "title": "Decision Id"
+          },
+          "customer_id": {
+            "type": "string",
+            "title": "Customer Id"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "address": {
+            "type": "string",
+            "title": "Address"
+          },
+          "country": {
+            "type": "string",
+            "title": "Country",
+            "description": "The recipient's country as resolved (ISO alpha-2), '' if unknown"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SendStatus"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons",
+            "default": []
+          },
+          "request": {
+            "$ref": "#/components/schemas/SendRequest"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/SendAttempt"
+            },
+            "type": "array",
+            "title": "Attempts",
+            "default": []
+          },
+          "rounds": {
+            "type": "integer",
+            "title": "Rounds",
+            "description": "Retry rounds in which every provider refused",
+            "default": 0
+          },
+          "schedules": {
+            "type": "integer",
+            "title": "Schedules",
+            "description": "How many times it was put on the queue",
+            "default": 0
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "provider_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Message Id"
+          },
+          "pinned_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned Provider",
+            "description": "Set after an ambiguous error"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery",
+            "description": "The latest delivery report, e.g. 'deliver'"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "idempotency_key",
+          "message_id",
+          "decision_id",
+          "customer_id",
+          "channel",
+          "address",
+          "country",
+          "status",
+          "request",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "MessageRecord",
+        "description": "Everything the gateway knows about one idempotency key. Updated as a new frozen copy."
+      },
       "Objective": {
         "type": "string",
         "enum": [
@@ -6132,6 +6992,62 @@
         ],
         "title": "OpeResponse"
       },
+      "PackCheckOut": {
+        "properties": {
+          "pack": {
+            "type": "string",
+            "title": "Pack"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "passed": {
+            "type": "boolean",
+            "title": "Passed"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pack",
+          "code",
+          "passed",
+          "detail"
+        ],
+        "title": "PackCheckOut"
+      },
+      "PackSettings": {
+        "properties": {
+          "dlt_templates": {
+            "items": {
+              "$ref": "#/components/schemas/DltRegistration"
+            },
+            "type": "array",
+            "title": "Dlt Templates",
+            "default": []
+          },
+          "postal_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postal Address",
+            "description": "The brand's physical postal address, for CAN-SPAM email footers"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PackSettings",
+        "description": "What the packs need to know about the brand. Empty is valid; checks that need a value then fail."
+      },
       "PiiFinding": {
         "properties": {
           "column": {
@@ -6182,6 +7098,43 @@
           "detected_by"
         ],
         "title": "PiiFinding"
+      },
+      "PiiLeak": {
+        "properties": {
+          "fact": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fact",
+            "description": "The fact that leaked, or None for a PII-shaped slot value"
+          },
+          "slot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slot"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fact",
+          "reason"
+        ],
+        "title": "PiiLeak"
       },
       "Problem": {
         "properties": {
@@ -6409,6 +7362,16 @@
         ],
         "title": "ProofSummary"
       },
+      "Purpose": {
+        "type": "string",
+        "enum": [
+          "promotional",
+          "transactional",
+          "service"
+        ],
+        "title": "Purpose",
+        "description": "Why a message is sent. Rules differ sharply: most only bind promotional messages.\n\nIndia's DLT has finer categories (service-implicit, service-explicit); `SERVICE` stands for both\nhere, and like `TRANSACTIONAL` it is exempt from the promotional-only rules."
+      },
       "QuietHours": {
         "properties": {
           "start": {
@@ -6471,6 +7434,127 @@
         "additionalProperties": false,
         "type": "object",
         "title": "QuietHoursIn"
+      },
+      "Recipient": {
+        "properties": {
+          "address": {
+            "type": "string",
+            "title": "Address",
+            "description": "Phone number, email address, or the client tool's id"
+          },
+          "customer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone",
+            "description": "IANA zone, e.g. 'Asia/Kolkata'"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country",
+            "description": "ISO 3166 alpha-2; inferred from +CC if absent"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "address"
+        ],
+        "title": "Recipient"
+      },
+      "RenderedPayload": {
+        "properties": {
+          "header": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "cta_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cta Url"
+          },
+          "media": {
+            "items": {
+              "$ref": "#/components/schemas/Media"
+            },
+            "type": "array",
+            "title": "Media"
+          },
+          "template_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Name"
+          },
+          "template_params": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Template Params"
+          }
+        },
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "title": "RenderedPayload"
       },
       "RevokeRequest": {
         "properties": {
@@ -6539,6 +7623,356 @@
           "bid"
         ],
         "title": "RunnerUp"
+      },
+      "SendAttempt": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "accepted": {
+            "type": "boolean",
+            "title": "Accepted"
+          },
+          "provider_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Message Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "round": {
+            "type": "integer",
+            "title": "Round",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider",
+          "at",
+          "accepted"
+        ],
+        "title": "SendAttempt"
+      },
+      "SendBody": {
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key"
+          },
+          "mandate_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mandate Id"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Recipient"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/SendPayload"
+          },
+          "consent_proof": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsentProof"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "send_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Send At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "idempotency_key",
+          "channel",
+          "recipient",
+          "payload"
+        ],
+        "title": "SendBody",
+        "description": "The request. Unknown keys are an error, so a misspelt field never silently drops a rule."
+      },
+      "SendPayload": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "title": "Body",
+            "default": ""
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          },
+          "template_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Name",
+            "description": "DLT or WhatsApp template"
+          },
+          "template_params": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Template Params",
+            "default": []
+          },
+          "asset_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Url"
+          },
+          "purpose": {
+            "type": "string",
+            "title": "Purpose",
+            "description": "promotional, transactional or service",
+            "default": "promotional"
+          },
+          "dnd_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dnd Category",
+            "description": "India NCPR preference category, 1-7"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SendPayload"
+      },
+      "SendRequest": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "mandate_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mandate Id"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Recipient"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/SendPayload"
+          },
+          "consent_proof": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConsentProof"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "send_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Send At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "channel",
+          "recipient",
+          "payload"
+        ],
+        "title": "SendRequest"
+      },
+      "SendResponse": {
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SendStatus"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons"
+          },
+          "message_id": {
+            "type": "string",
+            "title": "Message Id"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "provider_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Message Id"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "idempotency_key",
+          "status",
+          "reasons",
+          "message_id"
+        ],
+        "title": "SendResponse"
+      },
+      "SendStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "sent",
+          "refused",
+          "failed"
+        ],
+        "title": "SendStatus"
       },
       "SignRequest": {
         "properties": {
@@ -6667,6 +8101,48 @@
         ],
         "title": "SignerSpec",
         "description": "A person expected to sign, in a role. `key_id` names their key when it is known up front."
+      },
+      "SlotCheck": {
+        "properties": {
+          "passed": {
+            "type": "boolean",
+            "title": "Passed"
+          },
+          "used": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Used"
+          },
+          "filled": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Filled"
+          },
+          "fallbacks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fallbacks",
+            "description": "Slots the facts did not cover"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Problems"
+          }
+        },
+        "type": "object",
+        "required": [
+          "passed"
+        ],
+        "title": "SlotCheck"
       },
       "SpendToDate": {
         "properties": {
@@ -7144,6 +8620,34 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WebhookResponse": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "events": {
+            "type": "integer",
+            "title": "Events"
+          },
+          "stored": {
+            "type": "integer",
+            "title": "Stored"
+          },
+          "suppressed": {
+            "type": "integer",
+            "title": "Suppressed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "events",
+          "stored",
+          "suppressed"
+        ],
+        "title": "WebhookResponse"
       },
       "WebhookResult": {
         "properties": {
