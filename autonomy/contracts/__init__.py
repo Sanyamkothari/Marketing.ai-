@@ -3,7 +3,15 @@
 from autonomy.contracts.base import Channel, Contract, Group, new_id, stable_id
 from autonomy.contracts.content import ContentItem, ContentStatus, Format, Message, SendReceipt, Theme, Tone
 from autonomy.contracts.customer import ChannelStats, CustomerState
-from autonomy.contracts.decisions import Action, Bid, Decision, DecisionContext, DecisionKind
+from autonomy.contracts.decisions import (
+    Action,
+    Batch,
+    BatchStatus,
+    Bid,
+    Decision,
+    DecisionContext,
+    DecisionKind,
+)
 from autonomy.contracts.events import CHANNEL_REQUIRED, OUTBOUND_TYPES, Event, EventType
 from autonomy.contracts.goals import (
     DEFAULT_STOP_RULES,
@@ -49,6 +57,8 @@ __all__ = [
     "Audience",
     "AudienceFilter",
     "AutonomyLevel",
+    "Batch",
+    "BatchStatus",
     "Bid",
     "Brief",
     "Briefing",

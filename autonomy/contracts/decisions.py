@@ -76,3 +76,26 @@ class DecisionContext(Contract):
     budget_left: dict[str, float] = Field(default_factory=dict, description="goal_id -> money left")
     seed: int = Field(default=0, description="Sampling seed; the Gym fixes it so runs repeat")
     policy_version: str = "v0"
+
+
+class BatchStatus(StrEnum):
+    PENDING = "pending"  # waiting for a person (autonomy level APPROVE)
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    SENT = "sent"
+
+
+class Batch(Contract):
+    """One goal's ACT decisions from one sweep, held for a person when the goal is at APPROVE level."""
+
+    batch_id: str
+    goal_id: str
+    created_at: AwareDatetime
+    decision_ids: tuple[str, ...]
+    n_contacts: int = Field(ge=0)
+    expected_net: float = Field(default=0.0, description="Sum of the decisions' expected_net")
+    expected_spend: float = Field(default=0.0, ge=0)
+    summary: str = Field(default="", description="One plain sentence: who, which channels, which offers")
+    status: BatchStatus = BatchStatus.PENDING
+    decided_by: str | None = None
+    decided_at: AwareDatetime | None = None
