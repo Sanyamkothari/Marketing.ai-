@@ -29,7 +29,7 @@ import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, TypeAlias
 
 from starlette.applications import Starlette
@@ -84,6 +84,7 @@ from autonomy.interfaces import ChannelAdapter, DecisionLog, EventStore, StateFo
 from autonomy.loop import run_days
 
 if TYPE_CHECKING:  # imported lazily below, so `import api.v2.deps` stays light
+    from api.v2 import insights
     from autonomy.proof import Costs
     from autonomy.runtime.batches import BatchStore
     from autonomy.runtime.service import AutonomyRuntime
@@ -188,6 +189,10 @@ class Services:
     allow_tick: bool = False
     """Whether the operator tick endpoint may run. Only the demo and operator setups turn it on;
     in production the worker ticks on its own schedule."""
+    catalogue: Mapping[str, str] = field(default_factory=dict)
+    """item_id -> product name, for the words "Due for a refill of ..."; empty: names come from events."""
+    data_doctor: Callable[[], Mapping[str, Any] | None] | None = None
+    """The Data Doctor's latest report (`fixes`, `problems`, `questions`), when one is wired in."""
     _tick_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     # goals and briefs ---------------------------------------------------------------------------
@@ -215,20 +220,39 @@ class Services:
     def create_goal(
         self,
         text: str,
-        budget: float,
+        budget: float | None,
         currency: str = "USD",
         kind: GoalKind | None = None,
         objective: Objective | None = None,
+        ends_at: datetime | None = None,
     ) -> tuple[Goal, Brief]:
-        """Store the marketer's goal as a draft and the Strategist's (unapproved) brief for it."""
+        """Store the marketer's goal as a draft and the Strategist's (unapproved) brief for it.
+
+        With no `budget`, the amount (and the period, unless `ends_at` is given) are read from the
+        words, e.g. "$5,000 this month"; words that name no amount are refused. A given budget is
+        used as it is and the words are not read.
+        """
         text = text.strip()
         if not text:
             raise BadRequestError("a goal needs some words")
+        now = self.clock()
+        if budget is None:
+            from api.v2.insights import read_goal_text
+
+            reading = read_goal_text(text, now)
+            if reading.budget is None:
+                raise BadRequestError("say how much you want to spend, e.g. '$2,000 this month'")
+            budget = reading.budget
+            if reading.currency is not None and currency.upper() == "USD":
+                currency = reading.currency
+            if ends_at is None:
+                ends_at = reading.ends_at
         # Python's JSON parser reads 1e999 as infinity, and a stored infinite budget would break
         # every later response that includes the goal, so refuse it here.
         if not math.isfinite(budget) or budget < 0:
             raise BadRequestError("the budget must be a finite amount of zero or more")
-        now = self.clock()
+        if ends_at is not None and (ends_at.tzinfo is None or ends_at <= now):
+            raise BadRequestError("the end date must include a time zone and be in the future")
         taken = {g.goal_id for g in self.workspace.goals()}
         n = len(taken)
         goal_id = stable_id("goal", self.business_id, text, now.isoformat(), n)
@@ -244,6 +268,7 @@ class Services:
             budget=budget,
             currency=currency.upper(),
             starts_at=now,
+            ends_at=ends_at,
             created_at=now,
         )
         brief = self.strategist(goal)
@@ -252,6 +277,34 @@ class Services:
         self.workspace.put_goal(goal)
         self.workspace.put_brief(brief)
         return goal, brief
+
+    def set_budget(self, goal_id: str, budget: float) -> tuple[Goal, Brief | None]:
+        """Change a goal's budget: "Approve mode for one goal, with a small budget".
+
+        Lowering is always allowed. An approved plan was approved with its budget, so raising the
+        goal above it needs a new plan; a draft plan simply takes the new budget.
+        """
+        if not math.isfinite(budget) or budget < 0:
+            raise BadRequestError("the budget must be a finite amount of zero or more")
+        goal = self.get_goal(goal_id)
+        if goal.status is GoalStatus.DONE:
+            raise ConflictError("this goal is finished; start a new one instead")
+        brief = self.latest_brief(goal_id)
+        if brief is not None and not brief.approved:
+            envelope = brief.envelope.model_copy(update={"budget": budget})
+            brief = brief.model_copy(update={"envelope": envelope})
+            self.workspace.put_brief(brief)
+        elif brief is not None and budget > brief.envelope.budget:
+            raise ConflictError(
+                f"the approved plan's budget is {brief.envelope.budget:g}; raising it needs a new plan"
+            )
+        updated: Goal = goal.model_copy(update={"budget": budget})
+        self.workspace.put_goal(updated)
+        return updated, brief
+
+    def pause_all(self) -> list[Goal]:
+        """The one big Pause button: pause every active goal; returns the goals it paused."""
+        return [self.pause(g.goal_id) for g in self.list_goals() if g.status is GoalStatus.ACTIVE]
 
     def approve(self, goal_id: str, autonomy: AutonomyLevel) -> tuple[Goal, Brief]:
         """The marketer signs off the plan once and picks how much the agent may do without asking."""
@@ -417,6 +470,73 @@ class Services:
         except (ValueError, KeyError, TypeError) as exc:  # bad JSON, missing fields, invalid events
             raise BadRequestError(f"could not read the {channel} webhook: {exc}") from exc
         return self.ingest(events)
+
+    # what the promises need (the counting lives in api.v2.insights) ------------------------------
+
+    def today(self, goal_id: str | None = None, day: date | None = None) -> insights.Today:
+        """One day of decisions and events for a goal, counted over every decision that day."""
+        from api.v2 import insights
+
+        if goal_id is not None:
+            self.get_goal(goal_id)
+        return insights.today(self, goal_id, day)
+
+    def activity(
+        self, *, goal_id: str | None = None, customer_id: str | None = None, limit: int = 50
+    ) -> list[insights.ActivityRow]:
+        from api.v2 import insights
+
+        return insights.activity(self, goal_id=goal_id, customer_id=customer_id, limit=limit)
+
+    def customer_insight(self, customer_id: str) -> insights.CustomerInsight:
+        from api.v2 import insights
+
+        return insights.customer_insight(self, customer_id)
+
+    def plan_facts(self, goal_id: str) -> insights.PlanFacts:
+        from api.v2 import insights
+
+        return insights.plan_facts(self, goal_id)
+
+    def expected(self, goal_id: str, since: datetime | None = None) -> insights.Expected:
+        from api.v2 import insights
+
+        return insights.expected(self, goal_id, since)
+
+    def health_limits(self, goal_id: str | None = None) -> insights.HealthLimits:
+        from api.v2 import insights
+
+        if goal_id is not None:
+            self.get_goal(goal_id)
+        return insights.health_limits(self, goal_id)
+
+    def data_status(self) -> insights.DataStatus:
+        from api.v2 import insights
+
+        return insights.data_status(self)
+
+    def channels(self) -> list[insights.ChannelStatus]:
+        from api.v2 import insights
+
+        return insights.channels(self)
+
+    def sized_opportunities(self) -> list[insights.SizedOpportunity]:
+        from api.v2 import insights
+
+        return insights.sized_opportunities(self)
+
+    def read_goal(self, text: str) -> insights.GoalReading:
+        from api.v2 import insights
+
+        return insights.read_goal_text(text, self.clock())
+
+    def batch_breakdown(self, batch_id: str) -> insights.BatchBreakdown:
+        from api.v2 import insights
+
+        batch = self.batch_store.get(batch_id) if self.batch_store is not None else None
+        if batch is None:
+            raise NotFoundError(f"no batch {batch_id!r}")
+        return insights.batch_breakdown(self, batch)
 
 
 def _touches_goal(decision: Decision, goal_id: str) -> bool:

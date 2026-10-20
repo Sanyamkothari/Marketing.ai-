@@ -126,6 +126,11 @@ export function pill(text, tone = "neutral") {
   return el("span", { class: ["pill", `pill-${TONES.has(tone) ? tone : "neutral"}`] }, text);
 }
 
+/** A goal's status in the words every screen uses ("active" reads "Running"). */
+export function goalStatusWords(status) {
+  return { active: "Running", paused: "Paused", draft: "Not started", done: "Finished" }[status] || humanize(status);
+}
+
 /** The tone for a goal or content status, for `pill`. */
 export function statusTone(status) {
   return (

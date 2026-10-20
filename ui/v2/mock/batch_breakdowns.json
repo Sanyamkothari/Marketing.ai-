@@ -1,0 +1,45 @@
+[
+  {
+    "batch_id": "batch_20261020_1300",
+    "by_channel": {
+      "email": 2,
+      "whatsapp": 1
+    },
+    "by_offer": {
+      "none": 3
+    },
+    "offer_labels": {
+      "none": "No offer"
+    },
+    "words": "3 customers: 2 by email, 1 by WhatsApp; 3 with no offer."
+  },
+  {
+    "batch_id": "batch_20261020_1130",
+    "by_channel": {
+      "email": 1,
+      "whatsapp": 1
+    },
+    "by_offer": {
+      "pct10": 1,
+      "freeship": 1
+    },
+    "offer_labels": {
+      "pct10": "10% off",
+      "freeship": "Free shipping"
+    },
+    "words": "2 customers: 1 by email, 1 by WhatsApp; 1 with free shipping, 1 with 10% off."
+  },
+  {
+    "batch_id": "batch_20261020_1103",
+    "by_channel": {
+      "email": 1
+    },
+    "by_offer": {
+      "none": 1
+    },
+    "offer_labels": {
+      "none": "No offer"
+    },
+    "words": "1 customer: 1 by email; 1 with no offer."
+  }
+]

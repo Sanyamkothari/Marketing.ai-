@@ -62,6 +62,7 @@ with their reasons). Purchases, revenue and events are not in a decision, so the
 | `customer.json` | `GET /v2/customers/{id}` for `cust_1042` (others come from `decisions.json`) |
 | `briefing.json`, `proof.json`, `health.json`, `alerts.json` | the endpoints of the same names |
 | `batches.json` | `GET /v2/batches?goal_id=`: two pending batches and one sent, each made of act decisions from `decisions.json` |
+| `today.json`, `activity.json`, `customer_insight.json`, `plan.json`, `expected.json`, `health_limits.json`, `data_status.json`, `channels.json`, `opportunities_sized.json`, `batch_breakdowns.json` | the promise endpoints (`/v2/today`, `/v2/activity`, `/v2/customers/{id}/insight`, `/v2/goals/{id}/plan`, `/v2/expected`, `/v2/health/limits`, `/v2/data/status`, `/v2/channels`, `/v2/opportunities/sized`, `/v2/batches/{id}/breakdown`); see "Data for each screen" in [PROMISE_MAP.md](PROMISE_MAP.md) |
 
 ## Approval batches
 

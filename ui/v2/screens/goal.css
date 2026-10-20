@@ -1,0 +1,68 @@
+/* Goal screen (screens/goal.js). Only the shared tokens from styles.css are used, so light and dark mode follow
+   the shell. The opportunity's customer count is the biggest thing on its card, as in the pitch. */
+
+.gl-reading {
+  background: var(--good-t);
+  color: var(--ink);
+  border-left: 4px solid var(--good);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+
+.gl-reading[hidden] {
+  display: none;
+}
+
+.gl-safe {
+  margin: 16px 0 0;
+  padding: 8px 12px;
+  background: var(--info-t);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+}
+
+/* opportunity cards */
+.gl-opp-count {
+  margin: 0 0 6px;
+  line-height: 1.2;
+}
+
+.gl-opp-n {
+  display: block;
+  font-size: 2.25rem;
+  font-weight: 800;
+  color: var(--brand);
+  font-variant-numeric: tabular-nums;
+}
+
+.gl-opp-words {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.gl-opp-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.gl-opp-why {
+  margin: 6px 0;
+}
+
+.gl-opp-ask {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 12px 0 0;
+}
+
+.gl-autonomy .pill {
+  vertical-align: baseline;
+}
+
+@media (max-width: 719px) {
+  .gl-opp-n {
+    font-size: 1.9rem;
+  }
+}

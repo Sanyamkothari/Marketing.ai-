@@ -344,7 +344,7 @@ test("Goal screen: the big box, the examples, the opportunities, and starting on
   for (const ex of ["Win back lapsed customers", "Grow repeat purchases", "Recover carts"]) assert.equal(byText(root, "button", ex).length, 1, ex);
   const opps = await api.listOpportunities();
   for (const o of opps) assert.ok(text.includes(o.text), o.text);
-  const starts = byText(root, "button", "Start this goal");
+  const starts = byText(root, "button", "Yes, draft a plan");
   assert.equal(starts.length, opps.length);
   await starts[0].click();
   assert.equal(calls.navigate.length, 1);
@@ -437,14 +437,17 @@ test("plain-words helpers", () => {
   assert.equal(planScreen.followUpWords({ after_days: 1, when: "no_response", channel: "email" }), "After 1 day, if they have not responded, follow up by Email.");
 });
 
-test("Connect screen: explains, links to the Data Doctor, and says when status is unknown", async () => {
+test("Connect screen: explains, links to the Data Doctor, and shows what the Data Doctor reports", async () => {
   const { ctx } = makeCtx(mockApi(), null);
   const root = C.el("div");
   await connectScreen.render(root, ctx);
   const text = root.textContent;
-  assert.match(text, /Connect your customer data/);
+  assert.match(text, /Bring your data in/);
   assert.ok(root.querySelectorAll("a").some((a) => a.getAttribute("href") === "/" && a.textContent === "Open the Data Doctor"));
-  assert.match(text, /Data status is not available here/);
+  // The sample report (mock/data_status.json) is shown; the "not available" wording is for an API without it
+  // (covered in tests/v2/promise/connect_goal.test.mjs).
+  assert.match(text, /What the Data Doctor fixed/);
+  assert.match(text, /Waiting for your answer \(1\)/);
 });
 
 // ---- the shell itself ------------------------------------------------------------------------------------------

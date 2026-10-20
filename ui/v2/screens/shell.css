@@ -1,0 +1,249 @@
+/* The shell: the goal's autonomy badge, the red "Paused itself" badge, the one big Pause button, the slim note
+   under the bar, the Getting started link and a small Operator link. Colours are styles.css's tokens, so light
+   and dark mode follow them; every badge carries its meaning in words, never only in colour. */
+
+/* ---- badges next to the goal switcher --------------------------------------------------------------------- */
+/* The badges have their own short row under the goal switcher, at every width: next to it they pushed Inbox and
+   Pause onto a second line on a laptop. The row starts under the switcher (past the wordmark) on wider screens. */
+.topbar-row {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.goal-switcher {
+  flex: 1 1 0;
+}
+
+.goal-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  order: 5;
+  flex: 1 0 100%;
+}
+
+@media (min-width: 720px) {
+  .goal-badges {
+    padding-left: 132px;
+  }
+}
+
+.goal-badges:not(:has(> a:not([hidden]))) {
+  display: none;
+}
+
+.autonomy-badge,
+.selfpause-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--pill);
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.autonomy-badge[hidden],
+.selfpause-badge[hidden],
+.goal-note[hidden] {
+  display: none;
+}
+
+.autonomy-badge::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.autonomy-badge:hover,
+.selfpause-badge:hover {
+  text-decoration: underline;
+}
+
+/* Shadow: dashed, because nothing real happens yet. */
+.autonomy-shadow {
+  background: var(--neutral-t);
+  color: var(--neutral);
+  border: 1px dashed var(--muted);
+}
+
+.autonomy-shadow::before {
+  background: transparent;
+  border: 2px solid currentColor;
+  width: 9px;
+  height: 9px;
+}
+
+.autonomy-approve {
+  background: var(--brand-tint);
+  color: var(--brand);
+  border-color: var(--brand);
+}
+
+.autonomy-autopilot {
+  background: var(--good-t);
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.autonomy-paused {
+  background: var(--warning-t);
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.autonomy-draft {
+  background: var(--neutral-t);
+  color: var(--neutral);
+  border-color: var(--border);
+}
+
+.selfpause-badge {
+  background: var(--critical-t);
+  color: var(--critical);
+  border-color: var(--critical);
+}
+
+.selfpause-badge::before {
+  content: "!";
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--critical);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+/* ---- the inbox count: red only when something needs a look ------------------------------------------------- */
+.count.count-quiet {
+  background: var(--neutral);
+  color: var(--surface);
+}
+
+/* ---- the one big Pause button ------------------------------------------------------------------------------- */
+.pause-scope {
+  max-width: 88px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: right;
+}
+
+.topbar-actions .pause-big {
+  min-height: 42px;
+  padding: 9px 20px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+/* ---- nav: Getting started, and Operator mode kept small and out of the way ------------------------------------- */
+.start-link {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  padding: 10px 10px 12px;
+  color: var(--brand);
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  white-space: nowrap;
+  border-bottom: 3px solid transparent;
+}
+
+.start-link:hover {
+  text-decoration: underline;
+}
+
+.start-link.is-current {
+  border-bottom-color: var(--brand);
+}
+
+.nav .operator-link {
+  margin-left: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* ---- the slim note under the bar ------------------------------------------------------------------------------ */
+.goal-note {
+  border-top: 1px solid var(--border);
+  padding: 7px max(var(--gutter), calc((100% - var(--max)) / 2 + var(--gutter)));
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.goal-note-shadow {
+  background: var(--brand-tint);
+}
+
+.goal-note-paused {
+  background: var(--warning-t);
+}
+
+.goal-note-start {
+  background: var(--surface-2);
+}
+
+.goal-note-more {
+  color: var(--ink);
+}
+
+.goal-note-link {
+  margin-left: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ---- phones --------------------------------------------------------------------------------------------------- */
+@media (max-width: 719px) {
+  .autonomy-badge,
+  .selfpause-badge {
+    font-size: 12px;
+    padding: 3px 8px;
+    white-space: normal;
+  }
+
+  .pause-scope {
+    display: none;
+  }
+
+  .topbar-actions .pause-big {
+    min-height: 40px;
+    padding: 8px 14px;
+    font-size: 15px;
+  }
+
+  .nav .operator-link:not(.is-asked) {
+    display: none;
+  }
+
+  .start-link {
+    margin-left: 0;
+    padding: 10px 6px 12px;
+  }
+
+  .goal-note {
+    font-size: 13px;
+    padding: 6px var(--gutter);
+  }
+
+  /* On a phone the note keeps its first sentence and its link; the detail is on Getting started and Live. */
+  .goal-note .goal-note-more {
+    display: none;
+  }
+}

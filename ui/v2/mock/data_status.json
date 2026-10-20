@@ -1,0 +1,41 @@
+{
+  "as_of": "2026-10-20T13:20:00Z",
+  "customers": 10150,
+  "orders": 38420,
+  "products": 64,
+  "sources": [
+    {
+      "name": "csv",
+      "kind": "file",
+      "customers": 10150,
+      "orders": 38420,
+      "events": 61210,
+      "updated_at": "2026-10-20T06:00:00Z"
+    }
+  ],
+  "fixes": [
+    {
+      "what": "Dates written in two different formats were read the same way",
+      "rows": 1312
+    },
+    {
+      "what": "Duplicate orders removed",
+      "rows": 87
+    },
+    {
+      "what": "Customer ids with extra spaces matched up",
+      "rows": 240
+    }
+  ],
+  "problems": [
+    "14 orders have no customer id, so they are not used."
+  ],
+  "questions": [
+    {
+      "question_id": "q_negative_amounts",
+      "text": "52 orders have a negative amount. Should they count as refunds?",
+      "rows_affected": 52
+    }
+  ],
+  "doctor_connected": true
+}

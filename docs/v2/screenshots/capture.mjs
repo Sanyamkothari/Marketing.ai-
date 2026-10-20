@@ -1,5 +1,6 @@
-// Takes the screenshots in this folder: every screen of the marketer app at desktop and phone width,
-// plus Live and Proof in dark mode.
+// Takes the screenshots in this folder: every screen of the marketer app at desktop and phone width
+// (the five numbered screens, Getting started and Operator mode), plus Live, Proof and Getting started
+// in dark mode.
 //
 // It drives headless Chromium over the DevTools protocol (node 22's built-in WebSocket, no packages)
 // because `chrome --screenshot` cannot do what we need: headless Chrome will not make a window
@@ -14,7 +15,8 @@
 // GET /v2/goals: the autopilot goal for the six screens, and the goal at the APPROVE level for the
 // extra "batches" shots (its Live screen, with the batches waiting for a person).
 // It also prints any element that sticks out past the right edge of the viewport, because the page
-// hides horizontal overflow and a clipped element is otherwise easy to miss.
+// hides horizontal overflow and a clipped element is otherwise easy to miss, and any console error or
+// uncaught exception the page raised while it loaded (CONSOLE: ...).
 
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -57,6 +59,7 @@ const SCREENS = [
   ["live", `#/live/${GOAL}`],
   ["proof", `#/proof/${GOAL}`],
   ["operator", `#/operator/${GOAL}`],
+  ["start", "#/start"],
 ];
 // The APPROVE goal's Live screen, where its batches wait for Approve or Reject.
 if (APPROVE_GOAL) SCREENS.push(["batches", `#/live/${APPROVE_GOAL}`]);
@@ -66,7 +69,7 @@ for (const device of [DESKTOP, PHONE]) {
   for (const [screen, hash] of SCREENS) SHOTS.push({ screen, hash, device, scheme: "light" });
 }
 for (const device of [DESKTOP, PHONE]) {
-  for (const screen of ["live", "proof"]) {
+  for (const screen of ["live", "proof", "start"]) {
     const hash = SCREENS.find(([s]) => s === screen)[1];
     SHOTS.push({ screen, hash, device, scheme: "dark" });
   }
@@ -115,6 +118,22 @@ function connect(wsUrl) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Console errors and uncaught exceptions of the page being shot (cleared before each navigation).
+const consoleErrors = [];
+function watchConsole(ws) {
+  ws.addEventListener("message", (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.method === "Runtime.exceptionThrown") {
+      const d = msg.params.exceptionDetails;
+      consoleErrors.push((d.exception?.description ?? d.text ?? "exception").split("\n")[0]);
+    } else if (msg.method === "Runtime.consoleAPICalled" && msg.params.type === "error") {
+      consoleErrors.push(msg.params.args.map((a) => a.value ?? a.description ?? "").join(" ").slice(0, 160));
+    } else if (msg.method === "Log.entryAdded" && msg.params.entry.level === "error") {
+      consoleErrors.push(`${msg.params.entry.text} ${msg.params.entry.url ?? ""}`.trim().slice(0, 160));
+    }
+  });
+}
+
 // Elements whose right edge is past the viewport (ignoring ones inside a scrolling box, which is fine).
 const OVERFLOW_PROBE = `(() => {
   const vw = document.documentElement.clientWidth;
@@ -158,6 +177,8 @@ async function shoot(send, sessionId, shot) {
   await send("Emulation.setEmulatedMedia",
     { features: [{ name: "prefers-color-scheme", value: scheme }] }, sessionId);
   await send("Page.navigate", { url: "about:blank" }, sessionId);
+  await sleep(100);
+  consoleErrors.length = 0;
   await send("Page.navigate", { url: APP_URL + shot.hash }, sessionId);
   await sleep(SETTLE_MS);
   const { result: overflow } = await send("Runtime.evaluate",
@@ -177,6 +198,7 @@ async function shoot(send, sessionId, shot) {
   writeFileSync(join(OUT_DIR, file), Buffer.from(data, "base64"));
   let note = overflow.value.length ? `  OVERFLOW: ${overflow.value.join(", ")}` : "";
   if (!device.mobile && scrolls.value.length) note += `  SCROLLS SIDEWAYS: ${scrolls.value.join(", ")}`;
+  if (consoleErrors.length) note += `  CONSOLE: ${consoleErrors.slice(0, 5).join(" | ")}`;
   console.log(`${file} ${device.width}x${height}${note}`);
 }
 
@@ -186,7 +208,9 @@ try {
   const { targetId } = await send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Page.enable", {}, sessionId);
+  watchConsole(ws);
   await send("Runtime.enable", {}, sessionId);
+  await send("Log.enable", {}, sessionId);
   const only = process.argv.slice(2);
   for (const shot of SHOTS) {
     if (only.length && !only.includes(shot.screen)) continue;

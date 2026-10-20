@@ -429,7 +429,9 @@
       "category": null,
       "item_id": null,
       "text": null,
-      "attrs": {}
+      "attrs": {
+        "first_name": "Maya"
+      }
     },
     {
       "event_id": "evt_cust_1042_002",

@@ -1,0 +1,18 @@
+{
+  "goal_id": "goal_winback",
+  "as_of": "2026-10-20T13:20:00Z",
+  "label": "forecast",
+  "since": "2026-10-01T09:00:00Z",
+  "contacts": 4620,
+  "with_forecast": 4410,
+  "customers": 2010,
+  "expected_net": {
+    "point": 3900.0,
+    "low": 1500.0,
+    "high": 6300.0
+  },
+  "expected_spend": 1700.0,
+  "horizon_days": 14,
+  "currency": "USD",
+  "words": "Its own forecast, not proof: 4410 contacts expected to add $3,900 (range $1,500 to $6,300) in extra profit over 14 days each."
+}

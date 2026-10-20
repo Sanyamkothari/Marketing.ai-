@@ -1,0 +1,359 @@
+/* Live screen (live.js): the parts the daily briefing, the feed's delivery labels, the self-pause banner and the
+   customer panel's "what it knows" add on top of feed.css. Every class starts with `lv-` so nothing leaks into
+   other screens. Colours are feed.css's `--ap-*` tokens (light and dark), so both themes follow on their own.
+   Status colours always come with a word, never colour alone. */
+
+/* ---- header ---------------------------------------------------------------------------------------- */
+
+.lv-autonomy-line {
+  margin: 6px 0 0;
+  max-width: 60ch;
+}
+.lv-autonomy-shadow {
+  border-style: dashed;
+  color: var(--ap-ink);
+}
+.lv-autonomy-approve,
+.lv-autonomy-autopilot {
+  color: var(--ap-accent);
+  border-color: var(--ap-accent);
+}
+
+/* ---- "it paused itself" banner ---------------------------------------------------------------------- */
+
+.lv-selfpause-slot:empty {
+  display: none;
+}
+.lv-selfpause {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border-radius: var(--ap-radius);
+  border: 1px solid var(--ap-warning);
+  border-left-width: 6px;
+  background: var(--ap-warning-t);
+  color: var(--ap-ink);
+}
+.lv-selfpause .ap-h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  color: var(--ap-warning);
+}
+.lv-selfpause-goal {
+  border-color: var(--ap-critical);
+  background: var(--ap-critical-t);
+}
+.lv-selfpause-goal .ap-h2 {
+  color: var(--ap-critical);
+}
+.lv-selfpause-icon {
+  font-size: 11px;
+}
+.lv-selfpause-why {
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+.lv-selfpause-list {
+  margin: 4px 0;
+}
+.lv-selfpause-list li + li {
+  margin-top: 2px;
+}
+.lv-selfpause p {
+  margin: 4px 0 0;
+}
+
+/* ---- yesterday ---------------------------------------------------------------------------------------- */
+
+.lv-today {
+  border-top: 4px solid var(--ap-accent);
+}
+.lv-say {
+  font-size: 18px;
+  line-height: 1.4;
+  font-weight: 600;
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+}
+.lv-checked {
+  margin: 0 0 12px;
+}
+.lv-big {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.lv-big-item {
+  background: var(--ap-accent-soft);
+  border-radius: 8px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+.lv-big-quiet {
+  background: var(--ap-surface-2);
+}
+.lv-big-item dt {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ap-muted);
+}
+.lv-big-item dd {
+  margin: 0;
+}
+.lv-big-value {
+  font-size: 32px;
+  line-height: 1.15;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.lv-big-note {
+  font-size: 12.5px;
+  color: var(--ap-muted);
+  margin-top: 2px;
+}
+
+.lv-reasons {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+.lv-reason {
+  display: grid;
+  grid-template-columns: minmax(56px, auto) minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 4px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: 1px solid var(--ap-line);
+}
+.lv-reason:first-child {
+  border-top: 0;
+}
+.lv-reason-n {
+  font-weight: 700;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.lv-reason-words {
+  overflow-wrap: anywhere;
+}
+.lv-reason-hint {
+  display: block;
+  font-size: 12.5px;
+  color: var(--ap-muted);
+}
+.lv-reason-bar {
+  grid-column: 2;
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--ap-surface-2);
+  overflow: hidden;
+}
+.lv-reason-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--ap-bar);
+  border-radius: 3px;
+}
+
+.lv-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin: 0 0 10px;
+}
+.lv-stat {
+  background: var(--ap-surface-2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.lv-stat dt {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ap-muted);
+}
+.lv-stat dd {
+  margin: 2px 0 0;
+}
+.lv-stat-value {
+  font-size: 19px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.lv-stat-note {
+  font-size: 12.5px;
+  color: var(--ap-muted);
+}
+.lv-stat-sure {
+  background: var(--ap-good-t);
+}
+.lv-stat-sure .lv-stat-value {
+  color: var(--ap-good);
+}
+.lv-stat-unsure .lv-stat-value {
+  color: var(--ap-warning);
+}
+.lv-budget {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--ap-surface-2);
+  border: 1px solid var(--ap-line);
+  overflow: hidden;
+  margin: 0 0 10px;
+}
+.lv-budget-fill {
+  display: block;
+  height: 100%;
+  background: var(--ap-accent);
+}
+
+.lv-learned li + li {
+  margin-top: 6px;
+}
+.lv-stops li + li {
+  margin-top: 4px;
+}
+
+/* ---- the feed ------------------------------------------------------------------------------------------ */
+
+.lv-find {
+  margin: 4px 0 12px;
+}
+.lv-find label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.lv-find-row {
+  display: flex;
+  gap: 8px;
+}
+.lv-find-row .ap-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 320px;
+}
+.lv-who {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-weight: 600;
+}
+.lv-id {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ap-muted);
+  font-family: var(--ap-mono);
+}
+.ap-h2 .lv-id {
+  font-size: 13px;
+}
+.lv-state {
+  font-weight: 600;
+}
+.lv-state-good {
+  background: var(--ap-good-t);
+  color: var(--ap-good);
+  border-color: transparent;
+}
+.lv-state-good::before {
+  content: "✓";
+}
+.lv-state-warn {
+  background: var(--ap-warning-t);
+  color: var(--ap-warning);
+  border-color: transparent;
+}
+.lv-state-info {
+  background: var(--ap-accent-soft);
+  color: var(--ap-accent);
+  border-color: transparent;
+}
+.lv-state-bad {
+  background: var(--ap-critical-t);
+  color: var(--ap-critical);
+  border-color: transparent;
+}
+.lv-state-bad::before {
+  content: "✕";
+}
+.lv-state-quiet {
+  background: transparent;
+  color: var(--ap-muted);
+  border-style: dashed;
+}
+.lv-combo {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.lv-alone-why {
+  font-weight: 600;
+  color: var(--ap-muted);
+}
+.lv-thumb {
+  display: block;
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--ap-line);
+  margin: 6px 0;
+  background: var(--ap-surface-2);
+}
+
+/* ---- the customer panel ------------------------------------------------------------------------------ */
+
+.lv-know {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--ap-accent-soft);
+}
+.lv-know li + li {
+  margin-top: 6px;
+}
+.ap-panel .ap-h3 {
+  margin-top: 14px;
+}
+.lv-bid-chosen {
+  font-weight: 600;
+}
+.lv-verdict {
+  color: var(--ap-muted);
+}
+.lv-verdict-chosen {
+  color: var(--ap-good);
+}
+.lv-verdict-chosen::before {
+  content: "✓ ";
+}
+.ap-bids li + li {
+  margin-top: 4px;
+}
+
+@media (max-width: 520px) {
+  .lv-say {
+    font-size: 16px;
+  }
+  .lv-big-value {
+    font-size: 26px;
+  }
+  .lv-reason {
+    grid-template-columns: minmax(44px, auto) minmax(0, 1fr);
+    column-gap: 8px;
+  }
+  .lv-find-row .ap-input {
+    max-width: none;
+  }
+  .lv-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

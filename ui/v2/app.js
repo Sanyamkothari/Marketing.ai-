@@ -1,16 +1,26 @@
-// The Autonomy shell: the top bar (name, goal switcher, inbox, one-click pause), the nav for the five screens
-// plus Operator mode, and a hash router that loads each screen as an ES module.
+// The Autonomy shell: the top bar (name, goal switcher, the goal's autonomy badge, a "paused itself" badge, inbox,
+// the one big Pause button), the five numbered screens, a slim note under the bar (Shadow: "nothing is being
+// sent", with the trial day; or "getting started is safe" before any plan is approved), and a hash router that
+// loads each screen as an ES module.
 //
 // Every screen module exports `render(root, ctx)`, where ctx = {api, goalId, navigate, toast} (plus `goal`, the
-// current Goal object or null, `refreshGoals()`, for screens that change a goal, and `pauseInTopBar`, which tells
-// a screen that the top bar's Pause button is the one pause control). A screen that fails to load shows a
+// current Goal object or null, `refreshGoals()`, for screens that change a goal, `pauseAllInTopBar`, which tells a
+// screen that the top bar's Pause stops every goal at once, and `pauseInTopBar`, now false: the top bar no longer
+// pauses only the current goal, so a screen keeps its own per-goal Pause). A screen that fails to load shows a
 // placeholder instead of breaking the app, so screens can be built and shipped one at a time.
+//
+// The big Pause button pauses every running goal (POST /v2/pause, or each goal's own pause on an older API).
+// With nothing running it offers Resume for the goals it paused (or the current goal, if that one is paused).
 //
 // When the current goal is at "approve each batch", the top bar also shows how many batches wait for approval;
 // it links to the Live screen, where they are approved or rejected.
+//
+// Getting started (#/start, screens/onboarding.js) is linked from the nav, and from the note under the bar while
+// no plan has been approved; with no goal at all it is the first page.
 
-import { createApi } from "./api.js";
-import { button, clear, el, emptyState, errorBox, humanize, loading, toast } from "./components.js";
+import { createApi, routeMissing } from "./api.js";
+import { button, clear, el, emptyState, errorBox, goalStatusWords, humanize, int, loading, present, range, toast, when } from "./components.js";
+import { TRIAL_DAYS, rangeVerdict, trialDay, trialWords } from "./screens/onboarding.js";
 
 /** The screens, in the order a marketer meets them. `goal: true` means the address carries a goal id. */
 export const SCREENS = Object.freeze([
@@ -21,8 +31,11 @@ export const SCREENS = Object.freeze([
   { id: "proof", label: "Proof", goal: true, load: () => import("./screens/proof.js") },
 ]);
 export const OPERATOR = Object.freeze({ id: "operator", label: "Operator mode", goal: false, load: () => import("./screens/operator.js") });
-const ALL = [...SCREENS, OPERATOR];
+/** Getting started: the safe path (Shadow first), outside the five numbered steps. */
+export const START = Object.freeze({ id: "start", label: "Getting started", goal: false, load: () => import("./screens/onboarding.js") });
+const ALL = [...SCREENS, START, OPERATOR];
 const DEFAULT_ROUTE = "#/goal";
+const FIRST_RUN_ROUTE = "#/start";
 const REMEMBER_KEY = "autonomy.v2.goal";
 
 /** "#/plan/goal_1" -> {screen: "plan", goalId: "goal_1"}. Unknown screens keep their name so we can say so. */
@@ -56,6 +69,12 @@ const shell = {
   modules: new Map(),
   firstRender: true,
   badgeSeq: 0,
+  noteSeq: 0,
+  inboxSeq: 0,
+  /** Goals the big Pause button paused in this page load, so Resume brings back exactly those. */
+  pausedByButton: new Set(),
+  /** Per goal: {at, since, today, expected} for the Shadow note, kept a minute so routing stays quick. */
+  shadowFacts: new Map(),
 };
 
 const $ = (id) => document.getElementById(id);
@@ -98,7 +117,7 @@ export function navigate(target, goalId) {
 // ---- the top bar ------------------------------------------------------------------------------------------
 function goalLabel(g) {
   const text = g.text && g.text.length > 48 ? `${g.text.slice(0, 47)}…` : g.text || g.goal_id;
-  return `${text} (${humanize(g.status).toLowerCase()})`;
+  return `${text} (${goalStatusWords(g.status).toLowerCase()})`;
 }
 
 function drawSwitcher() {
@@ -120,29 +139,87 @@ function drawSwitcher() {
   select.disabled = false;
 }
 
+const running = () => shell.goals.filter((g) => g.status === "active");
+const goalsWord = (n) => `${n} ${n === 1 ? "goal" : "goals"}`;
+
+/** What Resume brings back: the goals the big button paused (still paused), else the current goal if paused. */
+function resumeTargets() {
+  const mine = shell.goals.filter((g) => g.status === "paused" && shell.pausedByButton.has(g.goal_id));
+  if (mine.length) return mine;
+  const g = currentGoal();
+  return g && g.status === "paused" ? [g] : [];
+}
+
 function drawPause() {
   const b = $("pause-button");
-  const g = currentGoal();
+  const scope = $("pause-scope");
+  const live = running();
+  const targets = live.length ? [] : resumeTargets();
   b.classList.remove("btn-danger", "btn-primary");
-  if (g && g.status === "active") {
+  if (live.length) {
     b.textContent = "Pause";
     b.classList.add("btn-danger");
     b.disabled = false;
-    b.setAttribute("aria-label", "Pause this goal: stop all sends now");
-    b.title = "Stops every send for this goal at once. You can resume any time.";
-  } else if (g && g.status === "paused") {
+    b.setAttribute("aria-label", `Pause all sending: stops ${live.length === 1 ? "the 1 running goal" : `all ${live.length} running goals`} at once`);
+    b.title = "Stops all sending, for every goal, at once. You can resume any time.";
+    if (scope) scope.textContent = "Stops all sending";
+  } else if (targets.length) {
     b.textContent = "Resume";
     b.classList.add("btn-primary");
     b.disabled = false;
-    b.setAttribute("aria-label", "Resume this goal");
+    b.setAttribute("aria-label", targets.length === 1 ? `Resume sending for: ${targets[0].text || targets[0].goal_id}` : `Resume sending for the ${targets.length} goals you paused`);
     b.title = "Lets the agent act again inside the approved plan.";
+    if (scope) scope.textContent = "Nothing is being sent";
   } else {
     b.textContent = "Pause";
     b.classList.add("btn-danger");
     b.disabled = true;
     b.removeAttribute("aria-label");
-    b.title = g ? "Nothing is running for this goal yet." : "Choose a goal first.";
+    b.title = shell.goals.length ? "Nothing is sending right now, so there is nothing to pause." : "Nothing is sending: there is no goal yet.";
+    if (scope) scope.textContent = "Nothing is sending";
   }
+}
+
+/** The autonomy level in a few words, for the badge next to the goal switcher. */
+const AUTONOMY_BADGE = Object.freeze({
+  shadow: { text: "Shadow: sends nothing", long: "Shadow: it decides and shows you what it would do, but sends nothing" },
+  approve: { text: "You approve each batch", long: "Approve each batch: nothing goes out until you approve it with one click" },
+  autopilot: { text: "Autopilot", long: "Autopilot: it acts on its own inside the limits you set" },
+});
+
+/** Badge text, tone and the sentence a screen reader hears, for a goal (and its Shadow trial day, when known). */
+export function autonomyBadge(goal, day = null) {
+  if (!goal) return null;
+  if (goal.status === "draft") {
+    return { text: "Plan not approved: nothing runs yet", tone: "draft", long: "This goal's plan is not approved yet, so nothing runs. Check and approve it on the Plan page." };
+  }
+  if (goal.status === "done" || goal.status === "retired") {
+    return { text: "Finished", tone: "draft", long: "This goal has finished. Nothing more is decided or sent for it." };
+  }
+  const base = AUTONOMY_BADGE[goal.autonomy] || { text: humanize(goal.autonomy), long: humanize(goal.autonomy) };
+  const trial = goal.autonomy === "shadow" ? trialWords(day) : null;
+  const text = `${goal.status === "paused" ? "Paused · " : ""}${base.text}${trial ? ` · ${trial}` : ""}`;
+  const long = `Autonomy level: ${base.long}.${trial ? ` Shadow trial: ${trial}.` : ""}${goal.status === "paused" ? " Paused right now." : ""} Change it on the Plan page.`;
+  return { text, tone: goal.status === "paused" ? "paused" : goal.autonomy, long };
+}
+
+function drawAutonomyBadge() {
+  const badge = $("autonomy-badge");
+  if (!badge) return;
+  const g = currentGoal();
+  const facts = g ? shell.shadowFacts.get(g.goal_id) : null;
+  const info = autonomyBadge(g, g && g.autonomy === "shadow" && facts ? trialDay(facts.since) : null);
+  if (!info) {
+    badge.hidden = true;
+    return;
+  }
+  badge.hidden = false;
+  badge.textContent = info.text;
+  badge.className = `autonomy-badge autonomy-${info.tone}`;
+  badge.setAttribute("href", hashFor("plan", g.goal_id));
+  // The spoken name starts with the visible words, so voice control ("click Autopilot") finds it.
+  badge.setAttribute("aria-label", `${info.text}. ${info.long}`);
+  badge.title = info.long;
 }
 
 function drawNav(activeId) {
@@ -167,7 +244,23 @@ function drawNav(activeId) {
   op.classList.toggle("is-current", activeId === OPERATOR.id);
   if (activeId === OPERATOR.id) op.setAttribute("aria-current", "page");
   else op.removeAttribute("aria-current");
+  // Operator mode is for us, not the marketer: small, and on a phone shown only on request (?operator=1).
+  op.classList.toggle("is-asked", activeId === OPERATOR.id || operatorAsked());
+  const start = $("start-link");
+  if (start) {
+    start.classList.toggle("is-current", activeId === START.id);
+    if (activeId === START.id) start.setAttribute("aria-current", "page");
+    else start.removeAttribute("aria-current");
+  }
   $("inbox-link").setAttribute("href", hashFor("live", shell.goalId));
+}
+
+function operatorAsked() {
+  try {
+    return new URLSearchParams((typeof location !== "undefined" && location.search) || "").get("operator") === "1";
+  } catch {
+    return false;
+  }
 }
 
 function drawBanner() {
@@ -186,9 +279,118 @@ function drawBanner() {
 
 function drawTopbar(activeId) {
   drawSwitcher();
+  drawAutonomyBadge();
   drawPause();
   drawNav(activeId);
   drawBanner();
+  drawGoalNote(activeId);
+}
+
+// ---- the note under the bar ---------------------------------------------------------------------------------
+/**
+ * One slim line under the bar, always visible (the bar is sticky):
+ * - the current goal is in Shadow: "Nothing is being sent", the trial day, and what it would have done;
+ * - the current goal is paused: nothing is being sent until Resume;
+ * - no plan approved yet (or no goal): getting started is safe, with a link to the steps.
+ */
+function drawGoalNote(activeId = parseHash(location.hash).screen) {
+  const note = $("goal-note");
+  if (!note) return;
+  const g = currentGoal();
+  const approvedAny = shell.goals.some((x) => x.status !== "draft");
+  // A paused goal neither decides nor sends (only running goals are run), so "deciding" is only said while it runs.
+  if (g && g.autonomy === "shadow" && g.status === "active") {
+    const facts = shell.shadowFacts.get(g.goal_id) || null;
+    const trial = facts ? trialWords(trialDay(facts.since)) : null;
+    note.className = "goal-note goal-note-shadow";
+    clear(
+      note,
+      el("strong", {}, "Shadow mode."),
+      " ",
+      el("span", {}, "Autonomy is deciding, but nothing is being sent."),
+      trial ? el("span", { class: "goal-note-trial" }, ` Shadow trial: ${trial}.`) : null,
+      shadowDetail(g, facts),
+      activeId === START.id ? null : el("a", { class: "goal-note-link", href: "#/start" }, trial && trialDay(facts.since) > TRIAL_DAYS ? "What's next" : "About the trial"),
+    );
+    note.hidden = false;
+    return;
+  }
+  if (g && g.status === "paused") {
+    note.className = "goal-note goal-note-paused";
+    clear(
+      note,
+      el("strong", {}, "Paused: nothing is being sent for this goal."),
+      " ",
+      g.autonomy === "shadow" ? "It is not deciding either, so the Shadow trial is on hold. " : "",
+      // The big button says Resume only while nothing else runs; otherwise it pauses the others, so point to Live.
+      !running().length
+        ? "Press Resume at the top when you want it to act again."
+        : activeId === "live"
+          ? "Press Resume on this page when you want it to act again."
+          : el("a", { class: "goal-note-link", href: hashFor("live", g.goal_id) }, "Resume it on the Live page"),
+    );
+    note.hidden = false;
+    return;
+  }
+  if (shell.goalsLoaded && !approvedAny && activeId !== START.id) {
+    note.className = "goal-note goal-note-start";
+    clear(
+      note,
+      el("strong", {}, "New here? Getting started is safe."),
+      " ",
+      el("span", { class: "goal-note-more" }, "Shadow first (it decides but sends nothing), then Approve with a small budget, then Autopilot when Proof shows real extra profit. It has not yet run with a real business, so start in Shadow. "),
+      el("a", { class: "goal-note-link", href: "#/start" }, "See the steps"),
+    );
+    note.hidden = false;
+    return;
+  }
+  note.hidden = true;
+  clear(note);
+}
+
+/** "On 19 Oct it would have contacted 412 and left 1,688 alone. Its own forecast: $a – $b (not proof)." */
+function shadowDetail(goal, facts) {
+  if (!facts) return null;
+  const parts = [];
+  const t = facts.today;
+  if (t && Number(t.customers_considered) === 0) {
+    parts.push(` It hasn't made its first decisions yet${present(t.next_run_at) ? `; the next daily run is ${when(t.next_run_at)}` : ""}.`);
+  } else if (t && present(t.contacted)) {
+    parts.push(` On ${when(t.date, { time: false })} it would have contacted ${int(t.contacted)} ${Number(t.contacted) === 1 ? "customer" : "customers"} and left ${int(t.left_alone)} alone.`);
+  }
+  const e = facts.expected;
+  if (e && e.expected_net) {
+    const unsure = rangeVerdict(e.expected_net) === "unsure";
+    parts.push(` Its own forecast so far: ${range(e.expected_net, e.currency || goal.currency)} extra profit${unsure ? ", so not sure yet" : ""} (a forecast, not proof).`);
+  }
+  return parts.length ? el("span", { class: "goal-note-more" }, parts.join("")) : null;
+}
+
+/** Fetch what the Shadow note needs for the current goal (once a minute per goal), then redraw the note. */
+async function loadShadowFacts() {
+  const g = currentGoal();
+  const seq = ++shell.noteSeq;
+  if (!g || g.autonomy !== "shadow" || !(g.status === "active" || g.status === "paused")) return;
+  const cached = shell.shadowFacts.get(g.goal_id);
+  if (cached && Date.now() - cached.at < 60000) return;
+  const optional = (name, ...args) => (typeof api[name] === "function" ? api[name](...args) : Promise.resolve(null));
+  const [todayR, expectedR] = await Promise.allSettled([optional("getToday", g.goal_id), optional("getExpected", g.goal_id)]);
+  const today = todayR.status === "fulfilled" ? todayR.value : null;
+  const expected = expectedR.status === "fulfilled" ? expectedR.value : null;
+  let since = today && today.autonomy_since;
+  if (!since) {
+    // The approval date is when Shadow started: the brief's approved_at, when the day count has none.
+    try {
+      const detail = await api.getGoal(g.goal_id);
+      since = (detail && detail.brief && detail.brief.approved_at) || null;
+    } catch {
+      since = null;
+    }
+  }
+  if (seq !== shell.noteSeq) return;
+  shell.shadowFacts.set(g.goal_id, { at: Date.now(), since, today, expected });
+  drawAutonomyBadge();
+  drawGoalNote();
 }
 
 async function loadGoals() {
@@ -202,20 +404,53 @@ async function loadGoals() {
   shell.goalsLoaded = true;
 }
 
+/**
+ * The alerts Live's Inbox lists for this goal: /alerts and /health's alerts together, once each, this goal's and
+ * the account-wide ones (every severity, info too), newest first. The same set as Live, so the counts agree.
+ */
+export function inboxAlerts(lists, goalId) {
+  const seen = new Map();
+  for (const list of lists) for (const a of Array.isArray(list) ? list : []) if (a && a.alert_id && !seen.has(a.alert_id)) seen.set(a.alert_id, a);
+  return [...seen.values()]
+    .filter((a) => !goalId || !a.goal_id || a.goal_id === goalId)
+    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+}
+
 async function loadInbox() {
-  try {
-    const alerts = await api.listAlerts();
-    // Count what the Live inbox shows for this goal: its own alerts and the account-wide ones, not other goals'.
-    const open = (Array.isArray(alerts) ? alerts : []).filter(
-      (a) => a.severity !== "info" && (!a.goal_id || !shell.goalId || a.goal_id === shell.goalId),
-    );
-    const count = $("inbox-count");
-    count.hidden = open.length === 0;
-    count.textContent = String(open.length);
-    $("inbox-link").setAttribute("aria-label", open.length ? `Alerts inbox, ${open.length} need a look` : "Alerts inbox, nothing urgent");
-  } catch {
-    /* the inbox count is a hint; the Live screen shows the inbox itself */
+  const seq = ++shell.inboxSeq;
+  const [alertsR, healthR] = await Promise.allSettled([api.listAlerts(), api.getHealth()]);
+  if (seq !== shell.inboxSeq) return;
+  if (alertsR.status === "rejected" && healthR.status === "rejected") return; // a hint; Live shows the inbox itself
+  const lists = [alertsR.status === "fulfilled" ? alertsR.value : [], healthR.status === "fulfilled" && healthR.value ? healthR.value.alerts : []];
+  const all = inboxAlerts(lists, shell.goalId);
+  const urgent = all.filter((a) => a.severity === "critical" || a.severity === "warning").length;
+  const count = $("inbox-count");
+  count.hidden = all.length === 0;
+  count.textContent = String(all.length);
+  count.classList.toggle("count-quiet", urgent === 0);
+  $("inbox-link").setAttribute(
+    "aria-label",
+    all.length ? `Inbox, ${all.length} ${all.length === 1 ? "message" : "messages"}${urgent ? `, ${urgent} need a look` : ", nothing urgent"}` : "Inbox, empty",
+  );
+  drawSelfPause(all.filter((a) => a.auto_paused));
+}
+
+/** The red "Paused itself" badge: Autonomy stopped a goal or a channel on its own (a stop rule fired). */
+function drawSelfPause(paused) {
+  const badge = $("selfpause-badge");
+  if (!badge) return;
+  if (!paused.length) {
+    badge.hidden = true;
+    return;
   }
+  const latest = paused[0];
+  badge.hidden = false;
+  const text = paused.length > 1 ? `Paused itself (${paused.length})` : "Paused itself";
+  badge.textContent = text;
+  badge.setAttribute("href", hashFor("live", shell.goalId));
+  const words = `Autonomy paused sending on its own ${paused.length === 1 ? "once" : `${paused.length} times`}. Latest, ${when(latest.at)}: ${latest.message || humanize(latest.code)} Open the Inbox on the Live page.`;
+  badge.setAttribute("aria-label", `${text}. ${words}`);
+  badge.title = words;
 }
 
 /** The "to approve" link in the top bar, made once next to the inbox (index.html stays as it is). */
@@ -281,21 +516,57 @@ async function refreshGoals() {
   return shell.goals;
 }
 
+/** Pause every running goal at once: POST /v2/pause, or each goal's own pause on an API without that route. */
+async function pauseEverything(live) {
+  let out = null;
+  if (typeof api.pauseAll === "function") {
+    try {
+      out = await api.pauseAll();
+    } catch (err) {
+      if (!routeMissing(err)) throw err;
+      out = null;
+    }
+  }
+  if (out && Array.isArray(out.paused)) return out.paused;
+  const paused = [];
+  for (const g of live) paused.push(await api.pauseGoal(g.goal_id));
+  return paused;
+}
+
 async function togglePause() {
-  const g = currentGoal();
-  if (!g) return;
+  const live = running();
+  const targets = live.length ? [] : resumeTargets();
+  if (!live.length && !targets.length) return;
   const b = $("pause-button");
   b.disabled = true;
   try {
-    const pausing = g.status === "active";
-    const next = pausing ? await api.pauseGoal(g.goal_id) : await api.resumeGoal(g.goal_id);
-    if (!(next && next.goal_id)) await loadGoals(); // a full Goal updates the bar through onGoalChange
-    toast(pausing ? "Paused. Nothing more will be sent for this goal until you resume." : "Resumed. The agent is acting inside the plan again.", pausing ? "warning" : "good");
+    let changed;
+    if (live.length) {
+      changed = await pauseEverything(live);
+      for (const g of changed) if (g && g.goal_id) shell.pausedByButton.add(g.goal_id);
+      const n = changed.length;
+      toast(
+        n ? `Paused all sending: ${goalsWord(n)} stopped. Nothing more goes out until you press Resume.` : "Nothing was sending, so nothing needed pausing.",
+        "warning",
+      );
+    } else {
+      changed = [];
+      for (const g of targets) changed.push(await api.resumeGoal(g.goal_id));
+      for (const g of targets) shell.pausedByButton.delete(g.goal_id);
+      toast(`Resumed: ${goalsWord(changed.length)} acting inside the plan again.`, "good");
+    }
+    const full = changed.every((g) => g && g.goal_id); // full Goals update the bar through onGoalChange
+    if (!full) await loadGoals();
+    drawSwitcher();
+    drawAutonomyBadge();
+    drawPause();
+    drawGoalNote();
     // Live follows the change itself (api.onGoalChange), keeping its feed and any open customer panel. Other
     // screens are redrawn, leaving keyboard focus on the button just pressed.
-    if (parseHash(location.hash).screen !== "live" || !(next && next.goal_id)) route({ focus: false });
+    if (parseHash(location.hash).screen !== "live" || !full) route({ focus: false });
   } catch (err) {
-    toast(`Could not change the goal. ${err.message || ""}`.trim(), "critical");
+    toast(`Could not change sending. ${err.message || ""}`.trim(), "critical");
+    await loadGoals();
     drawPause();
   }
 }
@@ -326,8 +597,12 @@ function placeholder(screen) {
 export async function route({ focus = true } = {}) {
   const seq = ++shell.seq;
   const main = $("main");
-  if (!location.hash || location.hash === "#" || location.hash === "#/") {
-    history.replaceState(null, "", DEFAULT_ROUTE);
+  const bare = !location.hash || location.hash === "#" || location.hash === "#/";
+  if (bare) {
+    // First run (no goal at all): start with the safe path. Otherwise the Goal screen.
+    if (!shell.goalsLoaded) await loadGoals();
+    if (seq !== shell.seq) return;
+    history.replaceState(null, "", shell.goals.length ? DEFAULT_ROUTE : FIRST_RUN_ROUTE);
   }
   const { screen: screenId, goalId } = parseHash(location.hash);
   const screen = ALL.find((s) => s.id === screenId);
@@ -374,7 +649,8 @@ export async function route({ focus = true } = {}) {
       return;
     }
     clear(root);
-    const ctx = { api, goalId: shell.goalId, goal: currentGoal(), navigate, toast, refreshGoals, pauseInTopBar: Boolean($("pause-button")) };
+    // The top bar's Pause stops every goal now, so screens keep their own per-goal Pause (pauseInTopBar false).
+    const ctx = { api, goalId: shell.goalId, goal: currentGoal(), navigate, toast, refreshGoals, pauseInTopBar: false, pauseAllInTopBar: Boolean($("pause-button")) };
     try {
       await mod.render(root, ctx);
     } catch (err) {
@@ -399,6 +675,7 @@ function start() {
       drawTopbar(screen);
       loadInbox();
       loadBatchBadge();
+      loadShadowFacts();
     }
   });
   $("pause-button").addEventListener("click", togglePause);
@@ -416,14 +693,20 @@ function start() {
   api.onGoalChange((goal) => {
     const known = shell.goals.some((g) => g.goal_id === goal.goal_id);
     shell.goals = known ? shell.goals.map((g) => (g.goal_id === goal.goal_id ? goal : g)) : [...shell.goals, goal];
+    if (goal.status === "active") shell.pausedByButton.delete(goal.goal_id);
     drawSwitcher();
+    drawAutonomyBadge();
     drawPause();
+    drawGoalNote();
     loadBatchBadge(); // the autonomy may have moved to or from "approve each batch"
+    shell.shadowFacts.delete(goal.goal_id); // approved in Shadow just now, or moved on: count the trial again
+    loadShadowFacts();
   });
   if (typeof api.onBatchChange === "function") api.onBatchChange(() => loadBatchBadge());
   const afterRoute = () => {
     loadInbox();
     loadBatchBadge();
+    loadShadowFacts();
   };
   window.addEventListener("hashchange", () => route().then(afterRoute));
   route().then(afterRoute);

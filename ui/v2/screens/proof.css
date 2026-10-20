@@ -1,0 +1,177 @@
+/* Proof screen (screens/proof.js). Classes start with `pf-`; the shared `ap-` cards, tiles and chart come from
+   feed.css. Only feed.css's colour tokens are used (light and dark mode follow them), with light fallbacks.
+   A verdict is never colour alone: it always has its icon and its words. Text pairs are the feed.css pairs,
+   which meet WCAG AA in both themes. */
+
+/* ---- the verdict, before any number ---------------------------------------------------------- */
+
+.ap-proof .pf-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 6px 12px 6px 6px;
+  border-radius: 999px;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+  background: var(--ap-surface-2, #f3f4f6);
+  color: var(--ap-ink, #111827);
+}
+.ap-proof .pf-verdict-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 15px;
+  font-weight: 800;
+  background: var(--ap-ink, #111827);
+  color: var(--ap-surface, #ffffff);
+}
+.ap-proof .pf-tone-good {
+  background: var(--ap-good-t, #e8f6ee);
+  color: var(--ap-good, #15803d);
+}
+.ap-proof .pf-tone-good .pf-verdict-icon {
+  background: var(--ap-good, #15803d);
+  color: var(--ap-good-t, #e8f6ee);
+}
+.ap-proof .pf-tone-warn {
+  background: var(--ap-warning-t, #fef3c7);
+  color: var(--ap-warning, #9a4a07);
+}
+.ap-proof .pf-tone-warn .pf-verdict-icon {
+  background: var(--ap-warning, #9a4a07);
+  color: var(--ap-warning-t, #fef3c7);
+}
+.ap-proof .pf-tone-bad {
+  background: var(--ap-critical-t, #fdecec);
+  color: var(--ap-critical, #b42318);
+}
+.ap-proof .pf-tone-bad .pf-verdict-icon {
+  background: var(--ap-critical, #b42318);
+  color: var(--ap-critical-t, #fdecec);
+}
+.ap-proof .pf-verdict-text {
+  font-size: 15px;
+  max-width: 70ch;
+  margin: 0 0 12px;
+}
+
+/* ---- how it is measured ---------------------------------------------------------------------- */
+
+.ap-proof .pf-method {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--ap-accent, #1e57bd);
+  border-radius: 0 8px 8px 0;
+  background: var(--ap-accent-soft, #edf2fa);
+}
+.ap-proof .pf-method p {
+  margin: 0;
+}
+.ap-proof .pf-details {
+  margin-top: 6px;
+}
+.ap-proof .pf-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ap-accent, #1e57bd);
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+.ap-proof .pf-details ul {
+  margin-top: 4px;
+}
+.ap-proof .pf-details li + li {
+  margin-top: 4px;
+}
+
+/* ---- what to do next ------------------------------------------------------------------------- */
+
+.ap-proof .pf-advice-good {
+  border-color: var(--ap-good, #15803d);
+  border-width: 2px;
+}
+.ap-proof .pf-advice p:last-child {
+  margin-bottom: 0;
+}
+.ap-proof .pf-link-btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  max-width: 100%;
+  white-space: normal;
+}
+
+/* ---- the forecast ---------------------------------------------------------------------------- */
+
+.ap-proof .pf-forecast {
+  border-style: dashed;
+}
+.ap-proof .pf-chip {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--ap-line, #dde1e7);
+  background: var(--ap-surface-2, #f3f4f6);
+  color: var(--ap-muted, #5b6474);
+  font-size: 12.5px;
+  font-weight: 600;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* ---- the product fact (general guidance, not this shop's number) ----------------------------- */
+
+.ap-proof .pf-fact {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--ap-line, #dde1e7);
+  border-left: 3px solid var(--ap-muted, #5b6474);
+  border-radius: var(--ap-radius, 10px);
+  background: var(--ap-surface-2, #f3f4f6);
+  color: var(--ap-ink, #111827);
+}
+.ap-proof .pf-fact p {
+  margin: 0 0 6px;
+  max-width: 75ch;
+}
+.ap-proof .pf-fact p:last-child {
+  margin-bottom: 0;
+}
+.ap-proof .pf-fact-label {
+  font-size: 14px;
+  margin: 0 0 2px;
+  text-transform: none;
+}
+.ap-proof .pf-fact code,
+.ap-proof .pf-fact a {
+  overflow-wrap: anywhere;
+}
+.ap-proof .pf-fact a {
+  color: var(--ap-accent, #1e57bd);
+}
+
+/* ---- the chart ------------------------------------------------------------------------------- */
+
+/* A halo in the card's colour keeps a value readable wherever it sits on the axis. */
+.ap-proof .ap-chart .pf-chart-note {
+  paint-order: stroke;
+  stroke: var(--ap-surface, #ffffff);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+@media (max-width: 520px) {
+  .ap-proof .pf-verdict {
+    font-size: 16px;
+  }
+  .ap-proof .pf-chip {
+    margin: 4px 0 0;
+  }
+}
