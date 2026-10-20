@@ -1,16 +1,26 @@
-"""The policies every agent is measured against: send-to-all, a sensible marketer's rule, and the oracle.
+"""The policies every agent is measured against, from send-to-all up to the oracle.
 
-`ContactEveryone` and `RuleBaseline` see only what a real policy sees (customer state and the
-decision context). `OraclePolicy` reads the Gym's planted truth and so marks the ceiling: the share
-of its value a policy captures is the headline number on the scoreboard.
+`ContactEveryone`, `RuleBaseline` and `BestFixedRule` see only what a real policy sees (customer
+state and the decision context). `BestFixedRule` is the one to beat: "WhatsApp if they consented,
+else email, no offer, at one fixed hour, as often as the cap allows" needs no learning at all and,
+in the plain shop, already earns more than half of the oracle (docs/v2/GYM_RESULTS.md). An agent
+that learns should do better than that.
 
-All three keep the hard rules a real deployment enforces (consent, the weekly cap, quiet hours), so
+Two policies read the Gym's planted truth and so mark ceilings, never targets for a real policy:
+
+* `SegmentOracle` reads it only through the average of each observable segment (new, lapsed,
+  light, medium, heavy buyer) x reachable channels: the best fixed action and hour per segment.
+  That is what perfect knowledge at the level a business can see is worth: the realistic ceiling.
+* `OraclePolicy` reads every customer's own truth: the full ceiling, which needs knowledge of
+  hidden personas no policy can have within 90 days (docs/v2/GYM_BAR.md).
+
+All of them keep the hard rules a real deployment enforces (consent, the weekly cap, quiet hours), so
 a gap between them and the agent is about judgement, not about rule-breaking.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -21,6 +31,7 @@ import numpy as np
 import numpy.typing as npt
 
 from autonomy.contracts import (
+    NO_OFFER,
     Action,
     Brief,
     Channel,
@@ -448,5 +459,330 @@ class OraclePolicy(_Static):
             self.version,
             f"The truth's best action: {best.channel.value} with {best.offer_id} at {hour}:00 local.",
             best,
+            expected_net=value,
+        )
+
+
+# --- the best fixed rule -------------------------------------------------------------------------
+
+BEST_FIXED_HOUR = 14
+"""The fixed local send hour of `BestFixedRule`. Mid-afternoon is the hour a marketer with no data
+would pick (inside every shop's opening hours, after lunch); GYM_RESULTS.md scored 14:00 to 18:00
+within two points of each other, and 14:00 is the lower end, so the default is not fitted to the
+Gym's planted best hours."""
+
+MIN_GAP_HOURS = 6.0
+"""No new message within this many hours of the last one. An unsubscribe arrives two to three hours
+after the message that caused it; a decision made in between cannot see it yet, and a message it
+schedules would then break the unsubscribe."""
+
+
+def _gap_ok(state: CustomerState, now: datetime, gap_hours: float) -> bool:
+    last = state.last_contact_at
+    return last is None or now - last >= timedelta(hours=gap_hours)
+
+
+def _in_audience(state: CustomerState, brief: Brief, now: datetime) -> bool:
+    """True when the customer is in the brief's audience; an audience without filters is everyone.
+
+    The filter rules live in `autonomy.decide.audience` and are imported only when a brief has
+    filters, so the Gym's baselines load without the decide package."""
+    if not brief.audience.filters:
+        return True
+    from autonomy.decide.audience import matches
+
+    return matches(state, brief.audience, now)
+
+
+class BestFixedRule(_Static):
+    """WhatsApp if the customer consented, else email; no offer; at one fixed hour on the customer's
+    clock (14:00 by default, moved out of quiet hours if need be); everyone in the audience, as often
+    as the weekly cap allows.
+
+    It never reads the truth: it is built without one and decides from the customer's state and the
+    decision context alone. It is the strongest policy in the Gym that needs no learning, so an agent
+    that learns has to beat it to be worth its complexity.
+
+    Like any careful sender it keeps a minimum gap of `min_gap_hours` after the last message, holds a
+    customer while a message it scheduled is still waiting to go out, and leaves alone a customer
+    with an open complaint.
+    """
+
+    version = "best-fixed-rule-v1"
+
+    def __init__(self, hour: int = BEST_FIXED_HOUR, *, min_gap_hours: float = MIN_GAP_HOURS) -> None:
+        if not 0 <= hour < 24:
+            raise ValueError(f"hour must be 0-23, not {hour}")
+        self.hour = hour
+        self.min_gap_hours = min_gap_hours
+        self._scheduled: dict[str, datetime] = {}
+        self._last_now: datetime | None = None
+
+    def decide(self, state: CustomerState, ctx: DecisionContext) -> Decision:
+        now = ctx.now
+        cid = state.customer_id
+        if self._last_now is not None and now < self._last_now:
+            # Time ran backwards: the same instance is being reused for a new run (another seed).
+            # Sends it scheduled in the old run must not hold customers in the new one.
+            self._scheduled = {}
+        self._last_now = now
+        if state.open_complaint:
+            return _decision(state, ctx, self.version, "They have an open complaint.")
+        pending = self._scheduled.get(cid)
+        if pending is not None and pending > now:
+            return _decision(state, ctx, self.version, "A message is already scheduled.")
+        if state.contacts_7d >= weekly_cap(ctx.briefs):
+            return _decision(state, ctx, self.version, "The weekly contact cap is reached.")
+        if not _gap_ok(state, now, self.min_gap_hours):
+            return _decision(state, ctx, self.version, "Contacted too recently.")
+        reachable = set(state.contactable_channels())
+        for brief in ctx.briefs:
+            if all(o.offer_id != NO_OFFER.offer_id for o in brief.envelope.offers):
+                continue  # this goal's envelope does not allow a message without an offer
+            allowed = brief.envelope.channels
+            if Channel.WHATSAPP in allowed and Channel.WHATSAPP in reachable:
+                ch = Channel.WHATSAPP
+            elif Channel.EMAIL in allowed and Channel.EMAIL in reachable:
+                ch = Channel.EMAIL
+            else:
+                continue
+            hour = send_hour(self.hour, brief.envelope)
+            if hour is None or not _in_audience(state, brief, now):
+                continue
+            item = next(
+                (c for c in usable_content(ctx.content, brief, ch) if c.offer_id == NO_OFFER.offer_id),
+                None,
+            )
+            action = Action(
+                goal_id=brief.goal_id,
+                channel=ch,
+                offer_id=NO_OFFER.offer_id,
+                content_id=item.content_id if item is not None else None,
+                format=item.format if item is not None else Format.TEXT,
+                send_at=next_local_time(now, state.timezone, hour),
+            )
+            self._scheduled[cid] = action.send_at
+            return _decision(
+                state,
+                ctx,
+                self.version,
+                f"Fixed rule: {ch.value}, no offer, at {hour}:00 local.",
+                action,
+            )
+        return _decision(state, ctx, self.version, "No allowed channel can reach this customer.")
+
+
+# --- the segment oracle --------------------------------------------------------------------------
+
+NEW_CUSTOMER_DAYS = 120
+"""First seen this recently: "new" (no buying rhythm to read yet)."""
+LAPSED_DAYS = 90
+"""No purchase for this long, or none ever after the new period: "lapsed"."""
+MIN_OBSERVED_DAYS = 30.0
+DEFAULT_FREQUENCY_CUTS = (0.15, 0.35)
+"""Purchases per 30 days splitting light / medium / heavy buyers until the terciles are fitted."""
+
+OBSERVABLE_SEGMENTS: tuple[str, ...] = ("new", "lapsed", "light", "medium", "heavy")
+
+SegmentKey = tuple[str, tuple[str, ...]]
+"""(observable segment, sorted reachable channels): the unit `SegmentOracle` decides for."""
+
+
+def purchase_frequency(state: CustomerState, now: datetime, data_start: datetime | None = None) -> float:
+    """Purchases per 30 days since the customer was first seen or, when it is later, since the start
+    of the business's purchase data (never over less than a month). The agent's segmenter does the
+    same: a customer who signed up two years ago but whose orders were imported for six months only
+    must not look three times lighter than a six-month customer with the same orders."""
+    start = state.first_seen_at
+    if data_start is not None and (start is None or start < data_start):
+        start = data_start
+    days = (now - start).total_seconds() / 86_400.0 if start is not None else MIN_OBSERVED_DAYS
+    return state.purchases * 30.0 / max(days, MIN_OBSERVED_DAYS)
+
+
+def observable_segment(
+    state: CustomerState,
+    now: datetime,
+    cuts: tuple[float, float] = DEFAULT_FREQUENCY_CUTS,
+    data_start: datetime | None = None,
+) -> str:
+    """The behaviour segment a business can see from its own data: tenure, recency and frequency.
+
+    The same definitions the agent's segments use (new for 120 days, lapsed after 90 days without a
+    purchase, light / medium / heavy by purchases per 30 days), so the segment oracle and the agent
+    look at customers through the same window."""
+    if state.first_seen_at is not None and now - state.first_seen_at <= timedelta(days=NEW_CUSTOMER_DAYS):
+        return "new"
+    last = state.last_purchase_at
+    if state.purchases <= 0 or last is None or now - last > timedelta(days=LAPSED_DAYS):
+        return "lapsed"
+    f = purchase_frequency(state, now, data_start)
+    if f >= cuts[1]:
+        return "heavy"
+    if f >= cuts[0]:
+        return "medium"
+    return "light"
+
+
+def frequency_cuts(
+    states: Sequence[CustomerState], now: datetime, data_start: datetime | None = None
+) -> tuple[float, float]:
+    """The terciles of purchase frequency among active, non-new buyers; the defaults if under 30."""
+    active = sorted(
+        purchase_frequency(s, now, data_start)
+        for s in states
+        if observable_segment(s, now) not in ("new", "lapsed")
+    )
+    if len(active) < 30:
+        return DEFAULT_FREQUENCY_CUTS
+    lo, hi = active[len(active) // 3], active[(2 * len(active)) // 3]
+    return (lo, hi) if hi > lo else DEFAULT_FREQUENCY_CUTS
+
+
+SegmentOf = Callable[[CustomerState, datetime], str]
+
+
+class SegmentOracle(_Static):
+    """The realistic ceiling: the best fixed action and hour per observable segment x reachable
+    channels, chosen with the planted truth's average over the segment. Diagnostic only.
+
+    Each morning (`prepare_day`) the customers who may be contacted today (consent, the cap, the
+    gap after the last message, nothing still scheduled, no open complaint) are grouped by observable
+    segment and the set of channels that can reach them. For each group the truth values every
+    allowed channel x offer x content item at every allowed local hour for each member, and only the
+    group's mean is used: the group gets the action and hour with the highest mean, or nothing when
+    no mean is above zero. Every member of a group gets the same action at the same local hour, so
+    nothing a member's own truth says beyond their segment's average can steer the choice. It never
+    asks the truth for a persona, a sleeping-dog flag or a best action.
+
+    `segment_of` replaces the default segments (for example to add an observable signal a scenario
+    plants); by default it is `observable_segment` with frequency cuts fitted on the first day.
+    `history_days` is how far back the business's purchase data goes before the first day (the
+    scenario's history); frequency is then counted from there, as the agent counts it from its first
+    imported order, rather than from a signup that may predate the data by a year.
+    `decide` without a plan for today (no `prepare_day` call) does nothing: a per-customer answer
+    would have to read that customer's own truth.
+    """
+
+    version = "segment-oracle-v1"
+
+    def __init__(
+        self,
+        truth: GroundTruth,
+        *,
+        segment_of: SegmentOf | None = None,
+        min_gap_hours: float = MIN_GAP_HOURS,
+        history_days: int | None = None,
+    ) -> None:
+        self.truth = truth
+        self.min_gap_hours = min_gap_hours
+        self.history_days = history_days
+        self._segment_of = segment_of
+        self._cuts: tuple[float, float] | None = None
+        self._data_start: datetime | None = None
+        self._plan: dict[str, tuple[Action, float, SegmentKey]] = {}
+        self._plan_at: datetime | None = None
+        self._scheduled: dict[str, datetime] = {}
+        self.choices: dict[SegmentKey, tuple[str, int, float] | None] = {}
+        """Today's choice per group: (action label, local hour, mean true value), or None."""
+
+    def segment(self, state: CustomerState, now: datetime) -> str:
+        if self._segment_of is not None:
+            return self._segment_of(state, now)
+        return observable_segment(state, now, self._cuts or DEFAULT_FREQUENCY_CUTS, self._data_start)
+
+    def key(self, state: CustomerState, now: datetime) -> SegmentKey:
+        reach = tuple(sorted(c.value for c in state.contactable_channels()))
+        return (self.segment(state, now), reach)
+
+    def _eligible(self, state: CustomerState, now: datetime, cap: int) -> bool:
+        pending = self._scheduled.get(state.customer_id)
+        return (
+            bool(state.contactable_channels())
+            and not state.open_complaint
+            and state.contacts_7d < cap
+            and (pending is None or pending <= now)
+            and _gap_ok(state, now, self.min_gap_hours)
+        )
+
+    def _values(
+        self, states: Sequence[CustomerState], action: Action, now: datetime
+    ) -> npt.NDArray[np.float64]:
+        truth = self.truth
+        if isinstance(truth, BatchTruth):
+            idx = np.array([truth.index(s.customer_id) for s in states], dtype=np.int64)
+            return np.asarray(truth.net(idx, action, now), dtype=np.float64)
+        return np.array([truth.expected_net(s.customer_id, action, now) for s in states], dtype=np.float64)
+
+    def prepare_day(self, states: Sequence[CustomerState], ctx: DecisionContext) -> None:
+        """Choose today's action and hour for every group, and plan each eligible customer."""
+        now = ctx.now
+        if self._plan_at is not None and now < self._plan_at:
+            # Time ran backwards: the same instance is being reused for a new run (another seed).
+            self._scheduled, self._cuts, self._data_start = {}, None, None
+        self._plan, self._plan_at, self.choices = {}, now, {}
+        if self._cuts is None and self._segment_of is None:
+            if self.history_days is not None:
+                self._data_start = now - timedelta(days=self.history_days)
+            self._cuts = frequency_cuts(states, now, self._data_start)
+        cap = weekly_cap(ctx.briefs)
+        eligible = [s for s in states if self._eligible(s, now, cap)]
+        hours = [h for h in range(24) if all(not is_quiet(h, b.envelope) for b in ctx.briefs)]
+        templates = _templates(ctx)
+        if not eligible or not hours or not templates:
+            return
+        cands = [(t, h) for h in hours for t in templates if not is_quiet(h, t.brief.envelope)]
+        values = np.zeros((len(cands), len(eligible)), dtype=np.float64)
+        by_tz: dict[str, list[int]] = {}
+        for k, s in enumerate(eligible):
+            by_tz.setdefault(s.timezone, []).append(k)
+        send_at: dict[tuple[str, int], datetime] = {}
+        for tz, cols in by_tz.items():
+            members = [eligible[k] for k in cols]
+            col = np.array(cols, dtype=np.int64)
+            for h in hours:
+                send_at[(tz, h)] = next_local_time(now, tz, h)
+            for r, (t, h) in enumerate(cands):
+                values[r, col] = self._values(members, t.at(send_at[(tz, h)]), now)
+
+        groups: dict[SegmentKey, list[int]] = {}
+        for k, s in enumerate(eligible):
+            groups.setdefault(self.key(s, now), []).append(k)
+        for key, cols in sorted(groups.items(), key=lambda kv: kv[0]):
+            reach = set(key[1])
+            allowed = np.array([t.channel.value in reach for t, _ in cands], dtype=np.bool_)
+            means = np.where(allowed, values[:, cols].mean(axis=1), -np.inf)
+            r = int(np.argmax(means))
+            best = float(means[r])
+            if not best > 0:
+                self.choices[key] = None
+                continue
+            t, h = cands[r]
+            self.choices[key] = (f"{t.channel.value}/{t.offer_id}/{t.content_id}", h, best)
+            for k in cols:
+                s = eligible[k]
+                self._plan[s.customer_id] = (t.at(send_at[(s.timezone, h)]), best, key)
+
+    def decide(self, state: CustomerState, ctx: DecisionContext) -> Decision:
+        if self._plan_at != ctx.now:
+            return _decision(state, ctx, self.version, "No plan for today.")
+        planned = self._plan.get(state.customer_id)
+        if planned is None:
+            return _decision(
+                state,
+                ctx,
+                self.version,
+                "Not eligible today, or nothing beats doing nothing for the segment.",
+            )
+        action, value, key = planned
+        self._scheduled[state.customer_id] = action.send_at
+        hour = local_hour(action.send_at, state.timezone)
+        return _decision(
+            state,
+            ctx,
+            self.version,
+            f"Best fixed action for {key[0]} customers reachable by {', '.join(key[1])}: "
+            f"{action.channel.value} with {action.offer_id} at {hour}:00 local.",
+            action,
             expected_net=value,
         )

@@ -6,6 +6,20 @@ drift, coping with a small list, doing nothing when nothing works, and stopping 
 
 Every scenario spells out its uplifts rather than leaning on the world's defaults, so the planted
 truth is readable here and does not move if the world's defaults change.
+
+Realism (wave 3a), shared by every scenario here:
+
+* The history holds the client's past campaigns (`history_sends_per_week` = 0.4: a weekly campaign
+  that reaches a recent buyer about three weeks in five and a lapsed one about three in ten), with
+  their clicks, unsubscribes and the purchases they caused, logged with their probabilities. A real
+  client hands over that CRM history; a bare `ScenarioSpec` keeps the old history without it.
+* Unsubscribes and complaints cost their lost future value (the `ScenarioSpec` default: 180 days of
+  a weekly message at the customer's own uplift), plus `COMPLAINT_COST` ($5) of deliverability per
+  complaint. This is what makes `complaint_storm` a fair test: a policy that keeps sending into a
+  storm now pays for the list it burns, in the truth and in the realised money.
+* Sleeping dogs leave faint clues in the history (`sleeping_dog_signal` 0.5, the default), as
+  annoyed people do. `sleeping_dogs_15` uses the default; `sleeping_dogs_hidden` keeps the old,
+  invisible coin flip (signal 0) so the hard case stays on the board.
 """
 
 from __future__ import annotations
@@ -41,6 +55,15 @@ TEN_OFF = OfferOption(
     offer_id="pct10", label="10% off", kind=OfferKind.PERCENT_OFF, amount=10, cost_per_redemption=6.0
 )
 GYM_OFFERS: tuple[OfferOption, ...] = (NO_OFFER, FREE_SHIPPING, TEN_OFF)
+
+HISTORY_SENDS_PER_WEEK = 0.4
+"""The library's past marketing: the weekly campaign's base inclusion probability (see the world)."""
+
+COMPLAINT_COST = 5.0
+"""The library's deliverability cost of one spam complaint. Mailbox providers start routing a
+sender's mail to spam once complaints pass about 0.1-0.3% of sends; for a shop of a few thousand
+customers one complaint is a sizeable step towards that line, and the reach it costs is worth a few
+dollars of later margin. A round, deliberately modest figure: it is a knob, not a measurement."""
 
 # --- planted uplifts ---------------------------------------------------------------------------
 # Added daily purchase probability while a contact's effect lasts (7 days by default). A base email
@@ -90,6 +113,8 @@ def _base(name: str, description: str, **changes: object) -> ScenarioSpec:
         "channel_uplift": _BASE_CHANNEL_UPLIFT,
         "offer_uplift": _BASE_OFFER_UPLIFT,
         "theme_uplift": _BASE_THEME_UPLIFT,
+        "history_sends_per_week": HISTORY_SENDS_PER_WEEK,
+        "complaint_cost": COMPLAINT_COST,
     }
     fields.update(changes)
     return ScenarioSpec.model_validate(fields)
@@ -106,6 +131,14 @@ def _library() -> dict[str, ScenarioSpec]:
             "15% of customers buy less after any contact; a good agent learns to leave them alone.",
             sleeping_dog_share=0.15,
             sleeping_dog_effect=-0.5,
+        ),
+        _base(
+            "sleeping_dogs_hidden",
+            "As sleeping_dogs_15, but the dogs' annoyance began on day 0, so their history looks like "
+            "anyone else's: they can only be found by contacting them.",
+            sleeping_dog_share=0.15,
+            sleeping_dog_effect=-0.5,
+            sleeping_dog_signal=0.0,
         ),
         _base(
             "discount_cannibalisation",
