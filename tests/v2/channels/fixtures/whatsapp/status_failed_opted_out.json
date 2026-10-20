@@ -1,0 +1,39 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "statuses": [
+              {
+                "id": "wamid.HBgLMTY1MDU1NTEyMzQVAgARGBI5QTNDQTVCM0Q0Q0Q2RTY3RTcA",
+                "status": "failed",
+                "timestamp": "1760865304",
+                "recipient_id": "16505551234",
+                "biz_opaque_callback_data": "{\"v\":1,\"d\":\"dec_5c0f3a9b7e2d41c8a6f0\",\"c\":\"cust_000123\",\"m\":\"msg_8b1e4d2c9a7f60e3b5d1\"}",
+                "errors": [
+                  {
+                    "code": 131050,
+                    "title": "User has stopped receiving marketing messages",
+                    "message": "User has stopped receiving marketing messages",
+                    "error_data": {
+                      "details": "Unable to deliver the message. This recipient has chosen to stop receiving marketing messages on WhatsApp from your business."
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "Type": "Notification",
+  "MessageId": "9b1c3d5e-7f80-4a1b-8c2d-000000000001",
+  "TopicArn": "arn:aws:sns:eu-west-1:123456789012:autonomy-ses-events",
+  "Subject": "Amazon SES Email Event Notification",
+  "Message": "{\"eventType\": \"Delivery\", \"mail\": {\"timestamp\": \"2026-10-19T09:14:03.214Z\", \"source\": \"Acme Store <news@mail.acme-store.example>\", \"sourceArn\": \"arn:aws:ses:eu-west-1:123456789012:identity/mail.acme-store.example\", \"sendingAccountId\": \"123456789012\", \"messageId\": \"0100019a0b7c3d2e-6f1a2b3c-4d5e-4f60-8a9b-0c1d2e3f4a5b-000000\", \"destination\": [\"jane@example.com\"], \"headersTruncated\": false, \"headers\": [{\"name\": \"From\", \"value\": \"Acme Store <news@mail.acme-store.example>\"}, {\"name\": \"To\", \"value\": \"jane@example.com\"}, {\"name\": \"Subject\", \"value\": \"Your favourites are back\"}, {\"name\": \"MIME-Version\", \"value\": \"1.0\"}, {\"name\": \"Content-Type\", \"value\": \"text/plain; charset=UTF-8\"}], \"commonHeaders\": {\"from\": [\"Acme Store <news@mail.acme-store.example>\"], \"to\": [\"jane@example.com\"], \"messageId\": \"0100019a0b7c3d2e-6f1a2b3c-4d5e-4f60-8a9b-0c1d2e3f4a5b-000000\", \"subject\": \"Your favourites are back\"}, \"tags\": {\"ses:configuration-set\": [\"autonomy-events\"], \"ses:source-ip\": [\"192.0.2.10\"], \"ses:from-domain\": [\"mail.acme-store.example\"], \"ses:caller-identity\": [\"autonomy-sender\"], \"decision_id\": [\"dec_5c0f3a9b7e2d41c8a6f0\"], \"customer_id\": [\"cust_000123\"], \"message_id\": [\"msg_8b1e4d2c9a7f60e3b5d1\"]}}, \"delivery\": {\"timestamp\": \"2026-10-19T09:14:05.872Z\", \"processingTimeMillis\": 2658, \"recipients\": [\"jane@example.com\"], \"smtpResponse\": \"250 2.6.0 Message received\", \"reportingMTA\": \"a8-50.smtp-out.amazonses.com\"}}",
+  "Timestamp": "2026-10-19T12:50:00.000Z",
+  "SignatureVersion": "1",
+  "Signature": "bm90LWEtcmVhbC1zaWduYXR1cmUtZml4dHVyZXMtdXNlLWFuLWluamVjdGVkLXZlcmlmaWVy",
+  "SigningCertURL": "https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-6209c161c6221fdf56ec1eb5c821d112.pem",
+  "UnsubscribeURL": "https://sns.eu-west-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:eu-west-1:123456789012:autonomy-ses-events:4c2b8f6e-1d3a-4e5f-9a7b-2c1d0e9f8a7b"
+}
