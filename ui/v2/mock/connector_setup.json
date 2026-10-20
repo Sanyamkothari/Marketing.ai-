@@ -1,0 +1,31 @@
+{
+  "conn_673ee938931319ae9646": {
+    "connection_id": "conn_673ee938931319ae9646",
+    "kind": "klaviyo",
+    "state": "guided",
+    "words": "One step to finish in Klaviyo.",
+    "steps": [
+      "In Klaviyo, open Flows → Create flow → Build your own, and name it 'Autonomy · email' (exactly).",
+      "Trigger: choose Metric → 'Autonomy Decision'. Add a trigger filter: 'channel' equals 'email'.",
+      "Add an Email action. Template: 'Autonomy · decision email' (Autonomy created it in Templates; if it is missing, create a code template whose body is {{ event.body|linebreaks }} with your footer). Subject line: {{ event.subject }}. Sender: your usual sender.",
+      "In the email's settings turn Smart Sending off: Autonomy already decides how often each person hears from you, and Smart Sending would silently skip decided emails.",
+      "Set the message to Live, then set the flow to Live. Autonomy notices within the hour."
+    ],
+    "channels": [
+      {
+        "channel": "email",
+        "ready": false,
+        "flow_name": "Autonomy · email",
+        "words": "Email: not ready yet",
+        "steps": [
+          "In Klaviyo, open Flows → Create flow → Build your own, and name it 'Autonomy · email' (exactly).",
+          "Trigger: choose Metric → 'Autonomy Decision'. Add a trigger filter: 'channel' equals 'email'.",
+          "Add an Email action. Template: 'Autonomy · decision email' (Autonomy created it in Templates; if it is missing, create a code template whose body is {{ event.body|linebreaks }} with your footer). Subject line: {{ event.subject }}. Sender: your usual sender.",
+          "In the email's settings turn Smart Sending off: Autonomy already decides how often each person hears from you, and Smart Sending would silently skip decided emails.",
+          "Set the message to Live, then set the flow to Live. Autonomy notices within the hour."
+        ]
+      }
+    ],
+    "checked_at": "2026-10-20T08:00:00Z"
+  }
+}

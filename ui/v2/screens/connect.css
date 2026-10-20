@@ -1,6 +1,6 @@
-/* Connect screen (screens/connect.js). Two columns on the 12-column grid, 7 + 5: what is connected, what the Data
-   Doctor fixed and sending health on the left; what it asks, how messages go out and how to bring data in on the
-   right. Hairline cards, rules between rows, numbers right-aligned in tabular figures, status always a word as well
+/* Connect screen (screens/connect.js). "Bring your data in" across the page (a row per platform, then files,
+   databases and what comes next), then two columns on the 12-column grid, 7 + 5: what is connected, what the Data
+   Doctor fixed and sending health on the left; what it asks and how messages go out on the right. Hairline cards, rules between rows, numbers right-aligned in tabular figures, status always a word as well
    as a colour. Tokens and components come from styles.css (DESIGN.md section 9). */
 
 .cn-grid {
@@ -79,36 +79,256 @@
   font-size: var(--fs-small);
 }
 
-/* ---- bring your data in ---------------------------------------------------------------------------------- */
-.cn-ways {
+/* ---- bring your data in: one row per way in ------------------------------------------------------------- */
+/* Platform rows: the name and one line on the left, the status pill, then one button, each row on a hairline.
+   On a phone the line wraps under the name, and the pill and the button share the row under it. */
+.cn-tools {
+  margin-bottom: var(--gap);
+}
+
+.cn-tools .notice {
+  margin-bottom: 12px;
+}
+
+.cn-platforms {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.cn-ways > li {
-  padding: 12px 0;
+.cn-platform {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 160px;
+  grid-template-areas:
+    "main status actions"
+    "setup setup setup"
+    "panel panel panel";
+  align-items: center;
+  column-gap: var(--gap);
+  padding: 14px 0;
   border-top: 1px solid var(--rule);
 }
 
-.cn-ways > li:last-child {
-  padding-bottom: 0;
+.cn-platform:first-child {
+  border-top: 0;
+  padding-top: 4px;
 }
 
-.cn-way-title {
-  margin: 0 0 4px;
+.cn-p-main {
+  grid-area: main;
+  min-width: 0;
+}
+
+.cn-p-status {
+  grid-area: status;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.cn-p-actions {
+  grid-area: actions;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cn-p-name {
+  margin: 0;
   font-size: var(--fs-body);
   line-height: var(--lh-body);
   font-weight: 600;
 }
 
-.cn-ways p {
-  margin: 0 0 6px;
+.cn-p-line {
+  margin: 2px 0 0;
   color: var(--muted);
 }
 
-.cn-ways > li > :last-child {
-  margin-bottom: 0;
+.cn-p-account {
+  color: var(--text);
+}
+
+/* The only loud state: access stopped working. A red rule on the left of the row, the critical pill, Reconnect. */
+.cn-platform.is-loud {
+  border-left: 2px solid var(--negative);
+  padding-left: 12px;
+}
+
+.cn-p-setup {
+  grid-area: setup;
+  margin-top: 8px;
+}
+
+.cn-p-setup[hidden],
+.cn-p-panel[hidden],
+.cn-p-actions .btn[hidden] {
+  display: none;
+}
+
+.cn-p-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+}
+
+.cn-steps {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+}
+
+.cn-steps li {
+  margin: 4px 0 0;
+}
+
+.cn-steps[hidden] {
+  display: none;
+}
+
+.cn-p-panel {
+  grid-area: panel;
+  margin-top: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--raised);
+}
+
+.cn-p-form .form-row {
+  max-width: 640px;
+}
+
+.cn-p-form .form-actions {
+  margin-top: 12px;
+}
+
+.cn-p-form .field-error {
+  margin-top: 8px;
+}
+
+.cn-streams,
+.cn-p-problems {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cn-stream {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.cn-stream-name {
+  font-weight: 500;
+}
+
+.cn-stream-words {
+  color: var(--muted);
+  font-size: var(--fs-small);
+  text-align: right;
+}
+
+.cn-p-problems li {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.cn-p-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* What comes next: quiet, nothing to click. */
+.cn-soon-row {
+  grid-template-areas: "main main main";
+}
+
+.cn-soon-row .cn-p-name {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.cn-soon {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.cn-soon-item {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+}
+
+@media (max-width: 719px) {
+  .cn-platform {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "main main"
+      "status actions"
+      "setup setup"
+      "panel panel";
+  }
+
+  /* Margins, not a row gap: the setup and details rows are often empty and must not leave gaps. */
+  .cn-p-status,
+  .cn-p-actions {
+    margin-top: 10px;
+  }
+
+  .cn-p-status {
+    justify-content: flex-start;
+  }
+
+  .cn-p-actions .btn {
+    min-height: var(--touch);
+  }
+
+  .cn-p-status:empty {
+    display: none;
+  }
+
+  .cn-way {
+    grid-template-areas:
+      "main main"
+      "actions actions";
+  }
+
+  .cn-way .cn-p-actions {
+    justify-content: stretch;
+  }
+
+  .cn-way .cn-p-actions .btn {
+    width: 100%;
+  }
+
+  .cn-soon-row {
+    grid-template-areas: "main main";
+  }
+
+  .cn-stream {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .cn-stream-words {
+    text-align: left;
+  }
 }
 
 .cn-where {

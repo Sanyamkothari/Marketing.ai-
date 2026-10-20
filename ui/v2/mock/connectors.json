@@ -1,0 +1,223 @@
+{
+  "business_id": "demo",
+  "as_of": "2026-10-20T08:00:00Z",
+  "can_act": false,
+  "on_hold": [
+    "Klaviyo (Sample Shop): loading history, 12%."
+  ],
+  "platforms": [
+    {
+      "kind": "shopify",
+      "label": "Shopify",
+      "tagline": "Brings in orders, customers and products.",
+      "description": "Reads customers and their email/SMS marketing consent, orders (lines, discount codes, refunds) and products; creates single-use discount codes and customer tags. Shopify does not send messages: they go out through your email tool.",
+      "auth": "oauth2",
+      "oauth_ready": false,
+      "missing_settings": [
+        "AUTONOMY_SHOPIFY_CLIENT_ID",
+        "AUTONOMY_SHOPIFY_CLIENT_SECRET"
+      ],
+      "key_allowed": true,
+      "install_url": null,
+      "scopes": [
+        "read_customers",
+        "write_customers",
+        "read_orders",
+        "read_all_orders",
+        "read_products",
+        "write_discounts"
+      ],
+      "setup": "automatic",
+      "setup_note": "Install the Autonomy app from your Shopify admin and approve the access it asks for. Before the app is listed, a pilot can paste a custom-app Admin API token with the same scopes instead.",
+      "config_fields": [
+        {
+          "name": "shop",
+          "label": "Shop address",
+          "help": "Your shop's permanent address, ending in .myshopify.com",
+          "pattern": "[a-z0-9][a-z0-9-]{0,98}\\.myshopify\\.com",
+          "required": true
+        }
+      ],
+      "streams": [
+        "Orders",
+        "Customers",
+        "Products"
+      ],
+      "sends": false,
+      "regions": [
+        "US",
+        "UK",
+        "AU"
+      ],
+      "api_version": "2026-10",
+      "connections": [
+        {
+          "connection_id": "conn_47096da0cc32eb1a8eb4",
+          "kind": "shopify",
+          "label": "Sample Shop",
+          "external_id": "sample-shop.myshopify.com",
+          "status": "active",
+          "phase": "healthy",
+          "words": "Up to date, 4 minutes ago",
+          "detail": "Autonomy checks Shopify every hour, and right away when Shopify reports a change.",
+          "can_act": true,
+          "last_sync_at": "2026-10-20T07:56:00Z",
+          "history_progress": null,
+          "rows_last_day": 200,
+          "connected_at": "2026-09-10T08:00:00Z",
+          "setup": "automatic",
+          "streams": [
+            {
+              "stream": "orders",
+              "label": "Orders",
+              "critical": true,
+              "freshness": "fresh",
+              "last_sync_at": "2026-10-20T07:56:00Z",
+              "lag_seconds": 240.0,
+              "words": "Up to date, 4 minutes ago",
+              "history_ready": true,
+              "history_progress": 1.0,
+              "history_words": "History loaded",
+              "rows_last_day": 140,
+              "last_rows": 37
+            },
+            {
+              "stream": "customers",
+              "label": "Customers",
+              "critical": true,
+              "freshness": "fresh",
+              "last_sync_at": "2026-10-20T07:56:00Z",
+              "lag_seconds": 240.0,
+              "words": "Up to date, 4 minutes ago",
+              "history_ready": true,
+              "history_progress": 0.11506849315068493,
+              "history_words": "History 12% loaded",
+              "rows_last_day": 60,
+              "last_rows": 12
+            },
+            {
+              "stream": "products",
+              "label": "Products",
+              "critical": false,
+              "freshness": "fresh",
+              "last_sync_at": "2026-10-20T06:00:00Z",
+              "lag_seconds": 7200.0,
+              "words": "Up to date, 2 hours ago",
+              "history_ready": true,
+              "history_progress": 1.0,
+              "history_words": "History loaded",
+              "rows_last_day": null,
+              "last_rows": 3
+            }
+          ],
+          "problems": []
+        }
+      ]
+    },
+    {
+      "kind": "klaviyo",
+      "label": "Klaviyo",
+      "tagline": "Sends Autonomy's messages through your own flows.",
+      "description": "Reads profiles, consent, and email/SMS engagement; sends Autonomy's decisions through your own Klaviyo flows, so your unsubscribes, sender reputation and footer stay in Klaviyo.",
+      "auth": "oauth2",
+      "oauth_ready": false,
+      "missing_settings": [
+        "AUTONOMY_KLAVIYO_CLIENT_ID",
+        "AUTONOMY_KLAVIYO_CLIENT_SECRET"
+      ],
+      "key_allowed": true,
+      "install_url": null,
+      "scopes": [
+        "accounts:read",
+        "profiles:read",
+        "lists:read",
+        "segments:read",
+        "metrics:read",
+        "events:read",
+        "events:write",
+        "flows:read",
+        "flows:write",
+        "templates:read",
+        "templates:write"
+      ],
+      "setup": "automatic",
+      "setup_note": "Autonomy creates its own send flows and template in your Klaviyo account on connect. If your account does not allow that, the Connect screen shows the few steps to do once by hand.",
+      "config_fields": [],
+      "streams": [
+        "Marketing consent",
+        "Message engagement",
+        "Site activity"
+      ],
+      "sends": true,
+      "regions": [
+        "US",
+        "UK",
+        "AU"
+      ],
+      "api_version": "2026-10-15",
+      "connections": [
+        {
+          "connection_id": "conn_673ee938931319ae9646",
+          "kind": "klaviyo",
+          "label": "Sample Shop",
+          "external_id": "AbC123",
+          "status": "active",
+          "phase": "backfilling",
+          "words": "Loading history, 12%",
+          "detail": "Autonomy reads your past data newest first. It starts deciding once it has 30 days; the rest keeps loading in the background.",
+          "can_act": false,
+          "last_sync_at": "2026-10-20T07:48:00Z",
+          "history_progress": 0.12222222222222222,
+          "rows_last_day": null,
+          "connected_at": "2026-10-18T08:00:00Z",
+          "setup": "automatic",
+          "streams": [
+            {
+              "stream": "consent",
+              "label": "Marketing consent",
+              "critical": true,
+              "freshness": "fresh",
+              "last_sync_at": "2026-10-20T07:48:00Z",
+              "lag_seconds": 720.0,
+              "words": "Up to date, 12 minutes ago",
+              "history_ready": true,
+              "history_progress": 0.012328767123287671,
+              "history_words": "History 1% loaded",
+              "rows_last_day": null,
+              "last_rows": 80
+            },
+            {
+              "stream": "engagement",
+              "label": "Message engagement",
+              "critical": true,
+              "freshness": "fresh",
+              "last_sync_at": "2026-10-20T07:48:00Z",
+              "lag_seconds": 720.0,
+              "words": "Up to date, 12 minutes ago",
+              "history_ready": false,
+              "history_progress": 0.12222222222222222,
+              "history_words": "History 12% loaded",
+              "rows_last_day": null,
+              "last_rows": 410
+            },
+            {
+              "stream": "events",
+              "label": "Site activity",
+              "critical": false,
+              "freshness": "fresh",
+              "last_sync_at": "2026-10-20T07:48:00Z",
+              "lag_seconds": 720.0,
+              "words": "Up to date, 12 minutes ago",
+              "history_ready": true,
+              "history_progress": 1.0,
+              "history_words": "History loaded",
+              "rows_last_day": null,
+              "last_rows": 950
+            }
+          ],
+          "problems": []
+        }
+      ]
+    }
+  ]
+}

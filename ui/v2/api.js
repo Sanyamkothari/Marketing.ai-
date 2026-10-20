@@ -44,6 +44,9 @@ export const MOCK_FILES = Object.freeze({
   channels: "channels.json",
   opportunitiesSized: "opportunities_sized.json",
   batchBreakdowns: "batch_breakdowns.json",
+  // The SaaS connectors (api/v2/connectors.py): the platform cards, and each sample connection's guided setup.
+  connectors: "connectors.json",
+  connectorSetup: "connector_setup.json",
 });
 
 // The values Goal.kind and Goal.objective may take (autonomy/contracts/goals.py), for the mock's checks.
@@ -384,8 +387,12 @@ export function createApi(options = {}) {
     const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
     const q = url.searchParams;
     const s = await state();
-    const key = `${method} /${parts.map((p, i) => (i > 0 && ["goals", "content", "customers", "batches"].includes(parts[i - 1]) ? "{id}" : p)).join("/")}`;
+    const key = `${method} /${parts.map((p, i) => (i > 0 && ["goals", "content", "customers", "batches", "connections"].includes(parts[i - 1]) ? "{id}" : p)).join("/")}`;
     const id = parts[1];
+    // Connecting, syncing and disconnecting need a real platform: the sample data only shows what it looks like.
+    if (parts[0] === "connectors" && method !== "GET") {
+      throw new ApiError(409, "SAMPLE_DATA", "This page shows sample data. Connecting needs the live Autonomy API.", null);
+    }
 
     switch (key) {
       case "GET /goals":
@@ -552,6 +559,13 @@ export function createApi(options = {}) {
       }
       case "GET /health":
         return (await loadMock(MOCK_FILES.health)) ?? null;
+      case "GET /connectors":
+        return (await loadMock(MOCK_FILES.connectors)) ?? null;
+      case "GET /connectors/connections/{id}/setup": {
+        const all = (await loadMock(MOCK_FILES.connectorSetup)) || {};
+        if (all[parts[2]]) return all[parts[2]];
+        throw notFound(`Connection ${parts[2]}`);
+      }
       case "GET /alerts":
         return (await loadMock(MOCK_FILES.alerts)) || [];
       case "GET /opportunities":
@@ -566,6 +580,7 @@ export function createApi(options = {}) {
   const get = (path) => request("GET", path);
   const post = (path, body = {}) => request("POST", path, body);
   const patch = (path, body = {}) => request("PATCH", path, body);
+  const del = (path) => request("DELETE", path);
   /** A GET of an endpoint an older API build may not have: null when the route is missing, as listBatches does. */
   const optional = (path) =>
     get(path).catch((err) => {
@@ -711,6 +726,28 @@ export function createApi(options = {}) {
     listSizedOpportunities: () => optional("/opportunities/sized"),
     /** GET /v2/batches/{id}/breakdown -> {batch_id, by_channel, by_offer, offer_labels, words} */
     getBatchBreakdown: (batchId) => optional(`/batches/${enc(batchId)}/breakdown`),
+
+    // ---- the SaaS connectors (api/v2/connectors.py; docs/v2/CONNECTORS.md) ----
+    /**
+     * GET /v2/connectors -> {business_id, as_of, can_act, on_hold, platforms: [{kind, label, tagline, description,
+     * oauth_ready, key_allowed, scopes, config_fields, sends, connections: [ConnectionView]}]}; null when this API
+     * build has no connector routes. A ConnectionView carries `phase` (healthy, warning, syncing, backfilling,
+     * stale, needs_reconnect, paused, disconnected), `words` (the card's one line) and `detail` (its description).
+     */
+    listConnectors: () => optional("/connectors"),
+    /** POST /v2/connectors/{kind}/connect {config} -> {kind, url}: send the browser to `url` (the platform's consent). */
+    startConnect: (kind, config = {}) => post(`/connectors/${enc(kind)}/connect`, { config }),
+    /** POST /v2/connectors/{kind}/key {api_key, config} -> ConnectionView: connect with a pasted key (pilots). */
+    connectWithKey: (kind, apiKey, config = {}) => post(`/connectors/${enc(kind)}/key`, { api_key: apiKey, config }),
+    /** GET /v2/connectors/connections/{id} -> ConnectionView */
+    getConnection: (connectionId) => get(`/connectors/connections/${enc(connectionId)}`),
+    /** POST /v2/connectors/connections/{id}/sync -> {connection_id, streams, run_at, words} */
+    syncConnection: (connectionId) => post(`/connectors/connections/${enc(connectionId)}/sync`),
+    /** DELETE /v2/connectors/connections/{id} -> ConnectionView (disconnected) */
+    disconnectConnection: (connectionId) => del(`/connectors/connections/${enc(connectionId)}`),
+    /** GET /v2/connectors/connections/{id}/setup?refresh= -> {state: ready|pending|guided|not_needed|unavailable, words, steps} */
+    getConnectorSetup: (connectionId, opts = {}) =>
+      get(`/connectors/connections/${enc(connectionId)}/setup${query({ refresh: opts.refresh ? "true" : null })}`),
     /** POST /v2/goals/read {text} -> {text, budget, currency, ends_at, period, words}: what the words say. */
     readGoal: (text) => post("/goals/read", { text }),
     /** PATCH /v2/goals/{id} {budget} -> {goal, brief}: lower a budget ("Approve with a small budget"). 409 above the approved plan. */

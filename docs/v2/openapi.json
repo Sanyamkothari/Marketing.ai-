@@ -2,10 +2,537 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Autonomy API",
-    "description": "The v2 marketer app's API: goals, plans, approvals, batches, decisions, proof, webhooks and the operator's runtime tick.",
+    "description": "The v2 marketer app's API: goals, plans, approvals, batches, decisions, proof, webhooks, the SaaS connectors (/v2/connectors) and the operator's runtime tick.",
     "version": "2.0.0"
   },
   "paths": {
+    "/v2/connectors": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Every platform this server connects, with health in words",
+        "operationId": "overview_v2_connectors_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectorsOverview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/connectors/connections": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Health of every connection",
+        "operationId": "list_connections_v2_connectors_connections_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectionView"
+                  },
+                  "type": "array",
+                  "title": "Response List Connections V2 Connectors Connections Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/connectors/connections/{connection_id}": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Health of one connection",
+        "operationId": "get_connection_v2_connectors_connections__connection_id__get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Disconnect: forget the tokens and stop syncing",
+        "operationId": "disconnect_v2_connectors_connections__connection_id__delete",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such connection"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/connectors/connections/{connection_id}/sync": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Queue a sync of every stream now",
+        "operationId": "sync_now_v2_connectors_connections__connection_id__sync_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncRequested"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such connection"
+          },
+          "409": {
+            "description": "Not active: reconnect first"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/connectors/connections/{connection_id}/setup": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "The one-time guided steps in the customer's tool, when its API could not do them",
+        "operationId": "setup_v2_connectors_connections__connection_id__setup_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Check the platform again instead of the last check",
+              "default": false,
+              "title": "Refresh"
+            },
+            "description": "Check the platform again instead of the last check"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such connection"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/connectors/webhooks/{kind}": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "App-level webhooks (Shopify's mandatory privacy topics): verified, deduped, queued, answered at once",
+        "operationId": "webhook_app_v2_connectors_webhooks__kind__post",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/connectors/webhooks/{kind}/{connection_id}": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Per-connection webhooks (the callback URL register_webhooks subscribes)",
+        "operationId": "webhook_connection_v2_connectors_webhooks__kind___connection_id__post",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/connectors/{kind}/connect": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Start OAuth: the platform's consent URL",
+        "operationId": "start_connect_v2_connectors__kind__connect_post",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ConnectStart"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectRedirect"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A connect field is not valid"
+          },
+          "404": {
+            "description": "No such platform"
+          },
+          "409": {
+            "description": "This server has no app credentials for the platform: use a key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/connectors/{kind}/callback": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "The platform's OAuth redirect: finish connecting, then back to the Connect screen",
+        "operationId": "oauth_callback_v2_connectors__kind__callback_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/connectors/{kind}/install": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "An install started on the platform (the Shopify admin's app URL): check it, then start OAuth",
+        "operationId": "platform_install_v2_connectors__kind__install_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "This platform does not start installs on its side"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/connectors/{kind}/key": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Connect with a pasted private key or custom-app token (pilots)",
+        "operationId": "connect_with_key_v2_connectors__kind__key_post",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyConnect"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The key or a field was refused"
+          },
+          "404": {
+            "description": "No such platform"
+          },
+          "503": {
+            "description": "The platform could not be reached"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v2/goals": {
       "get": {
         "tags": [
@@ -878,7 +1405,7 @@
           "v2"
         ],
         "summary": "Get Briefing",
-        "description": "The latest briefing for a goal (or the whole programme); null when there is none yet.",
+        "description": "The latest briefing for a goal (or the whole programme); null when there is none yet.\n\nIts measured sections carry the same proof and health as `/v2/proof` and `/v2/health` serve\nnow, for this goal, so the briefing and Proof never show two profits for one goal.",
         "operationId": "get_briefing_v2_briefing_get",
         "parameters": [
           {
@@ -3293,6 +3820,14 @@
         "title": "AudienceFilter",
         "description": "A test on one `CustomerState` field. `days_since_*` compare a datetime field with now."
       },
+      "AuthMethod": {
+        "type": "string",
+        "enum": [
+          "oauth2",
+          "api_key"
+        ],
+        "title": "AuthMethod"
+      },
       "AutonomyLevel": {
         "type": "string",
         "enum": [
@@ -4465,6 +5000,235 @@
           "distinct"
         ],
         "title": "ColumnProfile"
+      },
+      "ConnectRedirect": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "Send the browser here: the platform's consent screen"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "url"
+        ],
+        "title": "ConnectRedirect"
+      },
+      "ConnectStart": {
+        "properties": {
+          "config": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Config",
+            "description": "The platform's connect fields, e.g. {'shop': 'acme.myshopify.com'}"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ConnectStart"
+      },
+      "ConnectionStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "needs_reconnect",
+          "paused",
+          "disconnected"
+        ],
+        "title": "ConnectionStatus"
+      },
+      "ConnectionView": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "title": "Connection Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "The account's name, e.g. the shop's name or the Klaviyo organisation"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConnectionStatus"
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "warning",
+              "syncing",
+              "backfilling",
+              "stale",
+              "needs_reconnect",
+              "paused",
+              "disconnected"
+            ],
+            "title": "Phase",
+            "description": "healthy | warning (working, something to look at) | syncing (first sync) | backfilling (loading history) | stale (behind) | needs_reconnect | paused | disconnected"
+          },
+          "words": {
+            "type": "string",
+            "title": "Words",
+            "description": "The card's one line, e.g. 'Up to date, 4 minutes ago'"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "What that line means and what changes it (the description behind it)"
+          },
+          "can_act": {
+            "type": "boolean",
+            "title": "Can Act",
+            "description": "Decisions may rely on this connection now"
+          },
+          "last_sync_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sync At",
+            "description": "The oldest last sync across the streams decisions rely on"
+          },
+          "history_progress": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History Progress",
+            "description": "While loading history: 0..1 of the critical streams' least"
+          },
+          "rows_last_day": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rows Last Day"
+          },
+          "connected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Connected At"
+          },
+          "setup": {
+            "type": "string",
+            "title": "Setup",
+            "description": "automatic | guided: whether the platform may need a one-time step by hand"
+          },
+          "streams": {
+            "items": {
+              "$ref": "#/components/schemas/StreamView"
+            },
+            "type": "array",
+            "title": "Streams",
+            "default": []
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/ProblemView"
+            },
+            "type": "array",
+            "title": "Problems",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "connection_id",
+          "kind",
+          "label",
+          "status",
+          "phase",
+          "words",
+          "detail",
+          "can_act",
+          "last_sync_at",
+          "history_progress",
+          "connected_at",
+          "setup"
+        ],
+        "title": "ConnectionView",
+        "description": "One connected account and its health, in the words the Connect screen shows."
+      },
+      "ConnectorsOverview": {
+        "properties": {
+          "business_id": {
+            "type": "string",
+            "title": "Business Id"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "title": "As Of"
+          },
+          "can_act": {
+            "type": "boolean",
+            "title": "Can Act",
+            "description": "The runtime's answer: may Autonomy decide for this business now"
+          },
+          "on_hold": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "On Hold",
+            "description": "Why not, in plain words",
+            "default": []
+          },
+          "platforms": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformView"
+            },
+            "type": "array",
+            "title": "Platforms",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "business_id",
+          "as_of",
+          "can_act"
+        ],
+        "title": "ConnectorsOverview"
       },
       "ConsentProof": {
         "properties": {
@@ -6481,6 +7245,53 @@
         "title": "Expected",
         "description": "The agent's own forecast, summed from its decisions. A forecast, not proof."
       },
+      "FieldView": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "help": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Help"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pattern"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "label"
+        ],
+        "title": "FieldView",
+        "description": "One value a person types to connect (Shopify: the shop address)."
+      },
       "FinancialImpact": {
         "properties": {
           "gross_incremental_revenue": {
@@ -6654,6 +7465,16 @@
         "type": "object",
         "title": "FrequencyCapIn",
         "description": "`max_touches` (or its alias `max_per_customer`) in any `window_days` days."
+      },
+      "Freshness": {
+        "type": "string",
+        "enum": [
+          "fresh",
+          "late",
+          "stale",
+          "never"
+        ],
+        "title": "Freshness"
       },
       "Goal": {
         "properties": {
@@ -7411,6 +8232,28 @@
           "valid"
         ],
         "title": "KeyCheck"
+      },
+      "KeyConnect": {
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "title": "Api Key",
+            "description": "A private key or custom-app token (8 to 4096 characters)"
+          },
+          "config": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Config"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "api_key"
+        ],
+        "title": "KeyConnect"
       },
       "LeakCheck": {
         "properties": {
@@ -8933,6 +9776,145 @@
         "title": "PlanFacts",
         "description": "What the Plan screen needs beyond the brief: how many people, the hard rules, the editor."
       },
+      "PlatformView": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "tagline": {
+            "type": "string",
+            "title": "Tagline",
+            "description": "One short line for the card, e.g. 'Brings in orders, customers and products.'"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "The connector's full description (the card's description)"
+          },
+          "auth": {
+            "$ref": "#/components/schemas/AuthMethod"
+          },
+          "oauth_ready": {
+            "type": "boolean",
+            "title": "Oauth Ready",
+            "description": "This server holds our app's credentials, so 'Connect' can use OAuth"
+          },
+          "missing_settings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Settings",
+            "description": "Server settings OAuth still needs (for the operator)",
+            "default": []
+          },
+          "key_allowed": {
+            "type": "boolean",
+            "title": "Key Allowed",
+            "description": "A private key or custom-app token can be pasted instead (pilots)"
+          },
+          "install_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Install Url",
+            "description": "The app URL to give the platform (installs started there); None if not used"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes",
+            "description": "The access a key needs (the OAuth scopes)",
+            "default": []
+          },
+          "setup": {
+            "type": "string",
+            "title": "Setup"
+          },
+          "setup_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Note"
+          },
+          "config_fields": {
+            "items": {
+              "$ref": "#/components/schemas/FieldView"
+            },
+            "type": "array",
+            "title": "Config Fields",
+            "default": []
+          },
+          "streams": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Streams",
+            "description": "The streams' names on screen",
+            "default": []
+          },
+          "sends": {
+            "type": "boolean",
+            "title": "Sends",
+            "description": "Sends Autonomy's messages through the customer's own tool"
+          },
+          "regions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Regions",
+            "default": []
+          },
+          "api_version": {
+            "type": "string",
+            "title": "Api Version"
+          },
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionView"
+            },
+            "type": "array",
+            "title": "Connections",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "label",
+          "tagline",
+          "description",
+          "auth",
+          "oauth_ready",
+          "key_allowed",
+          "install_url",
+          "setup",
+          "sends",
+          "api_version"
+        ],
+        "title": "PlatformView",
+        "description": "One platform card: what it is, how it connects, and its connections."
+      },
       "Problem": {
         "properties": {
           "code": {
@@ -8972,6 +9954,48 @@
           "message"
         ],
         "title": "Problem"
+      },
+      "ProblemView": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "What kind of problem (connector.stale, connector.errors, ...), for the UI's logic"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Severity"
+          },
+          "stream": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stream"
+          },
+          "words": {
+            "type": "string",
+            "title": "Words"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "severity",
+          "words"
+        ],
+        "title": "ProblemView",
+        "description": "Something about a connection a person may want to know, in words (never an error code)."
       },
       "ProfileReport": {
         "properties": {
@@ -9860,6 +10884,109 @@
         ],
         "title": "SendStatus"
       },
+      "SetupChannelView": {
+        "properties": {
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "flow_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow Name"
+          },
+          "words": {
+            "type": "string",
+            "title": "Words"
+          },
+          "steps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Steps",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "channel",
+          "ready",
+          "words"
+        ],
+        "title": "SetupChannelView"
+      },
+      "SetupView": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "title": "Connection Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "pending",
+              "guided",
+              "not_needed",
+              "unavailable"
+            ],
+            "title": "State"
+          },
+          "words": {
+            "type": "string",
+            "title": "Words",
+            "description": "The one line, e.g. 'One step to finish in Klaviyo.'"
+          },
+          "steps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Steps",
+            "description": "The one-time steps to do by hand, in order",
+            "default": []
+          },
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/SetupChannelView"
+            },
+            "type": "array",
+            "title": "Channels",
+            "default": []
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Checked At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "connection_id",
+          "kind",
+          "state",
+          "words",
+          "checked_at"
+        ],
+        "title": "SetupView"
+      },
       "SignRequest": {
         "properties": {
           "role": {
@@ -10182,6 +11309,119 @@
         ],
         "title": "StopRuleStatus"
       },
+      "StreamView": {
+        "properties": {
+          "stream": {
+            "type": "string",
+            "title": "Stream"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "The stream's name on screen, e.g. 'Orders'"
+          },
+          "critical": {
+            "type": "boolean",
+            "title": "Critical",
+            "description": "Stale data here holds decisions (orders, consent)"
+          },
+          "freshness": {
+            "$ref": "#/components/schemas/Freshness"
+          },
+          "last_sync_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sync At",
+            "description": "When the live lane last finished a window"
+          },
+          "lag_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag Seconds"
+          },
+          "words": {
+            "type": "string",
+            "title": "Words",
+            "description": "e.g. 'Up to date, 4 minutes ago' or 'Not synced yet'"
+          },
+          "history_ready": {
+            "type": "boolean",
+            "title": "History Ready",
+            "description": "Enough history for decisions to rely on this stream"
+          },
+          "history_progress": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History Progress",
+            "description": "0..1 of the backfill depth read; None without a history lane"
+          },
+          "history_words": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History Words",
+            "description": "e.g. 'History 42% loaded'; None without a history lane"
+          },
+          "rows_last_day": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rows Last Day",
+            "description": "Records read in the last 24 hours (None before a week of runs)"
+          },
+          "last_rows": {
+            "type": "integer",
+            "title": "Last Rows",
+            "description": "Records read by the last finished sync"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stream",
+          "label",
+          "critical",
+          "freshness",
+          "last_sync_at",
+          "lag_seconds",
+          "words",
+          "history_ready",
+          "history_progress",
+          "history_words",
+          "rows_last_day",
+          "last_rows"
+        ],
+        "title": "StreamView"
+      },
       "SummaryRequest": {
         "properties": {
           "decisions": {
@@ -10362,6 +11602,39 @@
         ],
         "title": "SuppressedAction",
         "description": "An option that did not go out, and why. `channel`/`offer_id` are None when a whole goal was out."
+      },
+      "SyncRequested": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "title": "Connection Id"
+          },
+          "streams": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Streams"
+          },
+          "run_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Run At"
+          },
+          "words": {
+            "type": "string",
+            "title": "Words"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "connection_id",
+          "streams",
+          "run_at",
+          "words"
+        ],
+        "title": "SyncRequested"
       },
       "TemporalIntegrity": {
         "properties": {
