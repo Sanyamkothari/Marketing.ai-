@@ -1,0 +1,54 @@
+{
+  "goal_id": "goal_winback",
+  "date": "2026-10-19",
+  "as_of": "2026-10-20T13:20:00Z",
+  "autonomy": "approve",
+  "sends_nothing": false,
+  "autonomy_since": "2026-10-01T09:00:00Z",
+  "customers_considered": 2100,
+  "contacted": 412,
+  "contacted_by_group": {
+    "agent": 371,
+    "baseline": 41
+  },
+  "left_alone": 1688,
+  "left_alone_by_reason": {
+    "weekly_cap": 1120,
+    "no_effect": 384,
+    "holdout": 184
+  },
+  "reasons": [
+    {
+      "code": "weekly_cap",
+      "words": "Already contacted as often as the weekly limit allows",
+      "n": 1120
+    },
+    {
+      "code": "no_effect",
+      "words": "A message would not change what they do",
+      "n": 384
+    },
+    {
+      "code": "holdout",
+      "words": "People we never contact, so we can measure the difference",
+      "n": 184
+    }
+  ],
+  "messages_sent": 412,
+  "delivered": 407,
+  "purchases": 37,
+  "revenue": 2960.0,
+  "currency": "USD",
+  "spend_to_date": 1840.0,
+  "budget": 5000.0,
+  "budget_left": 3160.0,
+  "last_run_at": "2026-10-19T09:00:00Z",
+  "next_run_at": "2026-10-21T09:00:00Z",
+  "run_overdue": false,
+  "learned": [
+    "Free shipping is beating the percentage discount for lapsed coffee buyers. The share of contacts offered the discount fell from 31% to 18%."
+  ],
+  "notes": [
+    "Purchases are every purchase by the customers it looked after that day, not only extra ones; the extra profit, measured against people we never contact, is on the Proof page."
+  ]
+}

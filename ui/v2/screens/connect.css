@@ -1,0 +1,234 @@
+/* Connect screen (screens/connect.js). Only the shared tokens from styles.css are used, so light and dark mode
+   follow the shell; status is always a word as well as a colour. One column on a phone, two from 720px. */
+
+.cn-top,
+.cn-doctor {
+  margin-bottom: 16px;
+}
+
+.cn-ways {
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.cn-ways > li {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  padding: 12px 14px;
+}
+
+.cn-way-title {
+  font-size: 1rem;
+  margin: 0 0 4px;
+}
+
+.cn-ways p {
+  margin: 4px 0;
+}
+
+.cn-files li {
+  margin: 4px 0;
+}
+
+.cn-where {
+  margin: 12px 0 0;
+}
+
+.cn-sub {
+  font-size: 0.95rem;
+  margin: 16px 0 6px;
+}
+
+/* the totals: three big numbers */
+.cn-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin: 0 0 12px;
+}
+
+.cn-total {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+}
+
+.cn-total dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.cn-total dd {
+  margin: 2px 0 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.cn-note {
+  background: var(--warning-t);
+  color: var(--ink);
+  border-left: 4px solid var(--warning);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+}
+
+.cn-source-kind {
+  font-weight: 600;
+}
+
+/* what the Data Doctor fixed */
+.cn-fix-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cn-fix-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cn-fix-rows {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* it asks before changing anything */
+.cn-promise {
+  background: var(--brand-tint);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+}
+
+.cn-asks-open {
+  border-color: var(--warning);
+}
+
+.cn-questions {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.cn-question {
+  border-left: 4px solid var(--warning);
+  padding: 6px 12px;
+  margin: 8px 0;
+}
+
+.cn-question p {
+  margin: 2px 0;
+}
+
+.cn-question-text {
+  font-weight: 600;
+}
+
+/* how messages go out */
+.cn-channel-groups {
+  display: grid;
+  gap: 8px 24px;
+}
+
+.cn-channel-group .cn-sub {
+  margin-top: 4px;
+}
+
+.cn-channel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cn-channel {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cn-channel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.cn-channel-name {
+  font-weight: 600;
+}
+
+.cn-channel-why {
+  margin: 4px 0 0;
+  color: var(--warning);
+}
+
+/* sending health */
+.cn-health-lines {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 0 24px;
+}
+
+.cn-health-line {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cn-health-line p {
+  margin: 2px 0 0;
+}
+
+.cn-health-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.cn-health-label {
+  font-weight: 600;
+}
+
+.cn-health-value {
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cn-health-limit {
+  color: var(--ink);
+}
+
+.cn-self-paused {
+  background: var(--critical-t);
+  border-left: 4px solid var(--critical);
+  border-radius: var(--r-sm);
+  padding: 4px 12px 8px;
+  margin: 8px 0;
+}
+
+.cn-next {
+  margin-top: 16px;
+}
+
+@media (min-width: 720px) {
+  .cn-ways {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .cn-channel-groups,
+  .cn-health-lines {
+    grid-template-columns: 1fr 1fr;
+  }
+}

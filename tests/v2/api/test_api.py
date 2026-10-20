@@ -396,6 +396,20 @@ def test_published_openapi_matches_the_routes(client: Any, tmp_path: Path) -> No
         ("/v2/batches/{batch_id}/approve", "post"),
         ("/v2/batches/{batch_id}/reject", "post"),
         ("/v2/runtime/tick", "post"),
+        # What PITCH.md's promises need (api/v2/insights.py; docs/v2/PROMISE_MAP.md "Data for each screen").
+        ("/v2/goals/read", "post"),
+        ("/v2/goals/{goal_id}", "patch"),
+        ("/v2/goals/{goal_id}/plan", "get"),
+        ("/v2/pause", "post"),
+        ("/v2/activity", "get"),
+        ("/v2/customers/{customer_id}/insight", "get"),
+        ("/v2/today", "get"),
+        ("/v2/expected", "get"),
+        ("/v2/health/limits", "get"),
+        ("/v2/data/status", "get"),
+        ("/v2/channels", "get"),
+        ("/v2/opportunities/sized", "get"),
+        ("/v2/batches/{batch_id}/breakdown", "get"),
     }
     # The marketer app's routes are all there; the standalone engines (/v2/engines/...) add their own.
     assert expected <= ops(live)

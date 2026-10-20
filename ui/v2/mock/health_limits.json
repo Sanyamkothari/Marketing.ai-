@@ -1,0 +1,57 @@
+{
+  "goal_id": "goal_winback",
+  "as_of": "2026-10-20T13:20:00Z",
+  "unsubscribe_baseline": 0.0011,
+  "rules": [
+    {
+      "metric": "complaint_rate",
+      "threshold": 0.0008,
+      "action": "pause_goal",
+      "words": "Pauses this goal if complaints go above 0.08% of delivered messages.",
+      "current": 0.0002,
+      "baseline": null,
+      "pause_at": 0.0008,
+      "judged": true
+    },
+    {
+      "metric": "unsubscribe_multiple",
+      "threshold": 3.0,
+      "action": "pause_goal",
+      "words": "Pauses this goal if unsubscribes reach 3 times your usual rate (0.11%), that is 0.33%.",
+      "current": 0.0024,
+      "baseline": 0.0011,
+      "pause_at": 0.0033,
+      "judged": true
+    },
+    {
+      "metric": "delivery_rate_below",
+      "threshold": 0.95,
+      "action": "pause_channel",
+      "words": "Pauses that channel if fewer than 95% of messages are delivered.",
+      "current": 0.987,
+      "baseline": null,
+      "pause_at": 0.95,
+      "judged": true
+    },
+    {
+      "metric": "spend_pace",
+      "threshold": 1.2,
+      "action": "pause_goal",
+      "words": "Pauses this goal if spending runs more than 20% ahead of plan.",
+      "current": 0.581,
+      "baseline": null,
+      "pause_at": null,
+      "judged": true
+    },
+    {
+      "metric": "whatsapp_quality",
+      "threshold": 1.0,
+      "action": "pause_channel",
+      "words": "Pauses that channel if WhatsApp rates your message quality yellow.",
+      "current": null,
+      "baseline": null,
+      "pause_at": null,
+      "judged": true
+    }
+  ]
+}

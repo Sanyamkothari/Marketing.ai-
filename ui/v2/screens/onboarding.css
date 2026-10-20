@@ -1,0 +1,234 @@
+/* Getting started (#/start): the ask, the honest status note and the five-step safe path. `ob-` classes only.
+   Every step's state is a word ("Done", "Doing now", "Next", "Later", "Can't tell yet"), with colour as a second
+   signal; the tokens come from styles.css, so light and dark mode follow them. */
+
+.ob-top {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.ob-ask,
+.ob-honest {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  min-width: 0;
+}
+
+.ob-ask {
+  border-left: 4px solid var(--brand);
+}
+
+.ob-ask h2 {
+  font-size: 18px;
+}
+
+.ob-honest {
+  background: var(--surface-2);
+  border-left: 4px solid var(--warning);
+}
+
+.ob-honest-title {
+  font-size: 16px;
+}
+
+.ob-details summary {
+  cursor: pointer;
+  color: var(--brand);
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.ob-details p {
+  margin-top: 8px;
+}
+
+.ob-path h2 {
+  margin-bottom: 12px;
+}
+
+.ob-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.ob-step {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 16px;
+  min-width: 0;
+}
+
+.ob-step-now,
+.ob-step-next {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 1px var(--brand);
+}
+
+.ob-step-later {
+  background: var(--surface-2);
+}
+
+.ob-num {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid var(--muted);
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.ob-step-done .ob-num {
+  border-color: var(--good);
+  color: var(--good);
+}
+
+.ob-step-now .ob-num,
+.ob-step-next .ob-num {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
+}
+
+.ob-step-body {
+  min-width: 0;
+}
+
+.ob-step-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.ob-step-title {
+  margin: 0;
+  font-size: 16px;
+}
+
+.ob-state {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: var(--pill);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ob-state-done {
+  background: var(--good-t);
+  color: var(--good);
+}
+
+.ob-state-now,
+.ob-state-next {
+  background: var(--brand-tint);
+  color: var(--brand);
+}
+
+.ob-state-past,
+.ob-state-later {
+  background: var(--neutral-t);
+  color: var(--neutral);
+}
+
+.ob-state-unknown {
+  background: var(--warning-t);
+  color: var(--warning);
+}
+
+.ob-sub {
+  margin: 8px 0 2px;
+  font-weight: 600;
+}
+
+.ob-reasons {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.ob-attention {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.ob-muted {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.ob-guidance {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: var(--info-t);
+  font-size: 14px;
+}
+
+.ob-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 10px;
+}
+
+.ob-link {
+  font-weight: 600;
+}
+
+.ob-budget {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.ob-budget label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.ob-budget-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.ob-budget-row input {
+  flex: 0 1 180px;
+  min-width: 0;
+}
+
+.ob-form-msg:empty {
+  display: none;
+}
+
+.ob-then,
+.ob-footnote {
+  margin-top: 16px;
+}
+
+@media (min-width: 720px) {
+  .ob-top {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+}

@@ -7,6 +7,13 @@
     <title>Autonomy</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231E57BD'/%3E%3Cpath d='M9 23 16 8l7 15' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./screens/shell.css">
+    <link rel="stylesheet" href="./screens/connect.css">
+    <link rel="stylesheet" href="./screens/goal.css">
+    <link rel="stylesheet" href="./screens/plan.css">
+    <link rel="stylesheet" href="./screens/live.css">
+    <link rel="stylesheet" href="./screens/proof.css">
+    <link rel="stylesheet" href="./screens/onboarding.css">
   </head>
   <body>
     <a id="skip-link" class="skip-link" href="#main">Skip to content</a>
@@ -22,18 +29,25 @@
             <option>Loading goals…</option>
           </select>
         </div>
+        <div class="goal-badges">
+          <a id="autonomy-badge" class="autonomy-badge" href="#/plan" hidden></a>
+          <a id="selfpause-badge" class="selfpause-badge" href="#/live" hidden></a>
+        </div>
         <div class="topbar-actions">
           <a id="inbox-link" class="inbox-link" href="#/live" aria-label="Alerts inbox">
             <span aria-hidden="true">Inbox</span>
             <span id="inbox-count" class="count" hidden></span>
           </a>
-          <button id="pause-button" type="button" class="btn btn-danger" disabled>Pause</button>
+          <span id="pause-scope" class="pause-scope" aria-hidden="true">Stops all sending</span>
+          <button id="pause-button" type="button" class="btn btn-danger pause-big" disabled>Pause</button>
         </div>
       </div>
       <nav class="nav" aria-label="Screens">
         <ol id="nav-list" class="nav-list"></ol>
+        <a id="start-link" class="start-link" href="#/start">Getting started</a>
         <a id="operator-link" class="operator-link" href="#/operator">Operator mode</a>
       </nav>
+      <div id="goal-note" class="goal-note" hidden></div>
     </header>
     <div id="mode-banner" class="mode-banner" role="status" hidden></div>
     <main id="main" class="main" tabindex="-1">

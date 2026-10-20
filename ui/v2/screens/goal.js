@@ -1,12 +1,18 @@
-// Screen 2, Goal: the marketer says what they want in their own words, with a budget. The Strategist answers
-// with a plan (POST /v2/goals -> {goal, brief}) and we go straight to the Plan screen to review it. Below the box:
-// the opportunities the Analyst found in the data, each one click from becoming a goal, and the goals already set.
+// Screen 2, Goal: the marketer says what they want in their own words ("Win back customers who stopped buying,
+// $5,000 this month"). The server reads the amount and the period from the words (POST /v2/goals/read) and the
+// screen says what it read, so the budget never has to be typed twice. The Strategist answers with a plan
+// (POST /v2/goals -> {goal, brief}) and we go straight to the Plan screen to review it. Below the box: the
+// opportunities the Analyst found, each with how many customers it is about and why, one click from a plan.
+// Every number shown comes from the API or from the marketer's own words.
 
-import { button, card, clear, el, emptyState, errorBox, humanize, loading, money, pill, statusTone } from "../components.js";
+import { button, card, clear, el, emptyState, errorBox, goalStatusWords, humanize, int, loading, money, pill, present, statusTone } from "../components.js";
 
-/** Starting points. The words only: no number is suggested for the marketer. */
+/**
+ * Starting points. The first is the pitch's own example, amount included: it is the marketer's words to change,
+ * and the screen reads the amount back as "We read $5,000 as your budget. Change it if that's wrong."
+ */
 export const EXAMPLES = Object.freeze([
-  { label: "Win back lapsed customers", text: "Win back customers who haven't bought in a while" },
+  { label: "Win back lapsed customers", text: "Win back customers who stopped buying, $5,000 this month" },
   { label: "Grow repeat purchases", text: "Get first-time buyers to buy a second time" },
   { label: "Recover carts", text: "Recover carts people left without checking out" },
 ]);
@@ -23,6 +29,56 @@ const GOAL_KIND_WORDS = {
   custom: "Custom",
 };
 
+/** What follows the number of customers in an opportunity's headline: "1,900 customers are drifting away". */
+const KIND_PHRASE = {
+  win_back: ["customer is drifting away", "customers are drifting away"],
+  retention: ["customer may be about to drift away", "customers may be about to drift away"],
+  repeat_purchase: ["customer bought once and not again", "customers bought once and not again"],
+  cart_recovery: ["customer left a cart behind", "customers left a cart behind"],
+  cross_sell: ["customer could be ready for something new", "customers could be ready for something new"],
+  onboarding: ["customer signed up but has not bought yet", "customers signed up but have not bought yet"],
+  custom: ["customer matches this", "customers match this"],
+};
+
+export const AUTONOMY_WORDS = Object.freeze({
+  shadow: ["Shadow", "info", "decides, sends nothing"],
+  approve: ["Approve", "warning", "you approve each batch"],
+  autopilot: ["Autopilot", "good", "acts inside your limits"],
+});
+
+/** The words after the count, e.g. "customers are drifting away"; `opportunityHeadline` puts the count first. */
+export function opportunityWords(kind, n) {
+  const [one, many] = KIND_PHRASE[kind] || KIND_PHRASE.custom;
+  return Number(n) === 1 ? one : many;
+}
+
+/** "1,900 customers are drifting away." */
+export const opportunityHeadline = (kind, n) => `${int(n)} ${opportunityWords(kind, n)}.`;
+
+/** A date as "31 Oct 2026" in UTC. The server's end is exclusive (midnight after the last day), so step back 1s. */
+export function lastDay(iso) {
+  if (!present(iso)) return null;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  return new Date(at.getTime() - 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+/** What the screen says about what it read from the words. Built from the reading's fields, never invented. */
+export function readingWords(reading, typedBudget, currency) {
+  if (!reading) return "";
+  const cur = reading.currency || currency || "USD";
+  const parts = [];
+  if (present(reading.budget)) parts.push(`${money(reading.budget, cur)} as your budget`);
+  const end = lastDay(reading.ends_at);
+  if (present(reading.period) && end) parts.push(`'${reading.period}' as the period, so it runs until ${end}`);
+  if (!parts.length) return "";
+  let out = `We read ${parts.join(" and ")}. Change it if that's wrong.`;
+  if (present(reading.budget) && present(typedBudget) && Number(typedBudget) !== Number(reading.budget)) {
+    out += ` The Budget box says ${money(typedBudget, currency)}, and that is what will be used.`;
+  }
+  return out;
+}
+
 let uid = 0;
 
 /** Create the goal, tell the shell, and open its plan. Shared by the form and the opportunity cards. */
@@ -33,7 +89,9 @@ async function startGoal(ctx, body, busy) {
     const goal = out && out.goal;
     if (!goal || !goal.goal_id) throw new Error("The answer had no goal in it.");
     if (ctx.refreshGoals) await ctx.refreshGoals();
-    ctx.toast(out.brief ? "Here is the plan. Review it, then approve." : "Goal saved. The plan is still being drafted.", "good");
+    const end = lastDay(goal.ends_at);
+    const runs = end ? ` It runs until ${end}.` : "";
+    ctx.toast(out.brief ? `Here is the plan. Review it, then approve.${runs}` : `Goal saved. The plan is still being drafted.${runs}`, "good");
     ctx.navigate("plan", goal.goal_id);
   } catch (err) {
     ctx.toast(`Could not start the goal. ${err.message || ""}`.trim(), "critical");
@@ -50,10 +108,11 @@ function goalForm(ctx, defaultCurrency) {
     rows: "3",
     required: true,
     maxlength: "500",
-    placeholder: "For example: win back customers who haven't bought in 60 days",
-    "aria-describedby": `${id}-text-help ${id}-text-error`,
+    placeholder: `For example: ${EXAMPLES[0].text}`,
+    "aria-describedby": `${id}-text-help ${id}-reading ${id}-text-error`,
   });
   const textError = el("p", { id: `${id}-text-error`, class: "field-error", "aria-live": "polite" });
+  const readNote = el("p", { id: `${id}-reading`, class: "gl-reading", role: "status", "aria-live": "polite", hidden: true });
   const budget = el("input", {
     id: `${id}-budget`,
     name: "budget",
@@ -61,17 +120,86 @@ function goalForm(ctx, defaultCurrency) {
     inputmode: "decimal",
     min: "0",
     step: "any",
-    required: true,
     "aria-describedby": `${id}-budget-help ${id}-budget-error`,
   });
   const budgetError = el("p", { id: `${id}-budget-error`, class: "field-error", "aria-live": "polite" });
+  const options = [...new Set([defaultCurrency, ...CURRENCIES])];
   const currency = el(
     "select",
     { id: `${id}-currency`, name: "currency" },
-    [...new Set([defaultCurrency, ...CURRENCIES])].map((c) => el("option", { value: c, selected: c === defaultCurrency }, c)),
+    options.map((c) => el("option", { value: c, selected: c === defaultCurrency }, c)),
   );
+  currency.value = defaultCurrency;
   const submit = el("button", { type: "submit", class: "btn btn-primary btn-lg" }, "Make a plan");
   const status = el("p", { class: "muted", role: "status" });
+
+  // ---- reading the words: the amount and the period ----
+  let reading = null; // the latest POST /v2/goals/read answer for the words in the box
+  let readFor = null; // the words that answer was for
+  let autoFilled = null; // the budget value this screen put in the box (so a typed one is never overwritten)
+  let canRead = typeof ctx.api.readGoal === "function";
+  let pending = null;
+  let timer = null;
+
+  const showReading = () => {
+    const words = readingWords(reading, budget.value === "" ? null : budget.value, currency.value);
+    readNote.textContent = words;
+    readNote.hidden = !words;
+  };
+
+  const readNow = async () => {
+    clearTimeout(timer);
+    timer = null;
+    const words = text.value.trim();
+    if (words === readFor) return pending;
+    readFor = words;
+    if (!words || !canRead) {
+      reading = null;
+      if (autoFilled !== null && budget.value === autoFilled) budget.value = "";
+      autoFilled = null;
+      showReading();
+      return null;
+    }
+    const mine = (pending = ctx.api.readGoal(words).then(
+      (r) => r,
+      (err) => {
+        // An API without the reader: the server still reads the words when the budget is left empty.
+        if (err && (err.status === 404 || err.status === 405)) canRead = false;
+        return null;
+      },
+    ));
+    const r = await mine;
+    if (readFor !== words) return pending; // the words changed while we waited
+    reading = r;
+    if (r && present(r.budget)) {
+      if (budget.value === "" || budget.value === autoFilled) {
+        budget.value = String(r.budget);
+        autoFilled = budget.value;
+        budgetError.textContent = "";
+        budget.setAttribute("aria-invalid", "false");
+      }
+      if (r.currency && autoFilled === budget.value) {
+        if (!options.includes(r.currency)) currency.append(el("option", { value: r.currency }, r.currency));
+        currency.value = r.currency;
+      }
+    } else if (autoFilled !== null && budget.value === autoFilled) {
+      budget.value = "";
+      autoFilled = null;
+    }
+    showReading();
+    return r;
+  };
+  const readSoon = () => {
+    clearTimeout(timer);
+    timer = setTimeout(readNow, 400);
+  };
+  text.addEventListener("input", () => {
+    textError.textContent = "";
+    readSoon();
+  });
+  text.addEventListener("blur", () => readNow());
+  budget.addEventListener("input", showReading);
+  currency.addEventListener("change", showReading);
 
   const chips = el(
     "div",
@@ -86,6 +214,7 @@ function goalForm(ctx, defaultCurrency) {
             text.value = ex.text;
             textError.textContent = "";
             text.focus();
+            return readNow();
           },
         },
         ex.label,
@@ -99,61 +228,115 @@ function goalForm(ctx, defaultCurrency) {
     status.textContent = on ? "The Strategist is turning your words into a plan." : "";
   };
 
-  const form = el(
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    const words = text.value.trim();
+    textError.textContent = words ? "" : "Say what you want to achieve, in your own words.";
+    text.setAttribute("aria-invalid", words ? "false" : "true");
+    if (!words) return text.focus();
+    await readNow();
+    const typed = budget.value === "" ? null : Number(budget.value);
+    let problem = "";
+    if (typed !== null && !(Number.isFinite(typed) && typed >= 0)) problem = "Enter a budget of zero or more.";
+    // With no budget typed or read, an API that cannot read the words here still reads them itself (400 if none).
+    else if (typed === null && canRead) problem = "Type a budget, or say it in your words (for example “$2,000 this month”).";
+    budgetError.textContent = problem;
+    budget.setAttribute("aria-invalid", problem ? "true" : "false");
+    if (problem) return budget.focus();
+    const body = { text: words, currency: currency.value };
+    if (typed !== null) body.budget = typed;
+    if (reading && present(reading.ends_at) && present(reading.period)) body.ends_at = reading.ends_at;
+    return startGoal(ctx, body, busy);
+  };
+
+  return el(
     "form",
-    {
-      class: "goal-form",
-      novalidate: true,
-      onsubmit: (e) => {
-        e.preventDefault();
-        const words = text.value.trim();
-        const amount = budget.value === "" ? NaN : Number(budget.value);
-        textError.textContent = words ? "" : "Say what you want to achieve, in your own words.";
-        budgetError.textContent = Number.isFinite(amount) && amount >= 0 ? "" : "Enter a budget of zero or more.";
-        text.setAttribute("aria-invalid", words ? "false" : "true");
-        budget.setAttribute("aria-invalid", budgetError.textContent ? "true" : "false");
-        if (!words) return text.focus();
-        if (budgetError.textContent) return budget.focus();
-        startGoal(ctx, { text: words, budget: amount, currency: currency.value }, busy);
-      },
-    },
+    { class: "goal-form", novalidate: true, onsubmit: onSubmit },
     el("label", { for: text.id, class: "big-label" }, "What do you want to achieve?"),
-    el("p", { id: `${id}-text-help`, class: "muted" }, "Plain words are best. Say who, and what you want them to do."),
+    el(
+      "p",
+      { id: `${id}-text-help`, class: "muted" },
+      "Plain words are best. Say who, what you want them to do, and how much you want to spend. For example: “",
+      EXAMPLES[0].text,
+      ".”",
+    ),
     text,
     textError,
+    readNote,
     chips,
     el(
       "div",
       { class: "form-row" },
-      el("div", { class: "field" }, el("label", { for: budget.id }, "Budget"), budget, el("p", { id: `${id}-budget-help`, class: "muted small" }, "The most it may spend on offers and messages."), budgetError),
+      el(
+        "div",
+        { class: "field" },
+        el("label", { for: budget.id }, "Budget"),
+        budget,
+        el("p", { id: `${id}-budget-help`, class: "muted small" }, "The most it may spend on offers and messages. If your words name an amount, it is filled in for you."),
+        budgetError,
+      ),
       el("div", { class: "field field-narrow" }, el("label", { for: currency.id }, "Currency"), currency),
     ),
     el("div", { class: "form-actions" }, submit, status),
+    el(
+      "p",
+      { class: "gl-safe small" },
+      el("strong", {}, "Nothing is sent yet. "),
+      "Every new goal starts in Shadow: Autonomy decides and shows you what it would do, but sends nothing. Messages go out only after you approve the plan and choose to move it out of Shadow.",
+    ),
   );
-  return form;
 }
 
+// ---- opportunities ------------------------------------------------------------------------------------------
 function opportunityCard(ctx, opp) {
-  const start = button("Start this goal", null, { kind: "primary", ariaLabel: `Start this goal: ${opp.text}` });
+  const goal = opp.goal;
+  const sized = present(opp.audience_n);
+  const label = "Yes, draft a plan";
+  const start = button(label, null, { kind: "primary", ariaLabel: `Yes, draft a plan: ${goal.text}` });
   start.addEventListener("click", () =>
-    startGoal(ctx, { text: opp.text, budget: opp.budget, currency: opp.currency, kind: opp.kind, objective: opp.objective }, (on) => {
+    startGoal(ctx, { text: goal.text, budget: goal.budget, currency: goal.currency, kind: goal.kind, objective: goal.objective }, (on) => {
       start.disabled = on;
-      start.textContent = on ? "Starting…" : "Start this goal";
+      start.textContent = on ? "Drafting…" : label;
     }),
   );
+  const none = sized && Number(opp.audience_n) === 0;
   return card({
-    className: "opportunity",
-    level: 3,
-    title: opp.text,
+    className: "opportunity gl-opp",
     body: [
-      el("p", {}, pill(GOAL_KIND_WORDS[opp.kind] || humanize(opp.kind), "info"), " ", el("span", { class: "muted" }, `Aims for ${humanize(opp.objective).toLowerCase()}`)),
-      el("dl", { class: "facts" }, el("dt", {}, "Suggested budget"), el("dd", {}, money(opp.budget, opp.currency))),
+      sized
+        ? el(
+            "p",
+            { class: "gl-opp-count" },
+            el("span", { class: "gl-opp-n" }, int(opp.audience_n)),
+            " ",
+            el("span", { class: "gl-opp-words" }, `${opportunityWords(goal.kind, opp.audience_n)}.`),
+          )
+        : null,
+      el("h3", { class: "card-title gl-opp-title" }, goal.text),
+      present(opp.reason) ? el("p", { class: "gl-opp-why" }, el("strong", {}, "Why: "), opp.reason) : null,
+      el("p", {}, pill(GOAL_KIND_WORDS[goal.kind] || humanize(goal.kind), "info"), " ", el("span", { class: "muted small" }, `Aims for ${humanize(goal.objective).toLowerCase()}`)),
+      el("dl", { class: "facts" }, el("dt", {}, "Suggested budget"), el("dd", {}, money(goal.budget, goal.currency))),
+      el("p", { class: "gl-opp-ask" }, none ? "No customers match today. Want a plan anyway?" : sized ? "Want me to handle them?" : "Want me to handle this?"),
     ],
     actions: [start],
   });
 }
 
-function goalsList(ctx, goals) {
+function opportunitiesSection(ctx, list, error) {
+  let body;
+  if (error) body = errorBox("Could not load the opportunities.", error);
+  else if (!list.length) body = emptyState("No opportunities found yet", "When the Analyst spots one in your data, it shows up here.");
+  else body = el("div", { class: "card-grid gl-opps" }, list.map((o) => opportunityCard(ctx, o)));
+  return el(
+    "section",
+    { class: "section", "aria-labelledby": "opps" },
+    el("h2", { id: "opps" }, "Or pick one it found for you"),
+    el("p", { class: "muted" }, "Spotted in your data, counted from your customers today. Each one starts in Shadow, and you see its plan before anything is sent."),
+    body,
+  );
+}
+
+function goalsList(goals) {
   if (!goals.length) return null;
   return el(
     "section",
@@ -162,49 +345,53 @@ function goalsList(ctx, goals) {
     el(
       "ul",
       { class: "goal-list" },
-      goals.map((g) =>
-        el(
+      goals.map((g) => {
+        const auto = AUTONOMY_WORDS[g.autonomy];
+        const end = lastDay(g.ends_at);
+        return el(
           "li",
           {},
           el("a", { href: `#/plan/${encodeURIComponent(g.goal_id)}` }, g.text || g.goal_id),
           " ",
-          pill(humanize(g.status), statusTone(g.status)),
-          el("span", { class: "muted small" }, ` ${money(g.budget, g.currency)} budget`),
-        ),
-      ),
+          pill(goalStatusWords(g.status), statusTone(g.status)),
+          " ",
+          auto ? el("span", { class: "gl-autonomy" }, pill(auto[0], auto[1]), el("span", { class: "muted small" }, ` ${auto[2]}`)) : null,
+          el("span", { class: "muted small" }, ` · ${money(g.budget, g.currency)} budget${end ? ` · until ${end}` : ""}`),
+        );
+      }),
     ),
   );
 }
 
+/** The opportunities with their sizes when the API has /v2/opportunities/sized; otherwise the plain list. */
+async function loadOpportunities(api) {
+  if (typeof api.listSizedOpportunities === "function") {
+    try {
+      const sized = await api.listSizedOpportunities();
+      if (Array.isArray(sized)) return { list: sized.filter((o) => o && o.goal) };
+    } catch {
+      // fall back to the plain list below
+    }
+  }
+  try {
+    const plain = await api.listOpportunities();
+    return { list: (Array.isArray(plain) ? plain : []).map((goal) => ({ goal, audience_n: null, reason: null })) };
+  } catch (error) {
+    return { list: [], error };
+  }
+}
+
 export async function render(root, ctx) {
-  const head = [el("h1", {}, "Goal"), el("p", { class: "lede" }, "Tell Autonomy what you want. It drafts a plan you can check before anything is sent.")];
+  const head = [el("h1", {}, "Goal"), el("p", { class: "lede" }, "Tell Autonomy what you want, in your own words. It drafts a plan you can check before anything is sent.")];
   clear(root, ...head, loading());
-  const [goals, opps] = await Promise.all([
-    ctx.api.listGoals().catch(() => []),
-    ctx.api.listOpportunities().then(
-      (v) => v,
-      (err) => err,
-    ),
-  ]);
+  const [goals, opps] = await Promise.all([ctx.api.listGoals().catch(() => []), loadOpportunities(ctx.api)]);
   const goalList = Array.isArray(goals) ? goals : [];
   const defaultCurrency = (ctx.goal && ctx.goal.currency) || (goalList[0] && goalList[0].currency) || "USD";
-
-  let oppSection;
-  if (opps instanceof Error) oppSection = errorBox("Could not load the opportunities.", opps);
-  else if (!Array.isArray(opps) || !opps.length) oppSection = emptyState("No opportunities found yet", "When the Analyst spots one in your data, it shows up here.");
-  else oppSection = el("div", { class: "card-grid" }, opps.map((o) => opportunityCard(ctx, o)));
-
   clear(
     root,
     ...head,
     card({ className: "goal-box", body: [goalForm(ctx, defaultCurrency)] }),
-    el(
-      "section",
-      { class: "section", "aria-labelledby": "opps" },
-      el("h2", { id: "opps" }, "Opportunities the Analyst found"),
-      el("p", { class: "muted" }, "Spotted in your data. Start one and you will see its plan before anything happens."),
-      oppSection,
-    ),
-    goalsList(ctx, goalList),
+    opportunitiesSection(ctx, opps.list, opps.error),
+    goalsList(goalList),
   );
 }

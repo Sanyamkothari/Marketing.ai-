@@ -1,0 +1,48 @@
+{
+  "customer_id": "cust_1042",
+  "as_of": "2026-10-20T13:20:00Z",
+  "display_name": "Maya",
+  "timezone": "America/New_York",
+  "best_hour": 10,
+  "best_hour_words": "Usually reads messages around 10 am (their time, America/New_York).",
+  "reads_counted": 100,
+  "offer_habit": "full_price",
+  "offer_habit_words": "Always buys at full price (bought 6 times, never with an offer).",
+  "purchases": 6,
+  "purchases_with_offer": 0,
+  "contacts_7d": 1,
+  "refill": {
+    "item_id": "sku_house_blend_1kg",
+    "item_name": "House blend coffee, 1 kg",
+    "days_until_due": 84.2,
+    "window_open": false,
+    "basis": "Bought it 4 times, about every 189 days; the last time was 105 days ago."
+  },
+  "next_items": [],
+  "items": {
+    "sku_grinder_hand": "Hand coffee grinder",
+    "sku_house_blend_1kg": "House blend coffee, 1 kg",
+    "sku_pour_over_set": "Pour-over set",
+    "sku_single_origin_kenya": "Single-origin Kenya coffee"
+  },
+  "deliveries": {
+    "dec_20261020_001": {
+      "state": "queued",
+      "words": "Scheduled to go out",
+      "batch_id": "batch_20261020_1103",
+      "at": "2026-10-20T14:00:00Z"
+    },
+    "dec_20261014_007": {
+      "state": "delivered",
+      "words": "Delivered",
+      "batch_id": null,
+      "at": "2026-10-14T14:00:00Z"
+    }
+  },
+  "left_alone": {
+    "dec_20261017_031": {
+      "code": "nothing_to_offer",
+      "words": "No message in the plan fits them right now"
+    }
+  }
+}

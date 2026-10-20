@@ -33,6 +33,17 @@ export const MOCK_FILES = Object.freeze({
   health: "health.json",
   alerts: "alerts.json",
   batches: "batches.json",
+  // The promise endpoints (api/v2/insights.py); docs/v2/PROMISE_MAP.md "Data for each screen" says which serves what.
+  today: "today.json",
+  activity: "activity.json",
+  customerInsight: "customer_insight.json",
+  plan: "plan.json",
+  expected: "expected.json",
+  healthLimits: "health_limits.json",
+  dataStatus: "data_status.json",
+  channels: "channels.json",
+  opportunitiesSized: "opportunities_sized.json",
+  batchBreakdowns: "batch_breakdowns.json",
 });
 
 // The values Goal.kind and Goal.objective may take (autonomy/contracts/goals.py), for the mock's checks.
@@ -93,6 +104,40 @@ export function routeMissing(err) {
   if (!err || (err.status !== 404 && err.status !== 405)) return false;
   const detail = err.body && typeof err.body === "object" ? err.body.detail : err.body;
   return err.status === 405 || detail === undefined || detail === null || detail === "Not Found";
+}
+
+const MONEY_WORDS = Object.freeze({ $: "USD", "€": "EUR", "£": "GBP", "₹": "INR", rs: "INR", "rs.": "INR", usd: "USD", eur: "EUR", gbp: "GBP", inr: "INR" });
+const SCALE_WORDS = Object.freeze({ k: 1e3, thousand: 1e3, lakh: 1e5, lakhs: 1e5, m: 1e6, million: 1e6 });
+
+/**
+ * The mock's reading of a goal's words, in the shape of POST /v2/goals/read: the amount after a currency sign
+ * ("$5,000", "₹50,000", "5k") and the period ("this month", "this week", "in 30 days"). It only reads what the
+ * words say; the server's reader (api/v2/insights.py `read_goal_text`) knows a few more forms.
+ */
+export function readGoalWords(text, nowDate) {
+  const words = String(text || "");
+  const out = { text: words, budget: null, currency: null, ends_at: null, period: null, words: "" };
+  const m = /(\$|€|£|₹|\brs\.?|\busd|\beur|\bgbp|\binr)\s?(\d{1,3}(?:,\d{2,3})+|\d+(?:\.\d+)?)\s*(k|thousand|lakhs?|m|million)?\b/i.exec(words);
+  if (m) {
+    out.currency = MONEY_WORDS[m[1].toLowerCase().trim()] || null;
+    out.budget = Number(m[2].replace(/,/g, "")) * (SCALE_WORDS[(m[3] || "").toLowerCase()] || 1);
+  }
+  const p = /\b(this month|this week|(?:in|over|for|within|next) (\d{1,3}) (days?|weeks?))\b/i.exec(words);
+  const now = nowDate instanceof Date ? nowDate : new Date();
+  if (p) {
+    out.period = p[1];
+    const low = p[1].toLowerCase();
+    let end;
+    if (low === "this month") end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    else if (low === "this week") end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + (7 - ((now.getUTCDay() + 6) % 7))));
+    else end = new Date(now.getTime() + Number(p[2]) * (p[3].toLowerCase().startsWith("week") ? 7 : 1) * 86400000);
+    out.ends_at = end.toISOString().replace(".000Z", "Z");
+  }
+  const parts = [];
+  if (out.budget !== null) parts.push(`We read ${out.budget.toLocaleString("en-US")} ${out.currency || "USD"} as your budget.`);
+  if (out.period) parts.push(`We read '${out.period}' as the period.`);
+  out.words = parts.length ? `${parts.join(" ")} Change it if that's wrong.` : "No budget or period found in the words.";
+  return out;
 }
 
 function goalOfDecision(d) {
@@ -347,8 +392,12 @@ export function createApi(options = {}) {
         return clone(s.goals);
       case "POST /goals": {
         const text = String((body && body.text) || "").trim();
-        const budget = Number(body && body.budget);
         if (!text) throw new ApiError(422, "INVALID", "Say what you want to achieve.", null);
+        // Like the server: with no budget, read it (and the period) from the words.
+        const given = body && body.budget !== undefined && body.budget !== null;
+        const reading = given ? null : readGoalWords(text, now());
+        if (reading && reading.budget === null) throw new ApiError(400, "INVALID", "Say how much you want to spend, e.g. '$2,000 this month'.", null);
+        const budget = given ? Number(body.budget) : reading.budget;
         if (!Number.isFinite(budget) || budget < 0) throw new ApiError(422, "INVALID", "The budget must be zero or more.", null);
         s.made += 1;
         const at = now().toISOString();
@@ -359,9 +408,9 @@ export function createApi(options = {}) {
           kind: GOAL_KINDS.includes(body && body.kind) ? body.kind : "custom",
           objective: OBJECTIVES.includes(body && body.objective) ? body.objective : "gross_profit",
           budget,
-          currency: String((body && body.currency) || "USD").toUpperCase(),
+          currency: String((reading && reading.currency) || (body && body.currency) || "USD").toUpperCase(),
           starts_at: at,
-          ends_at: null,
+          ends_at: (body && body.ends_at) || (reading && reading.ends_at) || null,
           autonomy: "shadow",
           status: "draft",
           created_at: at,
@@ -374,6 +423,66 @@ export function createApi(options = {}) {
         const d = detailFor(s, goal);
         return clone({ goal, brief: d.brief, content: d.content, proof: d.proof });
       }
+      case "POST /goals/{id}": {
+        if (id !== "read") break;
+        const text = String((body && body.text) || "").trim();
+        if (!text) throw new ApiError(422, "INVALID", "Say what you want to achieve.", null);
+        return readGoalWords(text, now());
+      }
+      case "PATCH /goals/{id}": {
+        const goal = findGoal(s, id);
+        const budget = Number(body && body.budget);
+        if (!Number.isFinite(budget) || budget < 0) throw new ApiError(422, "INVALID", "The budget must be zero or more.", null);
+        const d = detailFor(s, goal);
+        if (d.brief && !d.brief.approved_at) d.brief = { ...d.brief, envelope: { ...d.brief.envelope, budget } };
+        else if (d.brief && budget > d.brief.envelope.budget)
+          throw new ApiError(409, "CONFLICT", `The approved plan's budget is ${d.brief.envelope.budget}; raising it needs a new plan.`, null);
+        const next = setGoal(s, { ...goal, budget });
+        return clone({ goal: next, brief: d.brief });
+      }
+      case "POST /pause": {
+        const paused = s.goals.filter((g) => g.status === "active").map((g) => setGoal(s, { ...g, status: "paused" }));
+        return clone({ paused });
+      }
+      case "GET /goals/{id}/plan":
+      case "GET /expected":
+      case "GET /today": {
+        const goalId = key === "GET /goals/{id}/plan" ? id : q.get("goal_id");
+        if (goalId) findGoal(s, goalId);
+        const file = { "GET /goals/{id}/plan": MOCK_FILES.plan, "GET /expected": MOCK_FILES.expected, "GET /today": MOCK_FILES.today }[key];
+        const obj = await loadMock(file);
+        // The sample file belongs to the sample goal; a goal made here has nothing counted yet.
+        return obj && (!goalId || obj.goal_id === goalId) ? obj : null;
+      }
+      case "GET /activity": {
+        const rows = (await loadMock(MOCK_FILES.activity)) || [];
+        const goalId = q.get("goal_id");
+        const customerId = q.get("customer_id");
+        let out = Array.isArray(rows) ? rows : [];
+        if (goalId) out = out.filter((r) => r.goal_id === goalId);
+        if (customerId) out = out.filter((r) => r.decision && r.decision.customer_id === customerId);
+        const limit = Number(q.get("limit"));
+        return Number.isFinite(limit) && limit > 0 ? out.slice(0, limit) : out;
+      }
+      case "GET /customers/{id}/insight": {
+        const obj = await loadMock(MOCK_FILES.customerInsight);
+        if (obj && obj.customer_id === id) return obj;
+        throw notFound(`Customer ${id}`);
+      }
+      case "GET /batches/{id}/breakdown": {
+        const rows = (await loadMock(MOCK_FILES.batchBreakdowns)) || [];
+        const found = (Array.isArray(rows) ? rows : []).find((b) => b.batch_id === id);
+        if (!found) throw notFound(`Batch ${id}`);
+        return found;
+      }
+      case "GET /health/limits":
+        return (await loadMock(MOCK_FILES.healthLimits)) ?? null;
+      case "GET /data/status":
+        return (await loadMock(MOCK_FILES.dataStatus)) ?? null;
+      case "GET /channels":
+        return (await loadMock(MOCK_FILES.channels)) || [];
+      case "GET /opportunities/sized":
+        return (await loadMock(MOCK_FILES.opportunitiesSized)) || [];
       case "GET /goals/{id}/content":
         return clone(detailFor(s, findGoal(s, id)).content);
       case "POST /goals/{id}/approve": {
@@ -448,13 +557,21 @@ export function createApi(options = {}) {
       case "GET /opportunities":
         return (await loadMock(MOCK_FILES.opportunities)) || [];
       default:
-        throw new ApiError(404, "NOT_FOUND", `The sample data has no answer for ${method} ${url.pathname}.`, null);
+        break;
     }
+    throw new ApiError(404, "NOT_FOUND", `The sample data has no answer for ${method} ${url.pathname}.`, null);
   }
 
   // ---- the endpoints -------------------------------------------------------------------------------------
   const get = (path) => request("GET", path);
   const post = (path, body = {}) => request("POST", path, body);
+  const patch = (path, body = {}) => request("PATCH", path, body);
+  /** A GET of an endpoint an older API build may not have: null when the route is missing, as listBatches does. */
+  const optional = (path) =>
+    get(path).catch((err) => {
+      if (routeMissing(err)) return null;
+      throw err;
+    });
   const pick = (opts, ...names) => {
     for (const n of names) if (opts && opts[n] !== undefined) return opts[n];
     return undefined;
@@ -498,6 +615,9 @@ export function createApi(options = {}) {
     createGoal: (textOrBody, budget, currency) => {
       const b = typeof textOrBody === "object" && textOrBody !== null ? textOrBody : { text: textOrBody, budget, currency };
       const payload = { text: b.text, budget: Number(b.budget), currency: b.currency || "USD" };
+      // No budget given: the server reads the amount and the period from the words ("$5,000 this month").
+      if (b.budget === undefined || b.budget === null || b.budget === "") delete payload.budget;
+      if (b.ends_at || b.endsAt) payload.ends_at = b.ends_at || b.endsAt;
       if (b.kind) payload.kind = b.kind;
       if (b.objective) payload.objective = b.objective;
       return post("/goals", payload);
@@ -549,6 +669,62 @@ export function createApi(options = {}) {
     approveBatch: (batchId) => post(`/batches/${enc(batchId)}/approve`).then(batchChanged),
     /** POST /v2/batches/{id}/reject -> Batch */
     rejectBatch: (batchId) => post(`/batches/${enc(batchId)}/reject`).then(batchChanged),
+
+    // ---- the promise endpoints (api/v2/insights.py). Each GET is null when this API build lacks the route. ----
+    /**
+     * GET /v2/today?goal_id=&day= -> Today: one day's work for a goal, counted over every decision that day
+     * (contacted, left_alone, reasons [{code, words, n}], messages_sent, purchases, revenue, spend_to_date,
+     * budget_left, last_run_at, next_run_at, learned). Default day: the latest day it decided.
+     */
+    getToday: (goalId, opts = {}) => optional(`/today${query({ goal_id: goalId, day: opts.day })}`),
+    /**
+     * GET /v2/activity?goal_id=&customer_id=&limit= -> [ActivityRow]: {decision, goal_id, display_name,
+     * contacts_7d, delivery: {state, words, batch_id, at} | null, left_alone: {code, words} | null, item, content}.
+     */
+    listActivity: (opts = {}) =>
+      optional(`/activity${query({ goal_id: pick(opts, "goalId", "goal_id"), customer_id: pick(opts, "customerId", "customer_id"), limit: opts.limit })}`),
+    /**
+     * GET /v2/customers/{id}/insight -> CustomerInsight: display_name, best_hour(_words), offer_habit(_words),
+     * refill {item_id, item_name, days_until_due, window_open, basis}, next_items, items {id: name}, and per
+     * decision: deliveries {decision_id: Delivery}, left_alone {decision_id: {code, words}}.
+     */
+    getCustomerInsight: (customerId) => optional(`/customers/${enc(customerId)}/insight`),
+    /**
+     * GET /v2/goals/{id}/plan -> PlanFacts: audience_n, agent_n, baseline_n, holdout_n, audience_words,
+     * hard_rules [{code, words, value}], content [{content_id, reviewed_by, passed, checks [{check, passed, note}]}],
+     * editor_passed, editor_failed, not_reviewed, rejected_by_person, autonomy, autonomy_since.
+     */
+    getPlanFacts: (goalId) => optional(`/goals/${enc(goalId)}/plan`),
+    /** GET /v2/expected?goal_id= -> Expected: the agent's own forecast (label "forecast"), never proof. */
+    getExpected: (goalId) => optional(`/expected${query({ goal_id: goalId })}`),
+    /** GET /v2/health/limits?goal_id= -> HealthLimits: each stop rule in words, unsubscribe_baseline, judged. */
+    getHealthLimits: (goalId) => optional(`/health/limits${query({ goal_id: goalId })}`),
+    /**
+     * GET /v2/data/status -> DataStatus: customers, orders, products, sources [{name, kind, customers, orders,
+     * updated_at}], fixes [{what, rows}], problems, questions [{question_id, text, rows_affected}],
+     * doctor_connected. (getDataStatus below is the older v1 /datasets call.)
+     */
+    getDataReport: () => optional("/data/status"),
+    /** GET /v2/channels -> [{channel, mode: direct|handoff, ready, paused, paused_reason, words}] */
+    listChannels: () => optional("/channels"),
+    /** GET /v2/opportunities/sized -> [{goal, audience_n, reason}] */
+    listSizedOpportunities: () => optional("/opportunities/sized"),
+    /** GET /v2/batches/{id}/breakdown -> {batch_id, by_channel, by_offer, offer_labels, words} */
+    getBatchBreakdown: (batchId) => optional(`/batches/${enc(batchId)}/breakdown`),
+    /** POST /v2/goals/read {text} -> {text, budget, currency, ends_at, period, words}: what the words say. */
+    readGoal: (text) => post("/goals/read", { text }),
+    /** PATCH /v2/goals/{id} {budget} -> {goal, brief}: lower a budget ("Approve with a small budget"). 409 above the approved plan. */
+    updateGoalBudget: (goalId, budget) =>
+      patch(`/goals/${enc(goalId)}`, { budget: Number(budget) }).then((out) => {
+        goalChanged(out && out.goal);
+        return out;
+      }),
+    /** POST /v2/pause -> {paused: [Goal]}: the one big Pause button, every active goal at once. */
+    pauseAll: () =>
+      post("/pause").then((out) => {
+        for (const g of (out && out.paused) || []) goalChanged(g);
+        return out;
+      }),
 
     /**
      * What data is connected, from the v1 app's GET /datasets (the Data Doctor builds those). Null when it is

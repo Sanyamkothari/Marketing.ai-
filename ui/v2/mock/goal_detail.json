@@ -124,7 +124,7 @@
       "tone": "friendly",
       "offer_id": "none",
       "subject": "We miss you, {{first_name}}",
-      "body": "New in {{top_category}} since your last visit.",
+      "body": "New in {{top_category}} since your last visit.\n\nYou can unsubscribe at any time.",
       "slots": [
         "first_name",
         "top_category"
@@ -133,7 +133,11 @@
       "template_name": null,
       "language": "en",
       "status": "approved",
-      "critic_notes": [],
+      "critic_notes": [
+        "judge run 1 [honesty, brand_voice]: honesty 5 (Mentions only the approved offer.); brand_voice 5 (Plain, warm and on brand.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 5 (Plain, warm and on brand.); honesty 5 (Mentions only the approved offer.)",
+        "approved"
+      ],
       "created_at": "2026-10-01T09:00:00Z"
     },
     {
@@ -145,7 +149,7 @@
       "tone": "friendly",
       "offer_id": "pct10",
       "subject": "10% off, just for you",
-      "body": "Come back to {{top_category}} with 10% off this week.",
+      "body": "Come back to {{top_category}} with 10% off this week.\n\nYou can unsubscribe at any time.",
       "slots": [
         "first_name",
         "top_category"
@@ -154,7 +158,11 @@
       "template_name": null,
       "language": "en",
       "status": "approved",
-      "critic_notes": [],
+      "critic_notes": [
+        "judge run 1 [honesty, brand_voice]: honesty 5 (Mentions only the approved offer.); brand_voice 5 (Plain, warm and on brand.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 5 (Plain, warm and on brand.); honesty 5 (Mentions only the approved offer.)",
+        "approved"
+      ],
       "created_at": "2026-10-01T09:00:00Z"
     },
     {
@@ -166,7 +174,7 @@
       "tone": "friendly",
       "offer_id": "none",
       "subject": "Getting the most from your order",
-      "body": "Three tips for {{top_category}}.",
+      "body": "Three tips for {{top_category}}.\n\nYou can unsubscribe at any time.",
       "slots": [
         "first_name",
         "top_category"
@@ -175,7 +183,11 @@
       "template_name": null,
       "language": "en",
       "status": "approved",
-      "critic_notes": [],
+      "critic_notes": [
+        "judge run 1 [honesty, brand_voice]: honesty 5 (Mentions only the approved offer.); brand_voice 5 (Plain, warm and on brand.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 5 (Plain, warm and on brand.); honesty 5 (Mentions only the approved offer.)",
+        "approved"
+      ],
       "created_at": "2026-10-01T09:00:00Z"
     },
     {
@@ -196,7 +208,11 @@
       "template_name": "winback_3",
       "language": "en",
       "status": "approved",
-      "critic_notes": [],
+      "critic_notes": [
+        "judge run 1 [honesty, brand_voice]: honesty 5 (Mentions only the approved offer.); brand_voice 5 (Plain, warm and on brand.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 5 (Plain, warm and on brand.); honesty 5 (Mentions only the approved offer.)",
+        "approved"
+      ],
       "created_at": "2026-10-01T09:00:00Z"
     },
     {
@@ -217,7 +233,11 @@
       "template_name": "winback_4",
       "language": "en",
       "status": "approved",
-      "critic_notes": [],
+      "critic_notes": [
+        "judge run 1 [honesty, brand_voice]: honesty 5 (Mentions only the approved offer.); brand_voice 5 (Plain, warm and on brand.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 5 (Plain, warm and on brand.); honesty 5 (Mentions only the approved offer.)",
+        "approved"
+      ],
       "created_at": "2026-10-01T09:00:00Z"
     },
     {
@@ -229,7 +249,7 @@
       "tone": "calm",
       "offer_id": "none",
       "subject": "What other {{top_category}} fans picked this month",
-      "body": "Hi {{first_name}}, here are the three {{top_category}} favourites customers like you came back for.",
+      "body": "Hi {{first_name}}, here are the three {{top_category}} favourites customers like you came back for.\n\nYou can unsubscribe at any time.",
       "slots": [
         "first_name",
         "top_category"
@@ -260,7 +280,9 @@
       "language": "en",
       "status": "draft",
       "critic_notes": [
-        "Urgency claims must be true on the day it is sent."
+        "judge run 1 [honesty, brand_voice]: honesty 2 (Urgency claims must be true on the day it is sent.); brand_voice 4 (Friendly and short.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 4 (Friendly and short.); honesty 2 (Urgency claims must be true on the day it is sent.)",
+        "rejected: run 1 scored honesty 2 < 3; run 2 scored honesty 2 < 3"
       ],
       "created_at": "2026-10-19T06:00:00Z"
     }

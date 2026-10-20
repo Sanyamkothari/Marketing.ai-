@@ -8,6 +8,7 @@ call one `Services` method and wrap the answer; the rules live in `api.v2.deps`.
 """
 
 from collections.abc import Callable
+from datetime import date
 from typing import Annotated, Any, ParamSpec, TypeVar
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
@@ -15,6 +16,19 @@ from pydantic import AwareDatetime, Field
 from starlette.concurrency import run_in_threadpool
 
 from api.v2.deps import ServiceError, Services, get_services
+from api.v2.insights import (
+    ActivityRow,
+    BatchBreakdown,
+    ChannelStatus,
+    CustomerInsight,
+    DataStatus,
+    Expected,
+    GoalReading,
+    HealthLimits,
+    PlanFacts,
+    SizedOpportunity,
+    Today,
+)
 from autonomy.contracts import (
     Alert,
     AutonomyLevel,
@@ -64,12 +78,35 @@ class GoalCreate(Contract):
     """The marketer's goal in their own words, and what they will spend on it."""
 
     text: str = Field(min_length=1, max_length=2000, description="e.g. 'win back lapsed customers'")
-    budget: float = Field(ge=0, allow_inf_nan=False)
+    budget: float | None = Field(
+        default=None,
+        ge=0,
+        allow_inf_nan=False,
+        description="Optional: without it the amount (and the period) are read from the text",
+    )
+    ends_at: AwareDatetime | None = Field(default=None, description="Optional end of the goal")
     currency: str = Field(default="USD", min_length=3, max_length=3)
     kind: GoalKind | None = Field(default=None, description="Optional; inferred from the text when absent")
     objective: Objective | None = Field(
         default=None, description="Optional; the Strategist proposes one when absent"
     )
+
+
+class GoalText(Contract):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class BudgetUpdate(Contract):
+    budget: float = Field(ge=0, allow_inf_nan=False)
+
+
+class GoalBudget(Contract):
+    goal: Goal
+    brief: Brief | None = Field(description="The latest plan; a draft plan takes the new budget too")
+
+
+class PauseAllResult(Contract):
+    paused: list[Goal] = Field(description="The goals this paused (those that were active)")
 
 
 class ApproveRequest(Contract):
@@ -149,8 +186,16 @@ def list_goals(services: ServicesDep) -> list[Goal]:
 @router.post("/goals")
 def create_goal(body: GoalCreate, services: ServicesDep) -> GoalWithBrief:
     """Store a new goal (a draft) with the Strategist's plan for it, waiting for approval."""
-    goal, brief = _run(services.create_goal, body.text, body.budget, body.currency, body.kind, body.objective)
+    goal, brief = _run(
+        services.create_goal, body.text, body.budget, body.currency, body.kind, body.objective, body.ends_at
+    )
     return GoalWithBrief(goal=goal, brief=brief)
+
+
+@router.post("/goals/read")
+def read_goal(body: GoalText, services: ServicesDep) -> GoalReading:
+    """What the server reads from a goal's words: an amount and a period ("$5,000 this month")."""
+    return services.read_goal(body.text)
 
 
 @router.get("/goals/{goal_id}")
@@ -158,6 +203,19 @@ def get_goal(goal_id: str, services: ServicesDep) -> GoalDetail:
     """The goal, its latest plan, its content (drafts included) and the proof so far."""
     goal, brief, content, proof = _run(services.goal_detail, goal_id)
     return GoalDetail(goal=goal, brief=brief, content=content, proof=proof)
+
+
+@router.patch("/goals/{goal_id}")
+def update_goal(goal_id: str, body: BudgetUpdate, services: ServicesDep) -> GoalBudget:
+    """Change the goal's budget. Raising it above an approved plan's budget is a 409 (a new plan)."""
+    goal, brief = _run(services.set_budget, goal_id, body.budget)
+    return GoalBudget(goal=goal, brief=brief)
+
+
+@router.get("/goals/{goal_id}/plan")
+def goal_plan(goal_id: str, services: ServicesDep) -> PlanFacts:
+    """Audience size, the hard rules in words, and the AI editor's checks on each message."""
+    return _run(services.plan_facts, goal_id)
 
 
 @router.post("/goals/{goal_id}/approve")
@@ -177,6 +235,12 @@ def pause_goal(goal_id: str, services: ServicesDep) -> Goal:
 def resume_goal(goal_id: str, services: ServicesDep) -> Goal:
     """Let the agent act again (the plan must be approved)."""
     return _run(services.resume, goal_id)
+
+
+@router.post("/pause")
+def pause_all(services: ServicesDep) -> PauseAllResult:
+    """The one big Pause button: pause every active goal."""
+    return PauseAllResult(paused=services.pause_all())
 
 
 @router.get("/goals/{goal_id}/content")
@@ -215,6 +279,35 @@ def get_customer(customer_id: str, services: ServicesDep) -> CustomerDetail:
     return CustomerDetail(state=state, decisions=decisions, events=events)
 
 
+@router.get("/activity")
+def list_activity(
+    services: ServicesDep,
+    goal_id: str | None = None,
+    customer_id: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 50,
+) -> list[ActivityRow]:
+    """The latest decisions, newest first, each with its goal, what happened to it and who it was for."""
+    return _run(services.activity, goal_id=goal_id, customer_id=customer_id, limit=limit)
+
+
+@router.get("/customers/{customer_id}/insight")
+def get_customer_insight(customer_id: str, services: ServicesDep) -> CustomerInsight:
+    """One customer in words: reading hours, offer habit, refill, items, and each decision's outcome."""
+    return _run(services.customer_insight, customer_id)
+
+
+@router.get("/today")
+def get_today(services: ServicesDep, goal_id: str | None = None, day: date | None = None) -> Today:
+    """One day's work for a goal (default: the latest day it decided), counted over every decision."""
+    return _run(services.today, goal_id, day)
+
+
+@router.get("/expected")
+def get_expected(goal_id: str, services: ServicesDep) -> Expected:
+    """What the agent expects its decisions to earn: its own forecast, labelled as such, not proof."""
+    return _run(services.expected, goal_id)
+
+
 # --- what the system tells people -----------------------------------------------------------------
 
 
@@ -236,6 +329,24 @@ def get_health(services: ServicesDep) -> HealthStatus:
     return services.health()
 
 
+@router.get("/health/limits")
+def get_health_limits(services: ServicesDep, goal_id: str | None = None) -> HealthLimits:
+    """The rules that pause sending, in words, with today's rate and the usual rate they compare with."""
+    return _run(services.health_limits, goal_id)
+
+
+@router.get("/data/status")
+def get_data_status(services: ServicesDep) -> DataStatus:
+    """What customer data is connected, by source, and the Data Doctor's fixes and questions."""
+    return services.data_status()
+
+
+@router.get("/channels")
+def list_channels(services: ServicesDep) -> list[ChannelStatus]:
+    """How messages go out: email and WhatsApp directly; SMS and your own tools by hand-off."""
+    return services.channels()
+
+
 @router.get("/alerts")
 def list_alerts(services: ServicesDep) -> list[Alert]:
     return services.alerts()
@@ -247,6 +358,12 @@ def list_opportunities(services: ServicesDep) -> list[Goal]:
     return services.opportunities()
 
 
+@router.get("/opportunities/sized")
+def list_sized_opportunities(services: ServicesDep) -> list[SizedOpportunity]:
+    """The same suggestions, each with how many customers it is about and why."""
+    return services.sized_opportunities()
+
+
 # --- batches (goals at the APPROVE autonomy level) ----------------------------------------------------
 
 
@@ -256,6 +373,12 @@ def list_batches(
 ) -> list[Batch]:
     """Contacts held for a person to sign off, newest first; filter by goal and status."""
     return _run(services.list_batches, goal_id, status)
+
+
+@router.get("/batches/{batch_id}/breakdown")
+def get_batch_breakdown(batch_id: str, services: ServicesDep) -> BatchBreakdown:
+    """A batch's contacts counted by channel and by offer, and in words."""
+    return _run(services.batch_breakdown, batch_id)
 
 
 BatchBody = Annotated[BatchDecisionRequest | None, Body()]

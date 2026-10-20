@@ -1,0 +1,34 @@
+[
+  {
+    "channel": "email",
+    "mode": "direct",
+    "ready": true,
+    "paused": false,
+    "paused_reason": null,
+    "words": "Email: Autonomy sends these itself."
+  },
+  {
+    "channel": "whatsapp",
+    "mode": "direct",
+    "ready": true,
+    "paused": true,
+    "paused_reason": "WhatsApp quality rating turned yellow, so WhatsApp is paused for this goal. Email carries on.",
+    "words": "WhatsApp is paused by a safety check."
+  },
+  {
+    "channel": "sms",
+    "mode": "handoff",
+    "ready": false,
+    "paused": false,
+    "paused_reason": null,
+    "words": "SMS works through a hand-off to your own tool; not set up yet."
+  },
+  {
+    "channel": "webhook",
+    "mode": "handoff",
+    "ready": false,
+    "paused": false,
+    "paused_reason": null,
+    "words": "Your own tools can send through a hand-off; not set up yet."
+  }
+]

@@ -1,13 +1,29 @@
-/* Proof: did the agent make money, and how sure are we (plan-v2.md section 9, screen 5).
+/* Proof: did it make you money, and how sure are we (PITCH.md screen 5, "Proof").
 
-   Two comparisons, each with its range: money made against the no-contact holdout, and lift against
-   the simple baseline rule. Then the group sizes, the spend and the return on spend. A small inline
-   SVG draws each estimate as a bar with its error bar, and "Copy summary" puts a plain paragraph on
-   the clipboard to paste into an email.
+   The page answers a business owner's questions in their order:
+     1. Did it make me extra money? A verdict in plain words comes before any number: "Real extra profit",
+        "Not sure yet", "Losing money so far" or "Too early to tell". Then the extra profit and revenue
+        compared with the people we never contact (a small random group left alone), each with its range,
+        and one line on how this is measured (real extra profit, not "attributed revenue").
+     2. What should I do now? "Ready for Autopilot" when even the low end of the profit range is above zero
+        and the goal is not on Autopilot yet; otherwise "stay in Shadow or Approve until the range is above
+        zero", with a link to the Plan dial.
+     3. Is the AI earning its keep? A verdict against the simple rule anyone could set up.
+     4. What does it expect to earn? Its own forecast (GET /v2/expected), always called a forecast and never
+        proof. In Shadow mode, where nothing is sent and so nothing can be proven, it comes straight after the
+        verdict.
+     5. Spend, return on spend and the three groups; the API's own notes; a paragraph ready to share.
+     6. What to expect, as general guidance about the product (3-10% typical), labelled as not being a result
+        from this business, with its source.
 
-   Every number here comes from the ProofSummary the API sends. Nothing is computed into a new
-   figure, every estimate is shown with its low and high (never a bare point), and a missing
-   estimate says "not enough data yet" instead of showing a zero. */
+   Honesty rules this file keeps:
+     - every number comes from the ProofSummary or the Expected forecast the API sends (or the mock files
+       that mirror them); nothing is added up into a new figure here, and a verdict only compares a range's
+       low and high with zero;
+     - an estimate is always shown with its low and high, never a bare point, and "not sure yet" when its
+       range includes zero; a missing estimate says "not enough data yet" instead of showing a zero;
+     - general facts about the product (3-10%) are labelled as such and never shown as this shop's numbers.
+   There are no pricing terms in the API, so nothing about "paid in results" is shown yet. */
 
 import {
   DASH,
@@ -24,6 +40,7 @@ import {
   notify,
   num,
   pageHead,
+  pct,
   present,
   range,
   resolveGoal,
@@ -31,6 +48,9 @@ import {
 } from "./live.js";
 
 const NOT_ENOUGH = "Not enough data yet";
+
+/** Where the "3-10% typical" guidance comes from. The docs are not served with the app, so it is named in words. */
+export const EXPECT_DOC = "docs/research/v2/03_DECISION_SCIENCE.md";
 
 /** Return on spend as a multiple: 2.3 reads "2.3×" (each unit spent brought 2.3 back in extra profit). */
 export const times = (v) => (present(v) ? `${num(v, 1)}×` : DASH);
@@ -46,6 +66,134 @@ export function estimateFormat(est, fmt) {
 
 /** True when an estimate's range runs through zero, so we cannot yet say which way it goes. */
 export const straddlesZero = (est) => Boolean(est) && est.low <= 0 && est.high >= 0;
+
+/** An estimate the page can show: point, low and high all there. */
+const complete = (est) => Boolean(est) && present(est.point) && present(est.low) && present(est.high);
+
+/**
+ * Which way a measured range points, by comparing its low and high with zero (no new number is made):
+ * "up" (the whole range is above zero), "unsure" (it includes zero), "down" (all below zero) or "early" (no range).
+ */
+export function direction(est) {
+  if (!complete(est)) return "early";
+  if (Number(est.low) > 0) return "up";
+  if (Number(est.high) < 0) return "down";
+  return "unsure";
+}
+
+/** The verdict on extra profit against the people we never contact, shown before any number. */
+export function profitVerdict(est) {
+  const way = direction(est);
+  if (way === "up") return { key: "real", tone: "good", icon: "✓", title: "Real extra profit" };
+  if (way === "down") return { key: "losing", tone: "bad", icon: "!", title: "Losing money so far" };
+  if (way === "unsure") return { key: "unsure", tone: "warn", icon: "?", title: "Not sure yet" };
+  return { key: "early", tone: "neutral", icon: "…", title: "Too early to tell" };
+}
+
+/** The verdict against the simple rule anyone could set up. */
+export function ruleVerdict(est) {
+  const way = direction(est);
+  if (way === "up") return { key: "beats", tone: "good", icon: "✓", title: "Beats the simple rule" };
+  if (way === "down") return { key: "behind", tone: "bad", icon: "!", title: "Behind the simple rule so far" };
+  if (way === "unsure") return { key: "unsure", tone: "warn", icon: "?", title: "Not sure yet" };
+  return { key: "early", tone: "neutral", icon: "…", title: "Too early to tell" };
+}
+
+const AUTONOMY_WORDS = { shadow: "Shadow", approve: "Approve each batch", autopilot: "Autopilot" };
+export const autonomyName = (a) => AUTONOMY_WORDS[a] || (present(a) ? String(a) : DASH);
+
+/**
+ * What to do next with the autonomy dial, from the profit verdict and the goal's level (PITCH.md: "When the proof
+ * page shows real extra profit: switch to Autopilot"). Returns null when there is no goal to advise on.
+ */
+export function autopilotAdvice(goal, proof) {
+  if (!goal) return null;
+  const real = direction(proof?.incremental_profit) === "up";
+  const level = goal.autonomy;
+  if (goal.status === "done") return null;
+  if (goal.status === "paused") {
+    return {
+      key: "paused",
+      title: "Paused right now",
+      text: real
+        ? "The proof shows real extra profit, but this goal is paused, so nothing is being sent. If it paused itself, the Live screen and the inbox say why. Check that before you resume it, or before you move the dial to Autopilot."
+        : "This goal is paused, so nothing is being sent. If it paused itself, the Live screen and the inbox say why. Check that before you resume it. Autopilot only makes sense once this page shows real extra profit, with the whole range above zero.",
+      link: "Go to the Live screen to see why and resume",
+      screen: "live",
+    };
+  }
+  if (goal.status === "draft") {
+    return {
+      key: "draft",
+      title: "The plan is not approved yet",
+      text: "Nothing runs until you approve the plan. Start in Shadow: it decides and shows you what it would do, but sends nothing.",
+      link: "Check and approve the plan",
+    };
+  }
+  if (level === "autopilot" && direction(proof?.incremental_profit) === "down") {
+    return {
+      key: "autopilot-losing",
+      title: "On Autopilot, and it is losing money so far",
+      text: "The whole profit range is below zero. Move the dial back to Approve each batch on the Plan screen, or pause it with the button at the top, and look at who it contacts and which offers it uses.",
+      link: "Change the autonomy level on the Plan screen",
+    };
+  }
+  if (level === "autopilot") {
+    return real
+      ? {
+          key: "autopilot-backed",
+          title: "On Autopilot, and the proof backs it",
+          text: "Even the low end of the profit range is above zero. It acts on its own inside the limits you set, and the Pause button at the top stops everything at once.",
+          link: null,
+        }
+      : {
+          key: "autopilot-unproven",
+          title: "On Autopilot, but the proof is not there yet",
+          text: "The profit range is not above zero yet. If you would rather check each batch until it is, move the dial back to Approve each batch on the Plan screen.",
+          link: "Change the autonomy level on the Plan screen",
+        };
+  }
+  if (real) {
+    return {
+      key: "ready",
+      title: "Ready for Autopilot",
+      text: `The proof shows real extra profit: even the low end of the range is above zero. It is on ${autonomyName(level)} now. If you want, let it act on its own inside the limits you set (budget, quiet hours, weekly limits). You can pause it at any time.`,
+      link: "Switch to Autopilot on the Plan screen",
+      primary: true,
+    };
+  }
+  if (direction(proof?.incremental_profit) === "down") {
+    return {
+      key: "losing",
+      title: "Not ready for Autopilot: it is losing money so far",
+      text: `Stay on ${autonomyName(level)}, or pause it with the button at the top, and look at the plan: who it contacts, which offers it may use and how often.`,
+      link: "Look at the plan",
+    };
+  }
+  if (level === "shadow") {
+    return {
+      key: "shadow-next",
+      title: "Not ready for Autopilot yet: stay in Shadow, then Approve",
+      text: "In Shadow mode it sends nothing, so there is nothing to prove yet. When you like what it would do, switch to Approve each batch with a small budget. Switch to Autopilot only when this page shows real extra profit, with the whole range above zero.",
+      link: "Change the autonomy level on the Plan screen",
+    };
+  }
+  return {
+    key: "stay",
+    title: "Not ready for Autopilot yet",
+    text: `Stay on ${autonomyName(level)} until the profit range is above zero. This page will say "Real extra profit" when it is.`,
+    link: null,
+  };
+}
+
+/** The API's notes keep its own words; when they use "holdout" or "baseline", say first what those mean. */
+export function notesGloss(notes) {
+  const text = (notes || []).join(" ");
+  const words = [];
+  if (/\bholdout\b/i.test(text)) words.push('"holdout" means the people we never contact');
+  if (/\bbaseline\b/i.test(text)) words.push('"baseline" means the simple rule');
+  return words.length ? `In these notes, ${words.join(" and ")}.` : null;
+}
 
 /**
  * The shareable paragraph. Plain text, every estimate with its range, and plain words where the data
@@ -64,37 +212,46 @@ export function proofSummaryText(proof, goal) {
     const bits = [];
     if (profit) bits.push(`${range(profit, estimateFormat(profit, m))} in extra profit`);
     if (revenue) bits.push(`${range(revenue, estimateFormat(revenue, m))} in extra revenue`);
-    out.push(`Compared with leaving customers alone, the agent made ${bits.join(" and ")}.`);
-    if (profit && straddlesZero(profit)) out.push("The profit range includes zero, so the gain is not yet certain.");
+    out.push(`Compared with the people we never contact (a small random group left alone), the agent made ${bits.join(" and ")}.`);
+    const way = direction(profit);
+    if (way === "up") out.push("The whole profit range is above zero: real extra profit.");
+    if (way === "unsure") out.push("The profit range includes zero, so the gain is not yet certain: not sure yet.");
+    if (way === "down") out.push("The whole profit range is below zero: it is losing money so far.");
   } else {
-    out.push("There is not enough data yet to compare with leaving customers alone.");
+    out.push("There is not enough data yet to compare with leaving customers alone (the people we never contact).");
   }
   const lift = proof.lift_vs_baseline;
   if (lift) {
-    out.push(`Against the simple rule, it made ${range(lift, estimateFormat(lift, m))} more profit per customer.`);
-    if (straddlesZero(lift)) out.push("That range includes zero, so it has not yet clearly beaten the simple rule.");
+    out.push(`Against the simple rule anyone could set up, it made ${range(lift, estimateFormat(lift, m))} more profit per customer.`);
+    const way = direction(lift);
+    if (way === "up") out.push("It beats the simple rule.");
+    if (way === "unsure") out.push("That range includes zero, so it has not yet clearly beaten the simple rule.");
+    if (way === "down") out.push("The simple rule is doing better so far.");
   } else {
     out.push("There is not enough data yet to compare with the simple rule.");
   }
   out.push(
-    `Groups: ${count(proof.agent_n)} customers decided by the agent, ${count(proof.baseline_n)} by the simple rule, and ${count(proof.holdout_n)} never contacted.`,
+    `Groups: ${count(proof.agent_n)} customers decided by the agent, ${count(proof.baseline_n)} by the simple rule, and ${count(proof.holdout_n)} people we never contact.`,
   );
   const spend = `Spend so far: ${m(proof.spend)}`;
   out.push(proof.roi ? `${spend}; return on spend ${range(proof.roi, estimateFormat(proof.roi, times))}.` : `${spend}.`);
+  const gloss = notesGloss(proof.notes);
+  if (gloss) out.push(gloss);
   for (const note of proof.notes || []) out.push(String(note));
-  out.push("Ranges are 95% intervals.");
+  out.push("Ranges are 95% ranges: the real number is very likely inside them.");
   return out.join(" ");
 }
 
 /**
  * Horizontal bars with error bars, one row per estimate, on one shared axis that always includes 0.
  * Rows without an estimate say "Not enough data yet". Returns null when no row has an estimate.
+ * The zero line is drawn through each bar only, so the value written under a bar never crosses it.
  */
 export function estimateChart(rows, fmt, label) {
-  const valid = rows.filter((r) => r.est);
+  const valid = rows.filter((r) => complete(r.est));
   if (!valid.length) return null;
-  const lo = Math.min(0, ...valid.map((r) => r.est.low));
-  const hi = Math.max(0, ...valid.map((r) => r.est.high));
+  const lo = Math.min(0, ...valid.map((r) => Number(r.est.low)));
+  const hi = Math.max(0, ...valid.map((r) => Number(r.est.high)));
   const span = hi - lo || 1;
   const W = 480;
   const L = 128;
@@ -102,31 +259,32 @@ export function estimateChart(rows, fmt, label) {
   const rowH = 60;
   const top = 8;
   const H = top + rows.length * rowH + 20;
-  const x = (v) => L + ((v - lo) / span) * (W - L - R);
+  const x = (v) => L + ((Number(v) - lo) / span) * (W - L - R);
   const x0 = x(0);
-  const described = rows.map((r) => `${r.label}: ${r.est ? range(r.est, estimateFormat(r.est, fmt)) : NOT_ENOUGH}`).join("; ");
+  const described = rows.map((r) => `${r.label}: ${complete(r.est) ? range(r.est, estimateFormat(r.est, fmt)) : NOT_ENOUGH}`).join("; ");
 
   const parts = [s("title", null, `${label}. ${described}`)];
   rows.forEach((r, i) => {
     const cy = top + i * rowH + 22;
     parts.push(s("text", { x: 0, y: cy + 5, class: "ap-chart-label" }, r.label));
-    if (!r.est) {
-      parts.push(s("text", { x: L, y: cy + 5, class: "ap-chart-note" }, NOT_ENOUGH));
+    if (!complete(r.est)) {
+      parts.push(s("text", { x: L, y: cy + 5, class: "ap-chart-note pf-chart-note" }, NOT_ENOUGH));
       return;
     }
     const xp = x(r.est.point);
     parts.push(
       s("rect", { x: Math.min(x0, xp), y: cy - 9, width: Math.max(1, Math.abs(xp - x0)), height: 18, rx: 3,
-        class: r.est.point < 0 ? "ap-bar ap-bar-neg" : "ap-bar" }),
+        class: Number(r.est.point) < 0 ? "ap-bar ap-bar-neg" : "ap-bar" }),
+      s("line", { x1: x0, x2: x0, y1: cy - 14, y2: cy + 14, class: "ap-zero" }),
       s("line", { x1: x(r.est.low), x2: x(r.est.high), y1: cy, y2: cy, class: "ap-err" }),
       s("line", { x1: x(r.est.low), x2: x(r.est.low), y1: cy - 7, y2: cy + 7, class: "ap-err" }),
       s("line", { x1: x(r.est.high), x2: x(r.est.high), y1: cy - 7, y2: cy + 7, class: "ap-err" }),
-      s("text", { x: L, y: cy + 27, class: "ap-chart-note" }, range(r.est, estimateFormat(r.est, fmt))),
+      s("text", { x: L, y: cy + 29, class: "ap-chart-note pf-chart-note" }, range(r.est, estimateFormat(r.est, fmt))),
     );
   });
   parts.push(
-    s("line", { x1: x0, x2: x0, y1: top, y2: H - 18, class: "ap-zero" }),
-    s("text", { x: x0, y: H - 4, class: "ap-chart-note", "text-anchor": "middle" }, "0"),
+    s("line", { x1: x0, x2: x0, y1: H - 20, y2: H - 15, class: "ap-zero" }),
+    s("text", { x: x0, y: H - 2, class: "ap-chart-note", "text-anchor": "middle" }, "0"),
   );
   return s("svg", { viewBox: `0 0 ${W} ${H}`, class: "ap-chart", role: "img", "aria-label": `${label}. ${described}` }, ...parts);
 }
@@ -134,13 +292,14 @@ export function estimateChart(rows, fmt, label) {
 /** A stat tile whose value is an estimate with its range, or "not enough data yet". */
 function estimateTile(title, est, baseFmt, hint) {
   const fmt = estimateFormat(est, baseFmt);
+  const ok = complete(est);
   return h(
     "div",
     { class: "ap-tile" },
     h("dt", null, title),
-    h("dd", { class: "ap-tile-value" }, est ? fmt(est.point) : NOT_ENOUGH),
-    est && h("dd", { class: "ap-small" }, `Range ${fmt(est.low)} to ${fmt(est.high)}`),
-    est && straddlesZero(est) && h("dd", { class: "ap-small ap-warn-text" }, "Includes zero: not yet certain"),
+    h("dd", { class: "ap-tile-value" }, ok ? fmt(est.point) : NOT_ENOUGH),
+    ok && h("dd", { class: "ap-small" }, `Range ${fmt(est.low)} to ${fmt(est.high)}`),
+    ok && straddlesZero(est) && h("dd", { class: "ap-small ap-warn-text" }, "Not sure yet: the range includes zero"),
     hint && h("dd", { class: "ap-muted ap-small" }, hint),
   );
 }
@@ -148,6 +307,172 @@ function estimateTile(title, est, baseFmt, hint) {
 function plainTile(title, value, hint) {
   return h("div", { class: "ap-tile" }, h("dt", null, title), h("dd", { class: "ap-tile-value" }, value),
     hint && h("dd", { class: "ap-muted ap-small" }, hint));
+}
+
+/** The verdict line: an icon (hidden from screen readers) and the words, so it never relies on colour alone. */
+function verdictLine(v, id) {
+  return h(
+    "p",
+    { class: `pf-verdict pf-tone-${v.tone}`, id },
+    h("span", { class: "pf-verdict-icon", "aria-hidden": "true" }, v.icon),
+    h("span", { class: "pf-verdict-title" }, v.title),
+  );
+}
+
+/** The sentence under the profit verdict, from the range's own numbers. */
+function profitSentence(v, est, fmt, goal, hasNotes) {
+  const r = complete(est) ? range(est, estimateFormat(est, fmt)) : null;
+  if (v.key === "real") {
+    return `Compared with the people we never contact, it brought in ${r} more profit. The whole range is above zero, so it very likely made money that would not have come in without it.`;
+  }
+  if (v.key === "unsure") {
+    return `Best estimate so far: ${r} more profit than the people we never contact. The range includes zero, so it may not have made any extra profit yet. It needs more time, or more customers, before we can say.`;
+  }
+  if (v.key === "losing") {
+    return `Compared with the people we never contact, it made ${r}: less profit than leaving these customers alone. Look at the plan, and pause it with the button at the top if you want it to stop.`;
+  }
+  if (goal?.autonomy === "shadow") {
+    return `${NOT_ENOUGH}. In Shadow mode it sends nothing, so there is nothing to measure yet. What it expects to earn is just below, as its own forecast.`;
+  }
+  const why = hasNotes ? " The notes further down say more." : "";
+  return `${NOT_ENOUGH}. Proof needs the agent, the simple rule and the people we never contact to run side by side for a while, and each decision only counts once the days it is given to work have passed.${why}`;
+}
+
+/** "How this is measured": one plain line, with the detail folded away. */
+function methodBlock(proof) {
+  const holdout = proof && present(proof.holdout_n) ? ` (${count(proof.holdout_n)} so far)` : "";
+  return h(
+    "div",
+    { class: "pf-method", role: "note", "aria-label": "How this is measured" },
+    h(
+      "p",
+      null,
+      h("strong", null, "How this is measured: "),
+      `a small random group of your customers${holdout} is never contacted. Everyone it looks after is compared with them, so this is real extra profit, after the cost of discounts and messages. It is not "attributed revenue", where a tool takes credit for every sale that follows a message.`,
+    ),
+    h(
+      "details",
+      { class: "pf-details" },
+      h("summary", null, "More about the method"),
+      h(
+        "ul",
+        { class: "ap-plain" },
+        h("li", null, "Each customer is put in one of three groups at random: the agent decides for most of them, a simple rule decides for some, and the people we never contact get nothing at all."),
+        h("li", null, "Because the groups are picked at random, they would buy about the same if left alone. The difference in profit between them is what the messages and offers really added."),
+        h("li", null, "A decision counts once the days it is given to work have passed, so the newest decisions are not in yet."),
+        h("li", null, "Each range is a 95% range: the real number is very likely inside it. When the range includes zero, it says \"not sure yet\" rather than guess."),
+      ),
+    ),
+  );
+}
+
+function planHref(goal, screen = "plan") {
+  return goal?.goal_id ? `#/${screen}/${encodeURIComponent(goal.goal_id)}` : `#/${screen}`;
+}
+
+function adviceCard(advice, goal) {
+  const tone = advice.key === "ready" || advice.key === "autopilot-backed" ? "good" : "neutral";
+  return h(
+    "section",
+    { class: `ap-card pf-advice pf-advice-${tone}`, "aria-labelledby": "pf-advice-title" },
+    h("h2", { class: "ap-h2", id: "pf-advice-title" }, advice.title),
+    h("p", null, advice.text),
+    advice.link &&
+      h("p", { class: "ap-actions" },
+        h("a", { class: advice.primary ? "ap-btn ap-btn-primary pf-link-btn" : "ap-btn pf-link-btn", href: planHref(goal, advice.screen || "plan") }, advice.link)),
+  );
+}
+
+/** The forecast from GET /v2/expected, fetched alongside the proof: {state: "ok"|"none"|"error"|"skip", expected, error}. */
+async function fetchForecast(ctx, goal) {
+  if (!goal?.goal_id || typeof ctx.api?.getExpected !== "function") return { state: "skip" };
+  try {
+    const expected = await call(ctx.api, "getExpected", goal.goal_id);
+    return expected ? { state: "ok", expected } : { state: "none" };
+  } catch (error) {
+    return { state: "error", error };
+  }
+}
+
+/** "What it expects to earn": the agent's own forecast, never proof. */
+function forecastBody(expected, goal, currency) {
+  const m = (v) => money(v, currency);
+  const shadow = goal?.autonomy === "shadow";
+  const est = expected.expected_net;
+  const since = present(expected.since) ? ` since ${day(expected.since)}` : "";
+  if (!complete(est)) return [h("p", null, String(expected.words || "There is no forecast yet."))];
+  const kids = [
+    h(
+      "p",
+      null,
+      shadow
+        ? `For the contacts it would have made${since} (nothing was sent, because this goal is in Shadow mode), it expects this much extra profit over the ${count(expected.horizon_days)} days after each contact:`
+        : `For the contacts it decided on${since}, it expects this much extra profit over the ${count(expected.horizon_days)} days after each contact:`,
+    ),
+    h(
+      "dl",
+      { class: "ap-tiles" },
+      estimateTile("Expected extra profit", est, m, "its own forecast"),
+      plainTile(shadow ? "Contacts it would make" : "Contacts", count(expected.with_forecast), `to ${count(expected.customers)} customers`),
+      plainTile("Expected spend", m(expected.expected_spend), "on discounts and messages"),
+    ),
+  ];
+  if (present(expected.contacts) && present(expected.with_forecast) && Number(expected.contacts) !== Number(expected.with_forecast)) {
+    kids.push(h("p", { class: "ap-muted ap-small" },
+      `Of ${count(expected.contacts)} contacts, ${count(expected.with_forecast)} carry a forecast of their own; only those are added up.`));
+  }
+  if (straddlesZero(est)) kids.push(h("p", { class: "ap-small ap-warn-text" }, "Even its own forecast is not sure yet: the range includes zero."));
+  kids.push(h("p", { class: "ap-muted ap-small" },
+    "A forecast is what it thinks will happen, not proof. Only the comparison with the people we never contact shows what really happened."));
+  return kids;
+}
+
+function forecastCard(result, goal, currency) {
+  let body;
+  if (result.state === "error") body = [failed("the forecast", result.error)];
+  else if (result.state === "none") body = [empty("No forecast to show yet: it has not decided on any contacts for this goal.")];
+  else body = forecastBody(result.expected, goal, result.expected.currency || currency);
+  return h(
+    "section",
+    { class: "ap-card pf-forecast", "aria-labelledby": "pf-forecast-title" },
+    h("h2", { class: "ap-h2", id: "pf-forecast-title" }, "What it expects to earn ", h("span", { class: "pf-chip" }, "Its own forecast, not proof")),
+    ...body,
+  );
+}
+
+function docLink() {
+  const base = globalThis.AUTONOMY_DOCS_BASE;
+  if (typeof base === "string" && base) {
+    try {
+      const href = new URL("../research/v2/03_DECISION_SCIENCE.md", base.endsWith("/") ? base : `${base}/`).href;
+      return h("a", { href, rel: "noopener" }, EXPECT_DOC);
+    } catch {
+      // A base we cannot resolve: name the file instead.
+    }
+  }
+  return h("code", null, EXPECT_DOC);
+}
+
+/** The 3-10% guidance, labelled as a fact about AI marketing in general, never as this shop's number. */
+function expectFact(proof, measured) {
+  const share = proof && complete(proof.incremental_profit_share) ? proof.incremental_profit_share : null;
+  return h(
+    "aside",
+    { class: "pf-fact", "aria-labelledby": "pf-fact-title" },
+    h("h2", { class: "pf-fact-label", id: "pf-fact-title" }, "What to expect"),
+    h("p", { class: "ap-small ap-muted" }, "General guidance about AI marketing, not a result from your business."),
+    h(
+      "p",
+      null,
+      "Well-run AI marketing, measured honestly against people who are never contacted, typically adds 3-10% in real extra profit. Claims of much more are rarely measured this way.",
+    ),
+    share
+      ? h("p", null, h("strong", null, "This goal so far: "), `${range(share, pct)} extra profit${straddlesZero(share) ? " (not sure yet: the range includes zero)" : ""}.`)
+      : h("p", null, measured
+          ? "Your own result is the one at the top of this page, in money, with its range. It is measured, not taken from this guidance."
+          : "Your own result will show at the top of this page, in money, with its range, once there is enough data."),
+    h("p", { class: "ap-small ap-muted" }, "Source: published results measured against an untouched group, summarised in ", docLink(), "."),
+  );
 }
 
 async function copyText(text, fallbackField) {
@@ -166,6 +491,62 @@ async function copyText(text, fallbackField) {
   } catch {
     return false;
   }
+}
+
+function ruleCardFor(proof, m) {
+  const rv = ruleVerdict(proof.lift_vs_baseline);
+  const lift = proof.lift_vs_baseline;
+  const r = complete(lift) ? range(lift, estimateFormat(lift, m)) : null;
+  const sentence = {
+    beats: `Per customer, it made ${r} more profit than the simple rule. The whole range is above zero, so the AI is earning its keep.`,
+    unsure: `Per customer, ${r} more profit than the simple rule. The range includes zero, so it has not yet clearly beaten it.`,
+    behind: `Per customer, ${r} compared with the simple rule: the simple rule is doing better so far. Worth a look at the plan.`,
+    early: `${NOT_ENOUGH} to compare with the simple rule.`,
+  }[rv.key];
+  return h(
+    "section",
+    { class: "ap-card", "aria-labelledby": "pf-rule-title" },
+    h("h2", { class: "ap-h2", id: "pf-rule-title" }, "Compared with a simple rule anyone could set up"),
+    verdictLine(rv, "pf-rule-verdict"),
+    h("p", { class: "pf-verdict-text" }, sentence),
+    h("p", { class: "ap-muted ap-small" },
+      `The simple rule treats everyone in the audience the same way, like the usual "10% off to everyone who hasn't bought in 60 days" email. ${count(proof.baseline_n)} customers, picked at random, get the simple rule instead of the agent.`),
+    complete(lift) && h("dl", { class: "ap-tiles" }, estimateTile("Extra profit per customer", lift, m)),
+    estimateChart([{ label: "Per customer", est: lift }], m, "Extra profit per customer compared with the simple rule, with its 95% range"),
+  );
+}
+
+function groupsCardFor(proof, m) {
+  return h(
+    "section",
+    { class: "ap-card", "aria-labelledby": "pf-groups-title" },
+    h("h2", { class: "ap-h2", id: "pf-groups-title" }, "Spend and the three groups"),
+    h("dl", { class: "ap-tiles" },
+      plainTile("Spend so far", m(proof.spend), "on discounts and messages"),
+      estimateTile("Return on spend", proof.roi, times, `Extra profit for each ${m(1)} spent`)),
+    h("dl", { class: "ap-tiles" },
+      plainTile("People we never contact", count(proof.holdout_n), "picked at random, left alone"),
+      plainTile("Agent decides", count(proof.agent_n), "customers"),
+      plainTile("Simple rule", count(proof.baseline_n), "customers")),
+  );
+}
+
+function shareCardFor(proof, goal, ctx, announcer) {
+  const summary = proofSummaryText(proof, goal);
+  const field = h("textarea", { class: "ap-summary", readonly: true, rows: 6, id: "ap-proof-summary" });
+  field.value = summary;
+  const copyBtn = h("button", { type: "button", class: "ap-btn ap-btn-primary" }, "Copy summary");
+  copyBtn.addEventListener("click", async () => {
+    const ok = await copyText(summary, field);
+    notify(ctx, ok ? "Summary copied." : "Couldn't copy; the text is selected, so press Ctrl+C (or Cmd+C).", ok ? "good" : "critical", announcer);
+  });
+  return h(
+    "section",
+    { class: "ap-card" },
+    h("h2", { class: "ap-h2" }, h("label", { for: "ap-proof-summary" }, "Ready to share")),
+    field,
+    h("div", { class: "ap-actions" }, copyBtn),
+  );
 }
 
 export async function render(root, ctx) {
@@ -194,93 +575,76 @@ export async function render(root, ctx) {
   page.append(pageHead("Proof", goal ? goal.text : "The whole programme"));
   if (goalError) page.append(h("p", { class: "ap-muted ap-small" }, `Couldn't load the goal (${errText(goalError)}); amounts are shown without a currency.`));
 
-  let proof;
+  // The forecast loads alongside the proof; either failing leaves the other standing.
+  const forecastP = fetchForecast(ctx, goal);
+  let proof = null;
+  let proofError = null;
   try {
     proof = await call(ctx.api, "getProof", goalId);
   } catch (e) {
     // Fall back to the proof inside the goal bundle only when it holds one: a null there must not turn a
     // failed request into "not enough data yet".
     if (bundle && bundle.proof) proof = bundle.proof;
-    else {
-      page.append(h("div", { class: "ap-card" }, failed("proof", e)), announcer);
-      return;
-    }
+    else proofError = e;
   }
+  const forecast = await forecastP;
 
   const currency = goal?.currency;
   const m = (v) => money(v, currency);
-  const summary = proofSummaryText(proof, goal);
+  const shadow = goal?.autonomy === "shadow";
 
-  if (!proof) {
-    page.append(
-      h("div", { class: "ap-card" },
-        empty("Not enough data yet. Proof needs the agent, the simple rule and the no-contact holdout to run side by side for a while; it usually starts to show after a couple of weeks.")),
-      announcer,
-    );
-    return;
+  // 1. The verdict first, then the money against the people we never contact, then how it is measured.
+  const resultCard = h(
+    "section",
+    { class: "ap-card pf-result", "aria-labelledby": "pf-result-title" },
+    h("h2", { class: "ap-h2", id: "pf-result-title" }, "Extra profit compared with people we never contact"),
+  );
+  if (proofError) {
+    resultCard.append(failed("proof", proofError));
+  } else {
+    const verdict = profitVerdict(proof?.incremental_profit);
+    resultCard.append(verdictLine(verdict, "pf-verdict"), h("p", { class: "pf-verdict-text" }, profitSentence(verdict, proof?.incremental_profit, m, goal, Boolean(proof?.notes?.length))));
+    if (proof && (proof.incremental_profit || proof.incremental_revenue)) {
+      resultCard.append(
+        h("dl", { class: "ap-tiles" },
+          estimateTile("Extra profit", proof.incremental_profit, m, "after the cost of discounts and messages"),
+          estimateTile("Extra revenue", proof.incremental_revenue, m)),
+      );
+      const chart = estimateChart(
+        [{ label: "Extra profit", est: proof.incremental_profit }, { label: "Extra revenue", est: proof.incremental_revenue }], m,
+        "Extra money compared with people we never contact, with 95% ranges");
+      if (chart) resultCard.append(chart);
+    }
+    resultCard.append(methodBlock(proof));
   }
 
-  const holdoutCard = h(
-    "section",
-    { class: "ap-card" },
-    h("h2", { class: "ap-h2" }, "Compared with contacting nobody"),
-    h("p", { class: "ap-muted" }, "The agent's customers against the holdout, a group we never message, so this is money that would not have come in otherwise."),
-    h("dl", { class: "ap-tiles" },
-      estimateTile("Extra profit", proof.incremental_profit, m),
-      estimateTile("Extra revenue", proof.incremental_revenue, m)),
-    estimateChart([{ label: "Extra profit", est: proof.incremental_profit }, { label: "Extra revenue", est: proof.incremental_revenue }], m,
-      "Extra money compared with contacting nobody, with 95% ranges"),
-  );
+  // 2. What to do with the autonomy dial. 3. The simple rule. 4. Its own forecast (first in Shadow).
+  const advice = proofError ? null : autopilotAdvice(goal, proof);
+  const forecastEl = forecast.state === "skip" || (forecast.state === "none" && !shadow) ? null : forecastCard(forecast, goal, currency);
 
-  const baselineCard = h(
-    "section",
-    { class: "ap-card" },
-    h("h2", { class: "ap-h2" }, "Compared with the simple rule"),
-    h("p", { class: "ap-muted" }, "The agent against a plain rule anyone could set up (contact everyone in the audience the same way)."),
-    h("dl", { class: "ap-tiles" }, estimateTile("Extra profit per customer", proof.lift_vs_baseline, m)),
-    estimateChart([{ label: "Per customer", est: proof.lift_vs_baseline }], m, "Extra profit per customer compared with the simple rule, with its 95% range"),
-  );
-
-  const groupsCard = h(
-    "section",
-    { class: "ap-card" },
-    h("h2", { class: "ap-h2" }, "Groups and spend"),
-    h("dl", { class: "ap-tiles" },
-      plainTile("Agent decides", count(proof.agent_n), "customers"),
-      plainTile("Simple rule", count(proof.baseline_n), "customers"),
-      plainTile("Never contacted", count(proof.holdout_n), "customers (holdout)"),
-      plainTile("Spend so far", m(proof.spend), "offers and messages"),
-      estimateTile("Return on spend", proof.roi, times, "Extra profit for each unit spent")),
-  );
-
-  const notes = (proof.notes || []).length
-    ? h("section", { class: "ap-card" }, h("h2", { class: "ap-h2" }, "Notes"), h("ul", { class: "ap-plain" }, ...proof.notes.map((n) => h("li", null, String(n)))))
+  const notes = proof && (proof.notes || []).length
+    ? h("section", { class: "ap-card", "aria-labelledby": "pf-notes-title" },
+        h("h2", { class: "ap-h2", id: "pf-notes-title" }, "Notes from the measurement"),
+        notesGloss(proof.notes) && h("p", { class: "ap-muted ap-small" }, notesGloss(proof.notes)),
+        h("ul", { class: "ap-plain" }, ...proof.notes.map((n) => h("li", null, String(n)))))
     : null;
 
-  const field = h("textarea", { class: "ap-summary", readonly: true, rows: 6, id: "ap-proof-summary" });
-  field.value = summary;
-  const copyBtn = h("button", { type: "button", class: "ap-btn ap-btn-primary" }, "Copy summary");
-  copyBtn.addEventListener("click", async () => {
-    const ok = await copyText(summary, field);
-    notify(ctx, ok ? "Summary copied." : "Couldn't copy; the text is selected, so press Ctrl+C (or Cmd+C).", ok ? "good" : "critical", announcer);
-  });
-  const shareCard = h(
-    "section",
-    { class: "ap-card" },
-    h("h2", { class: "ap-h2" }, h("label", { for: "ap-proof-summary" }, "Ready to share")),
-    field,
-    h("div", { class: "ap-actions" }, copyBtn),
-  );
+  const asOf = proof ? `As of ${day(proof.as_of)} · ` : "";
+  const level = goal ? `${asOf}Autonomy level: ${autonomyName(goal.autonomy)} · ` : asOf;
 
-  // append() turns null into the text "null", so leave out the notes card when there are no notes.
+  // append() turns null into the text "null", so leave out what is not there.
   page.append(
     ...[
-      h("p", { class: "ap-muted ap-small" }, `As of ${day(proof.as_of)} · ranges are 95% intervals`),
-      holdoutCard,
-      baselineCard,
-      groupsCard,
+      h("p", { class: "ap-muted ap-small" }, `${level}ranges are 95% ranges`),
+      resultCard,
+      shadow ? forecastEl : null,
+      advice ? adviceCard(advice, goal) : null,
+      proof ? ruleCardFor(proof, m) : null,
+      shadow ? null : forecastEl,
+      proof ? groupsCardFor(proof, m) : null,
+      expectFact(proof, direction(proof?.incremental_profit) !== "early"),
       notes,
-      shareCard,
+      proof ? shareCardFor(proof, goal, ctx, announcer) : null,
       announcer,
     ].filter(Boolean),
   );

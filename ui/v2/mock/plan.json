@@ -1,0 +1,298 @@
+{
+  "goal_id": "goal_winback",
+  "as_of": "2026-10-20T13:20:00Z",
+  "audience_n": 2140,
+  "agent_n": 1712,
+  "baseline_n": 214,
+  "holdout_n": 214,
+  "audience_words": [
+    "Has bought at least once",
+    "Last purchase more than 60 days ago"
+  ],
+  "hard_rules": [
+    {
+      "code": "no_consent",
+      "words": "Only messages people who agreed to hear from you on that channel.",
+      "value": null
+    },
+    {
+      "code": "unsubscribed",
+      "words": "Never messages anyone who unsubscribed.",
+      "value": null
+    },
+    {
+      "code": "quiet_hours",
+      "words": "No messages between 21:00 and 09:00, in each person's own time zone.",
+      "value": "21:00-09:00"
+    },
+    {
+      "code": "weekly_cap",
+      "words": "At most 2 messages per person per week, across all goals.",
+      "value": 2
+    },
+    {
+      "code": "no_budget",
+      "words": "Stops spending when the budget of $5,000 is used up.",
+      "value": 5000.0
+    },
+    {
+      "code": "open_complaint",
+      "words": "No messages to anyone with an open complaint.",
+      "value": null
+    },
+    {
+      "code": "no_discounts",
+      "words": "Never sends a discount to someone who asked for none.",
+      "value": null
+    },
+    {
+      "code": "holdout",
+      "words": "Never contacts the 10% of customers set aside for comparison.",
+      "value": 0.1
+    }
+  ],
+  "content": [
+    {
+      "content_id": "ci_0",
+      "status": "approved",
+      "reviewed_by": "critic",
+      "passed": true,
+      "checks": [
+        {
+          "check": "no_invented_numbers",
+          "passed": true,
+          "note": "No made-up numbers or discounts"
+        },
+        {
+          "check": "unsubscribe",
+          "passed": true,
+          "note": "Unsubscribe line present"
+        },
+        {
+          "check": "channel_rules",
+          "passed": true,
+          "note": "Follows the channel's rules"
+        },
+        {
+          "check": "brand_voice",
+          "passed": true,
+          "note": "Plain, warm and on brand."
+        },
+        {
+          "check": "honesty",
+          "passed": true,
+          "note": "Mentions only the approved offer."
+        }
+      ],
+      "notes": [
+        "judge run 1 [honesty, brand_voice]: honesty 5 (Mentions only the approved offer.); brand_voice 5 (Plain, warm and on brand.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 5 (Plain, warm and on brand.); honesty 5 (Mentions only the approved offer.)",
+        "approved"
+      ]
+    },
+    {
+      "content_id": "ci_1",
+      "status": "approved",
+      "reviewed_by": "critic",
+      "passed": true,
+      "checks": [
+        {
+          "check": "no_invented_numbers",
+          "passed": true,
+          "note": "No made-up numbers or discounts"
+        },
+        {
+          "check": "unsubscribe",
+          "passed": true,
+          "note": "Unsubscribe line present"
+        },
+        {
+          "check": "channel_rules",
+          "passed": true,
+          "note": "Follows the channel's rules"
+        },
+        {
+          "check": "brand_voice",
+          "passed": true,
+          "note": "Plain, warm and on brand."
+        },
+        {
+          "check": "honesty",
+          "passed": true,
+          "note": "Mentions only the approved offer."
+        }
+      ],
+      "notes": [
+        "judge run 1 [honesty, brand_voice]: honesty 5 (Mentions only the approved offer.); brand_voice 5 (Plain, warm and on brand.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 5 (Plain, warm and on brand.); honesty 5 (Mentions only the approved offer.)",
+        "approved"
+      ]
+    },
+    {
+      "content_id": "ci_2",
+      "status": "approved",
+      "reviewed_by": "critic",
+      "passed": true,
+      "checks": [
+        {
+          "check": "no_invented_numbers",
+          "passed": true,
+          "note": "No made-up numbers or discounts"
+        },
+        {
+          "check": "unsubscribe",
+          "passed": true,
+          "note": "Unsubscribe line present"
+        },
+        {
+          "check": "channel_rules",
+          "passed": true,
+          "note": "Follows the channel's rules"
+        },
+        {
+          "check": "brand_voice",
+          "passed": true,
+          "note": "Plain, warm and on brand."
+        },
+        {
+          "check": "honesty",
+          "passed": true,
+          "note": "Mentions only the approved offer."
+        }
+      ],
+      "notes": [
+        "judge run 1 [honesty, brand_voice]: honesty 5 (Mentions only the approved offer.); brand_voice 5 (Plain, warm and on brand.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 5 (Plain, warm and on brand.); honesty 5 (Mentions only the approved offer.)",
+        "approved"
+      ]
+    },
+    {
+      "content_id": "ci_3",
+      "status": "approved",
+      "reviewed_by": "critic",
+      "passed": true,
+      "checks": [
+        {
+          "check": "no_invented_numbers",
+          "passed": true,
+          "note": "No made-up numbers or discounts"
+        },
+        {
+          "check": "unsubscribe",
+          "passed": true,
+          "note": "No unsubscribe line needed here"
+        },
+        {
+          "check": "channel_rules",
+          "passed": true,
+          "note": "Follows the channel's rules"
+        },
+        {
+          "check": "brand_voice",
+          "passed": true,
+          "note": "Plain, warm and on brand."
+        },
+        {
+          "check": "honesty",
+          "passed": true,
+          "note": "Mentions only the approved offer."
+        }
+      ],
+      "notes": [
+        "judge run 1 [honesty, brand_voice]: honesty 5 (Mentions only the approved offer.); brand_voice 5 (Plain, warm and on brand.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 5 (Plain, warm and on brand.); honesty 5 (Mentions only the approved offer.)",
+        "approved"
+      ]
+    },
+    {
+      "content_id": "ci_4",
+      "status": "approved",
+      "reviewed_by": "critic",
+      "passed": true,
+      "checks": [
+        {
+          "check": "no_invented_numbers",
+          "passed": true,
+          "note": "No made-up numbers or discounts"
+        },
+        {
+          "check": "unsubscribe",
+          "passed": true,
+          "note": "No unsubscribe line needed here"
+        },
+        {
+          "check": "channel_rules",
+          "passed": true,
+          "note": "Follows the channel's rules"
+        },
+        {
+          "check": "brand_voice",
+          "passed": true,
+          "note": "Plain, warm and on brand."
+        },
+        {
+          "check": "honesty",
+          "passed": true,
+          "note": "Mentions only the approved offer."
+        }
+      ],
+      "notes": [
+        "judge run 1 [honesty, brand_voice]: honesty 5 (Mentions only the approved offer.); brand_voice 5 (Plain, warm and on brand.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 5 (Plain, warm and on brand.); honesty 5 (Mentions only the approved offer.)",
+        "approved"
+      ]
+    },
+    {
+      "content_id": "ci_5",
+      "status": "draft",
+      "reviewed_by": null,
+      "passed": null,
+      "checks": [],
+      "notes": []
+    },
+    {
+      "content_id": "ci_6",
+      "status": "draft",
+      "reviewed_by": "critic",
+      "passed": false,
+      "checks": [
+        {
+          "check": "no_invented_numbers",
+          "passed": true,
+          "note": "No made-up numbers or discounts"
+        },
+        {
+          "check": "unsubscribe",
+          "passed": true,
+          "note": "No unsubscribe line needed here"
+        },
+        {
+          "check": "channel_rules",
+          "passed": true,
+          "note": "Follows the channel's rules"
+        },
+        {
+          "check": "brand_voice",
+          "passed": true,
+          "note": "Friendly and short."
+        },
+        {
+          "check": "honesty",
+          "passed": false,
+          "note": "Urgency claims must be true on the day it is sent."
+        }
+      ],
+      "notes": [
+        "judge run 1 [honesty, brand_voice]: honesty 2 (Urgency claims must be true on the day it is sent.); brand_voice 4 (Friendly and short.)",
+        "judge run 2 [brand_voice, honesty]: brand_voice 4 (Friendly and short.); honesty 2 (Urgency claims must be true on the day it is sent.)",
+        "rejected: run 1 scored honesty 2 < 3; run 2 scored honesty 2 < 3"
+      ]
+    }
+  ],
+  "editor_passed": 5,
+  "editor_failed": 1,
+  "not_reviewed": 1,
+  "rejected_by_person": 0,
+  "autonomy": "approve",
+  "autonomy_since": "2026-10-01T09:00:00Z"
+}
