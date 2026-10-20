@@ -34,18 +34,20 @@ export const cardOf = (screen, type) => cards(screen).find((c) => c.type === typ
 // --- the checklist ----------------------------------------------------------------------------------------------
 
 /**
- * The short live checklist beside the chat: looked at / fixes / questions left / goal / ready. Every number is one the
- * server counted (`first_look`, the change cards, the open questions).
+ * The short live checklist beside the chat: looked at / changes / questions left / goal / ready. Every number is one the
+ * server counted (`first_look`: the same count of changes the approval sentence says).
  */
 export function checklistOf(screen) {
   const first = cardOf(screen, "first_look");
   const view = screen.view;
-  const changes = cards(screen).filter((c) => c.type === "change" && c.state === "accepted").length;
-  const open = cards(screen).filter((c) => c.type === "question" && (c.answer === null || c.answer === undefined)).length;
+  // The server's own counts (the same ones the first look and the approval sentence say), not the cards drawn: an
+  // answer's fix is told on its question and a suggested answer waits in its reply, but each still counts once.
+  const changes = first ? first.fixes_count : 0;
+  const open = first ? first.questions_count : 0;
   const ready = ["ready", "ready_with_warnings"].includes(view.verdict.key);
   return [
     { id: "looked", done: Boolean(first), text: first ? `Looked at ${plural(first.files.length, "file", "files")}` : "Looking at your data" },
-    { id: "fixes", done: Boolean(first), text: changes ? `${plural(changes, "fix", "fixes")} made` : "No fixes needed so far" },
+    { id: "fixes", done: Boolean(first), text: changes ? `${plural(changes, "change", "changes")} made` : "No changes needed so far" },
     { id: "questions", done: open === 0, text: open ? `${plural(open, "question", "questions")} left` : "No questions left" },
     { id: "goal", done: Boolean(view.goal_id), text: view.goal_id ? `Goal: ${goalName(view.goal_id)}` : "Goal: not chosen yet" },
     { id: "ready", done: ready, text: ready ? "Ready to start" : "Not ready to start yet" },
@@ -316,11 +318,18 @@ function messageHtml(m, names, { busy, openSent, index }) {
     ? `<p class="dds-why" data-dds-withdrawn>${esc("I took back: ")}${m.withdrawn.map((t) => userTextIn(t, names)).join("; ")}</p>`
     : "";
   const s = m.suggestion;
+  // The suggested answer is offered once, in the reply that made it (the reply already says what was understood): the
+  // button records it, "Other answers" holds the question's other chips, and the question's own card waits.
+  const others = s && (s.others || []).length
+    ? `<details class="ddc-others" data-dds-keep="others-${esc(s.question_id)}"><summary>Other answers</summary><ul class="dds-opts" aria-label="Other answers">${s.others
+        .map((o) => chip(o, { question_id: s.question_id }, { busy, dk: o.label === "I don't know" }))
+        .join("")}</ul></details>`
+    : "";
   const suggestion = s
-    ? `<div class="ddc-suggestion" data-dds-suggestion="${esc(s.question_id)}"><p class="dds-why">${esc(`I understood: ${plain(s.label)}.`)}</p>${
+    ? `<div class="ddc-suggestion" data-dds-suggestion="${esc(s.question_id)}">${
         s.used
           ? `<p class="dds-state">${icon("check", { size: 14 })}<span>That question is answered.</span></p>`
-          : button({ label: "Use this answer", kind: "primary", size: "sm", attrs: `data-dds-answer="${esc(s.option_id)}" data-dds-q="${esc(s.question_id)}" data-dds-use-answer`, disabled: busy })
+          : `<p class="dds-why">${esc(plain(s.label))}</p>${button({ label: "Use this answer", kind: "primary", size: "sm", attrs: `data-dds-answer="${esc(s.option_id)}" data-dds-q="${esc(s.question_id)}" data-dds-use-answer`, disabled: busy })}${others}`
       }</div>`
     : "";
   return agentRow(
@@ -369,9 +378,19 @@ export function readyHtml(r, ctx) {
           c.required ? "It is in the plan, so this waits for them." : "Until then it is left out.",
         )}</span></div>`;
       }
+      if (c.required) {
+        // In the plan already, and shown above (its answer, or its card with Undo): said once here, not asked again as a
+        // box. The one click records the yes the server needs for it (its exact sentence); when a separate yes is the
+        // rule, the card says why, in one line.
+        const line = c.separate
+          ? `Someone other than whoever suggested it must agree (${plain(c.why)}). Approve and start gives your yes.`
+          : "Recorded when you click Approve and start.";
+        const lead = c.separate ? "Needs your yes: " : c.answered ? "Already agreed: " : c.shown ? "Shown above, with Undo: " : "In the plan: ";
+        return `<div class="dds-state ddc-agreed" data-dds-agreed="${esc(c.item_id)}">${icon("check", { size: 14 })}<span>${esc(lead)}${userTextIn(c.sentence, names)}<br>${esc(line)}</span></div>`;
+      }
       return `<label class="dds-tick ddc-tick" data-dds-confirm-row="${esc(c.item_id)}"><input type="checkbox" data-dds-confirm="${esc(c.item_id)}"${ctx.confirms.has(c.item_id) ? " checked" : ""}${ctx.busy ? " disabled" : ""}><span class="dds-item-body"><span class="dds-item-t">${esc(
-        "I agree: ",
-      )}${userTextIn(c.sentence, names)}</span><span class="dds-item-sub">${esc(`${c.shown ? "Shown above, with Undo. " : ""}${c.required ? "Needed to go on. " : "Left out unless you agree. "}Why it needs your yes: ${plain(c.why)}${c.separate ? ", from someone other than whoever suggested it" : ""}.`)}</span></span></label>`;
+        "Also include: ",
+      )}${userTextIn(c.sentence, names)}</span><span class="dds-item-sub">${esc(`Left out unless you tick it. Why it needs your yes: ${plain(c.why)}${c.separate ? ", from someone other than whoever suggested it" : ""}.`)}</span></span></label>`;
     })
     .join("");
   const speeds = (r.speeds || []).length
@@ -406,6 +425,18 @@ export function readyHtml(r, ctx) {
   );
 }
 
+/**
+ * The approval sentence as it reads once `added` more changes are in the plan ("Prepare 1 file with 4 changes ..." ->
+ * "... with 5 changes ..."), nothing else different. The click that agrees to a left-out change puts it in the plan, so
+ * its sentence moves by exactly that; any other difference is not this.
+ */
+export function sentenceWithMore(sentence, added) {
+  return String(sentence).replace(/\bwith (\d+) changes?\b/, (_all, n) => {
+    const next = Number(n) + added;
+    return `with ${next} ${next === 1 ? "change" : "changes"}`;
+  });
+}
+
 const approveLabel = (ctx) => (ctx.starts === false ? "Approve and continue" : "Approve and start");
 
 /**
@@ -420,11 +451,11 @@ export function leavesOutHtml(r, ctx) {
     : "";
 }
 
-/** Whether the one click may go: every stop and every needed own yes is ticked, and nobody else must agree first. */
+/** Whether the one click may go: every stop is ticked, and nobody else must agree first (the own yeses are the click's). */
 export function approveAllowed(r, ctx) {
   if (!r || r.stage !== "approve" || r.blocked || r.hold) return false;
   if ((r.stops || []).some((s) => !ctx.stops.has(s.key))) return false;
-  return !(r.confirmations || []).some((c) => c.required && c.can_agree && !ctx.confirms.has(c.item_id));
+  return true; // a change that needs its own yes and is in the plan is agreed by this very click
 }
 
 // --- the composer -----------------------------------------------------------------------------------------------
@@ -505,13 +536,17 @@ export function conversationHtml(screen, ctx) {
   return `<section class="ddc-conv" aria-label="Conversation with Data Doctor" data-dds-conversation>${body}${thinking}${composerHtml(screen, ctx.composer || {})}</section>`;
 }
 
-/** The slim header: the goal (or "Your data") and the verdict, with the carried-on line when there is one. */
-export function headHtml(screen, { level = 2 } = {}) {
+/**
+ * The slim header: the goal (or "Your data") and the verdict, with the carried-on line when there is one. In the New
+ * campaign wizard (`titled: false`) the wizard's own card already names the customers and the goal, so the chat adds
+ * the verdict and the next step only, not a second heading.
+ */
+export function headHtml(screen, { level = 2, titled = true } = {}) {
   const { view } = screen;
   const v = VERDICTS[view.verdict.key] || VERDICTS.working;
   const title = view.goal_id ? `Your data for "${goalName(view.goal_id)}"` : "Your data";
   const line = view.carried && view.carried.line ? `<p class="dds-why" data-dds-new-line role="status">${esc(view.carried.line)}</p>` : "";
-  return `<div class="ddc-head" data-dds-verdict="${esc(view.verdict.key)}"><h${level} class="dds-title">${esc(title)}</h${level}>${statusChip("health", v.status, { word: v.word })}<p class="dds-next" data-dds-next>${esc(
+  return `<div class="ddc-head" data-dds-verdict="${esc(view.verdict.key)}">${titled ? `<h${level} class="dds-title">${esc(title)}</h${level}>` : ""}${statusChip("health", v.status, { word: v.word })}<p class="dds-next" data-dds-next>${esc(
     view.verdict.next,
   )}</p>${line}</div>`;
 }

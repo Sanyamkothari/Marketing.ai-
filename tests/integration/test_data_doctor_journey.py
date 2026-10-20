@@ -209,7 +209,7 @@ def test_data_page_to_the_campaign_on_one_case_nothing_asked_twice(
             left_out = wizard.locator("[data-dds-confirm-row]")
             assert left_out.count() == 1, "the consent change waiting for its own yes is a box in the card"
             assert "who agreed to be contacted" in left_out.inner_text()
-            assert "Left out unless you agree" in left_out.inner_text()
+            assert "Left out unless you tick it" in left_out.inner_text()
             assert left_out.locator("input").is_checked() is False, "never ticked for the person"
             assert (
                 wizard.locator("[data-dds-fit]").count() == 1

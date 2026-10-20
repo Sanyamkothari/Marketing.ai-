@@ -34,7 +34,7 @@ from engine.doctor.conversation import (
 )
 from engine.doctor.plan_check import plan_digest
 from engine.doctor.screen import CaseScreen, screen_view
-from engine.doctor.visit import active_section
+from engine.doctor.visit import active_section, plan_change_count
 from engine.doctor.visit_contracts import Acknowledgement, PlanCheck, PlanFinding
 from engine.storage import LocalStorage
 from tests.unit.doctor import visit_support as vs
@@ -148,8 +148,11 @@ def test_an_answer_is_told_once_on_its_question_and_is_not_a_fix(storage: LocalS
     ), "no second card repeating the answer"
     first = screen.view.conversation[0]
     assert isinstance(first, FirstLookCard)
-    assert first.fixes_count == len(_of(screen, ChangeCard)) == 1, "only fixes the rules made count"
-    assert "I made 1 fix on a copy" in first.sentence
+    assert len(_of(screen, ChangeCard)) == 1
+    assert (
+        first.fixes_count == 4
+    ), "the plan's one count: the card plus the three answers' fixes (told on their questions)"
+    assert "I made 4 changes on a copy" in first.sentence
     # what an answer changed, measured by our code, is told on the question
     q = next(q for q in answered if q.code == "KEY_AMBIGUOUS")
     items = tuple(
@@ -438,9 +441,10 @@ def test_the_ai_path_fills_the_same_cards(storage: LocalStorage, world: World) -
     assert cards["ai.undone"].state == "rejected", "undone by the person: shown, so it can be done again"
     assert "ai.taken_back" not in cards, "taken back by the agent: its message says so, it is not a card"
     first = view.conversation[0]
-    assert isinstance(first, FirstLookCard) and first.fixes_count == sum(
-        1 for c in cards.values() if c.state == "accepted"
+    assert isinstance(first, FirstLookCard) and first.fixes_count == plan_change_count(
+        case.model_copy(update={"items": (*case.items, *items)})
     )
+    assert first.fixes_count >= sum(1 for c in cards.values() if c.state == "accepted")
 
 
 def test_the_conversation_is_built_from_the_case_alone(storage: LocalStorage, world: World) -> None:
@@ -609,3 +613,142 @@ def test_approving_with_no_goal_chosen_starts_nothing_and_goes_back_to_asking_fo
     again = build_screen(storage, vs.CLIENT, after.case_id, config_root=None)
     assert again.view.start is None, "nothing to start"
     assert _of(again, GoalsCard) and not _of(again, ReadyCard), "the goals are offered again"
+
+
+# ---------------------------------------------------------------------------
+# Each thing is said once (v2e)
+# ---------------------------------------------------------------------------
+def test_one_count_of_changes_in_the_first_look_the_checklist_and_the_sentence(
+    storage: LocalStorage, world: World
+) -> None:
+    import re
+
+    screen = scenario("approve_class", storage, world)
+    first = screen.view.conversation[0]
+    ready = screen.view.conversation[-1]
+    assert isinstance(first, FirstLookCard) and isinstance(ready, ReadyCard)
+    said = re.search(r"with (\d+) changes?", ready.sentence)
+    assert said is not None
+    assert first.fixes_count == plan_change_count(screen.case) == int(said.group(1))
+    assert f"I made {first.fixes_count} changes on a copy" in first.sentence
+    # an undo moves all three together
+    undone = tuple(
+        (
+            i.model_copy(update={"state": ProposalState.REJECTED, "decided_by": "u-me"})
+            if i.item_id.startswith("as_of_column")
+            else i
+        )
+        for i in screen.case.items
+    )
+    again = screen_view(storage, screen.case.model_copy(update={"items": undone}), config_root=None)
+    first2, ready2 = again.conversation[0], again.conversation[-1]
+    assert isinstance(first2, FirstLookCard) and isinstance(ready2, ReadyCard)
+    assert first2.fixes_count == first.fixes_count - 1
+    assert f"with {first.fixes_count - 1} changes" in ready2.sentence
+
+
+def test_how_long_training_may_take_is_not_asked_in_the_chat_but_stays_in_the_case(
+    storage: LocalStorage, world: World, tmp_path: Path
+) -> None:
+    screen = scenario("question", storage, world)
+    case = screen.case
+    base = next(q for q in case.questions if q.code == "UNKNOWN_BOOLEAN")
+    budget = base.model_copy(
+        update={
+            "question_id": "q.training_budget.base.0001",
+            "code": "TRAINING_BUDGET",
+            "text": "How long may training take?",
+            "answer": None,
+        }
+    )
+    asked = case.model_copy(update={"questions": (*case.questions, budget)})
+    view = screen_view(storage, asked, config_root=None)
+    texts = [c.text for c in view.conversation if isinstance(c, QuestionCard)]
+    assert "How long may training take?" not in texts, "the ready card's speeds are the one place for it"
+    first = view.conversation[0]
+    assert (
+        isinstance(first, FirstLookCard) and first.questions_count == 2
+    ), "and it is not counted as a question"
+    assert any(q.code == "TRAINING_BUDGET" for q in asked.questions), "the plan view still has it"
+    ready = scenario("approve_class", LocalStorage(tmp_path / "goal"), vs.world()).view.conversation[-1]
+    assert isinstance(ready, ReadyCard) and [s.id for s in ready.speeds] == ["quick", "balanced", "thorough"]
+
+
+def test_an_answer_the_person_gave_is_agreed_already_not_asked_again(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("approve_class", storage, world)
+    ready = screen.view.conversation[-1]
+    assert isinstance(ready, ReadyCard)
+    by_id = {c.item_id: c for c in ready.confirmations}
+    answered = next(c for i, c in by_id.items() if i.startswith("q.impossible_age"))
+    assert answered.required and answered.answered and answered.can_agree
+    consent = next(c for i, c in by_id.items() if i.startswith("consent_column"))
+    assert not consent.answered and not consent.required, "a left-out change is still the person's to include"
+
+
+def _reply_with_suggestion(
+    case: Case, q: Any, at: Any, text: str = "I understood: haa is yes. Use this?"
+) -> Any:
+    return SimpleNamespace(
+        role="agent",
+        text=text,
+        at=at,
+        by=None,
+        sent=(),
+        item_ids=(),
+        withdrawn=(),
+        tools=(),
+        suggestion=SimpleNamespace(
+            question_id=q.question_id, option_id="c0", label="Yes: haa is yes, nahi is no"
+        ),
+    )
+
+
+def test_a_suggested_answer_is_offered_once_in_its_reply_and_the_question_card_waits(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("question", storage, world)
+    case = screen.case
+    q = next(q for q in case.questions if q.code == "UNKNOWN_BOOLEAN")
+    at = case.updated_at + timedelta(minutes=5)
+    reply = _reply_with_suggestion(case, q, at)
+    cards = screen_view(storage, _chat(case, reply), config_root=None).conversation
+    assert q.question_id not in {
+        c.question_id for c in cards if isinstance(c, QuestionCard)
+    }, "not a third time"
+    (message,) = [c for c in cards if isinstance(c, MessageCard)]
+    assert message.suggestion is not None and not message.suggestion.used
+    assert [o.id for o in message.suggestion.others] == ["c1", "c1"], "the other answers stay one tap away"
+    assert message.suggestion.others[-1].label == "I don't know"
+    first = cards[0]
+    assert isinstance(first, FirstLookCard) and first.questions_count == 2, "still an open question"
+    # answered: the question card is back, with its answer, and the reply has nothing left to offer
+    answered = case.model_copy(
+        update={
+            "questions": tuple(
+                x.model_copy(update={"answer": "c0"}) if x.question_id == q.question_id else x
+                for x in case.questions
+            )
+        }
+    )
+    after = screen_view(storage, _chat(answered, reply), config_root=None).conversation
+    card = next(c for c in after if isinstance(c, QuestionCard) and c.question_id == q.question_id)
+    assert card.answer == "c0"
+    (done,) = [c for c in after if isinstance(c, MessageCard)]
+    assert done.suggestion is not None and done.suggestion.used and done.suggestion.others == ()
+
+
+def test_only_the_newest_suggestion_for_a_question_offers_the_other_answers(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("question", storage, world)
+    case = screen.case
+    q = next(q for q in case.questions if q.code == "UNKNOWN_BOOLEAN")
+    at = case.updated_at + timedelta(minutes=5)
+    old = _reply_with_suggestion(case, q, at)
+    new = _reply_with_suggestion(case, q, at + timedelta(minutes=1), "Changed my mind: haa is yes.")
+    cards = screen_view(storage, _chat(case, old, new), config_root=None).conversation
+    first, second = [c for c in cards if isinstance(c, MessageCard)]
+    assert first.suggestion is not None and first.suggestion.others == ()
+    assert second.suggestion is not None and second.suggestion.others

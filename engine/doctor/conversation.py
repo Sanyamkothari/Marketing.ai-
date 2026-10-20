@@ -20,9 +20,12 @@ Every card has a `type`:
 
 Order: the first look, then everything in the order it happened (a change a chat reply made follows that reply),
 the goals or the fit after the first batch, and the ready card last. A change that is in the plan is a change card
-with Undo the moment it is made, also when it needs its own yes (the ready card then repeats it as a checkbox, marked
-`shown`). A change still waiting for its own yes, and a stop, are not cards of their own: they are inside the ready
-card, as the checkboxes of the one approval. What was said about a file before an approved join or stack made it into
+with Undo the moment it is made, also when it needs its own yes (the ready card then says it is agreed already, marked
+`shown`: the one click of Approve and start records the yes). A change still waiting for its own yes, and a stop, are not cards of their own: they are inside the ready
+card, as the checkboxes of the one approval. Each thing is said once: the training time is the ready card's speeds (the
+question about it stays in the plan view), an answer is told on its question, an answer the agent suggested is
+offered in its reply (the question's own card waits until it is answered), and the number of changes is one number
+(`plan_change_count`) in the first look, the checklist and the approval sentence. What was said about a file before an approved join or stack made it into
 one table is not drawn again beside the table's own cards; the join itself stays.
 
 Nothing here writes, and nothing here holds a cell value: titles, counts and sentences the rules or the AI wrote
@@ -45,7 +48,13 @@ from engine.doctor.case import Case, CaseItem, CaseQuestion, TimelineEvent, Time
 from engine.doctor.goal_names import goal_display_name
 from engine.doctor.plan_check import open_stops, plan_digest
 from engine.doctor.protocol import REQUEST_CODES
-from engine.doctor.visit import active_section, open_blocking
+from engine.doctor.visit import (
+    CARRIED_KINDS,
+    COMBINE_KINDS,
+    active_section,
+    open_blocking,
+    plan_change_count,
+)
 
 if TYPE_CHECKING:
     from engine.doctor.screen import CaseScreenView
@@ -75,6 +84,8 @@ GOALS_SHOWN: Final[int] = 3
 """Goal cards drawn at most; the rest are counted (`more_count`)."""
 _GOAL_STATUS_ORDER: Final[dict[str, int]] = {"ready": 0, "check": 1, "too_small": 2, "missing": 3}
 _REQUEST_CODES: Final[frozenset[str]] = frozenset(REQUEST_CODES.values())
+_FOLDED_CODES: Final[frozenset[str]] = frozenset({"TRAINING_BUDGET"})
+"""Questions the chat does not ask: a default the ready card's speeds change (the plan view still asks them)."""
 _LAST: Final[datetime] = datetime.max.replace(tzinfo=UTC)
 
 
@@ -103,7 +114,7 @@ class FirstLookCard(StrictBase):
     rows: int | None = Field(default=None, description="Rows of all the files together, when known.")
     files: tuple[FirstLookFile, ...] = ()
     fixes_count: int = Field(
-        description="Fixes made on the working copy (changes ticked, by the rules or the agent)."
+        description="Changes in the plan, made on the working copy (the number the approval sentence says)."
     )
     questions_count: int = Field(description="Questions still waiting for the person.")
     sentence: str = Field(description="The same, in one plain paragraph.")
@@ -204,6 +215,11 @@ class MessageSuggestion(StrictBase):
     label: str
     question: str = Field(default="", description="The question it answers, in its own words.")
     used: bool = Field(default=False, description="The question is answered by now.")
+    others: tuple[ChatOption, ...] = Field(
+        default=(),
+        description="The question's other answers, while this suggestion is the live one for an open question: its "
+        "own card waits, so the person can still pick another answer here.",
+    )
 
 
 class MessageCard(StrictBase):
@@ -238,6 +254,10 @@ class ReadyConfirmation(StrictBase):
     separate: bool = False
     shown: bool = Field(
         default=False, description="The change is in the conversation already, as a card with Undo."
+    )
+    answered: bool = Field(
+        default=False,
+        description="The person's own answer to a question made this change: it is told on that question, agreed.",
     )
 
 
@@ -327,12 +347,6 @@ def _counts(item: CaseItem, step: dict[str, Any] | None) -> str:
 
 def _in_plan(item: CaseItem | None) -> bool:
     return item is not None and item.state is ProposalState.ACCEPTED
-
-
-_COMBINES: Final[frozenset[str]] = frozenset({"build_dataset", "stack_files"})
-"""The kinds of the approved join and stack (`engine.doctor.combine_run.JOIN_KIND`, `STACK_KIND`)."""
-_CARRIED: Final[frozenset[str]] = frozenset({"outcome_column", "as_of_column", "consent_column"})
-"""The decisions on what the data means; they stay with the case when a join or stack makes its files one table."""
 
 
 def _is_check(item: CaseItem) -> bool:
@@ -493,7 +507,11 @@ def _hold(case: Case, view: CaseScreenView) -> str:
 
 
 def _ready(
-    case: Case, view: CaseScreenView, config_root: Path | None, drawn: Collection[str] = ()
+    case: Case,
+    view: CaseScreenView,
+    config_root: Path | None,
+    drawn: Collection[str] = (),
+    answered: Collection[str] = (),
 ) -> ReadyCard | None:
     verdict = view.verdict
     entries = tuple(view.approve_class)
@@ -509,6 +527,7 @@ def _ready(
             cannot_agree=a.cannot_agree,
             separate=a.separate,
             shown=a.item_id in drawn,
+            answered=a.item_id in answered,
         )
         for a in entries
         if not a.confirmed
@@ -583,7 +602,7 @@ def _first_look(case: Case, fixes: int, questions: int, timeline: Sequence[Timel
     )
     sentence = f"I looked at {_plural(len(files), 'file', 'files')}: {listed}."
     if fixes:
-        sentence += f" I made {_plural(fixes, 'fix', 'fixes')} on a copy. Your files stay as they are."
+        sentence += f" I made {_plural(fixes, 'change', 'changes')} on a copy. Your files stay as they are."
     else:
         sentence += " Your files stay as they are."
     if questions:
@@ -597,20 +616,44 @@ def _first_look(case: Case, fixes: int, questions: int, timeline: Sequence[Timel
     )
 
 
-def _message(case: Case, entry: Any) -> MessageCard:
+def _suggested(case: Case, entry: Any) -> tuple[CaseQuestion, Any] | None:
+    """The question an agent reply suggests an answer for, and the suggestion, when both are still in the case."""
+    wanted = getattr(entry, "suggestion", None)
+    if wanted is None:
+        return None
+    question = next((q for q in case.questions if q.question_id == wanted.question_id), None)
+    if question is None or not any(o.option_id == wanted.option_id for o in question.options):
+        return None
+    return question, wanted
+
+
+def _message(case: Case, entry: Any, *, live: bool = False) -> MessageCard:
+    """A chat message. `live`: the newest suggestion for a question nobody has answered; the question's other answers
+    are offered with it, since its own card waits until the question is answered."""
     titles = {i.item_id: i.title or i.kind for i in case.items}
     suggestion: MessageSuggestion | None = None
-    wanted = getattr(entry, "suggestion", None)
-    if wanted is not None:
-        question = next((q for q in case.questions if q.question_id == wanted.question_id), None)
-        if question is not None and any(o.option_id == wanted.option_id for o in question.options):
-            suggestion = MessageSuggestion(
-                question_id=question.question_id,
-                option_id=wanted.option_id,
-                label=wanted.label,
-                question=question.text,
-                used=question.answer is not None,
-            )
+    found = _suggested(case, entry)
+    if found is not None:
+        question, wanted = found
+        others: tuple[ChatOption, ...] = ()
+        if live and question.answer is None:
+            dont_know, own_id = _dont_know(question)
+            chips = [
+                _option(o, question)
+                for o in question.options
+                if o.option_id not in {own_id, wanted.option_id}
+            ]
+            if dont_know is not None and dont_know.id != wanted.option_id:
+                chips.append(dont_know)
+            others = tuple(chips)
+        suggestion = MessageSuggestion(
+            question_id=question.question_id,
+            option_id=wanted.option_id,
+            label=wanted.label,
+            question=question.text,
+            used=question.answer is not None,
+            others=others,
+        )
     return MessageCard(
         role=entry.role,
         text=entry.text,
@@ -650,7 +693,7 @@ def build_conversation(
     items = tuple(
         i
         for i in items
-        if i.upload_id is None or i.upload_id in here or i.kind in _COMBINES or i.kind in _CARRIED
+        if i.upload_id is None or i.upload_id in here or i.kind in COMBINE_KINDS or i.kind in CARRIED_KINDS
     )
     questions = tuple(q for q in questions if q.upload_id is None or q.upload_id in here)
     steps = {
@@ -710,8 +753,17 @@ def build_conversation(
             add(messages[placed[item.item_id]][1].at, 2, card)
         else:
             add(item.proposed_at, 2, card)
-    for _, entry in messages:
-        add(entry.at, 1, _message(case, entry))
+    # The newest suggestion for a question nobody has answered is offered in its reply, with the other answers; the
+    # question's own card waits until it is answered (the same thing is not drawn twice).
+    newest: dict[str, int] = {}
+    for index, entry in messages:
+        offered = _suggested(case, entry)
+        if offered is not None and offered[0].answer is None:
+            newest[offered[0].question_id] = index
+    for index, entry in messages:
+        offered = _suggested(case, entry)
+        live = offered is not None and newest.get(offered[0].question_id) == index
+        add(entry.at, 1, _message(case, entry, live=live))
 
     def said(question: CaseQuestion) -> str:
         prefix = f"{question.question_id}:"
@@ -720,9 +772,13 @@ def build_conversation(
                 return _counts(item, steps.get(item.item_id))
         return ""
 
-    shown_questions = [q for q in questions if q.code not in _REQUEST_CODES]
+    # How long training may take is the ready card's speeds (one place, one set of minutes); the question about it
+    # is kept in the plan view ("See details").
+    shown_questions = [q for q in questions if q.code not in _REQUEST_CODES | _FOLDED_CODES]
     open_questions = [q for q in shown_questions if q.answer is None]
     for q in shown_questions:
+        if q.answer is None and q.question_id in newest:
+            continue
         add(in_reply(asked_at.get(q.question_id, case.created_at)), 3, _question(q, said(q)))
     goal_ids = (view.goal_id,) if view.goal_id else tuple(view.missing_for[:4])
     for q in questions:
@@ -752,9 +808,11 @@ def build_conversation(
     elif (goals := _goals(case)) is not None:
         add(base_end, 6, goals)
 
-    fixes = sum(1 for c in changes if c.state == "accepted")
-    add(case.created_at, 0, _first_look(case, fixes, len(open_questions), timeline))
-    ready = _ready(case, view, config_root, {c.item_id for c in changes})
+    # One count of changes everywhere: the plan's own (what the approval sentence says), not the cards alone.
+    add(case.created_at, 0, _first_look(case, plan_change_count(case), len(open_questions), timeline))
+    # Shown: a card with Undo. Answered: the person's own answer made it, and it is told on that question.
+    answered = {i for i, item in made.items() if item.state is ProposalState.ACCEPTED}
+    ready = _ready(case, view, config_root, {c.item_id for c in changes}, answered)
     if ready is not None:
         add(_LAST, 9, ready)
     found.sort(key=lambda entry: entry[:3])
