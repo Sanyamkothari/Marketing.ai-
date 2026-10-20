@@ -406,22 +406,29 @@ function stopRulesCard(brief) {
     ],
     level: 2,
     className: "plan-stops",
+    // The rows are grouped by what happens, so "Pauses the goal" is said once, not on every row.
     body: rules.length
-      ? el(
-          "ul",
-          { class: "rule-list stop-list" },
-          rules.map((r) => {
-            const [watch, then] = stopRuleShort(r);
-            return el("li", { class: "rule stop" }, described(watch, stopRuleWords(r), { class: "stop-watch" }), el("span", { class: "stop-then" }, then));
-          }),
-        )
+      ? ["pause_goal", "pause_channel"].map((action) => {
+          const mine = rules.filter((r) => (r.action === "pause_channel" ? "pause_channel" : "pause_goal") === action);
+          if (!mine.length) return null;
+          return el(
+            "div",
+            { class: "stop-group" },
+            el("p", { class: "stop-then" }, stopRuleShort(mine[0])[1]),
+            el(
+              "ul",
+              { class: "rule-list stop-list" },
+              mine.map((r) => el("li", { class: "rule stop" }, described(stopRuleShort(r)[0], stopRuleWords(r), { class: "stop-watch" }))),
+            ),
+          );
+        })
       : el("p", {}, "No automatic pauses are set for this plan."),
   });
 }
 
 /** The product test's method and source, said in its description (a description cannot hold a link). */
 const PRODUCT_TEST_ABOUT =
-  "Tested on a public real shop's order history (the UCI Online Retail data, 2010 to 2011): it learned from about nine months of orders, then was checked on the next 90 days, on the 1,858 customers who went on to buy something new to them. Nobody was sent a message. Your own results will differ; Proof shows your real numbers. Source: " +
+  "A fact about Autonomy, not a result from your shop. Tested on a public real shop's order history (the UCI Online Retail data, 2010 to 2011): it learned from about nine months of orders, then was checked on the next 90 days, on the 1,858 customers who went on to buy something new to them. Nobody was sent a message. Your own results will differ; Proof shows your real numbers. Source: " +
   `${CATALOG_DOC} (Recommendations, Evaluation).`;
 
 /** Products it may suggest: what this shop's data allows, and the product test, labelled as a fact about Autonomy. */
@@ -447,7 +454,7 @@ function productsCard(data) {
       el(
         "aside",
         { class: "product-fact", "aria-label": "How we tested this: a fact about Autonomy, not about your shop" },
-        el("p", { class: "product-fact-label" }, described("How we tested this", PRODUCT_TEST_ABOUT), el("span", { class: "product-fact-tag" }, "A fact about Autonomy, not a result from your shop.")),
+        el("p", { class: "product-fact-label" }, described("How we tested this", PRODUCT_TEST_ABOUT), el("span", { class: "product-fact-tag" }, "About Autonomy, not your shop.")),
         el("p", {}, "34.7% bought one of its 5 suggestions, against 22.0% for the shop's 5 best-sellers: about 58% more.", source ? [" ", source] : null),
       ),
     ],
@@ -486,6 +493,27 @@ function pictureWords(item) {
   if (urls.length) return humanize(item.format);
   if (IMAGE_FORMATS.has(item.format)) return described("None attached yet", "This message has room for a picture, but none is attached yet.");
   return "Text only";
+}
+
+/**
+ * True when the editor passed a message on every one of its five checks, from the plan facts' checklist. Those
+ * messages sit together under ONE "Checked by the editor" line instead of each repeating it; a message with a check
+ * that failed or was not run keeps its own line, so whatever needs a look is said on the message itself.
+ */
+export function passedEveryCheck(review, hasFacts) {
+  if (!hasFacts || !review || review.passed !== true || !review.reviewed_by) return false;
+  const byName = new Map((review.checks || []).map((c) => [c.check, c]));
+  return CHECKS.every(({ check }) => Boolean(byName.get(check) && byName.get(check).passed === true));
+}
+
+/**
+ * The description of the group's "Checked by the editor" line: the five checks, said once for every message under
+ * it. The unsubscribe check passes as not needed on channels other than email, so that is said when one is there.
+ */
+export function groupChecklist(items) {
+  const others = [...new Set(items.filter((c) => c.channel !== "email").map((c) => channelName(c.channel)))];
+  const names = CHECKS.map(({ check, words }) => (check === "unsubscribe" && others.length ? `${words} (not needed on ${others.join(" or ")})` : words));
+  return `The strict editor passed each of these messages on every check: ${names.join(", ")}.`;
 }
 
 /**
@@ -548,8 +576,15 @@ function rawNotes(item, review) {
   return el("details", { class: "editor-notes" }, el("summary", { class: "small" }, "Editor's notes"), el("ul", { class: "plain-list small muted" }, notes.map((n) => el("li", {}, n))));
 }
 
-function contentCard(ctx, item, review, hasFacts, offers, onChange) {
-  const article = el("article", { class: "message", "aria-label": `${channelName(item.channel)} message, ${humanize(item.theme)}` });
+/** What the quiet "turn off" icon on a ready message does, said on hover and focus (and as its label for touch). */
+const TURN_OFF_ABOUT = "Don't use this one. Optional: a message that passed the editor needs no approval one by one.";
+
+/**
+ * One message. `grouped` is true for a message under the group's "Checked by the editor" line: it does not repeat
+ * that line, nor a "Ready to send" pill (the group and the counts say it), and its one choice is a quiet icon.
+ */
+function contentCard(ctx, item, review, hasFacts, offers, onChange, grouped = false) {
+  const article = el("article", { class: "message", "data-content-id": item.content_id, "aria-label": `${channelName(item.channel)} message, ${humanize(item.theme)}` });
 
   const set = async (next, buttons) => {
     for (const b of buttons) b.disabled = true;
@@ -574,6 +609,15 @@ function contentCard(ctx, item, review, hasFacts, offers, onChange) {
     const reject = button(item.status === "approved" ? "Don't use this one" : "Reject", null, { kind: "ghost", size: "sm", ariaLabel: `Reject message ${item.content_id}` });
     approve.addEventListener("click", () => set("approved", [approve, reject]));
     reject.addEventListener("click", () => set("rejected", [approve, reject]));
+    if (item.status === "approved" && grouped) {
+      const off = el(
+        "button",
+        { type: "button", class: "btn btn-ghost btn-sm btn-icon message-off", "aria-label": `Don't use this one: message ${item.content_id}` },
+        el("span", { class: "icon-off", "aria-hidden": "true" }),
+      );
+      off.addEventListener("click", () => set("rejected", [off]));
+      return el("div", { class: "message-actions" }, withInfo(off, TURN_OFF_ABOUT));
+    }
     if (item.status === "approved") return el("div", { class: "message-actions" }, withInfo(reject, "Optional. A message that passed the editor needs no approval one by one."));
     if (item.status === "rejected") return el("div", { class: "message-actions" }, approve);
     return el("div", { class: "message-actions" }, approve, reject);
@@ -584,13 +628,22 @@ function contentCard(ctx, item, review, hasFacts, offers, onChange) {
     const offerLabel = offer ? offer.label : item.offer_id === "none" ? "No offer" : item.offer_id;
     const state = messageState(item, review);
     const tag = (name, value) => el("li", {}, el("span", { class: "visually-hidden" }, `${name}: `), value);
+    // Under the group's line a plain "Ready to send" is the default, so only a different state shows its pill.
+    const quiet = grouped && state.key === "ready" && state.tone === "good";
     article.setAttribute("data-state", state.key);
+    // A screen reader hears the state with the message's name, so a quiet card loses nothing.
+    article.setAttribute("aria-label", `${channelName(item.channel)} message, ${humanize(item.theme)}: ${state.label}`);
     clear(
       article,
       el(
         "div",
         { class: "message-main" },
-        el("div", { class: "message-head" }, el("span", { class: "message-channel" }, channelName(item.channel)), withInfo(pill(state.label, state.tone), state.about)),
+        el(
+          "div",
+          { class: "message-head" },
+          el("span", { class: "message-channel" }, channelName(item.channel)),
+          quiet ? null : withInfo(pill(state.label, state.tone), state.about),
+        ),
         mediaBlock(item),
         item.subject ? el("p", { class: "message-subject" }, slotted(item.subject)) : null,
         el("p", { class: "message-body" }, slotted(item.body)),
@@ -603,7 +656,7 @@ function contentCard(ctx, item, review, hasFacts, offers, onChange) {
           tag("Picture", pictureWords(item)),
           item.template_name ? el("li", { class: "label-template" }, el("span", { class: "muted" }, "WhatsApp template "), item.template_name) : null,
         ),
-        el("div", { class: "message-foot" }, editorLine(item, review, hasFacts, state), rawNotes(item, review)),
+        el("div", { class: "message-foot" }, grouped ? null : editorLine(item, review, hasFacts, state), rawNotes(item, review)),
       ),
       el("div", { class: "message-side" }, actions()),
     );
@@ -613,8 +666,11 @@ function contentCard(ctx, item, review, hasFacts, offers, onChange) {
   return article;
 }
 
-/** How many messages show before "Show all"; only ready or turned-off messages fold, so one that needs a look always shows. */
-const FIRST_MESSAGES = 4;
+/**
+ * How many of the quiet messages (those under the editor's line, and the ones turned off) show before "Show all".
+ * A message that needs a look (waiting for you, failed the editor, a check not run) always shows, first.
+ */
+const FIRST_MESSAGES = 2;
 
 function contentSection(ctx, goal, brief, content, facts) {
   const offers = (brief && brief.envelope && brief.envelope.offers) || [];
@@ -626,21 +682,37 @@ function contentSection(ctx, goal, brief, content, facts) {
   const counts = withInfo(countsText, [summary, "Only messages that are ready to send ever go out."].filter(Boolean).join(" "));
   const items = [...content];
   let expanded = items.length <= FIRST_MESSAGES + 3;
-  let cards = [];
   const more = el("div", { class: "message-more" });
 
-  /** Show the first few and every message that needs a look; the rest fold behind one "Show all" button. */
+  // Three runs, in this order: the messages that need a look, each with its own editor line; the ones the editor
+  // passed on every check, under ONE "Checked by the editor" line; then the rest that are turned off. Membership
+  // follows the editor's verdict, which a person's choice does not change, so a card never moves when clicked.
+  const index = items.map((item, i) => i);
+  const grouped = new Set(index.filter((i) => passedEveryCheck(reviewOf(items[i]), hasFacts)));
+  // A message that needs a look never folds, even one under the group's line (a draft the editor passed is still
+  // waiting for you), and it leads its run. Read once, when the screen opens, so a click never hides a card.
+  const needsLook = new Set(index.filter((i) => !["ready", "off"].includes(messageState(items[i], reviewOf(items[i])).key)));
+  const look = index.filter((i) => !grouped.has(i) && needsLook.has(i));
+  const rest = index.filter((i) => !grouped.has(i) && !needsLook.has(i));
+  const inGroup = index.filter((i) => grouped.has(i));
+  const order = [...look, ...inGroup.filter((i) => needsLook.has(i)), ...inGroup.filter((i) => !needsLook.has(i)), ...rest];
+  const foldable = (i) => !needsLook.has(i);
+  const cards = new Map();
+
+  /** Show every message that needs a look and the first few quiet ones; the rest fold behind one "Show all" button. */
   const fold = () => {
     let hidden = 0;
-    cards.forEach((node, i) => {
-      const key = messageState(items[i], reviewOf(items[i])).key;
-      const show = expanded || i < FIRST_MESSAGES || !(key === "ready" || key === "off");
+    let quiet = 0;
+    for (const i of order) {
+      const node = cards.get(i);
+      const show = expanded || !foldable(i) || quiet < FIRST_MESSAGES;
+      if (foldable(i)) quiet += 1;
       if (show) node.removeAttribute("hidden");
       else {
         node.setAttribute("hidden", "");
         hidden += 1;
       }
-    });
+    }
     clear(
       more,
       hidden
@@ -667,14 +739,31 @@ function contentSection(ctx, goal, brief, content, facts) {
     countsText.textContent = bits.join(" · ");
   };
   recount();
-  cards = items.map((item, i) =>
-    contentCard(ctx, item, reviewOf(item), hasFacts, offers, (next) => {
-      items[i] = next;
-      recount();
-      fold();
-    }),
-  );
+  for (const i of order) {
+    cards.set(
+      i,
+      contentCard(ctx, items[i], reviewOf(items[i]), hasFacts, offers, (next) => {
+        items[i] = next;
+        recount();
+        fold();
+      }, grouped.has(i)),
+    );
+  }
   fold();
+  const groupItems = order.filter((i) => grouped.has(i));
+  const group = groupItems.length
+    ? el(
+        "div",
+        { class: "message-group", role: "group", "aria-labelledby": "plan-checked" },
+        el(
+          "p",
+          { class: "message-group-head small", id: "plan-checked" },
+          el("span", { class: "check-mark check-pass-mark", "aria-hidden": "true" }, "✓"),
+          described("Checked by the editor", groupChecklist(groupItems.map((i) => items[i]))),
+        ),
+        groupItems.map((i) => cards.get(i)),
+      )
+    : null;
   return el(
     "section",
     { class: "plan-library", "aria-labelledby": "library" },
@@ -702,7 +791,9 @@ function contentSection(ctx, goal, brief, content, facts) {
           counts,
         )
       : null,
-    items.length ? el("div", { class: "message-list" }, cards, more) : emptyState("No messages yet", "The copywriter is still writing them."),
+    items.length
+      ? el("div", { class: "message-list" }, look.map((i) => cards.get(i)), group, rest.map((i) => cards.get(i)), more)
+      : emptyState("No messages yet", "The copywriter is still writing them."),
   );
 }
 

@@ -686,6 +686,31 @@
 .lv-brief-title {
   color: var(--text);
 }
+/* One figure per line, set under its label so every row has the same rhythm in the narrow side column. The ": "
+   between them stays in the text (it reads "Label: figure" to a screen reader and in a copied line) but is not
+   drawn. The figure keeps its range on its own line, never broken inside "$1,846 ($697 to $3,115)". */
+.lv-brief-sep {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.lv-brief-fig,
+.lv-brief-fig.num {
+  display: block;
+  margin-top: 2px;
+  text-align: left;
+  color: var(--text);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.lv-brief-fig.lv-brief-unsure {
+  color: var(--muted);
+  font-weight: 400;
+}
 
 /* ---- the customer panel ------------------------------------------------------------------------------ */
 

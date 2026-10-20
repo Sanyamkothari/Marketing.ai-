@@ -161,3 +161,25 @@ Changed since the round before, and visible in these shots:
 
 Still visible: Operator lists all 200 decisions (the shots stop after two viewport heights), the demo has no
 product names, and its pictures point at a host that never resolves.
+
+## Retaken for the plan-proof polish (20 Oct 2026)
+
+All 22 shots were retaken after the plan-proof polish and the Live work done alongside it (see "The plan-proof
+polish" in section 10 of [DESIGN.md](../DESIGN.md)). None raised a console error or stuck out past the right edge,
+and the folder is 1.3 MB after the palette step.
+
+Changed since the round before, and visible in these shots:
+
+- **Plan**: the ready messages sit under one "✓ Checked by the editor" line, each with a quiet circle-slash icon
+  ("Don't use this one" is its description) instead of its own button, line and "Ready to send" pill; two show before
+  "Show all 40 messages". "When it pauses itself" says "Pauses the goal" and "Pauses that channel" once each.
+- **Proof**: the forecast card's sentence is a whole one ("Its forecast covers the 14 days after each contact it
+  decided on since …"). The too-early state (the repeat-purchase goal, not shot here) shows the groups so far, the
+  days each contact is given and the day the first ones count.
+- **Operator, phone**: "Showing 50 of 200 fetched", with "Show all 200" under the 50th row (below the shot).
+- **Getting started and Goal**: shorter, with no "Step n of 5", no links on done steps, and the form's hints in
+  their labels' (i).
+
+Still visible: Live says "The next check was due 20 Oct, 09:00 and has not run yet." in these shots: the demo's
+latest decisions are from the 19 Oct sweep, and the API's next run time (20 Oct, 09:00) had passed when they were
+taken (17:25 UTC).

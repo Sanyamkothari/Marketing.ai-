@@ -201,7 +201,10 @@ const byClass = (root, cls) => root.querySelectorAll(`.${cls}`);
 const articles = (root) => root.querySelectorAll("article");
 const cardFor = (root, contentId) =>
   articles(root).find((a) => a.querySelectorAll("button").some((b) => (b.getAttribute("aria-label") || "").endsWith(` ${contentId}`))) || null;
-const cardByIndex = (root, i) => articles(root)[i];
+/** A message's card by its content id (the cards that need a look come first, so the order is not the API's). */
+const cardById = (root, contentId) => articles(root).find((a) => a.getAttribute("data-content-id") === contentId) || null;
+/** The "Checked by the editor" group a card sits in, or null for a card that carries its own editor line. */
+const groupOf = (root, art) => byClass(root, "message-group").find((g) => g.querySelectorAll("article").includes(art)) || null;
 /** What a person sees without opening a description: the text with every `role="tooltip"` box left out. */
 const visibleText = (node) =>
   node.childNodes.map((n) => (n instanceof Element ? (n.getAttribute("role") === "tooltip" || n.hidden ? "" : visibleText(n)) : n.textContent)).join("");
@@ -264,23 +267,28 @@ test("Plan (sample data): the editor's checklist on every message, and nothing g
   );
   assert.ok(text.includes("turning one off is optional"), "the cards do not read as more approvals");
   const reviews = new Map(facts.content.map((r) => [r.content_id, r]));
-  detail.content.forEach((item, i) => {
-    const art = cardByIndex(root, i);
+  detail.content.forEach((item) => {
+    const art = cardById(root, item.content_id);
     const review = reviews.get(item.content_id);
     if (review.passed === null) {
       assert.ok(art.textContent.includes("Not checked by the editor yet"), item.content_id);
       return;
     }
-    assert.ok(art.textContent.includes("Checked by the editor"), item.content_id);
-    for (const c of plan.CHECKS) assert.ok(art.textContent.includes(c.words), `${item.content_id} ${c.check}`);
+    // A message the editor passed on every check sits under the group's ONE "Checked by the editor" line, whose
+    // description holds the checklist; any other reviewed message carries its own line and checklist.
+    const group = groupOf(root, art);
+    assert.equal(Boolean(group), plan.passedEveryCheck(review, true), `${item.content_id} grouped only when every check passed`);
+    const head = group ? byClass(group, "message-group-head")[0] : art;
+    assert.ok(head.textContent.includes("Checked by the editor"), item.content_id);
+    for (const c of plan.CHECKS) assert.ok(head.textContent.includes(c.words), `${item.content_id} ${c.check}`);
+    if (group) assert.ok(!visibleText(art).includes("Checked by the editor"), `${item.content_id} does not repeat the group's line`);
     // the raw notes are kept, folded under "Editor's notes"
     const fold = art.querySelector("details");
     assert.ok(fold && fold.textContent.includes("Editor's notes") && fold.textContent.includes(item.critic_notes[0]));
   });
   // the message the editor failed: the failed check with its reason, and no way to approve it
   const failed = facts.content.find((r) => r.passed === false);
-  const i = detail.content.findIndex((c) => c.content_id === failed.content_id);
-  const art = cardByIndex(root, i);
+  const art = cardById(root, failed.content_id);
   assert.ok(art.textContent.includes("Failed the editor: never sent"));
   const bad = failed.checks.find((c) => c.passed === false);
   assert.ok(art.textContent.includes(bad.note));
@@ -386,6 +394,32 @@ test("Plan: a picture is shown with alt text when a message has one, and said to
   assert.match(img.getAttribute("alt"), /^Picture sent with the Email message about /);
   assert.ok(!second.querySelector("img"));
   assert.ok(second.textContent.includes("has room for a picture, but none is attached yet"));
+});
+
+test("Plan: a message the editor passed that still waits for you is never folded away, and leads the group", async () => {
+  const detail = await sample("goal_detail.json");
+  const facts = await sample("plan.json");
+  const base = detail.content.find((c) => c.status === "approved");
+  const passed = facts.content.find((r) => r.passed === true);
+  // eight messages the editor passed on every check: seven ready, and the last one a draft waiting for you
+  const content = Array.from({ length: 8 }, (_, i) => ({ ...base, content_id: `cx_${i}`, status: i === 7 ? "draft" : "approved" }));
+  const reviews = content.map((c) => ({ ...passed, content_id: c.content_id }));
+  const { ctx } = makeCtx(
+    liveApi({ "GET /v2/health": HEALTH, "GET /v2/goals/goal_winback": { ...detail, content }, "GET /v2/goals/goal_winback/plan": { ...facts, content: reviews } }),
+    "goal_winback",
+  );
+  const root = C.el("div");
+  await plan.render(root, ctx);
+  const groups = byClass(root, "message-group");
+  assert.equal(groups.length, 1, "one group");
+  const inGroup = groups[0].querySelectorAll("article");
+  assert.equal(inGroup.length, 8, "every message passed on every check sits under the one line");
+  assert.equal(inGroup[0].getAttribute("data-content-id"), "cx_7", "the one waiting for you comes first");
+  assert.ok(!inGroup[0].hidden, "and it is never folded away");
+  assert.ok(visibleText(inGroup[0]).includes("Passed the editor, waiting for you"), "its own state still shows");
+  const shown = inGroup.filter((a) => !a.hidden).map((a) => a.getAttribute("data-content-id"));
+  assert.deepEqual(shown, ["cx_7", "cx_0", "cx_1"], "then the first two quiet ones");
+  assert.equal(byText(groups[0], "span", "Checked by the editor").length, 1, "the line is said once");
 });
 
 test("Plan on a simulated shop with no product names: says it cannot suggest one", async () => {

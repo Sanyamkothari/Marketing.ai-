@@ -173,8 +173,8 @@ def test_clean_llm_briefing_is_used_with_code_numbers() -> None:
     assert b.headline == "Steady progress against the holdout."
     titles = [s.title for s in b.sections]
     assert titles == [
-        "Money made against the holdout",
-        "Against the old way",
+        "Extra profit vs people we never contact",
+        "Against the simple rule",
         "Customer health",
         "What else we noticed",
     ]
@@ -214,7 +214,9 @@ def test_falls_back_to_template_when_the_retry_still_invents() -> None:
     assert result.source == "template" and len(llm.calls) == 2
     b = result.briefing
     assert "$9,999" not in b.headline and all("$9,999" not in s.body for s in b.sections)
-    assert b.headline == "The agent made an extra $1,235 in profit against the holdout."
+    assert b.headline == (
+        "It made an extra $1,235 in profit compared with people we never contact ($400 to $2,100)."
+    )
     assert "likely range $400 to $2,100" in b.sections[0].body
     _assert_every_number_backed(b)
 
@@ -241,8 +243,8 @@ def test_missing_section_is_a_problem() -> None:
 @pytest.mark.parametrize(
     ("profit", "headline", "phrase"),
     [
-        (Estimate(point=300.0, low=-200.0, high=900.0), "No clear profit difference", "which includes zero"),
-        (Estimate(point=-700.0, low=-1100.0, high=-250.0), "behind the holdout", "behind the customers"),
+        (Estimate(point=300.0, low=-200.0, high=900.0), "Not sure yet", "which includes zero"),
+        (Estimate(point=-700.0, low=-1100.0, high=-250.0), "less profit than the people", "$700 less profit"),
     ],
 )
 def test_template_states_direction_from_the_interval(profit: Estimate, headline: str, phrase: str) -> None:

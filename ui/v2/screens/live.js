@@ -1071,7 +1071,7 @@ export async function render(root, ctx) {
   // The learning notes: from /today, else the briefing's learning sections.
   const briefingValue = briefing.status === "fulfilled" ? briefing.value : null;
   const learned = (todayValue && todayValue.learned && todayValue.learned.length ? todayValue.learned : null) ||
-    (briefingValue?.sections || []).filter((s) => /learn/i.test(String(s.title || ""))).map((s) => s.body).filter(present);
+    (briefingValue?.sections || []).filter(isLearnedSection).map((s) => plainGroupWords(s.body)).filter(present);
   learnedSec.body.replaceChildren(...learnedView(learned));
 
   // The full (often weekly) briefing.
@@ -1083,8 +1083,8 @@ export async function render(root, ctx) {
     if (briefingValue) {
       briefingSec.setMeta(`${briefingValue.period === "weekly" ? "Weekly" : "Daily"} · ${day(briefingValue.as_of).replace(/ \d{4}$/, "")}`, tipLines([
         showHeadline ? null : plainGroupWords(briefingValue.headline),
-        showHeadline || !range ? null : `Range ${range}.`,
-        `As of ${when(briefingValue.as_of)}.`,
+        showHeadline || !range || String(plainGroupWords(briefingValue.headline) || "").includes(range) ? null : `Range ${range}.`,
+        `Figures as of ${when(briefingValue.as_of)}.`,
       ]));
     }
     briefingSec.body.replaceChildren(...briefingView(briefingValue, { showHeadline, currency }));
@@ -1278,20 +1278,95 @@ function learnedView(learned) {
   return [h("ul", { class: "list lv-learned" }, ...learned.map((t) => h("li", null, t)))];
 }
 
-// The briefing (often weekly): one line per section, whose words open on hover or tap. Its headline is visible only
-// when there is no Yesterday card: beside one it repeats Yesterday's counts or its extra profit, so it moves into the
-// meta's description (DESIGN.md section 6, "say each thing once").
+// The briefing (often weekly): one figure per line under the Analyst's labels ("Extra profit vs people we never
+// contact: $1,846 ($697 to $3,115)"), each section's sentences in the label's description. The API rebuilds these
+// figures from the proof and health it serves now (Services.current_briefing), so they match Proof and the "Extra
+// profit so far" tile. A section about what it learned is in its own card, so it is not repeated here. Its
+// headline is visible only when there is no Yesterday card: beside one it repeats Yesterday's counts or its extra
+// profit, so it moves into the meta's description (DESIGN.md section 6, "say each thing once").
 function briefingView(briefing, { showHeadline = true, currency = null } = {}) {
   if (!briefing) return [lvEmpty("No briefing yet. The first one arrives after the agent's first full day.")];
-  const secs = (briefing.sections || []).filter((sec) => present(sec.title) || present(sec.body));
+  const secs = (briefing.sections || [])
+    .filter((sec) => present(sec.title) || present(sec.body))
+    .filter((sec) => !isLearnedSection(sec));
   const range = headlineRange(briefing, currency);
+  const headline = plainGroupWords(briefing.headline);
+  const rangeShown = range && !String(headline || "").includes(range);
   return [
-    showHeadline && h("p", { class: "lv-headline" }, plainGroupWords(briefing.headline) || DASH),
-    showHeadline && range && h("p", { class: "kpi-range lv-headline-range" }, `Range ${range}`),
-    secs.length > 0 && h("ul", { class: "lv-brief-secs" }, ...secs.map((sec) =>
-      h("li", { class: "ap-brief-sec lv-brief-sec" },
-        explained(h("span", { class: "lv-brief-title" }, plainGroupWords(sec.title) || "More"), plainGroupWords(sec.body) || DASH)))),
+    showHeadline && h("p", { class: "lv-headline" }, headline || DASH),
+    showHeadline && rangeShown && h("p", { class: "kpi-range lv-headline-range" }, `Range ${range}`),
+    secs.length > 0 && h("ul", { class: "lv-brief-secs" }, ...secs.map((sec) => {
+      const kind = briefKind(sec);
+      const label = kind ? BRIEF_LABELS[kind] : plainGroupWords(sec.title) || "More";
+      const figure = briefFigure(sec, currency);
+      return h("li", { class: `ap-brief-sec lv-brief-sec${kind ? ` lv-brief-${kind}` : ""}` },
+        explained(h("span", { class: "lv-brief-title" }, label), plainGroupWords(sec.body) || DASH),
+        figure && h("span", { class: "lv-brief-sep" }, ": "),
+        figure && h("span", { class: `lv-brief-fig num${/^Not sure yet/.test(figure) ? " lv-brief-unsure" : ""}` }, figure));
+    })),
   ].filter(Boolean);
+}
+
+/** The Analyst's measured sections, labelled the same on every briefing whatever its stored title says. */
+const BRIEF_LABELS = {
+  money: "Extra profit vs people we never contact",
+  baseline: "Against the simple rule",
+  health: "Customer health",
+};
+
+/** A "What it learned" section: shown in its own card, not as a briefing line. */
+export const isLearnedSection = (sec) => /learn/i.test(String(sec?.title || ""));
+
+/**
+ * Which of the Analyst's measured sections this is, by the numbers it always carries ("money", "baseline",
+ * "health"), or null for any other section (other facts, a hand-written section).
+ */
+export function briefKind(sec) {
+  const n = sec?.numbers || {};
+  const has = (k) => present(n[k]);
+  if (has("incremental_profit") || (has("agent_customers") && has("holdout_customers"))) return "money";
+  if (has("lift_per_customer") || has("baseline_customers")) return "baseline";
+  if (has("contacts_per_customer_week") || has("complaint_rate") || (has("alerts") && has("delivery_rate"))) return "health";
+  return null;
+}
+
+/** An estimate's range alone, "$697 to $3,115", in the precision `rangeParts` picks for all three. */
+const rangeOnly = (parts) => parts.range.replace(/^\(range /, "").replace(/\)$/, "");
+
+/**
+ * The one figure a briefing line shows, from the section's own numbers, never from its words. Money always comes
+ * with its range: "$1,846 ($697 to $3,115)", "+$4.26 a customer ($1.17 to $7.34)", "Not sure yet (-$200 to $900)"
+ * when the range includes zero. Health is "0.37 messages a week, 0% complaints". Null when there is nothing to show.
+ */
+export function briefFigure(sec, currency) {
+  const n = sec?.numbers || {};
+  const kind = briefKind(sec);
+  const fmt = (v) => money(v, currency);
+  const est = (key) => ({ point: n[key], low: n[`${key}_low`], high: n[`${key}_high`] });
+  const unsure = (e) => Number(e.low) <= 0 && Number(e.high) >= 0;
+  if (kind === "money") {
+    const e = est("incremental_profit");
+    const parts = rangeParts(e, fmt);
+    if (!parts) return "Not sure yet";
+    return unsure(e) ? `Not sure yet (${rangeOnly(parts)})` : `${parts.point} (${rangeOnly(parts)})`;
+  }
+  if (kind === "baseline") {
+    const e = est("lift_per_customer");
+    const parts = rangeParts(e, fmt);
+    if (!parts) return "Not sure yet";
+    if (unsure(e)) return `Not sure yet (${rangeOnly(parts)} a customer)`;
+    const sign = Number(e.point) > 0 ? "+" : "";
+    return `${sign}${parts.point} a customer (${rangeOnly(parts)})`;
+  }
+  if (kind === "health") {
+    const bits = [];
+    if (present(n.contacts_per_customer_week)) bits.push(`${num(n.contacts_per_customer_week, 2)} messages a week`);
+    if (present(n.complaint_rate)) bits.push(`${pct(n.complaint_rate)} complaints`);
+    // Only a critical alert earns a place on the line; the others are in the Inbox and the description.
+    if (Number(n.critical_alerts) > 0) bits.push(`${count(n.critical_alerts)} critical ${Number(n.critical_alerts) === 1 ? "alert" : "alerts"}`);
+    return bits.length ? bits.join(", ") : null;
+  }
+  return null;
 }
 
 /**

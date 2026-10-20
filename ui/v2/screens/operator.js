@@ -7,7 +7,7 @@
      - a customer lookup by id: state, decisions and events, as a table and as raw JSON. It sits above the
        long decisions list, so a phone reaches it without scrolling past 200 rows;
      - a decisions table with filters (customer, kind, group, channel, words in the reason) and the
-       raw JSON of any row. Each row shows the start of the reason (the part after "what it did", which the
+       raw JSON of any row. On a phone it draws the first 50 rows, with "Show all" for the rest. Each row shows the start of the reason (the part after "what it did", which the
        Action column already says); the whole reason is that cell's description (hover, focus or tap).
 
    It shows the API's own values (ids, probabilities, expected net, policy version) with no
@@ -40,6 +40,26 @@ import {
 
 const LIMITS = [50, 200, 500];
 const PREVIEW_WORDS = 6;
+
+/**
+ * On a narrow screen each decision folds into a two-line row of about six lines, so 200 of them is a very long
+ * scroll: the list draws the first 50 and a "Show all" control draws the rest. Filters still search everything
+ * fetched, and the customer lookup stays above the list.
+ */
+export const PHONE_ROWS = 50;
+const NARROW = "(max-width: 639px)";
+
+/** True on a phone-width window. Without `matchMedia` (tests, old browsers) it is the wide layout. */
+export function isNarrow(win = globalThis) {
+  try {
+    return Boolean(win && typeof win.matchMedia === "function" && win.matchMedia(NARROW).matches);
+  } catch {
+    return false;
+  }
+}
+
+/** How many of `total` matching rows to draw: all on a wide screen or once "Show all" was pressed, else 50. */
+export const rowsToShow = (total, narrow, showAll) => (narrow && !showAll ? Math.min(total, PHONE_ROWS) : total);
 
 /**
  * The start of a decision's reason for its table row. The API writes "what it did: why" ("Sent a quality
@@ -220,12 +240,15 @@ export async function render(root, ctx) {
   const decCount = h("span", { class: "card-meta tabular", "aria-live": "polite" });
   const decTable = h("div", { class: "op-out" });
   const decDetail = h("div", { class: "op-detail" });
-  grid.append(card("Decisions", "Customer id and How many are sent to the API; the other filters narrow what came back. Hover or tap a reason to read all of it.", decCount, decForm, decTable, decDetail));
+  const decMore = h("div", { class: "op-more" });
+  grid.append(card("Decisions", "Customer id and How many are sent to the API; the other filters narrow what came back. Hover or tap a reason to read all of it.", decCount, decForm, decTable, decMore, decDetail));
   page.append(announcer);
 
   let bundle = null;
   let goalId = present(ctx.goalId) ? ctx.goalId : null;
   let decisions = [];
+  const narrow = isNarrow();
+  let showAll = false;
 
   const brief = () => bundle?.brief || null;
   const currency = () => bundle?.goal?.currency;
@@ -275,8 +298,18 @@ export async function render(root, ctx) {
   }
 
   function paintDecisions() {
-    const rows = filterDecisions(decisions, { kind: kindSel.value, group: groupSel.value, channel: channelSel.value, text: textFilter.value });
+    const matching = filterDecisions(decisions, { kind: kindSel.value, group: groupSel.value, channel: channelSel.value, text: textFilter.value });
+    const rows = matching.slice(0, rowsToShow(matching.length, narrow, showAll));
     decCount.textContent = `Showing ${count(rows.length)} of ${count(decisions.length)} fetched`;
+    decMore.replaceChildren();
+    if (rows.length < matching.length) {
+      const all = h("button", { type: "button", class: "btn btn-secondary btn-sm" }, `Show all ${count(matching.length)}`);
+      all.addEventListener("click", () => {
+        showAll = true;
+        paintDecisions();
+      });
+      decMore.append(all);
+    }
     if (!rows.length) {
       decTable.replaceChildren(emptyBox("No decisions match."));
       return;
@@ -320,7 +353,9 @@ export async function render(root, ctx) {
 
   async function loadDecisions() {
     decTable.replaceChildren(loadingBlock(6));
+    decMore.replaceChildren();
     decDetail.replaceChildren();
+    showAll = false;
     const query = { limit: Number(limitSel.value) };
     if (present(goalId)) query.goal_id = goalId;
     if (custFilter.value.trim()) query.customer_id = custFilter.value.trim();

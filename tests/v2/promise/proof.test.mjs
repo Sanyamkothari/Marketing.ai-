@@ -252,6 +252,27 @@ test("no estimate is 'Too early to tell' with no number made up", async () => {
   assert.ok(text.includes("once there is enough data"));
 });
 
+test("too early: the result card shows the groups, the days each contact is given and when the first count, once", async () => {
+  const thin = { ...mock("proof.json"), incremental_profit: null, incremental_revenue: null, lift_vs_baseline: null, roi: null, as_of: "2026-10-20T06:00:00Z" };
+  const recent = { ...mock("expected.json"), since: "2026-10-10T09:00:00Z" };
+  const { root, text } = await draw({ proof: thin, expected: recent });
+  const strip = byClass(root, "pf-early-strip")[0];
+  assert.ok(strip, "the strip is there");
+  const shown = visible(strip);
+  for (const n of [thin.agent_n, thin.baseline_n, thin.holdout_n]) assert.ok(shown.includes(n.toLocaleString("en-US")), String(n));
+  assert.ok(shown.includes("14 days") && shown.includes("First from 24 Oct 2026"), shown);
+  assert.ok(tipFor(root, "Each contact counts after").includes("the first contacts can count from 24 Oct 2026"));
+  // the folded method card leaves its counts out, so they are said once
+  assert.equal(byClass(root, "pf-method-body")[0].textContent.includes("The agent decides"), false);
+  assert.ok(noJunk(text));
+  // a first day already past is not shown as something to wait for
+  const old = await draw({ proof: thin });
+  assert.ok(!visible(byClass(old.root, "pf-early-strip")[0]).includes("First from"));
+  // in Shadow nothing is sent, so nothing will count: no days to wait for
+  const shadow = await draw({ goal: { autonomy: "shadow" }, proof: thin, expected: recent });
+  assert.ok(!visible(byClass(shadow.root, "pf-early-strip")[0]).includes("Each contact counts after"));
+});
+
 test("the simple rule gets its own verdict", async () => {
   assert.ok((await draw()).text.includes("Beats the simple rule"));
   const unsure = { ...mock("proof.json"), lift_vs_baseline: { point: 0.1, low: -0.2, high: 0.4 } };
@@ -282,7 +303,7 @@ test("Shadow shows its own forecast, labelled as a forecast, straight after the 
   const { root, text } = await draw({ goal: { autonomy: "shadow" }, proof: null });
   order(text, "Too early to tell", "In Shadow mode it sends nothing", "What it expects to earn", "Its own forecast, not proof", "$3,900", "$1,500 to $6,300", "Not ready for Autopilot yet");
   assert.ok(text.includes("nothing was sent"));
-  assert.match(text, /over the 14 days after each contact/i);
+  assert.match(text, /Its forecast covers the 14 days after each contact it would have made since 1 Oct 2026; nothing was sent/);
   assert.ok(tipFor(root, "Contacts it would make").includes("Of 4,620 contacts, 4,410 carry a forecast"));
   assert.ok(tipFor(root, "Expected extra profit").includes("not proof"));
   assert.ok(text.includes("switch to Approve each batch with a small budget"));

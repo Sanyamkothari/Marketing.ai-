@@ -176,24 +176,28 @@ At most 6 sizes on a screen. Weight 700 does one job per screen at most.
 
 **Word budget** (visible words, `document.body.innerText` with hidden elements left out, demo API, 1440 wide,
 light; the top bar and nav are about 50 of them, and each (i) glyph counts as one). "Before" was measured on 20 Oct
-2026 before the declutter pass, "After" when it finished; the target was about half. A phone (390) gives the same
-counts within a few words, and dark the same as light.
+2026 before the declutter pass, "After" when it finished (the target was about half), and "Polish" after the
+plan-proof polish that cut the four screens still over budget. A phone (390) gives the same counts within a few
+words, except Operator, and dark the same as light.
 
-| Route | Before | Target | After | Change |
-|---|---:|---:|---:|---:|
-| `#/start` Getting started | 413 | 200 | 223 | −46% |
-| `#/connect` | 661 | 330 | 256 | −61% |
-| `#/goal` | 311 | 160 | 185 | −41% |
-| `#/plan/<id>` (win-back, Autopilot) | 1,705 | 850 | 593 | −65% |
-| `#/live/<id>` (win-back, Autopilot) | 1,843 | 900 | 475 | −74% |
-| `#/live/<id>` (repeat purchase, a batch waiting) | 1,387 | 700 | 407 | −71% |
-| `#/proof/<id>` | 664 | 330 | 212 | −68% |
-| `#/operator` (lists all 200 decisions) | 7,994 | 4,000 | 3,941 | −51% |
+| Route | Before | Target | After | Polish | Change |
+|---|---:|---:|---:|---:|---:|
+| `#/start` Getting started | 413 | 200 | 223 | 200 | −52% |
+| `#/connect` | 661 | 330 | 256 | 256 | −61% |
+| `#/goal` | 311 | 160 | 185 | 160 | −49% |
+| `#/plan/<id>` (win-back, Autopilot) | 1,705 | 850 | 593 | 447 | −74% |
+| `#/live/<id>` (win-back, Autopilot) | 1,843 | 900 | 475 | 491 | −73% |
+| `#/live/<id>` (repeat purchase, a batch waiting) | 1,387 | 700 | 407 | 419 | −70% |
+| `#/proof/<id>` | 664 | 330 | 212 | 214 | −68% |
+| `#/proof/<id>` (repeat purchase, too early to tell) | — | 330 | 191 | 218 | — |
+| `#/operator` (desktop: all 200 decisions) | 7,994 | 4,000 | 3,941 | 3,941 | −51% |
+| `#/operator` (phone, 390: the first 50, then "Show all 200") | — | — | 3,941 | 1,100 | — |
 
-With the sample data (`?mock=1`): start 265, connect 320, goal 264, plan 680, live 538, proof 244, operator 345.
-Getting started and Goal stay a little over target: what is left there is the form, the goal list, the opportunity
-headlines and the steps' own words. Proof's share text is folded ("Show the text"); the counter cannot see a
-textarea's value, so the before figure was really about 80 words higher.
+Live's two rows moved with the Live work done alongside the polish, not with it. With the sample data (`?mock=1`):
+start 245, connect 320, goal 236, plan 537, live 534, proof 246, operator 345. What is left on Getting started and
+Goal is the form, the goal list, the opportunity headlines and the steps' own words. Proof's share text is folded
+("Show the text"); the counter cannot see a textarea's value, so the before figure was really about 80 words
+higher. It does read screen-reader labels and a closed menu's options, which nobody sees.
 
 ---
 
@@ -345,22 +349,41 @@ made the shared parts consistent:
 - "Holdout" is gone from the screens (Live rewrites the runtime's briefing words; Proof glosses the API's notes).
 - The leftover `.dial-option` styles are deleted from styles.css and plan.css.
 
+**The plan-proof polish (20 Oct 2026).** The four screens still over budget were cut to it, and two Proof states fixed:
+
+- Plan (593 → 447 words): the messages the editor passed on every check sit under ONE "✓ Checked by the editor"
+  line, whose description holds the checklist; under it a ready message drops its "Ready to send" pill (the counts
+  say it) and its "Don't use this one" button becomes a quiet circle-slash icon, drawn in CSS, with those words as
+  its description and its label for touch. A message that needs a look (waiting for you, failed the editor, not checked
+  yet) comes first with its own line, and is never folded; one the editor passed that still waits for you leads the
+  group instead. Two quiet messages show before "Show all". "When it pauses itself" says
+  "Pauses the goal" and "Pauses that channel" once each, as group labels, and the product fact's tag is shorter.
+- Proof: the forecast's sentence is a whole one ("Its forecast covers the 14 days after each contact it decided on
+  since 10 Oct 2026."). While it is too early to tell, the result card shows what the answer waits for: the three
+  groups so far, "Each contact counts after 14 days" and the day the first ones count ("First from 24 Oct 2026",
+  the forecast's `since` plus its `horizon_days`, shown only while that day is ahead), then the spend. The folded
+  method card then leaves its group counts out, so they are said once.
+- Operator: on a phone (under 640px) the decisions list draws 50 rows and a "Show all 200" button (about 1,100 words
+  instead of 3,941); the filters still search everything fetched, and the customer lookup stays above the list.
+- Getting started (223 → 200): no "Step n of 5" (the current step's pill says it), no link on a done step (the nav
+  has Connect and Goal), "Budget (USD)" and "Save", a shorter 3–10% line and "You stay in control", the pitch's words.
+- Goal (185 → 160): the box's hint and the budget's hint are their labels' (i), the Shadow line is "Every new goal
+  starts in Shadow." with "Nothing is sent yet" in its description, and an opportunity's kind joins its count's
+  description instead of a pill.
+
 **Still wordy, or not premium enough.**
-- Plan is the longest marketer screen (593 words): four ready messages, each with its own "Don't use this one" and
-  "Checked by the editor" line. One bulk line for the ready messages would cut it further.
-- Operator lists all 200 decisions (3,941 words; about 6 lines a row on a phone). It is the technical screen, so
-  it stays complete; loading 50 by default on a phone is the next step.
-- Getting started is 23 words over target and Goal 25 (the form, the goal list and the opportunity headlines). On
-  the demo, Goal's opportunity count repeats the API's goal headline ("396 … signed up but never bought"); the API
-  should leave the count out of its suggested goal text.
+- Operator on a desktop still lists all 200 decisions (3,941 words). It is the technical screen, so it stays
+  complete; the table scrolls inside its card.
+- On the demo, Goal's opportunity count repeats the API's goal headline ("396 … signed up but never bought"); the
+  API (`suggest_opportunities` in `api/v2/deps.py`) should leave the count out of its suggested goal text.
+- Plan's word count includes four screen-reader labels a message ("Theme:", "Tone:", …), and Goal's includes the
+  closed currency menu's eight options: the counter reads them, a sighted person does not see them.
 - In the Shadow state, Getting started says the trial day three times (badge, note, step 3), because promise 58 and
   a test pin all three.
 - Data, not UI: Live's weekly briefing and Proof are two API figures for nearly the same profit ($1,846 against
   $1,906), and the Approve goal's briefing carries the programme-wide figure while its own Proof says "Not sure
   yet". The briefing headline now sits only in a description, with its range. The runtime still writes "holdout";
   the screen rewrites it. Batch facts carry a forecast without a range because the API sends none.
-- Proof's forecast card's one sentence reads like a fragment ("Over the 14 days after each contact it decided on
-  since …"); a test pins the wording. In the too-early state the main card is sparse at 1440.
 - `--rule` hairlines are very faint in dark mode.
 - Error boxes cannot show "the time of the last good data" yet, because nothing records it.
 - The demo data has no product names and pictures on a host that never resolves, so the real-data screenshots look
