@@ -1,0 +1,413 @@
+"""Turn what happened into the observations each model's `update()` expects.
+
+Three kinds of observation, one per model in `autonomy.decide.models`:
+
+* `ResponseObservation`: did the customer buy within the horizon?
+  - **Treated**: an ACT decision that was actually sent (a SEND or DELIVER event carries its id)
+    and not reported undelivered (a FAIL, BOUNCE or BLOCK for it with no DELIVER: the message never
+    reached the customer, so counting it would pull the treated rate towards the control rate),
+    judged on `[send time, send time + horizon)`, keyed by the customer's segment and the action's
+    labels `channel|offer_id|theme`. The theme comes from the content library (`content_by_id`),
+    because decisions carry a content id, not a theme. A window counts once it has closed
+    (`send time + horizon <= now`). Overlapping sends can each claim the same purchase, like the
+    `'window'` attribution in `autonomy.proof.rewards`.
+  - **Control** (`action_key=None`): customers we left alone, judged on `[made_at, made_at + horizon)`.
+    By default these come **only from the holdout**, which is assigned at random. The agent's own
+    "do nothing" choices are not random: it leaves alone the customers it judged least likely to
+    respond, so their purchase rate is lower than the rate a contacted customer would have had
+    without the message, and counting them would inflate every uplift. They can be added with
+    `agent_nothing_ipw=True`, weighted by the inverse of the probability the policy had of doing
+    nothing (clipped, then self-normalised so the weights sum to the number of decisions). That
+    corrects for the policy's randomisation only: a decision taken with probability 1 (no bids, out
+    of the audience) still counts at face value, so the estimate stays biased towards whoever the
+    agent never targets. A control window with any send to the customer in it is skipped.
+    In the Gym, holdout customers never reach `decide()`, so no holdout decisions exist. Pass their
+    ids as `holdout_customers` and each night closes one virtual daily window per holdout customer.
+* `FatigueObservation`: for each delivered send with a closed window, how many sends the customer had in the
+  7 days before it, and whether an UNSUBSCRIBE or COMPLAINT followed (one carrying the decision's id,
+  or one without an id before the next send and inside the window).
+* `ValueObservation`: every PURCHASE event up to `now`, with its value and margin.
+
+**Overlapping control windows.** Daily do-nothing decisions with a 14-day horizon put one purchase
+in up to 14 control observations. That does not bias the rate, but it would make the control
+posterior about 14 times too sure of itself. With `overlap_weighting=True` (the default) a control
+window is weighted by the share of it that does not overlap the customer's previous control window,
+so a customer observed daily for D days counts as about D / horizon independent windows.
+
+Everything here is pure: no clock, no randomness, nothing mutated. The caller (`update.py`) passes in
+what has already been learned and applies the result.
+"""
+
+from __future__ import annotations
+
+import bisect
+from collections.abc import Callable, Container, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+from autonomy.contracts import ContentItem, Decision, DecisionKind, Event, EventType, Group
+from autonomy.decide.models import FatigueObservation, ResponseObservation, action_key
+from autonomy.learning.bundle import ValueObservation
+
+SegmentOf = Callable[[str], str | None] | Mapping[str, str | None]
+"""How to find a customer's segment: a function or a dict. Decisions do not carry it."""
+
+DEFAULT_TREATED_GROUPS: frozenset[Group] = frozenset({Group.AGENT, Group.BASELINE})
+"""Sends from the agent and from the baseline rule both teach what a contact does."""
+
+DEFAULT_IPW_CLIP = 20.0
+"""Largest inverse-propensity weight before normalising: one lucky do-nothing cannot dominate."""
+
+_WEEK = timedelta(days=7)
+_DAY = timedelta(days=1)
+_SENT_TYPES = frozenset({EventType.SEND, EventType.DELIVER})
+_STOP_TYPES = frozenset({EventType.UNSUBSCRIBE, EventType.COMPLAINT})
+_UNDELIVERED_TYPES = frozenset({EventType.FAIL, EventType.BOUNCE, EventType.BLOCK})
+"""A message that did not reach the customer. A WhatsApp BLOCK means they had already opted out, so it
+says nothing about what this message did and is not counted as an unsubscribe caused by it."""
+
+
+@dataclass
+class ObservationSet:
+    """Observations ready for the models, plus what to remember so they are not made twice."""
+
+    response: list[ResponseObservation] = field(default_factory=list)
+    fatigue: list[FatigueObservation] = field(default_factory=list)
+    value: list[ValueObservation] = field(default_factory=list)
+    decisions_closed: list[str] = field(default_factory=list)
+    """Decision ids now learned from (or skipped for good, e.g. never sent)."""
+    purchases_seen: list[str] = field(default_factory=list)
+    holdout_windows: list[str] = field(default_factory=list)
+    control_starts: dict[str, datetime] = field(default_factory=dict)
+    """Latest control window start per customer, for the next overlap weight."""
+    holdout_anchor: datetime | None = None
+    counts: dict[str, int] = field(default_factory=dict)
+
+    def count(self, name: str, n: int = 1) -> None:
+        self.counts[name] = self.counts.get(name, 0) + n
+
+    def merge(self, other: ObservationSet) -> None:
+        self.response.extend(other.response)
+        self.fatigue.extend(other.fatigue)
+        self.value.extend(other.value)
+        self.decisions_closed.extend(other.decisions_closed)
+        self.purchases_seen.extend(other.purchases_seen)
+        self.holdout_windows.extend(other.holdout_windows)
+        self.control_starts.update(other.control_starts)
+        if other.holdout_anchor is not None:
+            self.holdout_anchor = other.holdout_anchor
+        for name, n in other.counts.items():
+            self.count(name, n)
+
+
+def segment_lookup(segment_of: SegmentOf | None) -> Callable[[str], str | None]:
+    """A function from customer id to segment (None, the pooled segment, when unknown)."""
+    if segment_of is None:
+        return lambda _cid: None
+    if callable(segment_of):
+        return segment_of
+    table = segment_of
+    return lambda cid: table.get(cid)
+
+
+def theme_of(content_id: str | None, content_by_id: Mapping[str, ContentItem]) -> str | None:
+    """The theme label of a content item, or None when the item is unknown."""
+    if content_id is None:
+        return None
+    item = content_by_id.get(content_id)
+    return None if item is None else item.theme.value
+
+
+class Timeline:
+    """One customer's events, sorted, with the lookups learning needs."""
+
+    def __init__(self, events: Iterable[Event]) -> None:
+        ordered = sorted(events, key=lambda e: (e.ts, e.event_id))
+        self.first_ts: datetime | None = ordered[0].ts if ordered else None
+        self.purchases: list[datetime] = [e.ts for e in ordered if e.type is EventType.PURCHASE]
+        sends = [e for e in ordered if e.type is EventType.SEND]
+        self.send_times: list[datetime] = [e.ts for e in sends]
+        self.sent_at: dict[str, datetime] = {}
+        for e in ordered:
+            if e.type in _SENT_TYPES and e.decision_id is not None:
+                self.sent_at.setdefault(e.decision_id, e.ts)
+        self.stops: list[Event] = [e for e in ordered if e.type in _STOP_TYPES]
+        # decisions reported as failed, bounced or blocked and never delivered
+        delivered = {e.decision_id for e in ordered if e.type is EventType.DELIVER}
+        self.undelivered: frozenset[str] = frozenset(
+            e.decision_id
+            for e in ordered
+            if e.type in _UNDELIVERED_TYPES and e.decision_id is not None and e.decision_id not in delivered
+        )
+
+    def bought(self, start: datetime, end: datetime) -> bool:
+        """Any purchase in `[start, end)`."""
+        i = bisect.bisect_left(self.purchases, start)
+        return i < len(self.purchases) and self.purchases[i] < end
+
+    def sends_between(self, start: datetime, end: datetime) -> int:
+        """SEND events in `[start, end)`."""
+        return bisect.bisect_left(self.send_times, end) - bisect.bisect_left(self.send_times, start)
+
+    def next_send_after(self, ts: datetime) -> datetime | None:
+        i = bisect.bisect_right(self.send_times, ts)
+        return self.send_times[i] if i < len(self.send_times) else None
+
+    def stopped(self, decision_id: str, start: datetime, end: datetime) -> bool:
+        """An unsubscribe or complaint caused by this send: it names the decision, or it names none
+        and falls after the send, before the next send and inside the window."""
+        nxt = self.next_send_after(start)
+        until = end if nxt is None else min(end, nxt)
+        for e in self.stops:
+            if e.decision_id == decision_id:
+                return True
+            if e.decision_id is None and start <= e.ts < until:
+                return True
+        return False
+
+
+def timelines(events_by_customer: Mapping[str, Sequence[Event]]) -> Callable[[str], Timeline | None]:
+    """A memoised `customer_id -> Timeline`; None for a customer the mapping does not include."""
+    cache: dict[str, Timeline] = {}
+
+    def get(customer_id: str) -> Timeline | None:
+        found = cache.get(customer_id)
+        if found is not None:
+            return found
+        events = events_by_customer.get(customer_id)
+        if events is None:
+            return None
+        made = Timeline(events)
+        cache[customer_id] = made
+        return made
+
+    return get
+
+
+def overlap_weight(start: datetime, previous: datetime | None, horizon: timedelta) -> float:
+    """Share of a control window not covered by the customer's previous one (1 if none)."""
+    if previous is None:
+        return 1.0
+    gap = abs((start - previous).total_seconds())
+    return min(1.0, gap / horizon.total_seconds())
+
+
+def decision_observations(
+    decisions: Iterable[Decision],
+    events_by_customer: Mapping[str, Sequence[Event]],
+    content_by_id: Mapping[str, ContentItem],
+    now: datetime,
+    horizon_days: int,
+    *,
+    learned: Container[str] = frozenset(),
+    last_control_start: Mapping[str, datetime] | None = None,
+    segment_of: SegmentOf | None = None,
+    treated_groups: frozenset[Group] = DEFAULT_TREATED_GROUPS,
+    agent_nothing_ipw: bool = False,
+    ipw_clip: float = DEFAULT_IPW_CLIP,
+    overlap_weighting: bool = True,
+    require_send: bool = True,
+    timeline_of: Callable[[str], Timeline | None] | None = None,
+) -> ObservationSet:
+    """Treated, control and fatigue observations from decisions whose window has closed by `now`.
+
+    Decisions in `learned`, decisions whose window is still open, and decisions of customers missing
+    from `events_by_customer` (pass an empty list for a customer with no events) are left for later.
+    With `require_send=False`, an ACT decision with no SEND/DELIVER event is taken as sent at its
+    `send_at` (for logs without send events); it then gives no fatigue observation.
+    """
+    if horizon_days < 1:
+        raise ValueError("horizon_days must be at least 1")
+    horizon = timedelta(days=horizon_days)
+    segment = segment_lookup(segment_of)
+    timeline = timeline_of or timelines(events_by_customer)
+    starts: dict[str, datetime] = dict(last_control_start or {})
+    out = ObservationSet()
+    # (decision, start, converted, raw weight) for control candidates, weighted after the pass
+    holdout: list[tuple[Decision, datetime, bool]] = []
+    agent: list[tuple[Decision, datetime, bool, float]] = []
+
+    unique: dict[str, Decision] = {}
+    for d in decisions:
+        unique.setdefault(d.decision_id, d)
+    ordered = sorted(unique.values(), key=lambda d: (d.customer_id, d.made_at, d.decision_id))
+
+    for d in ordered:
+        if d.decision_id in learned:
+            out.count("already_learned")
+            continue
+        if d.kind is DecisionKind.NOTHING:
+            usable = d.group is Group.HOLDOUT or (d.group is Group.AGENT and agent_nothing_ipw)
+            if not usable:
+                continue
+        elif d.group not in treated_groups:
+            continue
+        tl = timeline(d.customer_id)
+        if tl is None:
+            out.count("no_events")
+            continue
+
+        if d.kind is DecisionKind.NOTHING:
+            end = d.made_at + horizon
+            if end > now:
+                out.count("still_open")
+                continue
+            out.decisions_closed.append(d.decision_id)
+            if tl.sends_between(d.made_at, end) > 0:
+                out.count("contaminated")
+                continue
+            converted = tl.bought(d.made_at, end)
+            if d.group is Group.HOLDOUT:
+                holdout.append((d, d.made_at, converted))
+            else:
+                agent.append((d, d.made_at, converted, min(1.0 / d.probability, ipw_clip)))
+            continue
+
+        action = d.action
+        assert action is not None  # an ACT decision always has one (contract validator)
+        sent = tl.sent_at.get(d.decision_id)
+        start = sent if sent is not None else action.send_at
+        end = start + horizon
+        if end > now:
+            out.count("still_open")
+            continue
+        out.decisions_closed.append(d.decision_id)
+        if sent is None and require_send:
+            out.count("not_sent")
+            continue
+        if d.decision_id in tl.undelivered:
+            out.count("not_delivered")
+            continue
+        theme = theme_of(action.content_id, content_by_id)
+        if theme is None:
+            out.count("unknown_content")
+        else:
+            out.response.append(
+                ResponseObservation(
+                    segment=segment(d.customer_id),
+                    action_key=action_key(action.channel, action.offer_id, theme),
+                    converted=tl.bought(start, end),
+                )
+            )
+            out.count("treated")
+        if sent is not None:
+            out.fatigue.append(
+                FatigueObservation(
+                    contacts_7d=tl.sends_between(sent - _WEEK, sent),
+                    unsubscribed=tl.stopped(d.decision_id, sent, end),
+                )
+            )
+            out.count("fatigue")
+
+    for d, start, converted in holdout:
+        w = overlap_weight(start, starts.get(d.customer_id), horizon) if overlap_weighting else 1.0
+        starts[d.customer_id] = max(start, starts.get(d.customer_id, start))
+        out.control_starts[d.customer_id] = starts[d.customer_id]
+        out.response.append(ResponseObservation(segment(d.customer_id), None, converted, w))
+        out.count("control_holdout")
+
+    if agent:
+        total = sum(raw for *_, raw in agent)
+        scale = len(agent) / total if total > 0 else 0.0
+        for d, start, converted, raw in agent:
+            w = raw * scale
+            if overlap_weighting:
+                w *= overlap_weight(start, starts.get(d.customer_id), horizon)
+            starts[d.customer_id] = max(start, starts.get(d.customer_id, start))
+            out.control_starts[d.customer_id] = starts[d.customer_id]
+            out.response.append(ResponseObservation(segment(d.customer_id), None, converted, w))
+            out.count("control_agent_ipw")
+    return out
+
+
+def holdout_anchors(now: datetime, horizon_days: int, last_anchor: datetime | None) -> list[datetime]:
+    """Starts of the virtual holdout windows that close by `now`: one a day after `last_anchor`, or
+    just `now - horizon` the first time (nothing is backfilled before learning starts)."""
+    latest = now - timedelta(days=horizon_days)
+    if last_anchor is None:
+        return [latest]
+    out: list[datetime] = []
+    t = last_anchor + _DAY
+    while t <= latest:
+        out.append(t)
+        t += _DAY
+    return out
+
+
+def holdout_observations(
+    holdout_customers: Iterable[str],
+    events_by_customer: Mapping[str, Sequence[Event]],
+    now: datetime,
+    horizon_days: int,
+    *,
+    learned: Container[str] = frozenset(),
+    last_anchor: datetime | None = None,
+    last_control_start: Mapping[str, datetime] | None = None,
+    skip_customers: Container[str] = frozenset(),
+    segment_of: SegmentOf | None = None,
+    overlap_weighting: bool = True,
+    timeline_of: Callable[[str], Timeline | None] | None = None,
+) -> ObservationSet:
+    """Control observations for holdout customers who have no logged decisions (the Gym).
+
+    Each night closes the windows `[anchor, anchor + horizon)` for the anchors `holdout_anchors`
+    gives. A customer counts only from the first anchor after their first event (so a customer who
+    did not exist yet is not counted as "did not buy"), and a window with a send in it is skipped.
+    `skip_customers` are holdout customers whose do-nothing decisions are logged and so already
+    counted by `decision_observations`.
+    """
+    if horizon_days < 1:
+        raise ValueError("horizon_days must be at least 1")
+    horizon = timedelta(days=horizon_days)
+    segment = segment_lookup(segment_of)
+    timeline = timeline_of or timelines(events_by_customer)
+    starts: dict[str, datetime] = dict(last_control_start or {})
+    anchors = holdout_anchors(now, horizon_days, last_anchor)
+    out = ObservationSet(holdout_anchor=anchors[-1] if anchors else last_anchor)
+    for cid in sorted(set(holdout_customers)):
+        if cid in skip_customers:
+            continue
+        tl = timeline(cid)
+        if tl is None or tl.first_ts is None:
+            out.count("no_events")
+            continue
+        for anchor in anchors:
+            key = f"{cid}@{anchor.isoformat()}"
+            if key in learned:
+                out.count("already_learned")
+                continue
+            if tl.first_ts > anchor:
+                continue
+            out.holdout_windows.append(key)
+            end = anchor + horizon
+            if tl.sends_between(anchor, end) > 0:
+                out.count("contaminated")
+                continue
+            w = overlap_weight(anchor, starts.get(cid), horizon) if overlap_weighting else 1.0
+            starts[cid] = max(anchor, starts.get(cid, anchor))
+            out.control_starts[cid] = starts[cid]
+            out.response.append(ResponseObservation(segment(cid), None, tl.bought(anchor, end), w))
+            out.count("control_holdout")
+    return out
+
+
+def value_observations(
+    events_by_customer: Mapping[str, Sequence[Event]],
+    now: datetime,
+    *,
+    learned: Container[str] = frozenset(),
+) -> ObservationSet:
+    """One `ValueObservation` per PURCHASE event at or before `now` not yet learned from."""
+    out = ObservationSet()
+    seen: set[str] = set()
+    for cid in sorted(events_by_customer):
+        for e in events_by_customer[cid]:
+            if e.type is not EventType.PURCHASE or e.ts > now or e.value is None:
+                continue
+            if e.event_id in learned or e.event_id in seen:
+                continue
+            seen.add(e.event_id)
+            out.purchases_seen.append(e.event_id)
+            out.value.append(ValueObservation(value=e.value, margin=e.margin))
+            out.count("value")
+    return out
