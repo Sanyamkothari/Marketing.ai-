@@ -12,21 +12,35 @@ quiet-hours rule tests the real send time in the customer's own time zone.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
-from autonomy.contracts import Bid, Brief, Channel, CustomerState, DecisionContext, Envelope, Group
+from autonomy.contracts import (
+    Bid,
+    Brief,
+    Channel,
+    CustomerState,
+    DecisionContext,
+    Envelope,
+    Group,
+    OfferKind,
+    OfferOption,
+)
 
 # The reason codes, in the order `check_bid` tries them. The first failing rule names the block.
 HOLDOUT = "holdout"
 NO_BRIEF = "no_brief"
 CHANNEL_NOT_ALLOWED = "channel_not_allowed"
 OFFER_NOT_ALLOWED = "offer_not_allowed"
+OFFER_NEEDS_APPROVAL = "offer_needs_approval"
+NO_DISCOUNTS = "no_discounts"
 UNSUBSCRIBED = "unsubscribed"
 NO_CONSENT = "no_consent"
 NO_ADDRESS = "no_address"
 OPEN_COMPLAINT = "open_complaint"
+SNOOZED = "snoozed"
+TOO_SOON = "too_soon"
 WEEKLY_CAP = "weekly_cap"
 NO_BUDGET = "no_budget"
 QUIET_HOURS = "quiet_hours"
@@ -36,10 +50,14 @@ ALL_CODES: tuple[str, ...] = (
     NO_BRIEF,
     CHANNEL_NOT_ALLOWED,
     OFFER_NOT_ALLOWED,
+    OFFER_NEEDS_APPROVAL,
+    NO_DISCOUNTS,
     UNSUBSCRIBED,
     NO_CONSENT,
     NO_ADDRESS,
     OPEN_COMPLAINT,
+    SNOOZED,
+    TOO_SOON,
     WEEKLY_CAP,
     NO_BUDGET,
     QUIET_HOURS,
@@ -47,6 +65,14 @@ ALL_CODES: tuple[str, ...] = (
 
 # Codes that mean "this channel cannot reach this person", as opposed to "not now".
 REACH_CODES: frozenset[str] = frozenset({CHANNEL_NOT_ALLOWED, UNSUBSCRIBED, NO_CONSENT, NO_ADDRESS})
+
+DISCOUNT_KINDS: frozenset[OfferKind] = frozenset(
+    {OfferKind.PERCENT_OFF, OfferKind.AMOUNT_OFF, OfferKind.FREE_SHIPPING}
+)
+"""Offers that lower what the customer pays. `no_discounts=true` rules these out; gifts, loyalty
+points and plain content are not discounts."""
+
+_TRUE = frozenset({"true", "1", "yes", "y", "on"})
 
 
 class RuleResult(NamedTuple):
@@ -108,6 +134,61 @@ def offer_in_envelope(bid: Bid, envelope: Envelope) -> RuleResult:
     return _blocked(OFFER_NOT_ALLOWED)
 
 
+def offer_option(offer_id: str, envelope: Envelope) -> OfferOption | None:
+    """The envelope's option for this offer id, if it lists one."""
+    return next((o for o in envelope.offers if o.offer_id == offer_id), None)
+
+
+def offer_approved(bid: Bid, envelope: Envelope) -> RuleResult:
+    """An offer marked `needs_approval` waits for a person; the agent never sends it on its own."""
+    offer = offer_option(bid.action.offer_id, envelope)
+    return _blocked(OFFER_NEEDS_APPROVAL) if offer is not None and offer.needs_approval else OK
+
+
+def wants_no_discounts(state: CustomerState) -> bool:
+    """True when the customer said they do not want discounts (`preferences["no_discounts"]`)."""
+    return state.preferences.get("no_discounts", "").strip().lower() in _TRUE
+
+
+def no_discounts(bid: Bid, state: CustomerState, envelope: Envelope) -> RuleResult:
+    """A customer who asked for no discounts gets none: money off and free shipping are ruled out.
+
+    An offer id the envelope does not describe cannot be told apart from a discount, so it is ruled
+    out too (it is already blocked as not allowed; this keeps the rule safe on its own).
+    """
+    if bid.action.offer_id == "none" or not wants_no_discounts(state):
+        return OK
+    offer = offer_option(bid.action.offer_id, envelope)
+    if offer is None or offer.kind in DISCOUNT_KINDS:
+        return _blocked(NO_DISCOUNTS)
+    return OK
+
+
+def snooze_until(state: CustomerState) -> datetime | None:
+    """When the customer's snooze ends (`preferences["snooze_until"]`, an ISO time), if they set one.
+
+    A time without a zone is read on the customer's own clock. A value that cannot be read counts as
+    a snooze with no end (`datetime.max`): when we cannot tell, we do not message someone who asked
+    us to wait. An empty value means no snooze.
+    """
+    raw = state.preferences.get("snooze_until", "").strip()
+    if not raw:
+        return None
+    try:
+        at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.max.replace(tzinfo=ZoneInfo("UTC"))
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=customer_zone(state))
+    return at
+
+
+def snoozed(state: CustomerState, send_at: datetime) -> RuleResult:
+    """Nothing lands before the end of a snooze the customer asked for."""
+    until = snooze_until(state)
+    return _blocked(SNOOZED) if until is not None and send_at < until else OK
+
+
 def unsubscribed(state: CustomerState, channel: Channel) -> RuleResult:
     """An unsubscribe on a channel is final for that channel."""
     stats = state.channels.get(channel)
@@ -130,6 +211,19 @@ def contactable(state: CustomerState, channel: Channel) -> RuleResult:
 def open_complaint(state: CustomerState) -> RuleResult:
     """While a complaint is open, nobody markets to this customer on any channel."""
     return _blocked(OPEN_COMPLAINT) if state.open_complaint else OK
+
+
+def too_soon(state: CustomerState, now: datetime, min_gap: timedelta | None, pending: int = 0) -> RuleResult:
+    """A policy may ask for a gap between two messages to one person (`min_gap`): nothing new while
+    another message is scheduled but not sent yet, or within `min_gap` of the last one. Besides
+    sparing the customer, it means every new message is decided knowing how the last one landed
+    (an unsubscribe a few hours after it cancels the next)."""
+    if min_gap is None:
+        return OK
+    if pending > 0:
+        return _blocked(TOO_SOON)
+    last = state.last_contact_at
+    return _blocked(TOO_SOON) if last is not None and now - last < min_gap else OK
 
 
 def weekly_cap(state: CustomerState, max_contacts_per_week: int) -> RuleResult:
@@ -184,10 +278,13 @@ def check_bid(bid: Bid, state: CustomerState, ctx: DecisionContext) -> RuleResul
     checks: tuple[RuleResult, ...] = (
         channel_in_envelope(bid, envelope),
         offer_in_envelope(bid, envelope),
+        offer_approved(bid, envelope),
+        no_discounts(bid, state, envelope),
         unsubscribed(state, channel),
         consent(state, channel),
         contactable(state, channel),
         open_complaint(state),
+        snoozed(state, bid.action.send_at),
         weekly_cap(state, envelope.max_contacts_per_week if cap is None else cap),
         budget_left(bid, ctx.budget_left),
         quiet_hours(state, envelope, bid.action.send_at),

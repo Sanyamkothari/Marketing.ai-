@@ -1,12 +1,13 @@
 """Run the Gym from the command line and print a plain-English scoreboard.
 
-    python -m autonomy.gym.run --scenario sleeping_dogs_15 --policy rule_baseline --seeds 5
+    python -m autonomy.gym.run --scenario sleeping_dogs_15 --policy agent --seeds 5 --customers 2000
 
 By default the chosen policy is compared with send-to-all, the rule baseline and the oracle on the
 same seeds, then judged against the plan's pass bar. `--no-compare` scores the policy alone.
 
-Policies are found by name in a registry. Another stream adds its own with
-`register_policy("agent", lambda world: MyPolicy(...))`; the factory gets the world so a fresh
+Policies are found by name in a registry. `agent` is Autonomy's own policy
+(`autonomy.runtime.agent.build_agent_policy`). Another stream adds its own with
+`register_policy("name", lambda world: MyPolicy(...))`; the factory gets the world so a fresh
 policy is built for every run (the oracle uses the world's truth; nothing else may).
 """
 
@@ -20,7 +21,7 @@ from collections.abc import Sequence
 from autonomy.contracts import Brief, ContentItem
 from autonomy.fakes.policies import NothingPolicy
 from autonomy.gym.api import ScenarioSpec
-from autonomy.gym.scenarios import SCENARIOS, get_scenario
+from autonomy.gym.scenarios import SCENARIOS, default_brief, default_content, get_scenario
 from autonomy.gym.score import (
     EVERYONE,
     NOTHING,
@@ -39,9 +40,20 @@ from autonomy.gym.score import (
 )
 from autonomy.interfaces import Policy
 
+AGENT = "agent"
+
 
 def _nothing_factory(world: SimWorld) -> Policy:  # noqa: ARG001
     return NothingPolicy()
+
+
+def agent_factory(world: SimWorld) -> Policy:  # noqa: ARG001
+    """A fresh Autonomy agent for one run. It never sees the world's truth: the world is passed only
+    because every factory gets it. It starts from the Gym's default brief and library and picks up
+    whatever briefs and content the run's decision context carries."""
+    from autonomy.runtime.agent import build_agent_policy
+
+    return build_agent_policy([default_brief()], default_content())
 
 
 POLICIES: dict[str, PolicyFactory] = {
@@ -49,6 +61,7 @@ POLICIES: dict[str, PolicyFactory] = {
     RULE: rule_factory,
     ORACLE: oracle_factory,
     NOTHING: _nothing_factory,
+    AGENT: agent_factory,
 }
 
 

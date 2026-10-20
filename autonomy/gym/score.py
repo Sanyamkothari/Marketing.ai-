@@ -18,6 +18,13 @@ A policy may also define `prepare_day(states, ctx)`: the scoreboard calls it wit
 the group it decides for, before the per-customer `decide` calls, so a policy can work out the whole
 day in one vectorised pass (the oracle does). It is optional and Gym-only.
 
+A policy may also define `nightly(decisions, events_by_customer, now)`, the runtime's nightly hook.
+When `learn` is on, the scoreboard calls it once with the history after `reset` and then every
+simulated morning before the sweep, with what is new since the last call: the previous day's ACT
+decisions of the agent and baseline groups, a "do nothing" for each holdout customer (the policy is
+asked to decide for its holdout too, as the runtime logs one for every customer; nothing it says for
+them is acted on), and the events, by customer. `Policy.learn` is still called with closed rewards.
+
 Net per customer is margin from purchases during the run (plus the effect window after the last
 decision day, and one day for sends scheduled after it) minus channel cost per send and offer cost per redeemed offer. A purchase counts as
 redeeming an offer when the world tags it with `attrs["offer_cost"]` (money) or `attrs["offer_id"]`
@@ -411,6 +418,13 @@ def _contacts_stale(state: CustomerState, now: datetime) -> bool:
     return sum(1 for t in recent if t > week_ago) != state.contacts_7d
 
 
+def _by_customer(events: Iterable[Event]) -> dict[str, list[Event]]:
+    out: dict[str, list[Event]] = {}
+    for e in events:
+        out.setdefault(e.customer_id, []).append(e)
+    return out
+
+
 def _fold(events: Iterable[Event], states: dict[str, CustomerState], folder: StateFolder) -> None:
     for e in events:
         states[e.customer_id] = folder.fold(states.get(e.customer_id), e)
@@ -443,6 +457,12 @@ def _simulate(
     states: dict[str, CustomerState] = {}
     _fold(history, states, folder)
     ledger.observe(history)
+    nightly = getattr(agent, "nightly", None) if learn else None
+    if not callable(nightly):
+        nightly = None
+    logged: list[Decision] = []  # yesterday's decisions, for the agent's nightly hook
+    if nightly is not None:
+        nightly([], _by_customer(history), start)
     groups: dict[str, Group] = {}
     true_value = dict.fromkeys(Group, 0.0)
     actions = dict.fromkeys(Group, 0)
@@ -455,6 +475,9 @@ def _simulate(
         new = world.advance(now)
         _fold(new, states, folder)
         ledger.observe(new)
+        if nightly is not None:
+            nightly(logged, _by_customer(new), now)
+            logged = []
         if learn:
             rewards, rewarded = ledger.close_windows(now)
             if rewards:
@@ -466,7 +489,7 @@ def _simulate(
             if g is None:
                 g = assign_group(cid, holdout_share=holdout_share, baseline_share=baseline_share, salt=salt)
                 groups[cid] = g
-            if g is Group.HOLDOUT:
+            if g is Group.HOLDOUT and nightly is None:
                 continue
             s = state
             if refresh_all or _contacts_stale(s, now):
@@ -481,6 +504,13 @@ def _simulate(
                 prepare([s for _, g, s in ready if g is group], ctx)
         todays: list[Decision] = []
         for _cid, g, s in ready:
+            if g is Group.HOLDOUT:
+                # The agent logs a "do nothing" for its holdout, as the runtime does: those are the
+                # control outcomes it learns uplift from. Nothing a holdout decision says is acted on.
+                held = agent.decide(s, ctx)
+                if held.kind is DecisionKind.NOTHING:
+                    logged.append(held if held.group is g else held.model_copy(update={"group": g}))
+                continue
             d = (agent if g is Group.AGENT else baseline).decide(s, ctx)
             if d.kind is not DecisionKind.ACT or d.action is None:
                 continue
@@ -498,6 +528,8 @@ def _simulate(
                     ledger.pending.append(d)
         daily.append(agent_today)
         world.act(todays)
+        if nightly is not None:
+            logged.extend(todays)
 
     # The last day's sends may go out up to a day after the decision, and their effect lasts
     # `effect_days` from then, so watch one day longer than days + effect_days: otherwise the tail of

@@ -19,8 +19,16 @@ This is `decide()` from plan-v2 section 3, built only from maths (no LLM):
    the draw that actually chose the option is one of them, so a chosen option never logs 0. With the
    default 1,000 draws the standard error of that share is at most 1.6 percentage points.
 
-Everything random comes from one generator seeded by `(ctx.seed, customer_id)`, so a run repeats
-exactly given its seed, and customers do not share draws.
+Everything random comes from one generator seeded by `(ctx.seed, customer_id)` (plus the trigger
+for an event-triggered decision), so a run repeats exactly given its seed, and customers do not share
+draws.
+
+The weekly cap counts sends this policy has scheduled but that have not gone out yet. A send chosen
+today may be timed for tomorrow evening, after the next sweep has already read the customer's state,
+so `contacts_7d` alone would let a second and third send through. The policy remembers each ACT
+decision's `send_at` until the customer's state shows a contact at or after it (the SEND was
+folded) or until it is a week old, and adds those pending sends to `contacts_7d` before the rules and
+the attention price see the state.
 """
 
 from __future__ import annotations
@@ -29,7 +37,7 @@ import hashlib
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -52,6 +60,9 @@ DEFAULT_EXPLORATION_FLOOR = 0.05
 DEFAULT_MC_DRAWS = 1000
 DEFAULT_MAX_OPTIONS = 10
 LOGGED_BIDS = 5
+SWEEP = "sweep"
+"""The trigger of the daily sweep; event-triggered decisions name their own (e.g. `cart:<event_id>`)."""
+_WEEK = timedelta(days=7)
 
 AttentionPrice = Callable[[CustomerState], float]
 
@@ -132,7 +143,15 @@ class AutonomousPolicy:
     `exploration_floor` overrides the envelopes' floors; None uses the largest floor among the
     active briefs. `baseline_policy` decides for the baseline group; None leaves them alone.
     `segment_hours` maps a segment to a 24-hour activity profile, used when a customer's own active
-    hours are unknown.
+    hours are unknown. `plausible_z` (None: off) keeps only options whose net could beat doing
+    nothing within that many standard deviations; the rest are logged as considered but neither
+    sampled nor explored. `min_gap` (None: off) holds a new message while another is scheduled or
+    within that long of the last one (`rules.too_soon`).
+
+    `decide(state, ctx, trigger=None)`: `trigger` names what prompted the decision when it is not the
+    daily sweep (a cart, a reply). The decision id is fixed by (customer, `ctx.now`, trigger), so
+    deciding again for the same moment and trigger gives the same id (and replaces the earlier
+    decision's pending send), while a cart and a reply in the same minute get two ids.
     """
 
     def __init__(
@@ -148,6 +167,8 @@ class AutonomousPolicy:
         default_hour: int = DEFAULT_HOUR,
         currency: str = "$",
         version: str = "autonomy-v1",
+        plausible_z: float | None = None,
+        min_gap: timedelta | None = None,
     ) -> None:
         if exploration_floor is not None and not 0 <= exploration_floor <= 1:
             raise ValueError("exploration_floor is a probability")
@@ -163,22 +184,45 @@ class AutonomousPolicy:
         self.default_hour = default_hour
         self.currency = currency
         self.version = version
+        self.plausible_z = plausible_z
+        self.min_gap = min_gap
+        # customer -> {decision_id: send_at} for ACT decisions whose SEND is not in the state yet
+        self._scheduled: dict[str, dict[str, datetime]] = {}
 
     # --- decide -----------------------------------------------------------------------------------
 
-    def decide(self, state: CustomerState, ctx: DecisionContext) -> Decision:
+    def decide(self, state: CustomerState, ctx: DecisionContext, *, trigger: str | None = None) -> Decision:
         if state.group is Group.BASELINE:
             if self.baseline_policy is not None:
                 return self.baseline_policy.decide(state, ctx)
-            return self._nothing(state, ctx, "Left alone: baseline group, and no baseline rule is set.")
+            return self._nothing(
+                state, ctx, "Left alone: baseline group, and no baseline rule is set.", trigger=trigger
+            )
         if state.group is Group.HOLDOUT:
-            held = self._nothing(state, ctx, "-", (rules.HOLDOUT,))
+            held = self._nothing(state, ctx, "-", (rules.HOLDOUT,), trigger=trigger)
             return held.model_copy(update={"reason": explain.reason(held, [])})
 
+        decision_id = self.decision_id(state.customer_id, ctx.now, trigger)
+        gap = rules.OK
+        if self.min_gap is not None:
+            # For the gap only sends still to come, or due within the gap, are pending. One due
+            # longer ago that the state still does not show never went out (the customer opted out
+            # first, say); the cap keeps counting it for a week, but it must not hold every other
+            # message for that week.
+            self.pending_sends(state, ctx.now)  # drops what was folded or is a week old
+            since = ctx.now - self.min_gap
+            upcoming = sum(
+                1
+                for did, at in self._scheduled.get(state.customer_id, {}).items()
+                if did != decision_id and at > since
+            )
+            gap = rules.too_soon(state, ctx.now, self.min_gap, upcoming)
+        state = self.with_pending(state, ctx.now, ignore=decision_id)
         # A bid whose value or uncertainty is NaN or infinite is a bidder bug, not an opportunity:
         # numpy's argmax treats NaN as the largest value, so one such bid would always be sent.
+        times: dict[tuple[str, datetime], datetime | None] = {}
         offered = [
-            self._timed(b, state, ctx)
+            self._timed(b, state, ctx, times)
             for bidder in self.bidders
             for b in bidder.bids(state, ctx)
             if math.isfinite(b.expected_net) and math.isfinite(b.uncertainty)
@@ -187,6 +231,8 @@ class AutonomousPolicy:
         blocked: list[str] = []
         for bid in offered:
             check = rules.check_bid(bid, state, ctx)
+            if check.allowed and not gap.allowed:
+                check = gap
             if check.allowed:
                 survivors.append(bid)
             else:
@@ -195,15 +241,20 @@ class AutonomousPolicy:
         survivors = sorted(survivors, key=lambda b: b.expected_net, reverse=True)[: self.max_options]
 
         price = self._price(state)
-        means = [0.0] + [b.expected_net - price for b in survivors]  # option 0 is "do nothing"
-        sds = [0.0] + [b.uncertainty for b in survivors]
-        pick = thompson_with_floor(
-            means, sds, self._floor(ctx), seeded_rng(ctx.seed, state.customer_id), self.mc_draws
-        )
+        options = survivors
+        if self.plausible_z is not None:
+            # Near-best only: an option whose net is below "do nothing" even at the optimistic end
+            # of its spread is not explored either, so the floor is not spent on known losers.
+            z = self.plausible_z
+            options = [b for b in survivors if b.expected_net - price + z * b.uncertainty > 0]
+        means = [0.0] + [b.expected_net - price for b in options]  # option 0 is "do nothing"
+        sds = [0.0] + [b.uncertainty for b in options]
+        rng_key = state.customer_id if trigger in (None, SWEEP) else f"{state.customer_id}\x1f{trigger}"
+        pick = thompson_with_floor(means, sds, self._floor(ctx), seeded_rng(ctx.seed, rng_key), self.mc_draws)
 
-        chosen = survivors[pick.index - 1] if pick.index > 0 else None
+        chosen = options[pick.index - 1] if pick.index > 0 else None
         draft = Decision(
-            decision_id=stable_id("dec", state.customer_id, ctx.now.isoformat(), self.version),
+            decision_id=decision_id,
             customer_id=state.customer_id,
             made_at=ctx.now,
             kind=DecisionKind.ACT if chosen is not None else DecisionKind.NOTHING,
@@ -226,26 +277,101 @@ class AutonomousPolicy:
             explored=pick.explored,
             currency=self.currency,
         )
+        self._remember(draft)
         return draft.model_copy(update={"reason": sentence})
 
-    def _timed(self, bid: Bid, state: CustomerState, ctx: DecisionContext) -> Bid:
+    def decision_id(self, customer_id: str, now: datetime, trigger: str | None = None) -> str:
+        """The id of the decision for this customer, moment and trigger (None: the daily sweep)."""
+        if trigger is None or trigger == SWEEP:
+            return stable_id("dec", customer_id, now.isoformat(), self.version)
+        return stable_id("dec", customer_id, now.isoformat(), self.version, trigger)
+
+    # --- sends scheduled but not yet in the state ------------------------------------------------
+
+    def pending_sends(self, state: CustomerState, now: datetime, *, ignore: str | None = None) -> int:
+        """Sends this policy scheduled for the customer that the state does not show yet.
+
+        A pending send is dropped once the state has a contact at or after its `send_at` (the SEND
+        was folded in) or once it is more than a week old (it no longer counts towards the cap even
+        if it never went out). `ignore` leaves out one decision id: the decision being re-made.
+        """
+        pending = self._scheduled.get(state.customer_id)
+        if not pending:
+            return 0
+        folded = state.last_contact_at
+        week_ago = now - _WEEK
+        keep = {did: at for did, at in pending.items() if at > week_ago and (folded is None or at > folded)}
+        if keep:
+            self._scheduled[state.customer_id] = keep
+        else:
+            del self._scheduled[state.customer_id]
+        return sum(1 for did in keep if did != ignore)
+
+    def with_pending(
+        self, state: CustomerState, now: datetime, *, ignore: str | None = None
+    ) -> CustomerState:
+        """The state with pending sends added to `contacts_7d`, so the cap and the price see them."""
+        extra = self.pending_sends(state, now, ignore=ignore)
+        if not extra:
+            return state
+        return state.model_copy(
+            update={"contacts_7d": state.contacts_7d + extra, "contacts_30d": state.contacts_30d + extra}
+        )
+
+    def forget_pending(self, decision_ids: Sequence[str]) -> None:
+        """Drop scheduled sends that will never go out (rejected, cancelled), so they stop counting."""
+        drop = set(decision_ids)
+        for cid in list(self._scheduled):
+            kept = {d: at for d, at in self._scheduled[cid].items() if d not in drop}
+            if kept:
+                self._scheduled[cid] = kept
+            else:
+                del self._scheduled[cid]
+
+    def _remember(self, decision: Decision) -> None:
+        pending = self._scheduled.get(decision.customer_id)
+        if decision.action is not None:
+            self._scheduled.setdefault(decision.customer_id, {})[
+                decision.decision_id
+            ] = decision.action.send_at
+        elif pending is not None and decision.decision_id in pending:
+            del pending[decision.decision_id]
+            if not pending:
+                del self._scheduled[decision.customer_id]
+
+    def _timed(
+        self,
+        bid: Bid,
+        state: CustomerState,
+        ctx: DecisionContext,
+        cache: dict[tuple[str, datetime], datetime | None] | None = None,
+    ) -> Bid:
         """The bid with its send time set: the customer's best allowed hour, never before now.
 
         A bidder may ask for a later start (a follow-up due in two days); the hour is then chosen in
         the 24 hours after that. A bid for a goal with no brief keeps its time; the rules block it.
+        Bids of one goal with the same start share one send time, so it is worked out once.
         """
-        brief = rules.brief_for(bid.goal_id, ctx.briefs)
-        if brief is None:
-            return bid
         earliest: datetime = max(ctx.now, bid.action.send_at)
-        send_at = choose_send_time(
-            state,
-            brief.envelope,
-            earliest,
-            fallback_hours=self.segment_hours.get(state.segment) if state.segment else None,
-            default_hour=self.default_hour,
-        )
-        if send_at == bid.action.send_at:
+        key = (bid.goal_id, earliest)
+        if cache is not None and key in cache:
+            send_at = cache[key]
+        else:
+            brief = rules.brief_for(bid.goal_id, ctx.briefs)
+            send_at = (
+                None
+                if brief is None
+                else choose_send_time(
+                    state,
+                    brief.envelope,
+                    earliest,
+                    fallback_hours=self.segment_hours.get(state.segment) if state.segment else None,
+                    default_hour=self.default_hour,
+                )
+            )
+            if cache is not None:
+                cache[key] = send_at
+        if send_at is None or send_at == bid.action.send_at:
             return bid
         return bid.model_copy(update={"action": bid.action.model_copy(update={"send_at": send_at})})
 
@@ -262,10 +388,16 @@ class AutonomousPolicy:
         return max(floors) if floors else DEFAULT_EXPLORATION_FLOOR
 
     def _nothing(
-        self, state: CustomerState, ctx: DecisionContext, reason: str, blocked_by: tuple[str, ...] = ()
+        self,
+        state: CustomerState,
+        ctx: DecisionContext,
+        reason: str,
+        blocked_by: tuple[str, ...] = (),
+        *,
+        trigger: str | None = None,
     ) -> Decision:
-        return Decision(
-            decision_id=stable_id("dec", state.customer_id, ctx.now.isoformat(), self.version),
+        decision = Decision(
+            decision_id=self.decision_id(state.customer_id, ctx.now, trigger),
             customer_id=state.customer_id,
             made_at=ctx.now,
             kind=DecisionKind.NOTHING,
@@ -275,6 +407,8 @@ class AutonomousPolicy:
             blocked_by=blocked_by,
             policy_version=self.version,
         )
+        self._remember(decision)
+        return decision
 
     # --- learn ------------------------------------------------------------------------------------
 

@@ -44,6 +44,7 @@ from autonomy.contracts import (
 )
 from autonomy.decide.audience import matches
 from autonomy.decide.models import (
+    ANY,
     BetaResponseModel,
     ResponseModel,
     ResponseObservation,
@@ -117,6 +118,28 @@ def urgency_for(kind: GoalKind) -> Urgency | None:
     return None
 
 
+def _option_std(model: ResponseModel, state: CustomerState, key: str, std: float) -> float:
+    """The spread of this option's uplift that is its own, for sampling between options.
+
+    Uplift is treated rate minus control rate, and the control rate is the same for every option a
+    customer has: drawing its spread independently per option (as Thompson sampling does) would
+    shuffle the options' order without anything to learn about them. So a model that exposes its
+    treated posterior (`BetaResponseModel`) is sampled on that part only; the control part still
+    moves every option's mean together as the holdout's data comes in. A model with its own
+    `option_std(state, key)` answers for itself.
+    """
+    own = getattr(model, "option_std", None)
+    if callable(own):
+        value = own(state, key)
+        return float(value) if isinstance(value, int | float) and value >= 0 else std
+    posterior = getattr(model, "posterior_treated", None)
+    if not callable(posterior):
+        return std
+    belief = posterior(state.segment or ANY, key)
+    var = getattr(belief, "var", None)
+    return math.sqrt(var) if isinstance(var, float) and var >= 0 else std
+
+
 def _rank(bid: Bid) -> tuple[float, float, str]:
     """Order for picking one theme: higher expected net, then less uncertain, then content id."""
     return (bid.expected_net, -bid.uncertainty, bid.action.content_id or "")
@@ -135,6 +158,10 @@ class GoalBidder:
     it): treated outcomes of this goal's sends and untreated outcomes of the `control_groups`
     feed the response model. `segment_of(customer_id)` gives a customer's segment; without it the
     bidder uses the segment it saw when it last bid for that customer, else none (pooled).
+
+    `own_spread=True` sets each bid's `uncertainty` from the option's own (treated) spread only, not
+    the control rate's spread that all of a customer's options share (see `_option_std`); the default
+    uses the full spread of the uplift.
     """
 
     def __init__(
@@ -150,8 +177,10 @@ class GoalBidder:
         per_theme: bool = True,
         segment_of: Callable[[str], str | None] | None = None,
         control_groups: frozenset[Group] = frozenset({Group.HOLDOUT}),
+        own_spread: bool = False,
     ) -> None:
         self.goal_id = brief.goal_id
+        self.own_spread = own_spread
         self.brief = brief
         self.response_model: ResponseModel = response_model or BetaResponseModel()
         self.value_model = value_model or ValueModel()
@@ -192,6 +221,8 @@ class GoalBidder:
                 for item in options:
                     key = action_key(channel, offer.offer_id, item.theme)
                     mean, std = self.response_model.predict(state, key)
+                    if self.own_spread:
+                        std = _option_std(self.response_model, state, key, std)
                     p_redeem = (
                         self.response_model.treated_rate(state, key) if offer.cost_per_redemption else 0.0
                     )
