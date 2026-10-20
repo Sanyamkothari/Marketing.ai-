@@ -183,8 +183,19 @@ export const CSS = `
 .ddc-table th{background:var(--bg);font-weight:600}
 .ddc-table th.is-changed{background:var(--info-t)}
 .ddc-mark{font-weight:400;color:var(--brand-700)}
-@media (max-width:900px){.ddc-layout{grid-template-columns:minmax(0,1fr)}.ddc-panel{order:-1;position:static;max-height:none;overflow:visible}}
-@media (max-width:600px){.ddc-indent{margin-left:0}.ddc-user .ddc-bubble{max-width:100%}.ddc-ready{padding:var(--s4)}.ddc-form{flex-direction:row}}
+.ddc-panel-toggle{display:none}
+.ddc-panel-body{display:flex;flex-direction:column;gap:var(--s3);min-width:0}
+.ddc-panel-body>*{flex:none}
+.ddc-spin{flex:none;width:14px;height:14px;border:2px solid var(--brand-blue);border-right-color:transparent;border-radius:50%;animation:ds-spin .8s linear infinite}
+.ddc-bubble[data-dds-progress]{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center}
+.ddc-progress{position:absolute;left:0;right:0;bottom:100%;margin:0 0 var(--s2);display:flex;gap:var(--s2);align-items:center;padding:var(--s2) var(--s3);background:var(--brand-50);border:1px solid var(--brand-200);border-radius:var(--r-lg);font-size:var(--fs-small);color:var(--ink)}
+.ddc-composer .dds-nochat{font-size:var(--fs-small);line-height:var(--lh-small);color:var(--ink2)}
+.ddc-stop{display:flex;flex-direction:column;gap:var(--s1)}
+.ddc-detail{font-size:var(--fs-small);color:var(--ink2)}
+.ddc-detail>summary{cursor:pointer;min-height:32px;display:flex;align-items:center}
+.ddc-detail>p{margin:0 0 var(--s2)}
+@media (max-width:900px){.ddc-layout{grid-template-columns:minmax(0,1fr)}.ddc-panel{order:-1;position:static;max-height:none;overflow:visible}.ddc-panel-toggle{display:flex;width:100%;min-height:44px;height:auto;justify-content:flex-start;text-align:left;white-space:normal}.ddc-panel:not(.is-open) .ddc-panel-body{display:none}}
+@media (max-width:600px){.ddc-indent{margin-left:0}.ddc-user .ddc-bubble{max-width:100%}.ddc-ready{padding:var(--s4)}.ddc-form{flex-direction:row}.ddc-composer.is-off .ddc-prompts{display:none}}
 `;
 
 /** Add the stylesheet once per document. */

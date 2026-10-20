@@ -161,7 +161,7 @@ test("with no goal the goals are cards; a goal chosen first is a fit, not a list
 
 test("with no AI service the box says so in plain words and the buttons still work", async () => {
   const s = await show("question");
-  assert.match($("[data-ai-not-connected]").textContent, /Chat needs the AI service\. No AI service is connected\./);
+  assert.match($("[data-ai-not-connected]").textContent, /^Chat needs the AI service\. Connect it in Settings\.$/, "one short line");
   assert.ok($('[data-ai-settings-link][href="#/settings/ai"]'), "the way to Settings › AI service");
   assert.equal($("#dds-chat-input").disabled, true);
   assert.ok($$("[data-dds-prompt]").every((b) => b.disabled), "the prompts wait for the AI service");
@@ -482,7 +482,8 @@ test("a stop is a checkbox in the card: nothing goes on until it is ticked, then
   };
   await show("approve_class", { patch });
   assert.equal($("[data-dds-approve-start]").disabled, true, "a stop is open");
-  assert.match($("[data-dds-stop-row]").textContent, /A safety check stops this plan: One step leaves no customers\./);
+  assert.match($("[data-dds-stop-row]").textContent, /^One step leaves no customers\./);
+  assert.match($("[data-dds-stop-row]").textContent, /A safety check stops this plan until you say yes/);
   tick($('input[data-dds-stop="k-stop"]'));
   assert.equal($("[data-dds-approve-start]").disabled, false);
   world.next.approval = "ready";
@@ -605,8 +606,8 @@ test("in a goal's setup the one click approves and fills the form (nothing runs)
 
 // --- look, accessibility, words ---------------------------------------------------------------------------------
 
-test("phone width: the data panel is above the chat; every control is the theme's 40px button", async () => {
-  assert.ok(CSS.includes("@media (max-width:900px){.ddc-layout{grid-template-columns:minmax(0,1fr)}.ddc-panel{order:-1;position:static;max-height:none;overflow:visible}}"));
+test("phone width: the data panel is one line above the chat; every control is the theme's 40px button", async () => {
+  assert.ok(CSS.includes("@media (max-width:900px){.ddc-layout{grid-template-columns:minmax(0,1fr)}.ddc-panel{order:-1;position:static;max-height:none;overflow:visible}"));
   assert.ok(
     CSS.includes("position:sticky;top:calc(var(--bar-h,56px) + var(--s4));max-height:calc(100vh - var(--bar-h,56px) - 2*var(--s4));overflow:auto}"),
     "the panel sits below the top bar and scrolls inside itself, so its foot is reachable",

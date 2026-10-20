@@ -33,6 +33,7 @@ import { DEFAULT_SPEED, SPEEDS, applySpeedMinutes, minutesText, modelChoice, run
 import { TABLE_FILE_TYPES } from "../intake/notes.js";
 import { injectAgentStyles } from "../agent/styles.js";
 import { plain } from "../agent/sent.js";
+import { userText } from "../../labels.js";
 import {
   acknowledgeStop,
   addFile,
@@ -54,7 +55,7 @@ import {
 } from "./api.js";
 import { injectDataDoctorStyles } from "./styles.js";
 import { sectionOf } from "./plan.js";
-import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml, sentenceWithMore } from "./chat.js";
+import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml, progressText, sentenceWithMore } from "./chat.js";
 import { checksHtml, funnelHtml, newLineHtml, planHtml, planModel, queueHtml, todoHtml } from "./plan_view.js";
 import {
   approveHtml,
@@ -89,6 +90,8 @@ function fresh() {
     loading: true,
     busy: "", // "" | upload | answer | tick | agree | approve | goal | revoke | chat | continue
     uploadNote: "",
+    pending: "", // what was clicked while the server answers ("answer:<q>|<option>", "undo:<item>", "goal:<goal>"): that control shows it is working
+    panelOpen: false, // on a phone the data panel is one line until it is opened
     sent: new Map(), // files already uploaded for the next check ("name|size|date" -> the upload): a retry does not send them again
     error: null,
     notice: "",
@@ -131,6 +134,13 @@ function mainHtml(entry) {
   const notice = s.notice ? `<p class="dds-why" role="status" data-dds-notice>${esc(s.notice)}</p>` : "";
   if (s.loading && !s.screen) {
     return `<div class="dds" data-dds data-dds-place="${esc(host.place)}"><p class="loading" role="status">Opening Data Doctor…</p></div>`;
+  }
+  if (!s.screen && s.busy === "upload") {
+    // The first files are being read: the chat is already there and says so (the start card returns if it fails).
+    const bubble = `<div class="ddc-row ddc-agent" data-dds-reading><span class="ddc-avatar" aria-hidden="true">DD</span><div class="ddc-stack"><div class="ddc-bubble" data-dds-progress role="status"><span class="ddc-spin" aria-hidden="true"></span><span>${esc(progressText("upload"))}</span> <span class="dds-why">${userText(
+      plain(s.uploadFirst || ""),
+    )}${s.uploadMore ? esc(` and ${s.uploadMore} more`) : ""}</span></div></div></div>`;
+    return `<div class="dds ddc" data-dds data-dds-place="${esc(host.place)}"><section class="ddc-conv" aria-label="Conversation with Data Doctor" data-dds-conversation>${bubble}</section></div>`;
   }
   if (!s.screen) {
     const title = host.goalId ? "Check the customers' file" : "Check my data";
@@ -345,6 +355,7 @@ function chatMainHtml(entry) {
   const openSent = new Set([...entry.main.querySelectorAll("details[data-ag-sent][open]")].map((el) => el.getAttribute("data-ag-sent")));
   const conversation = conversationHtml(screen, {
     busy: s.busy,
+    pending: s.pending,
     stops: s.stops,
     confirms: s.confirms,
     speed: s.speed,
@@ -364,7 +375,7 @@ function chatMainHtml(entry) {
     },
   });
   const intake = screen.case.read_only ? "" : intakeHtml(entry, { first: false });
-  const panel = panelHtml(screen, { tab: s.tab, side: s.side, intake, busy: Boolean(s.busy) });
+  const panel = panelHtml(screen, { tab: s.tab, side: s.side, intake, busy: Boolean(s.busy), open: s.panelOpen });
   return `<div class="dds ddc" data-dds data-dds-chat-view data-dds-place="${esc(host.place)}" data-dds-case="${esc(screen.case.case_id)}">${headHtml(screen, { level, titled: host.place !== "wizard" })}${alertInCard ? "" : `${notice}${err}`}<div class="ddc-layout">${conversation}${panel}</div>${
     host.place === "data" ? `<div class="dds-actions">${button({ label: "Start a new check", kind: "tertiary", attrs: "data-dds-new" })}</div>` : ""
   }</div>`;
@@ -411,7 +422,7 @@ function draw(entry) {
  * counted: a reply that lands above it is what the person is taken to (the newest message, else the first new card).
  */
 function followChat(entry) {
-  const cards = [...entry.main.querySelectorAll("[data-dds-conversation] > :not([data-dds-composer])")].filter((el) => !el.querySelector("[data-dds-ready]"));
+  const cards = [...entry.main.querySelectorAll("[data-dds-conversation] > :not([data-dds-composer]):not([data-dds-reading])")].filter((el) => !el.querySelector("[data-dds-ready]"));
   const seen = entry.cardsSeen;
   entry.cardsSeen = cards.length;
   if (!(seen > 0 && cards.length > seen)) return;
@@ -471,10 +482,11 @@ async function readStartInfo(entry) {
 }
 
 /** Run one change, then draw the case as the server has it now. A stale version reloads and says so. */
-async function act(entry, busy, work, { announce = "" } = {}) {
+async function act(entry, busy, work, { announce = "", pending = "" } = {}) {
   const s = entry.state;
   if (s.busy) return;
   s.busy = busy;
+  s.pending = pending;
   s.error = null;
   s.notice = "";
   s.alertAt = busy === "approve" ? "card" : "top";
@@ -499,6 +511,7 @@ async function act(entry, busy, work, { announce = "" } = {}) {
     }
   }
   s.busy = "";
+  s.pending = "";
   draw(entry);
 }
 
@@ -519,10 +532,12 @@ async function uploadGoal(host) {
 }
 
 /** Put the files the server now holds (uploaded, or imported from a connection) into the open case, or a new one. */
-async function bringIn(entry, name, getUploads) {
+async function bringIn(entry, name, getUploads, first = name, more = 0) {
   const s = entry.state;
   const host = entry.host;
   s.uploadNote = `Reading ${name}…`;
+  s.uploadFirst = first;
+  s.uploadMore = more;
   await act(
     entry,
     "upload",
@@ -568,7 +583,7 @@ function upload(entry, files) {
       }
     }
     return [...sent.values()];
-  });
+  }, list[0].name, list.length - 1);
 }
 
 /** "Pick from a connection": the picker's import answers what `POST /uploads` does, so it carries on as a file does. */
@@ -773,7 +788,7 @@ async function approveAndStart(entry) {
 
 async function pickGoal(entry, goalId) {
   const s = entry.state;
-  await act(entry, "goal", () => chooseGoal(theCase(entry), goalId), { announce: "Goal chosen" });
+  await act(entry, "goal", () => chooseGoal(theCase(entry), goalId), { announce: "Goal chosen", pending: `goal:${goalId}` });
   if (!s.error && entry.host.place === "data") {
     rememberCase(goalId, s.caseId);
     window.location.hash = wizardHref(goalId);
@@ -788,8 +803,9 @@ function bind(entry) {
     const d = target.dataset;
     if (d.ddsUndo) {
       const item = (theCase(entry).items || []).find((i) => i.item_id === d.ddsUndo);
-      act(entry, "tick", () => decideItem(theCase(entry), d.ddsUndo, false), { announce: item && item.state === "accepted" ? "Change undone" : "Change skipped" });
-    } else if (d.ddsUse) act(entry, "tick", () => decideItem(theCase(entry), d.ddsUse, true), { announce: "Change added" });
+      act(entry, "tick", () => decideItem(theCase(entry), d.ddsUndo, false), { announce: item && item.state === "accepted" ? "Change undone" : "Change skipped", pending: `undo:${d.ddsUndo}` });
+    } else if (d.ddsUse) act(entry, "tick", () => decideItem(theCase(entry), d.ddsUse, true), { announce: "Change added", pending: `use:${d.ddsUse}` });
+    else if (target.hasAttribute("data-dds-panel-toggle")) togglePanel(entry);
     else if (d.ddsPrompt) talk(entry, d.ddsPrompt);
     else if (target.hasAttribute("data-dds-approve-start")) approveAndStart(entry);
     else if (target.hasAttribute("data-dds-see-details")) {
@@ -818,7 +834,7 @@ function bind(entry) {
           entry.state.changing.delete(d.ddsQ);
           entry.state.knowing.delete(`q:${d.ddsQ}`);
         },
-        { announce: "Answer saved" },
+        { announce: "Answer saved", pending: `answer:${d.ddsQ}|${d.ddsAnswer}` },
       );
     } else if (d.ddsItemDk) openWho(entry, `i:${d.ddsItemDk}`, `[data-dds-who-pick]`);
     else if (d.ddsWhoPick) {
@@ -932,6 +948,19 @@ function bind(entry) {
       talk(entry, entry.state.draft);
     });
   }
+}
+
+/** On a phone: the one-line "Your data · 4,000 customers · Show" opens the panel and "Hide" folds it again, in place. */
+function togglePanel(entry) {
+  const s = entry.state;
+  s.panelOpen = !s.panelOpen;
+  const panel = entry.main.querySelector("[data-dds-panel]");
+  if (!panel) return;
+  panel.classList.toggle("is-open", s.panelOpen);
+  const toggle = panel.querySelector("[data-dds-panel-toggle]");
+  if (toggle) toggle.setAttribute("aria-expanded", String(s.panelOpen));
+  const word = panel.querySelector("[data-dds-panel-act]");
+  if (word) word.textContent = s.panelOpen ? "Hide" : "Show";
 }
 
 /** Send a message to Data Doctor (typed, or a suggested prompt); with no AI service the reply says so. */

@@ -19,11 +19,23 @@ import { button, icon, statusChip } from "../../components.js";
 import { esc } from "../../dom.js";
 import { count } from "../../format.js";
 import { goalName, userText } from "../../labels.js";
-import { AI_NOT_CONNECTED_SENTENCE, AI_SETTINGS_HREF } from "../../availability.js";
+import { AI_SETTINGS_HREF } from "../../availability.js";
 import { minutesText } from "../campaigns/run_rules.js";
 import { sentHtml, plain, TOOL_PHRASES } from "../agent/sent.js";
 import { samplesHtml } from "./plan_view.js";
-import { AI_CONSENT_BUTTON, AI_CONSENT_LINE, AI_SPENT_LINE, VERDICTS, namesOf, standingHtml, userTextIn } from "./view.js";
+import { AI_CONSENT_BUTTON, AI_CONSENT_LINE, AI_SPENT_LINE, VERDICTS, columnNote, namesOf, standingHtml, userTextIn as nameIn } from "./view.js";
+
+/** A server sentence with the person's names in it; a column is said in words (`marketing opt in`), not as the file spells it. */
+const userTextIn = (text, names) => nameIn(text, names, { friendly: true });
+
+/** What the chat says at once while the server works (by what was clicked); a chat message says "Thinking…". */
+export const PROGRESS = Object.freeze({
+  upload: "Reading your files…",
+  approve: "Checking everything before we start…",
+  continue: "Starting your campaign…",
+  chat: "Thinking…",
+});
+export const progressText = (busy) => PROGRESS[busy] || "Checking that…";
 
 const plural = (n, one, many) => `${count(n)} ${n === 1 ? one : many}`;
 const cards = (screen) => (screen && screen.view && screen.view.conversation) || [];
@@ -107,8 +119,16 @@ function samplesPanel(screen) {
     .join("");
 }
 
-/** The right-hand panel: progress, the data (tabs per file, After or Before), earlier answers, and "See details". */
-export function panelHtml(screen, { tab = null, side = "after", intake = "", busy = false } = {}) {
+/** "4,000 customers" (the customer list's rows, else the first file's), or "" when nothing was counted. */
+export function dataSummary(screen) {
+  const files = (cardOf(screen, "first_look") || { files: [] }).files.filter((f) => Number.isFinite(f.rows));
+  const customers = files.find((f) => /customer/i.test(f.kind || ""));
+  const pick = customers || files[0];
+  return pick ? plural(pick.rows, customers ? "customer" : "row", customers ? "customers" : "rows") : "";
+}
+
+/** The right-hand panel: progress, the data (tabs per file, After or Before), earlier answers, and "See details". On a phone it is one line, "Your data · 4,000 customers · Show", until it is opened. */
+export function panelHtml(screen, { tab = null, side = "after", intake = "", busy = false, open = false } = {}) {
   const files = previewFiles(screen.view);
   const chosen = files.find((f) => f.upload_id === tab) || files[0] || null;
   const tabs =
@@ -137,11 +157,15 @@ export function panelHtml(screen, { tab = null, side = "after", intake = "", bus
     : samplesPanel(screen);
   const names = (screen.case.files || []).map((f) => userText(plain(f.file_name))).join(", ");
   const heading = chosen ? `Your data: ${userText(plain(chosen.file_name))}` : "Your data";
-  return `<aside class="ddc-panel" aria-label="Your data" data-dds-panel>${checklistHtml(screen)}<section class="card ddc-box" data-dds-data aria-labelledby="ddc-data-t"><h3 class="dds-group-t" id="ddc-data-t">${heading}</h3>${
+  const summary = dataSummary(screen);
+  const toggle = `<button type="button" class="btn secondary ddc-panel-toggle" data-dds-panel-toggle aria-expanded="${open}" aria-controls="ddc-panel-body"><span>${esc(
+    `Your data${summary ? ` · ${summary}` : ""} · `,
+  )}<span class="ddc-panel-act" data-dds-panel-act>${open ? "Hide" : "Show"}</span></span></button>`;
+  return `<aside class="ddc-panel${open ? " is-open" : ""}" aria-label="Your data" data-dds-panel>${toggle}<div class="ddc-panel-body" id="ddc-panel-body">${checklistHtml(screen)}<section class="card ddc-box" data-dds-data aria-labelledby="ddc-data-t"><h3 class="dds-group-t" id="ddc-data-t">${heading}</h3>${
     files.length || !names ? "" : `<p class="dds-files">${icon("data", { size: 16 })}<span>${names}</span></p>`
   }${data}</section>${standingHtml(screen.view, { busy, level: 3 })}${intake ? `<div class="dds-more" data-dds-more>${intake}</div>` : ""}<div class="dds-actions">${button(
     { label: "See details (for experts)", kind: "tertiary", attrs: "data-dds-see-details" },
-  )}</div></aside>`;
+  )}</div></div></aside>`;
 }
 
 // --- the cards --------------------------------------------------------------------------------------------------
@@ -168,22 +192,25 @@ const DID = Object.freeze({
 
 const WHO = Object.freeze({ rules: "Done by the rules", agent: "Done by Data Doctor", you: "Your choice", someone: "Chosen by a teammate" });
 
-function changeHtml(card, names, busy) {
+function changeHtml(card, names, busy, { clicked: clickedKey = "", column = "" } = {}) {
   const accepted = card.state === "accepted";
-  const pending = card.state === "pending";
+  const waiting = card.state === "pending";
   const sub = [
     card.counts ? userTextIn(card.counts, names) : "",
+    columnNote([column]),
     accepted && card.by ? esc(WHO[card.by] || "") : "",
-    pending ? esc(card.source === "ai" ? "Suggested by the AI. Waiting for your yes." : "Waiting for your yes.") : "",
+    waiting ? esc(card.source === "ai" ? "Suggested by the AI. Waiting for your yes." : "Waiting for your yes.") : "",
     card.state === "rejected" ? esc(card.parked_for ? "Waiting for someone who would know. Left out." : "Undone. Not in the plan.") : "",
   ]
     .filter(Boolean)
     .join(" · ");
   const id = esc(card.item_id);
+  const usingIt = clickedKey === `use:${card.item_id}`; // the one that was clicked shows it is working
+  const undoing = clickedKey === `undo:${card.item_id}`;
   const actions = accepted
-    ? button({ label: "Undo", kind: "secondary", size: "sm", attrs: `data-dds-undo="${id}" aria-label="Undo: ${esc(plain(card.title))}"`, disabled: busy })
-    : `${button({ label: pending ? "Use this" : "Do it again", kind: pending ? "primary" : "secondary", size: "sm", attrs: `data-dds-use="${id}" aria-label="${pending ? "Use" : "Do again"}: ${esc(plain(card.title))}"`, disabled: busy })}${
-        pending ? button({ label: "Skip", kind: "tertiary", size: "sm", attrs: `data-dds-undo="${id}" aria-label="Skip: ${esc(plain(card.title))}"`, disabled: busy }) : ""
+    ? button({ label: "Undo", kind: "secondary", size: "sm", attrs: `data-dds-undo="${id}" aria-label="Undo: ${esc(plain(card.title))}"`, disabled: busy, busy: undoing })
+    : `${button({ label: waiting ? "Use this" : "Do it again", kind: waiting ? "primary" : "secondary", size: "sm", attrs: `data-dds-use="${id}" aria-label="${waiting ? "Use" : "Do again"}: ${esc(plain(card.title))}"`, disabled: busy, busy: usingIt })}${
+        waiting ? button({ label: "Skip", kind: "tertiary", size: "sm", attrs: `data-dds-undo="${id}" aria-label="Skip: ${esc(plain(card.title))}"`, disabled: busy, busy: undoing }) : ""
       }`;
   return indented(
     `<div class="ddc-change is-${esc(card.state)}" data-dds-change-card="${id}" data-dds-change-state="${esc(card.state)}">${icon(accepted ? "checkCircle" : "draft", { size: 18 })}<div class="ddc-change-body"><span class="dds-item-t">${userTextIn(
@@ -193,24 +220,25 @@ function changeHtml(card, names, busy) {
   );
 }
 
-function chip(option, q, { chosen = false, busy = false, dk = false } = {}) {
+function chip(option, q, { chosen = false, busy = false, dk = false, clicked = "" } = {}) {
   return `<li class="dds-opt${chosen ? " is-chosen" : ""}">${button({
     label: option.label,
     kind: chosen ? "primary" : "secondary",
     attrs: `data-dds-answer="${esc(option.id)}" data-dds-q="${esc(q.question_id)}"${dk ? " data-dds-dk-chip" : ""} aria-pressed="${chosen}"`,
     disabled: busy || chosen,
+    busy: clicked === `answer:${q.question_id}|${option.id}`,
   })}${option.effect ? `<span class="dds-effect">${userTextIn(option.effect, [])}${option.rows_changed != null ? ` · ${esc(option.rows_changed === 0 ? "Changes no rows" : `Changes ${plural(option.rows_changed, "row", "rows")}`)}` : ""}</span>` : ""}${
     option.recommended ? `<span class="dds-effect">Recommended</span>` : ""
   }</li>`;
 }
 
-function questionHtml(q, names, { busy, remembered }) {
+function questionHtml(q, names, { busy, remembered, clicked = "", column = "" }) {
   const answered = q.answer !== null && q.answer !== undefined;
   const all = [...q.options, ...(q.dont_know ? [q.dont_know] : [])];
   const chose = all.find((o) => o.id === q.answer);
   const chips = [
-    ...q.options.map((o) => chip(o, q, { chosen: o.id === q.answer, busy })),
-    ...(q.dont_know ? [chip(q.dont_know, q, { chosen: q.dont_know.id === q.answer && !q.options.some((o) => o.id === q.answer), busy, dk: true })] : []),
+    ...q.options.map((o) => chip(o, q, { chosen: o.id === q.answer, busy, clicked })),
+    ...(q.dont_know ? [chip(q.dont_know, q, { chosen: q.dont_know.id === q.answer && !q.options.some((o) => o.id === q.answer), busy, dk: true, clicked })] : []),
   ].join("");
   const state = q.note
     ? `<p class="dds-state" data-dds-assumed>${icon("info", { size: 14 })}<span>${userTextIn(q.note, names)}</span></p>`
@@ -233,7 +261,7 @@ function questionHtml(q, names, { busy, remembered }) {
     `<article class="dds-card dds-q${answered ? "" : " is-open"}" data-dds-question="${esc(q.question_id)}" data-dds-code="${esc(q.code || "")}" aria-labelledby="ddcq-${esc(q.question_id)}"><p class="dds-card-t" id="ddcq-${esc(q.question_id)}">${userTextIn(
       q.text,
       names,
-    )}</p>${q.blocking && !answered ? `<p class="dds-tag-row"><span class="chip neutral">Needed to go on</span></p>` : ""}${
+    )}</p>${columnNote([column]) ? `<p class="dds-effect" data-dds-column-note>${columnNote([column])}</p>` : ""}${q.blocking && !answered ? `<p class="dds-tag-row"><span class="chip neutral">Needed to go on</span></p>` : ""}${
       q.why ? `<p class="dds-why"><span class="dds-label">Why we ask:</span> ${userTextIn(q.why, names)}</p>` : ""
     }<ul class="dds-opts" aria-label="Answers">${chips}</ul>${state}${memory}</article>`,
   );
@@ -268,7 +296,7 @@ function requestHtml(r, names, { busy, kitHref }) {
   );
 }
 
-function goalsHtml(g, names, busy) {
+function goalsHtml(g, names, busy, clicked = "") {
   if (!g.cards.length) {
     return agentRow(
       `<div class="ddc-bubble" data-dds-goals>Nothing in this data fits one of the goals yet. ${button({
@@ -289,6 +317,7 @@ function goalsHtml(g, names, busy) {
           kind: c.best ? "primary" : "secondary",
           attrs: `data-dds-goal="${esc(c.goal_id)}" aria-label="Choose the goal: ${esc(c.name)}"`,
           disabled: busy,
+          busy: clicked === `goal:${c.goal_id}`,
         })}</li>`,
     )
     .join("");
@@ -300,15 +329,15 @@ function goalsHtml(g, names, busy) {
   )}`;
 }
 
-function fitHtml(f) {
+function fitHtml(f, names) {
   return indented(
     `<article class="dds-card ddc-fit${f.ok ? "" : " is-not"}" data-dds-fit="${esc(f.goal_id)}" data-dds-fit-ok="${f.ok}"><p class="dds-card-t has-icon">${icon(f.ok ? "checkCircle" : "alert", {
       size: 16,
-    })}<span>${esc(f.ok ? `A good fit for “${f.name}”` : `Not a good fit for “${f.name}” yet`)}</span></p><p class="dds-why">${esc(plain(f.sentence))}</p></article>`,
+    })}<span>${esc(f.ok ? `A good fit for “${f.name}”` : `Not a good fit for “${f.name}” yet`)}</span></p><p class="dds-why">${userTextIn(f.sentence, names)}</p></article>`,
   );
 }
 
-function messageHtml(m, names, { busy, openSent, index }) {
+function messageHtml(m, names, { busy, openSent, index, clicked = "" }) {
   if (m.role === "user") return `<div class="ddc-row ddc-user"><div class="ddc-bubble" data-dds-msg="user">${esc(plain(m.text))}</div></div>`;
   const did = [...new Set((m.tools || []).map((t) => DID[t]).filter(Boolean))];
   const trace = did.length
@@ -329,7 +358,7 @@ function messageHtml(m, names, { busy, openSent, index }) {
     ? `<div class="ddc-suggestion" data-dds-suggestion="${esc(s.question_id)}">${
         s.used
           ? `<p class="dds-state">${icon("check", { size: 14 })}<span>That question is answered.</span></p>`
-          : `${s.question ? `<p class="dds-card-t">${userTextIn(s.question, names)}</p>` : ""}${s.why ? `<p class="dds-why"><span class="dds-label">Why we ask:</span> ${userTextIn(s.why, names)}</p>` : ""}<p class="dds-why" data-dds-suggested>${esc(plain(s.label))}${s.effect ? ` ${esc("·")} ${userTextIn(s.effect, names)}` : ""}${s.rows_changed != null ? ` ${esc("·")} ${esc(s.rows_changed === 0 ? "Changes no rows" : `Changes ${plural(s.rows_changed, "row", "rows")}`)}` : ""}</p>${button({ label: "Use this answer", kind: "primary", size: "sm", attrs: `data-dds-answer="${esc(s.option_id)}" data-dds-q="${esc(s.question_id)}" data-dds-use-answer aria-label="${esc(`Use this answer: ${plain(s.label)}${s.question ? ` (${plain(s.question)})` : ""}`)}"`, disabled: busy })}${others}`
+          : `${s.question ? `<p class="dds-card-t">${userTextIn(s.question, names)}</p>` : ""}${s.why ? `<p class="dds-why"><span class="dds-label">Why we ask:</span> ${userTextIn(s.why, names)}</p>` : ""}<p class="dds-why" data-dds-suggested>${esc(plain(s.label))}${s.effect ? ` ${esc("·")} ${userTextIn(s.effect, names)}` : ""}${s.rows_changed != null ? ` ${esc("·")} ${esc(s.rows_changed === 0 ? "Changes no rows" : `Changes ${plural(s.rows_changed, "row", "rows")}`)}` : ""}</p>${button({ label: "Use this answer", kind: "primary", size: "sm", attrs: `data-dds-answer="${esc(s.option_id)}" data-dds-q="${esc(s.question_id)}" data-dds-use-answer aria-label="${esc(`Use this answer: ${plain(s.label)}${s.question ? ` (${plain(s.question)})` : ""}`)}"`, disabled: busy, busy: clicked === `answer:${s.question_id}|${s.option_id}` })}${others}`
       }</div>`
     : "";
   return agentRow(
@@ -353,7 +382,7 @@ export function readyHtml(r, ctx) {
   }
   if (r.stage === "start") {
     const left = (r.left_out || []).length
-      ? `<p class="dds-why" data-dds-left-out>${esc("Left out, because nobody agreed:")} ${r.left_out.map((s) => userTextIn(s, names)).join("; ")}</p>`
+      ? `<p class="dds-why" data-dds-left-out>${esc("Left out, because nobody agreed:")} ${r.left_out.map((s) => nameIn(s, names)).join("; ")}</p>`
       : "";
     return indented(
       `<section class="ddc-ready" data-dds-ready="start"><h3 class="dds-group-t">Ready to start</h3><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p>${
@@ -364,9 +393,14 @@ export function readyHtml(r, ctx) {
   const stops = (r.stops || [])
     .map(
       (s) =>
-        `<label class="dds-tick ddc-tick" data-dds-stop-row="${esc(s.key)}"><input type="checkbox" data-dds-stop="${esc(s.key)}"${ctx.stops.has(s.key) ? " checked" : ""}${ctx.busy ? " disabled" : ""}><span class="dds-item-body"><span class="dds-item-t">${esc(
-          "A safety check stops this plan:",
-        )} ${userTextIn(s.text, names)}</span><span class="dds-item-sub">Tick to say yes, go on anyway.</span></span></label>`,
+        `<div class="ddc-stop" data-dds-stop-block="${esc(s.key)}"><label class="dds-tick ddc-tick" data-dds-stop-row="${esc(s.key)}"><input type="checkbox" data-dds-stop="${esc(s.key)}"${ctx.stops.has(s.key) ? " checked" : ""}${ctx.busy ? " disabled" : ""}><span class="dds-item-body"><span class="dds-item-t">${userTextIn(
+          s.text,
+          names,
+        )}</span><span class="dds-item-sub">A safety check stops this plan until you say yes. Tick to go on anyway.</span></span></label>${
+          s.detail
+            ? `<details class="ddc-detail" data-dds-keep="stop-${esc(s.key)}"><summary>See details</summary><p class="dds-why" data-dds-stop-detail>${userTextIn(s.detail, names)}</p></details>`
+            : ""
+        }</div>`,
     )
     .join("");
   const yes = (r.confirmations || [])
@@ -374,7 +408,7 @@ export function readyHtml(r, ctx) {
       const who = c.role === "approver" ? "an approver on your team" : "an analyst on your team";
       if (!c.can_agree) {
         const ask = c.cannot_agree === "separation" ? `You suggested or answered this, so ask ${who.replace(/^an? /, "another ")} to agree to it.` : `Ask ${who} to agree to it.`;
-        return `<div class="dds-state ddc-ask" data-dds-ask-other="${esc(c.cannot_agree || "role")}">${icon("info", { size: 14 })}<span>${userTextIn(c.sentence, names)}<br>${esc(ask)} ${esc(
+        return `<div class="dds-state ddc-ask" data-dds-ask-other="${esc(c.cannot_agree || "role")}">${icon("info", { size: 14 })}<span>${nameIn(c.sentence, names)}<br>${esc(ask)} ${esc(
           c.required ? "It is in the plan, so this waits for them." : "Until then it is left out.",
         )}</span></div>`;
       }
@@ -447,7 +481,7 @@ export function leavesOutHtml(r, ctx) {
   const names = ctx.names || [];
   const out = (r.confirmations || []).filter((c) => !c.required && (!c.can_agree || !ctx.confirms.has(c.item_id)));
   return out.length
-    ? `<p class="dds-why" data-dds-approve-leaves-out>${esc(`${approveLabel(ctx)} leaves out:`)} ${out.map((c) => userTextIn(c.sentence, names)).join("; ")}</p>`
+    ? `<p class="dds-why" data-dds-approve-leaves-out>${esc(`${approveLabel(ctx)} leaves out:`)} ${out.map((c) => nameIn(c.sentence, names)).join("; ")}</p>`
     : "";
 }
 
@@ -475,10 +509,11 @@ export function promptsOf(screen) {
 export function composerHtml(screen, { ai = null, use = null, draft = "", busy = false, canConnect = true, canConsent = true } = {}) {
   let note = "";
   if (ai === false) {
-    const rest = canConnect ? "Connect one in Settings › AI service." : "Ask an admin to connect one in Settings › AI service.";
-    note = `<div class="dds-nochat" role="status"><p data-ai-not-connected>${esc(`Chat needs the AI service. ${AI_NOT_CONNECTED_SENTENCE} ${rest}`)}</p>${
-      canConnect ? `<div class="dds-actions">${button({ label: "Open Settings › AI service", href: AI_SETTINGS_HREF, kind: "secondary", attrs: "data-ai-settings-link" })}</div>` : ""
-    }<p class="dds-why">Everything else on this screen works without it.</p></div>`;
+    // One short line: what is missing and the way to it (the buttons above work without it).
+    const way = canConnect
+      ? `<a href="${esc(AI_SETTINGS_HREF)}" data-ai-settings-link>Connect it in Settings</a>.`
+      : esc("Ask an admin to connect it.");
+    note = `<div class="dds-nochat" role="status"><p data-ai-not-connected>${esc("Chat needs the AI service.")} ${way}</p></div>`;
   } else if (use && !use.consent) {
     note = `<div class="dds-nochat" role="status"><p data-ai-no-consent>${esc(AI_CONSENT_LINE)}</p>${
       canConsent
@@ -492,7 +527,8 @@ export function composerHtml(screen, { ai = null, use = null, draft = "", busy =
   const prompts = promptsOf(screen)
     .map((p) => button({ label: p, kind: "tertiary", size: "sm", attrs: `data-dds-prompt="${esc(p)}"`, disabled: off || Boolean(busy) }))
     .join("");
-  return `<div class="ddc-composer" data-dds-composer>${note}<div class="ddc-prompts" role="group" aria-label="Things to ask">${prompts}</div><form id="dds-chat-form" class="ddc-form"><label class="sr" for="dds-chat-input">Message Data Doctor</label><input type="text" id="dds-chat-input" class="input" autocomplete="off" maxlength="1000" placeholder="${
+  const working = busy && busy !== "chat" ? `<p class="ddc-progress" role="status" data-dds-progress><span class="ddc-spin" aria-hidden="true"></span><span>${esc(progressText(busy))}</span></p>` : "";
+  return `<div class="ddc-composer${off ? " is-off" : ""}" data-dds-composer>${working}${note}<div class="ddc-prompts" role="group" aria-label="Things to ask">${prompts}</div><form id="dds-chat-form" class="ddc-form"><label class="sr" for="dds-chat-input">Message Data Doctor</label><input type="text" id="dds-chat-input" class="input" autocomplete="off" maxlength="1000" placeholder="${
     off ? "Chat is not available" : "Ask anything, or tell me what to change…"
   }" value="${esc(draft)}"${off || busy === "chat" ? " disabled" : ""}>${button({ label: "Send", kind: "primary", type: "submit", attrs: "data-dds-send", disabled: off || Boolean(busy) })}</form></div>`;
 }
@@ -505,6 +541,11 @@ export function conversationHtml(screen, ctx) {
   const names = namesOf(c);
   const remembered = new Map((screen.view.remembered || []).map((r) => [r.question_id, r]));
   const busy = Boolean(ctx.busy);
+  const clicked = ctx.pending || ""; // what was clicked, while the server answers: that control shows it is working
+  const columnOf = new Map([
+    ...(c.items || []).map((i) => [`item:${i.item_id}`, i.payload && (i.payload.column || (i.payload.step && i.payload.step.column))]),
+    ...(c.questions || []).map((q) => [`question:${q.question_id}`, q.column]),
+  ]);
   let index = 0;
   const body = cards(screen)
     .map((card) => {
@@ -512,19 +553,19 @@ export function conversationHtml(screen, ctx) {
         case "first_look":
           return firstLookHtml(card, names);
         case "change":
-          return changeHtml(card, names, busy);
+          return changeHtml(card, names, busy, { clicked, column: columnOf.get(`item:${card.item_id}`) || "" });
         case "question":
-          return questionHtml(card, names, { busy, remembered: remembered.get(card.question_id) || null });
+          return questionHtml(card, names, { busy, clicked, column: columnOf.get(`question:${card.question_id}`) || "", remembered: remembered.get(card.question_id) || null });
         case "doubt":
           return doubtHtml(card, names);
         case "request":
           return requestHtml(card, names, { busy, kitHref: ctx.kitHref ? ctx.kitHref(card.goal_ids || []) : "" });
         case "goals":
-          return goalsHtml(card, names, busy);
+          return goalsHtml(card, names, busy, clicked);
         case "fit":
-          return fitHtml(card);
+          return fitHtml(card, names);
         case "message":
-          return messageHtml(card, names, { busy, openSent: ctx.openSent || new Set(), index: (index += 1) });
+          return messageHtml(card, names, { busy, clicked, openSent: ctx.openSent || new Set(), index: (index += 1) });
         case "ready":
           return readyHtml(card, { ...ctx, names });
         default:
@@ -532,7 +573,7 @@ export function conversationHtml(screen, ctx) {
       }
     })
     .join("");
-  const thinking = ctx.busy === "chat" ? agentRow(`<div class="ddc-bubble"><span class="loading">Thinking…</span></div>`) : "";
+  const thinking = ctx.busy === "chat" ? agentRow(`<div class="ddc-bubble" data-dds-progress role="status"><span class="ddc-spin" aria-hidden="true"></span><span>${esc(progressText("chat"))}</span></div>`) : "";
   return `<section class="ddc-conv" aria-label="Conversation with Data Doctor" data-dds-conversation>${body}${thinking}${composerHtml(screen, ctx.composer || {})}</section>`;
 }
 

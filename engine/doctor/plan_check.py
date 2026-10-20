@@ -109,6 +109,7 @@ def _finding(found: Finding, item_id: str | None) -> PlanFinding:
         code=found.code,
         text=found.message,
         item_id=item_id,
+        detail=found.detail,
     )
 
 
@@ -244,7 +245,9 @@ def ledger_view(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement]
                 "level": "flag" if ack else found.level,
                 "kind": "guard",
                 "key": found.key,
-                "text": f"{found.text} (confirmed by a person)" if ack else found.text,
+                "text": " ".join(
+                    filter(None, [found.text, found.detail, "(confirmed by a person)" if ack else ""])
+                ),
                 "acknowledged": ack,
                 "item_id": found.item_id,
                 "code": found.code,
