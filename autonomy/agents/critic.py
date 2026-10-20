@@ -8,7 +8,10 @@ Two stages, cheapest and surest first:
    carousel or video item: a format the channel can carry, built only from the brand's approved
    assets of the right kind, each with alt text. An item that breaks
    a rule is rejected with the reasons and never reaches the judge: there is no point paying a
-   model to score copy we already know is unsendable.
+   model to score copy we already know is unsendable. When the brand rules name countries, each
+   country's compliance pack (`autonomy.compliance_packs`) adds its own rules here too: India's
+   DLT template registration and opt-out line, the US's STOP keyword and postal address, the EU's
+   unsubscribe link. With no countries named, the rules are exactly the brand's own.
 2. **Judge** (an LLM, ideally from a different model family than the Creative, to avoid a model
    grading its own style): scores brand voice and honesty from 1 to 5 with reasons. To reduce
    position and self bias, each item is judged alone (never side by side with others) and twice,
@@ -45,6 +48,7 @@ from autonomy.agents.creative import (
     media_kind,
 )
 from autonomy.channels.render import CAROUSEL_MAX, CAROUSEL_MIN, FORMAT_MEDIA, FORMAT_SUPPORT, asset_urls
+from autonomy.compliance_packs import CompliancePack, PackSettings, Purpose, packs_for
 from autonomy.contracts import (
     NO_OFFER,
     Brief,
@@ -154,6 +158,21 @@ class BrandRules(Contract):
     approved_assets: tuple[AssetRef, ...] = Field(
         default=(), description="The brand's approved images and videos. Empty: text items only."
     )
+    countries: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "ISO country codes the content will be sent to; each adds its compliance pack's rules "
+            "(a country without a pack adds the strictest of them all). Empty: no pack rules."
+        ),
+    )
+    purpose: Purpose = Field(
+        default=Purpose.PROMOTIONAL,
+        description="What the packs judge the content as; marketing is promotional",
+    )
+    pack_settings: PackSettings = Field(
+        default_factory=PackSettings,
+        description="What the packs need from the brand: registered DLT templates, a postal address",
+    )
 
     @classmethod
     def from_brief(
@@ -163,6 +182,8 @@ class BrandRules(Contract):
         brand_voice: str,
         allowed_domains: Sequence[str] = (),
         assets: Iterable[ApprovedAsset] = (),
+        countries: Sequence[str] = (),
+        pack_settings: PackSettings | None = None,
     ) -> BrandRules:
         """Rules whose approved offers are the brief's envelope offers, and assets the approved ones given."""
         return cls(
@@ -170,7 +191,13 @@ class BrandRules(Contract):
             offers=brief.envelope.offers,
             allowed_domains=tuple(allowed_domains),
             approved_assets=tuple(AssetRef.of(a) for a in assets if is_approved(a)),
+            countries=tuple(countries),
+            pack_settings=pack_settings or PackSettings(),
         )
+
+    def compliance_packs(self) -> tuple[CompliancePack, ...]:
+        """The packs for `countries`, built with `pack_settings`; empty when no country is named."""
+        return packs_for(self.countries, self.pack_settings) if self.countries else ()
 
     def asset_by_url(self, url: str) -> AssetRef | None:
         return next((a for a in self.approved_assets if a.url == url), None)
@@ -256,8 +283,25 @@ def format_problems(item: ContentItem, rules: BrandRules) -> list[str]:
     return problems
 
 
-def check_rules(item: ContentItem, rules: BrandRules) -> list[str]:
-    """Every deterministic rule the item breaks, in plain words. Empty means it may go to the judge."""
+def pack_problems(
+    item: ContentItem, rules: BrandRules, packs: Sequence[CompliancePack] | None = None
+) -> list[str]:
+    """What the country packs say is wrong with the item, each prefixed with the pack's name.
+
+    `packs` overrides the packs `rules.countries` names (a brand with its own pack, or a test).
+    """
+    chosen = rules.compliance_packs() if packs is None else tuple(packs)
+    found = [p for pack in chosen for p in pack.content_problems(item, item.channel, rules.purpose)]
+    return list(dict.fromkeys(found))
+
+
+def check_rules(
+    item: ContentItem, rules: BrandRules, *, packs: Sequence[CompliancePack] | None = None
+) -> list[str]:
+    """Every deterministic rule the item breaks, in plain words. Empty means it may go to the judge.
+
+    The brand's rules first, then the country packs' (none unless `rules.countries` or `packs` names some).
+    """
     problems: list[str] = []
     subject = item.subject or ""
     text = f"{subject}\n{item.body}"
@@ -323,6 +367,9 @@ def check_rules(item: ContentItem, rules: BrandRules) -> list[str]:
 
     # Format and media.
     problems.extend(format_problems(item, rules))
+
+    # Country rules.
+    problems.extend(pack_problems(item, rules, packs))
     return problems
 
 
