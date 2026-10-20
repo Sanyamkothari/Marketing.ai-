@@ -674,7 +674,19 @@ def _what_can_this_power(_parsed: NoArgs, ctx: DataToolContext) -> PowerVerdicts
 
     files = list(ctx.files) or [_loaded(ctx, None)]
     offers = ctx.offers or (Offer(config=_config(ctx), stage=""),)
-    return PowerVerdicts(use_cases=readiness(files, offers, _root(ctx)))
+    verdicts = list(readiness(files, offers, _root(ctx)))
+
+    def fits() -> bool:
+        shown = PowerVerdicts(use_cases=tuple(verdicts)).model_dump(mode="json")
+        return output_size(Exposure.AGGREGATE, shown) <= AGGREGATE_BUDGET
+
+    # Each ready or check verdict carries its file's first look (about 3.6 KB). A table that powers four or five goals
+    # would be refused whole (`TOOL_OUTPUT_TOO_LARGE`) and stop the visit; the best verdicts keep theirs, the last lose it.
+    for index in range(len(verdicts) - 1, -1, -1):
+        if fits():
+            break
+        verdicts[index] = verdicts[index].model_copy(update={"first_look": None})
+    return PowerVerdicts(use_cases=tuple(verdicts))
 
 
 def _enough_data(parsed: OutcomeArgs, ctx: DataToolContext) -> NextSteps:
@@ -990,3 +1002,7 @@ def register_all(registry: DataToolRegistry) -> None:
     from engine.doctor.tools_sql import register_sql_tools
 
     register_sql_tools(registry)
+    # The agent looks at its own work (#85): the first rows before and after the plan, the AI only.
+    from engine.doctor.tools_preview import register_preview_tools
+
+    register_preview_tools(registry)

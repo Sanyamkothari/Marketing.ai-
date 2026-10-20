@@ -120,7 +120,7 @@ average), correct one cell for one customer, leave out rows by a rule (never by 
 Each suggestion says who made it. **Found by our checks**: the rules (an age of 212 is always "Please check"
 and never ticked for you). **Suggested by the AI**: the chat, when you ask ("Bombay and Mumbai are the same
 city"); the AI must look at the column first, the fix is tried on your first 1,000 rows and shows what it
-changes, and it is never ticked for you. **Your edit**: what you did by hand (M154).
+changes, and it is never ticked by the AI itself (the Data Doctor's chat may apply a safe one for you to undo, below). **Your edit**: what you did by hand (M154).
 
 ### A column per month (M156)
 
@@ -635,8 +635,9 @@ Every kind of suggestion Data Doctor can make - a data fix, a setting, your own 
 keeping each customer's latest row, cutting one file in two, reading lakh and crore or `haan`/`nahi` - has its own
 written **rule set**. A kind of suggestion with no rule set is never made at all. The rule sets say:
 
-- **which fixes** each kind may suggest (the chat may tidy, read and merge values; correcting a cell or leaving
-  rows out stays yours);
+- **which fixes** each kind may suggest (the chat may tidy, read and merge values, and the Data Doctor's chat may
+  also leave rows out by a rule such as "the ID starts with 999"; correcting a cell stays yours, and Guided
+  setup's chat never leaves rows out);
 - **never the ID or the outcome**, and a column holding personal data can only be hidden;
 - **how far** a fix may go for this goal (tidy, add a column, or change the rows);
 - **what is never ticked for you**: placeholder codes, ranges, keeping the latest row per customer, and anything
@@ -678,21 +679,71 @@ later without starting again.
 - **Close the browser at any moment.** Every step is saved as it happens. When you come back, Data Doctor goes on
   from where it was, without losing or repeating anything.
 - **No AI service needed.** Every step works without one. Only the chat needs one; without it, Data Doctor says so
-  and everything else carries on. Whatever the AI suggests waits for your tick.
+  and everything else carries on. Whatever the AI suggests waits for your tick, except the safe changes it applies
+  for you (next section).
 - **Who did what.** Your answers, your ticks and your approval are kept with your name, and the approval with the
   exact sentence you read.
+
+### The chat is a conversation (agent chat)
+
+With an AI service connected, the chat feels like any assistant that just does the work. It remembers the
+conversation (the last twelve messages), sees the whole case - every file, what the rules decided, its own earlier
+changes, the questions and your answers - and uses its tools: it looks at the data, makes changes on the working
+copy, asks, suggests an answer, says when it is unsure, asks for a missing file, takes back its own earlier change and
+replies in plain words. Its instructions are one short prompt, `configs/prompts/data_doctor_chat.v1.md`.
+
+- **It does the safe work itself.** A fix the guards pass (nothing new that stops or flags the plan) is *applied for
+  you*: ticked by the agent, one **Undo**, on the timeline with the counts of its trial on your first 1,000 rows.
+  Only these kinds: reading plain numbers, trimming spaces, splitting a column, renaming, leaving rows out by a rule
+  (`starts with 999`, `before 1 Jan`), and a join or stack that loses nobody. Leaving rows out still needs your own
+  yes in the approval. Anything that decides how dates or numbers are read (day or month first, a decimal comma),
+  gives a value a new meaning (merging spellings, units, filling blanks, yes/no words), hides a column, is a query,
+  touches most of a column, or is stopped or flagged by a guard waits for your tick, and the chat says why.
+- **Meaning stays yours.** What counts as a yes, who agreed to be contacted, which column is the ID or the date: the
+  chat asks, and when you have said it in your own words ("a sale only counts if the order was over 500") it
+  *suggests* the matching answer as a button. Only your click records it. The agent also never changes, by itself,
+  a column that holds one of these meanings (the outcome, the date a row describes, who agreed or opted out, the
+  ID - but for leaving rows out by it): a rename, a split or a reading of such a column waits for your tick, and so
+  does a rule that would leave out more than 5% of the whole file or reads dates whose day/month order nobody settled.
+  **Known gap:** your answer to "what counts as a yes" (Q24) is noted for your analyst and does not build an outcome
+  definition yet (`engine/doctor/outcome_definition.py` is not wired into the visit), so it does not block anything and the
+  chat says it changes nothing yet.
+- **Changing your mind.** "Actually only this year's orders" makes the agent take back its own earlier change
+  (rejected, decided by the agent, shown in the reply) and apply the new one. It cannot take back what you ticked or
+  gave your own yes to, and your Undo sticks: the same change proposed again in other words is not put back.
+- **Decision (leaving rows out by the ID).** `remove_rows` is allowed on the ID column (never on the outcome), in the
+  shared policy (`data.protected_columns`) and in `check_recipe`, so it holds for every caller, not only the chat:
+  leaving out the rows whose ID starts with 999 changes no ID. The agent may apply it for you (APPROVE-class: the
+  approval still asks for your own yes, and a loss over 5% is a stop). With separation of duties on, whoever wrote
+  the message the change answers counts as its proposer.
+- **Held in code:** each file's own masking before anything is sent, numbers in a reply must come from a look or from
+  your words, the case's AI spending limit (`data_doctor.ai_limits`: 2,000,000 tokens and 200 calls per case, at most
+  8 actions per message), and every refusal of the tools (consent, future dates, look-alike joins, invented values,
+  the original files).
 
 ### For developers
 
 `engine/doctor/goal_brief.py` (`GoalBrief`, `load_goal_brief`, `brief_hash`; tool #35 `load_goal_brief`),
 `engine/doctor/visit.py` (the state machine: `resume`, `set_goal`, `answer`, `decide`, `approve`, `chat`,
-`add_files`; the ports `VisitDeps`), `engine/doctor/visit_contracts.py` (`CaseVisit`, kept in `case.visit`) and
-`api/routes/case_visit.py` (`POST /cases/{id}/visit`, `/goal`, `/answers`, `/decisions`, `/approval`, `/chat`;
+`add_files`; the ports `VisitDeps`; CONVERSE applies the clean changes, `_converse`), `engine/doctor/visit_contracts.py`
+(`CaseVisit`, kept in `case.visit`) and `api/routes/case_visit.py` (`POST /cases/{id}/visit`, `/goal`, `/answers`, `/decisions`, `/approval`, `/chat`;
 `GET /goal-briefs/{goal_id}`). The brief is frozen into the case at `cases/<client>/<case>/briefs/<goal>_<hash>.json`.
 Each transition is one write of `case.json`; items and questions of a goal carry its `goal_id`. Refusals:
 `VISIT_NOT_WAITING` (409), `VISIT_UNKNOWN_CHOICE` (422), `USE_CASE_NOT_FOUND` for a goal that is not a use case.
 Tests: `tests/unit/doctor/test_goal_brief.py`, `tests/unit/doctor/test_visit.py`,
 `tests/integration/test_api_case_visit.py`.
+
+The chat: `engine/doctor/agent_chat.py` (`doctor_converse`: the review's loop with the conversation in front of it and
+a `reply` at the end), `engine/doctor/agent_apply.py` (`AGENT_APPLIED_STEPS`, `agent_applies`: what the agent applies for
+the person), `configs/prompts/data_doctor_chat.v1.md`. A reply in `case.chat` (`CaseChatEntry`) names what it did:
+`item_ids` (its changes in `case.items`: `accepted` with `decided_by: agent:data-doctor` is applied for the person,
+`pending` waits for their tick), `withdrawn` (its own earlier changes it took back), `tools` (what it did, in order) and
+`suggestion` (`question_id`, `option_id`, `label`: an answer for the person to click); each is left out of the JSON
+while empty. A typed change by the AI carries what its trial on the first 1,000 rows counted in `payload.tried`
+(`rows`, `changed`, `failed`). The chat's quick questions are `CHAT_ASK` (non-blocking, the model's own options) and
+"what counts as a yes" is `Q24` (a note for the analyst, not blocking). Tests: `tests/unit/doctor/test_doctor_chat.py` (the owner's example
+conversation, with the turn-keyed scripted model `tests/fixtures/doctor_eval/chat_model.py`),
+`tests/unit/doctor/test_agent_apply.py`, `tests/unit/doctor/test_chat_prompt.py`.
 
 ## 20. More of what Data Doctor can look at, and explanations you can trust (Plan O M236, DEC-1806)
 

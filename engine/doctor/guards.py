@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Literal
 
@@ -102,6 +102,10 @@ class Finding(StrictBase):
     message: str = Field(description="Plain words with the counts; never a cell value.")
     order: int | None = Field(default=None, description="The step it is about; none for the whole plan.")
     count: int | None = None
+    detail: str | None = Field(
+        default=None,
+        description="The expert's side of `message` (which steps, by outcome); shown behind a click.",
+    )
 
     @property
     def key(self) -> str:
@@ -644,6 +648,24 @@ def _naming(orders: Sequence[int]) -> str:
     return ", ".join(f"step {o}" for o in orders)
 
 
+_YES_VALUES: Final[frozenset[str]] = frozenset({"1", "1.0", "true", "yes", "y"})
+_NO_VALUES: Final[frozenset[str]] = frozenset({"0", "0.0", "false", "no", "n"})
+
+
+def _who_were_lost(by_outcome: Mapping[str, int]) -> str:
+    """One plain sentence on who was lost (most were a yes, or most were not); nothing when it cannot be said."""
+    total = sum(by_outcome.values())
+    if not total:
+        return ""
+    yes = sum(v for k, v in by_outcome.items() if k.strip().casefold() in _YES_VALUES)
+    no = sum(v for k, v in by_outcome.items() if k.strip().casefold() in _NO_VALUES)
+    if no * 2 > total:
+        return " Most of them were not a yes."
+    if yes * 2 > total:
+        return " Most of them were a yes."
+    return ""
+
+
 def plan_findings(ledger: Ledger | None, *, side_table: bool = False) -> list[Finding]:
     """The plan-level gate: over 5% lost, or the outcome rate moved over a point, needs a yes naming the steps.
     The loss gate is about customers: a log's rows (`side_table`) are said per step, they do not stop the plan.
@@ -653,24 +675,32 @@ def plan_findings(ledger: Ledger | None, *, side_table: bool = False) -> list[Fi
     found: list[Finding] = []
     if ledger.lost_pct > LOSS_STOP_PCT and not side_table:
         by = ", ".join(f"{k}: {v:,}" for k, v in ledger.lost_by_outcome.items())
+        who = (
+            "This step leaves"
+            if sum(1 for st in ledger.steps if st.lost) <= 1
+            else "Together these steps leave"
+        )
         found.append(
             Finding(
                 level="stop",
                 code="PLAN_LOSES_TOO_MUCH",
                 count=ledger.lost_total,
-                message=f"Together the steps lose {ledger.lost_total:,} of {ledger.start:,} {ledger.unit} "
-                f"({ledger.lost_pct:.1f}%), more than {LOSS_STOP_PCT:g}%. Most from {_naming(ledger.top_loss_steps)}."
-                + (f" By outcome, {by}." if by else ""),
+                message=f"{who} out {ledger.lost_total:,} of {ledger.start:,} {ledger.unit} "
+                f"({ledger.lost_pct:.1f}%), more than the {LOSS_STOP_PCT:g}% we allow without asking."
+                + (_who_were_lost(ledger.lost_by_outcome) if ledger.rate_start is not None else ""),
+                detail=f"Most from {_naming(ledger.top_loss_steps)}." + (f" By outcome, {by}." if by else ""),
             )
         )
     if ledger.rate_move is not None and abs(ledger.rate_move) > RATE_STOP_POINTS:
+        points = f"{RATE_STOP_POINTS:g} point" + ("" if RATE_STOP_POINTS == 1 else "s")
         found.append(
             Finding(
                 level="stop",
                 code="PLAN_MOVES_OUTCOME_RATE",
-                message=f"The outcome rate moves from {ledger.rate_start:.1f}% to {ledger.rate_end:.1f}% "
-                f"({ledger.rate_move:+.1f} points), more than {RATE_STOP_POINTS:g}. "
-                f"Biggest moves: {_naming(ledger.top_rate_steps)}.",
+                message=f"These steps change the share of {ledger.unit} who are a yes from {ledger.rate_start:.1f}% "
+                f"to {ledger.rate_end:.1f}% ({ledger.rate_move:+.1f} points), more than the {points} we allow "
+                "without asking.",
+                detail=f"The outcome rate moves most at {_naming(ledger.top_rate_steps)}.",
             )
         )
     return found
@@ -847,6 +877,7 @@ def run_guarded(
     book: ExpectationBook | None = None,
     twice: bool = True,
     source_name: str | None = None,
+    watch: Callable[[RecipeStep, pd.DataFrame, pd.DataFrame], None] | None = None,
     **recipe_args: Any,
 ) -> GuardedRun:
     """`run_recipe`, with a receipt for every step, the plan's ledger and the findings; run twice by default.
@@ -854,7 +885,9 @@ def run_guarded(
     A table whose `primary_key` names the rows of a log (:func:`names_a_log_row`: `order_id`, `payment_id`) is a
     side table: its rows are counted as rows of `source_name`, never as customers.
 
-    `expectations` (by step order) are locked in `book` before the plan runs. Raises what `run_recipe` raises.
+    `expectations` (by step order) are locked in `book` before the plan runs. `watch(step, before, after)` sees each
+    step's input and output once, on the first run (the preview takes its sample rows from it). Raises what
+    `run_recipe` raises.
     """
     book = book if book is not None else ExpectationBook()
     side_table = (source_name or "this file") if names_a_log_row(primary_key) else None
@@ -862,7 +895,7 @@ def run_guarded(
     for order, exp in (expectations or {}).items():
         findings.extend(book.declare(order, exp))
 
-    def once() -> tuple[RecipeRun, list[Receipt], list[str]]:
+    def once(watching: bool = False) -> tuple[RecipeRun, list[Receipt], list[str]]:
         receipts: list[Receipt] = []
         hashes: list[str] = []
 
@@ -880,6 +913,8 @@ def run_guarded(
                 )
             )
             hashes.append(frame_hash(after))
+            if watching and watch is not None:
+                watch(step, before, after)
 
         run = run_recipe(
             frame,
@@ -892,7 +927,7 @@ def run_guarded(
         )
         return run, receipts, hashes
 
-    run, receipts, hashes = once()
+    run, receipts, hashes = once(watching=True)
     if twice:
         _, _, again = once()
         if hashes != again:

@@ -67,6 +67,11 @@ def test_the_screen_follows_a_visit_from_a_file_to_a_goal(client: TestClient) ->
     view = screen["view"]
     assert view["mode"] == "generic" and view["missing_for"] == case["visit"]["missing_for"]
     assert case["state"] == "approve" and view["verdict"]["key"] == "needs_approval"
+    shown = view["preview"]["files"][0]  # the data panel: the first rows before and after, masked
+    assert shown["file_name"] == "customers.csv" and shown["total_rows"] == 1_500
+    assert len(shown["before"]) == 10 == len(shown["after"]) and shown["note"] is None
+    assert set(shown["columns"][0]) == {"name", "changed", "personal"}
+    assert all(len(row) == len(shown["columns"]) for row in shown["before"] + shown["after"])
     approved = client.post(
         f"/cases/{case['case_id']}/approval",
         json={"version": case["version"], "sentence": view["approval_sentence"]},
@@ -172,3 +177,9 @@ def test_the_screen_names_the_goal_and_says_who_may_agree(unified: None, tmp_pat
         assert screen["case"]["state"] == "approve", screen["case"]["state"]
         sentence = screen["view"]["approval_sentence"]
         assert "“Find customers likely to buy”" in sentence and GOAL not in sentence
+
+        # Cell values (masked) are an Analyst's, as on `agent-session/preview` and `/rows`: a Viewer's screen holds none.
+        assert screen["view"]["preview"]["files"][0]["before"]
+        seen = client.get(f"/cases/{case['case_id']}/screen", headers=bearer(app, viewer)).json()
+        assert seen["view"]["preview"] is None
+        assert all("samples" not in step for step in (seen["view"]["ledger"] or {}).get("steps", []))

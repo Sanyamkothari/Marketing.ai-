@@ -14,6 +14,10 @@
 // over when the switch is on), so the screen sits exactly where Guided setup sat and no route or page changes.
 // With the switch off nothing here is drawn and Guided setup is unchanged.
 //
+// The way in is a chat (`chat.js`): the server's `view.conversation` as cards, a composer, the data beside it and ONE
+// "Approve and start" card (`approveAndStart`). "See details (for experts)" opens the full plan view below it, as it
+// was; "Back to the chat" returns. An answer without a conversation (an older server) draws the plan view.
+//
 // The case is the server's: every change is sent with the version read and an idempotency key, and the screen is
 // drawn again from `GET /cases/{case_id}/screen`. The only state kept here is which case is open, a chat draft and
 // what is busy. One flow: nothing in this file asks a person to go anywhere else to finish.
@@ -25,10 +29,11 @@ import { button, emptyState } from "../../components.js";
 import { canAccess } from "../router.js";
 import { createConnectionPicker } from "../connections/picker.js";
 import { getModelOffer, postCampaignRun } from "../campaigns/wizard_api.js";
-import { DEFAULT_SPEED, SPEEDS, modelChoice, runHref, startSentenceHtml } from "../campaigns/run_rules.js";
+import { DEFAULT_SPEED, SPEEDS, applySpeedMinutes, minutesText, modelChoice, runHref, startSentenceHtml } from "../campaigns/run_rules.js";
 import { TABLE_FILE_TYPES } from "../intake/notes.js";
 import { injectAgentStyles } from "../agent/styles.js";
 import { plain } from "../agent/sent.js";
+import { userText } from "../../labels.js";
 import {
   acknowledgeStop,
   addFile,
@@ -50,6 +55,7 @@ import {
 } from "./api.js";
 import { injectDataDoctorStyles } from "./styles.js";
 import { sectionOf } from "./plan.js";
+import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml, progressText, sentenceWithMore } from "./chat.js";
 import { checksHtml, funnelHtml, newLineHtml, planHtml, planModel, queueHtml, todoHtml } from "./plan_view.js";
 import {
   approveHtml,
@@ -59,6 +65,7 @@ import {
   headerHtml,
   leftOutOf,
   missingHtml,
+  namesOf,
   requestHtml,
   requestsOf,
   standingHtml,
@@ -70,7 +77,7 @@ import {
 /** The wizard's Customers step for a goal: where the Data page continues. */
 export const wizardHref = (goalId) => `#/campaigns/new/customers/${encodeURIComponent(goalId)}`;
 
-const entries = new Map(); // place|goal|mode -> { main, aside, state, host }
+const entries = new Map(); // place|goal|mode -> { main, aside, state, host, detail }
 const remembered = new Map(); // goal -> the case just continued from the Data page
 
 /** The case the Data page continued with for `goalId`, so the wizard opens that one. */
@@ -83,9 +90,12 @@ function fresh() {
     loading: true,
     busy: "", // "" | upload | answer | tick | agree | approve | goal | revoke | chat | continue
     uploadNote: "",
+    pending: "", // what was clicked while the server answers ("answer:<q>|<option>", "undo:<item>", "goal:<goal>"): that control shows it is working
+    panelOpen: false, // on a phone the data panel is one line until it is opened
     sent: new Map(), // files already uploaded for the next check ("name|size|date" -> the upload): a retry does not send them again
     error: null,
     notice: "",
+    alertAt: "top", // where the notice or error is drawn: the approval card for what the Approve click said, else the top
     draft: "",
     ai: null, // true | false | null (not known)
     use: null, // the Doctor's AI on this case: { consent, spent, ... } (`GET /cases/{id}/ai`), null while not known
@@ -100,6 +110,10 @@ function fresh() {
     read: new Set(), // changes needing their own yes whose "I have read this sentence" is ticked
     checked: new Map(), // plan sections the person has checked ("I have checked this section") -> what they held then
     knowing: new Map(), // "I don't know" panels open: "q:<question>" / "i:<item>" -> who would know (or null)
+    stops: new Set(), // the chat's approval card: stops the person ticked "go on anyway" for (by key)
+    confirms: new Set(), // ... and the changes they ticked "I agree" for (by item id)
+    tab: null, // the data panel's file (upload id) and side ("after" | "before")
+    side: "after",
   };
 }
 
@@ -121,6 +135,13 @@ function mainHtml(entry) {
   if (s.loading && !s.screen) {
     return `<div class="dds" data-dds data-dds-place="${esc(host.place)}"><p class="loading" role="status">Opening Data Doctor…</p></div>`;
   }
+  if (!s.screen && s.busy === "upload") {
+    // The first files are being read: the chat is already there and says so (the start card returns if it fails).
+    const bubble = `<div class="ddc-row ddc-agent" data-dds-reading><span class="ddc-avatar" aria-hidden="true">DD</span><div class="ddc-stack"><div class="ddc-bubble" data-dds-progress role="status"><span class="ddc-spin" aria-hidden="true"></span><span>${esc(progressText("upload"))}</span> <span class="dds-why">${userText(
+      plain(s.uploadFirst || ""),
+    )}${s.uploadMore ? esc(` and ${s.uploadMore} more`) : ""}</span></div></div></div>`;
+    return `<div class="dds ddc" data-dds data-dds-place="${esc(host.place)}"><section class="ddc-conv" aria-label="Conversation with Data Doctor" data-dds-conversation>${bubble}</section></div>`;
+  }
   if (!s.screen) {
     const title = host.goalId ? "Check the customers' file" : "Check my data";
     return `<div class="dds" data-dds data-dds-place="${esc(host.place)}"><section class="card dds-start" data-dds-start>${emptyState({
@@ -130,6 +151,7 @@ function mainHtml(entry) {
     })}<div class="card-body">${intakeHtml(entry, { first: true, quiet: true })}</div></section>${err}</div>`;
   }
   const screen = s.screen;
+  if (isChat(entry)) return chatMainHtml(entry);
   const c = screen.case;
   const view = screen.view;
   const busy = Boolean(s.busy);
@@ -151,7 +173,10 @@ function mainHtml(entry) {
   const earlier = standingHtml(view, { busy, level: sub });
   const proceed = continueHtml(entry);
   const more = c.files && c.files.length && !c.read_only ? `<div class="dds-more" data-dds-more>${intakeHtml(entry, { first: false })}</div>` : "";
-  return `<div class="dds" data-dds data-dds-place="${esc(host.place)}" data-dds-case="${esc(c.case_id)}"><section class="card" data-dds-header>${headerHtml(
+  const back = chatShown(screen)
+    ? `<div class="dds-actions">${button({ label: "Back to the chat", kind: "secondary", attrs: "data-dds-back-to-chat" })}</div>`
+    : "";
+  return `<div class="dds" data-dds data-dds-place="${esc(host.place)}" data-dds-case="${esc(c.case_id)}">${back}<section class="card" data-dds-header>${headerHtml(
     screen,
     { level },
   )}</section>${notice}${err}${proceed}${newLineHtml(model)}${todoHtml(view.verdict.key, {
@@ -202,7 +227,7 @@ function speedsHtml(entry) {
   const chosen = entry.state.speed;
   const items = SPEEDS.map((speed) =>
     button({
-      label: `${speed.name}: about ${speed.minutes} minutes${speed.recommended ? " (recommended)" : ""}`,
+      label: `${speed.name}: about ${minutesText(speed.minutes)}${speed.recommended ? " (recommended)" : ""}`,
       kind: chosen === speed.id ? "primary" : "secondary",
       size: "sm",
       attrs: `data-dds-speed="${speed.id}" aria-pressed="${chosen === speed.id}"`,
@@ -248,35 +273,117 @@ function startSentence(entry) {
   }<p class="dds-why" data-dds-start-leave>You can close this page.</p>`;
 }
 
-/** Ready for the goal: one action on - start the campaign (Data page, wizard) or fill the goal's setup (setup). */
-function continueHtml(entry) {
+/** What starts the campaign (or fills the goal's setup): the sentence above Start, and the Start button. */
+function startParts(entry) {
   const { state: s, host } = entry;
   const view = s.screen && s.screen.view;
-  if (!view || !["ready", "ready_with_warnings"].includes(view.verdict.key) || !view.start) return "";
+  if (!view || !["ready", "ready_with_warnings"].includes(view.verdict.key) || !view.start) return null;
   // Here the campaign starts (the wizard's Start, which also offers last month's model or learning again, or the Data page's); else the goal's setup or the wizard goes on.
   const starts =
     host.place !== "setup" && (host.approved ? true : view.start.target === "runs" && canAccess("POST", "/campaign-runs"));
   const label = starts ? "Start the campaign" : host.approved ? "Continue with this data" : "Continue to the campaign";
-  const left = leftOutOf(s.screen).length;
-  const without = left
-    ? `<p class="dds-why" data-dds-continue-without>${esc(
-        `Continuing uses the data without the ${left === 1 ? "change" : `${left} changes`} left out above. Someone can still agree to ${left === 1 ? "it" : "them"} first.`,
-      )}</p>`
-    : "";
-  return `<section class="card dds-continue" data-dds-ready><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p>${without}${
-    starts ? startSentence(entry) : ""
-  }<div class="dds-actions">${button({
+  const action = `<div class="dds-actions">${button({
     label,
     kind: "primary",
     attrs: "data-dds-continue",
     disabled: Boolean(s.busy),
     busy: s.busy === "continue",
-  })}</div></section>`;
+  })}</div>`;
+  return { sentence: starts ? startSentence(entry) : "", action };
+}
+
+/** Whether "Approve" goes on to start a campaign here (the Data page, the wizard) or only fills the goal's setup / hands on to the wizard. */
+function approveStarts(entry) {
+  const { host } = entry;
+  return host.place !== "setup" && (host.approved ? true : canAccess("POST", "/campaign-runs"));
+}
+
+/** Above the approve button: what happens after the click (speed picked above; with last month's model on offer it is chosen after). */
+function approveSentence(entry) {
+  const { state: s } = entry;
+  if (modelChoice(s.offer, s.mode)) return "";
+  const files = s.screen.case.files || [];
+  const file = files[0];
+  // The minutes are the speed buttons' (one place, one set of numbers): the sentence does not say them again.
+  const ready = cardOf(s.screen, "ready");
+  const sentence = startSentenceHtml({ table: file ? plain(file.file_name) : "", speed: s.speed, time: !(ready && (ready.speeds || []).length) });
+  return `<p class="dds-why" data-dds-approve-start-sentence>${sentence}</p><p class="dds-why" data-dds-start-leave>You can close this page.</p>`;
+}
+
+/** Ready for the goal: one action on - start the campaign (Data page, wizard) or fill the goal's setup (setup). */
+function continueHtml(entry) {
+  const parts = startParts(entry);
+  if (!parts) return "";
+  const left = leftOutOf(entry.state.screen).length;
+  const without = left
+    ? `<p class="dds-why" data-dds-continue-without>${esc(
+        `Continuing uses the data without the ${left === 1 ? "change" : `${left} changes`} left out above. Someone can still agree to ${left === 1 ? "it" : "them"} first.`,
+      )}</p>`
+    : "";
+  return `<section class="card dds-continue" data-dds-ready><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p>${without}${parts.sentence}${parts.action}</section>`;
+}
+
+// --- the chat-first screen ----------------------------------------------------------------------------------------
+
+/** Whether the server sent a conversation to draw (an older answer has none: today's plan view is drawn then). */
+const chatShown = (screen) => Boolean(screen && screen.case && (screen.case.files || []).length && !screen.case.read_only && screen.view.conversation && screen.view.conversation.length);
+
+/** The chat is drawn unless "See details" opened the full plan view. */
+const isChat = (entry) => !entry.detail && chatShown(entry.state.screen);
+
+function chatMainHtml(entry) {
+  const { state: s, host } = entry;
+  const screen = s.screen;
+  const level = levelOf(host);
+  const err = s.error ? errorBox(s.error) : "";
+  const notice = s.notice ? `<p class="dds-why" role="status" data-dds-notice>${esc(s.notice)}</p>` : "";
+  const ready = cardOf(screen, "ready");
+  // What the Approve click says (the sentence changed, a safety check changed, a refusal) is drawn in the approval card,
+  // next to the button the person just clicked; at the top of a long page it would be out of sight.
+  // The card's learning times are the server's; the sentence above Approve says the same ones (before a goal is chosen
+  // no offer has brought them in yet).
+  // The learning time answered in See details opens the buttons on it (once per answer: a later click on a button wins).
+  if (ready && ready.speed && s.speedFrom !== ready.speed) {
+    s.speedFrom = ready.speed;
+    s.speed = ready.speed;
+  }
+  if (ready && (ready.speeds || []).length) applySpeedMinutes(Object.fromEntries(ready.speeds.map((sp) => [sp.id, sp.minutes])));
+  const alertInCard = s.alertAt === "card" && Boolean(ready && ["approve", "start"].includes(ready.stage));
+  const parts = ready && ready.stage === "start" ? startParts(entry) : null;
+  const starts = approveStarts(entry);
+  const goalIds = screen.view.goal_id ? [screen.view.goal_id] : screen.view.missing_for || [];
+  const openSent = new Set([...entry.main.querySelectorAll("details[data-ag-sent][open]")].map((el) => el.getAttribute("data-ag-sent")));
+  const conversation = conversationHtml(screen, {
+    busy: s.busy,
+    pending: s.pending,
+    stops: s.stops,
+    confirms: s.confirms,
+    speed: s.speed,
+    startHtml: parts ? `${parts.sentence}${parts.action}` : "",
+    starts,
+    approveHtml: ready && ready.stage === "approve" && starts ? approveSentence(entry) : "",
+    alertHtml: alertInCard ? `${notice}${err}` : "",
+    openSent,
+    kitHref: (ids) => dataRequestUrl((ids.length ? ids : goalIds).slice(0, 4)),
+    composer: {
+      ai: s.ai,
+      use: s.use,
+      draft: s.draft,
+      busy: s.busy,
+      canConnect: canAccess("PUT", "/ai-service/{slot}"),
+      canConsent: canAccess("POST", "/cases/{case_id}/ai-consent"),
+    },
+  });
+  const intake = screen.case.read_only ? "" : intakeHtml(entry, { first: false });
+  const panel = panelHtml(screen, { tab: s.tab, side: s.side, intake, busy: Boolean(s.busy), open: s.panelOpen });
+  return `<div class="dds ddc" data-dds data-dds-chat-view data-dds-place="${esc(host.place)}" data-dds-case="${esc(screen.case.case_id)}">${headHtml(screen, { level, titled: host.place !== "wizard" })}${alertInCard ? "" : `${notice}${err}`}<div class="ddc-layout">${conversation}${panel}</div>${
+    host.place === "data" ? `<div class="dds-actions">${button({ label: "Start a new check", kind: "tertiary", attrs: "data-dds-new" })}</div>` : ""
+  }</div>`;
 }
 
 function asideHtml(entry) {
   const { state: s, host } = entry;
-  if (!s.screen) return "";
+  if (!s.screen || isChat(entry)) return ""; // the chat view has its own composer and data panel
   const openSent = new Set(
     [...entry.aside.querySelectorAll("details[data-ag-sent][open]")].map((el) => el.getAttribute("data-ag-sent")),
   );
@@ -305,8 +412,24 @@ function draw(entry) {
     if (kept.has(el.getAttribute("data-dds-keep"))) el.open = true;
   }
   entry.aside.innerHTML = asideHtml(entry);
-  entry.aside.hidden = !entry.state.screen;
+  entry.aside.hidden = !entry.state.screen || isChat(entry);
+  followChat(entry);
   if (entry.state.picker) entry.state.picker.bind(entry.main);
+}
+
+/**
+ * New cards in the conversation scroll into view, as a chat does. The approval card always stays last, so it is not
+ * counted: a reply that lands above it is what the person is taken to (the newest message, else the first new card).
+ */
+function followChat(entry) {
+  const cards = [...entry.main.querySelectorAll("[data-dds-conversation] > :not([data-dds-composer]):not([data-dds-reading])")].filter((el) => !el.querySelector("[data-dds-ready]"));
+  const seen = entry.cardsSeen;
+  entry.cardsSeen = cards.length;
+  if (!(seen > 0 && cards.length > seen)) return;
+  const fresh = cards.slice(seen);
+  const said = fresh.filter((el) => el.querySelector("[data-dds-msg]"));
+  const target = said.length ? said[said.length - 1] : fresh[0];
+  if (target && typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "nearest" });
 }
 
 // --- behaviour -------------------------------------------------------------------------------------------------
@@ -359,12 +482,14 @@ async function readStartInfo(entry) {
 }
 
 /** Run one change, then draw the case as the server has it now. A stale version reloads and says so. */
-async function act(entry, busy, work, { announce = "" } = {}) {
+async function act(entry, busy, work, { announce = "", pending = "" } = {}) {
   const s = entry.state;
   if (s.busy) return;
   s.busy = busy;
+  s.pending = pending;
   s.error = null;
   s.notice = "";
+  s.alertAt = busy === "approve" ? "card" : "top";
   draw(entry);
   try {
     await work();
@@ -386,6 +511,7 @@ async function act(entry, busy, work, { announce = "" } = {}) {
     }
   }
   s.busy = "";
+  s.pending = "";
   draw(entry);
 }
 
@@ -406,10 +532,12 @@ async function uploadGoal(host) {
 }
 
 /** Put the files the server now holds (uploaded, or imported from a connection) into the open case, or a new one. */
-async function bringIn(entry, name, getUploads) {
+async function bringIn(entry, name, getUploads, first = name, more = 0) {
   const s = entry.state;
   const host = entry.host;
   s.uploadNote = `Reading ${name}…`;
+  s.uploadFirst = first;
+  s.uploadMore = more;
   await act(
     entry,
     "upload",
@@ -455,7 +583,7 @@ function upload(entry, files) {
       }
     }
     return [...sent.values()];
-  });
+  }, list[0].name, list.length - 1);
 }
 
 /** "Pick from a connection": the picker's import answers what `POST /uploads` does, so it carries on as a file does. */
@@ -479,6 +607,7 @@ async function pickFromConnection(entry) {
     });
   } catch (error) {
     s.error = error;
+    s.alertAt = "top";
     draw(entry);
     return;
   }
@@ -514,6 +643,7 @@ async function proceed(entry) {
     profile = await getProfile(start.upload_id);
   } catch (error) {
     s.error = error;
+    s.alertAt = "card";
     s.busy = "";
     draw(entry);
     return;
@@ -537,6 +667,7 @@ async function startCampaignRun(entry, start) {
   const s = entry.state;
   s.busy = "continue";
   s.error = null;
+  s.alertAt = "card"; // a refused start is told in the card with the Start button, not at the top of a long page
   draw(entry);
   try {
     const choice = modelChoice(s.offer, s.mode);
@@ -578,9 +709,86 @@ async function approve(entry) {
   }
 }
 
+/**
+ * The one "Approve and start" click of the chat: the person's own yeses (the changes in the plan that need one, and any
+ * left-out change they ticked "Also include"), then Approve, then the start that was already there. Every server rule
+ * stays: each own yes is sent with its exact sentence, each stop is said yes to by its key, and Approve carries the
+ * sentence the person read.
+ *
+ * The order is the one the server needs. Agreeing to a change that was not in the plan puts it there, which counts the
+ * plan's checks again and drops yeses said to stops, so the own yeses go first; the stops are read from the plan as it
+ * stands then, and a stop the person did not tick ends the chain (the card shows it). The sentence is read again after
+ * the yeses: when it moved only by the changes they just agreed to ("with 4 changes" -> "with 5 changes"), the click
+ * goes on and approves the sentence as it reads now; any other difference approves nothing, and the card shows the new
+ * sentence to read.
+ */
+async function approveAndStart(entry) {
+  const s = entry.state;
+  const card = cardOf(s.screen, "ready");
+  if (s.busy || !card || card.stage !== "approve" || !approveAllowed(card, s)) return;
+  const latest = async () => {
+    s.screen = await getScreen(s.caseId);
+    return s.screen;
+  };
+  let go = false;
+  await act(
+    entry,
+    "approve",
+    async () => {
+      let added = 0; // left-out changes the person ticked: each one the yes puts into the plan
+      const recorded = new Set();
+      for (const yes of card.confirmations) {
+        if (!yes.can_agree || !(yes.required || s.confirms.has(yes.item_id))) continue;
+        await confirmItem(theCase(entry), yes.item_id, yes.sentence);
+        recorded.add(yes.item_id);
+        if (!yes.required) added += 1;
+        s.confirms.delete(yes.item_id);
+        await latest();
+      }
+      const now = cardOf(await latest(), "ready");
+      if (!now || now.stage !== "approve") return; // the plan moved under the click: the screen shows where it is
+      const only = now.sentence === card.sentence || (added > 0 && now.sentence === sentenceWithMore(card.sentence, added));
+      if (!only || now.blocked || now.hold || (now.confirmations || []).some((c) => c.required && c.can_agree && !recorded.has(c.item_id))) {
+        s.notice = only
+          ? "Your yes is recorded. Something else needs a look first, then click Approve and start."
+          : "Your yes is recorded. What you approve has changed, so read the sentence again, then click Approve and start.";
+        return;
+      }
+      for (const stop of now.stops) {
+        if (!s.stops.has(stop.key)) {
+          s.notice = "A safety check changed. Read it below, tick it if you agree, then click Approve and start.";
+          return;
+        }
+        await acknowledgeStop(theCase(entry), stop.key, "Ticked in the approval card.");
+        s.stops.delete(stop.key);
+        await latest();
+      }
+      // Approve carries the sentence that was checked above, never the server's fresh one: if acknowledging a stop moved it,
+      // nothing is approved and the card shows the new sentence to read.
+      const last = cardOf(s.screen, "ready");
+      if (!last || last.stage !== "approve" || last.sentence !== now.sentence) {
+        s.notice = "Your yes is recorded. What you approve has changed, so read the sentence again, then click Approve and start.";
+        return;
+      }
+      await approveCase(theCase(entry), now.sentence);
+      go = true;
+    },
+    { announce: "Approved" },
+  );
+  const view = s.screen && s.screen.view;
+  if (!go || s.error || !view || !["ready", "ready_with_warnings"].includes(view.verdict.key) || !view.start) return;
+  if (modelChoice(s.offer, s.mode)) {
+    // Next month: last month's model or learning again is the person's choice, made on the card that is now "Ready to start".
+    s.notice = "Approved. Choose how to start below.";
+    draw(entry);
+    return;
+  }
+  await proceed(entry);
+}
+
 async function pickGoal(entry, goalId) {
   const s = entry.state;
-  await act(entry, "goal", () => chooseGoal(theCase(entry), goalId), { announce: "Goal chosen" });
+  await act(entry, "goal", () => chooseGoal(theCase(entry), goalId), { announce: "Goal chosen", pending: `goal:${goalId}` });
   if (!s.error && entry.host.place === "data") {
     rememberCase(goalId, s.caseId);
     window.location.hash = wizardHref(goalId);
@@ -593,7 +801,28 @@ function bind(entry) {
     const target = event.target && event.target.closest ? event.target.closest("button, a") : null;
     if (!target || target.disabled) return;
     const d = target.dataset;
-    if (target.hasAttribute("data-dds-dont-know") && d.ddsQ) {
+    if (d.ddsUndo) {
+      const item = (theCase(entry).items || []).find((i) => i.item_id === d.ddsUndo);
+      act(entry, "tick", () => decideItem(theCase(entry), d.ddsUndo, false), { announce: item && item.state === "accepted" ? "Change undone" : "Change skipped", pending: `undo:${d.ddsUndo}` });
+    } else if (d.ddsUse) act(entry, "tick", () => decideItem(theCase(entry), d.ddsUse, true), { announce: "Change added", pending: `use:${d.ddsUse}` });
+    else if (target.hasAttribute("data-dds-panel-toggle")) togglePanel(entry);
+    else if (d.ddsPrompt) talk(entry, d.ddsPrompt);
+    else if (target.hasAttribute("data-dds-approve-start")) approveAndStart(entry);
+    else if (target.hasAttribute("data-dds-see-details")) {
+      entry.detail = true;
+      draw(entry);
+    } else if (target.hasAttribute("data-dds-back-to-chat")) {
+      entry.detail = false;
+      draw(entry);
+    } else if (d.ddsFileTab) {
+      entry.state.tab = d.ddsFileTab;
+      draw(entry);
+    } else if (d.ddsSide) {
+      entry.state.side = d.ddsSide;
+      draw(entry);
+    } else if (target.hasAttribute("data-dds-ai-consent")) {
+      act(entry, "consent", () => giveAiConsent(entry.state.caseId), { announce: "The Doctor's AI may now read masked summaries" });
+    } else if (target.hasAttribute("data-dds-dont-know") && d.ddsQ) {
       // "I don't know" first asks who would know; the safe choice is one click further, never a guess.
       openWho(entry, `q:${d.ddsQ}`, `[data-dds-who-pick]`);
     } else if (d.ddsAnswer && d.ddsQ) {
@@ -605,7 +834,7 @@ function bind(entry) {
           entry.state.changing.delete(d.ddsQ);
           entry.state.knowing.delete(`q:${d.ddsQ}`);
         },
-        { announce: "Answer saved" },
+        { announce: "Answer saved", pending: `answer:${d.ddsQ}|${d.ddsAnswer}` },
       );
     } else if (d.ddsItemDk) openWho(entry, `i:${d.ddsItemDk}`, `[data-dds-who-pick]`);
     else if (d.ddsWhoPick) {
@@ -677,6 +906,18 @@ function bind(entry) {
       else entry.state.checked.delete(id);
       draw(entry);
       focusOn(entry, `input[data-dds-sec-ok="${id}"]`);
+    } else if (input.matches && (input.matches("input[data-dds-stop]") || input.matches("input[data-dds-confirm]"))) {
+      // The approval card's ticks: kept in the state, and "Approve and start" turns on or off in place (the focus stays).
+      const stop = input.matches("input[data-dds-stop]");
+      const set = stop ? entry.state.stops : entry.state.confirms;
+      const id = stop ? input.dataset.ddsStop : input.dataset.ddsConfirm;
+      if (input.checked) set.add(id);
+      else set.delete(id);
+      const go = root.querySelector("[data-dds-approve-start]");
+      const ready = cardOf(entry.state.screen, "ready");
+      if (go) go.disabled = Boolean(entry.state.busy) || !approveAllowed(ready, entry.state);
+      const note = root.querySelector("[data-dds-approve-note]");
+      if (note && ready) note.innerHTML = leavesOutHtml(ready, { names: namesOf(entry.state.screen.case), confirms: entry.state.confirms, starts: approveStarts(entry) });
     } else if (input.matches && input.matches("input[data-dds-read]")) {
       // "I have read this sentence": kept for the next drawing, and turns its "I agree" on or off in place, so
       // the focus stays on the box.
@@ -696,19 +937,41 @@ function bind(entry) {
       act(entry, "consent", () => giveAiConsent(entry.state.caseId), { announce: "The Doctor's AI may now read masked summaries" });
     }
   });
-  entry.aside.addEventListener("input", (event) => {
-    if (event.target && event.target.id === "dds-chat-input") entry.state.draft = event.target.value;
-  });
-  entry.aside.addEventListener("submit", (event) => {
-    if (!event.target || event.target.id !== "dds-chat-form") return;
-    event.preventDefault();
-    const text = entry.state.draft.trim();
-    if (!text) return;
-    act(entry, "chat", async () => {
-      await sendChat(theCase(entry), text);
-      entry.state.draft = "";
+  // The composer: in the side card of the plan view, and in the conversation of the chat view (one of them is drawn).
+  for (const where of [entry.aside, entry.main]) {
+    where.addEventListener("input", (event) => {
+      if (event.target && event.target.id === "dds-chat-input") entry.state.draft = event.target.value;
     });
+    where.addEventListener("submit", (event) => {
+      if (!event.target || event.target.id !== "dds-chat-form") return;
+      event.preventDefault();
+      talk(entry, entry.state.draft);
+    });
+  }
+}
+
+/** On a phone: the one-line "Your data · 4,000 customers · Show" opens the panel and "Hide" folds it again, in place. */
+function togglePanel(entry) {
+  const s = entry.state;
+  s.panelOpen = !s.panelOpen;
+  const panel = entry.main.querySelector("[data-dds-panel]");
+  if (!panel) return;
+  panel.classList.toggle("is-open", s.panelOpen);
+  const toggle = panel.querySelector("[data-dds-panel-toggle]");
+  if (toggle) toggle.setAttribute("aria-expanded", String(s.panelOpen));
+  const word = panel.querySelector("[data-dds-panel-act]");
+  if (word) word.textContent = s.panelOpen ? "Hide" : "Show";
+}
+
+/** Send a message to Data Doctor (typed, or a suggested prompt); with no AI service the reply says so. */
+async function talk(entry, message) {
+  const text = String(message || "").trim();
+  if (!text || entry.state.busy) return;
+  await act(entry, "chat", async () => {
+    await sendChat(theCase(entry), text);
+    entry.state.draft = "";
   });
+  focusOn(entry, "#dds-chat-input");
 }
 
 /** Open the "Who would know?" panel of a question ("q:<id>") or a step ("i:<id>"), and move to its first choice. */
@@ -789,6 +1052,7 @@ async function open(entry) {
     }
   } catch (error) {
     s.error = error;
+    s.alertAt = "top";
   }
   s.loading = false;
   draw(entry);
@@ -820,6 +1084,8 @@ export function mountDataDoctor(slots, host) {
     }
   }
   entry.host = full;
+  // The chat is the way in; `host.detail` opens the full plan view instead ("See details" does the same by hand).
+  if (isNew || full.detail !== undefined) entry.detail = Boolean(full.detail);
   // A case continued from the Data page since this place last drew is the one to show.
   const wanted = goalId && remembered.get(goalId);
   // ... or the case a link names (`host.caseId`, "What the Doctor did" on a finished campaign).

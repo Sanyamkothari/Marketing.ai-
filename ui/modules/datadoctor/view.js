@@ -133,20 +133,51 @@ function measured(option) {
   return parts.join(" · ");
 }
 
-export const userTextIn = (text, names) => {
-  // A server sentence with the person's column and file names in it: the names are marked as their own text.
-  let html = esc(plain(text));
-  for (const name of names.filter(Boolean).sort((a, b) => b.length - a.length)) {
+/**
+ * A column name as a person says it: `marketing_opt_in` -> "marketing opt in", `converted_30d` -> "converted 30d". A
+ * name that is already plain words, or a file name, comes back as it is.
+ */
+export function columnLabel(name) {
+  const raw = plain(String(name ?? ""));
+  if (/\.[A-Za-z0-9]{2,5}$/.test(raw)) return raw; // a file name
+  if (/^[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+$/.test(raw)) return raw.replace(/[_-]+/g, " ").toLowerCase();
+  if (/^[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+$/.test(raw)) return raw.replace(/([A-Z])/g, " $1").toLowerCase();
+  return raw;
+}
+
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * A server sentence with the person's column and file names in it: each name is marked as their own text. With
+ * `friendly`, a column the way the file spells it (`marketing_opt_in`) is shown as words (`marketing opt in`); where
+ * the person must recognise the column, the card says its exact name small (`columnNote`).
+ */
+export const userTextIn = (text, names, { friendly = false } = {}) => {
+  const html = esc(plain(text));
+  const found = new Map();
+  for (const name of names.filter(Boolean)) {
     const safe = esc(plain(name));
-    if (safe && html.includes(safe)) html = html.split(safe).join(userText(plain(name)));
+    if (safe && html.includes(safe)) found.set(safe, name);
   }
-  return html;
+  if (!found.size) return html;
+  const pattern = new RegExp([...found.keys()].sort((a, b) => b.length - a.length).map(escapeRegex).join("|"), "g");
+  return html.replace(pattern, (safe) => {
+    const name = found.get(safe);
+    return userText(friendly ? columnLabel(name) : plain(name));
+  });
 };
+
+/** The exact column names a card talks about, small and secondary, when showing them as words hides the spelling. */
+export function columnNote(columns) {
+  const raw = [...new Set((columns || []).filter(Boolean).map((c) => plain(String(c))))].filter((c) => columnLabel(c) !== c);
+  return raw.length ? `In your file: ${raw.map((c) => userText(c)).join(", ")}` : "";
+}
 
 export const namesOf = (c) => [
   ...(c.files || []).map((f) => f.file_name),
   ...(c.questions || []).map((q) => q.column),
   ...(c.items || []).map((i) => i.payload && i.payload.column),
+  ...(c.items || []).map((i) => i.payload && i.payload.step && i.payload.step.column), // (a fix on a column keeps it in its recipe step)
 ];
 
 // --- the header -----------------------------------------------------------------------------------------------

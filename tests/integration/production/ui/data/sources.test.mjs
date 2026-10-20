@@ -205,6 +205,60 @@ test("files that belong to a Data Doctor check are listed once, under the check,
   await session.loadMe();
 });
 
+test("prepared copies sit under the check that holds their source; unrelated files stay listed", async () => {
+  const saved = world.uploads;
+  const [combined, orders] = saved;
+  const copy = (id, n) => ({ ...combined, upload_id: id, file_name: `${combined.file_name} (prepared)`, made_by: "recipe", source_upload_id: combined.upload_id, created_at: n });
+  const copies = [copy("up_prep_a", combined.created_at), copy("up_prep_b", combined.created_at)];
+  const stray = { ...orders, upload_id: "up_stray", file_name: "orders.csv", made_by: "file", source_upload_id: null };
+  world.uploads = [...saved, ...copies, stray];
+  world.doctor = true;
+  await session.loadMe();
+  world.cases = [
+    { case_id: "case_combo", title: "combined", goal_id: null, state: "open", files: [combined.file_name], upload_ids: [combined.upload_id], updated_at: combined.created_at },
+  ];
+  await show("#/data");
+  assert.equal(row(combined.upload_id), null, "the source is under its check");
+  assert.equal(row("up_prep_a"), null, "so is each prepared copy");
+  assert.equal(row("up_prep_b"), null);
+  assert.ok(row("up_stray"), "a file no check holds stays listed");
+  world.uploads = saved;
+  world.cases = [];
+  world.doctor = false;
+  await session.loadMe();
+});
+
+test("older Data Doctor checks are folded: the newest 3 show, the rest open on one button", async () => {
+  const [a] = world.uploads;
+  world.doctor = true;
+  await session.loadMe();
+  world.cases = Array.from({ length: 5 }, (_, i) => ({
+    case_id: `case_${i}`,
+    title: `check ${i}`,
+    goal_id: null,
+    state: "open",
+    files: [`f${i}.csv`],
+    upload_ids: i === 0 ? [a.upload_id] : [],
+    updated_at: a.created_at,
+  }));
+  await show("#/data");
+  assert.equal($$("[data-dt-source='check']").length, 3, "the newest three checks");
+  assert.deepEqual(
+    $$("[data-dt-source='check']").map((el) => el.dataset.dtId),
+    ["case_0", "case_1", "case_2"],
+    "newest first, as the server sent them",
+  );
+  assert.equal(row(a.upload_id), null, "an upload stays under its check, not a row of its own");
+  assert.equal(text($("[data-dt-show-older]")), "Show 2 older checks");
+  $("[data-dt-show-older]").click();
+  await settle();
+  assert.equal($$("[data-dt-source='check']").length, 5);
+  assert.equal($("[data-dt-show-older]"), null);
+  world.cases = [];
+  world.doctor = false;
+  await session.loadMe();
+});
+
 test("a connection keeps Test, Edit and Delete; a file has no action of its own", async () => {
   await show("#/data");
   const ok = row(ids.s3);

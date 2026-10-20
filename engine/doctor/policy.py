@@ -600,7 +600,12 @@ def protected_columns(subject: DataProposal, ctx: DataPolicyContext, rules: Data
                     f"A new column may not be computed from the outcome column '{ctx.target}'.",
                 )
             continue
-        if step.column in protected or (step.new_column is not None and step.new_column in protected):
+        leaves_rows_out_by_id = (
+            step.kind is RecipeStepKind.REMOVE_ROWS and step.column == ctx.primary_key != ctx.target
+        )  # no ID changes when the rows whose ID begins "999" go; only the outcome never chooses rows
+        if not leaves_rows_out_by_id and (
+            step.column in protected or (step.new_column is not None and step.new_column in protected)
+        ):
             return _refuse(
                 PROTECTED,
                 code,

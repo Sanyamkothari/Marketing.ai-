@@ -10,6 +10,7 @@ refuse a write even from a transaction someone forgot to mark. The only query bu
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from datetime import date
 from typing import Any, Final
@@ -29,8 +30,21 @@ from engine.connections.sql import SqlConnector, database_fields, date_literal
 
 __all__ = ["PostgresConnector", "postgres_select", "postgres_window"]
 
+logger = logging.getLogger(__name__)
+
 _SYSTEM_SCHEMAS: Final[frozenset[str]] = frozenset({"information_schema", "pg_catalog", "pg_toast"})
 _SSL_MODES: Final[tuple[str, ...]] = ("prefer", "require", "verify-full", "disable")
+
+_REQUIRE_AUTH_LIBPQ: Final[int] = 160000
+"""libpq 16 added the `require_auth` connection setting."""
+
+
+def _libpq_version(psycopg: Any) -> int:
+    try:
+        return int(psycopg.pq.version())
+    except (AttributeError, TypeError, ValueError, ImportError):
+        return 0
+
 
 _WRITE_PRIVILEGES_SQL: Final[str] = (
     "SELECT count(*) FROM information_schema.table_privileges "
@@ -112,6 +126,15 @@ class PostgresConnector(SqlConnector):
         sslmode = text_value(config, "sslmode") or ("require" if self.redshift else "prefer")
         if sslmode not in _SSL_MODES:
             sslmode = "prefer"
+        extra: dict[str, Any] = {}
+        if sslmode != "verify-full" and _libpq_version(psycopg) >= _REQUIRE_AUTH_LIBPQ:
+            # A server we did not verify may ask for the password in clear text; refuse that method
+            # (SCRAM, MD5 and a server that asks for nothing still work).
+            extra["require_auth"] = "!password"
+        elif sslmode != "verify-full":
+            logger.warning(
+                "libpq is older than 16, so a server that is not verified can still ask for the password in clear text"
+            )
         try:
             connection = psycopg.connect(
                 host=text_value(config, "host"),
@@ -124,6 +147,7 @@ class PostgresConnector(SqlConnector):
                 application_name="marketing-ai",
                 # Every statement stops after READ_TIMEOUT_S; PostgreSQL only (Redshift ignores options).
                 options="" if self.redshift else f"-c statement_timeout={READ_TIMEOUT_S * 1000}",
+                **extra,
             )
         except psycopg.Error as exc:
             raise _sign_in_error(exc, config) from None

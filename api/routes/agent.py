@@ -9,7 +9,6 @@ through `engine.agent.checks.check_plan` - so the two cannot disagree (Plan G §
 
 from __future__ import annotations
 
-import numbers
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -17,8 +16,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-import numpy as np
-import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import Field, JsonValue
@@ -66,7 +63,6 @@ from engine.agent.contracts import (
 from engine.agent.edits import TABLE_MAX_ROWS, add_edit, table_rows
 from engine.agent.egress import cap_sent, is_third_party
 from engine.agent.explore import EXPLORE_SESSION_FILENAME, RateChart, charts_of, start_explore
-from engine.agent.formats import masked_cut
 from engine.agent.loop import chat_turn
 from engine.agent.recipe import RecipeError, run_recipe
 from engine.agent.scope import agent_available
@@ -93,6 +89,7 @@ from engine.doctor.memory import (
     use_same_treatment,
     used_in,
 )
+from engine.doctor.preview import masked_rows
 from engine.doctor.renames import FileChanges
 from engine.generative.budget import Meter
 from engine.generative.contracts import LlmUsageReport
@@ -1056,62 +1053,6 @@ def _accepted_recipe(
     )
 
 
-PREVIEW_CELL_CHARS: Final[int] = 60
-
-
-def _cell(value: Any) -> str:
-    """One preview cell as text. Numbers and dates are formatted, never run through the text masker:
-    a float's digits (0.020000000000000002) would otherwise read as a phone number.
-
-    Every digit a person needs to tell two values apart is kept: an integer in full, a float to 15
-    significant digits (so 20240001 and 20240002 never both read `2.024e+07`). A narrower float (a
-    Parquet `float32`) is first written at its own precision, so 0.1 stays `0.1` rather than the
-    `0.100000001490116` it is as a double. Text is masked before it is cut, so an e-mail address split
-    by the cut is still one the masker knows; a marker the cut would split is left out whole.
-    """
-    if value is None or value is pd.NA or value is pd.NaT or (isinstance(value, float) and value != value):
-        return ""
-    if isinstance(value, bool):
-        return str(value)
-    if isinstance(value, numbers.Integral):
-        return str(int(value))
-    if isinstance(value, (int, float)) or hasattr(value, "dtype"):
-        try:
-            dtype = getattr(value, "dtype", None)
-            if getattr(dtype, "kind", "") == "f" and getattr(dtype, "itemsize", 8) < 8:
-                value = float(str(value))  # numpy's shortest text at the value's own precision
-            number = float(value)
-            return "" if number != number else format(number, ".15g")
-        except (TypeError, ValueError):
-            pass
-    if hasattr(value, "isoformat"):
-        text = str(value.isoformat())
-        return text[:10] if text.endswith("T00:00:00") else text
-    return masked_cut(str(value), PREVIEW_CELL_CHARS)
-
-
-def _rows(frame: Any, columns: tuple[str, ...], personal: set[str]) -> tuple[tuple[str, ...], ...]:
-    head = frame.head(PREVIEW_ROWS)
-    # Column by column, not `iterrows`: a row Series would turn a float32 into a double (0.1 into
-    # 0.100000001490116) before `_cell` could write it at its own precision.
-    cells = {
-        name: (
-            ("[personal data]",) * len(head)
-            if name in personal
-            else tuple(_cell(value) for value in _values(head[name]))
-        )
-        for name in columns
-    }
-    return tuple(tuple(cells[name][index] for name in columns) for index in range(len(head)))
-
-
-def _values(series: Any) -> list[Any]:
-    """The column's values with their own scalar types: numpy scalars for a numpy column."""
-    if isinstance(series.dtype, np.dtype):
-        return list(series.to_numpy())
-    return list(series.array)
-
-
 def _preview_sample(frame: Any, recipe: DataRecipe | None) -> Any:
     """The rows a preview runs on: the first `PREVIEW_SAMPLE_ROWS` rows, or - when the recipe makes the
     rows one per entity (combines them, or keeps each one's latest) - every row of the first
@@ -1170,9 +1111,9 @@ def preview_agent_session(
     columns_after = tuple(str(c) for c in after.columns)
     return PreviewResponse(
         columns_before=columns_before,
-        rows_before=_rows(before, columns_before, personal),
+        rows_before=masked_rows(before, columns_before, personal, PREVIEW_ROWS),
         columns_after=columns_after,
-        rows_after=_rows(after, columns_after, personal),
+        rows_after=masked_rows(after, columns_after, personal, PREVIEW_ROWS),
         receipt=receipt,
     )
 

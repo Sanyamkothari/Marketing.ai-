@@ -58,7 +58,7 @@ if TYPE_CHECKING:
     from engine.doctor.goal_brief import GoalBrief
     from engine.doctor.visit import Detected, DetectorPort
 
-__all__ = ["combining_detector"]
+__all__ = ["combining_detector", "propose_combination"]
 
 _LOG = get_logger(__name__)
 
@@ -85,6 +85,25 @@ def combining_detector(*, clock: Callable[[], datetime] = utc_now) -> DetectorPo
         return Detected(asks=tuple(asks), items=tuple(_same_as_last_month(i, before) for i in items))
 
     return detect
+
+
+def propose_combination(
+    case: Case, files: tuple[LoadedFile, ...], now: datetime
+) -> tuple[list[CaseItem], list[Ask]]:
+    """The join or stack the rules would propose for exactly `files` (the chat names which ones go together).
+
+    The same plan, counts and guards as the detector's, on the files given; nothing is ticked. A case with no
+    diagnosis, or files that do not fit, give nothing. Raises `AgentToolError` only for a diagnosis that cannot be read.
+    """
+    if len(files) < 2 or not case.diagnosis:
+        return [], []
+    try:
+        diagnosis = Diagnosis.model_validate(case.diagnosis)
+        items, asks = _propose(diagnosis, {f.upload_id: f for f in files}, now)
+    except (ValidationError, BuildDriveError, StackError) as exc:
+        said = str(getattr(exc, "message", "") or "the files do not fit together")
+        raise AgentToolError("AGENT_COMBINE_FAILED", f"These files cannot be combined: {said}"[:300]) from exc
+    return items, asks
 
 
 def _flagged(item: CaseItem) -> bool:

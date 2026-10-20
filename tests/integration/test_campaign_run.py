@@ -27,7 +27,7 @@ from engine.campaign_run import (
     overrides_for,
     speed_minutes,
 )
-from engine.config import DEFAULT_CONFIG_ROOT
+from engine.config import DEFAULT_CONFIG_ROOT, load_engine_config
 from engine.contracts import FeatureSchema, RunRecord, RunState, RunStatus
 from engine.jobs import NullJobRunner
 from engine.storage import LocalStorage, run_key
@@ -194,6 +194,8 @@ def test_next_month_the_current_model_scores_the_new_file_without_learning(
     offer = client.get("/campaign-runs/model-offer", params={"use_case": USE_CASE, "upload_id": upload_id})
     assert offer.status_code == 200, offer.text
     assert offer.json()["model_version_id"] == model_id and offer.json()["usable"] is True
+    # The Start panel shows the server's own minutes for each speed (`campaign_speeds` in configs/engine.yaml).
+    assert offer.json()["speeds"] == load_engine_config(DEFAULT_CONFIG_ROOT).campaign_speeds
     created = client.post(
         "/campaign-runs",
         json={

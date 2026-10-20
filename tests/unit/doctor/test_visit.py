@@ -8,8 +8,8 @@ Acceptance (Plan O §M235):
 * Two goals on one case keep separate goal sections; switching back restores the first.
 * `brief_hash` is stable for an unchanged configuration (also `test_goal_brief.py`).
 
-Also: generic mode says what the files can power and what is missing; CONVERSE is Plan G's `chat_turn`, whose
-suggestions land pending and unticked; a retried action is applied once; VERIFY sends a not-ready case back to
+Also: generic mode says what the files can power and what is missing; CONVERSE is the Doctor's chat, whose
+suggestions land pending and the clean ones are applied by the agent (`test_doctor_chat.py`); a retried action is applied once; VERIFY sends a not-ready case back to
 TREAT with its reason; forgetting an upload forgets it in the visit.
 """
 
@@ -25,8 +25,7 @@ from typing import Any
 import pytest
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
-from engine.agent.tools import AgentContext
-from engine.config import RunMode, load_use_case
+from engine.config import load_use_case
 from engine.doctor import visit
 from engine.doctor.case import (
     Case,
@@ -42,7 +41,6 @@ from engine.doctor.goal_brief import load_goal_brief
 from engine.doctor.registry import DataToolContext, DataToolRegistry, DataToolResult
 from engine.doctor.visit import AI_NEEDED_REPLY, VisitDeps, active_section, mode_of, open_blocking
 from engine.storage import LocalStorage
-from tests.unit.agent.egress_canary import ToolingClient, guardrails, meter_for
 from tests.unit.doctor import visit_support as vs
 from tests.unit.doctor.visit_support import (
     ANALYST,
@@ -597,53 +595,37 @@ def test_old_cases_and_their_json_are_unchanged_by_the_new_fields(
 
 
 # ---------------------------------------------------------------------------
-# CONVERSE: Plan G's chat turn
+# CONVERSE: the chat is the Doctor's own (`test_doctor_chat.py` runs it with a scripted model)
 # ---------------------------------------------------------------------------
-def test_converse_is_plan_gs_chat_turn_and_its_suggestions_land_pending(
+def test_a_port_that_returns_items_gets_them_pending_and_never_ticked_by_the_model(
     storage: LocalStorage, world: World
 ) -> None:
-    client = ToolingClient(
-        [
-            {"action": "describe_missing", "args": {}},
-            {
-                "action": "propose_setting",
-                "args": {"path": "model_search.strategy", "value": "fast", "reason": "Faster."},
-            },
-        ]
+    """Whatever a CONVERSE port returns lands as the AI's own, `check` and pending; only the visit's guard run
+    (`agent_apply`) may apply it, and a port that hands back an already ticked item changes nothing about that.
+    """
+    case = _generic(storage, world)
+    ticked = visit._item(
+        "recipe_step",
+        {"upload_id": FIRST, "path": None, "value": None, "step": None},
+        title="A fix the port ticked itself",
+        upload_id=FIRST,
+        confidence=AgentConfidence.SURE,
+        evidence=(),
+        now=world.clock(),
+        ticked=True,
     )
 
-    def context_for(case: Case, files: tuple[LoadedFile, ...]) -> AgentContext:
-        config = load_use_case(GOAL_A)
-        return AgentContext(
-            use_case_id=GOAL_A,
-            config=config,
-            config_root=None,
-            upload_id=files[0].upload_id,
-            mode=RunMode.TRAIN,
-            profile=files[0].profile,
-            frame=files[0].frame,
-        )
+    def port(case: Case, message: str, files: tuple[LoadedFile, ...]) -> visit.ConverseResult:
+        return visit.ConverseResult(reply="Here you are.", items=(ticked,), model_calls=1)
 
-    converse = visit.plan_g_converse(context_for, meter=meter_for(client), guardrails=guardrails())
-    case = _goal(storage, world, _generic(storage, world), GOAL_A)
-    case = _answer(storage, world, case, "OUTCOME_COLUMN", "converted")
     case = visit.chat(
-        CLIENT, case.case_id, "Can training be faster?", _deps(storage, world, converse=converse),
+        CLIENT, case.case_id, "Anything to fix?", _deps(storage, world, converse=port),
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
-    assert client.calls, "the AI was asked"
-    assert case.chat[-1].role == "agent" and case.chat[-1].text != AI_NEEDED_REPLY
-    suggested = [i for i in case.items if i.source is ProposalSource.AI]
-    assert len(suggested) == 1
-    (item,) = suggested
-    assert item.state is ProposalState.PENDING and item.confidence is AgentConfidence.CHECK, "never ticked"
-    assert (
-        item.kind == "setting" and item.goal_id == GOAL_A and item.payload["path"] == "model_search.strategy"
-    )
-    assert case.counters.model_calls >= 1
-    known = {e.evidence_id for e in case.evidence}
-    assert set(item.evidence_ids) <= known, "the suggestion cites the case's own evidence, by content hash"
-    assert case.state is VisitState.APPROVE
+    (item,) = (i for i in case.items if i.title == ticked.title)
+    assert item.source is ProposalSource.AI and item.confidence is AgentConfidence.CHECK
+    assert item.state is ProposalState.PENDING and item.decided_by is None, "not a kind the agent applies"
+    assert case.chat[-1].item_ids == (item.item_id,)
 
 
 def test_a_file_added_while_the_visit_waits_for_approval_is_read_before_anything_is_approved(

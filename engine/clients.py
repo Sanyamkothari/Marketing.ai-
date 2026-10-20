@@ -76,6 +76,8 @@ class ClientStore(Protocol):
 
     def ensure_client(self, client_id: str, name: str, industry: str) -> ClientRecord: ...
 
+    def update_client(self, client_id: str, name: str, industry: str, notes: str = "") -> ClientRecord: ...
+
     def get_client(self, client_id: str) -> ClientRecord: ...
 
     def list_clients(self) -> tuple[ClientRecord, ...]: ...
@@ -237,6 +239,26 @@ class LocalClientStore:
             self._conn.execute(
                 "INSERT INTO clients (client_id, created_at, document) VALUES (?, ?, ?)",
                 (client_id, _iso_utc(now), dump_artefact(record)),
+            )
+        return record
+
+    def update_client(self, client_id: str, name: str, industry: str, notes: str = "") -> ClientRecord:
+        """Rename a client and set its industry and notes, keeping its id and creation time.
+
+        Raises `NOT_FOUND` when the id is unknown."""
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT document FROM clients WHERE client_id = ?", (client_id,)
+            ).fetchone()
+            if row is None:
+                raise ClientStoreError(
+                    "NOT_FOUND", f"No client {client_id!r}.", entity="client", entity_id=client_id
+                )
+            record = ClientRecord.model_validate_json(row[0]).model_copy(
+                update={"name": name, "industry": industry, "notes": notes}
+            )
+            self._conn.execute(
+                "UPDATE clients SET document = ? WHERE client_id = ?", (dump_artefact(record), client_id)
             )
         return record
 

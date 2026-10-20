@@ -44,6 +44,8 @@ export const TABS = Object.freeze([
 ]);
 /** How many uploaded files the list shows before "Show all". */
 export const FILES_SHOWN = 25;
+/** How many Data Doctor checks (newest first, each holding its own uploads) the list shows before "Show older checks". */
+export const CHECKS_SHOWN = 3;
 
 const state = {
   kinds: [],
@@ -60,6 +62,7 @@ const state = {
   confirming: null, // the connection id whose Delete asks "Are you sure?"
   chooserOpen: false,
   showAllFiles: false,
+  showOlderChecks: false,
 };
 
 let view = { app: null, tab: "sources", hash: "", doctor: false };
@@ -234,8 +237,21 @@ function fileRow(u) {
   </li>`;
 }
 
-/** The uploads a Data Doctor check holds: they are listed under the check, not a second time as files. */
-const inChecks = () => new Set(state.checks.flatMap((c) => c.upload_ids || []));
+/** The uploads a Data Doctor check holds, and the prepared copies made from them: they are listed under the check,
+ *  not a second time as files. */
+const inChecks = () => {
+  const held = new Set(state.checks.flatMap((c) => c.upload_ids || []));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const u of state.uploads) {
+      if (u.source_upload_id && held.has(u.source_upload_id) && !held.has(u.upload_id)) {
+        held.add(u.upload_id);
+        grew = true;
+      }
+    }
+  }
+  return held;
+};
 
 /** One row for a check: its files by name, and the way back into it. */
 function checkRow(c) {
@@ -307,7 +323,19 @@ function sourcesHtml() {
   if (state.loadError) return errorBox(state.loadError, { retry: true });
   const connections = state.connections.map(connectionRow).join("");
   const held = inChecks();
-  const checks = state.checks.filter((c) => (c.files || []).length).map(checkRow).join("");
+  // Uploads are grouped under the check they belong to (one row per check, newest first); the older checks are folded.
+  const allChecks = state.checks.filter((c) => (c.files || []).length);
+  const shownChecks = state.showOlderChecks ? allChecks : allChecks.slice(0, CHECKS_SHOWN);
+  const checks = shownChecks.map(checkRow).join("");
+  const olderChecks =
+    allChecks.length > shownChecks.length
+      ? button({
+          label: `Show ${fmtInt(allChecks.length - shownChecks.length)} older ${allChecks.length - shownChecks.length === 1 ? "check" : "checks"}`,
+          kind: "tertiary",
+          size: "sm",
+          attrs: "data-dt-show-older",
+        })
+      : "";
   const loose = state.uploads.filter((u) => !held.has(u.upload_id));
   const shown = state.showAllFiles ? loose : loose.slice(0, FILES_SHOWN);
   const files = checks + shown.map(fileRow).join("");
@@ -327,7 +355,7 @@ function sourcesHtml() {
           `Showing the newest ${fmtInt(state.uploads.length)} of ${fmtInt(state.uploadsTotal)} files.`,
         )}</span>`
       : "";
-  const more = showAll || cut ? `<div class="dt-more">${showAll}${cut}</div>` : "";
+  const more = olderChecks || showAll || cut ? `<div class="dt-more">${olderChecks}${showAll}${cut}</div>` : "";
   const list =
     connections || files
       ? `<ul class="dt-list" aria-label="Your data sources">${connections}${files}</ul>${more}`
@@ -470,6 +498,13 @@ function bind(app) {
       draw();
     }),
   );
+  const older = app.querySelector("[data-dt-show-older]");
+  if (older) {
+    older.addEventListener("click", () => {
+      state.showOlderChecks = true;
+      draw();
+    });
+  }
   const all = app.querySelector("[data-dt-show-all]");
   if (all) {
     all.addEventListener("click", () => {
@@ -506,6 +541,7 @@ export async function renderData(app, parts) {
   state.uploadsError = null;
   state.confirming = null;
   state.showAllFiles = false;
+  state.showOlderChecks = false;
   const [sources, files, ai, checks] = await Promise.allSettled([
     Promise.all([getKinds(), getConnections()]),
     getUploads(),

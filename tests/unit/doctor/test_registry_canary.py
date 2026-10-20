@@ -222,6 +222,8 @@ SPECS: dict[str, Calls | None] = {
     "propose_time_settings": lambda columns: [{}, {"window_days": 30}]
     + [{"as_of_column": column} for column in columns]
     + [{"outcome_column": column} for column in columns],
+    # The agent's look at its own work: the first rows, personal columns withheld, in every data-access mode.
+    "preview_working_copy": _fixed({}, {"rows": 3}, {"rows": 10}),
     # The SQL step reads tables named after their files, and the canary's file names carry planted secrets.
     "propose_sql_step": lambda _columns: [
         {
@@ -387,6 +389,7 @@ def _case(ctx: AgentContext, root: Path) -> DataToolContext:
         primary_key="customer_id",
         case_files=case_files,
         readiness=_readiness(ctx),
+        case_items=(),  # the plan so far, for `preview_working_copy`
         **_m236_context(ctx, root, storage, files),
     )
 

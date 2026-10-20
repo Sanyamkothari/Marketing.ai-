@@ -963,6 +963,7 @@ Extra column-name hints the helper uses on top of the use case's own detection h
 |---|---|---|---|
 | `max_tokens_per_case` | integer | no | Tokens (read plus written) the AI may use on one case. |
 | `max_calls_per_case` | integer | no | Calls to the AI service the Doctor may make on one case. |
+| `max_chat_steps` | integer | no | Actions (looks, changes, questions) the Doctor's chat may take to answer one message. |
 
 #### ChannelSuppressionConfig
 
@@ -2186,6 +2187,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `data_doctor.ai_limits` | the most the Doctor's AI may use on one case; when used up the Doctor carries on with its rules alone |
 | `data_doctor.ai_limits.max_tokens_per_case` | int >= 1; tokens read plus written |
 | `data_doctor.ai_limits.max_calls_per_case` | int >= 1; calls to the AI service |
+| `data_doctor.ai_limits.max_chat_steps` | int 1..30; actions (looks, changes, questions) the chat may take to answer one message |
 
 ### Catalog keys
 

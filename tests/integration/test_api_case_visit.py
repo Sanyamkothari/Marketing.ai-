@@ -24,6 +24,7 @@ from engine.doctor import case as doctor_case
 from engine.doctor.goal_brief import load_goal_brief
 from engine.doctor.visit import AI_NEEDED_REPLY
 from engine.llm import FakeLLMClient, FakeLLMMode
+from tests.fixtures.doctor_eval.chat_model import ChatScript
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.integration.production.access_support import bearer, local_app, make_user
 
@@ -174,6 +175,79 @@ def test_a_chat_whose_process_died_during_the_ai_call_is_answered_by_the_ai_on_r
     assert case["chat"][-1]["text"] != AI_NEEDED_REPLY, "the AI service answered, not 'none is connected'"
     assert any(c.calls for c in built[asked:]), "the resumed visit asked the AI service"
     assert case["state"] in {"ask", "approve"} and case["counters"]["model_calls"] >= 1
+
+
+def test_the_chat_through_the_api_applies_a_filter_for_the_person_who_can_undo_it(
+    unified: None, config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scripted model drives the real route: a look, a filter the guards pass (applied by the agent with its counts,
+    decided by `agent:data-doctor`), a reply; the person unticks it and it is theirs from then on. Evidence of the look
+    is stored, so the next message can cite it."""
+
+    def step(seen: Any) -> dict[str, Any]:
+        return {
+            "action": "propose_step",
+            "file": "F1",
+            "args": {
+                "kind": "remove_rows",
+                "column": "customer_id",
+                "params": {"operator": "starts_with", "values": ["C-1048"]},
+                "reason": "You asked for this.",
+                "evidence_ids": [seen.last("evidence_id")],
+            },
+        }
+
+    script = ChatScript(
+        {
+            "drop the 1048": [
+                {
+                    "action": "find_values",
+                    "file": "F1",
+                    "args": {"column": "customer_id", "contains": "1048"},
+                },
+                step,
+                {"action": "reply", "text": "Done: I left out the customers whose id starts with C-1048."},
+            ],
+            "what did you": [{"action": "reply", "text": "I looked at the customer ids."}],
+        }
+    )
+    monkeypatch.setattr(ai_service, "build_client", lambda *_a, **_k: script)
+    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as client:
+        case = client.post("/cases", json={"upload_ids": [_upload(client)]}).json()
+        case = _answer_open(client, client.post(f"/cases/{case['case_id']}/visit", json={}).json())
+        case_id = case["case_id"]
+        assert client.post(f"/cases/{case_id}/ai-consent", json={}).status_code == 200
+        chatted = client.post(
+            f"/cases/{case_id}/chat", json={"version": case["version"], "message": "drop the 1048s"}
+        )
+        assert chatted.status_code == 200, chatted.text
+        case = chatted.json()
+        reply = case["chat"][-1]
+        (item,) = [i for i in case["items"] if i["source"] == "ai"]
+        assert reply["item_ids"] == [item["item_id"]] and reply["tools"] == ["find_values", "propose_step"]
+        assert "withdrawn" not in reply and "suggestion" not in reply, "left out of the JSON while empty"
+        assert item["state"] == "accepted" and item["decided_by"] == "agent:data-doctor"
+        assert item["payload"]["tried"]["changed"] > 0 and item["payload"]["tried"]["rows"] == 1_000
+        assert case["counters"]["model_calls"] >= 3, "the chat's three calls are counted on the case"
+
+        undone = client.post(
+            f"/cases/{case_id}/decisions",
+            json={"version": case["version"], "item_id": item["item_id"], "accept": False},
+        )
+        assert undone.status_code == 200, undone.text
+        mine = next(i for i in undone.json()["items"] if i["item_id"] == item["item_id"])
+        assert mine["state"] == "rejected" and mine["decided_by"] != "agent:data-doctor"
+
+        later = client.post(
+            f"/cases/{case_id}/chat",
+            json={"version": undone.json()["version"], "message": "what did you look at?"},
+        ).json()
+        seen = script.seen[-1]
+        assert seen.state["earlier_looks"] == [
+            {"id": "e1", "tool": "find_values", "file": "F1", "column": "customer_id"}
+        ], "the look of the earlier turn is back from the case's evidence"
+        assert [h["who"] for h in seen.history] == ["person", "you"]
+        assert later["chat"][-1]["text"] == "I looked at the customer ids."
 
 
 def test_refusals_answer_their_codes(client: TestClient) -> None:

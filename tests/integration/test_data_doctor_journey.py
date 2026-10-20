@@ -6,15 +6,20 @@ service connected. Chromium opens the Data page's "Check my data" (no goal), and
     choose the file -> [1] answer the one question (which column names each customer?)
                     -> [2] Choose this goal ("Find customers likely to buy")
                     -> the "New campaign" wizard's Customers step, on the SAME case, nothing asked again
-                    -> [3] Approve (the sentence shown is the one recorded, naming the goal by its name)
-                    -> the consent change ("who agreed to be contacted") was never agreed, so it is listed as left
-                       out, and the campaign starts only on a separate choice: "Start the campaign"
+                    -> [3] "Approve and start" (the sentence shown is the one recorded, naming the goal by its name)
+                    -> the consent change ("who agreed to be contacted") was never agreed: it is a checkbox in the
+                       card, unticked, and says it is left out unless agreed - the campaign starts on the same click
 
-The clicks from the file to Approve are pinned (`CLICKS_PINNED`): a change that adds one fails here. Continuing
-without a change left out is a choice of its own after Approve (`CHOICES_AFTER_APPROVE`), never part of Approve. The test then
+The screen is the chat (`ui/modules/datadoctor/chat.js`): the cards of `view.conversation`, one approval card.
+The clicks from the file to the started campaign are pinned (`CLICKS_PINNED`): a change that adds one fails here.
+CHANGED ON PURPOSE (agent-style Data Doctor plan): the earlier screen made the person approve, and then choose to
+continue without the change left out, as a second click (`CHOICES_AFTER_APPROVE`); the one card now carries that choice
+- the change is listed in the card as a checkbox, unticked and "Left out unless you agree", right above the button - so
+Approve and the start are one click. The server's rules are untouched: the card sends the exact sentence, and the own
+yes of a change only when its box is ticked. The test then
 checks through the API that the wizard used the same case, that the question was answered once (the timeline holds one
 answer and the wizard asked nothing), that the approval recorded the exact sentence shown, and that the run started
-on the case's file with its ID and outcome columns; with no AI service the chat links to Settings › AI service.
+on the case's file with its ID and outcome columns; with no AI service the box says so and links to Settings › AI service.
 Screenshots of every screen are taken at desktop and phone sizes (into `$LOOK_AFTER_DIR` when it is set), and the
 phone page never scrolls sideways.
 
@@ -50,11 +55,8 @@ GOAL: Final[str] = "targeted-advertisement"
 ROWS: Final[int] = 4000
 SEED: Final[int] = 20_261_011
 CLICKS_PINNED: Final[int] = 3
-"""From the chosen file to Approve: the one answer, the goal, Approve. A change that adds a click fails here; one that
-removes one updates the pin."""
-CHOICES_AFTER_APPROVE: Final[int] = 1
-"""Continuing while the consent change is left out (M247 review): its own choice, so Approve never starts the run with
-a change that needs its own yes silently left out."""
+"""From the chosen file to the started campaign: the one answer, the goal, Approve and start. A change that adds a click
+fails here; one that removes one updates the pin."""
 GOAL_NAME: Final[str] = "Find customers likely to buy"
 WAIT_MS: Final[int] = 180_000
 PHONE: Final[dict[str, int]] = {"width": 390, "height": 844}
@@ -180,8 +182,9 @@ def test_data_page_to_the_campaign_on_one_case_nothing_asked_twice(
             page.locator("#dds-file").set_input_files(str(customers))
             key = page.locator('[data-dds-code="KEY_AMBIGUOUS"]')
             key.wait_for(timeout=WAIT_MS)
-            chat = page.locator("[data-dds-chat]")
+            chat = page.locator("[data-dds-composer]")
             chat.locator("a[data-ai-settings-link]").wait_for(timeout=30_000)
+            assert "Chat needs the AI service" in chat.inner_text()
             assert chat.locator("a[data-ai-settings-link]").get_attribute("href") == "#/settings/ai"
             assert chat.locator('a[href^="#/connections"]').count() == 0, "no AI: Settings, never Connections"
             shoot("02_data_question")
@@ -197,30 +200,26 @@ def test_data_page_to_the_campaign_on_one_case_nothing_asked_twice(
             wizard = page.locator('[data-cw-customers] [data-cw-guided-main] [data-dds-place="wizard"]')
             wizard.locator("[data-dds-verdict]").wait_for(timeout=WAIT_MS)
             assert wizard.get_attribute("data-dds-case") == case_id, "the wizard continues on the same case"
-            page.locator("[data-dds-approve-button]:not([disabled])").wait_for(timeout=WAIT_MS)
+            page.locator("[data-dds-approve-start]:not([disabled])").wait_for(timeout=WAIT_MS)
             answered = wizard.locator('[data-dds-code="KEY_AMBIGUOUS"] [data-dds-answered]')
             assert answered.count() == 1, "the Data page's answer stands"
             assert wizard.locator(".dds-q.is-open").filter(has_text="Needed to go on").count() == 0
             sentence = page.locator("[data-dds-approve-sentence]").inner_text()
             assert f"for the goal “{GOAL_NAME}”" in sentence and GOAL not in sentence, sentence
-            left_out = wizard.locator('[data-dds-left-out="approve"]')
-            assert left_out.count() == 1, "the consent change waiting for its own yes is said to be left out"
+            left_out = wizard.locator("[data-dds-confirm-row]")
+            assert left_out.count() == 1, "the consent change waiting for its own yes is a box in the card"
             assert "who agreed to be contacted" in left_out.inner_text()
+            assert "Left out unless you tick it" in left_out.inner_text()
+            assert left_out.locator("input").is_checked() is False, "never ticked for the person"
+            assert (
+                wizard.locator("[data-dds-fit]").count() == 1
+            ), "the goal was chosen first: does the data fit it"
             shoot("04_wizard_case")
 
-            click("[data-dds-approve-button]")  # 3
+            click(
+                "[data-dds-approve-start]"
+            )  # 3: the own yes (none ticked), Approve with the sentence, the start
             assert len(clicks) == CLICKS_PINNED, clicks
-            proceed = wizard.locator("[data-dds-continue]:not([disabled])")
-            proceed.wait_for(timeout=WAIT_MS)
-            assert (
-                page.evaluate("location.hash") == "#/campaigns/new/customers/" + GOAL
-            ), "Approve started nothing"
-            assert wizard.locator('[data-dds-header] [data-dds-left-out="head"]').count() == 1
-            assert wizard.locator("[data-dds-continue-without]").count() == 1
-            assert proceed.inner_text().strip() == "Start the campaign"
-            shoot("05_wizard_approved")
-            choices = [proceed]
-            proceed.click()  # the person's own choice to continue without the consent change
             page.wait_for_function("location.hash.startsWith('#/campaigns/run/')", timeout=WAIT_MS)
             campaign_run_id = page.evaluate("location.hash").rsplit("/", 1)[-1]
             run_id = _get(server, f"/campaign-runs/{campaign_run_id}")["record"]["train_run_id"]
@@ -247,7 +246,6 @@ def test_data_page_to_the_campaign_on_one_case_nothing_asked_twice(
             browser.close()
 
     assert len(clicks) == CLICKS_PINNED, clicks
-    assert len(choices) == CHOICES_AFTER_APPROVE
     case = _get(server, f"/cases/{case_id}")
     assert [g["goal_id"] for g in case["goals"] if g["active"]] == [GOAL]
     key_questions = [q for q in case["questions"] if q["code"] == "KEY_AMBIGUOUS"]
@@ -255,7 +253,11 @@ def test_data_page_to_the_campaign_on_one_case_nothing_asked_twice(
     events = _get(server, f"/cases/{case_id}/timeline")["events"]
     answered = [e for e in events if e["kind"] == "question.answered"]
     assert len(answered) == 1, "asked and answered once, on the Data page"
-    assert [e["kind"] for e in events].count("question.asked") == 1, "nothing asked twice"
+    key_id = key_questions[0]["question_id"]
+    asked = [e for e in events if e["kind"] == "question.asked" and e["item_id"] == key_id]
+    assert len(asked) == 1, "the question the person answered was asked once, never again in the wizard"
+    ids = [e["item_id"] for e in events if e["kind"] == "question.asked"]
+    assert len(ids) == len(set(ids)), "no question is asked twice"
     approval = next(a for a in case["approvals"] if not a["approve_class"])
     assert approval["text_shown"] == sentence, "the sentence shown is the one recorded"
     run = _get(server, f"/runs/{run_id}")["run"]

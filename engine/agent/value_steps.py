@@ -45,7 +45,9 @@ MAX_MISSING_WORDS: Final[int] = 20
 MAX_CORRECTIONS: Final[int] = 1000
 """A `correct_cells` step corrects at most this many cells (plan §12)."""
 
-REMOVE_OPERATORS: Final[frozenset[str]] = frozenset({"equals", "in", "is_empty", "before", "after"})
+REMOVE_OPERATORS: Final[frozenset[str]] = frozenset(
+    {"equals", "in", "starts_with", "is_empty", "before", "after"}
+)
 
 _EXAMPLES: Final[int] = 5
 _UNIT_VALUE: Final[re.Pattern[str]] = re.compile(r"^\s*([+-]?\d+(?:[.,]\d+)?)\s*([A-Za-z%/]+)?\s*$")
@@ -225,10 +227,19 @@ def correct_cells(
 def remove_rows(series: pd.Series[Any], *, operator: str, values: Sequence[Any]) -> pd.Series[Any]:
     """True for each row to keep: the rows the rule names are left out.
 
-    `equals` / `in` compare trimmed text (so 7 and "7" match), `is_empty` needs no value, `before` /
-    `after` compare dates (a value that is not a date is kept).
+    `equals` / `in` compare trimmed text (so 7 and "7" match), `starts_with` leaves out the rows whose trimmed
+    text begins with one of the values (ids starting 999), `is_empty` needs no value, `before` / `after` compare
+    dates (a value that is not a date is kept).
     """
-    if operator in {"equals", "in"}:
+    if operator == "starts_with":
+        prefixes = tuple(p for p in (_text(v) for v in values) if p)
+        hit = series.map(
+            lambda v: v is not None
+            and not (isinstance(v, float) and math.isnan(v))
+            and bool(prefixes)
+            and _text(v).startswith(prefixes)
+        )
+    elif operator in {"equals", "in"}:
         wanted = {_text(v) for v in values}
         hit = series.map(
             lambda v: v is not None and not (isinstance(v, float) and math.isnan(v)) and _text(v) in wanted

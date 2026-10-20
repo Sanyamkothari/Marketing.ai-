@@ -331,6 +331,21 @@ def target_of(config: UseCaseConfig | None) -> str:
     return (config.target.column if config is not None else None) or "outcome"
 
 
+def _unused_default_name(store: CampaignStore, config: UseCaseConfig, start: datetime) -> str:
+    """The default campaign name ("Goal, 16 Oct 2026"), with " (2)", " (3)" ... when that day's name is taken.
+
+    Only the name given to a new campaign changes; the names already stored are never rewritten.
+    """
+    base = f"{config.name}, {start.day} {start:%b %Y}"
+    taken = {c.name for c in store.list(use_case_id=config.id, limit=None)}
+    if base not in taken:
+        return base
+    number = 2
+    while f"{base} ({number})" in taken:
+        number += 1
+    return f"{base} ({number})"
+
+
 def open_campaign(
     storage: Storage,
     store: CampaignStore,
@@ -411,7 +426,7 @@ def open_campaign(
     campaign = Campaign(
         campaign_id=new_campaign_id(now),
         kind=CampaignKind.SCORED,
-        name=name or f"{config.name}, {start.day} {start:%b %Y}",
+        name=name or _unused_default_name(store, config, start),
         use_case_id=record.use_case_id,
         run_ids=(record.run_id,),
         primary_key=record.primary_key,

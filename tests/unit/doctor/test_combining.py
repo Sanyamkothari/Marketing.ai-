@@ -172,6 +172,13 @@ def test_a_customer_list_and_its_orders_are_one_change_with_counts_that_needs_it
     assert case.visit is not None and case.visit.hand_off is not None
     assert case.visit.hand_off.upload_ids == (only.upload_id,)
 
+    # A decision made on one of the files is read on the table that replaced them (the first file, or the other).
+    from engine.doctor.combine_run import current_upload
+
+    assert current_upload(case, "up-c") == only.upload_id and current_upload(case, "up-o") == only.upload_id
+    assert current_upload(case, only.upload_id) == only.upload_id, "the table itself"
+    assert current_upload(case, "up-elsewhere") == "up-elsewhere", "a file no join made into a table"
+
 
 def test_a_join_that_loses_no_customer_and_few_log_rows_is_ticked_with_no_yes(tmp_path: Path) -> None:
     day = _Day(

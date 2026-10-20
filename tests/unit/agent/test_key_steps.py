@@ -11,7 +11,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from engine.agent.config import AgentLevel
@@ -20,6 +20,7 @@ from engine.agent.key_steps import (
     _PREFIX,
     KEY_JOIN_OK,
     KeyColumn,
+    KeyMergeError,
     KeyRule,
     key_coverage,
     key_text,
@@ -117,7 +118,12 @@ def test_phone_cannot_be_combined_with_prefix_or_zeros() -> None:
 def test_the_step_is_stateless(values: list[Any], start: int) -> None:
     """A row's output depends on that row only: any slice of the column gives the same rows' answers."""
     rule = KeyRule(prefix="CUST-", zeros=True, case=True, spaces=True)
-    whole = normalise_keys(pd.Series(values, dtype=object), rule).values
+    try:
+        whole = normalise_keys(pd.Series(values, dtype=object), rule).values
+    except KeyMergeError:
+        # Two different IDs the rule would make one ("0" and "00") are refused on purpose; that is not about
+        # statelessness, and a slice of a column with no such pair can have none either.
+        assume(False)
     part = pd.Series(values[start:], index=range(start, len(values)), dtype=object)
     sliced = normalise_keys(part, rule).values
     assert list(sliced) == list(whole[start:])

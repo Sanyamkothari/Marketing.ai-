@@ -16,7 +16,7 @@ from typing import Annotated, Any, Final
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from pydantic import Field, model_validator
 
-from api.access import set_audit_context
+from api.access import client_scope, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import (
     ConfigRootDep,
@@ -473,15 +473,18 @@ def read_model_offer(
     newest, last = FingerprintStore(storage).newest_two(client_id or DEFAULT_CLIENT_ID, use_case)
     if newest is None or newest.upload_id != upload_id:  # this file was not fingerprinted: nothing to compare
         newest = last = None
-    return model_offer(
+    engine_config = load_engine_config(root)
+    offer = model_offer(
         model,
         None if model is None else missing_columns(storage, model, columns),
         now=utc_now(),
         current=newest,
         last=last,
-        rules=load_engine_config(root).model_reuse,
+        rules=engine_config.model_reuse,
         conflict=None if model is None else outcome_conflict(storage, model, outcome),
     )
+    # The minutes the Start panel shows for Quick / Balanced / Thorough are the server's own.
+    return offer.model_copy(update={"speeds": dict(engine_config.campaign_speeds)})
 
 
 def _require_readable(request: Request, storage: StorageDep, body: CampaignRunRequest) -> None:
@@ -521,16 +524,28 @@ def list_campaign_runs(
     ] = None,
 ) -> CampaignRunListResponse:
     runner = get_runner(request.app)
-    return CampaignRunListResponse(
-        campaign_runs=tuple(
-            runner.view(run) for run in runner.store.list(state=state, limit=limit, score_run_id=score_run_id)
-        )
+    allowed = client_scope(get_settings(request))
+    runs = runner.store.list(
+        state=state, limit=limit, score_run_id=score_run_id, accept=lambda run: _in_scope(run, allowed)
     )
+    return CampaignRunListResponse(campaign_runs=tuple(runner.view(run) for run in runs))
+
+
+def _in_scope(run: CampaignRun, allowed: frozenset[str] | None) -> bool:
+    """Whether this deployment may show `run`: a run that names no client belongs to the deployment's own."""
+    return allowed is None or run.client_id is None or run.client_id in allowed
+
+
+def _visible(request: Request, run: CampaignRun | None) -> CampaignRun | None:
+    """`run`, unless it belongs to another client (security review 2, H-3): then it is not found."""
+    return run if run is not None and _in_scope(run, client_scope(get_settings(request))) else None
 
 
 def _read(request: Request, campaign_run_id: str, *, advance: bool) -> CampaignRunView:
     runner = get_runner(request.app)
-    run = runner.advance(campaign_run_id, wait=False) if advance else runner.store.get(campaign_run_id)
+    run = _visible(request, runner.store.get(campaign_run_id))
+    if run is not None and advance:
+        run = runner.advance(campaign_run_id, wait=False)
     if run is None:
         raise http_error(404, "CAMPAIGN_RUN_NOT_FOUND", f"No campaign run with id {campaign_run_id!r}.")
     runner.ensure_running()
@@ -565,7 +580,7 @@ def read_top_customers(
     A list that is not finished, or is held (for example its new model still waits for approval), answers with an
     empty list and the reason in plain words, never an error: the summary then says why it shows no names.
     """
-    run = get_runner(request.app).store.get(campaign_run_id)
+    run = _visible(request, get_runner(request.app).store.get(campaign_run_id))
     if run is None:
         raise http_error(404, "CAMPAIGN_RUN_NOT_FOUND", f"No campaign run with id {campaign_run_id!r}.")
     if run.score_run_id is None:
@@ -604,7 +619,7 @@ def restart_campaign_run(
     body: RestartRequest | None = None,
 ) -> CampaignRunView:
     """A run the server restarted under, or one that needs a cost confirmed, goes on from the start."""
-    old = get_runner(request.app).store.get(campaign_run_id)
+    old = _visible(request, get_runner(request.app).store.get(campaign_run_id))
     if old is None:
         raise http_error(404, "CAMPAIGN_RUN_NOT_FOUND", f"No campaign run with id {campaign_run_id!r}.")
     if old.state in (CampaignRunState.RUNNING, CampaignRunState.DONE):
@@ -640,7 +655,7 @@ def restart_campaign_run(
 )
 def cancel_campaign_run(campaign_run_id: str, request: Request) -> CampaignRunView:
     runner = get_runner(request.app)
-    if runner.cancel(campaign_run_id) is None:
+    if _visible(request, runner.store.get(campaign_run_id)) is None or runner.cancel(campaign_run_id) is None:
         raise http_error(404, "CAMPAIGN_RUN_NOT_FOUND", f"No campaign run with id {campaign_run_id!r}.")
     return _read(request, campaign_run_id, advance=False)
 
