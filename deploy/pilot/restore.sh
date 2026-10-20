@@ -32,8 +32,8 @@ else
 fi
 gzip -t "$tarball" || die "not a valid gzip file"
 listing=$(tar -tzf "$tarball") || die "not a valid tar archive"
-echo "$listing" | grep -q '\.db$' || die "the archive holds no .db file; it is not a backup of this product"
-echo "  $(echo "$listing" | grep -c .) entries; databases: $(echo "$listing" | grep '\.db$' | xargs -n1 basename | tr '\n' ' ')"
+has_database "$listing" || die "the archive holds no .db file; it is not a backup of this product"
+echo "  $(grep -c . <<<"$listing") entries; databases: $(grep '\.db$' <<<"$listing" | xargs -n1 basename | tr '\n' ' ')"
 
 if [ "$assume_yes" = 0 ]; then
   read -r -p "Replace the current data of this deployment with this backup? [y/N] " answer

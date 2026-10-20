@@ -6,6 +6,14 @@
 DATA_PATH=/var/lib/marketing-ai
 BACKUP_DIR="${BACKUP_DIR:-$PWD/backups}"
 
+# Backups and safety copies hold the client's data: readable by this user only.
+umask 077
+
+# has_database LISTING: true when a tar listing names a .db file. The listing is passed as a here-string,
+# not piped into `grep -q`: under `set -o pipefail` a quitting grep makes tar die of SIGPIPE on a big
+# archive and the pipeline then counts as failed.
+has_database() { grep -q '\.db$' <<<"$1"; }
+
 die() { echo "ERROR: $*" >&2; exit 1; }
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 

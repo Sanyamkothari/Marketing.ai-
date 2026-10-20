@@ -59,8 +59,8 @@ cp .env.example .env && chmod 600 .env
 Generate the two secrets and **store both in the team's password manager now, off this VM**:
 
 ```bash
-python3 -c "import secrets; print(secrets.token_urlsafe(48))"                              # MARKETING_AI_PRIVACY_SALT
-docker run --rm python:3.11-slim sh -c "pip install -q cryptography && python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"   # MARKETING_AI_CONNECTIONS_KEY
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"                       # MARKETING_AI_PRIVACY_SALT
+python3 -c "import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"   # MARKETING_AI_CONNECTIONS_KEY (a Fernet key is 32 random bytes)
 ```
 
 Edit `.env` (every variable is explained in it): `DOMAIN`, `ACME_EMAIL`, `IMAGE_TAG`,
@@ -150,10 +150,11 @@ keeping the only copy on the same VM when `BACKUP_TARGET` is empty. A training r
 API stops is lost, hence the night time. Nightly at 02:00:
 
 ```bash
-( crontab -l 2>/dev/null; echo '0 2 * * * cd /opt/marketing-ai/deploy/pilot && ./backup.sh >> /var/log/marketing-ai-backup.log 2>&1' ) | crontab -
+mkdir -p backups   # the log lives here, so it must exist before cron first runs
+( crontab -l 2>/dev/null; echo '0 2 * * * cd /opt/marketing-ai/deploy/pilot && ./backup.sh >> backups/backup.log 2>&1' ) | crontab -
 ```
 
-Cron mails or logs nothing on its own: check `/var/log/marketing-ai-backup.log` weekly, and have the
+Cron mails or logs nothing on its own: check `backups/backup.log` (in the same directory; the cron user owns it, `/var/log` it does not) weekly, and have the
 uptime service (step 10) alert on a stale backup if it can. The tarball holds the client's data but not
 the secrets, which you already keep off the VM.
 
@@ -167,7 +168,7 @@ rclone copy <remote>:<path>/marketing-ai-<client>-<date>.tgz.sha256 backups/
 ```
 
 It checks the checksum, gzip, the archive and that it holds a database; asks before replacing anything;
-writes a `pre-restore-*.tgz` safety copy of what was there; extracts; runs `PRAGMA integrity_check` on every
+writes a `pre-restore-*.tgz` safety copy of what was there (pruned with the same `BACKUP_KEEP_DAYS` as the nightly copies; delete it sooner once the restore is confirmed); extracts; runs `PRAGMA integrity_check` on every
 database (on a failure it leaves the API stopped and prints the command to undo); starts the API and waits
 for it to be healthy. Then run `./smoke_test.sh`. Anything erased on request (DPDP) after the backup was
 taken is back and must be erased again by hand: the audit log lists the requests. There is no
@@ -191,7 +192,8 @@ re-apply-by-hash command yet. **Rehearse a restore on a second VM once, with rea
 cd /opt/marketing-ai/deploy/pilot
 ./backup.sh                                   # always first
 git -C ../.. pull --ff-only origin main
-nano .env                                     # set IMAGE_TAG to a new value, e.g. the git short sha
+nano .env                                     # set IMAGE_TAG to a NEW value, e.g. the git short sha
+docker image ls marketing-ai                  # the previous tag must be listed: it is your rollback
 docker compose build api
 docker compose up -d                          # recreates api on the new image (~1 min of downtime)
 ./smoke_test.sh
@@ -203,7 +205,7 @@ The previous image is still on the VM (do not `docker image prune -a`; `docker i
 
 ```bash
 nano .env                                     # IMAGE_TAG back to the previous value
-docker compose up -d api
+docker compose up -d --no-build api           # --no-build: a missing old image fails loudly instead of building the new code under the old tag
 ./smoke_test.sh
 ```
 
@@ -232,7 +234,7 @@ against a stand-in for the `docker compose` calls and shellcheck is clean.
 - [ ] `docker compose ps` shows no `0.0.0.0:8000`; from outside, `curl http://<ip>:8000` fails.
 - [ ] `backup.sh` run for real: the `docker compose run --entrypoint tar` pipe writes a good tarball, the
       upload reaches the target, `restore.sh` on a **second VM** brings the data back and the smoke test passes.
-      Time it. Cron has run once and the log is clean.
+      Time it. Cron has run once and `backups/backup.log` ends with `Backup done`.
 - [ ] Uptime alert tested (stop the api, get the email); a named person owns it. Disk alert set.
 - [ ] `MARKETING_AI_ENV=prod`, `AUTH_MODE=local` confirmed: an unauthenticated call returns 401, not data.
 - [ ] First admin's temporary password replaced; one Approver who is not the trainer.
@@ -243,8 +245,12 @@ against a stand-in for the `docker compose` calls and shellcheck is clean.
       ledger is imported if scoring will contact people.
 - [ ] Sample file through upload, train, approve, score and download, **as each role**. Memory and disk during a
       training run on a file of the client's real size watched once (`docker stats`).
-- [ ] The Data Doctor's AI gate against the live AI (`make doctor-ai-gate`, exit 2 = no AI connected). It needs
-      the repo's `tests/` fixtures, which the image does not contain, so run it from a checkout, not from the container.
+- [ ] The Data Doctor's AI gate against the live AI (exit 2 = no AI connected). The saved AI connection is
+      inside the data volume, so run it in the image, with the checkout's `tests/` fixtures (the image does not
+      contain them) mounted read-only:
+      `docker compose run --rm --no-deps -v "$PWD/../../tests:/app/tests:ro" api python -m scripts.plan_o_benchmark --model product --k 5 --parts tools,ai,multi,extended --out /var/lib/marketing-ai/reports/doctor_ai_gate`
+      (this stops nothing, but a training run in the API at the same moment will slow both). Or run
+      `make doctor-ai-gate` on a dev machine that has the same provider key connected.
 - [ ] Pilot playbook success and exit criteria signed (`docs/pilot/PLAYBOOK.md`); the client's data protection
       contact approved the data request; compliance has seen the DPDP section (the repo says its controls are
       not a legal opinion); a processing agreement covers the AI provider.

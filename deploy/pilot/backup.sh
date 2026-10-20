@@ -71,7 +71,8 @@ restart_api
 
 # The check: gzip is intact, the archive lists, and it holds at least one database.
 gzip -t "$partial"
-tar -tzf "$partial" | grep -q '\.db$' || die "the tarball holds no .db file; refusing to call it a backup"
+listing=$(tar -tzf "$partial") || die "the tarball cannot be listed; refusing to call it a backup"
+has_database "$listing" || die "the tarball holds no .db file; refusing to call it a backup"
 mv "$partial" "$final"
 (cd "$BACKUP_DIR" && sha256sum "$name" >"$name.sha256")
 log "Local copy: $final ($(du -h "$final" | cut -f1))"
@@ -98,7 +99,7 @@ case "$target" in
 esac
 
 # --- local retention --------------------------------------------------------
-find "$BACKUP_DIR" -name 'marketing-ai-*.tgz*' -mtime "+$keep_days" -delete
+find "$BACKUP_DIR" \( -name 'marketing-ai-*.tgz*' -o -name 'pre-restore-*.tgz' \) -mtime "+$keep_days" -delete
 
 if [ -z "$target" ]; then
   echo "NOTE: --local-only: this copy is on the same VM as the data. It is not a backup." >&2

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import stat
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -125,3 +126,21 @@ def test_the_secrets_file_and_the_backups_are_never_committed_or_built_into_an_i
         lines = (repo_root / ignore_file).read_text(encoding="utf-8").splitlines()
         assert "deploy/pilot/.env" in lines, ignore_file
         assert any(line.startswith("deploy/pilot/backups") for line in lines), ignore_file
+
+
+def _has_database(kit: Path, listing: str) -> int:
+    """Exit status of lib.sh's has_database under the same `set -euo pipefail` the scripts use."""
+    script = f'set -euo pipefail; . "{kit}/lib.sh"; listing=$(cat); has_database "$listing" || exit 3'
+    return subprocess.run(["bash", "-c", script], input=listing, text=True, cwd=kit, check=False).returncode
+
+
+def test_the_database_check_survives_a_huge_listing_under_pipefail(kit: Path) -> None:
+    # A run folder is thousands of files; a `tar -t | grep -q` pipe dies of SIGPIPE there and the script
+    # then refuses a good backup. The check must give the right answer however long the listing is.
+    files = "\n".join(f"./runs/r{i}/models/part_{i}.pkl" for i in range(20000))
+    assert _has_database(kit, f"./registry.db\n{files}\n") == 0
+    assert _has_database(kit, f"{files}\n./runs/x/last.db\n") == 0
+    assert _has_database(kit, f"{files}\n") == 3
+    for script in ("backup.sh", "restore.sh"):
+        text = (kit / script).read_text(encoding="utf-8")
+        assert "| grep -q" not in text, f"{script}: grep -q at the end of a pipe"
