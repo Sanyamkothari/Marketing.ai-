@@ -10,6 +10,9 @@
 * `FatigueModel` gives the attention price: the chance that one more message makes this customer
   unsubscribe, given how often we contacted them this week, times their future value. It starts
   from a documented default curve and learns from unsubscribe outcomes.
+* `HazardModel` is the agent's sharper version of that chance: per channel and messages this week,
+  learned from every send as its outcome arrives, each cell shrunk towards the channel, the count
+  and the business (empirical Bayes), from a conservative prior.
 
 Actions are keyed by their labels, `channel|offer_id|theme` (plus `|format` for a message that is not
 plain text, e.g. `email|none|education|text_image`), so learning transfers across goals and across
@@ -361,6 +364,132 @@ class FatigueModel:
             n = min(max(obs.contacts_7d, 0), self._max)
             hit, miss = (obs.weight, 0.0) if obs.unsubscribed else (0.0, obs.weight)
             self._beliefs[n] = self._beliefs[n].plus(hit, miss)
+
+
+# --- the contact hazard, per channel and contacts this week -----------------------------------------
+
+HAZARD_BASE_RATE = 0.005
+"""Before any send: half a percent of messages lose the contact (an unsubscribe or a complaint) for
+someone not contacted this week. Conservative on purpose. Published email unsubscribe rates run
+0.1-0.5% a campaign and WhatsApp opt-outs and blocks higher, so a business that has not measured its
+own rate should assume the dear end, not zero: a near-zero prior made the second message of every
+week look free until weeks of unsubscribes had piled up."""
+HAZARD_GROWTH = 0.5
+"""Each message already received this week multiplies that chance by 1.5 in the prior."""
+HAZARD_MAX_CONTACTS = 3
+"""Contact counts above this share one cell."""
+HAZARD_BUSINESS_STRENGTH = 2.0
+HAZARD_COUNT_STRENGTH = 3.0
+HAZARD_CHANNEL_STRENGTH = 3.0
+HAZARD_CELL_STRENGTH = 3.0
+"""Each level's Gamma(k, k) prior, in expected events: a level moves halfway from the one above once
+its own sends predict this many events. Counted in events, not sends, so a rare event needs more
+sends before one unsubscribe can move it."""
+
+
+def _gamma_mean(events: float, expected: float, strength: float) -> float:
+    return (strength + events) / (strength + max(expected, 0.0))
+
+
+class HazardModel:
+    """P(a message loses the contact | its channel, messages the customer had in the last 7 days).
+
+    Learned from every send as soon as its outcome is in (an unsubscribe or a complaint arrives hours
+    after its message, not after a week-long window), by a four-level empirical-Bayes model:
+
+        p(channel, n) = prior(n) x r_business x r_count[n] x r_channel[channel] x r_cell[channel, n]
+
+    `prior(n)` is `base_rate x (1 + growth) ^ n`. Each `r` is a Gamma(k, k) multiplier centred on 1,
+    updated with the events its sends saw against the events the levels above predicted for them
+    (Poisson counts with an offset). So the business's overall level is learned first, then how much
+    worse a second or third message of a week is (pooled over channels, so email learns the shape
+    from WhatsApp's sends too), then each channel's own level (WhatsApp and email apart), and last
+    each channel x count cell. A cell with few sends stays where the levels above put it. The curve
+    is kept non-decreasing in the count: another message this week never makes the next one safer.
+
+    Deterministic and order-free: it keeps counts only.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_rate: float = HAZARD_BASE_RATE,
+        growth: float = HAZARD_GROWTH,
+        max_contacts: int = HAZARD_MAX_CONTACTS,
+        business_strength: float = HAZARD_BUSINESS_STRENGTH,
+        count_strength: float = HAZARD_COUNT_STRENGTH,
+        channel_strength: float = HAZARD_CHANNEL_STRENGTH,
+        cell_strength: float = HAZARD_CELL_STRENGTH,
+    ) -> None:
+        if not 0 < base_rate < 1 or growth < 0 or max_contacts < 0:
+            raise ValueError("need 0 < base_rate < 1, growth >= 0 and max_contacts >= 0")
+        if min(business_strength, count_strength, channel_strength, cell_strength) <= 0:
+            raise ValueError("prior strengths must be positive")
+        self.max_contacts = max_contacts
+        self.prior = tuple(min(base_rate * (1 + growth) ** n, 0.5) for n in range(max_contacts + 1))
+        self.strengths = (business_strength, count_strength, channel_strength, cell_strength)
+        self._sends: dict[tuple[Channel, int], float] = {}
+        self._events: dict[tuple[Channel, int], float] = {}
+        self._rates: dict[tuple[Channel, int], float] | None = None
+
+    def _cell(self, contacts_7d: int) -> int:
+        return min(max(contacts_7d, 0), self.max_contacts)
+
+    def observe_send(self, channel: Channel, contacts_7d: int, weight: float = 1.0) -> None:
+        """A delivered message on `channel` to someone with `contacts_7d` messages in the week before."""
+        if weight > 0:
+            key = (channel, self._cell(contacts_7d))
+            self._sends[key] = self._sends.get(key, 0.0) + weight
+            self._rates = None
+
+    def observe_event(self, channel: Channel, contacts_7d: int, weight: float = 1.0) -> None:
+        """That message lost the contact (count each message once, even if it caused two events)."""
+        if weight > 0:
+            key = (channel, self._cell(contacts_7d))
+            self._events[key] = self._events.get(key, 0.0) + weight
+            self._rates = None
+
+    def counts(self, channel: Channel, contacts_7d: int) -> tuple[float, float]:
+        """(sends, events) seen in one cell."""
+        key = (channel, self._cell(contacts_7d))
+        return self._sends.get(key, 0.0), self._events.get(key, 0.0)
+
+    def _fit(self) -> dict[tuple[Channel, int], float]:
+        k_bus, k_count, k_chan, k_cell = self.strengths
+        # Sorted, so the float sums below add up in the same order in every process (a set of
+        # channels iterates in an order that changes with the hash seed).
+        cells = sorted(set(self._sends) | set(self._events), key=lambda c: (c[0].value, c[1]))
+        sends = {c: self._sends.get(c, 0.0) for c in cells}
+        events = {c: self._events.get(c, 0.0) for c in cells}
+        prior = {c: self.prior[c[1]] * sends[c] for c in cells}
+        r_bus = _gamma_mean(sum(events.values()), sum(prior.values()), k_bus)
+        r_count: dict[int, float] = {}
+        for n in range(self.max_contacts + 1):
+            mine = [c for c in cells if c[1] == n]
+            r_count[n] = _gamma_mean(
+                sum(events[c] for c in mine), sum(prior[c] for c in mine) * r_bus, k_count
+            )
+        r_chan: dict[Channel, float] = {}
+        for ch in dict.fromkeys(c[0] for c in cells):
+            mine = [c for c in cells if c[0] is ch]
+            expected = sum(prior[c] * r_bus * r_count[c[1]] for c in mine)
+            r_chan[ch] = _gamma_mean(sum(events[c] for c in mine), expected, k_chan)
+        rates: dict[tuple[Channel, int], float] = {}
+        for ch in Channel:
+            running = 0.0
+            for n in range(self.max_contacts + 1):
+                level = self.prior[n] * r_bus * r_count[n] * r_chan.get(ch, 1.0)
+                key = (ch, n)
+                cell = _gamma_mean(events[key], level * sends[key], k_cell) if key in sends else 1.0
+                running = max(running, min(level * cell, 0.5))
+                rates[key] = running
+        return rates
+
+    def rate(self, channel: Channel, contacts_7d: int) -> float:
+        """The chance the next message on `channel` loses the contact, given this week's count."""
+        if self._rates is None:
+            self._rates = self._fit()
+        return self._rates[(channel, self._cell(contacts_7d))]
 
 
 # --- per-person response: empirical Bayes ------------------------------------------------------

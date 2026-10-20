@@ -27,8 +27,10 @@ How a message is valued (see `ClickResponseModel`):
   It is what makes a discount expensive for someone who would have bought anyway.
 * **Value** (`ShrunkValueModel`): one order's margin, the customer's own average shrunk towards
   the business's, so a single $6 order does not make someone worthless.
-* **Attention price** (`AttentionPrice`): the learned chance of an unsubscribe times the value of
-  the messages we could no longer send them.
+* **Attention price** (`ContactPrice`), per channel: the chance this message loses the contact
+  (`HazardModel`, learned from every send, per channel and messages this week, from a conservative
+  prior) times the value of the messages we could no longer send on that channel (half a year of
+  the customer's best weekly rhythm there), plus the chance of a complaint times its cost.
 
 What it does around the auction:
 
@@ -37,14 +39,27 @@ What it does around the auction:
   (weighted by the inverse of each send's `logged_probability`), each customer's own record and
   their reading hours, so day 1 is not blind (`_warm_start`).
 * **Send hour.** A click that comes hours after the message shows when the person reads; their
-  own reading hour is used once known. Otherwise the allowed hour closest, on average, to when
-  people in their segment read (`ReadingHours.closest_hour`), with a small share sent at random
-  hours so every hour keeps being tried.
+  own reading hour is used once known. A customer with quick clicks only gets the best allowed
+  hour of `ReadingHourModel`'s posterior mean (their clicks credit the hours we sent at, shrunk to
+  their segment's).
+  Everyone else gets the allowed hour closest, on average, to when people in their segment read
+  (`ReadingHours.closest_hour`), with a small share sent at random hours so every hour keeps being
+  tried.
 * **Pacing.** Pending sends count towards the weekly cap, and the cap is judged on the week before
   the planned send, not before the morning decision (`_contacts_at_send`). Nothing new goes out
   within `MIN_GAP` of the last message (so each one is decided knowing whether the last caused an
   unsubscribe). Options that could not beat doing nothing even at the optimistic end are not
   explored (`PLAUSIBLE_Z`), nor are those that could not be the customer's best (`PRUNE_Z`).
+  With `pacing=True`, `Pacer` slows a channel, then holds it, before the brief's complaint or
+  unsubscribe rule trips (off by default, see `build_agent_policy`).
+* **Contacting less.** Each customer has a weekly budget (`ContactPrice.rhythm`): one message a
+  week, a burst of two (then a rest until the week is clear) or two spread out, whichever is worth
+  most after each message's fatigue and price; the policy holds them when one more does not fit,
+  and the auction gives each slot to the best option. Where the holdout comparison has not shown
+  that messages create lift in a segment, an option is sampled only if it pays at the pessimistic
+  end of what is known
+  (`_margin`, a lower-confidence-bound rule); the exploration floor keeps trying the rest. See
+  docs/v2/CONTACT_LESS.md.
 * **Briefs move.** A newer brief version rebuilds that goal's bidder (the models are shared).
 * **Nightly.** `nightly(decisions, events_by_customer, now)` feeds the clicks and purchases above,
   then hands the log to `autonomy.learning.update_models` (window conversions, fatigue, value).
@@ -108,7 +123,7 @@ from autonomy.decide.models import (
     ANY,
     Beta,
     BetaResponseModel,
-    FatigueModel,
+    HazardModel,
     PersonalEffects,
     ValueModel,
     base_key,
@@ -117,11 +132,12 @@ from autonomy.decide.models import (
     shrink_to_pool,
 )
 from autonomy.decide.models import action_key as key_of
+from autonomy.decide.pacing import Pacer
 from autonomy.decide.policy import SWEEP, AutonomousPolicy, seeded_rng
-from autonomy.decide.timing import LATE_CLICK, zone_named
+from autonomy.decide.timing import LATE_CLICK, ReadingHourModel, zone_named
 from autonomy.interfaces import Bidder, Policy
 from autonomy.learning import ModelBundle, build_bundle, learn_from_rewards, update_models
-from autonomy.learning.observations import ipw_weights, logged_sends, weighted_rate
+from autonomy.learning.observations import LoggedSend, ipw_weights, logged_sends, weighted_rate
 
 AGENT_VERSION = "autonomy-agent-v1"
 
@@ -172,6 +188,23 @@ PLAUSIBLE_Z = 2.0
 PRUNE_Z = 2.0
 """Options that could not be this customer's best even two standard deviations up (against the best
 option two down) are not offered at all, so the exploration floor is spent only on contenders."""
+
+RESTRAINT_Z = 1.64
+"""One-sided 95%. The evidence that messages create lift in a segment is weak when the lift per
+click's posterior reaches zero this many standard deviations below its mean; there, an option is
+sampled only if its net beats doing nothing by this many of its own standard deviations."""
+LIFT_EVIDENCE_CLICKS = 20.0
+"""Matured clicks the holdout comparison needs before its verdict can trigger restraint (the lift
+prior is worth as many)."""
+LIFT_JUDGE_WINDOWS = 2
+"""The comparison is judged only after this many learning windows (two weeks) since the agent
+started: a launch test runs for a set period before anyone reads it, because a comparison read
+every night from day one will look "unproven" in its first noisy week in every shop, and holding
+back then would starve the very test that settles it."""
+
+HISTORY_LOSS_WINDOW = timedelta(days=2)
+"""In the history, an unsubscribe or complaint without a decision id is put down to the latest
+delivered send on its channel at most this long before it (they come within hours of a message)."""
 
 _EVENT_MEMORY_EXTRA = timedelta(days=9)
 """Events are kept for the learning window plus this: the week of sends before a send (fatigue)
@@ -720,6 +753,10 @@ class LiftPerClick:
         k = max((k0 * self.strength + extra[0]) / den, 0.0)
         return k, math.sqrt((sd0 * self.strength) ** 2 + extra[1] ** 2) / den
 
+    def evidence(self, now: datetime) -> float:
+        """Matured clicks behind the comparison so far (how much it has had to go on)."""
+        return self._matured(self.click_times, now)
+
     def estimate(self, now: datetime) -> tuple[float, float]:
         clicks = self._matured(self.click_times, now)
         extra = self._extra(sorted(self.group))
@@ -851,56 +888,207 @@ class ShrunkValueModel(ValueModel):
         return self.order_value(state) * self.margin_rate(state) * self.base.future_orders
 
 
-# --- the attention price -------------------------------------------------------------------------
+# --- the attention price ---------------------------------------------------------------------------
 
-STAKE_WEEKS = 13.0
-"""How far ahead an unsubscribe costs us: a quarter of the messages we would have sent."""
-STAKE_PRIOR_VALUE = 0.25
-"""Before the agent has sent anything: a message is assumed worth 25 cents, worth 100 messages."""
-STAKE_PRIOR_SENDS = 100.0
+LOST_VALUE_WEEKS = 26.0
+"""How far ahead an unsubscribe costs us: half a year of the messages we would have sent on that
+channel. A contact permission is permanent, but a plan that far out is uncertain and the customer's
+interest drifts, so the far future is not counted (CRM teams value a subscriber over 6-12 months)."""
+COMPLAINT_BASE_RATE = 0.0005
+"""Before any send: one message in 2,000 draws a spam complaint (inbox providers start filtering a
+sender at about 0.1%)."""
+COMPLAINT_COST = 2.0
+"""What one complaint costs beyond the lost contact: deliverability for every other customer. A
+rough figure in the goal's currency; a business that knows its own should set it."""
 
 
-@dataclass
-class AttentionPrice:
-    """What one more message costs this customer: p(unsubscribe | contacts this week) x the stake.
+@dataclass(frozen=True)
+class _Option:
+    channel: Channel
+    gross: float
+    """Uplift x value of one message at the customer's current count, before any urgency."""
+    fixed: float
+    """Offer and channel cost of one message."""
+    urgency: float
 
-    An unsubscribe does not stop someone buying; it stops us messaging them on that channel. So the
-    stake is the value of the messages we would have sent them over the next `STAKE_WEEKS` weeks:
-    the agent's own recent expected net per message, times how many messages a customer gets a week.
-    The unsubscribe curve is the bundle's learned `FatigueModel`.
+
+BURST_GAP_DAYS = 1.0
+"""In a burst, each message after the first goes out a day after the one before (the agent decides
+daily, and nothing goes within `MIN_GAP` of the last message)."""
+BURST_WITHIN = timedelta(days=2)
+"""A customer is in the middle of a burst while their last message is at most this old."""
+
+
+@dataclass(frozen=True)
+class Rhythm:
+    """How a customer's weekly budget is spent: `size` messages in any 7 days, either `steady`
+    (spread out, so each message has `size - 1` others in its week) or in a burst (back to back,
+    then a rest until the week is clear, so the j-th message of a burst has j - 1 before it)."""
+
+    size: int
+    burst: bool
+    weekly_value: float
+
+    def allows(self, contacts_7d: int, last_contact_age: timedelta | None) -> bool:
+        """Whether one more message fits: under the size, and for a burst only at its start (a clear
+        week) or in its middle (the last message went out within `BURST_WITHIN`)."""
+        if contacts_7d >= self.size:
+            return False
+        if not self.burst or contacts_7d == 0:
+            return True
+        return last_contact_age is not None and last_contact_age <= BURST_WITHIN
+
+
+def rhythms(values: Sequence[float]) -> list[Rhythm]:
+    """Every way to spend a weekly budget the cap allows, with its value per week.
+
+    `values[j]` is what a message with j others in its week is worth after its price (j = 0 .. cap
+    - 1). Steady b: b messages a week, each with b - 1 others, `b x values[b - 1]`. A burst of b:
+    `values[0] + ... + values[b - 1]` every `7 + (b - 1) x BURST_GAP_DAYS` days, since the next burst
+    can only start once its first message has a clear week. The list is in order of preference on a
+    tie: fewer messages first, a burst before the steady rhythm of the same size."""
+    out: list[Rhythm] = []
+    for b in range(1, len(values) + 1):
+        if b >= 2:
+            cycle = 7.0 + (b - 1) * BURST_GAP_DAYS
+            out.append(Rhythm(b, True, sum(values[:b]) * 7.0 / cycle))
+        out.append(Rhythm(b, False, b * values[b - 1]))
+    return out
+
+
+def best_rhythm(values: Sequence[float]) -> Rhythm:
+    """The rhythm worth most a week; the first in `rhythms`' order on a tie."""
+    best: Rhythm | None = None
+    for r in rhythms(values):
+        if best is None or r.weekly_value > best.weekly_value + 1e-12:
+            best = r
+    assert best is not None
+    return best
+
+
+class ContactPrice:
+    """What one more message costs a customer, per channel, and how their weekly budget is spent.
+
+    **Attention price** of a message on a channel, for a customer with n messages in the last week:
+
+        P(unsubscribe or complaint | channel, n) x lost future value(customer, channel)
+        + P(complaint | channel, n) x the complaint cost
+
+    * The chances come from `HazardModel`s learned from every send (WhatsApp and email apart, each
+      contact count apart, shrunk towards each other), starting from a conservative prior.
+    * The **lost future value** is what the messages we would still send on that channel are worth:
+      `LOST_VALUE_WEEKS` x the weekly value of that channel's best rhythm for this customer (see
+      below), from the customer's own options now. Those options carry the per-person factors,
+      which are shrunk to the segment, and the measured lift per click, so a customer messages do not
+      move (or a shop where nothing works) has little to lose, and a keen WhatsApp reader a lot.
+
+    **Weekly budget.** A message with j others in its week is worth `fatigue(j)` of a fresh one and
+    costs `price(j)`. The customer's budget is the rhythm (`rhythms`) worth most a week: one
+    message a week; a burst of two (a message, another the next day, then a rest until the week is
+    clear: one fresh and one tired message every eight days); or two spread out (both tired). The
+    policy holds the customer whenever one more message does not fit that rhythm, so a second
+    message goes out only when it pays for itself and for tiring the next one. The auction spends
+    each slot on the best option there is, so a cheap email does not take the slot (and tire the
+    reader) that a WhatsApp message would have used better.
+
+    `fatigue(n)` is the click model's "messages this week" factor; `cap()` the briefs' weekly cap.
     """
 
-    fatigue: FatigueModel
-    sends: list[tuple[datetime, float]] = field(default_factory=list)
-    customers: set[str] = field(default_factory=set)
+    def __init__(
+        self,
+        fatigue: Callable[[int], float],
+        cap: Callable[[], int],
+        *,
+        hazard: HazardModel | None = None,
+        complaints: HazardModel | None = None,
+        weeks: float = LOST_VALUE_WEEKS,
+        complaint_cost: float = COMPLAINT_COST,
+    ) -> None:
+        self.fatigue = fatigue
+        self.cap = cap
+        self.hazard = hazard if hazard is not None else HazardModel()
+        self.complaints = complaints if complaints is not None else HazardModel(base_rate=COMPLAINT_BASE_RATE)
+        self.weeks = weeks
+        self.complaint_cost = complaint_cost
 
-    def record(self, decision: Decision) -> None:
-        self.customers.add(decision.customer_id)
-        if decision.kind is DecisionKind.ACT:
-            self.sends.append((decision.made_at, decision.expected_net))
+    @staticmethod
+    def _options(bids: Sequence[Bid]) -> list[_Option]:
+        return [
+            _Option(
+                b.action.channel,
+                max(b.uplift, 0.0) * max(b.value_if_converted, 0.0),
+                b.offer_cost + b.channel_cost,
+                b.urgency,
+            )
+            for b in bids
+        ]
 
-    def roll(self, now: datetime) -> None:
-        week_ago = now - timedelta(days=7)
-        self.sends = [x for x in self.sends if x[0] > week_ago]
+    def _relative(self, contacts_7d: int, top: int) -> list[float]:
+        """How a message at each count 0..top compares with one at the customer's count now."""
+        now = max(self.fatigue(contacts_7d), 1e-9)
+        return [max(self.fatigue(j), 0.0) / now for j in range(top + 1)]
 
-    def stake(self) -> float:
-        n = len(self.sends)
-        value = (STAKE_PRIOR_VALUE * STAKE_PRIOR_SENDS + sum(v for _, v in self.sends)) / (
-            STAKE_PRIOR_SENDS + n
+    def lost_value(self, state: CustomerState, bids: Sequence[Bid]) -> dict[Channel, float]:
+        """Per channel: what losing the customer on it costs (its best rhythm's weekly value x the
+        horizon, before any attention price)."""
+        cap = max(self.cap(), 1)
+        rel = self._relative(state.contacts_7d, cap - 1)
+        values: dict[Channel, list[float]] = {}
+        for o in self._options(bids):
+            mine = values.setdefault(o.channel, [0.0] * cap)
+            for j in range(cap):
+                mine[j] = max(mine[j], o.gross * rel[j] - o.fixed)
+        return {ch: self.weeks * max(best_rhythm(v).weekly_value, 0.0) for ch, v in values.items()}
+
+    def _price(self, channel: Channel, contacts_7d: int, lost: float) -> float:
+        return (
+            self.hazard.rate(channel, contacts_7d) * lost
+            + self.complaints.rate(channel, contacts_7d) * self.complaint_cost
         )
-        per_week = n / len(self.customers) if self.customers and n else 1.0
-        return max(value, 0.0) * per_week * STAKE_WEEKS
 
-    def refresh(self, now: datetime) -> None:
-        """Once a day: forget sends older than a week and recompute the stake."""
-        self.roll(now)
-        self.current = self.stake()
+    def prices(self, state: CustomerState, bids: Sequence[Bid]) -> dict[Channel, float]:
+        """The attention price of the next message on each channel the bids use."""
+        lost = self.lost_value(state, bids)
+        return {ch: self._price(ch, state.contacts_7d, v) for ch, v in lost.items()}
 
-    def __call__(self, state: CustomerState) -> float:
-        return self.fatigue.p_unsub(state.contacts_7d) * self.current
+    def floor(self, state: CustomerState) -> float:
+        """The cheapest a message can be for this customer (no future value at stake): the
+        complaint cost alone, on their cheapest reachable channel."""
+        channels = state.contactable_channels() or (Channel.EMAIL,)
+        return min(self._price(ch, state.contacts_7d, 0.0) for ch in channels)
 
-    current: float = STAKE_PRIOR_VALUE * STAKE_WEEKS
-    """The stake used by `__call__`, refreshed once a day."""
+    def rhythm(self, state: CustomerState, bids: Sequence[Bid]) -> Rhythm:
+        """The customer's best rhythm, from their options now, each count priced on its own."""
+        cap = max(self.cap(), 1)
+        if not bids:
+            return Rhythm(1, False, 0.0)
+        lost = self.lost_value(state, bids)
+        rel = self._relative(state.contacts_7d, cap - 1)
+        options = self._options(bids)
+        values = [
+            max(
+                o.urgency * (o.gross * rel[j] - o.fixed) - self._price(o.channel, j, lost.get(o.channel, 0.0))
+                for o in options
+            )
+            for j in range(cap)
+        ]
+        return best_rhythm(values)
+
+    def budget(
+        self, state: CustomerState, bids: Sequence[Bid], cost: Callable[[Bid], float] | None = None
+    ) -> int:
+        """The policy's hook: how many messages the customer's last 7 days may hold for one more to
+        go now. Their rhythm's size while one more fits it, else their count (which holds them);
+        never below 1, so the first message of a week is the auction's call. `cost` is accepted for
+        the hook; each count is priced here."""
+        del cost
+        rhythm = self.rhythm(state, bids)
+        last = state.last_contact_at
+        send_at = min((b.action.send_at for b in bids), default=state.as_of)
+        age = send_at - last if last is not None else None
+        if rhythm.allows(state.contacts_7d, age):
+            return max(rhythm.size, 1)
+        return max(state.contacts_7d, 1)
 
 
 # --- the breaker --------------------------------------------------------------------------------
@@ -949,6 +1137,37 @@ class Breaker:
             return
         if first[0] >= BASELINE_SENDS and now.timestamp() - first[2] >= BASELINE_DAYS * 86_400.0:
             self.unsub_baseline[goal_id] = first[1] / first[0]
+
+    def check_history(self, briefs: Iterable[Brief], counts: Mapping[Channel, tuple[int, int]]) -> list[str]:
+        """Before the first decision: judge each brief's complaint-rate rule on the client's past
+        campaigns, channel by channel, with the weekly check's own test (at least
+        `BREAKER_MIN_EVENTS` complaints, a count that would happen less than once in 10,000 at the
+        limit). `counts` maps a channel to (delivered past messages, those that drew a complaint).
+
+        A channel whose history already breaks the limit is paused for the goal before anything is
+        sent on it, until a person approves a new brief version: a business whose past messages on a
+        channel drew complaints at many times the brief's limit should not have the agent find that
+        out again on its customers. Returns sentences for the new pauses."""
+        news: list[str] = []
+        for brief in briefs:
+            for rule in brief.envelope.stop_rules:
+                if rule.metric is not StopMetric.COMPLAINT_RATE:
+                    continue
+                for channel in brief.envelope.channels:
+                    sent, complaints = counts.get(channel, (0, 0))
+                    key = (brief.goal_id, channel)
+                    if key in self.paused_channels or complaints < BREAKER_MIN_EVENTS:
+                        continue
+                    if _poisson_tail(complaints, rule.threshold * sent) >= BREAKER_ALPHA:
+                        continue
+                    sentence = (
+                        f"Paused {channel.value} before the first message: past campaigns drew "
+                        f"{complaints} complaints on {sent:,} messages ({complaints / max(sent, 1):.2%}), "
+                        f"above the {rule.threshold:.2%} limit."
+                    )
+                    self.paused_channels[key] = sentence
+                    news.append(sentence)
+        return news
 
     def resume(self, goal_id: str) -> None:
         """A new brief version: a person has looked, so the goal starts afresh."""
@@ -1037,6 +1256,11 @@ BASELINE_GROUP = "baseline_group"
 """The block code `explain_bids` gives every bid of a baseline-group customer: the baseline rule, not
 the auction, decides for them."""
 
+PRUNED = "pruned"
+"""The block code `explain_bids` gives an option the bidder's own pruning left out (an offer not
+expected to beat its plain version, an option that cannot plausibly be the best, or every option
+of someone contact clearly harms) when no hard rule blocks it first: `decide` never sees it."""
+
 
 @dataclass(frozen=True)
 class BidExplanation:
@@ -1071,6 +1295,15 @@ def _quote(bidder: Bidder, state: CustomerState, ctx: DecisionContext) -> list[B
     return bidder.bids(state, ctx)
 
 
+def _quote_all(bidder: Bidder, state: CustomerState, ctx: DecisionContext) -> list[tuple[Bid, bool]]:
+    """Every option a bidder prices, each with whether its pruning keeps it (what `decide` sees).
+    A bidder without `GoalBidder.quote(prune=False)` keeps all it bids."""
+    kept = _quote(bidder, state, ctx)
+    if isinstance(bidder, GoalBidder):
+        return [(b, b in kept) for b in bidder.quote(state, ctx, prune=False)]
+    return [(b, True) for b in kept]
+
+
 def _item_reason(bid: Bid, bidders: Mapping[str, Bidder], state: CustomerState) -> str | None:
     if bid.action.item_id is None:
         return None
@@ -1100,6 +1333,10 @@ class AgentPolicy:
         asset_of: AssetOf | None = None,
         carousel_template: bool = False,
         format_costs: Mapping[Format, float] | None = None,
+        pacing: bool = False,
+        reading_hour_model: bool = True,
+        restraint: bool = True,
+        weekly_budget: bool = True,
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
@@ -1124,7 +1361,12 @@ class AgentPolicy:
         self.breaker = Breaker()
         self.alerts: list[str] = []
         self.value = ShrunkValueModel(base=bundle.value)
-        self.attention = AttentionPrice(bundle.fatigue)
+        self.contact_price = ContactPrice(self._click_fatigue, self._weekly_cap)
+        self.pacer: Pacer | None = Pacer(step_aside=True) if pacing else None
+        self.hour_model: ReadingHourModel | None = ReadingHourModel() if reading_hour_model else None
+        self.restraint = restraint
+        self._weak_lift: dict[str, bool] = {}
+        """Segment (or ANY) -> whether the evidence that messages create lift there is weak tonight."""
         self.lift = LiftPerClick(effect_days=float(learn_horizon_days))
         self.organic = OrganicRate(self.segmenter, days=float(learn_horizon_days))
         if isinstance(bundle.response, ClickResponseModel):
@@ -1133,13 +1375,17 @@ class AgentPolicy:
         self.bidders: dict[str, GoalBidder] = {}
         self.policy = AutonomousPolicy(
             [],
-            self.attention,
+            self.contact_price.floor,
             exploration_floor,
             baseline_policy,
             mc_draws=mc_draws,
             version=version,
             plausible_z=PLAUSIBLE_Z,
             min_gap=MIN_GAP,
+            pacer=self.pacer,
+            channel_price_fn=self.contact_price.prices,
+            budget_fn=self.contact_price.budget if weekly_budget else None,
+            margin_fn=self._margin if restraint else None,
         )
         for brief in briefs:
             self._install(brief)
@@ -1158,9 +1404,11 @@ class AgentPolicy:
         self._send_keys: dict[str, tuple[str | None, str, str]] = {}
         """decision_id -> (segment, action key, offer) of the agent group's sends, for the click model."""
         self._clicked: set[str] = set()
+        self._lost: set[str] = set()
+        """Sends whose lost contact the hazard model has counted (once per message)."""
+        self._complained: set[str] = set()
         self._send_contacts: dict[str, tuple[int, int | None]] = {}
         """decision_id -> (messages the customer had in the week before that send, its local hour)."""
-        self._refreshed_at: datetime | None = None
         self._forgotten_before: datetime | None = None
         """Events before this were pruned from memory; they are never observed again."""
         self._ctx_key: tuple[object, ...] | None = None
@@ -1235,6 +1483,8 @@ class AgentPolicy:
             if self._is_newer(brief):
                 if brief.goal_id in self.briefs:
                     self.breaker.resume(brief.goal_id)
+                    if self.pacer is not None:
+                        self.pacer.reset(brief.goal_id)
                 self._install(brief)
 
     def _effective(self, ctx: DecisionContext) -> DecisionContext:
@@ -1293,24 +1543,78 @@ class AgentPolicy:
 
     def prepare_day(self, states: Sequence[CustomerState], ctx: DecisionContext) -> None:
         """Once a day before the sweep (optional): fit the frequency segments and the segments'
-        organic purchase rates to the business's own customers (first day), and refresh the
-        attention stake. Without it the segments keep their default cuts."""
+        organic purchase rates to the business's own customers (first day), and learn from the
+        history before the first decision. Without it the segments keep their default cuts."""
         if not self.segmenter.fitted:
             self.segmenter.fit(states, ctx.now)
             self.organic.fit(states, ctx.now)
         if not self._decided:
             self._warm_start({s.customer_id: s for s in states}, ctx.now)
-        self._daily(ctx.now)
 
-    def _daily(self, now: datetime) -> None:
-        if self._refreshed_at is None or now - self._refreshed_at >= timedelta(days=1):
-            self.attention.refresh(now)
-            self._refreshed_at = now
+    # --- what contacting costs ------------------------------------------------------------------
+
+    def _click_fatigue(self, contacts_7d: int) -> float:
+        """How a message's click rate compares with the average message's at this weekly count."""
+        model = self.bundle.response
+        if isinstance(model, ClickResponseModel):
+            return model.fatigue_factor(contacts_7d)[0]
+        return 1.0
+
+    def _weekly_cap(self) -> int:
+        """The weekly contact cap the briefs allow (the largest, when goals differ)."""
+        caps = [b.envelope.max_contacts_per_week for b in self.briefs.values()]
+        return max(caps) if caps else 1
+
+    def _margin(self, state: CustomerState, bid: Bid) -> float:
+        """How far this option's net must beat doing nothing before it may be sampled.
+
+        Zero (plain Thompson sampling) while the evidence that messages create lift in the customer's
+        segment is good. Where it is weak (`_weak_lift`), `RESTRAINT_Z` of the option's own standard
+        deviations, the spread Thompson sampling would have drawn it with: a lower-confidence-bound
+        rule, so an option goes out only if it pays at the pessimistic end of what we know about it,
+        not when one lucky draw says so. The doubt about the lift itself is already in the mean (the
+        lift per click is the holdout comparison's posterior, shrunk to the prior); counting it a
+        second time in the margin holds back every option at once, and is a trap (see
+        docs/v2/CONTACT_LESS.md): a segment that stops being sent to stops being measured.
+        """
+        if not self._weak_lift.get(state.segment or ANY, self._weak_lift.get(ANY, False)):
+            return 0.0
+        return RESTRAINT_Z * bid.uncertainty
+
+    def _judge_lift(self, now: datetime) -> None:
+        """Nightly: in which segments is the evidence that messages create lift weak?
+
+        Weak means the holdout comparison has had its say (`LIFT_JUDGE_WINDOWS` learning windows
+        since the agent started, and at least `LIFT_EVIDENCE_CLICKS` matured clicks behind it) and
+        the lift per click's posterior still includes zero at `RESTRAINT_Z` (its lower bound is at
+        or below 0), whether because the effect is small or because the comparison is too noisy to
+        show it. Before that the prior rules: the agent starts as a business launching a programme
+        with a holdout would, by running it.
+
+        A segment is judged on its own posterior (shrunk towards the business's) only when the
+        business-wide one is weak too. A segment has a tenth of a holdout of a hundred or so, so
+        its own comparison includes zero most weeks even where messages plainly work; letting that
+        alone hold it back stopped sending (and so measuring) in shops that make money. Where the
+        business's lift is unproven, a segment whose own lift is clear of zero is still sent to.
+        """
+        model = self.bundle.response
+        if not self.restraint or not isinstance(model, ClickResponseModel):
+            self._weak_lift = {}
+            return
+        start = self.lift.start
+        judged_from = timedelta(days=LIFT_JUDGE_WINDOWS * self.learn_horizon_days)
+        if start is None or now - start < judged_from or self.lift.evidence(now) < LIFT_EVIDENCE_CLICKS:
+            self._weak_lift = {}
+            return
+        pooled = model.lift[0] - RESTRAINT_Z * model.lift[1] <= 0
+        weak = {ANY: pooled}
+        for seg, (k, sd) in model.lift_by_segment.items():
+            weak[seg] = pooled and k - RESTRAINT_Z * sd <= 0
+        self._weak_lift = weak
 
     def decide(self, state: CustomerState, ctx: DecisionContext, *, trigger: str | None = None) -> Decision:
         if not self._decided:
             self._warm_start({}, ctx.now)
-        self._daily(ctx.now)
         eff = self._effective(ctx)
         seg = self.segment(state, ctx.now)
         self._segments[state.customer_id] = seg
@@ -1335,8 +1639,6 @@ class AgentPolicy:
             update["active_hours"] = ()
         decision = self.policy.decide(state.model_copy(update=update), eff, trigger=trigger)
         self._decision_segment[decision.decision_id] = seg
-        if decision.group is Group.AGENT:
-            self.attention.record(decision)
         return decision
 
     # --- explaining ------------------------------------------------------------------------------
@@ -1351,12 +1653,18 @@ class AgentPolicy:
         with pending sends, gap rule and hard rules), and ranked the way the auction ranks them:
         the bids that may go out first, by `net` (expected net minus the attention price), then the
         blocked ones by expected net. `considered` marks the near-best few the auction samples from.
+        Options the bidder's own pruning leaves out are listed too: blocked by the hard rule that
+        would stop them, else by `PRUNED`.
+
+        Each bid's `net` is after its own channel's attention price and any pacing surcharge. Bids
+        held by pacing (`pacing`) or by the customer's spent weekly budget (`weekly_cap`) come back
+        blocked with that code. `considered` includes options restraint keeps out of the Thompson
+        draw: the exploration floor can still pick them.
 
         It changes nothing: no decision is logged, no send is scheduled, no bidder remembers the
-        customer, no new brief version is installed, so deciding afterwards gives the same decision.
-        Two things `decide` does first are not done here: the warm start from history (before the
-        first decision) and the daily refresh of the attention price, so before the day's first
-        decision the price may be yesterday's. A pacer (the agent sets none) is not applied.
+        customer, no new brief version is installed and the pacer's running reference is left
+        alone, so deciding afterwards gives the same decision. The warm start from history (before
+        the first decision) is not done here.
         A holdout or baseline customer's bids all come back blocked (`holdout`, `BASELINE_GROUP`).
         """
         eff, bidders = self._view(ctx)
@@ -1402,35 +1710,42 @@ class AgentPolicy:
             )
         times: dict[tuple[str, datetime], datetime | None] = {}
         offered = [
-            policy._timed(b, view, eff, times, hour_scores)
+            (policy._timed(b, view, eff, times, hour_scores), kept)
             for bidder in bidders
-            for b in _quote(bidder, view, eff)
+            for b, kept in _quote_all(bidder, view, eff)
             if math.isfinite(b.expected_net) and math.isfinite(b.uncertainty)
         ]
-        price = policy._price(view)
-        survivors: list[Bid] = []
+        allowed: list[Bid] = []
         blocked: list[tuple[Bid, str]] = []
-        for bid in offered:
+        for bid, kept in offered:
             check = rules.check_bid(bid, view, eff)
             if check.allowed and not gap.allowed:
                 check = gap
-            if check.allowed:
-                survivors.append(bid)
+            if check.allowed and not kept:
+                blocked.append((bid, PRUNED))
+            elif check.allowed:
+                allowed.append(bid)
             else:
                 blocked.append((bid, check.code))
-        survivors.sort(key=lambda b: b.expected_net - price, reverse=True)
-        sampled = survivors[: policy.max_options]
-        if policy.plausible_z is not None:
-            z = policy.plausible_z
-            sampled = [b for b in sampled if b.expected_net - price + z * b.uncertainty > 0]
-        chosen = {id(b) for b in sampled}
+        market = policy.auction(view, eff, allowed, [], observe=False)
+        blocked.extend(market.held)
+        held_ids = {id(b) for b, _code in market.held}
+        considered = {id(b) for b in market.options}
+        # Allowed bids past the auction's best `max_options` are listed too, as not considered.
+        ranked = sorted(
+            (b for b in allowed if id(b) not in held_ids),
+            key=lambda b: b.expected_net - market.cost(b),
+            reverse=True,
+        )
         out = [
-            BidExplanation(b, b.expected_net - price, None, id(b) in chosen, _item_reason(b, by_goal, view))
-            for b in survivors
+            BidExplanation(
+                b, b.expected_net - market.cost(b), None, id(b) in considered, _item_reason(b, by_goal, view)
+            )
+            for b in ranked
         ]
         blocked.sort(key=lambda x: -x[0].expected_net)
         out.extend(
-            BidExplanation(b, b.expected_net - price, code, False, _item_reason(b, by_goal, view))
+            BidExplanation(b, b.expected_net - market.cost(b), code, False, _item_reason(b, by_goal, view))
             for b, code in blocked
         )
         return out
@@ -1472,19 +1787,24 @@ class AgentPolicy:
         Every delivered logged send feeds the click model: the segment click rates take it weighted
         by the inverse of its logged propensity (`logged_probability`, clipped; weight 1 when the
         campaign did not log one), and the customer's own record takes it as for the agent's sends.
-        A click that came hours after its message shows when that customer reads. Segments are
-        today's (as of the first decision): decisions in the history were not ours, so the segment
-        each was made in is unknown, and a customer without a state here is pooled.
+        A click that came hours after its message shows when that customer reads. The same sends
+        and the unsubscribes and complaints that followed them warm-start the contact hazard
+        (`_warm_hazard`). Segments are today's (as of the first decision): decisions in the history
+        were not ours, so the segment each was made in is unknown, and a customer without a state
+        here is pooled.
         """
         history = {cid: list(evs.values()) for cid, evs in self._history.items()}
         self._history = {}
         self._decided = True
         sends = [s for s in logged_sends(history, self.content_by_id, exclude=self._sends) if s.delivered]
+        if not sends:
+            return
+        weights = ipw_weights([s.propensity for s in sends])
+        self._warm_hazard(history, sends, weights)
         model = self.bundle.response
-        if not sends or not isinstance(model, ClickResponseModel):
+        if not isinstance(model, ClickResponseModel):
             return
         segment = {cid: self.segment(st, now) for cid, st in states.items()}
-        weights = ipw_weights([s.propensity for s in sends])
         records = [
             (s.customer_id, segment.get(s.customer_id), s.action_key(), s.clicked, w)
             for s, w in zip(sends, weights, strict=True)
@@ -1498,6 +1818,68 @@ class AgentPolicy:
             self.reading.observe(
                 s.customer_id, s.click_at.astimezone(zone_named(tz)).hour, segment.get(s.customer_id)
             )
+
+    def _warm_hazard(
+        self, history: Mapping[str, Sequence[Event]], sends: Sequence[LoggedSend], weights: Sequence[float]
+    ) -> None:
+        """Teach the contact hazard from past campaigns: every delivered past send, by its channel and
+        the messages the customer had in the week before it, and every unsubscribe or complaint that
+        followed one. An event is tied to its send by decision id when the history has one, else to
+        the latest delivered send on the same channel within `HISTORY_LOSS_WINDOW` before it. Each
+        send counts with its inverse-propensity weight, as for the click rates, so a campaign aimed
+        at the people least likely to leave does not make leaving look rare (the weights are scaled to
+        average 1, so the history counts for as many sends as it holds). The plain counts of messages
+        and complaints per channel then go to the breaker's `check_history`."""
+        price = self.contact_price
+        sent_times: dict[str, list[datetime]] = {}
+        for cid, events in history.items():
+            sent_times[cid] = sorted(e.ts for e in events if e.type is EventType.SEND)
+        rows: list[tuple[LoggedSend, float, int]] = []
+        # Weights rescaled to average 1: the evidence counts as many sends as there were (the prior
+        # strengths are in events), while the campaigns' targeting is still undone.
+        mean_w = sum(weights) / len(weights) if weights else 1.0
+        for s, w in zip(sends, (w / mean_w for w in weights), strict=True):
+            week_ago = s.sent_at - timedelta(days=7)
+            before = sum(1 for t in sent_times.get(s.customer_id, ()) if week_ago < t < s.sent_at)
+            rows.append((s, w, before))
+            price.hazard.observe_send(s.channel, before, w)
+            price.complaints.observe_send(s.channel, before, w)
+        by_decision = {s.decision_id: i for i, (s, _w, _b) in enumerate(rows) if s.decision_id}
+        by_customer: dict[str, list[int]] = {}
+        for i, (s, _w, _b) in enumerate(rows):
+            by_customer.setdefault(s.customer_id, []).append(i)
+        lost: set[int] = set()
+        complained: set[int] = set()
+        delivered: dict[Channel, int] = {}
+        for s in sends:
+            delivered[s.channel] = delivered.get(s.channel, 0) + 1
+        for cid, events in sorted(history.items()):
+            for e in sorted(events, key=lambda e: (e.ts, e.event_id)):
+                if e.type not in (EventType.UNSUBSCRIBE, EventType.COMPLAINT):
+                    continue
+                found = by_decision.get(e.decision_id) if e.decision_id else None
+                if found is None:
+                    candidates = [
+                        i
+                        for i in by_customer.get(cid, ())
+                        if rows[i][0].channel is e.channel
+                        and rows[i][0].sent_at <= e.ts <= rows[i][0].sent_at + HISTORY_LOSS_WINDOW
+                    ]
+                    found = max(candidates, key=lambda i: rows[i][0].sent_at) if candidates else None
+                if found is None:
+                    continue
+                s, w, before = rows[found]
+                if found not in lost:
+                    lost.add(found)
+                    price.hazard.observe_event(s.channel, before, w)
+                if e.type is EventType.COMPLAINT and found not in complained:
+                    complained.add(found)
+                    price.complaints.observe_event(s.channel, before, w)
+        counts: dict[Channel, tuple[int, int]] = {ch: (n, 0) for ch, n in delivered.items()}
+        for i in complained:
+            ch = rows[i][0].channel
+            counts[ch] = (counts[ch][0], counts[ch][1] + 1)
+        self.alerts.extend(self.breaker.check_history(self.briefs.values(), counts))
 
     def _contacts_at_send(self, state: CustomerState, ctx: DecisionContext, hour: int) -> int:
         """Messages the customer will have had in the 7 days before the planned send.
@@ -1533,7 +1915,9 @@ class AgentPolicy:
         """The local hour to aim for.
 
         1. The customer's own reading hour, when late clicks show it.
-        2. Else the allowed hour closest, on average, to when people in their segment read
+        2. Else, for a customer with quick clicks only (and `hour_model` on), the best allowed hour
+           of `ReadingHourModel`'s posterior mean.
+        3. Else the allowed hour closest, on average, to when people in their segment read
            (`ReadingHours.closest_hour`; each known customer counts once, the segment shrunk towards
            the business). Before anyone's hour is known, the business default.
         A small share (`HOUR_EXPLORE`) of messages to customers without a known hour goes to a random
@@ -1552,6 +1936,10 @@ class AgentPolicy:
         rng = seeded_rng(ctx.seed, key)
         if rng.random() < HOUR_EXPLORE:
             return allowed[int(rng.integers(len(allowed)))]
+        if self.hour_model is not None and self.hour_model.clicks(customer_id) > 0:
+            # Some quick clicks but no late one yet: the best allowed hour of their reading-hour
+            # posterior (their quick clicks credit the hours we sent at, shrunk to the segment's).
+            return self.hour_model.best_hour(customer_id, segment, allowed)
         closest = self.reading.closest_hour(segment, allowed)
         return default if closest is None else closest
 
@@ -1634,11 +2022,15 @@ class AgentPolicy:
             if self._refit_at is None or now - self._refit_at >= timedelta(days=PERSONAL_REFIT_DAYS):
                 model.people.refit()
                 self._refit_at = now
+        self._judge_lift(now)
         learned = self.bundle.learned_decisions
         self._log = {k: d for k, d in self._log.items() if k not in learned}
         self._decision_segment = {k: v for k, v in self._decision_segment.items() if k not in learned}
         self._prune(now)
         news = self.breaker.check(self.briefs.values(), now)
+        if self.pacer is not None:
+            for goal in self.briefs:
+                self.pacer.set_unsubscribe_baseline(goal, self.breaker.unsub_baseline.get(goal))
         self.alerts.extend(news)
         return news
 
@@ -1691,34 +2083,63 @@ class AgentPolicy:
             return
         goal, channel, send_at = sent
         self.breaker.record(e, goal, channel)
+        if self.pacer is not None:
+            self.pacer.record(goal, channel, e.type, e.ts)
         model = self.bundle.response
         keyed = self._send_keys.get(e.decision_id)
+        seg = keyed[0] if keyed is not None else self._decision_segment.get(e.decision_id)
         first_click = e.type is EventType.CLICK and e.decision_id not in self._clicked
         if first_click:
             self._clicked.add(e.decision_id)
             self.lift.click(send_at, e.customer_id)
-        if keyed is not None and isinstance(model, ClickResponseModel):
-            seg, key, offer = keyed
-            if e.type is EventType.DELIVER:
-                before = self._sends_before(e.customer_id, send_at)
-                local = self._local_hour(e.customer_id, send_at)
-                self._send_contacts[e.decision_id] = (before, local)
-                model.observe_send(e.customer_id, seg, key, offer, before, local)
-            elif first_click:
+        if e.type is EventType.DELIVER and e.decision_id not in self._send_contacts:
+            before = self._sends_before(e.customer_id, send_at)
+            local = self._local_hour(e.customer_id, send_at)
+            self._send_contacts[e.decision_id] = (before, local)
+            price = self.contact_price
+            price.hazard.observe_send(channel, before)
+            price.complaints.observe_send(channel, before)
+            if self.hour_model is not None:
+                self.hour_model.observe_send(
+                    e.customer_id, send_at, self._timezones.get(e.customer_id, "UTC"), seg
+                )
+            if keyed is not None and isinstance(model, ClickResponseModel):
+                model.observe_send(e.customer_id, keyed[0], keyed[1], keyed[2], before, local)
+        elif e.type in (EventType.UNSUBSCRIBE, EventType.COMPLAINT):
+            # One lost contact per message, however many events it caused; complaints apart too.
+            contacts = self._send_contacts.get(
+                e.decision_id, (self._sends_before(e.customer_id, send_at), None)
+            )[0]
+            if e.decision_id not in self._lost:
+                self._lost.add(e.decision_id)
+                self.contact_price.hazard.observe_event(channel, contacts)
+            if e.type is EventType.COMPLAINT and e.decision_id not in self._complained:
+                self._complained.add(e.decision_id)
+                self.contact_price.complaints.observe_event(channel, contacts)
+        elif first_click:
+            if keyed is not None and isinstance(model, ClickResponseModel):
                 prior_sends, send_hour = self._send_contacts.get(e.decision_id, (0, None))
-                model.observe_click(e.customer_id, seg, key, offer, prior_sends, send_hour)
+                model.observe_click(e.customer_id, keyed[0], keyed[1], keyed[2], prior_sends, send_hour)
+            if self.hour_model is not None:
+                self.hour_model.observe_click(
+                    e.customer_id, send_at, e.ts, self._timezones.get(e.customer_id, "UTC"), seg
+                )
         if e.type is EventType.CLICK and e.ts - send_at >= LATE_CLICK:
             hour = self._local_hour(e.customer_id, e.ts)
-            self.reading.observe(e.customer_id, hour, keyed[0] if keyed is not None else None)
+            self.reading.observe(e.customer_id, hour, seg)
 
     def _local_hour(self, customer_id: str, at: datetime) -> int:
         return at.astimezone(zone_named(self._timezones.get(customer_id, "UTC"))).hour
 
     def _sends_before(self, customer_id: str, at: datetime) -> int:
-        """SEND events to the customer in the week before `at` (not counting one at `at` itself)."""
+        """SEND events to the customer in the week before `at` (not counting one at `at` itself).
+
+        The window is the weekly cap's (`_contacts_at_send`): a send exactly seven days earlier has
+        dropped out. Counted the same way as the count the price is read at, so the hazard and the
+        fatigue factor learned for "one message this week" are the ones charged for it."""
         week_ago = at - timedelta(days=7)
         return sum(
-            1 for e in self._events.get(customer_id, ()) if e.type is EventType.SEND and week_ago <= e.ts < at
+            1 for e in self._events.get(customer_id, ()) if e.type is EventType.SEND and week_ago < e.ts < at
         )
 
     def _prune(self, now: datetime) -> None:
@@ -1736,6 +2157,8 @@ class AgentPolicy:
         self._send_keys = {k: v for k, v in self._send_keys.items() if k in self._sends}
         self._clicked = {k for k in self._clicked if k in self._sends}
         self._send_contacts = {k: v for k, v in self._send_contacts.items() if k in self._sends}
+        self._lost = {k for k in self._lost if k in self._sends}
+        self._complained = {k for k in self._complained if k in self._sends}
 
 
 def build_agent_policy(
@@ -1753,6 +2176,10 @@ def build_agent_policy(
     asset_of: AssetOf | None = None,
     carousel_template: bool = False,
     format_costs: Mapping[Format, float] | None = None,
+    pacing: bool = False,
+    reading_hour_model: bool = True,
+    restraint: bool = True,
+    weekly_budget: bool = True,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -1764,6 +2191,14 @@ def build_agent_policy(
     actions are about (None: the agent's own `set_items` mappings); `asset_of` names the approved
     asset behind an image variant (`autonomy.decide.bidders.asset_lookup`), `carousel_template` says
     the brand has WhatsApp carousel templates and `format_costs` adds a per-message cost by format.
+
+    Three parts that make contacting rarer and better timed are on by default and can be switched
+    off one at a time (to measure each): `reading_hour_model` (the reading-hour posterior for
+    customers with clicks but no known hour), `restraint` (the lower-confidence-bound rule where
+    lift is unproven) and `weekly_budget` (each customer's own weekly rhythm). `pacing` (slow a
+    channel before a stop rule trips, `autonomy.decide.pacing`) is off by default: on the Gym it
+    changed nothing where no stop rule is near and kept the breaker from stopping a complaint storm.
+    See docs/v2/CONTACT_LESS.md.
     """
     if bundle is None:
         fresh = build_bundle()
@@ -1782,4 +2217,8 @@ def build_agent_policy(
         asset_of=asset_of,
         carousel_template=carousel_template,
         format_costs=format_costs,
+        pacing=pacing,
+        reading_hour_model=reading_hour_model,
+        restraint=restraint,
+        weekly_budget=weekly_budget,
     )

@@ -9,22 +9,36 @@ any pacing surcharge (`pacing`) are charged, Thompson sampling with an explorati
 agent (`autonomy.runtime.agent`) builds on. Bids can name a product (`ItemChoice`, from an
 `ItemLookup`; refills get `refill_boost` while `refill_window_open`) and a format's asset
 (`asset_lookup`); `action_key` adds the format as a fourth part (`base_key`, `key_format`).
+
+Contacting less: `models.HazardModel` learns P(unsubscribe or complaint | channel, messages this
+week), which the agent turns into a per-channel attention price. `bidders` prices offers against
+the plain message (`shrink_offer_extra`, `offer_sensitivity_factor`, `organic_chance`) and charges
+the dent contact makes in some customers' own buying (`ContactHarm`, found by `contact_harm_of`).
+`policy.Market` is one customer's priced options before the draw.
 """
 
 from autonomy.decide import rules
 from autonomy.decide.audience import matches
 from autonomy.decide.bidders import (
     DEFAULT_CHANNEL_COSTS,
+    EVIDENCE_HALF_LIFE_DAYS,
     AssetOf,
+    ContactHarm,
     GoalBidder,
+    HarmEvidence,
+    HarmFit,
     ItemChoice,
     ItemLookup,
     Urgency,
     asset_lookup,
+    contact_harm_of,
     days_since_cart,
     needs_item,
+    offer_sensitivity_factor,
+    organic_chance,
     refill_boost,
     refill_window_open,
+    shrink_offer_extra,
     urgency_for,
     uses_refill_scores,
 )
@@ -35,6 +49,7 @@ from autonomy.decide.models import (
     BetaResponseModel,
     FatigueModel,
     FatigueObservation,
+    HazardModel,
     PersonalEffects,
     ResponseModel,
     ResponseObservation,
@@ -47,22 +62,28 @@ from autonomy.decide.models import (
     shrink_to_pool,
 )
 from autonomy.decide.pacing import Pacer
-from autonomy.decide.policy import AutonomousPolicy, Pick, seeded_rng, thompson_with_floor
+from autonomy.decide.policy import AutonomousPolicy, Market, Pick, seeded_rng, thompson_with_floor
 from autonomy.decide.rules import RuleResult, check_bid
 from autonomy.decide.timing import ReadingHourModel, candidate_times, choose_send_time
 
 __all__ = [
     "ANY",
     "DEFAULT_CHANNEL_COSTS",
+    "EVIDENCE_HALF_LIFE_DAYS",
     "AssetOf",
     "AutonomousPolicy",
     "Beta",
     "BetaResponseModel",
+    "ContactHarm",
     "FatigueModel",
     "FatigueObservation",
     "GoalBidder",
+    "HarmEvidence",
+    "HarmFit",
+    "HazardModel",
     "ItemChoice",
     "ItemLookup",
+    "Market",
     "Pacer",
     "PersonalEffects",
     "Pick",
@@ -78,17 +99,21 @@ __all__ = [
     "candidate_times",
     "check_bid",
     "choose_send_time",
+    "contact_harm_of",
     "cuped_adjust",
     "cuped_theta",
     "days_since_cart",
     "key_format",
     "matches",
     "needs_item",
+    "offer_sensitivity_factor",
+    "organic_chance",
     "reason",
     "refill_boost",
     "refill_window_open",
     "rules",
     "seeded_rng",
+    "shrink_offer_extra",
     "shrink_to_pool",
     "thompson_with_floor",
     "urgency_for",

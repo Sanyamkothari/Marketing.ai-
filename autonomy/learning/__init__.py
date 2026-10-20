@@ -7,7 +7,9 @@ content_by_id, now, horizon_days)` closes outcome windows and updates the models
 randomised holdout unless inverse-propensity weighting of the agent's own do-nothing decisions is
 asked for (see `observations`). `logged_sends`, `ipw_weights` and `weighted_rate` read a client's
 past campaigns (sends logged with the probability they were chosen with) so the agent can
-warm-start before its first decision.
+warm-start before its first decision. `contact_evidence` keeps, per customer, the days inside and
+outside a message's window and the purchases in each; `learn_contact_harm` refits the decide
+`ContactHarm` model from it each night (`update_models` calls it).
 """
 
 from autonomy.learning.bundle import (
@@ -20,10 +22,13 @@ from autonomy.learning.bundle import (
     prior_values,
 )
 from autonomy.learning.observations import (
+    ContactEvidence,
     LoggedSend,
     ObservationSet,
     SegmentOf,
     Timeline,
+    contact_evidence,
+    contact_evidence_all,
     decision_observations,
     format_of,
     holdout_anchors,
@@ -33,10 +38,11 @@ from autonomy.learning.observations import (
     value_observations,
     weighted_rate,
 )
-from autonomy.learning.update import LearnReport, learn_from_rewards, update_models
+from autonomy.learning.update import LearnReport, learn_contact_harm, learn_from_rewards, update_models
 
 __all__ = [
     "DEFAULT_PRIOR_STRENGTH",
+    "ContactEvidence",
     "LearnReport",
     "LearnedValueModel",
     "LoggedSend",
@@ -47,11 +53,14 @@ __all__ = [
     "ValueObservation",
     "ValueStats",
     "build_bundle",
+    "contact_evidence",
+    "contact_evidence_all",
     "decision_observations",
     "format_of",
     "holdout_anchors",
     "holdout_observations",
     "ipw_weights",
+    "learn_contact_harm",
     "learn_from_rewards",
     "logged_sends",
     "prior_values",
