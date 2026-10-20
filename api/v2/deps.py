@@ -485,6 +485,41 @@ class Services:
             raise BadRequestError(f"could not read the {channel} webhook: {exc}") from exc
         return self.ingest(events)
 
+    # what the system tells people ----------------------------------------------------------------
+
+    def current_briefing(self, goal_id: str | None) -> Briefing | None:
+        """The latest briefing, its measured sections brought up to the proof and health served now.
+
+        A stored briefing is a snapshot from the time it was written, so its profit drifts away from
+        what Proof shows as more outcomes close (the weekly briefing said $1,846 while Proof said
+        $1,906), and a goal's briefing may have been written from the programme-wide proof. Here the
+        Analyst's three measured sections (profit against people we never contact, the simple rule,
+        customer health) are rebuilt by code from this goal's own `proof` and the current `health`,
+        so Live's briefing, its "Extra profit so far" and Proof's headline are one figure when read
+        at the same time. `as_of` becomes the measurement's time. The other sections (what it
+        learned, other facts) are kept as they were written.
+
+        A briefing whose numbers already match, one that is not the Analyst's (no measured
+        sections), or one with no proof to measure against is returned as stored, model words and all.
+        """
+        stored = self.briefing(goal_id)
+        if stored is None or not any(_measured_kind(s) == "money" for s in stored.sections):
+            return stored
+        proof = self.proof(goal_id)
+        if proof is None:
+            return stored
+        from autonomy.agents.analyst import template_briefing
+
+        goal = next((g for g in self.workspace.goals() if g.goal_id == goal_id), None) if goal_id else None
+        fresh = template_briefing(
+            goal, proof, self.health(), {}, stored.period, proof.as_of, briefing_id=stored.briefing_id
+        )
+        measured = [s for s in stored.sections if _measured_kind(s) is not None]
+        if _same_numbers(measured, fresh.sections):
+            return stored
+        kept = tuple(s for s in stored.sections if _measured_kind(s) is None)
+        return fresh.model_copy(update={"goal_id": stored.goal_id, "sections": fresh.sections + kept})
+
     # what the promises need (the counting lives in api.v2.insights) ------------------------------
 
     def today(self, goal_id: str | None = None, day: date | None = None) -> insights.Today:
@@ -551,6 +586,33 @@ class Services:
         if batch is None:
             raise NotFoundError(f"no batch {batch_id!r}")
         return insights.batch_breakdown(self, batch)
+
+
+_MEASURED_KEYS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("money", frozenset({"agent_customers", "holdout_customers"})),
+    ("baseline", frozenset({"baseline_customers"})),
+    ("health", frozenset({"alerts"})),
+)
+"""Which of the Analyst's sections a briefing section is, by the numbers it always carries."""
+
+
+def _measured_kind(section: BriefingSection) -> str | None:
+    """'money', 'baseline' or 'health' for the Analyst's measured sections; None for any other."""
+    keys = set(section.numbers)
+    return next((kind for kind, needs in _MEASURED_KEYS if needs <= keys), None)
+
+
+def _same_numbers(old: Sequence[BriefingSection], new: Sequence[BriefingSection]) -> bool:
+    """Whether two sets of measured sections carry the same numbers (to a cent's worth of rounding)."""
+    a = {_measured_kind(s): s.numbers for s in old}
+    b = {_measured_kind(s): s.numbers for s in new}
+    if a.keys() != b.keys():
+        return False
+    return all(
+        x.keys() == b[k].keys()
+        and all(math.isclose(v, b[k][n], rel_tol=1e-9, abs_tol=1e-6) for n, v in x.items())
+        for k, x in a.items()
+    )
 
 
 def _touches_goal(decision: Decision, goal_id: str) -> bool:

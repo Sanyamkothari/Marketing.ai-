@@ -4,7 +4,7 @@
 // (POST /v2/goals -> {goal, brief}) and we go straight to the Plan screen to review it. Below the box: the
 // opportunities the Analyst found, each with how many customers it is about and why, one click from a plan.
 // Every number shown comes from the API or from the marketer's own words. Words (DESIGN.md section 6): each field is
-// its label and one hint; the rest (what the budget covers, why an opportunity was found, what Shadow means) is a
+// its label, with its hint in the label's (i); the rest (what the budget covers, why an opportunity was found, what Shadow means) is a
 // description on the label, number or pill it explains.
 
 import { button, card, clear, el, emptyState, errorBox, goalStatusWords, humanize, info, int, money, pageHead, pill, present, skeleton, skeletonLines, statusTone, titleInfo, withInfo } from "../components.js";
@@ -255,8 +255,13 @@ function goalForm(ctx, defaultCurrency) {
   return el(
     "form",
     { class: "goal-form", novalidate: true, onsubmit: onSubmit },
-    el("label", { for: text.id, class: "big-label" }, "What do you want to achieve?"),
-    el("p", { id: `${id}-text-help`, class: "gl-help" }, "Say who, what you want them to do, and how much to spend."),
+    // The box's placeholder already shows an example; how to say it is the label's (i), read with the box.
+    el(
+      "label",
+      { for: text.id, class: "big-label" },
+      "What do you want to achieve?",
+      info("Say who, what you want them to do, and how much to spend.", { label: "How to say it", id: `${id}-text-help` }),
+    ),
     text,
     textError,
     readNote,
@@ -268,9 +273,13 @@ function goalForm(ctx, defaultCurrency) {
         "div",
         { class: "field" },
         // The (i) is a button inside the label, so a tap opens the description instead of focusing the box.
-        el("label", { for: budget.id, class: "gl-label" }, "Budget", info("The most it may spend on offers and messages.", { label: "What the budget covers" })),
+        el(
+          "label",
+          { for: budget.id, class: "gl-label" },
+          "Budget",
+          info("The most it may spend on offers and messages. Filled in when your words name an amount.", { label: "What the budget covers", id: `${id}-budget-help` }),
+        ),
         budget,
-        el("p", { id: `${id}-budget-help`, class: "field-hint" }, "Filled in when your words name an amount."),
         budgetError,
       ),
       el("div", { class: "field field-narrow" }, el("label", { for: currency.id }, "Currency"), currency),
@@ -280,8 +289,8 @@ function goalForm(ctx, defaultCurrency) {
       "p",
       { class: "gl-safe" },
       withInfo(
-        el("span", {}, "Nothing is sent yet: every new goal starts in Shadow."),
-        "In Shadow, Autonomy decides and shows you what it would do, but sends nothing. Messages go out only after you approve the plan and choose to move it out of Shadow.",
+        el("span", {}, "Every new goal starts in Shadow."),
+        "Nothing is sent yet. In Shadow, Autonomy decides and shows you what it would do, but sends nothing. Messages go out only after you approve the plan and choose to move it out of Shadow.",
       ),
     ),
   );
@@ -304,7 +313,9 @@ function opportunityRow(ctx, opp) {
   );
   const none = sized && Number(opp.audience_n) === 0;
   // Why it was found, and that the count is today's, is the count's description (the headline already says what they did).
-  const why = [present(opp.reason) ? `Why: ${opp.reason}` : "", sized ? "Counted from your customers today." : ""].filter(Boolean).join(" ");
+  // Its kind ("Aims for …") joins the why: the headline already says what these customers did, so no pill repeats it.
+  const aims = `${GOAL_KIND_WORDS[goal.kind] || humanize(goal.kind)}: aims for ${humanize(goal.objective).toLowerCase()}.`;
+  const why = [present(opp.reason) ? `Why: ${opp.reason}` : "", sized ? "Counted from your customers today." : "", aims].filter(Boolean).join(" ");
   return el(
     "li",
     { class: ["opportunity", "gl-opp", !sized && "gl-opp-unsized"] },
@@ -312,9 +323,9 @@ function opportunityRow(ctx, opp) {
     el(
       "div",
       { class: "gl-opp-main" },
-      el("h3", { class: "gl-opp-title" }, goal.text),
-      !sized && present(opp.reason) ? el("p", { class: "gl-opp-why" }, why) : null,
-      el("p", { class: "gl-opp-meta" }, withInfo(pill(GOAL_KIND_WORDS[goal.kind] || humanize(goal.kind), "neutral"), `Aims for ${humanize(goal.objective).toLowerCase()}.`)),
+      // Without a count there is no number to hold the why: the reason is on the page, the kind in its description.
+      el("h3", { class: "gl-opp-title" }, !sized && !present(opp.reason) ? withInfo(el("span", {}, goal.text), aims) : goal.text),
+      !sized && present(opp.reason) ? el("p", { class: "gl-opp-why" }, withInfo(el("span", {}, `Why: ${opp.reason}`), aims)) : null,
     ),
     el(
       "div",

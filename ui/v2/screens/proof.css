@@ -712,6 +712,11 @@
   margin-top: var(--gap);
 }
 
+/* On a phone: "Show all" under the first 50 decisions, on the list's left edge. */
+.ap-operator .op-more:not(:empty) {
+  margin: 0 0 var(--gap);
+}
+
 /* The tables: dense, every short cell on one line, only the reason wraps; the wrapper scrolls sideways. */
 .ap-operator .op-table-wrap {
   margin: 0 0 var(--gap);

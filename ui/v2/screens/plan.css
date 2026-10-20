@@ -302,18 +302,17 @@
   padding-bottom: 0;
 }
 
-/* The automatic pauses: what is watched, with its line, on the left; what happens, in grey, on the right. */
-.stop {
-  justify-content: space-between;
-  gap: 12px;
+/* The automatic pauses, grouped by what happens: a small grey label ("Pauses the goal") said once, then what is
+   watched, with its line, one short row each. */
+.stop-group + .stop-group {
+  margin-top: var(--gap);
 }
 
 .stop-then {
-  flex: none;
+  margin: 0 0 6px;
   color: var(--muted);
   font-size: var(--fs-small);
   line-height: var(--lh-small);
-  white-space: nowrap;
 }
 
 /* ---- products it may suggest, and the labelled product fact ------------------------------------------------ */
@@ -683,6 +682,102 @@
 
   .editor-notes summary {
     padding: 6px 0;
+  }
+}
+
+/* The messages the editor passed on every check: ONE "Checked by the editor" line over them, so no message repeats
+   it. It reads as the group's label, on the same hairline rhythm as the messages. */
+.message-group {
+  border-top: 1px solid var(--border);
+}
+
+.message-list > .message-group:first-child {
+  border-top: 0;
+}
+
+.message-group-head {
+  display: flex;
+  align-items: baseline;
+  margin: 0;
+  padding: 12px var(--card-pad) 0;
+  color: var(--muted);
+}
+
+.message-group > .message:nth-child(2) {
+  border-top: 0;
+  padding-top: 10px;
+}
+
+/* A ready message's one choice, "Don't use this one", as a quiet icon: a circle with a slash, drawn in CSS (no
+   emoji, no icon font). Its words are its description on hover and focus, and its label for touch screens. */
+.btn-icon {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+}
+
+.message-actions .btn-icon:first-child {
+  margin-left: 0;
+}
+
+.icon-off {
+  position: relative;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  color: var(--muted);
+}
+
+.icon-off::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1.5px;
+  height: 12px;
+  background: currentColor;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.btn-icon:hover .icon-off,
+.btn-icon:focus-visible .icon-off {
+  color: var(--text);
+}
+
+/* On a phone the icon keeps the message's top line, as on a wide screen, instead of a row of its own at the end.
+   Its 44px touch target overlaps the space above and below, so the line stays the height of its words. */
+@media (max-width: 759px) {
+  .btn-icon {
+    width: var(--touch);
+    min-height: var(--touch);
+  }
+
+  .message-group .message {
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 12px;
+    row-gap: 0;
+  }
+
+  .message-group .message-main {
+    display: contents;
+  }
+
+  .message-group .message-main > * {
+    grid-column: 1 / -1;
+  }
+
+  .message-group .message-main > .message-head {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .message-group .message-side {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: start;
+    margin: -12px -10px -12px 0;
   }
 }
 

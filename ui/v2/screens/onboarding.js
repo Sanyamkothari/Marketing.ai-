@@ -146,7 +146,8 @@ function dataStep(report, err) {
           )
         : null,
     ],
-    [link(questions.length ? "Answer on Connect" : "See your data", "#/connect")],
+    // A done step needs no link: Connect is step 1 in the nav. Only open questions ask for a visit.
+    questions.length ? [link("Answer on Connect", "#/connect")] : [],
   );
 }
 
@@ -162,10 +163,9 @@ function goalStep(goals, goal, dataMissing) {
     el(
       "p",
       {},
-      "Following: ",
       goals.length > 1 ? withInfo(name, `You have ${plural(goals.length, "goal", "goals")}. Switch between them at the top; we suggest starting with one.`) : name,
     ),
-    [link("See your goals", "#/goal")],
+    // Goal is step 2 in the nav, so the done step carries no link of its own.
   );
 }
 
@@ -253,7 +253,7 @@ function budgetForm(ctx, goal, rerender) {
   const id = `ob-budget-${goal.goal_id}`;
   const input = el("input", { id, class: "tabular", type: "number", min: "0", step: "any", inputmode: "decimal", value: present(goal.budget) ? String(goal.budget) : "", "aria-describedby": `${id}-help` });
   const msg = el("p", { class: "ob-form-msg", role: "status" });
-  const save = button("Save budget", null, { kind: "secondary", type: "submit" });
+  const save = button("Save", null, { kind: "secondary", type: "submit", ariaLabel: "Save the budget" });
   const form = el(
     "form",
     {
@@ -279,7 +279,7 @@ function budgetForm(ctx, goal, rerender) {
         }
       },
     },
-    el("label", { for: id }, `Budget for this goal (${goal.currency || "USD"})`),
+    el("label", { for: id }, `Budget (${goal.currency || "USD"})`),
     el("div", { class: "ob-budget-row" }, input, save),
     el(
       "p",
@@ -331,9 +331,9 @@ function guidance() {
     "p",
     { class: "notice notice-neutral ob-guidance" },
     el("strong", {}, "In general: "),
-    "well-run AI marketing typically adds ",
-    withInfo(el("span", {}, "3–10%"), "That is general guidance about the field, not a number about your shop. Your Proof page shows your real number, with its range."),
-    " in real, measured extra profit.",
+    "well-run AI marketing adds ",
+    withInfo(el("span", {}, "3–10%"), "That is general guidance about the field, not a number about your shop: what is typical when results are measured honestly. Your Proof page shows your real number, with its range."),
+    " in measured extra profit.",
   );
 }
 
@@ -373,7 +373,7 @@ function proofStep(goal, proof, proofErr) {
 // ask (first run only), the honest status and the control promise sit in the rail beside it (under it on a phone).
 
 const TITLE = "Getting started";
-const SUB = "Getting started is safe. It starts by watching, not sending.";
+const SUB = "Getting started is safe: it watches before it sends.";
 const SUB_MORE = "You let it do more one step at a time, and only when the numbers say so.";
 
 function honestNote() {
@@ -409,17 +409,17 @@ function controlNote() {
     el(
       "div",
       { class: "ob-card-title" },
-      el("h2", { id: "ob-control-title", class: "card-title" }, "You stay in control at every step"),
-      info("Autonomy also pauses itself if complaints or unsubscribes spike.", { label: "When it pauses itself" }),
+      el("h2", { id: "ob-control-title", class: "card-title" }, "You stay in control"),
+      info("At every step. Autonomy also pauses itself if complaints or unsubscribes spike.", { label: "When it pauses itself" }),
     ),
-    el("p", { class: "ob-footnote" }, "Pause, at the top, stops all sending at once."),
+    el("p", { class: "ob-footnote" }, "Pause, at the top, stops all sending."),
   );
 }
 
 // The ask is the first run's whole message; once a goal is set it has been answered, so the rail drops it.
 const rail = (hasGoals) => el("div", { class: "span-4 stack ob-rail" }, hasGoals ? null : theAsk(), honestNote(), controlNote());
 
-/** The path's frame: the card with its title, "Step n of 5" on the right when one step is current, and its rows. */
+/** The path's frame: the card with its title, an optional grey meta on the right, and its rows. */
 function pathCard(title, meta, children) {
   return el(
     "section",
@@ -499,11 +499,11 @@ export async function render(root, ctx) {
   const isState = (s, state) => String(s.getAttribute("class") || "").split(/\s+/).includes(`ob-step-${state}`);
   const current = steps.find((s) => isState(s, "now")) || steps.find((s) => isState(s, "next"));
   if (current) current.setAttribute("aria-current", "step");
-  const at = current ? steps.indexOf(current) + 1 : null;
 
+  // The current step's own pill ("Doing now", "Next") says where you are, so the card's head carries no "Step n of 5".
   const path = pathCard(
     goals.length ? "Your path" : "Two steps to start",
-    goals.length && at ? `Step ${at} of 5` : null,
+    null,
     [
       el("ol", { class: "ob-steps" }, steps),
       goals.length

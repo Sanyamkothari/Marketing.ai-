@@ -313,8 +313,12 @@ def get_expected(goal_id: str, services: ServicesDep) -> Expected:
 
 @router.get("/briefing")
 def get_briefing(services: ServicesDep, goal_id: str | None = None) -> Briefing | None:
-    """The latest briefing for a goal (or the whole programme); null when there is none yet."""
-    return services.briefing(goal_id)
+    """The latest briefing for a goal (or the whole programme); null when there is none yet.
+
+    Its measured sections carry the same proof and health as `/v2/proof` and `/v2/health` serve
+    now, for this goal, so the briefing and Proof never show two profits for one goal.
+    """
+    return services.current_briefing(goal_id)
 
 
 @router.get("/proof")

@@ -15,6 +15,13 @@ If the model cannot be reached at all (`LLMError`, or any other exception from t
 template briefing is used at once, without a second ask: retrying a provider that is down only
 delays the report.
 
+**The words a marketer reads.** The comparison group is "people we never contact", never "the
+holdout" (DESIGN.md section 6); the template leads with the sentence a marketer wants (did it make
+money, and how sure is that), and money is always written with its likely range. When the caller
+knows what the agent changed as it learned, the briefing carries it as a short "What it learned"
+section, which Live shows in its own card. `template_briefing()` writes the template briefing
+alone, with no model, so the API can rebuild a stored briefing from the measurement it serves now.
+
 **Opportunities** (`opportunities()`) are rule-based scouting over a summary of segments, with no LLM
 at all: for example many lapsing customers with real past spend become a DRAFT win-back goal with
 a budget computed from their value. The goal's text is the one-line reason. A person approves it,
@@ -56,6 +63,12 @@ BriefingSource = Literal["llm", "llm_retry", "template"]
 
 INTERVAL_LEVEL = 0.95
 """Every `Estimate` is a 95% interval. Listed as a number so the model may say "95%"."""
+
+MONEY_TITLE = "Extra profit vs people we never contact"
+BASELINE_TITLE = "Against the simple rule"
+HEALTH_TITLE = "Customer health"
+LEARNED_TITLE = "What it learned"
+"""Section titles, shared with Live (it shows one figure per line under these labels)."""
 
 CURRENCY_SYMBOLS: dict[str, str] = {"USD": "$", "EUR": "€", "GBP": "£", "INR": "₹", "JPY": "¥"}
 """Currencies written with a symbol; any other is written as `1,200 CAD`."""
@@ -155,7 +168,7 @@ def _estimate(draft: SectionDraft, name: str, est: Estimate, fmt: str, currency:
 
 
 def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> SectionDraft:
-    d = SectionDraft("money", "Money made against the holdout")
+    d = SectionDraft("money", MONEY_TITLE)
     agent_n = d.add("agent_customers", proof.agent_n, format_count(proof.agent_n))
     holdout_n = d.add("holdout_customers", proof.holdout_n, format_count(proof.holdout_n))
     if any(e is not None for e in (proof.incremental_profit, proof.incremental_revenue, proof.roi)):
@@ -163,31 +176,35 @@ def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> Sec
 
     profit = proof.incremental_profit
     if profit is None:
-        d.sentences.append("There are not enough results yet to measure profit against the holdout.")
+        d.sentences.append(
+            "Not sure yet: there are not enough results to compare profit with the people we never contact."
+        )
         d.notes.append("Profit cannot be measured yet; do not suggest a win or a loss.")
     else:
         p, lo, hi = _estimate(d, "incremental_profit", profit, "money", currency)
         verdict = _verdict(profit)
         if verdict == "up":
             d.sentences.append(
-                f"The agent made an extra {p} in profit compared with customers we left alone "
+                f"It made an extra {p} in profit compared with people we never contact "
                 f"(likely range {lo} to {hi})."
             )
             d.notes.append(
-                "Profit against the holdout is clearly positive: the whole likely range is above zero."
+                "Profit against the people we never contact is clearly positive: the whole likely range is "
+                "above zero."
             )
         elif verdict == "down":
             d.sentences.append(
-                f"The agent is behind the customers we left alone by {format_money(abs(profit.point), currency)} "
-                f"in profit (likely range {lo} to {hi})."
+                f"It made {format_money(abs(profit.point), currency)} less profit than the people we never "
+                f"contact (likely range {lo} to {hi})."
             )
             d.notes.append(
-                "Profit against the holdout is clearly negative: the whole likely range is below zero."
+                "Profit against the people we never contact is clearly negative: the whole likely range is "
+                "below zero."
             )
         else:
             d.sentences.append(
-                f"There is no clear profit difference yet: the best estimate is {p}, but the likely range "
-                f"runs from {lo} to {hi}, which includes zero."
+                f"Not sure yet: the best estimate is {p} of extra profit, but the likely range runs from "
+                f"{lo} to {hi}, which includes zero."
             )
             d.notes.append("The profit range includes zero: we cannot tell yet whether the agent helped.")
 
@@ -210,13 +227,13 @@ def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> Sec
         d.sentences.append(f"Return on spend: {roi} (likely range {lo} to {hi}).")
 
     d.sentences.append(
-        f"The agent looks after {agent_n} customers and {holdout_n} are held out for comparison."
+        f"It looks after {agent_n} customers; {holdout_n} people we never contact are kept for comparison."
     )
     return d
 
 
 def _baseline_section(proof: ProofSummary, currency: str) -> SectionDraft:
-    d = SectionDraft("baseline", "Against the old way")
+    d = SectionDraft("baseline", BASELINE_TITLE)
     baseline_n = d.add("baseline_customers", proof.baseline_n, format_count(proof.baseline_n))
     lift = proof.lift_vs_baseline
     if lift is None:
@@ -231,7 +248,7 @@ def _baseline_section(proof: ProofSummary, currency: str) -> SectionDraft:
     verdict = _verdict(lift)
     if verdict == "up":
         d.sentences.append(
-            f"Compared with the simple rule, the agent made {lift_shown} more profit per customer "
+            f"Compared with the simple rule, it made {lift_shown} more profit per customer "
             f"(likely range {lo} to {hi})."
         )
         d.notes.append("The agent clearly beats the simple rule.")
@@ -256,16 +273,13 @@ def _limit(metric: StopMetric) -> float | None:
 
 
 def _health_section(health: HealthStatus) -> SectionDraft:
-    d = SectionDraft("health", "Customer health")
+    d = SectionDraft("health", HEALTH_TITLE)
     rates = (
         ("delivery_rate", "Delivery rate", health.delivery_rate),
         ("complaint_rate", "Complaint rate", health.complaint_rate),
         ("unsubscribe_rate", "Unsubscribe rate", health.unsubscribe_rate),
         ("block_rate", "Block rate", health.block_rate),
     )
-    shown = [f"{label} {d.add(name, v, format_rate(v))}" for name, label, v in rates if v is not None]
-    if shown:
-        d.sentences.append(". ".join(shown) + ".")
     if health.contacts_per_customer_week is not None:
         c = d.add(
             "contacts_per_customer_week",
@@ -273,6 +287,9 @@ def _health_section(health: HealthStatus) -> SectionDraft:
             format_ratio(health.contacts_per_customer_week),
         )
         d.sentences.append(f"Each customer got {c} messages a week on average.")
+    shown = [f"{label} {d.add(name, v, format_rate(v))}" for name, label, v in rates if v is not None]
+    if shown:
+        d.sentences.append(". ".join(shown) + ".")
 
     complaint_limit = _limit(StopMetric.COMPLAINT_RATE)
     if (
@@ -317,18 +334,122 @@ def _facts_section(facts: Mapping[str, float], currency: str) -> SectionDraft | 
     return d
 
 
+@dataclass(frozen=True)
+class LearnedNote:
+    """One thing the agent changed as it learned, in words, with the numbers its words use.
+
+    Written by code (the caller knows what moved), e.g. "Free shipping is beating the discount for
+    lapsed buyers; the share offered the discount fell from 31% to 18%." with
+    `numbers={"discount_share_before": 0.31, "discount_share_now": 0.18}`.
+    """
+
+    text: str
+    numbers: Mapping[str, float] = field(default_factory=dict)
+
+
+Learned = Sequence[str | LearnedNote]
+"""What the agent learned, as plain lines or as `LearnedNote`s with their numbers."""
+
+
+def _format_learned(name: str, value: float, currency: str) -> str:
+    """A learned number as its words show it: a share or rate as a percent, anything else as a fact."""
+    low = name.lower()
+    if ("share" in low or "rate" in low) and 0.0 <= value <= 1.0:
+        return format_rate(value)
+    return _format_fact(name, value, currency)
+
+
+def _learned_section(learned: Learned, currency: str) -> SectionDraft | None:
+    """The "What it learned" lines whose every number is backed; a line with an unchecked number is left out.
+
+    A briefing never carries a number code did not compute. A plain line has no numbers to check a
+    digit against, so a plain line with a digit in it is dropped rather than shown; one in words only
+    is kept.
+    """
+    d = SectionDraft("learned", LEARNED_TITLE)
+    for i, item in enumerate(learned):
+        note = item if isinstance(item, LearnedNote) else LearnedNote(text=str(item))
+        text = " ".join(note.text.split())
+        if not text or check_numbers(text, note.numbers):
+            continue
+        for name, value in note.numbers.items():
+            key = name if name not in d.numbers else f"{name}_{i}"
+            d.numbers[key] = float(value)
+            d.shown[key] = _format_learned(name, value, currency)
+        d.sentences.append(text if text.endswith((".", "!", "?")) else f"{text}.")
+    if not d.sentences:
+        return None
+    d.notes.append(
+        "Say what the agent changed as it learned, in a sentence or two; keep each line's numbers."
+    )
+    return d
+
+
 def _template_headline(proof: ProofSummary, health: HealthStatus, money: SectionDraft) -> str:
+    """The sentence a marketer wants first: did it make money, and how sure is that (always with the range)."""
     if any(a.severity == "critical" and a.auto_paused for a in health.alerts):
         return "A critical alert paused part of the programme; please take a look."
     profit = proof.incremental_profit
     if profit is None:
         return "Too early to call: results are still coming in."
+    p = money.shown["incremental_profit"]
+    lo, hi = money.shown["incremental_profit_low"], money.shown["incremental_profit_high"]
     verdict = _verdict(profit)
     if verdict == "up":
-        return f"The agent made an extra {money.shown['incremental_profit']} in profit against the holdout."
+        return f"It made an extra {p} in profit compared with people we never contact ({lo} to {hi})."
     if verdict == "down":
-        return "The agent is behind the holdout on profit so far."
-    return "No clear profit difference from the holdout yet."
+        return f"It made less profit than the people we never contact so far ({lo} to {hi})."
+    return f"Not sure yet whether it made extra profit: the likely range runs from {lo} to {hi}."
+
+
+def build_sections(
+    goal: Goal | None,
+    proof: ProofSummary,
+    health: HealthStatus,
+    facts: Mapping[str, float],
+    *,
+    learned: Learned = (),
+) -> list[SectionDraft]:
+    """The briefing's sections with every number, computed by code: money, the simple rule, health,
+    then what it learned and other facts when there are any."""
+    currency = goal.currency if goal else "USD"
+    drafts = [
+        _money_section(goal, proof, currency),
+        _baseline_section(proof, currency),
+        _health_section(health),
+    ]
+    lesson = _learned_section(learned, currency)
+    if lesson is not None:
+        drafts.append(lesson)
+    extra = _facts_section(facts, currency)
+    if extra is not None:
+        drafts.append(extra)
+    return drafts
+
+
+def template_briefing(
+    goal: Goal | None,
+    proof: ProofSummary,
+    health: HealthStatus,
+    facts: Mapping[str, float],
+    period: Period,
+    now: datetime,
+    *,
+    learned: Learned = (),
+    briefing_id: str | None = None,
+) -> Briefing:
+    """The briefing written entirely by code, with no model: what the Analyst falls back to, and what
+    the API rebuilds a stored briefing with when the measurement it serves has moved on."""
+    drafts = build_sections(goal, proof, health, facts, learned=learned)
+    goal_id = goal.goal_id if goal else proof.goal_id
+    return Briefing(
+        briefing_id=briefing_id or stable_id("brf", goal_id or "all", period, now.isoformat()),
+        goal_id=goal_id,
+        as_of=now,
+        period=period,
+        headline=_template_headline(proof, health, drafts[0]),
+        sections=tuple(d.section() for d in drafts),
+    )
 
 
 # --- what the model writes ------------------------------------------------------------------------
@@ -360,6 +481,9 @@ def _briefing_prompt(goal: Goal | None, period: Period, drafts: Sequence[Section
         f"Briefing: {period}",
         "",
         "Write a headline and one body for each section below.",
+        "Lead with what the marketer most wants to know: did it make extra profit, and how sure is that.",
+        'Call the comparison group "people we never contact", never "the holdout".',
+        "Whenever you give a money estimate, give its likely range with it.",
     ]
     for d in drafts:
         lines += [
@@ -481,19 +605,16 @@ class Analyst:
         self.model_id = model_id
 
     def sections(
-        self, goal: Goal | None, proof: ProofSummary, health: HealthStatus, facts: Mapping[str, float]
+        self,
+        goal: Goal | None,
+        proof: ProofSummary,
+        health: HealthStatus,
+        facts: Mapping[str, float],
+        *,
+        learned: Learned = (),
     ) -> list[SectionDraft]:
         """The briefing's sections with every number, computed by code."""
-        currency = goal.currency if goal else "USD"
-        drafts = [
-            _money_section(goal, proof, currency),
-            _baseline_section(proof, currency),
-            _health_section(health),
-        ]
-        extra = _facts_section(facts, currency)
-        if extra is not None:
-            drafts.append(extra)
-        return drafts
+        return build_sections(goal, proof, health, facts, learned=learned)
 
     def briefing(
         self,
@@ -503,9 +624,11 @@ class Analyst:
         facts: Mapping[str, float],
         period: Period,
         now: datetime,
+        *,
+        learned: Learned = (),
     ) -> Briefing:
         """The briefing a marketer reads. Never raises for bad or missing model output; code fills in."""
-        return self.write_briefing(goal, proof, health, facts, period, now).briefing
+        return self.write_briefing(goal, proof, health, facts, period, now, learned=learned).briefing
 
     def write_briefing(
         self,
@@ -515,9 +638,11 @@ class Analyst:
         facts: Mapping[str, float],
         period: Period,
         now: datetime,
+        *,
+        learned: Learned = (),
     ) -> BriefingResult:
         """As `briefing`, also saying whether the model's words or the template were used, and why."""
-        drafts = self.sections(goal, proof, health, facts)
+        drafts = self.sections(goal, proof, health, facts, learned=learned)
         goal_id = goal.goal_id if goal else proof.goal_id
         briefing_id = stable_id("brf", goal_id or "all", period, now.isoformat())
         system = load_prompt("analyst")
@@ -557,13 +682,8 @@ class Analyst:
                 )
             seen += problems
         return BriefingResult(
-            briefing=Briefing(
-                briefing_id=briefing_id,
-                goal_id=goal_id,
-                as_of=now,
-                period=period,
-                headline=_template_headline(proof, health, drafts[0]),
-                sections=tuple(d.section() for d in drafts),
+            briefing=template_briefing(
+                goal, proof, health, facts, period, now, learned=learned, briefing_id=briefing_id
             ),
             source="template",
             problems=tuple(seen),

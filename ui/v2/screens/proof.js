@@ -410,6 +410,48 @@ function profitLede(v, est, fmt, goal, proof) {
   );
 }
 
+/**
+ * The day the first contacts can count: `since` plus the days each contact is given to work, both as the API sent
+ * them (GET /v2/expected's `since` and `horizon_days`). Null when either is missing or that day has already come,
+ * so the page never shows a date in the past as something to wait for.
+ */
+export function firstCountsOn(since, horizonDays, asOf) {
+  if (!present(since) || !present(horizonDays)) return null;
+  const start = Date.parse(since);
+  if (Number.isNaN(start)) return null;
+  const days = Number(horizonDays);
+  if (!Number.isFinite(days)) return null;
+  const at = start + days * 86400000;
+  const now = present(asOf) ? Date.parse(asOf) : Number.NaN;
+  if (!Number.isNaN(now) && at <= now) return null;
+  return new Date(at).toISOString();
+}
+
+/**
+ * While it is too early to tell, the result card shows what the answer is waiting for, from the API's own numbers:
+ * the three groups so far (the proof's counts), how many days each contact is given before it counts (the
+ * forecast's horizon) and, when that is still ahead, the day the first ones count; then the spend. In Shadow the
+ * days are left out: nothing is sent, so nothing will count.
+ */
+function earlyStrip(proof, forecast, shadow, m) {
+  const expected = forecast && forecast.state === "ok" ? forecast.expected : null;
+  const horizon = expected && present(expected.horizon_days) ? Number(expected.horizon_days) : null;
+  const first = horizon !== null ? firstCountsOn(expected.since, horizon, proof.as_of) : null;
+  const waits = horizon !== null && !shadow
+    ? [
+        `A contact counts once the ${count(horizon)} days it is given to work have passed, so the newest are not in yet.`,
+        first ? `It has been deciding since ${day(expected.since)}, so the first contacts can count from ${day(first)}.` : "",
+      ].join(" ").trim()
+    : null;
+  return kpis([
+    plainCell(described("The agent decides", "Customers the agent decides for so far, picked at random."), count(proof.agent_n)),
+    plainCell(described("The simple rule decides", "Customers a simple fixed rule decides for, picked at random, for comparison."), count(proof.baseline_n)),
+    plainCell(described("People we never contact", methodWords(proof)), count(proof.holdout_n)),
+    waits && plainCell(described("Each contact counts after", waits), `${count(horizon)} days`, first ? `First from ${day(first)}` : null),
+    plainCell(described("Spend so far", "On discounts and messages, for this goal."), m(proof.spend)),
+  ], "pf-hero-strip pf-early-strip");
+}
+
 /** The chart's rows in words ("Extra profit: $4,300 (range $900 to $7,700); …"), from its label after the title. */
 const chartRows = (chart) => {
   const label = String(chart.getAttribute("aria-label") || "");
@@ -500,8 +542,8 @@ function forecastBody(expected, goal, currency) {
       "p",
       { class: "pf-lede-small" },
       shadow
-        ? `Over the ${count(expected.horizon_days)} days after each contact it would have made${since} (nothing was sent, because this goal is in Shadow mode).`
-        : `Over the ${count(expected.horizon_days)} days after each contact it decided on${since}.`,
+        ? `Its forecast covers the ${count(expected.horizon_days)} days after each contact it would have made${since}; nothing was sent, because this goal is in Shadow mode.`
+        : `Its forecast covers the ${count(expected.horizon_days)} days after each contact it decided on${since}.`,
     ),
     kpis([
       estimateCell(described("Expected extra profit", FORECAST_NOT_PROOF), est, m),
@@ -589,8 +631,11 @@ function ruleCardFor(proof, m, span) {
   );
 }
 
-/** "How this is measured": one folded block at the bottom, with the three groups, the method and the API's notes. */
-function methodCard(proof) {
+/**
+ * "How this is measured": one folded block at the bottom, with the three groups, the method and the API's notes.
+ * `groupsShown` is true when the result card already shows the three groups (too early to tell), so they are said once.
+ */
+function methodCard(proof, groupsShown = false) {
   const notes = (proof?.notes || []).map(String);
   const gloss = notesGloss(notes);
   return h(
@@ -604,6 +649,7 @@ function methodCard(proof) {
         "div",
         { class: "pf-method-body" },
         proof &&
+          !groupsShown &&
           kpis([
             plainCell("People we never contact", count(proof.holdout_n)),
             plainCell("The agent decides", count(proof.agent_n)),
@@ -742,12 +788,16 @@ export async function render(root, ctx) {
 
   // 1. The verdict first, then one sentence with the money against the people we never contact, then the figures.
   const resultCard = h("section", { class: "card pf-hero span-12", "aria-label": "Extra profit compared with people we never contact" });
+  let early = false;
   if (proofError) {
     resultCard.append(h("h2", { class: "card-title" }, "Extra profit compared with people we never contact"), failedBox("proof", proofError, retry));
   } else {
     const verdict = profitVerdict(proof?.incremental_profit);
     resultCard.append(verdictLine(verdict, "pf-verdict"), profitLede(verdict, proof?.incremental_profit, m, goal, proof));
-    if (proof) {
+    if (proof && verdict.key === "early") {
+      early = true;
+      resultCard.append(h("div", { class: "pf-figure" }, earlyStrip(proof, forecast, shadow, m)));
+    } else if (proof) {
       // The figures that support the sentence: revenue next to profit, the return on spend once it has a range,
       // and the spend always (a measured $0 is a value). A figure with no range yet is left to the verdict.
       const measured = complete(proof.incremental_profit) || complete(proof.incremental_revenue);
@@ -793,7 +843,7 @@ export async function render(root, ctx) {
           shadow ? null : forecastEl,
           expectFact(proof, direction(proof?.incremental_profit) !== "early", proof ? "span-5" : "span-12"),
           proof ? shareCardFor(proof, goal, ctx, announcer, "span-7") : null,
-          proofError ? null : methodCard(proof),
+          proofError ? null : methodCard(proof, early),
         ].filter(Boolean),
       ),
       announcer,
