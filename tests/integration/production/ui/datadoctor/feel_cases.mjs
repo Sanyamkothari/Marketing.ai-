@@ -105,7 +105,8 @@ test("a column is said in words; its exact name is small and only where the pers
   assert.ok(!plain.querySelector("[data-dds-column-note]"), "a plain name needs no note");
   // The exact sentence a person agrees to is never reworded.
   for (const yes of s.view.conversation.find((c) => c.type === "ready").confirmations) {
-    assert.ok(text($(`[data-dds-confirm-row="${yes.item_id}"]`)).includes(yes.sentence), `the sentence agreed to is word for word: ${yes.sentence}`);
+    const row = $(`[data-dds-confirm-row="${yes.item_id}"]`) || $(`[data-dds-agreed="${yes.item_id}"]`);
+    assert.ok(row && text(row).includes(yes.sentence), `the sentence agreed to is word for word: ${yes.sentence}`);
   }
   const v = violations(visibleText(app));
   assert.ok(v.ok, describe("column names in words", v));
@@ -192,7 +193,11 @@ test("choosing a goal, Undo and Approve each say what is happening and mark the 
   await until(() => !$("[data-dds-progress]"), 3000, "the answer");
 
   const ready = s.view.conversation.find((c) => c.type === "ready");
-  for (const yes of ready.confirmations.filter((c) => c.required)) tick($(`input[data-dds-confirm="${yes.item_id}"]`));
+  // A required yes is said once as a line and given by the one click (no box to tick); an optional one is a box.
+  for (const yes of ready.confirmations.filter((c) => c.required)) {
+    const box = $(`input[data-dds-confirm="${yes.item_id}"]`);
+    if (box) tick(box);
+  }
   release = holdPost("confirmations");
   $("[data-dds-approve-start]").click();
   await until(() => $("[data-dds-progress]"), 1000, "the progress text");

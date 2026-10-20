@@ -420,11 +420,11 @@ export function readyHtml(r, ctx) {
           ? `Someone other than whoever suggested it must agree (${plain(c.why)}). Approve and start gives your yes.`
           : "Recorded when you click Approve and start.";
         const lead = c.separate ? "Needs your yes: " : c.answered ? "Already agreed: " : c.shown ? "Shown above, with Undo: " : "In the plan: ";
-        return `<div class="dds-state ddc-agreed" data-dds-agreed="${esc(c.item_id)}">${icon("check", { size: 14 })}<span>${esc(lead)}${userTextIn(c.sentence, names)}<br>${esc(line)}</span></div>`;
+        return `<div class="dds-state ddc-agreed" data-dds-agreed="${esc(c.item_id)}">${icon("check", { size: 14 })}<span>${esc(lead)}${nameIn(c.sentence, names)}<br>${esc(line)}</span></div>`;
       }
       return `<label class="dds-tick ddc-tick" data-dds-confirm-row="${esc(c.item_id)}"><input type="checkbox" data-dds-confirm="${esc(c.item_id)}"${ctx.confirms.has(c.item_id) ? " checked" : ""}${ctx.busy ? " disabled" : ""}><span class="dds-item-body"><span class="dds-item-t">${esc(
         "Also include: ",
-      )}${userTextIn(c.sentence, names)}</span><span class="dds-item-sub">${esc(`Left out unless you tick it. Why it needs your yes: ${plain(c.why)}${c.separate ? ", from someone other than whoever suggested it" : ""}.`)}</span></span></label>`;
+      )}${nameIn(c.sentence, names)}</span><span class="dds-item-sub">${esc(`Left out unless you tick it. Why it needs your yes: ${plain(c.why)}${c.separate ? ", from someone other than whoever suggested it" : ""}.`)}</span></span></label>`;
     })
     .join("");
   const speeds = (r.speeds || []).length
