@@ -11,8 +11,9 @@
   unsubscribe, given how often we contacted them this week, times their future value. It starts
   from a documented default curve and learns from unsubscribe outcomes.
 
-Actions are keyed by their labels, `channel|offer_id|theme`, so learning transfers across goals and
-across content items that share a theme. Priors can be injected (from the Gym, public data or the
+Actions are keyed by their labels, `channel|offer_id|theme` (plus `|format` for a message that is not
+plain text, e.g. `email|none|education|text_image`), so learning transfers across goals and across
+content items that share a theme. Priors can be injected (from the Gym, public data or the
 cross-client prior store) and the client's own data overrides them as it accumulates.
 """
 
@@ -24,15 +25,38 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
-from autonomy.contracts import NO_OFFER, Channel, CustomerState, Objective
+from autonomy.contracts import NO_OFFER, Channel, CustomerState, Format, Objective
 
 ANY = "*"
 """Wildcard for a segment or one part of an action key in prior keys, and the pooled segment."""
 
+TEXT_FORMAT = Format.TEXT.value
+"""The format a three-part key stands for: plain text is the default, and keys say nothing about it."""
 
-def action_key(channel: Channel | str, offer_id: str, theme: str) -> str:
-    """The model key of an action: its labels, e.g. `email|pct10|savings`."""
-    return f"{channel!s}|{offer_id}|{theme!s}"
+
+def action_key(channel: Channel | str, offer_id: str, theme: str, fmt: Format | str | None = None) -> str:
+    """The model key of an action: its labels, e.g. `email|pct10|savings`.
+
+    A format other than plain text adds a fourth part (`email|none|education|text_image`), so an
+    image is learned as its own option. Plain text keeps the three-part key every earlier model,
+    prior and log uses, so nothing learned before formats existed is lost.
+    """
+    base = f"{channel!s}|{offer_id}|{theme!s}"
+    if fmt is None or str(fmt) == TEXT_FORMAT:
+        return base
+    return f"{base}|{fmt!s}"
+
+
+def base_key(key: str) -> str:
+    """The plain-text key under a format key (`email|none|education|text_image` -> `email|none|education`)."""
+    parts = key.split("|")
+    return "|".join(parts[:3]) if len(parts) > 3 else key
+
+
+def key_format(key: str) -> str:
+    """The format part of an action key: `text` for a three-part key."""
+    parts = key.split("|")
+    return parts[3] if len(parts) > 3 else TEXT_FORMAT
 
 
 # --- Beta posteriors ----------------------------------------------------------------------------
@@ -119,7 +143,8 @@ class BetaResponseModel:
 
     * `treated/<segment>/<channel>|<offer_id>|<theme>`, where the segment and any part of the action
       key may be `*`. The most specific match wins: the customer's segment before `*`, and within a
-      segment the exact key before wildcards (theme first, then offer, then channel).
+      segment the exact key before wildcards (theme first, then offer, then channel). A format key
+      (`...|text_image`) first looks for a prior of its own, then falls back to its plain-text key's.
     * `control/<segment>`, or `control/*`.
 
     Anything unmatched uses `default_treated` / `default_control`. `priors_from_rates` builds this dict
@@ -197,13 +222,18 @@ class BetaResponseModel:
 
     def _treated_prior(self, segment: str, key: str) -> Beta:
         parts = key.split("|")
+        own: list[str] = []
+        if len(parts) == 4:
+            # An image or video option: a prior of its own if there is one, else the plain message's.
+            own = [key]
+            parts = parts[:3]
         if len(parts) == 3:
-            patterns = [
+            patterns = own + [
                 "|".join(ANY if wild else part for part, wild in zip(parts, mask, strict=True))
                 for mask in _WILDCARD_ORDER
             ]
         else:
-            patterns = [key]
+            patterns = own or [key]
         segments = (segment,) if segment == ANY else (segment, ANY)
         for seg in segments:
             for pattern in patterns:
@@ -439,38 +469,47 @@ def product_moments(factors: Iterable[tuple[float, float]]) -> tuple[float, floa
     return m, max(second - m * m, 0.0)
 
 
-PERSON_FEATURES: tuple[str, ...] = ("channel", "offer", "theme")
+PERSON_FEATURES: tuple[str, ...] = ("channel", "offer", "theme", "format")
 """The parts of an action a person's own taste is learned for. Learning on one discount informs the
-next discount on any channel; a liking for WhatsApp informs every WhatsApp message."""
+next discount on any channel; a liking for WhatsApp informs every WhatsApp message; someone who
+clicks on product images gets more of them, on any channel that can carry one."""
 DEFAULT_OVERALL_STRENGTH = 3.0
 """Before the data can say: a customer's overall responsiveness varies by about +-60% around their
 segment's (variance 1/3)."""
 DEFAULT_FEATURE_STRENGTH = 8.0
-"""Before the data can say: a customer's taste for one channel, offer or theme varies by about
-+-35% around what their overall level predicts (variance 1/8)."""
-REFERENCE_LEVELS: Mapping[str, str] = MappingProxyType({"offer": NO_OFFER.offer_id})
+"""Before the data can say: a customer's taste for one channel, offer, theme or format varies by
+about +-35% around what their overall level predicts (variance 1/8)."""
+REFERENCE_LEVELS: Mapping[str, str] = MappingProxyType({"offer": NO_OFFER.offer_id, "format": TEXT_FORMAT})
 """Feature levels whose factor is fixed at 1. With "no offer" as the reference, a customer's overall
 level is how they answer a plain message and their offer factor is how much more (or less) an offer
-moves them than that: the taste that differs most between people, measured against a clean baseline."""
+moves them than that: the taste that differs most between people, measured against a clean baseline.
+Plain text is the format's reference for the same reason: the format factor is how much more (or
+less) an image, carousel or video moves this person than the same words alone."""
 _BACKFIT_ROUNDS = 2
 
 _Fit = tuple[tuple[float, float], dict[tuple[int, str], tuple[float, float]]]
+_Cell = tuple[str, str, str, str]
 
 
-def action_features(action_key: str) -> tuple[str, str, str]:
-    """(channel, offer, theme) of a `channel|offer|theme` key; parts missing from a shorter key are ANY."""
+def action_features(action_key: str) -> _Cell:
+    """(channel, offer, theme, format) of an action key.
+
+    A three-part key is plain text (see `action_key`); parts missing from a shorter key are ANY.
+    """
     parts = action_key.split("|")
+    fmt = parts[3] if len(parts) > 3 else TEXT_FORMAT
+    parts = parts[:3]
     while len(parts) < 3:
         parts.append(ANY)
-    return parts[0], parts[1], parts[2]
+    return parts[0], parts[1], parts[2], fmt
 
 
 @dataclass
 class _Person:
     """One customer's evidence and its fitted factors (recomputed only when the evidence changes)."""
 
-    cells: dict[tuple[str, str, str], list[float]]
-    """(channel, offer, theme) -> [clicks, expected clicks from their segment, sum of each message's
+    cells: dict[_Cell, list[float]]
+    """(channel, offer, theme, format) -> [clicks, expected clicks from their segment, sum of each message's
     expected clicks squared (for the yes/no noise in `refit`)]."""
     fit: _Fit | None = None
     """((overall shape, rate), {(feature index, level): (shape, rate)}), or None when stale."""
@@ -481,7 +520,12 @@ class PersonalEffects:
 
     For customer c and an action with features (channel, offer, theme):
 
-        clicks ~ Poisson(segment rate(action) x rho_c x psi_c[channel] x psi_c[offer] x psi_c[theme])
+        clicks ~ Poisson(segment rate(action) x rho_c x psi_c[channel] x psi_c[offer] x psi_c[theme]
+                         x psi_c[format])
+
+    Plain text is the format's reference (its factor is 1), so `psi_c[text_image]` is how much more
+    this person answers a message with a product image than the same words alone: the agent learns
+    who responds to images, shrunk towards their segment like every other taste.
 
     Every factor has a Gamma(k, k) prior centred on 1, so a customer with no record is exactly their
     segment. Each delivered message adds its segment-predicted clicks to the customer's evidence and
@@ -675,7 +719,7 @@ class PersonalEffects:
             person.fit = None
 
 
-def _others(means: Mapping[tuple[int, str], float], key: tuple[str, str, str], skip: int) -> float:
+def _others(means: Mapping[tuple[int, str], float], key: _Cell, skip: int) -> float:
     """Product of the current feature means for this cell, leaving out feature `skip`."""
     out = 1.0
     for f, level in enumerate(key):

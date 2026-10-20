@@ -55,6 +55,24 @@ What it does around the auction:
   once in 10,000 weeks at the limit; a paused goal stays paused until a person approves a new brief
   version.
 
+Products and formats (see `autonomy.decide.bidders`):
+
+* **Products.** `item_lookup` / `recommender` (customer -> item id or (item id, reason)) feed every
+  goal's bidder; without them the agent reads its own `refill_items` and `complements`, which the
+  runtime fills with `set_items(...)` after enriching states (`autonomy.catalog.enrich_all` returns
+  the refill mapping). A refill goal's uplift rises while the customer's refill window is open, and
+  its actions carry the item (`Action.item_id`); content that names a product is offered only when
+  there is one.
+* **Formats.** An approved image, carousel or video variant is its own option (`channel|offer|theme|
+  format`), offered only on channels that can carry it. Its segment click rate is shrunk towards the
+  same words in plain text (`FORMAT_POOL`), and each person gets a format factor beside their
+  channel, offer and theme factors (`PersonalEffects`, plain text as the reference), so the agent
+  learns who answers images.
+* **Explaining.** `explain_bids(state, ctx)` returns every bid the auction would see for the
+  customer, ranked, each with the hard rule that blocks it (if any), its net after the attention
+  price and whether it would be sampled. It changes nothing: deciding afterwards gives the same
+  decision, so an API can show "why" without calling private methods.
+
 Nothing here reads the Gym's truth: everything learned comes from events a real deployment sees.
 """
 
@@ -68,6 +86,7 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 
 from autonomy.contracts import (
+    Bid,
     Brief,
     Channel,
     ContentItem,
@@ -77,13 +96,14 @@ from autonomy.contracts import (
     DecisionKind,
     Event,
     EventType,
+    Format,
     GoalKind,
     Group,
     Reward,
     StopMetric,
 )
 from autonomy.decide import rules
-from autonomy.decide.bidders import GoalBidder
+from autonomy.decide.bidders import AssetOf, GoalBidder, ItemLookup
 from autonomy.decide.models import (
     ANY,
     Beta,
@@ -91,6 +111,7 @@ from autonomy.decide.models import (
     FatigueModel,
     PersonalEffects,
     ValueModel,
+    base_key,
     cuped_adjust,
     product_moments,
     shrink_to_pool,
@@ -98,7 +119,7 @@ from autonomy.decide.models import (
 from autonomy.decide.models import action_key as key_of
 from autonomy.decide.policy import SWEEP, AutonomousPolicy, seeded_rng
 from autonomy.decide.timing import LATE_CLICK, zone_named
-from autonomy.interfaces import Policy
+from autonomy.interfaces import Bidder, Policy
 from autonomy.learning import ModelBundle, build_bundle, learn_from_rewards, update_models
 from autonomy.learning.observations import ipw_weights, logged_sends, weighted_rate
 
@@ -347,6 +368,9 @@ CLICK_PRIOR = Beta.from_rate(0.05, 20.0)
 """Before any send: about 5% of messages get a click, worth 20 sends."""
 CLICK_POOL = 20.0
 """How many sends' worth the business-wide click rate of an action is worth for one segment."""
+FORMAT_POOL = 20.0
+"""How many sends' worth the plain-text click rate is for the same message with an image, carousel
+or video: a new format starts where its words are and moves as its own clicks come in."""
 LIFT_PER_CLICK_PRIOR = (0.25, 0.25)
 """Before purchases say otherwise: a click goes with a quarter of an extra purchase, give or take a
 quarter. Weak on purpose: the agent-vs-holdout comparison takes over within weeks."""
@@ -393,7 +417,10 @@ class ClickResponseModel(BetaResponseModel):
         uplift(customer, action) = lift_per_click(segment) x click_rate(segment, action) x personal(customer, action)
 
     * `click_rate` is a Beta posterior per (segment, action), shrunk towards the business-wide rate of
-      that action (worth `CLICK_POOL` sends), itself shrunk towards `CLICK_PRIOR`.
+      that action (worth `CLICK_POOL` sends), itself shrunk towards `CLICK_PRIOR`. For an image,
+      carousel or video option the business-wide rate is shrunk towards the same words' plain-text
+      rate instead (worth `FORMAT_POOL` sends): format, segment, then person, each shrunk to the
+      level above.
     * `personal` is how much more (or less) this customer clicks than their segment predicts, for
       this action's channel, offer and theme (`PersonalEffects`): their overall responsiveness times
       their taste for each feature, every factor shrunk towards 1 by as much as the business's
@@ -544,7 +571,13 @@ class ClickResponseModel(BetaResponseModel):
         if found is not None:
             return found
         total = self._clicks.get((ANY, action_key), [0.0, 0.0])
-        pooled = self.click_prior.plus(total[0], max(total[1] - total[0], 0.0))
+        plain = base_key(action_key)
+        prior = (
+            self.click_prior
+            if plain == action_key
+            else Beta.from_rate(self.click_rate(ANY, plain).mean, FORMAT_POOL)
+        )
+        pooled = prior.plus(total[0], max(total[1] - total[0], 0.0))
         if segment == ANY:
             rate = pooled
         else:
@@ -1000,6 +1033,52 @@ def _kind_of(brief: Brief, kinds: Mapping[str, GoalKind]) -> GoalKind:
     return kinds.get(brief.goal_id, GoalKind.CUSTOM)
 
 
+BASELINE_GROUP = "baseline_group"
+"""The block code `explain_bids` gives every bid of a baseline-group customer: the baseline rule, not
+the auction, decides for them."""
+
+
+@dataclass(frozen=True)
+class BidExplanation:
+    """One option the auction would see for a customer, as `AgentPolicy.explain_bids` reports it.
+
+    `bid` is timed as the auction times it. `net` is its expected net minus the price it must beat
+    (the attention price), so a positive `net` beats doing nothing on average. `blocked_by` is the
+    hard rule that removes it (a code from `autonomy.decide.rules`, or `BASELINE_GROUP`), None when
+    it may go out. `considered` is True for the options Thompson sampling and the exploration floor
+    choose among (the near-best few that could beat doing nothing). `item_reason` says why the
+    action is about its product (`bid.action.item_id`), when it is about one.
+    """
+
+    bid: Bid
+    net: float
+    blocked_by: str | None = None
+    considered: bool = False
+    item_reason: str | None = None
+
+    @property
+    def allowed(self) -> bool:
+        return self.blocked_by is None
+
+
+def _quote(bidder: Bidder, state: CustomerState, ctx: DecisionContext) -> list[Bid]:
+    """A bidder's bids without its learning memo (`GoalBidder.quote`); `bids` for other bidders."""
+    quote = getattr(bidder, "quote", None)
+    if callable(quote):
+        found = quote(state, ctx)
+        if isinstance(found, list):
+            return [b for b in found if isinstance(b, Bid)]
+    return bidder.bids(state, ctx)
+
+
+def _item_reason(bid: Bid, bidders: Mapping[str, Bidder], state: CustomerState) -> str | None:
+    if bid.action.item_id is None:
+        return None
+    bidder = bidders.get(bid.goal_id)
+    choice = bidder.item_for(state) if isinstance(bidder, GoalBidder) else None
+    return choice.reason if choice is not None and choice.item_id == bid.action.item_id else None
+
+
 class AgentPolicy:
     """Autonomy's policy for the agent group (implements `Policy`). Build it with `build_agent_policy`."""
 
@@ -1016,10 +1095,25 @@ class AgentPolicy:
         learn_horizon_days: int = DEFAULT_LEARN_HORIZON_DAYS,
         mc_draws: int = 400,
         version: str = AGENT_VERSION,
+        item_lookup: ItemLookup | None = None,
+        recommender: ItemLookup | None = None,
+        asset_of: AssetOf | None = None,
+        carousel_template: bool = False,
+        format_costs: Mapping[Format, float] | None = None,
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
         self.version = version
+        self.refill_items: dict[str, str | tuple[str, str]] = {}
+        """customer -> refill pick (item id, or (item id, reason)), set by `set_items`; read when no
+        `item_lookup` is given."""
+        self.complements: dict[str, str | tuple[str, str]] = {}
+        """customer -> complementary product, set by `set_items`; read when no `recommender` is given."""
+        self.item_lookup: ItemLookup = item_lookup if item_lookup is not None else self.refill_items.get
+        self.recommender: ItemLookup = recommender if recommender is not None else self.complements.get
+        self.asset_of = asset_of
+        self.carousel_template = carousel_template
+        self.format_costs = dict(format_costs) if format_costs is not None else None
         self.bundle = bundle
         self.costs = dict(costs) if costs is not None else None
         self.kinds: dict[str, GoalKind] = dict(kinds or {})
@@ -1085,9 +1179,27 @@ class AgentPolicy:
 
     # --- briefs and bidders ---------------------------------------------------------------------
 
-    def _install(self, brief: Brief) -> None:
-        self.briefs[brief.goal_id] = brief
-        self.bidders[brief.goal_id] = GoalBidder(
+    def set_items(
+        self,
+        refill: Mapping[str, str | tuple[str, str]] | None = None,
+        complements: Mapping[str, str | tuple[str, str]] | None = None,
+    ) -> None:
+        """Replace the products the bidders read (unless `item_lookup` / `recommender` were given).
+
+        `refill` maps a customer to their refill pick (`autonomy.catalog.enrich_all`'s mapping) and
+        `complements` to a complementary product (from `autonomy.catalog.next_best_item`), each an
+        item id or (item id, plain reason). A mapping left as None keeps what it held. Call it with
+        the enriched states, before the sweep: a customer missing from the mapping has no product.
+        """
+        if refill is not None:
+            self.refill_items.clear()
+            self.refill_items.update(refill)
+        if complements is not None:
+            self.complements.clear()
+            self.complements.update(complements)
+
+    def _new_bidder(self, brief: Brief) -> GoalBidder:
+        return GoalBidder(
             brief,
             None,  # read the live library from ctx.content
             self.bundle.response,
@@ -1096,19 +1208,32 @@ class AgentPolicy:
             kind=_kind_of(brief, self.kinds),
             own_spread=True,
             prune_z=PRUNE_Z,
+            item_lookup=self.item_lookup,
+            recommender=self.recommender,
+            asset_of=self.asset_of,
+            carousel_template=self.carousel_template,
+            format_costs=self.format_costs,
         )
+
+    def _install(self, brief: Brief) -> None:
+        self.briefs[brief.goal_id] = brief
+        self.bidders[brief.goal_id] = self._new_bidder(brief)
         self.policy.bidders = list(self.bidders.values())
+
+    def _is_newer(self, brief: Brief) -> bool:
+        """Whether the context's brief replaces the installed one (or there is none yet)."""
+        known = self.briefs.get(brief.goal_id)
+        return (
+            known is None
+            or brief.version > known.version
+            or (brief.version == known.version and brief.brief_id != known.brief_id)
+        )
 
     def _refresh(self, briefs: Sequence[Brief]) -> None:
         """Rebuild a goal's bidder when the context carries a newer version of its brief."""
         for brief in briefs:
-            known = self.briefs.get(brief.goal_id)
-            if (
-                known is None
-                or brief.version > known.version
-                or (brief.version == known.version and brief.brief_id != known.brief_id)
-            ):
-                if known is not None:
+            if self._is_newer(brief):
+                if brief.goal_id in self.briefs:
                     self.breaker.resume(brief.goal_id)
                 self._install(brief)
 
@@ -1137,12 +1262,20 @@ class AgentPolicy:
             return ctx
         return ctx.model_copy(update={"briefs": live})
 
-    def _live_briefs(self, briefs: Sequence[Brief]) -> tuple[Brief, ...]:
+    def _live_briefs(
+        self, briefs: Sequence[Brief], resumed: frozenset[str] = frozenset()
+    ) -> tuple[Brief, ...]:
+        """The briefs with paused goals and channels taken out; goals in `resumed` count as unpaused
+        (a new brief version that `_refresh` has not installed yet resumes its goal)."""
         live: list[Brief] = []
         for brief in briefs:
-            if brief.goal_id in self.breaker.paused_goals:
+            if brief.goal_id in self.breaker.paused_goals and brief.goal_id not in resumed:
                 continue
-            closed = {ch for (g, ch) in self.breaker.paused_channels if g == brief.goal_id}
+            closed = {
+                ch
+                for (g, ch) in self.breaker.paused_channels
+                if g == brief.goal_id and brief.goal_id not in resumed
+            }
             if closed:
                 channels = tuple(ch for ch in brief.envelope.channels if ch not in closed)
                 if not channels:
@@ -1205,6 +1338,133 @@ class AgentPolicy:
         if decision.group is Group.AGENT:
             self.attention.record(decision)
         return decision
+
+    # --- explaining ------------------------------------------------------------------------------
+
+    def explain_bids(
+        self, state: CustomerState, ctx: DecisionContext, *, trigger: str | None = None
+    ) -> list[BidExplanation]:
+        """Every bid the auction would see for this customer now, ranked, with what blocks each.
+
+        The public hook for "why this, and why not that" (the engine API's decision view): the bids
+        are priced and timed exactly as `decide` would (the same segment, send hour, weekly count
+        with pending sends, gap rule and hard rules), and ranked the way the auction ranks them:
+        the bids that may go out first, by `net` (expected net minus the attention price), then the
+        blocked ones by expected net. `considered` marks the near-best few the auction samples from.
+
+        It changes nothing: no decision is logged, no send is scheduled, no bidder remembers the
+        customer, no new brief version is installed, so deciding afterwards gives the same decision.
+        Two things `decide` does first are not done here: the warm start from history (before the
+        first decision) and the daily refresh of the attention price, so before the day's first
+        decision the price may be yesterday's. A pacer (the agent sets none) is not applied.
+        A holdout or baseline customer's bids all come back blocked (`holdout`, `BASELINE_GROUP`).
+        """
+        eff, bidders = self._view(ctx)
+        seg = self.segment(state, ctx.now)
+        update: dict[str, object] = {"segment": seg}
+        by_goal = {b.goal_id: b for b in bidders}
+        if state.group is not Group.AGENT:
+            code = rules.HOLDOUT if state.group is Group.HOLDOUT else BASELINE_GROUP
+            view = state.model_copy(update=update)
+            held = [b for bidder in bidders for b in _quote(bidder, view, eff)]
+            held.sort(key=lambda b: -b.expected_net)
+            return [
+                BidExplanation(b, b.expected_net, code, False, _item_reason(b, by_goal, view)) for b in held
+            ]
+        hour = self._send_hour(state.customer_id, seg, eff, trigger)
+        if hour is not None:
+            update["active_hours"] = tuple(1.0 if h == hour else 0.0 for h in range(24))
+            update["contacts_7d"] = self._contacts_at_send(state, eff, hour)
+        elif state.active_hours:
+            update["active_hours"] = ()
+        view = state.model_copy(update=update)
+
+        policy = self.policy
+        decision_id = policy.decision_id(state.customer_id, ctx.now, trigger)
+        pending, upcoming = self._pending_view(view, ctx.now, decision_id)
+        gap = (
+            rules.too_soon(view, ctx.now, policy.min_gap, upcoming)
+            if policy.min_gap is not None
+            else rules.OK
+        )
+        if pending:
+            view = view.model_copy(
+                update={
+                    "contacts_7d": view.contacts_7d + pending,
+                    "contacts_30d": view.contacts_30d + pending,
+                }
+            )
+        hour_scores: tuple[float, ...] | None = None
+        if policy.reading_hours is not None:
+            rng_key = state.customer_id if trigger in (None, SWEEP) else f"{state.customer_id}\x1f{trigger}"
+            hour_scores = policy.reading_hours.sample_profile(
+                state.customer_id, view.segment, seeded_rng(ctx.seed, f"{rng_key}\x1freading")
+            )
+        times: dict[tuple[str, datetime], datetime | None] = {}
+        offered = [
+            policy._timed(b, view, eff, times, hour_scores)
+            for bidder in bidders
+            for b in _quote(bidder, view, eff)
+            if math.isfinite(b.expected_net) and math.isfinite(b.uncertainty)
+        ]
+        price = policy._price(view)
+        survivors: list[Bid] = []
+        blocked: list[tuple[Bid, str]] = []
+        for bid in offered:
+            check = rules.check_bid(bid, view, eff)
+            if check.allowed and not gap.allowed:
+                check = gap
+            if check.allowed:
+                survivors.append(bid)
+            else:
+                blocked.append((bid, check.code))
+        survivors.sort(key=lambda b: b.expected_net - price, reverse=True)
+        sampled = survivors[: policy.max_options]
+        if policy.plausible_z is not None:
+            z = policy.plausible_z
+            sampled = [b for b in sampled if b.expected_net - price + z * b.uncertainty > 0]
+        chosen = {id(b) for b in sampled}
+        out = [
+            BidExplanation(b, b.expected_net - price, None, id(b) in chosen, _item_reason(b, by_goal, view))
+            for b in survivors
+        ]
+        blocked.sort(key=lambda x: -x[0].expected_net)
+        out.extend(
+            BidExplanation(b, b.expected_net - price, code, False, _item_reason(b, by_goal, view))
+            for b, code in blocked
+        )
+        return out
+
+    def _view(self, ctx: DecisionContext) -> tuple[DecisionContext, list[Bidder]]:
+        """The context and bidders `decide` would use, without installing anything (`_effective`
+        installs new brief versions and caches the live briefs; this leaves both alone)."""
+        bidders: dict[str, Bidder] = dict(self.bidders)
+        resumed: set[str] = set()
+        for brief in ctx.briefs:
+            if self._is_newer(brief):
+                if brief.goal_id in self.briefs:
+                    resumed.add(brief.goal_id)
+                bidders[brief.goal_id] = self._new_bidder(brief)
+        live = self._live_briefs(ctx.briefs, frozenset(resumed))
+        if len(live) == len(ctx.briefs) and all(a is b for a, b in zip(live, ctx.briefs, strict=True)):
+            return ctx, list(bidders.values())
+        return ctx.model_copy(update={"briefs": live}), list(bidders.values())
+
+    def _pending_view(self, state: CustomerState, now: datetime, decision_id: str) -> tuple[int, int]:
+        """(sends the policy scheduled that the state does not show yet, those of them still to come
+        or due within the gap), leaving out `decision_id`: what `AutonomousPolicy.decide` counts,
+        read without dropping anything from its schedule."""
+        scheduled = self.policy._scheduled.get(state.customer_id, {})
+        folded = state.last_contact_at
+        week_ago = now - timedelta(days=7)
+        keep = {
+            did: at
+            for did, at in scheduled.items()
+            if did != decision_id and at > week_ago and (folded is None or at > folded)
+        }
+        gap = self.policy.min_gap
+        upcoming = sum(1 for at in keep.values() if gap is not None and at > now - gap)
+        return len(keep), upcoming
 
     def _warm_start(self, states: Mapping[str, CustomerState], now: datetime) -> None:
         """Learn from the client's past campaigns before the first decision, so day 1 is not blind.
@@ -1414,7 +1674,7 @@ class AgentPolicy:
                     seg = self._decision_segment.get(d.decision_id)
                     self._send_keys[d.decision_id] = (
                         seg,
-                        key_of(d.action.channel, d.action.offer_id, item.theme.value),
+                        key_of(d.action.channel, d.action.offer_id, item.theme.value, item.format),
                         d.action.offer_id,
                     )
         elif d.group is Group.HOLDOUT:
@@ -1488,6 +1748,11 @@ def build_agent_policy(
     baseline_policy: Policy | None = None,
     kinds: Mapping[str, GoalKind] | None = None,
     learn_horizon_days: int = DEFAULT_LEARN_HORIZON_DAYS,
+    item_lookup: ItemLookup | None = None,
+    recommender: ItemLookup | None = None,
+    asset_of: AssetOf | None = None,
+    carousel_template: bool = False,
+    format_costs: Mapping[Format, float] | None = None,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -1495,7 +1760,10 @@ def build_agent_policy(
     `autonomy.learning.build_bundle()` whose response model is a `ClickResponseModel`. `costs`
     overrides the per-message channel costs, `kinds` gives each goal's kind (cart recovery fades
     fast), `exploration_floor` overrides the envelopes' floor and `baseline_policy` decides for the
-    baseline group.
+    baseline group. `item_lookup` (refill picks) and `recommender` (complements) name the products
+    actions are about (None: the agent's own `set_items` mappings); `asset_of` names the approved
+    asset behind an image variant (`autonomy.decide.bidders.asset_lookup`), `carousel_template` says
+    the brand has WhatsApp carousel templates and `format_costs` adds a per-message cost by format.
     """
     if bundle is None:
         fresh = build_bundle()
@@ -1509,4 +1777,9 @@ def build_agent_policy(
         baseline_policy=baseline_policy,
         kinds=kinds,
         learn_horizon_days=learn_horizon_days,
+        item_lookup=item_lookup,
+        recommender=recommender,
+        asset_of=asset_of,
+        carousel_template=carousel_template,
+        format_costs=format_costs,
     )
