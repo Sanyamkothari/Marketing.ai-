@@ -248,12 +248,20 @@ def test_an_open_stop_is_a_checkbox_inside_the_ready_card(storage: LocalStorage,
     case = screen.case
     items, _ = active_section(case)
     assert case.visit is not None
-    stop = PlanFinding(key="k-stop", level="stop", code="STEP_LOSES_CUSTOMERS", text="Two thirds are lost.")
+    stop = PlanFinding(
+        key="k-stop",
+        level="stop",
+        code="STEP_LOSES_CUSTOMERS",
+        text="Two thirds are lost.",
+        detail="Most from step 2.",
+    )
     check = PlanCheck(digest=plan_digest(case.files, items), findings=(stop,))
     counted = case.model_copy(update={"visit": case.visit.model_copy(update={"plan_check": check})})
     ready = screen_view(storage, counted, config_root=None).conversation[-1]
     assert isinstance(ready, ReadyCard)
-    assert [(s.key, s.text) for s in ready.stops] == [("k-stop", "Two thirds are lost.")]
+    assert [(s.key, s.text, s.detail) for s in ready.stops] == [
+        ("k-stop", "Two thirds are lost.", "Most from step 2.")
+    ]
     said = case.visit.model_copy(update={"plan_check": check})
     ack = Acknowledgement(key="k-stop", by="u", at=case.updated_at)
     after = case.model_copy(update={"visit": said.model_copy(update={"acknowledged": (ack,)})})
