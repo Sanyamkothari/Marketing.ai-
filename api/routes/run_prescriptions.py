@@ -208,7 +208,13 @@ def _upload_training(
         if not after:
             return rows
         replayed = replay_after_build(
-            prescription, rows, mode="train", goal_id=found.goal_id, config=config, upload_id=upload.upload_id
+            prescription,
+            rows,
+            mode="train",
+            goal_id=found.goal_id,
+            config=config,
+            upload_id=upload.upload_id,
+            tables=_query_tables(storage, config, prescription, part.slot, rows, cap),
         )
         warnings.extend(replayed.warnings)
         return replayed.frame
@@ -249,6 +255,45 @@ def _upload_training(
         profile=profile,
         warnings=tuple(warnings),
     )
+
+
+def _query_tables(
+    storage: Storage, config: UseCaseConfig, prescription: Prescription, slot: str, rows: Any, cap: int
+) -> Any:
+    """The case's other files, each prepared by its own recipe, for a post-build query step that reads them (the
+    outcome of a rule over orders, Q24); None when no such step is there. `rows` are this slot's prepared rows.
+    """
+    import pandas as pd
+
+    from api.routes.uploads import load_upload
+    from engine.agent.contracts import RecipeStepKind
+    from engine.doctor.prescription import case_tables
+    from engine.doctor.prescription_replay import run_part_recipe
+
+    post = prescription.post_build
+    if post is None or not any(step.kind is RecipeStepKind.SQL_QUERY for step in post.steps):
+        return None
+    frames: dict[str, Any] = {slot: rows}
+    for other in prescription.files:
+        if other.slot == slot:
+            continue
+        read = [
+            ingest.read_upload(storage, record.source_key, file_format=record.file_format, row_cap=cap).frame
+            for record in (load_upload(storage, upload_id) for upload_id in other.upload_ids)
+        ]
+        frame = read[0] if len(read) == 1 else pd.concat(read, ignore_index=True)
+        if other.recipe is not None:
+            frame = run_part_recipe(
+                other.recipe,
+                frame,
+                config=config,
+                upload_id=other.upload_ids[0],
+                leak_check="full",
+                contract=other.contract,
+                slot=other.slot,
+            ).frame
+        frames[other.slot] = frame
+    return case_tables(frames, prescription.files)
 
 
 def prescribed_scoring(

@@ -110,10 +110,11 @@ def test_the_instructions_are_untouched_by_the_egress_backstop() -> None:
         assert matches == 0, f"{path.name} line {number} would be masked: {line!r} -> {cleaned!r}"
 
 
-def test_it_lists_every_kind_of_change_the_chat_may_propose_and_says_q24_is_only_a_note() -> None:
+def test_it_lists_every_kind_of_change_the_chat_may_propose_and_says_q24_is_the_persons_click() -> None:
     from engine.agent.loop import DOCTOR_STEP_KINDS
 
     system = load_prompt(NAME).system
     for kind in DOCTOR_STEP_KINDS:
         assert kind.value in system, kind
-    assert "never say the rule is applied" in system, "Q24 changes no outcome yet"
+    assert "the outcome changes only when they click it" in system, "Q24 is meaning: the click records it"
+    assert '"outcomes"' in system and "reads_future" in system

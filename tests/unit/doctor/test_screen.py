@@ -235,10 +235,11 @@ def test_the_approval_sentence_names_the_goal_as_the_screens_do(storage: LocalSt
     """The sentence a person approves word for word names the goal ("Find customers likely to buy"), not its id."""
     screen = scenario("not_ready", storage, world)
     sentence = screen.view.approval_sentence
+    assert sentence.startswith("Prepare 1 file with 4 changes for the goal “Find customers likely to buy”. ")
     assert (
-        sentence
-        == "Prepare 1 file with 4 changes for the goal “Find customers likely to buy”. Nothing else changes."
-    )
+        " The model learns from this: “converted” = 1 is a yes: " in sentence
+    ), "the outcome, in plain words"
+    assert sentence.endswith(" customers. Nothing else changes.")
     assert GOAL_A not in sentence
     assert sentence == visit.approval_sentence(screen.case), "the server shows and checks the same sentence"
     stale = sentence.replace("“Find customers likely to buy”", GOAL_A)

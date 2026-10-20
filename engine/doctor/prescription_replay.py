@@ -527,12 +527,21 @@ def replay_after_build(
     goal_id: str | None = None,
     config: UseCaseConfig | None = None,
     upload_id: str = "prescription",
+    tables: Mapping[str, pd.DataFrame] | None = None,
 ) -> PreparedReplay:
     """:func:`replay_on_prepared` for a run: the outcome (training only), the post-build recipe and the contract on
-    every row of a built dataset or a prepared file. Raises `PrescriptionError` on a stop."""
+    every row of a built dataset or a prepared file. `tables` are the case's other files a query step reads. Raises
+    `PrescriptionError` on a stop."""
     trail = _Trail()
     rows, outcome, warnings = replay_on_prepared(
-        prescription, frame, mode=mode, goal_id=goal_id, config=config, upload_id=upload_id, trail=trail
+        prescription,
+        frame,
+        mode=mode,
+        goal_id=goal_id,
+        config=config,
+        upload_id=upload_id,
+        trail=trail,
+        tables=tables,
     )
     receipt = trail.recipes[-1] if prescription.post_build is not None and trail.recipes else None
     replayed = tuple(dict.fromkeys(p.part for p in trail.parts if p.status != "skipped"))

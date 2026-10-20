@@ -93,6 +93,15 @@ from engine.doctor.case import (
     payload_digest,
 )
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL, GoalBrief, load_goal_brief, register_goal_brief_tool
+from engine.doctor.outcome_answer import (
+    OUTCOME_ASK_CODE,
+    OUTCOME_KIND,
+    outcome_says,
+    query_item,
+    rules_payload,
+    sql_hash,
+    step_sql,
+)
 from engine.doctor.plan_check import check_plan, open_stops, plan_digest
 from engine.doctor.protocol import (
     DATA_DECISION,
@@ -504,7 +513,15 @@ def approval_sentence(case: Case, *, goal_name: str | None = None) -> str:
     what = f"{ticked} change{'s' if ticked != 1 else ''}"
     files = len(case.files)
     to = f" for the goal “{goal_display_name(goal.goal_id, goal_name)}”" if goal is not None else ""
-    return f"Prepare {files} file{'s' if files != 1 else ''} with {what}{to}. Nothing else changes."
+    learns = ""
+    if goal is not None:  # the outcome the person's answer chose, in their words and with its count
+        said = [
+            outcome_says(i)
+            for i in case.items
+            if i.kind == OUTCOME_KIND and i.goal_id == goal.goal_id and i.state is ProposalState.ACCEPTED
+        ]
+        learns = f" The model learns from this: {said[-1]}." if said and said[-1] else ""
+    return f"Prepare {files} file{'s' if files != 1 else ''} with {what}{to}.{learns} Nothing else changes."
 
 
 def approval_goal_name(storage: Storage, case: Case) -> str | None:
@@ -652,6 +669,14 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
             if question.question_id in have_questions:
                 continue  # asked once: an answered question is never asked again, in any mode
             have_questions.add(question.question_id)
+            if question.code == OUTCOME_ASK_CODE:  # asked again in other words: the open one is replaced
+                for old in [
+                    q
+                    for q in questions
+                    if q.code == OUTCOME_ASK_CODE and q.goal_id == question.goal_id and q.answer is None
+                ]:
+                    questions.remove(old)
+                    offers.pop(old.question_id, None)
             questions.append(question)
             offers[question.question_id] = effects
             # Plan O M246: a question the rules settled (an assumption) or a standing answer applied is not one
@@ -1743,7 +1768,13 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                             option_id=f"c{index}",
                             kind="outcome_column",
                             title=f"“{column}” is the outcome: {brief.outcome.definition}",
-                            payload={"upload_id": loaded.upload_id, "column": column},
+                            payload={
+                                "upload_id": loaded.upload_id,
+                                "column": column,
+                                **rules_payload(
+                                    loaded.frame, column, loaded.upload_id, brief.outcome.positive_label
+                                ),
+                            },
                         ),
                     )
                     for index, (loaded, column) in enumerate(likely[:5])
@@ -2389,6 +2420,12 @@ def answer(
         effect = effects.get(option_id)
         replaced = f"{question_id}:{question.answer}" if question.answer is not None else None
         items = [item for item in case.items if item.item_id != replaced]
+        payload: dict[str, Any] = {} if effect is None else dict(effect.payload)
+        if effect is not None and effect.kind == OUTCOME_KIND:
+            # The outcome is what the model learns: this click records it (the prescription reads the click as the
+            # approval of its value map), it is the only outcome of the goal, and the query step that builds its
+            # column is the person's now.
+            items = _the_outcome(items, question.goal_id, payload, actor, now)
         if effect is not None and effect.kind is not None:
             items.append(
                 CaseItem(
@@ -2398,9 +2435,9 @@ def answer(
                     source=ProposalSource.RULES,
                     confidence=AgentConfidence.SURE,
                     state=ProposalState.ACCEPTED,
-                    upload_id=question.upload_id or _str(effect.payload.get("upload_id")),
-                    payload=dict(effect.payload),
-                    payload_digest=payload_digest(effect.payload),
+                    upload_id=question.upload_id or _str(payload.get("upload_id")),
+                    payload=payload,
+                    payload_digest=payload_digest(payload),
                     proposed_at=now,
                     decided_by=actor,
                     decided_at=now,
@@ -2450,6 +2487,32 @@ def answer(
         )
 
     return _person_step(run, client_id, case_id, expected_version, op_id, build)
+
+
+def _the_outcome(
+    items: list[CaseItem], goal_id: str | None, payload: Mapping[str, Any], actor: str, now: datetime
+) -> list[CaseItem]:
+    """`items` with the goal's other outcomes set aside, and the query step that builds the new outcome's column
+    ticked by `actor`. `CaseError` when that step is gone or is not the one the person was shown."""
+    built = payload.get("outcome_sql")
+    out: list[CaseItem] = []
+    for item in items:
+        if item.kind == OUTCOME_KIND and item.goal_id == goal_id and item.state is ProposalState.ACCEPTED:
+            item = item.model_copy(
+                update={"state": ProposalState.REJECTED, "decided_by": actor, "decided_at": now}
+            )
+        out.append(item)
+    if isinstance(built, str):
+        step = query_item(out, built)
+        if step is None or sql_hash(step_sql(step)) != payload.get("sql_hash"):
+            raise _unknown(
+                "The query that builds this outcome is not in the plan as you were shown it; ask for it again."
+            )
+        ticked = step.model_copy(
+            update={"state": ProposalState.ACCEPTED, "decided_by": actor, "decided_at": now}
+        )
+        out = [ticked if i.item_id == step.item_id else i for i in out]
+    return out
 
 
 def _remember_answer(

@@ -705,9 +705,20 @@ replies in plain words. Its instructions are one short prompt, `configs/prompts/
   a column that holds one of these meanings (the outcome, the date a row describes, who agreed or opted out, the
   ID - but for leaving rows out by it): a rename, a split or a reading of such a column waits for your tick, and so
   does a rule that would leave out more than 5% of the whole file or reads dates whose day/month order nobody settled.
-  **Known gap:** your answer to "what counts as a yes" (Q24) is noted for your analyst and does not build an outcome
-  definition yet (`engine/doctor/outcome_definition.py` is not wired into the visit), so it does not block anything and the
-  chat says it changes nothing yet.
+  **What counts as a yes decides the outcome.** Say it in your own words ("a sale is an order over 500 within 30 days
+  of contact") and the agent asks "What should count as a yes?" (Q24), with what it understood and the count our code
+  measured ("a sale = an order over 500 within 30 days: 312 of 4,000 customers (7.8%)"). If the file has a 0/1 or yes/no
+  column ("converted_30d = 1"), the answer is that column and its yes values (every other value is a no). If the rule is
+  over another file or a threshold, the agent proposes ONE query step (the same sandbox and guards as any query, with
+  its `expect`) that builds a 0/1 column on the customer table; that column becomes the outcome. The question blocks
+  Approve, only your click answers it (it also ticks the query, which still needs your own yes at Approve), and the
+  Ready sentence says it: "The model learns from this: a sale = an order over 500 within 30 days: 312 of 4,000
+  customers." The query must state its as-of date; the orders after it are the outcome window, so only the outcome
+  column may read them (`reads_future`) and every other column must be what was known by that date
+  (`FUTURE_EVENTS_LEAKED`), and a column that alone tells every yes from every no is refused
+  (`OUTCOME_FROM_A_FEATURE`). Without an AI the question about the outcome offers the columns the goal detects as
+  chips, with the same counts and sentence. **Left:** if you later untick the query, the outcome column goes with it; the
+  readiness check then says the column is missing.
 - **Changing your mind.** "Actually only this year's orders" makes the agent take back its own earlier change
   (rejected, decided by the agent, shown in the reply) and apply the new one. It cannot take back what you ticked or
   gave your own yes to, and your Undo sticks: the same change proposed again in other words is not put back.
@@ -741,7 +752,8 @@ the person), `configs/prompts/data_doctor_chat.v1.md`. A reply in `case.chat` (`
 `suggestion` (`question_id`, `option_id`, `label`: an answer for the person to click); each is left out of the JSON
 while empty. A typed change by the AI carries what its trial on the first 1,000 rows counted in `payload.tried`
 (`rows`, `changed`, `failed`). The chat's quick questions are `CHAT_ASK` (non-blocking, the model's own options) and
-"what counts as a yes" is `Q24` (a note for the analyst, not blocking). Tests: `tests/unit/doctor/test_doctor_chat.py` (the owner's example
+"what counts as a yes" is `Q24` (blocking; `engine/doctor/outcome_answer.py` builds its answers and counts, the click records
+the `outcome_column` item in `visit.answer`). Tests: `tests/unit/doctor/test_outcome_answer.py`, `tests/unit/doctor/test_doctor_chat.py` (the owner's example
 conversation, with the turn-keyed scripted model `tests/fixtures/doctor_eval/chat_model.py`),
 `tests/unit/doctor/test_agent_apply.py`, `tests/unit/doctor/test_chat_prompt.py`.
 
