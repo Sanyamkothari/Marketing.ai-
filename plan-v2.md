@@ -224,6 +224,8 @@ Five screens:
 
 ## 12. Build order
 
+> **We build this in parallel:** see [`docs/v2/PARALLEL_BUILD.md`](docs/v2/PARALLEL_BUILD.md). Wave 0 freezes the contracts, then six workflows build the streams at once. The table below is the logical order. The parallel plan takes about 1.5–2 weeks instead of 6–8.
+
 Each phase ends with a **demo** and a **check**. Claude writes the code; the founder reviews the demo and makes the calls.
 
 | Phase | Time | What gets built | Demo / check at the end |
