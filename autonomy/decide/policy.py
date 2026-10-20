@@ -40,6 +40,21 @@ agent factory decides when to switch them on):
   surcharge that rises with its pressure, and at full pressure the channel is held (`pacing` in
   `blocked_by`). The surcharge is charged like the attention price, and a sent decision logs the
   price plus its surcharge as `attention_price`, which is what that bid had to beat.
+
+Three more optional hooks let a caller make contacting dearer and rarer (all off by default):
+
+* `channel_price_fn(state, bids)`: the attention price per channel, given the customer's bids (an
+  unsubscribe on WhatsApp risks a different future from one on email). A channel it leaves out pays
+  `attention_price_fn`'s price.
+* `budget_fn(state, bids, cost)`: the customer's weekly contact budget. When the messages of the
+  last 7 days (pending sends included) have used it up, every option is held (`weekly_cap` in
+  `blocked_by`: it is the customer's own weekly limit). A budget below 1 never holds the first
+  message of a week; whether that one is worth sending is the price's and the auction's call.
+* `margin_fn(state, bid)`: restraint under uncertainty. An option with a positive margin may win
+  the Thompson part only if its net beats doing nothing by that margin (a lower-confidence-bound
+  rule); it stays among the options the exploration floor picks from, so learning goes on. The
+  logged probability counts this exactly: `floor / n` for every option, plus `(1 - floor) x` its
+  share of Thompson wins among the options that pass.
 """
 
 from __future__ import annotations
@@ -47,7 +62,7 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Protocol, runtime_checkable
 
@@ -78,6 +93,12 @@ SWEEP = "sweep"
 _WEEK = timedelta(days=7)
 
 AttentionPrice = Callable[[CustomerState], float]
+ChannelPrices = Callable[[CustomerState, Sequence[Bid]], Mapping[Channel, float]]
+"""(state, the customer's bids) -> the attention price per channel."""
+ContactBudget = Callable[[CustomerState, Sequence[Bid], Callable[[Bid], float]], int | None]
+"""(state, bids, each bid's price) -> how many messages the customer should get in any 7 days."""
+RestraintMargin = Callable[[CustomerState, Bid], float]
+"""(state, bid) -> how far the bid's net must beat doing nothing to be sampled (0: plain Thompson)."""
 
 
 @runtime_checkable
@@ -100,6 +121,39 @@ class Pick:
     explored: bool = False
 
 
+@dataclass(frozen=True)
+class Market:
+    """One customer's options after pricing, as the auction sees them (`AutonomousPolicy.auction`).
+
+    `survivors` are the bids that may go out, best net after their price first (at most
+    `max_options`); `options` are those of them the auction samples or explores (all of them, unless
+    `plausible_z` drops known losers); `eligible` says, per option, whether it may win the Thompson
+    part (False when restraint holds it back). `price` is the base attention price, `prices` the
+    per-channel prices and `surcharges` pacing's extra per (goal, channel). `held` lists the bids
+    that passed the hard rules but that pacing (`pacing`) or the weekly budget (`weekly_cap`) held,
+    with that code; `budget` is the customer's weekly budget when one was set.
+    """
+
+    survivors: list[Bid]
+    options: list[Bid]
+    eligible: list[bool]
+    price: float
+    prices: Mapping[Channel, float]
+    surcharges: Mapping[tuple[str, Channel], float]
+    budget: int | None = None
+    held: list[tuple[Bid, str]] = field(default_factory=list)
+
+    def channel_price(self, channel: Channel) -> float:
+        """The attention price of a message on `channel`, before any pacing surcharge."""
+        return self.prices.get(channel, self.price)
+
+    def cost(self, bid: Bid) -> float:
+        """What `bid` must beat: its channel's price plus its pacing surcharge."""
+        return self.channel_price(bid.action.channel) + self.surcharges.get(
+            (bid.goal_id, bid.action.channel), 0.0
+        )
+
+
 def seeded_rng(seed: int, customer_id: str) -> np.random.Generator:
     """One generator per (seed, customer): repeatable runs, and no draws shared between customers."""
     digest = hashlib.sha256(customer_id.encode()).digest()
@@ -112,15 +166,22 @@ def thompson_with_floor(
     floor: float,
     rng: np.random.Generator,
     draws: int = DEFAULT_MC_DRAWS,
+    eligible: Sequence[bool] | None = None,
 ) -> Pick:
     """Choose among options by Thompson sampling mixed with a uniform exploration floor.
 
     Ties go to the lowest index, so put the option you prefer on a tie (do nothing) first.
-    Returns the chosen index, its logged probability and the whole distribution over options.
+    `eligible` (None: all) marks the options that may win the Thompson part; the floor still picks
+    uniformly among all of them, so an option held back by restraint keeps being tried now and then.
+    The first option is always eligible, and marking every option eligible gives exactly the
+    unmasked choice. Returns the chosen index, its logged probability and the whole distribution
+    over options.
     """
     n = len(means)
     if n == 0 or len(sds) != n:
         raise ValueError("need one mean and one standard deviation per option, and at least one option")
+    if eligible is not None and len(eligible) != n:
+        raise ValueError("need one eligibility flag per option")
     if not 0 <= floor <= 1:
         raise ValueError("the exploration floor is a probability")
     if draws < 1:
@@ -129,13 +190,17 @@ def thompson_with_floor(
         return Pick(index=0)
     mean = np.asarray(means, dtype=float)
     sd = np.asarray(sds, dtype=float)
+    # np.array copies, so setting the first flag below leaves the caller's flags as given.
+    mask = np.ones(n, dtype=bool) if eligible is None else np.array(eligible, dtype=bool)
+    mask[0] = True
     explore = bool(rng.random() < floor)
     uniform_pick = int(rng.integers(n))
-    if not np.any(sd > 0):  # nothing uncertain: the sampling part is a plain argmax, exactly
-        ts_pick = int(np.argmax(mean))
+    if not np.any(sd[mask] > 0):  # nothing uncertain: the sampling part is a plain argmax, exactly
+        ts_pick = int(np.argmax(np.where(mask, mean, -np.inf)))
         ts_share = [1.0 if i == ts_pick else 0.0 for i in range(n)]
     else:
         samples = mean + sd * rng.standard_normal((draws, n))
+        samples[:, ~mask] = -np.inf
         winners = np.argmax(samples, axis=1)
         ts_pick = int(winners[0])  # the real Thompson draw is the first of the Monte Carlo draws
         ts_share = [float(c) / draws for c in np.bincount(winners, minlength=n)]
@@ -161,7 +226,9 @@ class AutonomousPolicy:
     sampled nor explored. `min_gap` (None: off) holds a new message while another is scheduled or
     within that long of the last one (`rules.too_soon`). `reading_hours` (None: off) times each
     send by a Thompson draw of the customer's reading hours. `pacer` (None: off) slows a channel
-    down, then holds it, as the goal nears a stop rule (see the module docstring).
+    down, then holds it, as the goal nears a stop rule. `channel_price_fn`, `budget_fn` and
+    `margin_fn` (None: off) price each channel apart, hold a customer whose weekly budget is spent
+    and keep uncertain options out of the Thompson draw (see the module docstring).
 
     `decide(state, ctx, trigger=None)`: `trigger` names what prompted the decision when it is not the
     daily sweep (a cart, a reply). The decision id is fixed by (customer, `ctx.now`, trigger), so
@@ -186,6 +253,9 @@ class AutonomousPolicy:
         min_gap: timedelta | None = None,
         reading_hours: ReadingHourModel | None = None,
         pacer: Pacer | None = None,
+        channel_price_fn: ChannelPrices | None = None,
+        budget_fn: ContactBudget | None = None,
+        margin_fn: RestraintMargin | None = None,
     ) -> None:
         if exploration_floor is not None and not 0 <= exploration_floor <= 1:
             raise ValueError("exploration_floor is a probability")
@@ -205,6 +275,9 @@ class AutonomousPolicy:
         self.min_gap = min_gap
         self.reading_hours = reading_hours
         self.pacer = pacer
+        self.channel_price_fn = channel_price_fn
+        self.budget_fn = budget_fn
+        self.margin_fn = margin_fn
         # customer -> {decision_id: send_at} for ACT decisions whose SEND is not in the state yet
         self._scheduled: dict[str, dict[str, datetime]] = {}
 
@@ -263,29 +336,26 @@ class AutonomousPolicy:
                 survivors.append(bid)
             else:
                 blocked.append(check.code)
-        price = self._price(state)
-        extra: dict[tuple[str, Channel], float] = {}
-        if self.pacer is not None:
-            survivors = self._paced(survivors, ctx, price, extra, blocked)
-
-        def cost(b: Bid) -> float:
-            return price + extra.get((b.goal_id, b.action.channel), 0.0)
-
-        # Keep the near-best options only: exploring a long tail of poor bids wastes the floor.
-        survivors = sorted(survivors, key=lambda b: b.expected_net - cost(b), reverse=True)[
-            : self.max_options
-        ]
-        options = survivors
-        if self.plausible_z is not None:
-            # Near-best only: an option whose net is below "do nothing" even at the optimistic end
-            # of its spread is not explored either, so the floor is not spent on known losers.
-            z = self.plausible_z
-            options = [b for b in survivors if b.expected_net - cost(b) + z * b.uncertainty > 0]
+        market = self.auction(state, ctx, survivors, blocked)
+        survivors, options, cost = market.survivors, market.options, market.cost
         means = [0.0] + [b.expected_net - cost(b) for b in options]  # option 0 is "do nothing"
         sds = [0.0] + [b.uncertainty for b in options]
-        pick = thompson_with_floor(means, sds, self._floor(ctx), seeded_rng(ctx.seed, rng_key), self.mc_draws)
+        pick = thompson_with_floor(
+            means,
+            sds,
+            self._floor(ctx),
+            seeded_rng(ctx.seed, rng_key),
+            self.mc_draws,
+            eligible=[True, *market.eligible],
+        )
 
         chosen = options[pick.index - 1] if pick.index > 0 else None
+        if chosen is not None:
+            paid, base_price = cost(chosen), market.channel_price(chosen.action.channel)
+        else:
+            # What the best option had to beat: its own channel's price.
+            best = survivors[0] if survivors else None
+            paid = base_price = market.channel_price(best.action.channel) if best else market.price
         draft = Decision(
             decision_id=decision_id,
             customer_id=state.customer_id,
@@ -295,7 +365,7 @@ class AutonomousPolicy:
             group=state.group,
             probability=pick.probability,
             expected_net=chosen.expected_net if chosen is not None else 0.0,
-            attention_price=cost(chosen) if chosen is not None else price,
+            attention_price=paid,
             reason="-",
             bids=tuple(survivors[:LOGGED_BIDS]),
             blocked_by=_unique(blocked),
@@ -309,8 +379,8 @@ class AutonomousPolicy:
             contacts_7d=state.contacts_7d,
             explored=pick.explored,
             currency=self.currency,
-            surcharges=extra,
-            base_price=price,
+            surcharges=market.surcharges,
+            base_price=base_price,
         )
         self._remember(draft)
         return draft.model_copy(update={"reason": sentence})
@@ -414,13 +484,66 @@ class AutonomousPolicy:
             return bid
         return bid.model_copy(update={"action": bid.action.model_copy(update={"send_at": send_at})})
 
+    def auction(
+        self,
+        state: CustomerState,
+        ctx: DecisionContext,
+        survivors: Sequence[Bid],
+        blocked: list[str],
+        *,
+        observe: bool = True,
+    ) -> Market:
+        """Price the bids that passed the hard rules and pick the ones the auction weighs.
+
+        In order: the attention price per channel, pacing (which may hold a channel), the weekly
+        budget (which may hold the customer), the best `max_options` by net after price, the
+        plausible ones among them, and which of those restraint lets into the Thompson draw. Codes
+        for what pacing or the budget held are appended to `blocked`. `observe=False` leaves the
+        pacer's running reference alone, so an explanation changes nothing.
+        """
+        price = self._price(state)
+        prices: dict[Channel, float] = {}
+        if self.channel_price_fn is not None and survivors:
+            for channel, p in self.channel_price_fn(state, survivors).items():
+                prices[channel] = float(p) if p > 0 and math.isfinite(p) else 0.0
+        extra: dict[tuple[str, Channel], float] = {}
+        bids = list(survivors)
+        held: list[tuple[Bid, str]] = []
+        if self.pacer is not None:
+            bids = self._paced(bids, ctx, lambda ch: prices.get(ch, price), extra, blocked, observe=observe)
+            kept = {id(b) for b in bids}
+            held = [(b, rules.PACING) for b in survivors if id(b) not in kept]
+        market = Market([], [], [], price, prices, extra)
+        budget: int | None = None
+        if self.budget_fn is not None and bids:
+            budget = self.budget_fn(state, bids, market.cost)
+            if budget is not None and state.contacts_7d >= max(budget, 1):
+                blocked.append(rules.WEEKLY_CAP)
+                held.extend((b, rules.WEEKLY_CAP) for b in bids)
+                bids = []
+        # Keep the near-best options only: exploring a long tail of poor bids wastes the floor.
+        bids = sorted(bids, key=lambda b: b.expected_net - market.cost(b), reverse=True)[: self.max_options]
+        options = bids
+        if self.plausible_z is not None:
+            # Near-best only: an option whose net is below "do nothing" even at the optimistic end
+            # of its spread is not explored either, so the floor is not spent on known losers.
+            z = self.plausible_z
+            options = [b for b in bids if b.expected_net - market.cost(b) + z * b.uncertainty > 0]
+        eligible: list[bool] = []
+        for b in options:
+            margin = self.margin_fn(state, b) if self.margin_fn is not None else 0.0
+            eligible.append(margin <= 0 or b.expected_net - market.cost(b) > margin)
+        return Market(bids, options, eligible, price, prices, extra, budget, held)
+
     def _paced(
         self,
         bids: Sequence[Bid],
         ctx: DecisionContext,
-        price: float,
+        price_of: Callable[[Channel], float],
         extra: dict[tuple[str, Channel], float],
         blocked: list[str],
+        *,
+        observe: bool = True,
     ) -> list[Bid]:
         """Bids that pacing lets through; fills `extra` with each (goal, channel)'s surcharge and
         adds `pacing` to `blocked` for each bid on a held channel."""
@@ -430,14 +553,15 @@ class AutonomousPolicy:
         kept: list[Bid] = []
         for bid in bids:
             channel = bid.action.channel
-            pacer.observe_bid(channel, bid.expected_net, ctx.now)
+            if observe:
+                pacer.observe_bid(channel, bid.expected_net, ctx.now)
             key = (bid.goal_id, channel)
             if key not in extra:
                 brief = rules.brief_for(bid.goal_id, ctx.briefs)
                 pressure = (
                     0.0 if brief is None else pacer.pressure(bid.goal_id, channel, brief.envelope, ctx.now)
                 )
-                extra[key] = pacer.surcharge(channel, pressure, price, ctx.now)
+                extra[key] = pacer.surcharge(channel, pressure, price_of(channel), ctx.now)
             if math.isinf(extra[key]):
                 blocked.append(rules.PACING)
             else:

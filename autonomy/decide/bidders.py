@@ -10,9 +10,27 @@ offer x approved content for that channel and offer, one item per theme and form
   (`channel|offer_id|theme`, plus `|format` for an image, carousel or video), so learning transfers
   across goals.
 * `value` is what one conversion is worth for this customer (`ValueModel`).
-* `p_redeem` is the chance they buy when treated: an offer is paid for by everyone who redeems it,
-  including people who would have bought anyway, which is why "sure things" get no discount.
+* `p_redeem` is the chance they buy when treated, organic chance of buying + uplift: an offer is
+  paid for by everyone who redeems it, including people who would have bought anyway, which is why
+  "sure things" get no discount (`organic_chance`).
 * `urgency` fades for time-sensitive goals (cart recovery) as the triggering moment passes.
+
+**Discount discipline.** An offer is believed only as far as the evidence goes. Its uplift is its
+plain version's (the best no-offer option on the same channel and format) plus what the offer adds,
+and that extra is shrunk towards nothing (`shrink_offer_extra`: a Normal prior centred on 0 with a
+spread of `OFFER_PRIOR_SPREAD` x the plain uplift, against the spread of the evidence for the
+difference). The evidence is the response model's: for the agent's click model, the segment's clicks
+on past offers against past plain messages (including the logged campaigns of the warm start) and
+the customer's own offer factor. The customer's `offer_sensitivity` (share of purchases made with an
+offer) scales what is left (`offer_sensitivity_factor`). With pruning on (`prune_z`, as the agent
+runs), an offer whose expected net, on that evidence, is below its plain version's is not bid at
+all: the default is no offer, and an offer is tried only once the evidence says it pays.
+
+**Sleeping dogs.** Some customers buy *less* after a message. `ContactHarm` (fitted nightly by
+`autonomy.learning.update`, found with `contact_harm_of(response_model)`) gives each customer the
+share of their own buying a message credibly costs them; `dent x organic chance` comes off every
+option's uplift, so "do nothing" moves ahead of all of them alike, and with pruning on a customer
+whose expected harm is larger than every option's gain gets no bids.
 
 **Products.** An action can be about one product (`Action.item_id`):
 
@@ -33,25 +51,31 @@ offered only when its channel can carry its format (`autonomy.assets.support.sup
 media (`asset_url`); `asset_of(item)` names the approved asset behind it for `Action.asset_id`, and
 an action about one product never shows an asset of a different product.
 
-The bidder returns every option, including losing and negative ones: the attention auction, the
-attention price, "do nothing", the hard rules and exploration all happen downstream. It does not
-choose a send time; `Action.send_at` is `ctx.now` and the timing step replaces it. Pure maths, no
-LLM, no clock.
+The bidder returns every option, including losing and negative ones (unless `prune_z` is set): the
+attention auction, the attention price, "do nothing", the hard rules and exploration all happen
+downstream. It does not choose a send time; `Action.send_at` is `ctx.now` and the timing step
+replaces it. Pure maths, no LLM, no clock.
 """
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
+import weakref
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Literal
+from typing import Literal, Protocol
+
+import numpy as np
+import numpy.typing as npt
 
 from autonomy.assets.library import Asset
 from autonomy.assets.support import supports
 from autonomy.contracts import (
+    NO_OFFER,
     Action,
     Audience,
     Bid,
@@ -272,6 +296,420 @@ def _refill_reason(state: CustomerState) -> str:
     return f"Refill due in about {due:.0f} days"
 
 
+# --- contact harm: customers a message makes buy less ------------------------------------------
+
+
+class HarmEvidence(Protocol):
+    """One customer's record around messages, as `ContactHarm` reads it.
+
+    `autonomy.learning.observations.ContactEvidence` is the one the learner builds from events; the
+    protocol keeps the inner loop free of the learning package."""
+
+    @property
+    def exposed_days(self) -> float: ...
+    @property
+    def exposed_purchases(self) -> float: ...
+    @property
+    def open_days(self) -> float: ...
+    @property
+    def open_purchases(self) -> float: ...
+    @property
+    def sends(self) -> float: ...
+    @property
+    def clicks(self) -> float: ...
+    @property
+    def stops(self) -> float: ...
+    @property
+    def direct_visits(self) -> float: ...
+
+
+HARM_MIN_CUSTOMERS = 50
+"""Below this many customers with a record the model is not fitted and charges nothing."""
+HARM_RIDGE = 1.0
+"""Prior precision of each clue's (standardised) coefficient in the index: a clue says nothing until
+purchases show it does."""
+HARM_BANDS = 10
+"""Customers are cut into this many equal bands along the clue index; each band's buying after a
+message is read on its own."""
+HARM_RATIO_SD = 0.5
+"""Prior spread (log scale) of a band's ratio around the business's: before its purchases say
+otherwise, a band buys after a message like everyone else."""
+HARM_CREDIBLE = 0.9
+"""A band is charged only the dent its purchases make credible: 1 minus the upper 90% bound of its
+ratio. A band whose buying merely might fall after a message is charged nothing."""
+HARM_ROUNDS = 25
+EVIDENCE_HALF_LIFE_DAYS = 90.0
+"""Recency weighting of the evidence the learner keeps (`ContactEvidence`): a record a quarter old
+counts half. Annoyance begins at some point; the recent stretch says more about who someone is now."""
+HARM_CLUES: tuple[str, ...] = ("clicks", "direct_visits", "stopped")
+"""The clues, in the order of `HarmFit.coefficients`."""
+_CLICK_PSEUDO_SENDS = 5.0
+"""A customer's click rate is shrunk towards the business's by this many messages."""
+_VISIT_PSEUDO_DAYS = 30.0
+"""A customer's direct-visit rate is shrunk towards the business's by this many days."""
+_RATIO_GRID = np.exp(np.linspace(math.log(0.05), math.log(5.0), 241))
+_TINY = 1e-12
+
+
+@dataclass(frozen=True)
+class HarmFit:
+    """What `ContactHarm` fitted.
+
+    The ratio is buying in the week after a message as a multiple of the customer's own buying on open
+    days: above 1 a message adds to what they buy, below 1 it takes away."""
+
+    coefficients: tuple[float, ...]
+    """Per standardised clue (`HARM_CLUES`): its weight in the index (positive: more of it, more
+    buying after a message), fitted on all customers; the index each customer gets comes from the
+    other half of the customers (cross-fitting)."""
+    ratio: float
+    """The business's ratio."""
+    band_ratios: tuple[float, ...]
+    """Posterior mean ratio per band, from the band least likely to buy after a message up."""
+    band_dents: tuple[float, ...]
+    """The credible dent charged per band (`HARM_CREDIBLE`)."""
+    customers: int
+    rows: int
+    """Customers whose purchases could be read (some buying, some exposed and some open days)."""
+
+    @property
+    def share(self) -> float:
+        """Share of customers in bands that are charged a dent."""
+        return sum(1 for d in self.band_dents if d > 0) / len(self.band_dents) if self.band_dents else 0.0
+
+    @property
+    def effect(self) -> float:
+        """The average dent charged in those bands (0 when there are none)."""
+        charged = [d for d in self.band_dents if d > 0]
+        return sum(charged) / len(charged) if charged else 0.0
+
+
+class ContactHarm:
+    """How much one message makes this customer buy less, learned from what happened after past sends.
+
+    Some customers are put off by marketing: after a message they buy *less* than on their own
+    (sleeping dogs). No single clue gives them away, but the clues a CRM holds tilt the odds: many
+    messages and few clicks, coming in by direct visits rather than links, an unsubscribe or a
+    complaint on any channel. Which clues matter, and whether people who show them really buy less,
+    is learned from purchases:
+
+    * **The outcome** is each customer's buying around messages (`HarmEvidence`): given N purchases,
+      the share made in the week after a message is binomial, with odds = ratio x exposed / open
+      days. How much someone buys in general cancels out, so heavy buyers do not look responsive.
+    * **The clues** are each customer's own, shrunk towards the business's: click rate (by
+      `_CLICK_PSEUDO_SENDS` messages), direct-visit rate (by `_VISIT_PSEUDO_DAYS` days), and whether
+      they ever unsubscribed or complained. Two messages and no click is mostly the average customer;
+      twenty and no click is mostly themselves.
+    * **An index** orders customers from least to most likely to buy after a message: a logistic
+      regression of that outcome on the clues (with the offset, a ridge prior on each clue). It is
+      cross-fitted: each customer's index comes from the coefficients fitted on the *other* half of
+      the customers, so no one is placed low because they happened to buy less.
+    * **Bands** (`HARM_BANDS` equal slices of the index) each get their own ratio from their
+      members' purchases, shrunk towards the business's (`HARM_RATIO_SD`). The index's shape is not
+      trusted: in a shop where keen clickers buy more after messages, a straight line would call
+      the quiet loyal buyers harmed; the bands read what the quiet buyers actually do.
+    * **The charge** is the dent each band's purchases make credible: 1 minus the upper
+      `HARM_CREDIBLE` bound of its ratio, 0 if that bound is above 1. A shop where messages harm no
+      one has no band credibly below 1 and is charged nothing.
+
+    * **Each customer's own record** then updates their band's ratio (as the prior, spread
+      `HARM_RATIO_SD`): someone who keeps buying on open days and not after messages is charged the
+      dent their own purchases make credible, if it is larger than their band's.
+
+    `dent(customer)` is that charge, `p_harm(customer)` the chance their own ratio is below 1, and
+    `expected_loss(customer, organic)` = dent x their organic chance of buying in the window: what
+    bidders take off every option's uplift.
+    """
+
+    def __init__(
+        self,
+        *,
+        min_customers: int = HARM_MIN_CUSTOMERS,
+        ridge: float = HARM_RIDGE,
+        bands: int = HARM_BANDS,
+        ratio_sd: float = HARM_RATIO_SD,
+        credible: float = HARM_CREDIBLE,
+        rounds: int = HARM_ROUNDS,
+    ) -> None:
+        if ridge <= 0 or bands < 1 or ratio_sd <= 0 or not 0.5 <= credible < 1 or rounds < 1:
+            raise ValueError("ridge, bands, ratio_sd and rounds must be positive; credible in [0.5, 1)")
+        self.min_customers = min_customers
+        self.ridge = ridge
+        self.bands = bands
+        self.ratio_sd = ratio_sd
+        self.credible = credible
+        self.rounds = rounds
+        self.evidence: dict[str, HarmEvidence] = {}
+        self.data_start: datetime | None = None
+        """Where the business's records begin (set by the learner): evidence is counted from there."""
+        self.fit: HarmFit | None = None
+        self._dent: dict[str, float] = {}
+        self._p: dict[str, float] = {}
+        self._dirty = False
+
+    # -- evidence --
+
+    def observe(self, updates: Mapping[str, HarmEvidence]) -> None:
+        """Replace these customers' records (the learner's accumulators carry everything so far)."""
+        if updates:
+            self.evidence.update(updates)
+            self._dirty = True
+
+    def forget(self, customer_id: str) -> None:
+        self.evidence.pop(customer_id, None)
+        self._p.pop(customer_id, None)
+        self._dent.pop(customer_id, None)
+
+    # -- reading --
+
+    @property
+    def fitted(self) -> bool:
+        return self.fit is not None
+
+    @property
+    def share(self) -> float:
+        return self.fit.share if self.fit is not None else 0.0
+
+    @property
+    def effect(self) -> float:
+        return self.fit.effect if self.fit is not None else 0.0
+
+    def p_harm(self, customer_id: str) -> float:
+        """Chance that a message lowers the buying of customers like this one (0 without a record)."""
+        return self._p.get(customer_id, 0.0)
+
+    def dent(self, customer_id: str) -> float:
+        """Share of their own buying one message credibly costs this customer (0 without a record)."""
+        return self._dent.get(customer_id, 0.0)
+
+    def expected_loss(self, customer_id: str, organic: float) -> float:
+        """Chance of a purchase one message costs this customer: their dent x their organic chance."""
+        return self.dent(customer_id) * min(max(organic, 0.0), 1.0)
+
+    def likely(self, threshold: float = 0.5) -> int:
+        """Customers whose chance of being harmed is above `threshold`."""
+        return sum(1 for p in self._p.values() if p > threshold)
+
+    def describe(self) -> str:
+        """One plain sentence for logs and the decision view."""
+        fit = self.fit
+        if fit is None:
+            return "Not enough history yet to tell who is put off by messages."
+        if fit.share <= 0:
+            return (
+                f"No sign that messages put anyone off: across {fit.customers} customers, buying "
+                f"after a message runs at {fit.ratio:.2f} times their own."
+            )
+        return (
+            f"About {fit.share:.0%} of customers look put off by messages (few clicks, direct "
+            f"visits, past unsubscribes): they buy at least {fit.effect:.0%} less of their own in "
+            f"the week after one."
+        )
+
+    # -- fitting --
+
+    def refit(self) -> None:
+        """Fit the model to every record (a no-op when nothing changed since the last fit)."""
+        if not self._dirty and self.fit is not None:
+            return
+        self._dirty = False
+        ids = sorted(self.evidence)
+        if len(ids) < self.min_customers:
+            self.fit = None
+            self._p, self._dent = {}, {}
+            return
+        rows = [self.evidence[c] for c in ids]
+
+        def col(name: str) -> npt.NDArray[np.float64]:
+            return np.array([max(float(getattr(r, name)), 0.0) for r in rows], dtype=np.float64)
+
+        exposed_p, open_p = col("exposed_purchases"), col("open_purchases")
+        exposed_d, open_d = col("exposed_days"), col("open_days")
+        sends = col("sends")
+        clicks = np.minimum(col("clicks"), sends)
+        visits = col("direct_visits")
+        stopped = np.minimum(col("stops"), 1.0)
+        days = exposed_d + open_d
+
+        c_pool = max(float(clicks.sum()), 0.5) / max(float(sends.sum()), 1.0)
+        v_pool = max(float(visits.sum()), 0.5) / max(float(days.sum()), 1.0)
+        click_rate = (clicks + c_pool * _CLICK_PSEUDO_SENDS) / (sends + _CLICK_PSEUDO_SENDS)
+        visit_rate = (visits + v_pool * _VISIT_PSEUDO_DAYS) / (days + _VISIT_PSEUDO_DAYS)
+        raw = np.column_stack([np.log(click_rate / c_pool), np.log(visit_rate / v_pool), stopped])
+        scale = raw.std(axis=0)
+        feats = (raw - raw.mean(axis=0)) / np.where(scale > 1e-9, scale, 1.0)
+
+        n_buys = exposed_p + open_p
+        ok = (exposed_d > 0) & (open_d > 0) & (n_buys > 0)
+        offset = np.log(np.maximum(exposed_d, _TINY) / np.maximum(open_d, _TINY))
+        design = np.column_stack([np.ones(len(ids)), feats])
+
+        def fit_on(mask: npt.NDArray[np.bool_]) -> npt.NDArray[np.float64]:
+            m = mask & ok
+            return _logit_fit(design[m], exposed_p[m], n_buys[m], offset[m], self.ridge, self.rounds)
+
+        # cross-fitting: each half's index comes from the other half's coefficients
+        half = np.array([_stable_half(c) for c in ids], dtype=np.bool_)
+        index = np.where(half, feats @ fit_on(~half)[1:], feats @ fit_on(half)[1:])
+        everyone = fit_on(np.ones(len(ids), dtype=np.bool_))
+
+        grid, log_grid = _RATIO_GRID, np.log(_RATIO_GRID)
+        x = np.where(ok, exposed_d / np.maximum(days, _TINY), 0.5)
+        ll_grid = np.where(
+            ok[:, None],
+            exposed_p[:, None] * log_grid[None, :]
+            - n_buys[:, None] * np.log(grid[None, :] * x[:, None] + (1.0 - x[:, None])),
+            0.0,
+        )
+        business = log_grid[int(np.argmax(ll_grid.sum(axis=0)))]
+        prior = -0.5 * ((log_grid - business) / self.ratio_sd) ** 2
+        order = np.argsort(index, kind="stable")
+        dent = np.zeros(len(ids))
+        p_harm = np.zeros(len(ids))
+        band_ratios: list[float] = []
+        band_dents: list[float] = []
+        for members in np.array_split(order, self.bands):
+            score = ll_grid[members].sum(axis=0) + prior
+            post = np.exp(score - score.max())
+            post /= post.sum()
+            upper = float(grid[min(int(np.searchsorted(np.cumsum(post), self.credible)), len(grid) - 1)])
+            band_dent = max(0.0, 1.0 - upper)
+            band_ratio = float((post * grid).sum())
+            band_ratios.append(band_ratio)
+            band_dents.append(band_dent)
+            # Each member's own record, with their band as the prior: someone who keeps buying on
+            # open days and not after messages is charged what their own purchases make credible.
+            own = ll_grid[members] - 0.5 * ((log_grid - math.log(band_ratio)) / self.ratio_sd) ** 2
+            own_post = np.exp(own - own.max(axis=1, keepdims=True))
+            own_post /= own_post.sum(axis=1, keepdims=True)
+            cut = np.minimum((np.cumsum(own_post, axis=1) < self.credible).sum(axis=1), len(grid) - 1)
+            own_dent = np.maximum(1.0 - grid[cut], 0.0)
+            dent[members] = np.maximum(own_dent, band_dent)
+            p_harm[members] = own_post[:, grid < 1.0].sum(axis=1)
+        self.fit = HarmFit(
+            coefficients=tuple(float(b) for b in everyone[1:]),
+            ratio=float(math.exp(business)),
+            band_ratios=tuple(band_ratios),
+            band_dents=tuple(band_dents),
+            customers=len(ids),
+            rows=int(ok.sum()),
+        )
+        self._dent = {cid: float(d) for cid, d in zip(ids, dent.tolist(), strict=True) if d > 0}
+        self._p = {cid: float(p) for cid, p in zip(ids, p_harm.tolist(), strict=True)}
+
+
+def _stable_half(customer_id: str) -> bool:
+    """A fixed coin flip per customer (not Python's salted hash), for cross-fitting."""
+    return int.from_bytes(hashlib.blake2b(customer_id.encode(), digest_size=2).digest(), "big") % 2 == 1
+
+
+def _logit_fit(
+    design: npt.NDArray[np.float64],
+    hits: npt.NDArray[np.float64],
+    trials: npt.NDArray[np.float64],
+    offset: npt.NDArray[np.float64],
+    ridge: float,
+    rounds: int,
+) -> npt.NDArray[np.float64]:
+    """Binomial logistic regression with an offset, by Newton steps. `ridge` is the prior precision of
+    every coefficient but the first (the intercept)."""
+    k = design.shape[1]
+    beta = np.zeros(k)
+    if design.shape[0] == 0:
+        return beta
+    penalty = np.full(k, ridge)
+    penalty[0] = 0.0
+    for _ in range(rounds):
+        eta = offset + design @ beta
+        mu = 1.0 / (1.0 + np.exp(-np.clip(eta, -30.0, 30.0)))
+        grad = design.T @ (hits - trials * mu) - penalty * beta
+        hess = design.T @ (design * (trials * mu * (1.0 - mu))[:, None]) + np.diag(penalty) + 1e-6 * np.eye(k)
+        step = np.linalg.solve(hess, grad)
+        beta = beta + step
+        if float(np.abs(step).max()) < 1e-8:
+            break
+    return beta
+
+
+_HARM_MODELS: weakref.WeakKeyDictionary[object, ContactHarm] = weakref.WeakKeyDictionary()
+
+
+def contact_harm_of(model: object, *, create: bool = False) -> ContactHarm | None:
+    """The `ContactHarm` that travels with a response model (the learner fills it; bidders read it).
+
+    Keyed by the response model, so every bidder sharing a model shares what was learned about who
+    is put off by messages, and a fresh model starts without. None when there is none yet (and
+    `create` is False) or the model cannot be keyed."""
+    try:
+        found = _HARM_MODELS.get(model)
+        if found is None and create:
+            found = _HARM_MODELS[model] = ContactHarm()
+    except TypeError:  # not weak-referenceable or not hashable
+        return None
+    return found
+
+
+# --- offers: paid by everyone who buys while they are open ----------------------------------------
+
+OFFER_PRIOR_SPREAD = 2.0
+"""Before the evidence: what an offer adds to a message's uplift is centred on nothing, give or take
+twice what the message does without it. Wide on purpose: for someone who wants a deal a discount can
+triple what a message does, for someone who pays full price it adds nothing, and only the evidence
+can tell them apart. The default to no offer comes from the centre and from the gate (an offer must
+be expected to beat its plain version), not from a narrow prior that would also hide offers that work."""
+OFFER_PRIOR_FLOOR = 0.005
+"""The plain uplift the prior's spread is never taken below (half a point of purchase chance). Where
+the plain message does nothing (or harms), a spread of 2 x nothing would rule out any offer whatever
+its evidence; this keeps a well-measured discount believable there, while a thinly measured one is
+still shrunk to almost nothing."""
+OFFER_SENSITIVITY_PRIOR = 0.3
+"""Where `CustomerState.offer_sensitivity` starts (`autonomy.data.folder.OFFER_PRIOR`): a customer
+there is neither keen on offers nor indifferent to them."""
+OFFER_SENSITIVITY_MAX = 2.0
+"""A customer who buys only with offers can at most double what the evidence says an offer adds."""
+
+
+def offer_sensitivity_factor(state: CustomerState) -> float:
+    """How much more (or less) an offer moves this customer than their segment, from their own buying.
+
+    `offer_sensitivity` is the share of their purchases made with an offer, shrunk towards
+    `OFFER_SENSITIVITY_PRIOR` by the state folder. Someone who has bought ten times at full price
+    (about 0.07) would have bought anyway: an offer adds a quarter of what it adds for others. Someone
+    who buys only on offer (near 1) gets up to `OFFER_SENSITIVITY_MAX`. Unknown: 1."""
+    s = state.offer_sensitivity
+    if s is None or not math.isfinite(s):
+        return 1.0
+    return min(max(s, 0.0) / OFFER_SENSITIVITY_PRIOR, OFFER_SENSITIVITY_MAX)
+
+
+def shrink_offer_extra(extra: float, extra_sd: float, reference: float) -> tuple[float, float]:
+    """(posterior mean, posterior sd) of what an offer adds to uplift, shrunk towards nothing.
+
+    `extra` is the offer option's uplift minus its no-offer version's, `extra_sd` the spread of the
+    evidence behind that difference, `reference` the no-offer uplift. The prior is Normal(0, tau^2)
+    with tau = `OFFER_PRIOR_SPREAD` x the no-offer uplift (at least `OFFER_PRIOR_FLOOR`): an offer
+    must show it adds something before it is believed to. A difference measured on thousands of
+    sends passes almost unchanged; one measured on a handful is mostly ignored."""
+    tau = OFFER_PRIOR_SPREAD * max(reference, OFFER_PRIOR_FLOOR)
+    var = max(extra_sd, 0.0) ** 2
+    weight = tau * tau / (tau * tau + var)
+    return extra * weight, math.sqrt(weight * var)
+
+
+def organic_chance(model: ResponseModel, state: CustomerState, key: str) -> float:
+    """The customer's chance of buying in the window without the message.
+
+    A model with its own `organic(state)` answers for itself (the agent's click model); otherwise it
+    is the treated rate minus the uplift (the control rate, for `BetaResponseModel`)."""
+    own = getattr(model, "organic", None)
+    if callable(own):
+        value = own(state)
+        if isinstance(value, int | float) and math.isfinite(value):
+            return min(max(float(value), 0.0), 1.0)
+    mean, _ = model.predict(state, key)
+    return min(max(model.treated_rate(state, key) - max(mean, 0.0), 0.0), 1.0)
+
+
 # --- pricing helpers ----------------------------------------------------------------------------
 
 
@@ -295,6 +733,33 @@ def _option_std(model: ResponseModel, state: CustomerState, key: str, std: float
     belief = posterior(state.segment or ANY, key)
     var = getattr(belief, "var", None)
     return math.sqrt(var) if isinstance(var, float) and var >= 0 else std
+
+
+@dataclass(frozen=True)
+class _Raw:
+    """One option before pricing: its uplift as the response model predicts it (not yet boosted by
+    a refill window, shrunk for an offer or charged for harm) and the spread used for sampling."""
+
+    channel: Channel
+    offer_id: str
+    item: ContentItem
+    key: str
+    plain: float
+    std: float
+
+
+def _no_offer_references(raw: Sequence[_Raw]) -> dict[tuple[Channel, Format], _Raw]:
+    """The plain version an offer has to beat: per channel and format, the no-offer option with the
+    highest predicted uplift (lowest content id on a tie)."""
+    out: dict[tuple[Channel, Format], _Raw] = {}
+    for opt in raw:
+        if opt.offer_id != NO_OFFER.offer_id:
+            continue
+        where = (opt.channel, opt.item.format)
+        best = out.get(where)
+        if best is None or (opt.plain, best.item.content_id) > (best.plain, opt.item.content_id):
+            out[where] = opt
+    return out
 
 
 def _rank(bid: Bid) -> tuple[float, float, str]:
@@ -361,9 +826,11 @@ class GoalBidder:
         asset_of: AssetOf | None = None,
         carousel_template: bool = False,
         format_costs: Mapping[Format, float] | None = None,
+        harm: ContactHarm | None = None,
     ) -> None:
         if prune_z is not None and prune_z < 0:
             raise ValueError("prune_z must be >= 0")
+        self.harm = harm
         self.goal_id = brief.goal_id
         self.kind = kind
         self.own_spread = own_spread
@@ -430,8 +897,12 @@ class GoalBidder:
             self._labels.update((c.content_id, (c.theme.value, c.format)) for c in library)
         return out
 
-    def quote(self, state: CustomerState, ctx: DecisionContext) -> list[Bid]:
-        """What `bids()` returns, without remembering anything for learning: safe to call to explain."""
+    def quote(self, state: CustomerState, ctx: DecisionContext, *, prune: bool = True) -> list[Bid]:
+        """What `bids()` returns, without remembering anything for learning: safe to call to explain.
+
+        `prune=False` skips every `prune_z` step (the offer gate, the harm hold and the spread floor),
+        so an explanation can list what pruning left out and say so."""
+        prune_z = self.prune_z if prune else None
         if not matches(state, self.brief.audience, ctx.now):
             return []
         envelope = self.brief.envelope
@@ -446,26 +917,54 @@ class GoalBidder:
         boost = refill_boost(state) if self.refill and choice is not None else 1.0
         p14 = min(max(_score(state, REFILL_P14) or 0.0, 0.0), 1.0) if boost > 1.0 else 0.0
 
+        raw = self._raw_options(state, library, channels, choice)
+        if not raw:
+            return []
+        organic = organic_chance(self.response_model, state, raw[0].key)
+        harm = self.harm if self.harm is not None else contact_harm_of(self.response_model)
+        # Chance of a purchase one message costs them, if they are someone contact puts off: every
+        # option pays it, so it moves "do nothing" ahead of all of them alike.
+        loss = harm.expected_loss(state.customer_id, organic) if harm is not None else 0.0
+        references = _no_offer_references(raw)
+        sensitivity = offer_sensitivity_factor(state)
+
         out: list[Bid] = []
+        reference_net: dict[tuple[Channel, Format], float] = {}
+        gates: list[tuple[Bid, tuple[Channel, Format]]] = []
         for channel in channels:
             channel_cost = self.costs.get(channel, 0.0)
             for offer in envelope.offers:
                 group: list[Bid] = []
-                for item in self._options(library, channel, offer.offer_id, choice):
-                    key = action_key(channel, offer.offer_id, item.theme, item.format)
-                    mean, std = self.response_model.predict(state, key)
-                    if self.own_spread:
-                        std = _option_std(self.response_model, state, key, std)
-                    plain = min(max(mean, -1.0), 1.0)
+                for opt in (o for o in raw if o.channel is channel and o.offer_id == offer.offer_id):
+                    item = opt.item
+                    plain, std = opt.plain, opt.std
+                    extra_sd = 0.0
+                    # An offer in a format with no plain version is held to the plain text one.
+                    ref = references.get((channel, item.format)) or references.get((channel, Format.TEXT))
+                    if offer.offer_id != NO_OFFER.offer_id and ref is not None:
+                        # Believe only what the evidence shows an offer adds to its plain version.
+                        extra, extra_sd = shrink_offer_extra(
+                            plain - ref.plain, math.hypot(std, ref.std), ref.plain
+                        )
+                        if extra > 0:
+                            extra *= sensitivity
+                        plain = ref.plain + extra
+                        # Sampled against its plain version, an offer's own uncertainty is what it
+                        # adds: drawing the plain part's spread again for it would let the offer win
+                        # draws on noise the two share.
+                        std = extra_sd
                     # The window raises what a message can do, not what a harmful one costs.
                     uplift = min(plain * boost, 1.0) if plain > 0 else plain
                     std *= boost
                     p_redeem = 0.0
                     if offer.cost_per_redemption:
-                        p_redeem = self.response_model.treated_rate(state, key)
+                        # Everyone who buys while the offer is open redeems it, including those who
+                        # would have bought anyway: organic chance plus what the message adds.
+                        p_redeem = min(max(organic + max(plain, 0.0) - loss, 0.0), 1.0)
                         if boost > 1.0:
                             # Everyone who refills while the offer is open redeems it.
                             p_redeem = min(1.0, max(p_redeem, p14) + (uplift - plain))
+                    uplift -= loss
                     offer_cost = offer.cost_per_redemption * p_redeem
                     cost = channel_cost + self.format_costs.get(item.format, 0.0)
                     net = urgency * (uplift * value - offer_cost - cost)
@@ -480,29 +979,52 @@ class GoalBidder:
                         item_id=choice.item_id if names and choice is not None else None,
                         asset_id=self._asset(item)[0],
                     )
-                    group.append(
-                        Bid(
-                            goal_id=self.goal_id,
-                            action=action,
-                            uplift=uplift,
-                            value_if_converted=value,
-                            offer_cost=offer_cost,
-                            channel_cost=cost,
-                            urgency=urgency,
-                            expected_net=net,
-                            uncertainty=urgency * value * std,
-                        )
+                    bid = Bid(
+                        goal_id=self.goal_id,
+                        action=action,
+                        uplift=uplift,
+                        value_if_converted=value,
+                        offer_cost=offer_cost,
+                        channel_cost=cost,
+                        urgency=urgency,
+                        expected_net=net,
+                        uncertainty=urgency * value * std,
                     )
+                    if ref is not None and opt is ref:
+                        reference_net[(channel, item.format)] = net
+                    elif ref is not None and offer.offer_id != NO_OFFER.offer_id:
+                        gates.append((bid, (ref.channel, ref.item.format)))
+                    group.append(bid)
                 if not self.per_theme and group:
                     # Best by expected net, not uplift: the offer is paid by everyone who buys, so a
                     # theme that lifts more can still lose money when the offer costs more than the sale.
                     group = [max(group, key=_rank)]
                 out.extend(group)
-        if self.prune_z is not None and len(out) > 1:
+        if prune_z is not None and gates:
+            # Default to no offer: an offer is bid only when, on the evidence, it is expected to beat
+            # its own plain version. Its prior spread is no reason to try it: an offer that has not
+            # shown what it adds is paid for by every customer who would have bought anyway.
+            dropped = {
+                id(bid)
+                for bid, where in gates
+                if where in reference_net and bid.expected_net < reference_net[where]
+                # One the offer rules block cannot go out anyway: keep it, so the rule that blocks
+                # it (waiting for approval, say) is what the decision reports.
+                and _offer_allowed(bid, state, envelope, ctx)
+            }
+            out = [b for b in out if id(b) not in dropped]
+        if prune_z is not None and loss > 0 and out:
+            # Nor can any option be worth sending to someone whose expected harm is larger than every
+            # option's gain even prune_z standard deviations up: leave them alone.
+            harm_cost = urgency * loss * value
+            z = prune_z
+            if harm_cost > max(b.expected_net + harm_cost + z * b.uncertainty for b in out):
+                return []
+        if prune_z is not None and len(out) > 1:
             # The floor is set by options the offer rules let through for this customer: a discount
             # they asked not to get, one waiting for approval or one the budget cannot pay must not
             # crowd out the plain message the policy could still send.
-            z = self.prune_z
+            z = prune_z
             sendable = [b for b in out if _offer_allowed(b, state, envelope, ctx)]
             if sendable:
                 floor = max(b.expected_net - z * b.uncertainty for b in sendable)
@@ -515,6 +1037,25 @@ class GoalBidder:
                 b.action.content_id or "",
             )
         )
+        return out
+
+    def _raw_options(
+        self,
+        state: CustomerState,
+        library: Sequence[ContentItem],
+        channels: Sequence[Channel],
+        choice: ItemChoice | None,
+    ) -> list[_Raw]:
+        """Every allowed option with the response model's uplift and spread, in bidding order."""
+        out: list[_Raw] = []
+        for channel in channels:
+            for offer in self.brief.envelope.offers:
+                for item in self._options(library, channel, offer.offer_id, choice):
+                    key = action_key(channel, offer.offer_id, item.theme, item.format)
+                    mean, std = self.response_model.predict(state, key)
+                    if self.own_spread:
+                        std = _option_std(self.response_model, state, key, std)
+                    out.append(_Raw(channel, offer.offer_id, item, key, min(max(mean, -1.0), 1.0), std))
         return out
 
     def learn(self, rewards: Sequence[Reward], decisions: Mapping[str, Decision]) -> None:

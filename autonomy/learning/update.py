@@ -11,6 +11,13 @@ purchase list, so it learns response and (when told each decision's `contacts_7d
 value.
 
 Use one of these or `AutonomousPolicy.learn`, not both: they feed the same response model.
+
+**Who contact puts off.** `update_models` also keeps each customer's `ContactEvidence` (buying in the
+week after messages against their own open days, clicks, stops, direct visits; see
+`observations.contact_evidence`) and refits the `ContactHarm` model that travels with the response
+model (`autonomy.decide.bidders.contact_harm_of`). The first pass, given the client's history, learns
+from their past campaigns; each night adds what is new. Bidders sharing the response model then
+charge every option the expected harm, and leave alone anyone it clearly outweighs.
 """
 
 from __future__ import annotations
@@ -19,14 +26,17 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from autonomy.contracts import ContentItem, Decision, DecisionKind, Event, Group, Reward
+from autonomy.contracts import ContentItem, Decision, DecisionKind, Event, EventType, Group, Reward
+from autonomy.decide.bidders import EVIDENCE_HALF_LIFE_DAYS, ContactHarm, contact_harm_of
 from autonomy.decide.models import FatigueObservation, ResponseObservation, action_key
 from autonomy.learning.bundle import LearnedValueModel, ModelBundle
 from autonomy.learning.observations import (
     DEFAULT_IPW_CLIP,
     DEFAULT_TREATED_GROUPS,
+    ContactEvidence,
     ObservationSet,
     SegmentOf,
+    contact_evidence_all,
     decision_observations,
     format_of,
     holdout_observations,
@@ -116,6 +126,7 @@ def update_models(
     overlap_weighting: bool = True,
     require_send: bool = True,
     learn_value: bool = True,
+    learn_harm: bool = True,
 ) -> LearnReport:
     """Learn from every outcome window that has closed by `now`, once; returns what was learned.
 
@@ -130,6 +141,7 @@ def update_models(
       from `events_by_customer` is not retried: the night's windows move on without them (counted
       as `no_events`), so pass every holdout customer's events.
     * `segment_of`: a customer's segment; None pools everyone in one segment.
+    * `learn_harm`: also update who contact puts off (`learn_contact_harm`).
 
     See `observations.py` for the windows, the control-group rule and the weights. Time is `now`,
     never the clock.
@@ -175,7 +187,52 @@ def update_models(
     if learn_value and isinstance(bundle.value, LearnedValueModel):
         obs.merge(value_observations(events_by_customer, now, learned=bundle.learned_purchases))
     _apply(bundle, obs)
+    if learn_harm:
+        learn_contact_harm(bundle, events_by_customer, content_by_id, now, horizon_days)
     return LearnReport.from_set(obs)
+
+
+def learn_contact_harm(
+    bundle: ModelBundle,
+    events_by_customer: Mapping[str, Sequence[Event]],
+    content_by_id: Mapping[str, ContentItem],
+    now: datetime,
+    horizon_days: int,
+) -> ContactHarm | None:
+    """Add the events in `events_by_customer` up to `now` to each customer's contact evidence and
+    refit the contact-harm model of `bundle.response` (made on first use). Each moment is counted
+    once: a customer's evidence carries on from where the last pass stopped, so the events may be the
+    whole log or only what is still in memory. Returns the model (None if the response model cannot
+    carry one)."""
+    harm = contact_harm_of(bundle.response, create=True)
+    if harm is None:
+        return None
+    if harm.data_start is None:
+        # Where the business's records begin: its first purchase on file (as the agent's segments
+        # count frequency), so the time before an import is not taken for days without buying.
+        firsts = [
+            e.ts
+            for events in events_by_customer.values()
+            for e in events
+            if e.type is EventType.PURCHASE and e.ts < now
+        ]
+        harm.data_start = min(firsts) if firsts else None
+    previous = {
+        cid: e for cid in events_by_customer if isinstance(e := harm.evidence.get(cid), ContactEvidence)
+    }
+    harm.observe(
+        contact_evidence_all(
+            events_by_customer,
+            now,
+            horizon_days,
+            previous,
+            content_by_id=content_by_id,
+            data_start=harm.data_start,
+            half_life_days=EVIDENCE_HALF_LIFE_DAYS,
+        )
+    )
+    harm.refit()
+    return harm
 
 
 def learn_from_rewards(

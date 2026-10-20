@@ -35,6 +35,11 @@ them back as `LoggedSend`s (channel, offer, theme, whether delivered and clicked
 chance of going out stands for ten customers like it. The agent warm-starts its click model from
 them (`autonomy.runtime.agent.AgentPolicy`).
 
+**Contact evidence.** `contact_evidence` keeps, per customer, what they did around messages: days
+inside and outside the week after a delivered message and the purchases in each, clicks, stops and
+direct visits, recency-weighted when asked. `autonomy.learning.update` feeds it to the contact-harm
+model (`autonomy.decide.bidders.ContactHarm`), which learns who buys less after a message.
+
 **Overlapping control windows.** Daily do-nothing decisions with a 14-day horizon put one purchase
 in up to 14 control observations. That does not bias the rate, but it would make the control
 posterior about 14 times too sure of itself. With `overlap_weighting=True` (the default) a control
@@ -48,8 +53,9 @@ what has already been learned and applies the result.
 from __future__ import annotations
 
 import bisect
+import math
 from collections.abc import Callable, Container, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, timedelta
 
 from autonomy.contracts import Channel, ContentItem, Decision, DecisionKind, Event, EventType, Group
@@ -583,3 +589,245 @@ def weighted_rate(outcomes: Sequence[bool], weights: Sequence[float]) -> tuple[f
         return 0.0, 0.0
     rate = sum(w for y, w in zip(outcomes, weights, strict=True) if y) / sw
     return rate, sw * sw / sum(w * w for w in weights)
+
+
+# --- contact evidence: what each customer did around messages, for the contact-harm model ---------
+
+DIRECT_VISIT_GAP = timedelta(days=1)
+"""A visit within a day of the customer's last click came through the message; any other visit is
+"direct" (they came on their own)."""
+_EVENT_ORDER: Mapping[EventType, int] = {EventType.PURCHASE: 0}
+"""At one timestamp a purchase is taken to come before a send: a message cannot cause a purchase
+made at the moment it went out."""
+
+
+@dataclass
+class ContactEvidence:
+    """One customer's record around messages, summed from their events up to `until`.
+
+    Time is split into **exposed** days (inside `[send, send + horizon)` of a delivered message) and
+    **open** days (no message working on them), with the purchases made in each. A customer whose
+    purchases fall off after messages, against their own buying on open days, is someone contact
+    harms. Offer windows are the exposed days in which an offer from a message was open.
+
+    The clues a real CRM holds sit beside it: delivered messages and clicks (someone who never clicks
+    after many messages), unsubscribes and complaints on any channel, visits and the "direct" ones
+    (not within `DIRECT_VISIT_GAP` of a click), and purchases within `LOGGED_CLICK_WINDOW` of a click
+    (message-attributed buying).
+
+    It is an accumulator: `contact_evidence` adds the events in `[until, now)` and returns a new one,
+    so a nightly caller that keeps only recent events still counts each moment once. Events that
+    arrive with a timestamp before `until` are not counted.
+    """
+
+    since: datetime | None = None
+    """The first moment counted (the customer's first event)."""
+    until: datetime | None = None
+    """Everything before this has been counted."""
+    exposed_until: datetime | None = None
+    offer_until: datetime | None = None
+    last_click_at: datetime | None = None
+    exposed_days: float = 0.0
+    exposed_purchases: float = 0.0
+    offer_days: float = 0.0
+    """The part of `exposed_days` with an offer open (from a message carrying one)."""
+    offer_purchases: float = 0.0
+    open_days: float = 0.0
+    open_purchases: float = 0.0
+    sends: float = 0.0
+    """Messages that reached the customer (SEND events not reported failed, bounced or blocked)."""
+    offer_sends: float = 0.0
+    clicks: float = 0.0
+    stops: float = 0.0
+    """Unsubscribes and complaints, on any channel."""
+    visits: float = 0.0
+    direct_visits: float = 0.0
+    message_purchases: float = 0.0
+
+    @property
+    def days(self) -> float:
+        """Days observed (`since` to `until`)."""
+        return self.exposed_days + self.open_days
+
+    @property
+    def purchases(self) -> float:
+        return self.exposed_purchases + self.open_purchases
+
+
+def _offer_of(event: Event, content_by_id: Mapping[str, ContentItem]) -> str:
+    offer = event.attrs.get("offer_id")
+    if isinstance(offer, str):
+        return offer
+    content = event.attrs.get("content_id")
+    item = content_by_id.get(content) if isinstance(content, str) else None
+    return item.offer_id if item is not None else "none"
+
+
+def contact_evidence(
+    events: Sequence[Event],
+    now: datetime,
+    horizon_days: int,
+    previous: ContactEvidence | None = None,
+    *,
+    content_by_id: Mapping[str, ContentItem] | None = None,
+    no_offer: str = "none",
+    data_start: datetime | None = None,
+    half_life_days: float | None = None,
+) -> ContactEvidence:
+    """`previous` plus the events in `[previous.until, now)` (all events before `now` the first time).
+
+    The first time, counting starts at the customer's first event or `data_start`, whichever is
+    later: an import of six months of orders for customers who signed up years ago would otherwise
+    count years of "open days without a purchase" and make every message look like it sells. When
+    the customer's record opens with a purchase (their first order is why they are on file), that
+    purchase is not counted: it is the selection, not their buying.
+
+    With `half_life_days`, every count and every day is weighted by how recent it is (a record that
+    old counts half): people change, and someone who has stopped answering messages over the last
+    quarter is better described by that quarter than by the year before. The weights are those at
+    `now`; what was counted before is decayed to `now` first, so the result does not depend on how
+    often it is called.
+
+    `events` may be the customer's whole log or only what is still in memory, as long as it holds
+    every event since `previous.until`. A send's window is `horizon_days` long, as in learning. A
+    SEND whose decision is reported FAIL, BOUNCE or BLOCK (and never DELIVER) did not reach the
+    customer and exposes nothing. Pure: `previous` is not changed.
+    """
+    if horizon_days < 1:
+        raise ValueError("horizon_days must be at least 1")
+    if half_life_days is not None and half_life_days <= 0:
+        raise ValueError("half_life_days must be positive")
+    horizon = timedelta(days=horizon_days)
+    library = content_by_id or {}
+    acc = ContactEvidence() if previous is None else replace(previous)
+    start = acc.until
+    batch = sorted(
+        (e for e in events if e.ts < now and (start is None or e.ts >= start)),
+        key=lambda e: (e.ts, _EVENT_ORDER.get(e.type, 1), e.event_id),
+    )
+    if start is None:
+        if not batch:
+            return acc
+        first = batch[0].ts
+        start = first if data_start is None else max(first, data_start)
+        batch = [e for e in batch if e.ts >= start]
+        if start == first and any(e.type is EventType.PURCHASE and e.ts == start for e in batch):
+            # A record that opens with a purchase (an order import) is on file *because* of it:
+            # counting it would add one open-day purchase to every such customer and make
+            # messages look as if they put everyone off. Counting starts just after it.
+            batch = [e for e in batch if not (e.type is EventType.PURCHASE and e.ts == start)]
+        acc.since = start
+    if now <= start:
+        return acc
+    rate = math.log(2.0) / half_life_days if half_life_days is not None else 0.0
+
+    def weight(ts: datetime) -> float:
+        """An event's weight at `now`."""
+        return math.exp(-rate * max((now - ts).total_seconds(), 0.0) / 86_400.0)
+
+    def days(a: datetime, b: datetime) -> float:
+        """Weighted days in `[a, b)`."""
+        span = max((b - a).total_seconds(), 0.0) / 86_400.0
+        if span <= 0:
+            return 0.0
+        if rate == 0:
+            return span
+        return (weight(b) - weight(a)) / rate
+
+    if previous is not None and rate > 0:
+        old = weight(start)
+        for f in fields(acc):
+            if f.type in ("float", float):
+                setattr(acc, f.name, getattr(acc, f.name) * old)
+    delivered = {e.decision_id for e in batch if e.type is EventType.DELIVER and e.decision_id is not None}
+    failed = {
+        e.decision_id
+        for e in batch
+        if e.type in _UNDELIVERED_TYPES and e.decision_id is not None and e.decision_id not in delivered
+    }
+    clicked: set[str] = set()
+    t = start
+
+    def advance(to: datetime) -> None:
+        total = days(t, to)
+        exposed = (
+            days(t, min(to, acc.exposed_until))
+            if acc.exposed_until is not None and acc.exposed_until > t
+            else 0.0
+        )
+        offer = (
+            days(t, min(to, acc.offer_until)) if acc.offer_until is not None and acc.offer_until > t else 0.0
+        )
+        acc.exposed_days += exposed
+        acc.open_days += max(total - exposed, 0.0)
+        acc.offer_days += min(offer, exposed)
+
+    for e in batch:
+        advance(e.ts)
+        t = e.ts
+        w = weight(e.ts)
+        if e.type is EventType.SEND:
+            if e.decision_id is not None and e.decision_id in failed:
+                continue
+            acc.sends += w
+            end = e.ts + horizon
+            acc.exposed_until = end if acc.exposed_until is None else max(acc.exposed_until, end)
+            if _offer_of(e, library) != no_offer:
+                acc.offer_sends += w
+                acc.offer_until = end if acc.offer_until is None else max(acc.offer_until, end)
+        elif e.type is EventType.PURCHASE:
+            if acc.exposed_until is not None and e.ts < acc.exposed_until:
+                acc.exposed_purchases += w
+                if acc.offer_until is not None and e.ts < acc.offer_until:
+                    acc.offer_purchases += w
+            else:
+                acc.open_purchases += w
+            if acc.last_click_at is not None and e.ts - acc.last_click_at <= LOGGED_CLICK_WINDOW:
+                acc.message_purchases += w
+        elif e.type is EventType.CLICK:
+            if e.decision_id is not None:
+                if e.decision_id in clicked:
+                    continue
+                clicked.add(e.decision_id)
+            acc.clicks += w
+            acc.last_click_at = e.ts
+        elif e.type in _STOP_TYPES:
+            acc.stops += w
+        elif e.type is EventType.VISIT:
+            acc.visits += w
+            if acc.last_click_at is None or e.ts - acc.last_click_at > DIRECT_VISIT_GAP:
+                acc.direct_visits += w
+    advance(now)
+    acc.until = now
+    return acc
+
+
+def contact_evidence_all(
+    events_by_customer: Mapping[str, Sequence[Event]],
+    now: datetime,
+    horizon_days: int,
+    previous: Mapping[str, ContactEvidence] | None = None,
+    *,
+    content_by_id: Mapping[str, ContentItem] | None = None,
+    data_start: datetime | None = None,
+    half_life_days: float | None = None,
+) -> dict[str, ContactEvidence]:
+    """`contact_evidence` for every customer in `events_by_customer` (sorted, so runs repeat).
+
+    Only the customers given are returned; the caller merges them into what it keeps. `data_start`
+    is where the business's records begin (see `contact_evidence`)."""
+    known = previous or {}
+    out: dict[str, ContactEvidence] = {}
+    for cid in sorted(events_by_customer):
+        found = contact_evidence(
+            events_by_customer[cid],
+            now,
+            horizon_days,
+            known.get(cid),
+            content_by_id=content_by_id,
+            data_start=data_start,
+            half_life_days=half_life_days,
+        )
+        if found.until is not None:
+            out[cid] = found
+    return out

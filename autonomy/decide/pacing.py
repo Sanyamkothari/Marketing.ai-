@@ -10,7 +10,12 @@ outcomes and gives every (goal, channel) a pressure in [0, 1]:
 * rising as one more complaint (or unsubscribe) would bring the breaker's own test close to
   tripping, weighted by how much this channel's rate pushes the goal towards the limit (a channel
   well under the limit dilutes the goal's rate rather than raising it);
-* 1, which blocks the channel (rule code `pacing`), when one more such event could trip the rule.
+* 1, which blocks the channel (rule code `pacing`), when one more such event could trip the rule;
+* with `step_aside=True`, back to 0 once the goal is clearly over the limit (`in_breach`):
+  slowing down then only holds the goal just short of the breaker's stop, and the sending resumes
+  as the week rolls on, so a real storm would trickle on for weeks instead of being stopped (seen
+  in the Gym's complaint storm, docs/v2/CONTACT_LESS.md). Off by default, which keeps the
+  original behaviour: hold the channel near the trip point however far over the limit it is.
 
 The policy turns a pressure below 1 into a surcharge on that channel's bids, on top of the attention
 price: `reference x p / (1 - p)`, where the reference is what a typical message on the channel is
@@ -109,6 +114,7 @@ class Pacer:
         min_events: int = PACING_MIN_EVENTS,
         lookahead: float = LOOKAHEAD,
         start: float = PRESSURE_START,
+        step_aside: bool = False,
     ) -> None:
         if window <= timedelta(0) or z < 0 or min_events < 1 or lookahead < 0:
             raise ValueError("need a positive window, z >= 0, min_events >= 1 and lookahead >= 0")
@@ -119,6 +125,7 @@ class Pacer:
         self.min_events = min_events
         self.lookahead = lookahead
         self.start = start
+        self.step_aside = step_aside
         self._outcomes: deque[_Outcome] = deque()
         self._unsub_baseline: dict[str, float] = {}
         self._counted_at: datetime | None = None
@@ -235,6 +242,19 @@ class Pacer:
         count = hits / self.min_events
         return min(interval, count)
 
+    def in_breach(self, goal_id: str, metric: StopMetric, threshold: float, now: datetime) -> bool:
+        """Whether the goal is already clearly over the limit: the lower end of the interval on its
+        rate this week, with no lookahead, is above the threshold. Pacing is for a goal that could
+        still be under the limit; one that is plainly over it should reach the breaker's stop, not
+        be held just short of it and let go again when the week rolls on."""
+        if threshold <= 0:
+            return False
+        self._count(now)
+        goal = self._goal.get(goal_id)
+        if goal is None or goal.delivered <= 0:
+            return False
+        return wilson_low(goal.hits(metric), goal.delivered, self.z) > threshold
+
     def relevance(
         self, goal_id: str, channel: Channel, metric: StopMetric, threshold: float, now: datetime
     ) -> float:
@@ -264,6 +284,8 @@ class Pacer:
                     continue
                 threshold = rule.threshold * base
             else:
+                continue
+            if self.step_aside and self.in_breach(goal_id, rule.metric, threshold, now):
                 continue
             ramp = self._ramp(self.closeness(goal_id, rule.metric, threshold, now))
             if ramp <= 0:
