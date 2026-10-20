@@ -29,6 +29,8 @@ make help       # every target
 Docker: `make image` builds the API image, `make compose-up` runs it with both Postgres servers on
 localhost (`make compose-down` stops it). Step-by-step: [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
+A supervised pilot for one client on one small VM (HTTPS, backups, upgrades, rollback): [deploy/pilot/README.md](deploy/pilot/README.md).
+
 ## Where things are
 
 * `engine/`: the engine (data checks and fixes in `engine/doctor/`, who-to-contact rules in `engine/decide/`, training, scoring, measurement).

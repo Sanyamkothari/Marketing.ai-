@@ -1,0 +1,85 @@
+# The pilot stack for ONE client on ONE small VM: the repo's api image, Caddy in front of it for
+# HTTPS, one data volume. Run everything from this directory:
+#
+#   cp .env.example .env && chmod 600 .env     # then fill it in
+#   docker compose build api                   # builds marketing-ai:$IMAGE_TAG from this checkout
+#   docker compose up -d
+#
+# README.md has the whole procedure. Local backends only (SQLite, files on the volume, training in
+# the API process): the path every v1 journey was walked on. The repo-root docker-compose.yml is the
+# developer stack and is not used here.
+
+name: marketing-ai-pilot
+
+services:
+  api:
+    build:
+      context: ../..
+      target: api
+    image: marketing-ai:${IMAGE_TAG:-pilot-1}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Fixed here, not in .env: the volume below is mounted at this path.
+      MARKETING_AI_DATA_DIR: /var/lib/marketing-ai
+      # Refuse to start with the settings a pilot cannot run without, in words, before the API does
+      # (the connections key in particular is otherwise only missed at the first "save AI key").
+      MARKETING_AI_ENV: ${MARKETING_AI_ENV:?set MARKETING_AI_ENV=prod in .env}
+      MARKETING_AI_CLIENT_ID: ${MARKETING_AI_CLIENT_ID:?set MARKETING_AI_CLIENT_ID in .env}
+      MARKETING_AI_CORS_ORIGINS: ${MARKETING_AI_CORS_ORIGINS:?set MARKETING_AI_CORS_ORIGINS=https://<DOMAIN> in .env}
+      MARKETING_AI_PRIVACY_SALT: ${MARKETING_AI_PRIVACY_SALT:?set MARKETING_AI_PRIVACY_SALT in .env}
+      MARKETING_AI_CONNECTIONS_KEY: ${MARKETING_AI_CONNECTIONS_KEY:?set MARKETING_AI_CONNECTIONS_KEY in .env}
+    volumes:
+      # A NAMED volume, not a host folder: Docker copies the image's ownership (uid 10001, the
+      # non-root user the image runs as) into a new one, so the API can write to it.
+      - data:/var/lib/marketing-ai
+    # No "ports": the API is reachable only from Caddy, on the compose network. Never publish 8000.
+    expose:
+      - "8000"
+    healthcheck:
+      # python, not curl: the slim image has no curl. Same probe as the Dockerfile's HEALTHCHECK.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # AutoGluon's import is heavy; the Dockerfile's 120 s is a chosen number, not a measurement.
+      start_period: 120s
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+
+  caddy:
+    image: caddy:2.8.4
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The certificates. Losing this volume only means asking Let's Encrypt again.
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+volumes:
+  data:
+  caddy_data:
+  caddy_config:

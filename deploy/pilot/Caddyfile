@@ -1,0 +1,44 @@
+# HTTPS for one client's pilot VM. Caddy gets and renews the certificate for {$DOMAIN} by itself
+# (Let's Encrypt), so DNS must already point here and ports 80 and 443 must be reachable.
+# DOMAIN and ACME_EMAIL come from .env through docker-compose.yml.
+{
+	email {$ACME_EMAIL}
+	servers {
+		timeouts {
+			# A client that opens a connection and never sends its request is cut off.
+			read_header 30s
+			idle 5m
+		}
+	}
+}
+
+{$DOMAIN} {
+	# Largest upload the product accepts is 2 GB (configs/engine.yaml validation.max_file_size_mb)
+	# plus multipart overhead; the API enforces its own, tighter, per-request limits behind this one.
+	request_body {
+		max_size 2100MiB
+	}
+
+	encode zstd gzip
+
+	reverse_proxy api:8000 {
+		# Caddy replaces any X-Forwarded-For the client sent with the real peer address, which is
+		# what MARKETING_AI_TRUSTED_PROXY_HOPS=1 relies on for the sign-in rate limit.
+		health_uri /healthz
+		health_interval 30s
+		transport http {
+			dial_timeout 5s
+			# Some calls (profiling or scoring a large file) answer only when they are done.
+			response_header_timeout 15m
+		}
+	}
+
+	# The API already adds the security headers (nosniff, frame-ancestors, HSTS on prod); Caddy only
+	# hides what it is.
+	header -Server
+
+	log {
+		output stdout
+		format json
+	}
+}
