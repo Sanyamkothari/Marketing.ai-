@@ -159,8 +159,13 @@ def preview_cell(value: Any) -> str:
         return ""
     if isinstance(value, bool):
         return str(value)
+    # a length of time reads as an integer to `numbers`, and would show as a number of nanoseconds
+    if isinstance(value, np.timedelta64):
+        return "" if np.isnat(value) else masked_cut(str(pd.Timedelta(value)), PREVIEW_CELL_CHARS)
     if isinstance(value, numbers.Integral):
         return str(int(value))
+    if isinstance(value, np.datetime64):  # a datetime column's numpy scalar is not a number of nanoseconds
+        return "" if np.isnat(value) else preview_cell(pd.Timestamp(value))
     if isinstance(value, (int, float)) or hasattr(value, "dtype"):
         try:
             dtype = getattr(value, "dtype", None)

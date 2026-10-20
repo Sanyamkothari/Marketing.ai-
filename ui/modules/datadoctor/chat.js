@@ -20,6 +20,7 @@ import { esc } from "../../dom.js";
 import { count } from "../../format.js";
 import { goalName, userText } from "../../labels.js";
 import { AI_NOT_CONNECTED_SENTENCE, AI_SETTINGS_HREF } from "../../availability.js";
+import { minutesText } from "../campaigns/run_rules.js";
 import { sentHtml, plain, TOOL_PHRASES } from "../agent/sent.js";
 import { samplesHtml } from "./plan_view.js";
 import { AI_CONSENT_BUTTON, AI_CONSENT_LINE, AI_SPENT_LINE, VERDICTS, namesOf, standingHtml, userTextIn } from "./view.js";
@@ -348,7 +349,7 @@ export function readyHtml(r, ctx) {
     return indented(
       `<section class="ddc-ready" data-dds-ready="start"><h3 class="dds-group-t">Ready to start</h3><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p>${
         r.sentence ? `<blockquote class="dds-sentence" data-dds-approved-sentence>${userTextIn(r.sentence, names)}</blockquote>` : ""
-      }${left}${ctx.startHtml || ""}</section>`,
+      }${left}${ctx.alertHtml || ""}${ctx.startHtml || ""}</section>`,
     );
   }
   const stops = (r.stops || [])
@@ -370,14 +371,14 @@ export function readyHtml(r, ctx) {
       }
       return `<label class="dds-tick ddc-tick" data-dds-confirm-row="${esc(c.item_id)}"><input type="checkbox" data-dds-confirm="${esc(c.item_id)}"${ctx.confirms.has(c.item_id) ? " checked" : ""}${ctx.busy ? " disabled" : ""}><span class="dds-item-body"><span class="dds-item-t">${esc(
         "I agree: ",
-      )}${userTextIn(c.sentence, names)}</span><span class="dds-item-sub">${esc(`${c.required ? "Needed to go on. " : "Left out unless you agree. "}Why it needs your yes: ${plain(c.why)}${c.separate ? ", from someone other than whoever suggested it" : ""}.`)}</span></span></label>`;
+      )}${userTextIn(c.sentence, names)}</span><span class="dds-item-sub">${esc(`${c.shown ? "Shown above, with Undo. " : ""}${c.required ? "Needed to go on. " : "Left out unless you agree. "}Why it needs your yes: ${plain(c.why)}${c.separate ? ", from someone other than whoever suggested it" : ""}.`)}</span></span></label>`;
     })
     .join("");
   const speeds = (r.speeds || []).length
     ? `<div class="dds-actions" role="group" aria-label="How long to learn" data-dds-speeds>${r.speeds
         .map((sp) =>
           button({
-            label: `${sp.name}: about ${sp.minutes} minutes${sp.recommended ? " (recommended)" : ""}`,
+            label: `${sp.name}: about ${minutesText(sp.minutes)}${sp.recommended ? " (recommended)" : ""}`,
             kind: ctx.speed === sp.id ? "primary" : "secondary",
             size: "sm",
             attrs: `data-dds-speed="${esc(sp.id)}" aria-pressed="${ctx.speed === sp.id}"`,
@@ -387,11 +388,15 @@ export function readyHtml(r, ctx) {
     : "";
   const ok = approveAllowed(r, ctx);
   const label = approveLabel(ctx);
-  const hold = r.blocked ? `<p class="dds-why" data-dds-approve-hold>${esc("A change in the plan needs someone else's own yes first.")}</p>` : "";
+  const hold = r.blocked
+    ? `<p class="dds-why" data-dds-approve-hold>${esc("A change in the plan needs someone else's own yes first.")}</p>`
+    : r.hold
+      ? `<p class="dds-why" data-dds-approve-hold>${esc(r.hold)}</p>`
+      : "";
   return indented(
     `<section class="ddc-ready" data-dds-ready="approve" aria-labelledby="ddc-ready-t"><h3 class="dds-group-t" id="ddc-ready-t">Ready to start</h3><blockquote class="dds-sentence" id="dds-approve-sentence" data-dds-approve-sentence>${esc(
       r.sentence,
-    )}</blockquote>${notesHtml}${stops}${yes}${hold}${speeds}${ctx.approveHtml || ""}<div data-dds-approve-note>${leavesOutHtml(r, ctx)}</div><div class="dds-actions">${button({
+    )}</blockquote>${notesHtml}${stops}${yes}${hold}${speeds}${ctx.approveHtml || ""}${ctx.alertHtml || ""}<div data-dds-approve-note>${leavesOutHtml(r, ctx)}</div><div class="dds-actions">${button({
       label,
       kind: "primary",
       attrs: `data-dds-approve-start aria-describedby="dds-approve-sentence"`,
@@ -417,7 +422,7 @@ export function leavesOutHtml(r, ctx) {
 
 /** Whether the one click may go: every stop and every needed own yes is ticked, and nobody else must agree first. */
 export function approveAllowed(r, ctx) {
-  if (!r || r.stage !== "approve" || r.blocked) return false;
+  if (!r || r.stage !== "approve" || r.blocked || r.hold) return false;
   if ((r.stops || []).some((s) => !ctx.stops.has(s.key))) return false;
   return !(r.confirmations || []).some((c) => c.required && c.can_agree && !ctx.confirms.has(c.item_id));
 }

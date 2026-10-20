@@ -717,6 +717,23 @@ def test_diagnose_files_and_what_can_this_power_equal_the_wrapped_functions(agen
     assert verdicts == [v.model_dump(mode="json") for v in direct]
 
 
+def test_a_table_that_powers_many_goals_still_gets_its_verdicts_with_the_best_first_looks() -> None:
+    """Every ready/check verdict carries a first look; five goals together went over the 16 KB budget and stopped
+    the whole visit ("Something stopped the check") for an ordinary customer table."""
+    from engine.config import load_use_case
+    from tests.unit.doctor import chat_support, visit_support
+
+    config = load_use_case("targeted-advertisement")
+    loaded = visit_support.loaded("u_many", "orders.csv", chat_support.orders_frame(), config)
+    ctx = DataToolContext(
+        files=(loaded,), offers=tuple(Offer(config=config, stage="") for _ in range(5)), principal=VIEWER
+    )
+    verdicts = data_registry().call("what_can_this_power", {}, ctx).output["use_cases"]
+    assert len(verdicts) == 5, "every goal still has its verdict"
+    assert verdicts[0]["first_look"] is not None, "the best goal keeps its first look"
+    assert verdicts[-1]["first_look"] is None, "the last ones give theirs up to fit"
+
+
 def test_unified_on_reads_the_switch_and_is_off_without_it(agent: AgentContext) -> None:
     class Section:
         unified = True

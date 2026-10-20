@@ -126,7 +126,9 @@ class UseCaseReadiness(StrictBase):
         default=None,
         description=(
             "For a `ready` or `check` verdict: the file's rate of 'yes' and the rate by its most informative "
-            "columns, counted on the rows read (`engine.doctor.first_look`). Null otherwise."
+            "columns, counted on the rows read (`engine.doctor.first_look`). Null otherwise, and also for the "
+            "lower-ranked verdicts of a table that powers many goals, left out to stay within the answer's size "
+            "budget: a null here does not mean the verdict is not ready."
         ),
     )
 

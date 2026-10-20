@@ -519,3 +519,19 @@ def test_the_ledgers_steps_carry_their_samples_once_the_plan_is_counted(tmp_path
     assert samples["before"] and all(row == {"marketing_opt_in": "0"} for row in samples["before"])
     assert samples["after"] == []
     assert view.preview is not None and len(view.preview.files[0].after) == PREVIEW_ROWS
+
+
+def test_a_date_column_is_shown_as_dates_not_as_nanoseconds() -> None:
+    from engine.doctor.preview import masked_rows
+
+    frame = pd.DataFrame({"when": pd.to_datetime(["2026-04-14", "2026-07-21", None])})
+    rows = masked_rows(frame, ("when",), (), 5)
+    assert rows == (("2026-04-14",), ("2026-07-21",), ("",))
+
+
+def test_a_length_of_time_is_shown_as_a_length_not_as_nanoseconds() -> None:
+    from engine.doctor.preview import masked_rows
+
+    frame = pd.DataFrame({"gap": pd.to_timedelta(["1 days", "90 minutes", None])})
+    rows = masked_rows(frame, ("gap",), (), 5)
+    assert rows == (("1 days 00:00:00",), ("0 days 01:30:00",), ("",))

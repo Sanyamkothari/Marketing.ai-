@@ -19,8 +19,11 @@ Every card has a `type`:
 * ``ready``       the one approval: the exact sentence, the stops and own-yes changes inside it, the speeds.
 
 Order: the first look, then everything in the order it happened (a change a chat reply made follows that reply),
-the goals or the fit after the first batch, and the ready card last. A change that needs its own yes, and a stop,
-are not cards of their own: they are inside the ready card, as the checkboxes of the one approval.
+the goals or the fit after the first batch, and the ready card last. A change that is in the plan is a change card
+with Undo the moment it is made, also when it needs its own yes (the ready card then repeats it as a checkbox, marked
+`shown`). A change still waiting for its own yes, and a stop, are not cards of their own: they are inside the ready
+card, as the checkboxes of the one approval. What was said about a file before an approved join or stack made it into
+one table is not drawn again beside the table's own cards; the join itself stays.
 
 Nothing here writes, and nothing here holds a cell value: titles, counts and sentences the rules or the AI wrote
 (already masked in the case), ids and column names the case holds.
@@ -28,7 +31,7 @@ Nothing here writes, and nothing here holds a cell value: titles, counts and sen
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
@@ -42,7 +45,7 @@ from engine.doctor.case import Case, CaseItem, CaseQuestion, TimelineEvent, Time
 from engine.doctor.goal_names import goal_display_name
 from engine.doctor.plan_check import open_stops, plan_digest
 from engine.doctor.protocol import REQUEST_CODES
-from engine.doctor.visit import active_section
+from engine.doctor.visit import active_section, open_blocking
 
 if TYPE_CHECKING:
     from engine.doctor.screen import CaseScreenView
@@ -233,6 +236,9 @@ class ReadyConfirmation(StrictBase):
     can_agree: bool = True
     cannot_agree: Literal["role", "separation"] | None = None
     separate: bool = False
+    shown: bool = Field(
+        default=False, description="The change is in the conversation already, as a card with Undo."
+    )
 
 
 class Speed(StrictBase):
@@ -260,6 +266,11 @@ class ReadyCard(StrictBase):
         default=(), description="Why it is not ready, in the check's own sentences."
     )
     speeds: tuple[Speed, ...] = ()
+    hold: str = Field(
+        default="",
+        description="Why Approve is off for now, in a plain sentence (no goal yet, a question still open, or the "
+        "last check found something to fix first); empty when it may be clicked.",
+    )
 
 
 ConversationCard = Annotated[
@@ -312,6 +323,16 @@ def _counts(item: CaseItem, step: dict[str, Any] | None) -> str:
     if twice:
         parts.append(f"{_plural(twice, 'customer appears', 'customers appear')} twice")
     return " · ".join(parts)
+
+
+def _in_plan(item: CaseItem | None) -> bool:
+    return item is not None and item.state is ProposalState.ACCEPTED
+
+
+_COMBINES: Final[frozenset[str]] = frozenset({"build_dataset", "stack_files"})
+"""The kinds of the approved join and stack (`engine.doctor.combine_run.JOIN_KIND`, `STACK_KIND`)."""
+_CARRIED: Final[frozenset[str]] = frozenset({"outcome_column", "as_of_column", "consent_column"})
+"""The decisions on what the data means; they stay with the case when a join or stack makes its files one table."""
 
 
 def _is_check(item: CaseItem) -> bool:
@@ -456,7 +477,24 @@ def _speeds(config_root: Path | None) -> tuple[Speed, ...]:
     )
 
 
-def _ready(case: Case, view: CaseScreenView, config_root: Path | None) -> ReadyCard | None:
+def _hold(case: Case, view: CaseScreenView) -> str:
+    """Why Approve waits: nothing to approve it for yet, or something to fix first. Empty: it may go.
+
+    A check that found the data not ready for this goal says the same again until the plan changes (a change makes
+    that check old, and the card goes back to asking); a visit that was stopped by something else may try again.
+    """
+    if view.goal_id is None:
+        return "Choose what the campaign is for first."
+    if open_blocking(case):
+        return "Answer the questions above first."
+    if view.verdict.key == "not_ready" and not (case.visit is not None and case.visit.stopped is not None):
+        return "Fix what the last check found first."
+    return ""
+
+
+def _ready(
+    case: Case, view: CaseScreenView, config_root: Path | None, drawn: Collection[str] = ()
+) -> ReadyCard | None:
     verdict = view.verdict
     entries = tuple(view.approve_class)
     accepted = {i.item_id for i in case.items if i.state is ProposalState.ACCEPTED}
@@ -470,6 +508,7 @@ def _ready(case: Case, view: CaseScreenView, config_root: Path | None) -> ReadyC
             can_agree=a.can_agree,
             cannot_agree=a.cannot_agree,
             separate=a.separate,
+            shown=a.item_id in drawn,
         )
         for a in entries
         if not a.confirmed
@@ -492,6 +531,7 @@ def _ready(case: Case, view: CaseScreenView, config_root: Path | None) -> ReadyC
             blocked=any(c.required and not c.can_agree for c in confirmations),
             notes=notes,
             speeds=_speeds(config_root),
+            hold=_hold(case, view),
         )
     if verdict.key in {"ready", "ready_with_warnings"} and view.start is not None:
         last = next((a for a in reversed(case.approvals) if not a.approve_class), None)
@@ -596,8 +636,23 @@ def build_conversation(
     if not case.files:
         return ()
     items, questions = active_section(case)
-    # A change still waiting for its own yes is inside the ready card; once agreed it is a change like any other.
-    needs_own_yes = {a.item_id for a in view.approve_class if not a.confirmed}
+    # A change not in the plan yet that needs its own yes is inside the ready card. One that is in the plan (the AI
+    # made it, the person ticked it) is a change card with Undo like any other, whether or not it has its yes.
+    needs_own_yes = {
+        a.item_id
+        for a in view.approve_class
+        if not a.confirmed and not _in_plan(next((i for i in items if i.item_id == a.item_id), None))
+    }
+    # What was said about a file before an approved join or stack made it into one table is not drawn again beside
+    # the table's own cards. The join itself is, and so are the person's decisions on what the data means (the
+    # outcome, the date, who agreed): they go on the table (`current_upload`).
+    here = {f.upload_id for f in case.files}
+    items = tuple(
+        i
+        for i in items
+        if i.upload_id is None or i.upload_id in here or i.kind in _COMBINES or i.kind in _CARRIED
+    )
+    questions = tuple(q for q in questions if q.upload_id is None or q.upload_id in here)
     steps = {
         s["item_id"]: s
         for s in (view.ledger or {}).get("steps", [])
@@ -674,6 +729,8 @@ def build_conversation(
         if q.code in _REQUEST_CODES:
             add(in_reply(asked_at.get(q.question_id, case.created_at)), 5, _request(q, goal_ids))
     for doubt in case.doubts:
+        if doubt.upload_id is not None and doubt.upload_id not in here:
+            continue
         add(
             in_reply(
                 next(
@@ -697,7 +754,7 @@ def build_conversation(
 
     fixes = sum(1 for c in changes if c.state == "accepted")
     add(case.created_at, 0, _first_look(case, fixes, len(open_questions), timeline))
-    ready = _ready(case, view, config_root)
+    ready = _ready(case, view, config_root, {c.item_id for c in changes})
     if ready is not None:
         add(_LAST, 9, ready)
     found.sort(key=lambda entry: entry[:3])

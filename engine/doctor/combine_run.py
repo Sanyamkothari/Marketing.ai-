@@ -38,7 +38,7 @@ from engine.privacy.working_key import (
 )
 
 if TYPE_CHECKING:
-    from engine.doctor.case import CaseItem
+    from engine.doctor.case import Case, CaseItem
     from engine.doctor.contracts import Diagnosis
 
 __all__ = [
@@ -46,6 +46,7 @@ __all__ = [
     "STACK_KIND",
     "Combined",
     "combine_item",
+    "current_upload",
     "guard_join",
     "guard_stack",
     "plan_of",
@@ -143,6 +144,34 @@ def upload_ids_of(item: CaseItem) -> tuple[str, ...]:
     """The files a join or stack item is made from."""
     given = item.payload.get("upload_ids")
     return tuple(str(u) for u in given) if isinstance(given, list) else ()
+
+
+def current_upload(case: Case, upload_id: str) -> str:
+    """The upload that stands for `upload_id` now: itself while the case still holds it, else the table an approved
+    join or stack made from it. A decision made on a file (its outcome, its consent column) goes on the table.
+    """
+    from engine.agent.contracts import ProposalState
+
+    here = {f.upload_id for f in case.files}
+    for _ in range(len(case.items) + 1):  # a table made of tables: one step each, never more than the changes
+        if upload_id in here:
+            break
+        made = next(
+            (
+                f.upload_id
+                for item in case.items
+                if item.kind in {JOIN_KIND, STACK_KIND}
+                and item.state is ProposalState.ACCEPTED
+                and upload_id in upload_ids_of(item)
+                for f in case.files
+                if f.original_upload_id in upload_ids_of(item)
+            ),
+            None,
+        )
+        if made is None:
+            break
+        upload_id = made
+    return upload_id
 
 
 def combine_item(
