@@ -16,8 +16,10 @@ Use one of these or `AutonomousPolicy.learn`, not both: they feed the same respo
 week after messages against their own open days, clicks, stops, direct visits; see
 `observations.contact_evidence`) and refits the `ContactHarm` model that travels with the response
 model (`autonomy.decide.bidders.contact_harm_of`). The first pass, given the client's history, learns
-from their past campaigns; each night adds what is new. Bidders sharing the response model then
-charge every option the expected harm, and leave alone anyone it clearly outweighs.
+from their past campaigns; each night adds what is new. Once the agent runs, the holdout (people we
+never contact) sets the organic level of buying since the start, so a season everyone shares is not
+read as harm. Bidders sharing the response model then charge every option the credible harm, and
+leave alone anyone messages credibly put off.
 """
 
 from __future__ import annotations
@@ -127,6 +129,8 @@ def update_models(
     require_send: bool = True,
     learn_value: bool = True,
     learn_harm: bool = True,
+    harm_holdout: Iterable[str] = (),
+    harm_split_at: datetime | None = None,
 ) -> LearnReport:
     """Learn from every outcome window that has closed by `now`, once; returns what was learned.
 
@@ -141,7 +145,10 @@ def update_models(
       from `events_by_customer` is not retried: the night's windows move on without them (counted
       as `no_events`), so pass every holdout customer's events.
     * `segment_of`: a customer's segment; None pools everyone in one segment.
-    * `learn_harm`: also update who contact puts off (`learn_contact_harm`).
+    * `learn_harm`: also update who contact puts off (`learn_contact_harm`). Its organic baseline
+      is the holdout: the customers in `holdout_customers`, in `harm_holdout`, and those with
+      holdout decisions in `decisions`. `harm_split_at` is where the agent started (default: the
+      earliest decision the harm model has seen).
 
     See `observations.py` for the windows, the control-group rule and the weights. Time is `now`,
     never the clock.
@@ -188,7 +195,18 @@ def update_models(
         obs.merge(value_observations(events_by_customer, now, learned=bundle.learned_purchases))
     _apply(bundle, obs)
     if learn_harm:
-        learn_contact_harm(bundle, events_by_customer, content_by_id, now, horizon_days)
+        held = {d.customer_id for d in decisions if d.group is Group.HOLDOUT}
+        firsts = [d.made_at for d in decisions]
+        learn_contact_harm(
+            bundle,
+            events_by_customer,
+            content_by_id,
+            now,
+            horizon_days,
+            holdout=held.union(holdout_ids, harm_holdout),
+            segment_of=segment_of,
+            split_at=harm_split_at if harm_split_at is not None else (min(firsts) if firsts else None),
+        )
     return LearnReport.from_set(obs)
 
 
@@ -198,15 +216,34 @@ def learn_contact_harm(
     content_by_id: Mapping[str, ContentItem],
     now: datetime,
     horizon_days: int,
+    *,
+    holdout: Iterable[str] = (),
+    segment_of: SegmentOf | None = None,
+    split_at: datetime | None = None,
 ) -> ContactHarm | None:
     """Add the events in `events_by_customer` up to `now` to each customer's contact evidence and
     refit the contact-harm model of `bundle.response` (made on first use). Each moment is counted
     once: a customer's evidence carries on from where the last pass stopped, so the events may be the
     whole log or only what is still in memory. Returns the model (None if the response model cannot
-    carry one)."""
+    carry one).
+
+    * `holdout`: customers we never contact. Their buying since the agent started, against their
+      own history, is the organic level the time since the start is counted at (the model keeps
+      every holdout customer it has been told of).
+    * `segment_of`: each customer's segment, so that level is read per segment (each customer keeps
+      the first segment they are given).
+    * `split_at`: where the agent started (kept from the first pass that gives one).
+    """
     harm = contact_harm_of(bundle.response, create=True)
     if harm is None:
         return None
+    if harm.split_at is None and split_at is not None and split_at <= now:
+        harm.split_at = split_at
+    lookup = segment_lookup(segment_of)
+    harm.set_groups(
+        holdout=holdout,
+        segments={cid: lookup(cid) for cid in sorted(events_by_customer)} if segment_of is not None else None,
+    )
     if harm.data_start is None:
         # Where the business's records begin: its first purchase on file (as the agent's segments
         # count frequency), so the time before an import is not taken for days without buying.
@@ -229,6 +266,7 @@ def learn_contact_harm(
             content_by_id=content_by_id,
             data_start=harm.data_start,
             half_life_days=EVIDENCE_HALF_LIFE_DAYS,
+            split_at=harm.split_at,
         )
     )
     harm.refit()

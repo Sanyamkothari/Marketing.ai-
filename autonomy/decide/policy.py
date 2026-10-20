@@ -381,6 +381,10 @@ class AutonomousPolicy:
             currency=self.currency,
             surcharges=market.surcharges,
             base_price=base_price,
+            prices={b.action.channel: market.channel_price(b.action.channel) for b in survivors},
+            channels=state.channels,
+            # options are best net first, so this says restraint held the best one out of the draw
+            restrained=bool(market.eligible) and not market.eligible[0],
         )
         self._remember(draft)
         return draft.model_copy(update={"reason": sentence})
