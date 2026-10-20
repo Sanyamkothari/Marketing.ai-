@@ -22,3 +22,7 @@ docs/ui/before
 docs/ui/after
 docs/ui/fixtures
 plan.md
+
+# The pilot kit's secrets and backups never belong in a build context.
+deploy/pilot/.env
+deploy/pilot/backups

@@ -252,6 +252,10 @@ demo-signin: demo-seed ## the demo with sign-in on and one demo user per role (l
 	@echo "  Marketing AI demo with sign-in: open http://localhost:8000 and sign in as one of the users above. Ctrl+C stops it."
 	@echo ""
 	MARKETING_AI_UI_LAYOUT=campaigns MARKETING_AI_DATA_DOCTOR_UNIFIED=true MARKETING_AI_DEMO_MODE=true MARKETING_AI_AUTH_MODE=local $(BIN)/uvicorn api.main:app --port 8000
+
+.PHONY: pilot-smoke
+pilot-smoke: ## smoke-test a pilot deployment: make pilot-smoke URL=https://pilot-acme.example.com (no credentials sent)
+	deploy/pilot/smoke_test.sh $(URL)
 # ---- END PLAN-E ----
 # ---- PLAN-G (agents) — append only below this line ----
 # ---- END PLAN-G ----
