@@ -34,7 +34,8 @@ def _unit_rows(vectors: Sequence[Sequence[float]]) -> _FloatArray:
     if arr.ndim != 2:
         raise ValueError("the embedder returned vectors of different lengths")
     norms = np.linalg.norm(arr, axis=1, keepdims=True)
-    return np.divide(arr, norms, out=np.zeros_like(arr), where=norms > 0)
+    out: _FloatArray = np.divide(arr, norms, out=np.zeros_like(arr), where=norms > 0)
+    return out
 
 
 def softmax(scores: _FloatArray, temperature: float) -> _FloatArray:
