@@ -1,0 +1,51 @@
+# The Gym at a size this machine cannot afford locally (plan-v2.md section 8, docs/v2/GYM_BAR.md).
+#
+# Its own workflow so ordinary pushes (which cancel the v2 job's older runs) never cancel an hour-long
+# Gym run. It runs on a push to version-2 whose commit message contains "[gym]" (scheduled and
+# manually dispatched workflows only run from the default branch, and this lives on version-2).
+# Report-only: each scenario's scoreboard is an artefact, and a red Gym does not block other work.
+
+name: gym
+
+on:
+  push:
+    branches: ["version-2"]
+
+concurrency:
+  group: gym-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The Gym at a size this machine cannot afford locally. Report-only for now: the agent does not
+  # pass the bar yet (docs/v2/GYM_RESULTS.md), so a red Gym must not block other work. Each
+  # scenario's scoreboard is uploaded as an artefact.
+  gym:
+    name: gym ${{ matrix.scenario }}
+    if: contains(github.event.head_commit.message, '[gym]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [baseline_shop, sleeping_dogs_15, sleeping_dogs_hidden, discount_cannibalisation, whatsapp_fatigue, send_time_matters, drift_midway, small_business, null_effect, complaint_storm]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: .github/workflows/v2.yml
+      - name: Install the v2 core
+        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54"
+      - name: Gym scoreboard
+        run: |
+          mkdir -p gym-report
+          python -m autonomy.gym.run --scenario ${{ matrix.scenario }} --policy agent --seeds 3 --customers 3000 --report-json gym-report/${{ matrix.scenario }}.json | tee gym-report/${{ matrix.scenario }}.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gym-${{ matrix.scenario }}
+          path: gym-report/
