@@ -131,7 +131,9 @@
         "content_id": "ci_0",
         "format": "text",
         "send_at": "2026-10-20T14:00:00Z",
-        "follow_up_step": 0
+        "follow_up_step": 0,
+        "item_id": null,
+        "asset_id": null
       },
       "group": "agent",
       "probability": 0.91,
@@ -148,7 +150,9 @@
             "content_id": "ci_0",
             "format": "text",
             "send_at": "2026-10-20T14:00:00Z",
-            "follow_up_step": 0
+            "follow_up_step": 0,
+            "item_id": null,
+            "asset_id": null
           },
           "uplift": 0.052,
           "value_if_converted": 64.0,
@@ -192,7 +196,9 @@
         "content_id": "ci_0",
         "format": "text",
         "send_at": "2026-10-14T14:00:00Z",
-        "follow_up_step": 0
+        "follow_up_step": 0,
+        "item_id": null,
+        "asset_id": null
       },
       "group": "agent",
       "probability": 0.89,
@@ -209,7 +215,9 @@
             "content_id": "ci_0",
             "format": "text",
             "send_at": "2026-10-14T14:00:00Z",
-            "follow_up_step": 0
+            "follow_up_step": 0,
+            "item_id": null,
+            "asset_id": null
           },
           "uplift": 0.052,
           "value_if_converted": 64.0,
