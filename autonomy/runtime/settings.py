@@ -12,6 +12,14 @@ customers are assigned with it, and briefs that ask for other shares are refused
 to the worker process, so the runtime is built with `run_send_jobs=False`. Anything can be
 overridden by argument, which is how tests and the demo swap in fakes. Heavy or optional packages
 (boto3 for SES, httpx for WhatsApp and webhooks) are imported only when that channel is configured.
+
+With `gateway_enabled`, every decision is sent through the `DispatchGateway`
+(`autonomy.channels.gateway`) instead of straight through the dispatcher: consent proofs from the
+SQL consent registry, do-not-disturb registers read from files (`dnd_registries`, e.g.
+`NCPR=/data/ncpr.txt`), and the compliance packs of the business's `countries`. It is off by
+default, so a deployment that does not turn it on sends exactly as before. Mandates
+(`mandates=`) and a state enricher (`state_enricher=`) are passed by argument. The nightly
+negative-lift breaker is on (`negative_lift_breaker`); its sample floors are settings too.
 """
 
 from __future__ import annotations
@@ -21,7 +29,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import timedelta
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -29,18 +37,21 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
 from autonomy.agents.orchestrator import AdjustFn, AnalystFn
+from autonomy.channels.breakers import LiftGuards
 from autonomy.channels.dispatcher import AddressBook, Dispatcher, ProfileBook
 from autonomy.contracts import Brief, Channel, ContentItem, GoalKind
 from autonomy.data.folder import StateFolder as ProductionStateFolder
-from autonomy.interfaces import ChannelAdapter, Policy, TextSignals, Workspace
+from autonomy.interfaces import ChannelAdapter, EventStore, JobQueue, Policy, TextSignals, Workspace
 from autonomy.proof.split import group_assigner
 from autonomy.runtime.batches import SqlBatchStore, create_batch_tables
 from autonomy.runtime.service import (
     AutonomyRuntime,
     BreakersFn,
+    MandateSource,
     PolicyFactory,
     RuntimeConfig,
     SpendFn,
+    StateEnricher,
     standard_breakers,
 )
 from autonomy.runtime.stores import SqlAlertStore, SqlBriefingStore, create_record_tables
@@ -54,11 +65,16 @@ from autonomy.store import (
     memory_engine,
 )
 
+if TYPE_CHECKING:
+    from autonomy.channels.consent import ConsentRegistry, DndRegistry
+    from autonomy.channels.gateway import DispatchGateway
+
 __all__ = [
     "ENV_PREFIX",
     "RuntimeSettings",
     "agent_policy_factory",
     "build_adapters",
+    "build_gateway",
     "build_runtime",
     "engine_for",
     "webhook_address_book",
@@ -66,7 +82,7 @@ __all__ = [
 ]
 
 ENV_PREFIX = "AUTONOMY_"
-_LIST_FIELDS = frozenset({"ses_topic_arns"})
+_LIST_FIELDS = frozenset({"ses_topic_arns", "countries", "dnd_registries"})
 
 
 class RuntimeSettings(BaseModel):
@@ -115,6 +131,43 @@ class RuntimeSettings(BaseModel):
     webhook_tool_secret_ref: str = "WEBHOOK_TOOL_SECRET"
     csv_export_path: str | None = None
 
+    # The send-time gateway (autonomy.channels.gateway). Off: the dispatcher sends directly.
+    gateway_enabled: bool = False
+    countries: tuple[str, ...] = Field(
+        default=(), description="ISO 3166 alpha-2 codes the business sends to; they pick the compliance packs"
+    )
+    consent_registry: Literal["sql", "none"] = Field(
+        default="sql", description="'sql': a promotional send needs a live consent proof on file"
+    )
+    dnd_registries: tuple[str, ...] = Field(
+        default=(),
+        description="Do-not-disturb registers as REGISTER=path (or COUNTRY=path), e.g. NCPR=/data/ncpr.txt",
+    )
+    gateway_purpose: Literal["promotional", "transactional", "service"] = "promotional"
+
+    # The nightly negative-lift breaker (autonomy.channels.breakers.negative_lift).
+    negative_lift_breaker: bool = True
+    lift_min_group: int = Field(default=30, ge=2, description="Measured customers per group before judging")
+    lift_min_closed: int = Field(default=100, ge=1, description="Closed outcome windows before judging")
+
+    @field_validator("countries")
+    @classmethod
+    def _countries(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        out = tuple(dict.fromkeys(c.strip().upper() for c in value if c.strip()))
+        bad = [c for c in out if len(c) != 2 or not c.isalpha()]
+        if bad:
+            raise ValueError(f"countries are ISO 3166 alpha-2 codes such as IN or US, not {bad}")
+        return out
+
+    @field_validator("dnd_registries")
+    @classmethod
+    def _dnd(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for entry in value:
+            key, sep, path = entry.partition("=")
+            if not sep or not key.strip() or not path.strip():
+                raise ValueError(f"a DND register is REGISTER=path, e.g. NCPR=/data/ncpr.txt, not {entry!r}")
+        return value
+
     @field_validator("timezone")
     @classmethod
     def _zone(cls, value: str) -> str:
@@ -152,6 +205,12 @@ class RuntimeSettings(BaseModel):
             else:
                 values[name] = raw.strip()
         return cls.model_validate(values)
+
+    def lift_guards(self) -> LiftGuards | None:
+        """The negative-lift breaker's guards, or None when it is turned off."""
+        if not self.negative_lift_breaker:
+            return None
+        return LiftGuards(min_group=self.lift_min_group, min_closed=self.lift_min_closed)
 
     def config(self) -> RuntimeConfig:
         """The runtime's schedule and windows."""
@@ -269,6 +328,54 @@ def build_adapters(
     return adapters
 
 
+def build_gateway(
+    settings: RuntimeSettings,
+    adapters: Mapping[Channel, ChannelAdapter],
+    *,
+    engine: Engine,
+    queue: JobQueue,
+    events: EventStore,
+    workspace: Workspace,
+    address_book: AddressBook,
+    profiles: ProfileBook | None = None,
+    consent: ConsentRegistry | None = None,
+    dnd: DndRegistry | Mapping[str, DndRegistry] | None = None,
+) -> DispatchGateway:
+    """The send-time gateway over the configured adapters, with a dispatcher attached.
+
+    One provider per channel (named after the channel, which is what its webhooks are addressed
+    by). Country rules come from the compliance packs of the business's `countries` (a recipient
+    elsewhere gets the strictest of those packs); with no countries, every shipped pack is loaded.
+    `consent` and `dnd` override the registries the settings describe. Held decisions go on the
+    runtime's own queue, so the one worker claims them."""
+    from autonomy.channels.consent import FileDndRegistry, SqlConsentRegistry
+    from autonomy.channels.gateway import DispatchGateway, Provider, pack_rules
+    from autonomy.compliance_packs import packs_for
+
+    if consent is None and settings.consent_registry == "sql":
+        consent = SqlConsentRegistry(engine)
+    if dnd is None and settings.dnd_registries:
+        registers: dict[str, DndRegistry] = {}
+        for entry in settings.dnd_registries:
+            key, _, path = entry.partition("=")
+            registers[key.strip()] = FileDndRegistry(path.strip())
+        dnd = registers
+    packs = packs_for(settings.countries) if settings.countries else None
+    extra: dict[str, Any] = {"default_country": settings.countries[0]} if settings.countries else {}
+    gateway = DispatchGateway(
+        {channel: [Provider(channel.value, adapter)] for channel, adapter in adapters.items()},
+        consent=consent,
+        dnd=dnd,
+        rules=pack_rules(packs=packs),
+        queue=queue,
+        events=events,
+        decision_purpose=settings.gateway_purpose,
+        **extra,
+    )
+    gateway.attach_dispatcher(address_book, workspace, events, profiles=profiles)
+    return gateway
+
+
 def build_runtime(
     settings: RuntimeSettings | None = None,
     *,
@@ -287,6 +394,10 @@ def build_runtime(
     baselines: Mapping[str, float] | None = None,
     channel_costs: Mapping[Channel, float] | None = None,
     run_send_jobs: bool | None = False,
+    state_enricher: StateEnricher | None = None,
+    mandates: MandateSource | None = None,
+    consent: ConsentRegistry | None = None,
+    dnd: DndRegistry | Mapping[str, DndRegistry] | None = None,
 ) -> AutonomyRuntime:
     """The production runtime on SQL stores. Creates the tables it needs (safe to call twice).
 
@@ -294,7 +405,10 @@ def build_runtime(
     `channel_costs`, plus offer cost per redemption) and planned spend to `EvenPacing`; the
     standard breakers get both. `run_send_jobs=False` leaves queued sends to the worker process
     (`python -m autonomy.runtime.worker`), their one owner; pass None for a single process that
-    ticks with no worker."""
+    ticks with no worker.
+
+    `settings.gateway_enabled` sends through `build_gateway` (with `consent` and `dnd` overriding
+    the registries from the settings); `mandates` and `state_enricher` go to the runtime as they are."""
     settings = settings or RuntimeSettings.from_env(environ)
     engine = engine or engine_for(settings.database_url)
     create_all(engine)
@@ -307,14 +421,24 @@ def build_runtime(
     workspace = SqlWorkspace(engine)
     queue = SqlJobQueue(engine)
     chosen = dict(adapters) if adapters is not None else build_adapters(settings, environ)
-    dispatcher = Dispatcher(
-        chosen,
-        address_book or webhook_address_book,
-        workspace,
-        events,
-        queue,
-        profiles=profiles,
-    )
+    book = address_book or webhook_address_book
+    gateway: DispatchGateway | None = None
+    if settings.gateway_enabled:
+        gateway = build_gateway(
+            settings,
+            chosen,
+            engine=engine,
+            queue=queue,
+            events=events,
+            workspace=workspace,
+            address_book=book,
+            profiles=profiles,
+            consent=consent,
+            dnd=dnd,
+        )
+        dispatcher = gateway.dispatcher
+    else:
+        dispatcher = Dispatcher(chosen, book, workspace, events, queue, profiles=profiles)
     return AutonomyRuntime(
         events=events,
         states=states,
@@ -347,4 +471,8 @@ def build_runtime(
         alerts=SqlAlertStore(engine),
         briefings=SqlBriefingStore(engine),
         channel_costs=channel_costs,
+        state_enricher=state_enricher,
+        mandates=mandates,
+        gateway=gateway,
+        lift_guards=settings.lift_guards(),
     )

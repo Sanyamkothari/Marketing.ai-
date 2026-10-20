@@ -8,6 +8,12 @@ Three kinds of job keep Autonomy moving between requests:
 - `send_message` finishes a send the dispatcher queued for its `send_at`; the dispatcher re-checks
   every rule first, so a customer who unsubscribed while the message waited is not contacted.
 - `webhook_event` stores a provider callback that was accepted quickly and parsed later.
+- `gateway_send_decision` (only when the runtime sends through a `DispatchGateway`) finishes a
+  decision the gateway held for quiet hours, a rate limit or a retry; the gateway re-runs its
+  compliance gate and the dispatcher its checks (`gateway_handler`).
+
+Both send handlers take an optional `gate`: the runtime's mandate check, run again when a held
+message comes due, so a mandate revoked (or a daily cap reached) while it waited stops it.
 
 The library code never sleeps and never reads the clock: `Worker.run_once(now)` and
 `Worker.drain(now)` take `now`, so the demo and the tests drive it on simulated time. Only the
@@ -37,21 +43,29 @@ import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
-from autonomy.channels import SEND_JOB_KIND, Dispatcher, DispatchReport
-from autonomy.contracts import Channel, Event, Job, stable_id
+from autonomy.channels import SEND_JOB_KIND, Dispatcher, DispatchReport, DispatchResult, DispatchStatus
+from autonomy.contracts import Channel, Decision, Event, Job, stable_id
 from autonomy.interfaces import ChannelAdapter, DecisionLog, JobQueue, StateStore
+
+if TYPE_CHECKING:
+    from autonomy.channels.gateway import DispatchGateway
 
 __all__ = [
     "DEFAULT_KINDS",
+    "GATEWAY_KIND",
     "SEND_KIND",
     "TICK_KIND",
     "WEBHOOK_KIND",
+    "GatewayHandler",
     "JobHandler",
     "JobOutcome",
     "PermanentJobError",
+    "SendGate",
     "SendHandler",
     "Worker",
+    "gateway_handler",
     "main",
     "next_tick_at",
     "retry_delay",
@@ -68,6 +82,8 @@ log = logging.getLogger(__name__)
 TICK_KIND = "tick"
 SEND_KIND = SEND_JOB_KIND
 WEBHOOK_KIND = "webhook_event"
+GATEWAY_KIND = "gateway_send_decision"
+"""The gateway's held-decision job kind (`autonomy.channels.gateway.GATEWAY_DECISION_JOB`)."""
 DEFAULT_KINDS: tuple[str, ...] = (TICK_KIND, SEND_KIND, WEBHOOK_KIND)
 
 DEFAULT_MAX_ATTEMPTS = 5
@@ -80,6 +96,9 @@ never decide anything."""
 
 JobHandler = Callable[[Job, datetime], None]
 """Runs one claimed job at `now`. Returning means done; raising means failed (retried unless permanent)."""
+
+SendGate = Callable[[Decision, datetime], str | None]
+"""(decision, now) -> a reason not to send it now (it is skipped, and the job is done), or None."""
 
 
 class PermanentJobError(Exception):
@@ -259,13 +278,38 @@ def worker_owns_sends(dispatcher: Dispatcher) -> bool:
     return dispatcher in _SEND_OWNERS
 
 
+def _gated(job: Job, decisions: DecisionLog, gate: SendGate | None, now: datetime) -> DispatchReport | None:
+    """A report skipping the job's decision when `gate` says no; None when it may go ahead."""
+    if gate is None:
+        return None
+    decision_id = str(job.payload.get("decision_id") or "")
+    decision = decisions.get(decision_id) if decision_id else None
+    if decision is None:
+        return None  # the send path reports a missing decision in its own words
+    reason = gate(decision, now)
+    if not reason:
+        return None
+    return DispatchReport(
+        results=[
+            DispatchResult(
+                decision_id=decision.decision_id,
+                customer_id=decision.customer_id,
+                status=DispatchStatus.SKIPPED,
+                reason=reason,
+                detail=f"job {job.job_id} was held back by the send gate",
+            )
+        ]
+    )
+
+
 class SendHandler:
     """Finish a `send_message` job through the dispatcher: the one code path for queued sends.
 
     A skip (the customer unsubscribed, the goal was paused, ...) is a finished job: the dispatcher
     reported why. A provider failure raises, so the worker retries with backoff. `on_report`, if
     given, sees every dispatch report first (failures included), which is how a runtime hosting
-    the handler folds the SEND and FAIL events into state in the same tick."""
+    the handler folds the SEND and FAIL events into state in the same tick. `gate`, if given, is
+    asked first; a reason from it skips the send (the job is done, nothing is retried)."""
 
     def __init__(
         self,
@@ -274,14 +318,18 @@ class SendHandler:
         states: StateStore,
         *,
         on_report: Callable[[DispatchReport], None] | None = None,
+        gate: SendGate | None = None,
     ) -> None:
         self.dispatcher = dispatcher
         self.decisions = decisions
         self.states = states
         self.on_report = on_report
+        self.gate = gate
 
     def __call__(self, job: Job, now: datetime) -> None:
-        report = self.dispatcher.run_send_job(job, self.decisions, self.states, now)
+        report = _gated(job, self.decisions, self.gate, now)
+        if report is None:
+            report = self.dispatcher.run_send_job(job, self.decisions, self.states, now)
         if self.on_report is not None:
             self.on_report(report)
         if report.failed:
@@ -295,9 +343,53 @@ def send_handler(
     states: StateStore,
     *,
     on_report: Callable[[DispatchReport], None] | None = None,
+    gate: SendGate | None = None,
 ) -> SendHandler:
     """A `SendHandler` for a worker. A worker given it owns the dispatcher's send jobs."""
-    return SendHandler(dispatcher, decisions, states, on_report=on_report)
+    return SendHandler(dispatcher, decisions, states, on_report=on_report, gate=gate)
+
+
+class GatewayHandler:
+    """Finish a decision the `DispatchGateway` held (`gateway_send_decision` jobs).
+
+    The gateway runs its compliance gate again and re-queues what still has to wait, so a held
+    decision is never lost; its failures are retried by the gateway itself (with its own backoff),
+    so a failed send does not raise here and the worker does not retry it a second way. `gate` and
+    `on_report` work as for `SendHandler`."""
+
+    def __init__(
+        self,
+        gateway: DispatchGateway,
+        decisions: DecisionLog,
+        states: StateStore,
+        *,
+        on_report: Callable[[DispatchReport], None] | None = None,
+        gate: SendGate | None = None,
+    ) -> None:
+        self.gateway = gateway
+        self.decisions = decisions
+        self.states = states
+        self.on_report = on_report
+        self.gate = gate
+
+    def __call__(self, job: Job, now: datetime) -> None:
+        report = _gated(job, self.decisions, self.gate, now)
+        if report is None:
+            report = self.gateway.run_decision_job(job, self.decisions, self.states, now)
+        if self.on_report is not None:
+            self.on_report(report)
+
+
+def gateway_handler(
+    gateway: DispatchGateway,
+    decisions: DecisionLog,
+    states: StateStore,
+    *,
+    on_report: Callable[[DispatchReport], None] | None = None,
+    gate: SendGate | None = None,
+) -> GatewayHandler:
+    """A `GatewayHandler` for a worker: register it under `GATEWAY_KIND`."""
+    return GatewayHandler(gateway, decisions, states, on_report=on_report, gate=gate)
 
 
 def webhook_job(channel: Channel, headers: Mapping[str, str], body: bytes, *, received_at: datetime) -> Job:

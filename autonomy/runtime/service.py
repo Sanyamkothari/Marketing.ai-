@@ -27,9 +27,28 @@ and the operator endpoint call it by hand. Each tick does, in order:
    events_by_customer, now)` with its own goal's decisions, if it has the hook (the fast learning
    loop). A policy built in this process (the first tick after a start, or a materially new brief)
    first replays `replay_lookback` of the decision log and events through the same hook, so what
-   it learned survives restarts.
+   it learned survives restarts. When `lift_guards` is set, the negative-lift breaker
+   (`autonomy.channels.breakers.negative_lift`) then reads each acting goal's proof over closed
+   outcome windows and pauses a goal that is confidently losing money against the holdout.
 7. **Weekly**, once a week, when an analyst and a strategist are configured: the Orchestrator's
    weekly cycle (Analyst report, then the Strategist's narrowing of the brief).
+
+**Optional wiring**, all off by default so a runtime built without it behaves as before:
+
+- `state_enricher(states, events_by_customer, now) -> states` runs on the states of each goal's
+  candidates right before deciding (signals, scores from another engine). It never changes the
+  stored state, and if it raises, the goal decides on the plain states and an alert says so.
+- `mandates` (a `MandateSource`) puts goals under signed mandates (`autonomy.mandate`). A goal the
+  source governs acts only under an active, verified mandate; with none, or an expired, revoked
+  or unsigned one, it does not decide (shadow goals still do, as they never act) and a critical
+  alert says why. Every ACT decision is checked again with `check_action` right before it is
+  batched or sent, with the mandate's spend so far; a violation blocks that send, is noted on the
+  decision (`blocked_by`, reason) and raises an alert. Spend is paced by the mandate's
+  `TokenBucket` (from `max_daily_spend`): a send the bucket cannot cover waits for another day.
+- `gateway` (an `autonomy.channels.gateway.DispatchGateway` with a dispatcher attached) sends
+  every decision through its send-time compliance gate: consent proof, do-not-disturb registers,
+  country quiet hours, rate limits and carrier failover. A refusal is a skipped send and an
+  alert; held decisions come back as `gateway_send_decision` jobs.
 
 Every alert and briefing a tick produces is written to the runtime's `AlertStore` and
 `BriefingStore` (`autonomy.runtime.stores`), so a worker's ticks reach the API. Spend per goal
@@ -61,18 +80,26 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AwareDatetime, BaseModel, Field
 
 from autonomy.agents.conversation import Conversation, ReplyOutcome
 from autonomy.agents.orchestrator import AdjustFn, AnalystFn, Orchestrator, WeeklyOutcome
-from autonomy.channels.breakers import DEFAULT_GUARDS, BreakerResult, Guards, evaluate_goals
+from autonomy.channels.breakers import (
+    DEFAULT_GUARDS,
+    BreakerResult,
+    Guards,
+    LiftGuards,
+    evaluate_goals,
+    negative_lift,
+)
 from autonomy.channels.dispatcher import (
     Dispatcher,
     DispatchReport,
     DispatchResult,
+    SkipReason,
 )
 from autonomy.contracts import (
     NO_OFFER,
@@ -108,6 +135,9 @@ from autonomy.interfaces import (
     TextSignals,
     Workspace,
 )
+from autonomy.mandate.enforce import ActionCosts, SpendToDate, TokenBucket, check_action, check_bid
+from autonomy.mandate.models import Mandate, MandateStatus
+from autonomy.proof.rewards import Costs
 from autonomy.runtime.batches import (
     BatchStore,
     BatchTransitionError,
@@ -123,14 +153,28 @@ from autonomy.runtime.stores import (
     InMemoryAlertStore,
     InMemoryBriefingStore,
 )
-from autonomy.runtime.worker import SEND_KIND, Worker, send_handler, worker_owns_sends
+from autonomy.runtime.worker import (
+    GATEWAY_KIND,
+    SEND_KIND,
+    JobHandler,
+    Worker,
+    gateway_handler,
+    send_handler,
+    worker_owns_sends,
+)
+
+if TYPE_CHECKING:
+    from autonomy.channels.gateway import DispatchGateway
 
 __all__ = [
+    "MANDATE_PACED",
     "MATERIAL_BRIEF_FIELDS",
     "TRIGGER_TYPES",
     "AutonomyRuntime",
     "BreakersFn",
     "EvenPacing",
+    "MandateBook",
+    "MandateSource",
     "PersonReadsReplies",
     "PolicyFactory",
     "RuntimeConfig",
@@ -139,6 +183,7 @@ __all__ = [
     "SpendLedger",
     "SplitMismatchError",
     "StandardBreakers",
+    "StateEnricher",
     "TickReport",
     "Trigger",
     "build_worker",
@@ -161,7 +206,26 @@ SpendFn = Callable[[str, datetime], float]
 GroupFn = Callable[[CustomerState], CustomerState]
 """state -> the same state with its proof group set (see `autonomy.proof.split.group_assigner`)."""
 
+StateEnricher = Callable[[list[CustomerState], Mapping[str, list[Event]], datetime], list[CustomerState]]
+"""(states of one goal's candidates, their recent events by customer, now) -> the states to decide
+on. Runs right before deciding; the result is matched back by customer id, and a customer it leaves
+out is decided on its plain state."""
+
 Severity = Literal["info", "warning", "critical"]
+
+MANDATE_PACED = "mandate_paced"
+"""Noted on a decision the mandate's spend pacer (`TokenBucket`) held back: allowed, but not today."""
+
+MANDATE_MISSING = "mandate_missing"
+MANDATE_INACTIVE = "mandate_not_active"
+MANDATE_UNVERIFIED = "mandate_unverified"
+MANDATE_ERROR = "mandate_error"
+
+ENRICH_PER_CUSTOMER_MAX = 200
+"""Up to this many candidates, the enricher's events are read customer by customer; above, one scan."""
+
+_DISPATCHER_SKIPS: frozenset[str] = frozenset(r.value for r in SkipReason)
+"""The dispatcher's own skip codes. Any other skip reason on the gateway path is the gateway's refusal."""
 
 TRIGGER_TYPES: frozenset[EventType] = frozenset({EventType.REPLY, EventType.CART})
 """Events that get a customer a decision within one tick, not at the next daily sweep."""
@@ -223,6 +287,12 @@ class RuntimeConfig:
     refused (its goal does not run, and a critical alert says why). None: not checked."""
     seed: int = 0
     worker: str = "runtime"
+    enrich_lookback: timedelta = timedelta(days=30)
+    """How far back the events handed to the `state_enricher` reach."""
+    proof_lookback: timedelta = timedelta(days=120)
+    """How much of a goal's decision log the nightly negative-lift check reads (from its start at most)."""
+    mandate_burst_share: float = 0.25
+    """The share of a mandate's daily cap its spend pacer lets go at once (see `TokenBucket`)."""
 
     def __post_init__(self) -> None:
         for name in ("sweep_hour", "nightly_hour", "weekly_hour"):
@@ -246,6 +316,10 @@ class RuntimeConfig:
                 raise ValueError(f"{name} is a share from 0 to 0.5")
         if (self.holdout_share is None) != (self.baseline_share is None):
             raise ValueError("set both holdout_share and baseline_share, or neither")
+        if self.enrich_lookback < timedelta(0) or self.proof_lookback < timedelta(0):
+            raise ValueError("enrich_lookback and proof_lookback cannot be negative")
+        if not 0 < self.mandate_burst_share < 1:
+            raise ValueError("mandate_burst_share is between 0 and 1, exclusive")
 
 
 class RuntimeCursor(BaseModel):
@@ -284,6 +358,10 @@ class TickReport:
     weekly: list[WeeklyOutcome] = field(default_factory=list)
     replayed_goals: list[str] = field(default_factory=list)
     """Goals whose policy was built this tick and replayed the decision log to relearn."""
+    halted_goals: list[str] = field(default_factory=list)
+    """Goals that did not act this tick because their mandate is missing, inactive or unsigned."""
+    mandate_blocked: list[str] = field(default_factory=list)
+    """Decisions a mandate check stopped (violations, or the spend pacer) before batching or sending."""
 
     @property
     def sent(self) -> list[DispatchResult]:
@@ -317,6 +395,8 @@ class TickReport:
             "swept_goals": list(self.swept_goals),
             "nightly_ran": self.nightly_ran,
             "weekly": [w.brief.goal_id for w in self.weekly],
+            "halted_goals": list(self.halted_goals),
+            "mandate_blocked": len(self.mandate_blocked),
         }
 
 
@@ -375,6 +455,69 @@ def standard_breakers(
     return StandardBreakers(
         baselines=dict(baselines or {}), spend_fn=spend_fn, planned_fn=planned_fn, guards=guards
     )
+
+
+# --- mandates -------------------------------------------------------------------------------------
+
+
+@runtime_checkable
+class MandateSource(Protocol):
+    """Where the runtime finds each goal's mandate (`autonomy.mandate.Mandate`).
+
+    `governs(goal_id)` says whether the goal must act under a mandate at all; `lookup(goal_id)` is
+    the mandate that currently stands for it (latest version, whatever its status), or None; and
+    `problems(mandate, now)` is every reason its signatures do not authorise it (empty when they do,
+    e.g. `autonomy.mandate.verify_mandate`). The runtime checks status and validity itself.
+    """
+
+    def governs(self, goal_id: str) -> bool: ...
+
+    def lookup(self, goal_id: str) -> Mandate | None: ...
+
+    def problems(self, mandate: Mandate, now: datetime) -> list[str]: ...
+
+
+class MandateBook:
+    """An in-memory `MandateSource`: the mandates you give it, latest version per goal.
+
+    A goal is governed when a mandate covers it, when it is in `required_goals`, or always with
+    `require_all` (then a goal with no mandate does not act). `verify` checks signatures, e.g.
+    `lambda m: verify_mandate(m, policy, keys)`; without it, a mandate's status is trusted, which
+    is right for a store that only ever holds verified mandates.
+    """
+
+    def __init__(
+        self,
+        mandates: Iterable[Mandate] = (),
+        *,
+        required_goals: Iterable[str] = (),
+        require_all: bool = False,
+        verify: Callable[[Mandate], list[str]] | None = None,
+    ) -> None:
+        self._mandates: dict[tuple[str, int], Mandate] = {}
+        self.required_goals = frozenset(required_goals)
+        self.require_all = require_all
+        self.verify = verify
+        for m in mandates:
+            self.put(m)
+
+    def put(self, mandate: Mandate) -> None:
+        """Add a mandate, or replace the same version (a revocation changes only its status)."""
+        self._mandates[(mandate.mandate_id, mandate.version)] = mandate
+
+    def governs(self, goal_id: str) -> bool:
+        if self.require_all or goal_id in self.required_goals:
+            return True
+        return any(goal_id in m.goal_ids for m in self._mandates.values())
+
+    def lookup(self, goal_id: str) -> Mandate | None:
+        covering = [m for m in self._mandates.values() if goal_id in m.goal_ids]
+        if not covering:
+            return None
+        return max(covering, key=lambda m: (m.version, m.valid_from, m.mandate_id))
+
+    def problems(self, mandate: Mandate, now: datetime) -> list[str]:  # noqa: ARG002
+        return [] if self.verify is None else list(self.verify(mandate))
 
 
 # --- spend ---------------------------------------------------------------------------------------
@@ -706,6 +849,10 @@ class AutonomyRuntime:
         alerts: AlertStore | None = None,
         briefings: BriefingStore | None = None,
         channel_costs: Mapping[Channel, float] | None = None,
+        state_enricher: StateEnricher | None = None,
+        mandates: MandateSource | None = None,
+        gateway: DispatchGateway | None = None,
+        lift_guards: LiftGuards | None = None,
     ) -> None:
         """`conversation` defaults to one over `text_signals`, else over `PersonReadsReplies`: STOP
         is always honoured. `strategist` is the weekly adjustment, e.g. `Strategist.adjust_brief`;
@@ -713,7 +860,19 @@ class AutonomyRuntime:
 
         `spend_fn` defaults to a `SpendLedger` over the log (priced with `channel_costs`) and
         `planned_fn` to `EvenPacing`; `StandardBreakers` without their own spend sources get these.
-        `alerts` and `briefings` default to in-memory stores; production passes SQL ones."""
+        `alerts` and `briefings` default to in-memory stores; production passes SQL ones.
+
+        The rest is optional and off by default (see the module docstring): `state_enricher` runs
+        on each goal's candidate states right before deciding; `mandates` puts goals under signed
+        mandates; `gateway` sends through a `DispatchGateway` (its attached dispatcher becomes
+        `dispatcher`, so pauses reach it); `lift_guards` turns on the nightly negative-lift
+        breaker."""
+        if gateway is not None:
+            if gateway.dispatcher is None:
+                raise ValueError("attach a dispatcher to the gateway (attach_dispatcher) before using it")
+            if dispatcher is not None and dispatcher is not gateway.dispatcher:
+                raise ValueError("pass the gateway's own dispatcher, or none: the gateway sends through it")
+            dispatcher = gateway.dispatcher
         self.events = events
         self.states = states
         self.decisions = decisions
@@ -722,6 +881,13 @@ class AutonomyRuntime:
         self.policy_factory = policy_factory
         self.queue = queue
         self.dispatcher = dispatcher
+        self.gateway = gateway
+        self.state_enricher = state_enricher
+        self.mandates = mandates
+        self.lift_guards = lift_guards
+        self.channel_costs: dict[Channel, float] = dict(
+            DEFAULT_CHANNEL_COSTS if channel_costs is None else channel_costs
+        )
         self.batches: BatchStore = batches if batches is not None else InMemoryBatchStore()
         self.breakers_fn = breakers_fn
         self.conversation = conversation or Conversation(text_signals or PersonReadsReplies())
@@ -749,6 +915,8 @@ class AutonomyRuntime:
         self._day: _Day | None = None
         self._policies: dict[str, tuple[tuple[object, ...], Policy]] = {}
         self._paused_channels: set[Channel] = set()
+        self._buckets: dict[tuple[str, int], TokenBucket] = {}
+        """The spend pacer per mandate version. Rebuilt after a restart from the last day's spend."""
 
     # --- the API's helpers ---------------------------------------------------------------------
 
@@ -950,7 +1118,12 @@ class AutonomyRuntime:
             return
         recent = [e for e in self.events.scan(since=now - self.config.breaker_window) if e.ts <= now]
         result = self.breakers_fn([b for _, b in running], recent, now)
-        goals = {g.goal_id: g for g, _ in running}
+        self._apply_breakers(result, {g.goal_id: g for g, _ in running}, report)
+
+    def _apply_breakers(self, result: BreakerResult, goals: Mapping[str, Goal], report: TickReport) -> None:
+        """Pause what a breaker verdict names (active goals in `goals`, channels) and keep its alerts.
+
+        A repeated alert (same code and goal) is reported once a day, unless it paused the goal anew."""
         newly_paused: set[str] = set()
         for goal_id in sorted(result.paused_goals):
             goal = goals.get(goal_id)
@@ -1010,9 +1183,14 @@ class AutonomyRuntime:
                 # Sending now would skip every message and still mark the batch sent, so what the
                 # person approved would be lost. Hold it until the pause lifts, or until it expires.
                 continue
+            may_act, mandate = self._mandate_for(goal, now, report)
+            if not may_act:
+                continue  # held until the mandate stands again, or until the batch expires
             states = self._fresh_states({d.customer_id for d in decided}, now)
-            result = self.dispatcher.dispatch(decided, states, now)
-            self._take_dispatch(result, now, report)
+            if mandate is not None:
+                brief = self._latest_brief(batch.goal_id)
+                decided = self._mandate_filter(mandate, brief, decided, states, now, report, pace=True)
+            self._send_now(batch.goal_id, decided, states, now, report)
             try:
                 report.batches_sent.append(mark_sent(self.batches, batch.batch_id, now=now))
             except (BatchTransitionError, UnknownBatchError):
@@ -1039,9 +1217,24 @@ class AutonomyRuntime:
         def take(result: DispatchReport) -> None:
             self._take_dispatch(result, now, report)
 
-        handler = send_handler(dispatcher, self.decisions, self.states, on_report=take)
-        hosted = Worker(self.queue, {SEND_KIND: handler}, name=self.config.worker, hosted=True)
+        gate = self.send_gate if self.mandates is not None else None
+        handlers: dict[str, JobHandler] = {
+            SEND_KIND: send_handler(dispatcher, self.decisions, self.states, on_report=take, gate=gate)
+        }
+        gateway = self.gateway
+        gateway_jobs: JobHandler | None = None
+        if gateway is not None and gateway.queue is not None:
+            gateway_jobs = gateway_handler(gateway, self.decisions, self.states, on_report=take, gate=gate)
+            if gateway.queue is self.queue:
+                handlers[GATEWAY_KIND] = gateway_jobs
+                gateway_jobs = None
+        hosted = Worker(self.queue, handlers, name=self.config.worker, hosted=True)
         hosted.drain(now, limit=MAX_SEND_JOBS_PER_TICK)
+        if gateway_jobs is not None and gateway is not None and gateway.queue is not None:
+            # The gateway keeps its held decisions on a queue of its own.
+            Worker(gateway.queue, {GATEWAY_KIND: gateway_jobs}, name=self.config.worker, hosted=True).drain(
+                now, limit=MAX_SEND_JOBS_PER_TICK
+            )
 
     def _hosts_sends(self) -> bool:
         if self.config.run_send_jobs is not None:
@@ -1075,6 +1268,10 @@ class AutonomyRuntime:
 
         for run in running:
             gid = run.goal.goal_id
+            may_act, mandate = self._mandate_for(run.goal, now, report)
+            if not may_act:
+                report.halted_goals.append(gid)
+                continue  # not even decided: a decision today would block deciding again once it stands
             candidates: list[_Candidate] = []
             for e in triggers:
                 did = _decision_id(gid, e.customer_id, Trigger.EVENT, e.event_id)
@@ -1108,7 +1305,7 @@ class AutonomyRuntime:
             if sweep_due:
                 self.cursor.swept[gid] = day.day
                 report.swept_goals.append(gid)
-            self._act(run, made, contacted_this_tick, now, report)
+            self._act(run, made, contacted_this_tick, now, report, mandate=mandate)
         if lapse_due:
             self.cursor.lapse_checked_at = now
 
@@ -1130,8 +1327,7 @@ class AutonomyRuntime:
             seed=_seed(self.config.seed, gid, now),
             policy_version=run.policy.version,
         )
-        made: list[Decision] = []
-        failures = 0
+        picked: list[tuple[_Candidate, CustomerState]] = []
         decided_now: set[str] = set()
         for cand in candidates:
             cid = cand.customer_id
@@ -1156,14 +1352,18 @@ class AutonomyRuntime:
                 state = self.folder.refresh(stored, now)
             if cand.trigger is Trigger.EVENT and not matches(state, run.brief.audience, now):
                 continue
+            picked.append((cand, state))
+            decided_now.add(cid)
+        picked = self._enrich(gid, picked, now, report)
+        made: list[Decision] = []
+        failures = 0
+        for cand, state in picked:
             try:
                 decision = run.policy.decide(state, ctx)
             except Exception:  # a policy bug for one customer must not stop everyone else's
                 failures += 1
                 continue
-            decision = decision.model_copy(update={"decision_id": cand.decision_id})
-            made.append(decision)
-            decided_now.add(cid)
+            made.append(decision.model_copy(update={"decision_id": cand.decision_id}))
         if failures:
             self._alert(
                 report,
@@ -1180,6 +1380,54 @@ class AutonomyRuntime:
             report.decisions.extend(made)
         return made
 
+    def _enrich(
+        self,
+        goal_id: str,
+        picked: list[tuple[_Candidate, CustomerState]],
+        now: datetime,
+        report: TickReport,
+    ) -> list[tuple[_Candidate, CustomerState]]:
+        """Hand the candidates' states to the `state_enricher`, if any; plain states if it fails."""
+        enricher = self.state_enricher
+        if enricher is None or not picked:
+            return picked
+        states = [state for _, state in picked]
+        try:
+            enriched = enricher(states, self._recent_events([s.customer_id for s in states], now), now)
+            by_id = {s.customer_id: s for s in enriched}
+        except Exception as err:  # an enricher bug must not stop deciding; the plain states still work
+            self._alert(
+                report,
+                code="enrich.error",
+                key=f"{goal_id}:{now.isoformat()}",
+                severity="warning",
+                goal_id=goal_id,
+                message=(
+                    f"The state enricher failed ({type(err).__name__}); this goal decided on the "
+                    "customers' plain state."
+                ),
+            )
+            return picked
+        return [(cand, by_id.get(cand.customer_id, state)) for cand, state in picked]
+
+    def _recent_events(self, customer_ids: Sequence[str], now: datetime) -> dict[str, list[Event]]:
+        """Each customer's events in the enricher's lookback, oldest first (every id has a list)."""
+        since = now - self.config.enrich_lookback
+        wanted = sorted(set(customer_ids))
+        if len(wanted) <= ENRICH_PER_CUSTOMER_MAX:
+            return {
+                cid: sorted(self.events.for_customer(cid, since=since, until=now), key=lambda e: e.ts)
+                for cid in wanted
+            }
+        out: dict[str, list[Event]] = {cid: [] for cid in wanted}
+        for e in self.events.scan(since=since, until=now):
+            bucket = out.get(e.customer_id)
+            if bucket is not None:
+                bucket.append(e)
+        for bucket in out.values():
+            bucket.sort(key=lambda e: e.ts)
+        return out
+
     def _act(
         self,
         run: _Running,
@@ -1187,8 +1435,13 @@ class AutonomyRuntime:
         contacted_this_tick: set[str],
         now: datetime,
         report: TickReport,
+        *,
+        mandate: Mandate | None = None,
     ) -> None:
-        """Do what the goal's autonomy level allows with its ACT decisions."""
+        """Do what the goal's autonomy level allows with its ACT decisions.
+
+        Under a mandate, every ACT decision is checked again first; what it blocks is neither
+        batched nor sent (`_mandate_filter`), and the pacer draws spend only for what is sent."""
         gid = run.goal.goal_id
         acts = [
             d
@@ -1214,6 +1467,15 @@ class AutonomyRuntime:
         if level is AutonomyLevel.SHADOW:
             return
         contacted_this_tick.update(d.customer_id for d in acts)
+        states: dict[str, CustomerState] | None = None
+        if mandate is not None:
+            states = self._fresh_states({d.customer_id for d in acts}, now)
+            # A batch is paced when it is sent, not when it is held for a person; with no channels
+            # nothing is sent, so nothing is drawn from the pacer either.
+            pace = level is AutonomyLevel.AUTOPILOT and self.dispatcher is not None
+            acts = self._mandate_filter(mandate, run.brief, acts, states, now, report, pace=pace)
+            if not acts:
+                return
         if level is AutonomyLevel.APPROVE:
             batch = make_batch(gid, acts, now)
             if self.batches.put(batch):
@@ -1229,8 +1491,304 @@ class AutonomyRuntime:
                 message="This goal is on autopilot but no channels are set up; nothing was sent.",
             )
             return
-        states = self._fresh_states({d.customer_id for d in acts}, now)
-        self._take_dispatch(self.dispatcher.dispatch(acts, states, now), now, report)
+        if states is None:
+            states = self._fresh_states({d.customer_id for d in acts}, now)
+        self._send_now(gid, acts, states, now, report)
+
+    def _send_now(
+        self,
+        goal_id: str,
+        acts: Sequence[Decision],
+        states: Mapping[str, CustomerState],
+        now: datetime,
+        report: TickReport,
+    ) -> None:
+        """Dispatch, through the gateway when there is one. A refusal or a crash is an alert.
+
+        A failing channel or gateway must never stop the tick: the other goals still decide and
+        send, and a person reads what went wrong."""
+        if not acts:
+            return
+        assert self.dispatcher is not None  # callers check
+        try:
+            if self.gateway is not None:
+                result = self.gateway.dispatch(acts, states, now)
+            else:
+                result = self.dispatcher.dispatch(acts, states, now)
+        except Exception as err:
+            self._alert(
+                report,
+                code="dispatch.error",
+                key=f"{goal_id}:{now.isoformat()}:{_ids_key(d.decision_id for d in acts)}",
+                severity="critical",
+                goal_id=goal_id,
+                message=(
+                    f"Sending {len(acts)} messages for this goal failed ({type(err).__name__}: {err}); "
+                    "nothing was sent this tick. The decisions are logged."
+                )[:1000],
+            )
+            return
+        self._take_dispatch(result, now, report)
+        if self.gateway is None:
+            return
+        refused = Counter(r.reason for r in result.skipped if r.reason not in _DISPATCHER_SKIPS)
+        if refused:
+            listed = ", ".join(
+                f"{k} ({v})" for k, v in sorted(refused.items(), key=lambda kv: (-kv[1], kv[0]))
+            )
+            n = sum(refused.values())
+            self._alert(
+                report,
+                code="dispatch.refused",
+                key=f"{goal_id}:{now.isoformat()}:{_ids_key(d.decision_id for d in acts)}",
+                severity="warning",
+                goal_id=goal_id,
+                message=(
+                    f"The send-time gateway refused {n} {'message' if n == 1 else 'messages'} for this "
+                    f"goal: {listed}. Nothing was sent to them."
+                ),
+            )
+
+    # --- mandates -------------------------------------------------------------------------------
+
+    def _mandate_state(self, goal_id: str, now: datetime) -> tuple[Mandate | None, str | None, str]:
+        """(the mandate to act under, a problem code, why in words). No source: (None, None, '').
+
+        A goal the source does not govern acts without one. One it governs needs a mandate that is
+        active now, inside its validity window and authorised by its signatures."""
+        source = self.mandates
+        if source is None or not source.governs(goal_id):
+            return None, None, ""
+        mandate = source.lookup(goal_id)
+        if mandate is None:
+            return None, MANDATE_MISSING, "it needs a signed mandate and none covers it"
+        status = mandate.effective_status(now)
+        if status is not MandateStatus.ACTIVE:
+            return (
+                mandate,
+                MANDATE_INACTIVE,
+                f"its mandate {mandate.mandate_id} (v{mandate.version}) is {status.value}",
+            )
+        if not mandate.is_valid_at(now):
+            return (
+                mandate,
+                MANDATE_INACTIVE,
+                f"its mandate {mandate.mandate_id} (v{mandate.version}) is valid only from "
+                f"{mandate.valid_from.isoformat()} to {mandate.valid_until.isoformat()}",
+            )
+        problems = source.problems(mandate, now)
+        if problems:
+            return (
+                mandate,
+                MANDATE_UNVERIFIED,
+                f"the signatures on mandate {mandate.mandate_id} (v{mandate.version}) do not authorise it "
+                f"({', '.join(problems)})",
+            )
+        return mandate, None, ""
+
+    def _mandate_for(self, goal: Goal, now: datetime, report: TickReport) -> tuple[bool, Mandate | None]:
+        """(may this goal act, the mandate it acts under). A goal that may not act raises an alert,
+        once a day; a shadow goal never acts, so it is never held back."""
+        if self.mandates is None or goal.autonomy is AutonomyLevel.SHADOW:
+            return True, None
+        gid = goal.goal_id
+        try:
+            mandate, problem, why = self._mandate_state(gid, now)
+        except Exception as err:  # a mandate store outage stops this goal, never the tick
+            mandate, problem, why = (
+                None,
+                MANDATE_ERROR,
+                f"its mandate could not be read ({type(err).__name__})",
+            )
+        if problem is None:
+            return True, mandate
+        day = self._today()
+        key = (f"mandate.{problem}", gid)
+        if key not in day.alerted:
+            day.alerted.add(key)
+            self._alert(
+                report,
+                code=f"mandate.{problem.removeprefix('mandate_')}",
+                key=f"{gid}:{problem}:{day.day.isoformat()}",
+                severity="critical",
+                goal_id=gid,
+                message=f"This goal is not acting: {why}. Nothing is batched or sent until a mandate stands.",
+            )
+        return False, None
+
+    def send_gate(self, decision: Decision, now: datetime) -> str | None:
+        """The mandate check for a queued send coming due (a worker's `SendGate`): a reason, or None.
+
+        The pacer was drawn when the send was queued; this re-checks the rest with today's spend,
+        so a mandate revoked or a cap reached while the message waited stops it."""
+        action = decision.action
+        if self.mandates is None or action is None:
+            return None
+        mandate, problem, _ = self._mandate_state(action.goal_id, now)
+        if problem is not None:
+            return problem
+        if mandate is None:
+            return None
+        state = self.states.get(decision.customer_id)
+        if state is None:
+            return None  # the dispatcher reports the missing state itself
+        state = self.folder.refresh(state, now)
+        brief = self._latest_brief(action.goal_id)
+        codes, _ = self._check_one(mandate, brief, decision, state, now, self._mandate_spend(mandate, now))
+        return codes[0] if codes else None
+
+    def _check_one(
+        self,
+        mandate: Mandate,
+        brief: Brief | None,
+        decision: Decision,
+        state: CustomerState,
+        now: datetime,
+        spend: SpendToDate,
+    ) -> tuple[list[str], float]:
+        """(every mandate violation of this ACT decision, what it would spend)."""
+        action = decision.action
+        assert action is not None
+        chosen = next((b for b in decision.bids if b.action == action), None)
+        if chosen is not None:
+            # Priced as the SpendLedger will charge it: the runtime's channel price where it has
+            # one, else the bid's. A bid that prices the channel lower would otherwise pass the
+            # daily cap and the pacer, and the ledger would then record more than they allowed.
+            priced = self.channel_costs.get(action.channel)
+            if priced is not None and priced != chosen.channel_cost:
+                chosen = chosen.model_copy(update={"channel_cost": max(priced, 0.0)})
+            offers = brief.envelope.offers if brief is not None else ()
+            codes = check_bid(mandate, chosen, state, now, offers=offers, spend=spend)
+            return codes, max(chosen.offer_cost, 0.0) + max(chosen.channel_cost, 0.0)
+        costs = ActionCosts(channel_cost=max(self.channel_costs.get(action.channel, 0.0), 0.0))
+        return check_action(mandate, action, costs, state, now, spend=spend), costs.spend
+
+    def _mandate_filter(
+        self,
+        mandate: Mandate,
+        brief: Brief | None,
+        acts: Sequence[Decision],
+        states: Mapping[str, CustomerState],
+        now: datetime,
+        report: TickReport,
+        *,
+        pace: bool,
+    ) -> list[Decision]:
+        """The ACT decisions the mandate lets through now; the rest are noted and alerted.
+
+        Each is checked with `check_action` (via `check_bid` when the decision carries its bid), with
+        the mandate's spend so far plus what this call already let through. With `pace`, what passes
+        is drawn from the mandate's `TokenBucket`; a send the bucket cannot cover is held
+        (`mandate_paced`) and the customer is decided again on another day."""
+        spend = self._mandate_spend(mandate, now)
+        extra = 0.0
+        bucket = self._bucket(mandate, now) if pace else None
+        allowed: list[Decision] = []
+        blocked: list[tuple[Decision, list[str]]] = []
+        for d in acts:
+            state = states.get(d.customer_id)
+            if d.action is None or state is None:
+                allowed.append(d)  # the dispatcher skips a decision with no state, in its own words
+                continue
+            so_far = SpendToDate(total=spend.total + extra, today=spend.today + extra)
+            codes, amount = self._check_one(mandate, brief, d, state, now, so_far)
+            if not codes and bucket is not None:
+                ok, bucket = bucket.try_spend(amount, now)
+                if not ok:
+                    codes = [MANDATE_PACED]
+            if codes:
+                blocked.append((d, codes))
+                continue
+            extra += amount
+            allowed.append(d)
+        if bucket is not None:
+            self._buckets[(mandate.mandate_id, mandate.version)] = bucket
+        if blocked:
+            self._note_blocked(mandate, blocked, now, report)
+        return allowed
+
+    def _note_blocked(
+        self,
+        mandate: Mandate,
+        blocked: Sequence[tuple[Decision, list[str]]],
+        now: datetime,
+        report: TickReport,
+    ) -> None:
+        """Note on each decision why the mandate stopped it, and raise one alert per goal."""
+        noted: dict[str, Decision] = {}
+        by_goal: dict[str, Counter[str]] = defaultdict(Counter)
+        for d, codes in blocked:
+            assert d.action is not None
+            paced = codes == [MANDATE_PACED]
+            why = (
+                "the mandate's daily spend pacing had no room for it today"
+                if paced
+                else f"it breaks the mandate ({', '.join(codes)})"
+            )
+            noted[d.decision_id] = d.model_copy(
+                update={
+                    "blocked_by": tuple(dict.fromkeys((*d.blocked_by, *codes))),
+                    "reason": f"{d.reason} Not sent: {why}.",
+                }
+            )
+            by_goal[d.action.goal_id].update(codes)
+            report.mandate_blocked.append(d.decision_id)
+        self.decisions.record(noted.values())
+        report.decisions = [noted.get(d.decision_id, d) for d in report.decisions]
+        for gid in sorted(by_goal):
+            counts = by_goal[gid]
+            n = sum(1 for d, _ in blocked if d.action is not None and d.action.goal_id == gid)
+            listed = ", ".join(
+                f"{k} ({v})" for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            )
+            only_paced = set(counts) == {MANDATE_PACED}
+            self._alert(
+                report,
+                code="mandate.paced" if only_paced else "mandate.violation",
+                key=f"{gid}:{now.isoformat()}:{_ids_key(d.decision_id for d, _ in blocked)}",
+                severity="info" if only_paced else "warning",
+                goal_id=gid,
+                message=(
+                    f"Mandate {mandate.mandate_id} (v{mandate.version}) held back {n} "
+                    f"{'send' if n == 1 else 'sends'} for this goal: {listed}. "
+                    "Each decision notes why; nothing was sent to those customers."
+                ),
+            )
+
+    def _mandate_spend(self, mandate: Mandate, now: datetime) -> SpendToDate:
+        """Money spent under the mandate: over its validity window, and on `now`'s UTC day."""
+        at = now.astimezone(UTC)
+        midnight = datetime.combine(at.date(), time(0), tzinfo=UTC)
+        total = today = 0.0
+        for gid in mandate.goal_ids:
+            spent = self.spend_fn(gid, now)
+            total += max(0.0, spent - self.spend_fn(gid, mandate.valid_from))
+            today += max(0.0, spent - self.spend_fn(gid, midnight))
+        return SpendToDate(total=total, today=today)
+
+    def _bucket(self, mandate: Mandate, now: datetime) -> TokenBucket | None:
+        """The mandate version's spend pacer; None when it has no daily cap.
+
+        A pacer built in this process (after a restart, or for a new version) starts with what
+        the last 24 hours already spent taken out, so a restart never frees a fresh burst."""
+        key = (mandate.mandate_id, mandate.version)
+        known = self._buckets.get(key)
+        if known is not None:
+            return known
+        fresh = TokenBucket.for_mandate(mandate, now, burst_share=self.config.mandate_burst_share)
+        if fresh is None:
+            return None
+        recent = sum(
+            max(0.0, self.spend_fn(gid, now) - self.spend_fn(gid, now - timedelta(days=1)))
+            for gid in mandate.goal_ids
+        )
+        fresh = fresh.model_copy(update={"tokens": max(0.0, fresh.tokens - recent)})
+        self._buckets[key] = fresh
+        return fresh
+
+    def _latest_brief(self, goal_id: str) -> Brief | None:
+        found = self.workspace.briefs(goal_id)
+        return max(found, key=lambda b: b.version) if found else None
 
     def _lapse_due(self, now: datetime) -> bool:
         if self.cursor.last_tick is None:
@@ -1256,6 +1814,71 @@ class AutonomyRuntime:
         # adds this tick's decisions (nightly() keeps everything by id, so nothing counts twice).
         running = self._running(now, report)
         self._learn(running, now, self.config.nightly_lookback, report, code="nightly.error")
+        self._negative_lift(running, now, report)
+
+    def _negative_lift(self, running: Sequence[_Running], now: datetime, report: TickReport) -> None:
+        """The nightly negative-lift breaker: pause an acting goal whose proof shows it losing money.
+
+        Each goal is judged on its own decisions (holdout ones included) over closed outcome
+        windows; see `autonomy.channels.breakers.negative_lift`. A failure is an alert, never a
+        stop: the other goals are still judged."""
+        guards = self.lift_guards
+        acting = [r for r in running if r.goal.autonomy is not AutonomyLevel.SHADOW]
+        if guards is None or not acting:
+            return
+        since = now - self.config.proof_lookback
+        try:
+            decided = [d for d in self.decisions.scan(since=since) if d.made_at <= now]
+            customers = {d.customer_id for d in decided}
+            by_customer: dict[str, list[Event]] = defaultdict(list)
+            for e in self.events.scan(since=since - self.config.trigger_window):
+                if e.customer_id in customers and e.ts <= now:
+                    by_customer[e.customer_id].append(e)
+            goal_ids = sorted(g.goal_id for g in self.workspace.goals())
+            owner = {
+                d.decision_id: _goal_of(
+                    d,
+                    goal_ids,
+                    self._tz,
+                    [e.event_id for e in by_customer.get(d.customer_id, ()) if e.type in TRIGGER_TYPES],
+                )
+                for d in decided
+            }
+        except Exception as err:
+            self._alert(
+                report,
+                code="proof.error",
+                key=f"lift:{now.isoformat()}",
+                severity="warning",
+                message=f"The nightly proof check could not read the logs ({type(err).__name__}).",
+            )
+            return
+        for run in acting:
+            gid = run.goal.goal_id
+            mine = [d for d in decided if owner[d.decision_id] == gid and d.made_at >= run.goal.starts_at]
+            if not mine:
+                continue
+            events = {d.customer_id: by_customer.get(d.customer_id, []) for d in mine}
+            try:
+                result = negative_lift(
+                    run.brief,
+                    mine,
+                    events,
+                    now,
+                    costs=Costs.from_brief(run.brief, channel=self.channel_costs),
+                    guards=guards,
+                )
+            except Exception as err:
+                self._alert(
+                    report,
+                    code="proof.error",
+                    key=f"{gid}:{now.isoformat()}",
+                    severity="warning",
+                    goal_id=gid,
+                    message=f"The nightly proof check failed for this goal ({type(err).__name__}).",
+                )
+                continue
+            self._apply_breakers(result, {gid: run.goal}, report)
 
     def _replay(self, built: Sequence[_Running], now: datetime, report: TickReport) -> None:
         """Relearn what new policies lost: replay the decision log and events through `nightly()`.
@@ -1539,6 +2162,12 @@ class _RecordingEvents:
         return self.inner.for_decision(decision_id)
 
 
+def _ids_key(decision_ids: Iterable[str]) -> str:
+    """A short, order-free key for a set of decisions: two sends for one goal in one tick (two
+    approved batches, say) get distinct alert ids, so the alert store keeps both."""
+    return stable_id("ids", *sorted(set(decision_ids)))
+
+
 def _decision_id(goal_id: str, customer_id: str, trigger: Trigger, key: str) -> str:
     """The id the runtime gives a decision: one per (goal, customer, trigger, local day or event)."""
     return stable_id("dec", goal_id, customer_id, trigger.value, key)
@@ -1622,15 +2251,18 @@ def build_worker(
         start = tick_slot(datetime.now(UTC), every)
     runtime.queue.enqueue(tick_job(start, every_minutes=settings.tick_every_minutes))
     events = runtime.events
-    return Worker(
-        queue=runtime.queue,
-        handlers={
-            TICK_KIND: tick_handler(runtime.tick, runtime.queue),
-            SEND_KIND: send_handler(runtime.dispatcher, runtime.decisions, runtime.states),
-            WEBHOOK_KIND: webhook_handler(runtime.dispatcher.adapters, events.append),
-        },
-        name=name,
-    )
+    gate = runtime.send_gate if runtime.mandates is not None else None
+    handlers: dict[str, JobHandler] = {
+        TICK_KIND: tick_handler(runtime.tick, runtime.queue),
+        SEND_KIND: send_handler(runtime.dispatcher, runtime.decisions, runtime.states, gate=gate),
+        WEBHOOK_KIND: webhook_handler(runtime.dispatcher.adapters, events.append),
+    }
+    if runtime.gateway is not None:
+        # build_runtime gives the gateway the runtime's queue, so this worker claims its held decisions.
+        handlers[GATEWAY_KIND] = gateway_handler(
+            runtime.gateway, runtime.decisions, runtime.states, gate=gate
+        )
+    return Worker(queue=runtime.queue, handlers=handlers, name=name)
 
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
