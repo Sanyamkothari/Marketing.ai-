@@ -325,7 +325,7 @@ def test_harm_model_charges_nothing_when_contact_harms_nobody():
 
 def test_harm_is_shrunk_by_how_much_record_there_is():
     evidence, harmed = population()
-    one = max(harmed, key=lambda c: evidence[c].sends)
+    one = max(sorted(harmed), key=lambda c: evidence[c].sends)
     # a look-alike of a harmed customer with only two messages and no purchases yet
     evidence["thin"] = ContactEvidence(exposed_days=14.0, open_days=30.0, sends=2.0)
     harm = fitted(evidence)
