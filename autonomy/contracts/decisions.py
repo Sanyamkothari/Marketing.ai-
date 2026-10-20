@@ -24,6 +24,12 @@ class Action(Contract):
     format: Format = Format.TEXT
     send_at: AwareDatetime
     follow_up_step: int = Field(default=0, description="0 = first contact, 1 = first follow-up, ...")
+    item_id: str | None = Field(
+        default=None, description="The product this action is about (refill, recommendation)"
+    )
+    asset_id: str | None = Field(
+        default=None, description="The approved image/video used, when the format needs one"
+    )
 
 
 class Bid(Contract):
