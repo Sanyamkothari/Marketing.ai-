@@ -471,7 +471,17 @@ class ClickResponseModel(BetaResponseModel):
     customer's own organic chance of buying in the window (from `organic`, set by the agent) plus the
     uplift. Window conversions still come in through `update()` as for `BetaResponseModel`, so the
     nightly learner keeps its control posteriors, but the bids do not read them.
+
+    **Purchases weigh in per person** (`uplift_from_clicks`). A put-off customer still clicks, so
+    uplift read from clicks credits them with a message's full gain while their buying drops.
+    Bidders that see `uplift_from_clicks` weigh each customer's click gain against their own
+    purchases inside and outside message weeks (`autonomy.decide.bidders.ContactHarm.purchase_shift`),
+    by how well each is measured: see docs/v2/CLICK_HARM.md.
     """
+
+    uplift_from_clicks = True
+    """Read by `GoalBidder`: this model's uplift is implied by clicks, so its bids are weighed
+    against each customer's purchases."""
 
     def __init__(
         self,

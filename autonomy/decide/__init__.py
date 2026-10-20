@@ -16,19 +16,25 @@ the plain message (`shrink_offer_extra`, `offer_sensitivity_factor`, `organic_ch
 the dent contact makes in some customers' own buying (`ContactHarm`, found by `contact_harm_of`).
 `ContactHarm` is a per-person posterior read against the holdout's organic trend (at least
 `HARM_MIN_HOLDOUT` people); `leave_alone` says when messages credibly lower someone's buying, and
-`leave_alone_retry` lets them back in now and then so a wrong verdict can be undone.
+`leave_alone_retry` lets them back in now and then so a wrong verdict can be undone. For a model
+whose uplift comes from clicks (`uplift_from_clicks`), `ContactHarm.purchase_shift` weighs each
+customer's click gain against their own purchases, after taking off the gap all records share
+(`ClickGap`); the nightly refit runs in blocks of `HARM_BLOCK` customers.
 `policy.Market` is one customer's priced options before the draw.
 """
 
 from autonomy.decide import rules
 from autonomy.decide.audience import matches
 from autonomy.decide.bidders import (
+    CLICK_GAP_MIN,
     DEFAULT_CHANNEL_COSTS,
     EVIDENCE_HALF_LIFE_DAYS,
+    HARM_BLOCK,
     HARM_MIN_HOLDOUT,
     LEAVE_ALONE_CREDIBLE,
     LEAVE_ALONE_RETRY,
     AssetOf,
+    ClickGap,
     ContactHarm,
     GoalBidder,
     HarmEvidence,
@@ -76,8 +82,10 @@ from autonomy.decide.timing import ReadingHourModel, candidate_times, choose_sen
 
 __all__ = [
     "ANY",
+    "CLICK_GAP_MIN",
     "DEFAULT_CHANNEL_COSTS",
     "EVIDENCE_HALF_LIFE_DAYS",
+    "HARM_BLOCK",
     "HARM_MIN_HOLDOUT",
     "LEAVE_ALONE_CREDIBLE",
     "LEAVE_ALONE_RETRY",
@@ -85,6 +93,7 @@ __all__ = [
     "AutonomousPolicy",
     "Beta",
     "BetaResponseModel",
+    "ClickGap",
     "ContactHarm",
     "FatigueModel",
     "FatigueObservation",
