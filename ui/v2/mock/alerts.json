@@ -1,0 +1,38 @@
+[
+  {
+    "alert_id": "alert_wa_quality_1020",
+    "at": "2026-10-20T12:40:00Z",
+    "goal_id": "goal_winback",
+    "severity": "warning",
+    "code": "whatsapp_quality",
+    "message": "WhatsApp quality rating turned yellow, so WhatsApp is paused for this goal. Email carries on.",
+    "auto_paused": true
+  },
+  {
+    "alert_id": "alert_question_1020",
+    "at": "2026-10-20T10:15:00Z",
+    "goal_id": "goal_winback",
+    "severity": "info",
+    "code": "needs_answer",
+    "message": "2 customers replied asking whether the house blend has changed. The agent wasn't sure how to answer; please check the draft reply.",
+    "auto_paused": false
+  },
+  {
+    "alert_id": "alert_offer_shift_1019",
+    "at": "2026-10-19T07:00:00Z",
+    "goal_id": "goal_winback",
+    "severity": "info",
+    "code": "learning",
+    "message": "Free shipping is beating 10% off for lapsed coffee buyers, so more of them now get free shipping.",
+    "auto_paused": false
+  },
+  {
+    "alert_id": "alert_bounces_1018",
+    "at": "2026-10-18T16:20:00Z",
+    "goal_id": null,
+    "severity": "critical",
+    "code": "delivery_rate_below",
+    "message": "Email delivery fell to 93.1% after a batch of old addresses bounced. Email was paused for 2 hours while those addresses were removed.",
+    "auto_paused": true
+  }
+]

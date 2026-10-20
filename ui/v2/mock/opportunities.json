@@ -1,0 +1,44 @@
+[
+  {
+    "goal_id": "opp_cart",
+    "business_id": "demo",
+    "text": "Recover abandoned carts from the last 7 days",
+    "kind": "cart_recovery",
+    "objective": "revenue",
+    "budget": 1500.0,
+    "currency": "USD",
+    "starts_at": "2026-10-19T06:00:00Z",
+    "ends_at": null,
+    "autonomy": "shadow",
+    "status": "draft",
+    "created_at": "2026-10-19T06:00:00Z"
+  },
+  {
+    "goal_id": "opp_cross",
+    "business_id": "demo",
+    "text": "Introduce skincare buyers to the new haircare range",
+    "kind": "cross_sell",
+    "objective": "gross_profit",
+    "budget": 1000.0,
+    "currency": "USD",
+    "starts_at": "2026-10-19T06:00:00Z",
+    "ends_at": null,
+    "autonomy": "shadow",
+    "status": "draft",
+    "created_at": "2026-10-19T06:00:00Z"
+  },
+  {
+    "goal_id": "opp_onboard",
+    "business_id": "demo",
+    "text": "Welcome new subscribers and get them to a first order",
+    "kind": "onboarding",
+    "objective": "conversion",
+    "budget": 800.0,
+    "currency": "USD",
+    "starts_at": "2026-10-19T06:00:00Z",
+    "ends_at": null,
+    "autonomy": "shadow",
+    "status": "draft",
+    "created_at": "2026-10-19T06:00:00Z"
+  }
+]

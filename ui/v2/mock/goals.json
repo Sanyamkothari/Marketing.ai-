@@ -1,0 +1,30 @@
+[
+  {
+    "goal_id": "goal_winback",
+    "business_id": "demo",
+    "text": "Win back customers who haven't bought in 60 days, $5,000 this month",
+    "kind": "win_back",
+    "objective": "gross_profit",
+    "budget": 5000.0,
+    "currency": "USD",
+    "starts_at": "2026-10-01T09:00:00Z",
+    "ends_at": "2026-10-31T23:59:00Z",
+    "autonomy": "approve",
+    "status": "active",
+    "created_at": "2026-10-01T09:00:00Z"
+  },
+  {
+    "goal_id": "goal_repeat",
+    "business_id": "demo",
+    "text": "Get first-time buyers to make a second purchase within 30 days, $2,000 budget",
+    "kind": "repeat_purchase",
+    "objective": "gross_profit",
+    "budget": 2000.0,
+    "currency": "USD",
+    "starts_at": "2026-10-19T06:00:00Z",
+    "ends_at": null,
+    "autonomy": "shadow",
+    "status": "draft",
+    "created_at": "2026-10-19T06:00:00Z"
+  }
+]

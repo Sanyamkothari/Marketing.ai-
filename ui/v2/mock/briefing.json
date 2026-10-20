@@ -1,0 +1,46 @@
+{
+  "briefing_id": "brf_goal_winback_20261020",
+  "goal_id": "goal_winback",
+  "as_of": "2026-10-20T07:00:00Z",
+  "period": "daily",
+  "headline": "Yesterday the win-back goal contacted 412 customers and 37 of them bought, for $2,960 in revenue.",
+  "sections": [
+    {
+      "title": "What happened",
+      "body": "Contacted 412 customers and left 1,688 alone. 37 bought within the day, for $2,960 in revenue. Spend was $96.",
+      "numbers": {
+        "contacted": 412.0,
+        "left_alone": 1688.0,
+        "buyers": 37.0,
+        "revenue": 2960.0,
+        "spend": 96.0
+      }
+    },
+    {
+      "title": "Who we left alone and why",
+      "body": "1,120 were at their weekly contact limit or had just bought, 384 looked like they buy on their own anyway, and 184 are in the no-contact holdout.",
+      "numbers": {
+        "capped_or_recent": 1120.0,
+        "would_buy_anyway": 384.0,
+        "holdout": 184.0
+      }
+    },
+    {
+      "title": "What it is learning",
+      "body": "Free shipping is beating the percentage discount for lapsed coffee buyers. The share of contacts offered the discount fell from 31% to 18%.",
+      "numbers": {
+        "pct10_share_before": 0.31,
+        "pct10_share_now": 0.18
+      }
+    },
+    {
+      "title": "Watch",
+      "body": "No customer complaints yesterday and 3 unsubscribes. Email delivery was 98.7%.",
+      "numbers": {
+        "complaints": 0.0,
+        "unsubscribes": 3.0,
+        "delivery_rate": 0.987
+      }
+    }
+  ]
+}

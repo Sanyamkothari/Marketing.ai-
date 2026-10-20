@@ -1,0 +1,31 @@
+{
+  "goal_id": "goal_winback",
+  "as_of": "2026-10-19T06:00:00Z",
+  "agent_n": 8120,
+  "baseline_n": 1015,
+  "holdout_n": 1015,
+  "incremental_revenue": {
+    "point": 14200.0,
+    "low": 6100.0,
+    "high": 22300.0
+  },
+  "incremental_profit": {
+    "point": 4300.0,
+    "low": 900.0,
+    "high": 7700.0
+  },
+  "lift_vs_baseline": {
+    "point": 0.38,
+    "low": 0.05,
+    "high": 0.71
+  },
+  "spend": 1840.0,
+  "roi": {
+    "point": 2.3,
+    "low": 0.5,
+    "high": 4.2
+  },
+  "notes": [
+    "Holdout and baseline are 10% each; ranges are 95% intervals."
+  ]
+}

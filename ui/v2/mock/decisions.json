@@ -1,0 +1,550 @@
+[
+  {
+    "decision_id": "dec_20261020_015",
+    "customer_id": "cust_2002",
+    "made_at": "2026-10-20T13:15:00Z",
+    "kind": "nothing",
+    "action": null,
+    "group": "agent",
+    "probability": 0.9,
+    "expected_net": 0.0,
+    "attention_price": 0.15,
+    "reason": "Left alone: the best message was worth less than the cost of using up their attention this week.",
+    "bids": [
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "email",
+          "offer_id": "none",
+          "content_id": "ci_0",
+          "format": "text",
+          "send_at": "2026-10-20T15:30:00Z",
+          "follow_up_step": 0
+        },
+        "uplift": 0.003,
+        "value_if_converted": 38.0,
+        "offer_cost": 0.0,
+        "channel_cost": 0.02,
+        "urgency": 1.0,
+        "expected_net": 0.09,
+        "uncertainty": 0.4
+      }
+    ],
+    "blocked_by": [],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_014",
+    "customer_id": "cust_0733",
+    "made_at": "2026-10-20T13:02:00Z",
+    "kind": "nothing",
+    "action": null,
+    "group": "holdout",
+    "probability": 1.0,
+    "expected_net": 0.0,
+    "attention_price": 0.0,
+    "reason": "In the no-contact holdout: we never message this group, so it shows what happens without us.",
+    "bids": [],
+    "blocked_by": [],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_013",
+    "customer_id": "cust_4096",
+    "made_at": "2026-10-20T12:55:00Z",
+    "kind": "act",
+    "action": {
+      "goal_id": "goal_winback",
+      "channel": "email",
+      "offer_id": "none",
+      "content_id": "ci_0",
+      "format": "text",
+      "send_at": "2026-10-20T15:30:00Z",
+      "follow_up_step": 0
+    },
+    "group": "agent",
+    "probability": 0.86,
+    "expected_net": 2.24,
+    "attention_price": 0.15,
+    "reason": "Email instead of WhatsApp: WhatsApp is paused, and email is the next best channel for him.",
+    "bids": [
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "email",
+          "offer_id": "none",
+          "content_id": "ci_0",
+          "format": "text",
+          "send_at": "2026-10-20T15:30:00Z",
+          "follow_up_step": 0
+        },
+        "uplift": 0.039,
+        "value_if_converted": 58.0,
+        "offer_cost": 0.0,
+        "channel_cost": 0.02,
+        "urgency": 1.0,
+        "expected_net": 2.24,
+        "uncertainty": 0.4
+      }
+    ],
+    "blocked_by": [
+      "channel_paused:whatsapp"
+    ],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_012",
+    "customer_id": "cust_1309",
+    "made_at": "2026-10-20T12:48:00Z",
+    "kind": "nothing",
+    "action": null,
+    "group": "agent",
+    "probability": 0.93,
+    "expected_net": 0.0,
+    "attention_price": 0.15,
+    "reason": "Left alone today: WhatsApp is paused and email has not worked for this customer in the last 3 tries.",
+    "bids": [],
+    "blocked_by": [
+      "channel_paused:whatsapp"
+    ],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_011",
+    "customer_id": "cust_2648",
+    "made_at": "2026-10-20T12:05:00Z",
+    "kind": "act",
+    "action": {
+      "goal_id": "goal_winback",
+      "channel": "email",
+      "offer_id": "none",
+      "content_id": "ci_5",
+      "format": "text",
+      "send_at": "2026-10-20T14:00:00Z",
+      "follow_up_step": 0
+    },
+    "group": "agent",
+    "probability": 0.05,
+    "expected_net": 1.48,
+    "attention_price": 0.15,
+    "reason": "Trying a different email to keep learning: the usual pick was 10% off, but 5% of choices test an alternative.",
+    "bids": [
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "email",
+          "offer_id": "pct10",
+          "content_id": "ci_1",
+          "format": "text",
+          "send_at": "2026-10-20T14:00:00Z",
+          "follow_up_step": 0
+        },
+        "uplift": 0.11,
+        "value_if_converted": 44.0,
+        "offer_cost": 2.1,
+        "channel_cost": 0.02,
+        "urgency": 1.0,
+        "expected_net": 2.72,
+        "uncertainty": 0.4
+      },
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "email",
+          "offer_id": "none",
+          "content_id": "ci_5",
+          "format": "text",
+          "send_at": "2026-10-20T14:00:00Z",
+          "follow_up_step": 0
+        },
+        "uplift": 0.034,
+        "value_if_converted": 44.0,
+        "offer_cost": 0.0,
+        "channel_cost": 0.02,
+        "urgency": 1.0,
+        "expected_net": 1.48,
+        "uncertainty": 0.4
+      }
+    ],
+    "blocked_by": [],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_010",
+    "customer_id": "cust_5120",
+    "made_at": "2026-10-20T11:52:00Z",
+    "kind": "nothing",
+    "action": null,
+    "group": "agent",
+    "probability": 1.0,
+    "expected_net": 0.0,
+    "attention_price": 0.15,
+    "reason": "Left alone: unsubscribed from email and never agreed to WhatsApp, so we have no way to reach them.",
+    "bids": [],
+    "blocked_by": [
+      "unsubscribed:email",
+      "no_consent:whatsapp"
+    ],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_009",
+    "customer_id": "cust_3517",
+    "made_at": "2026-10-20T11:40:00Z",
+    "kind": "act",
+    "action": {
+      "goal_id": "goal_winback",
+      "channel": "whatsapp",
+      "offer_id": "none",
+      "content_id": "ci_3",
+      "format": "text",
+      "send_at": "2026-10-20T15:00:00Z",
+      "follow_up_step": 1
+    },
+    "group": "agent",
+    "probability": 0.79,
+    "expected_net": 2.62,
+    "attention_price": 0.15,
+    "reason": "WhatsApp follow-up: no purchase 3 days after the email, and she answers WhatsApp more often than email.",
+    "bids": [
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "whatsapp",
+          "offer_id": "none",
+          "content_id": "ci_3",
+          "format": "text",
+          "send_at": "2026-10-20T15:00:00Z",
+          "follow_up_step": 1
+        },
+        "uplift": 0.044,
+        "value_if_converted": 61.0,
+        "offer_cost": 0.0,
+        "channel_cost": 0.06,
+        "urgency": 1.0,
+        "expected_net": 2.62,
+        "uncertainty": 0.4
+      },
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "email",
+          "offer_id": "none",
+          "content_id": "ci_0",
+          "format": "text",
+          "send_at": "2026-10-20T15:00:00Z",
+          "follow_up_step": 1
+        },
+        "uplift": 0.018,
+        "value_if_converted": 61.0,
+        "offer_cost": 0.0,
+        "channel_cost": 0.02,
+        "urgency": 1.0,
+        "expected_net": 1.08,
+        "uncertainty": 0.4
+      }
+    ],
+    "blocked_by": [],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_008",
+    "customer_id": "cust_0921",
+    "made_at": "2026-10-20T11:31:00Z",
+    "kind": "nothing",
+    "action": null,
+    "group": "agent",
+    "probability": 0.97,
+    "expected_net": 0.0,
+    "attention_price": 0.15,
+    "reason": "Left alone: bought 3 days ago, so a win-back message would be wasted.",
+    "bids": [],
+    "blocked_by": [],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_007",
+    "customer_id": "cust_2875",
+    "made_at": "2026-10-20T11:24:00Z",
+    "kind": "act",
+    "action": {
+      "goal_id": "goal_winback",
+      "channel": "email",
+      "offer_id": "none",
+      "content_id": "ci_2",
+      "format": "text",
+      "send_at": "2026-10-20T14:00:00Z",
+      "follow_up_step": 0
+    },
+    "group": "baseline",
+    "probability": 1.0,
+    "expected_net": 0.0,
+    "attention_price": 0.0,
+    "reason": "Simple rule: everyone who has not bought in 60 days gets the standard reminder email.",
+    "bids": [],
+    "blocked_by": [],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_006",
+    "customer_id": "cust_4410",
+    "made_at": "2026-10-20T11:20:00Z",
+    "kind": "nothing",
+    "action": null,
+    "group": "agent",
+    "probability": 1.0,
+    "expected_net": 0.0,
+    "attention_price": 0.15,
+    "reason": "Left alone: already contacted twice this week, the most we allow.",
+    "bids": [],
+    "blocked_by": [
+      "max_contacts_per_week"
+    ],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_005",
+    "customer_id": "cust_1876",
+    "made_at": "2026-10-20T11:14:00Z",
+    "kind": "act",
+    "action": {
+      "goal_id": "goal_winback",
+      "channel": "email",
+      "offer_id": "pct10",
+      "content_id": "ci_1",
+      "format": "text",
+      "send_at": "2026-10-20T14:30:00Z",
+      "follow_up_step": 0
+    },
+    "group": "agent",
+    "probability": 0.88,
+    "expected_net": 1.95,
+    "attention_price": 0.15,
+    "reason": "10% off by email: she used an offer on 4 of her 5 orders and it has been 94 days since the last one.",
+    "bids": [
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "email",
+          "offer_id": "pct10",
+          "content_id": "ci_1",
+          "format": "text",
+          "send_at": "2026-10-20T14:30:00Z",
+          "follow_up_step": 0
+        },
+        "uplift": 0.083,
+        "value_if_converted": 49.0,
+        "offer_cost": 2.1,
+        "channel_cost": 0.02,
+        "urgency": 1.0,
+        "expected_net": 1.95,
+        "uncertainty": 0.4
+      },
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "email",
+          "offer_id": "none",
+          "content_id": "ci_0",
+          "format": "text",
+          "send_at": "2026-10-20T14:30:00Z",
+          "follow_up_step": 0
+        },
+        "uplift": 0.021,
+        "value_if_converted": 55.0,
+        "offer_cost": 0.0,
+        "channel_cost": 0.02,
+        "urgency": 1.0,
+        "expected_net": 1.14,
+        "uncertainty": 0.4
+      }
+    ],
+    "blocked_by": [],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_004",
+    "customer_id": "cust_3301",
+    "made_at": "2026-10-20T11:10:00Z",
+    "kind": "nothing",
+    "action": null,
+    "group": "agent",
+    "probability": 0.95,
+    "expected_net": 0.0,
+    "attention_price": 0.15,
+    "reason": "Left alone: customers like this buy on their own, and messages have made them less likely to buy.",
+    "bids": [
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "email",
+          "offer_id": "none",
+          "content_id": "ci_0",
+          "format": "text",
+          "send_at": "2026-10-20T14:00:00Z",
+          "follow_up_step": 0
+        },
+        "uplift": -0.012,
+        "value_if_converted": 71.0,
+        "offer_cost": 0.0,
+        "channel_cost": 0.02,
+        "urgency": 1.0,
+        "expected_net": -0.87,
+        "uncertainty": 0.4
+      }
+    ],
+    "blocked_by": [],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_003",
+    "customer_id": "cust_0587",
+    "made_at": "2026-10-20T11:06:00Z",
+    "kind": "nothing",
+    "action": null,
+    "group": "holdout",
+    "probability": 1.0,
+    "expected_net": 0.0,
+    "attention_price": 0.0,
+    "reason": "In the no-contact holdout: we never message this group, so it shows what happens without us.",
+    "bids": [],
+    "blocked_by": [],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_002",
+    "customer_id": "cust_2210",
+    "made_at": "2026-10-20T11:05:00Z",
+    "kind": "act",
+    "action": {
+      "goal_id": "goal_winback",
+      "channel": "whatsapp",
+      "offer_id": "freeship",
+      "content_id": "ci_4",
+      "format": "text",
+      "send_at": "2026-10-20T13:30:00Z",
+      "follow_up_step": 0
+    },
+    "group": "agent",
+    "probability": 0.84,
+    "expected_net": 2.43,
+    "attention_price": 0.15,
+    "reason": "Free shipping on WhatsApp: he replies on WhatsApp within the hour, and shipping cost stopped his last two carts.",
+    "bids": [
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "whatsapp",
+          "offer_id": "freeship",
+          "content_id": "ci_4",
+          "format": "text",
+          "send_at": "2026-10-20T13:30:00Z",
+          "follow_up_step": 0
+        },
+        "uplift": 0.071,
+        "value_if_converted": 52.0,
+        "offer_cost": 1.2,
+        "channel_cost": 0.06,
+        "urgency": 1.0,
+        "expected_net": 2.43,
+        "uncertainty": 0.4
+      },
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "whatsapp",
+          "offer_id": "none",
+          "content_id": "ci_3",
+          "format": "text",
+          "send_at": "2026-10-20T13:30:00Z",
+          "follow_up_step": 0
+        },
+        "uplift": 0.035,
+        "value_if_converted": 52.0,
+        "offer_cost": 0.0,
+        "channel_cost": 0.06,
+        "urgency": 1.0,
+        "expected_net": 1.76,
+        "uncertainty": 0.4
+      },
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "email",
+          "offer_id": "pct10",
+          "content_id": "ci_1",
+          "format": "text",
+          "send_at": "2026-10-20T14:00:00Z",
+          "follow_up_step": 0
+        },
+        "uplift": 0.04,
+        "value_if_converted": 47.0,
+        "offer_cost": 2.1,
+        "channel_cost": 0.02,
+        "urgency": 1.0,
+        "expected_net": -0.24,
+        "uncertainty": 0.4
+      }
+    ],
+    "blocked_by": [],
+    "policy_version": "v0.3"
+  },
+  {
+    "decision_id": "dec_20261020_001",
+    "customer_id": "cust_1042",
+    "made_at": "2026-10-20T11:02:00Z",
+    "kind": "act",
+    "action": {
+      "goal_id": "goal_winback",
+      "channel": "email",
+      "offer_id": "none",
+      "content_id": "ci_0",
+      "format": "text",
+      "send_at": "2026-10-20T14:00:00Z",
+      "follow_up_step": 0
+    },
+    "group": "agent",
+    "probability": 0.91,
+    "expected_net": 3.31,
+    "attention_price": 0.15,
+    "reason": "Reminder email with no discount: she has bought 6 times, always at full price, and opens email around 10am.",
+    "bids": [
+      {
+        "goal_id": "goal_winback",
+        "action": {
+          "goal_id": "goal_winback",
+          "channel": "email",
+          "offer_id": "none",
+          "content_id": "ci_0",
+          "format": "text",
+          "send_at": "2026-10-20T14:00:00Z",
+          "follow_up_step": 0
+        },
+        "uplift": 0.052,
+        "value_if_converted": 64.0,
+        "offer_cost": 0.0,
+        "channel_cost": 0.02,
+        "urgency": 1.0,
+        "expected_net": 3.31,
+        "uncertainty": 0.4
+      }
+    ],
+    "blocked_by": [
+      "no_consent:whatsapp",
+      "preference:no_discounts"
+    ],
+    "policy_version": "v0.3"
+  }
+]
