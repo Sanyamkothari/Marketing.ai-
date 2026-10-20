@@ -392,6 +392,10 @@ def test_published_openapi_matches_the_routes(client: Any, tmp_path: Path) -> No
         ("/v2/alerts", "get"),
         ("/v2/opportunities", "get"),
         ("/v2/webhooks/{channel}", "post"),
+        ("/v2/batches", "get"),
+        ("/v2/batches/{batch_id}/approve", "post"),
+        ("/v2/batches/{batch_id}/reject", "post"),
+        ("/v2/runtime/tick", "post"),
     }
     assert ops(live) == expected
     assert ops(published) == expected, "docs/v2/openapi.json is stale: run `python -m api.v2.app --openapi`"

@@ -4,22 +4,25 @@ Every JSON body is a contract model (or a small wrapper of them) dumped with
 `model_dump(mode="json")`, which is what FastAPI's response models produce. The routes only parse,
 call one `Services` method and wrap the answer; the rules live in `api.v2.deps`.
 
-`ServiceError`s become their HTTP status (400, 401, 404, 409) with a plain-English `detail`.
+`ServiceError`s become their HTTP status (400, 401, 403, 404, 409) with a plain-English `detail`.
 """
 
 from collections.abc import Callable
-from typing import Annotated, ParamSpec, TypeVar
+from typing import Annotated, Any, ParamSpec, TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import Field
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from pydantic import AwareDatetime, Field
 from starlette.concurrency import run_in_threadpool
 
 from api.v2.deps import ServiceError, Services, get_services
 from autonomy.contracts import (
     Alert,
     AutonomyLevel,
+    Batch,
+    BatchStatus,
     Brief,
     Briefing,
+    Channel,
     ContentItem,
     ContentStatus,
     Contract,
@@ -97,6 +100,37 @@ class CustomerDetail(Contract):
 
 class WebhookResult(Contract):
     accepted: int = Field(description="How many of the callback's events were new")
+
+
+class TickRequest(Contract):
+    now: AwareDatetime | None = Field(
+        default=None, description="When the tick runs; the API's clock if absent"
+    )
+
+
+class TickResult(Contract):
+    """What one runtime tick did: counts, plus the batches it created and the alerts it raised in full."""
+
+    now: AwareDatetime
+    decisions: int = Field(ge=0, description="Decisions made (contact or leave alone)")
+    acts: int = Field(default=0, ge=0, description="Of those, decisions to contact someone")
+    sent: int = Field(ge=0, description="Messages handed to a channel")
+    queued: int = Field(default=0, ge=0, description="Messages queued for a later send time")
+    failed: int = Field(default=0, ge=0)
+    events_folded: int = Field(default=0, ge=0)
+    batches: list[Batch] = Field(description="Batches created by this tick, waiting for a person")
+    batches_sent: list[str] = Field(default_factory=list, description="Ids of approved batches sent")
+    batches_expired: list[str] = Field(default_factory=list)
+    alerts: list[Alert]
+    paused_goals: list[str] = Field(default_factory=list, description="Goals a circuit breaker paused")
+    paused_channels: list[Channel] = Field(default_factory=list)
+    swept_goals: list[str] = Field(default_factory=list, description="Goals whose daily sweep ran")
+    nightly_ran: bool = False
+
+    @classmethod
+    def from_summary(cls, summary: dict[str, Any]) -> "TickResult":
+        """Keep the fields this response promises; a runtime may report more."""
+        return cls.model_validate({k: v for k, v in summary.items() if k in cls.model_fields})
 
 
 # --- goals ----------------------------------------------------------------------------------------
@@ -207,6 +241,39 @@ def list_alerts(services: ServicesDep) -> list[Alert]:
 def list_opportunities(services: ServicesDep) -> list[Goal]:
     """Goals the agent suggests (drafts); POST one's text to /v2/goals to take it up."""
     return services.opportunities()
+
+
+# --- batches (goals at the APPROVE autonomy level) ----------------------------------------------------
+
+
+@router.get("/batches")
+def list_batches(
+    services: ServicesDep, goal_id: str | None = None, status: BatchStatus | None = None
+) -> list[Batch]:
+    """Contacts held for a person to sign off, newest first; filter by goal and status."""
+    return _run(services.list_batches, goal_id, status)
+
+
+@router.post("/batches/{batch_id}/approve")
+def approve_batch(batch_id: str, services: ServicesDep) -> Batch:
+    """Approve a pending batch; the runtime sends it on its next tick. 409 if it is no longer pending."""
+    return _run(services.approve_batch, batch_id)
+
+
+@router.post("/batches/{batch_id}/reject")
+def reject_batch(batch_id: str, services: ServicesDep) -> Batch:
+    """Reject a pending batch; nothing in it is sent. 409 if it is no longer pending."""
+    return _run(services.reject_batch, batch_id)
+
+
+# --- the runtime (operator and demo only) ---------------------------------------------------------
+
+
+@router.post("/runtime/tick")
+def run_tick(services: ServicesDep, body: Annotated[TickRequest | None, Body()] = None) -> TickResult:
+    """Run one tick of the runtime now (or at `now`). 404 without a runtime, 403 where it is turned off."""
+    summary = _run(services.tick, body.now if body is not None else None)
+    return TickResult.from_summary(summary)
 
 
 # --- inbound provider callbacks -------------------------------------------------------------------
