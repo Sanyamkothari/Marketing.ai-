@@ -54,7 +54,7 @@ import {
 } from "./api.js";
 import { injectDataDoctorStyles } from "./styles.js";
 import { sectionOf } from "./plan.js";
-import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml } from "./chat.js";
+import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml, sentenceWithMore } from "./chat.js";
 import { checksHtml, funnelHtml, newLineHtml, planHtml, planModel, queueHtml, todoHtml } from "./plan_view.js";
 import {
   approveHtml,
@@ -294,7 +294,9 @@ function approveSentence(entry) {
   if (modelChoice(s.offer, s.mode)) return "";
   const files = s.screen.case.files || [];
   const file = files[0];
-  const sentence = startSentenceHtml({ table: file ? plain(file.file_name) : "", speed: s.speed });
+  // The minutes are the speed buttons' (one place, one set of numbers): the sentence does not say them again.
+  const ready = cardOf(s.screen, "ready");
+  const sentence = startSentenceHtml({ table: file ? plain(file.file_name) : "", speed: s.speed, time: !(ready && (ready.speeds || []).length) });
   return `<p class="dds-why" data-dds-approve-start-sentence>${sentence}</p><p class="dds-why" data-dds-start-leave>You can close this page.</p>`;
 }
 
@@ -330,6 +332,11 @@ function chatMainHtml(entry) {
   // next to the button the person just clicked; at the top of a long page it would be out of sight.
   // The card's learning times are the server's; the sentence above Approve says the same ones (before a goal is chosen
   // no offer has brought them in yet).
+  // The learning time answered in See details opens the buttons on it (once per answer: a later click on a button wins).
+  if (ready && ready.speed && s.speedFrom !== ready.speed) {
+    s.speedFrom = ready.speed;
+    s.speed = ready.speed;
+  }
   if (ready && (ready.speeds || []).length) applySpeedMinutes(Object.fromEntries(ready.speeds.map((sp) => [sp.id, sp.minutes])));
   const alertInCard = s.alertAt === "card" && Boolean(ready && ["approve", "start"].includes(ready.stage));
   const parts = ready && ready.stage === "start" ? startParts(entry) : null;
@@ -358,7 +365,7 @@ function chatMainHtml(entry) {
   });
   const intake = screen.case.read_only ? "" : intakeHtml(entry, { first: false });
   const panel = panelHtml(screen, { tab: s.tab, side: s.side, intake, busy: Boolean(s.busy) });
-  return `<div class="dds ddc" data-dds data-dds-chat-view data-dds-place="${esc(host.place)}" data-dds-case="${esc(screen.case.case_id)}">${headHtml(screen, { level })}${alertInCard ? "" : `${notice}${err}`}<div class="ddc-layout">${conversation}${panel}</div>${
+  return `<div class="dds ddc" data-dds data-dds-chat-view data-dds-place="${esc(host.place)}" data-dds-case="${esc(screen.case.case_id)}">${headHtml(screen, { level, titled: host.place !== "wizard" })}${alertInCard ? "" : `${notice}${err}`}<div class="ddc-layout">${conversation}${panel}</div>${
     host.place === "data" ? `<div class="dds-actions">${button({ label: "Start a new check", kind: "tertiary", attrs: "data-dds-new" })}</div>` : ""
   }</div>`;
 }
@@ -688,14 +695,17 @@ async function approve(entry) {
 }
 
 /**
- * The one "Approve and start" click of the chat: the yeses the person ticked in the card, then Approve, then the start
- * that was already there. Every server rule stays: each own yes is sent with its exact sentence, each stop is said yes
- * to by its key, and Approve carries the sentence the person read.
+ * The one "Approve and start" click of the chat: the person's own yeses (the changes in the plan that need one, and any
+ * left-out change they ticked "Also include"), then Approve, then the start that was already there. Every server rule
+ * stays: each own yes is sent with its exact sentence, each stop is said yes to by its key, and Approve carries the
+ * sentence the person read.
  *
  * The order is the one the server needs. Agreeing to a change that was not in the plan puts it there, which counts the
  * plan's checks again and drops yeses said to stops, so the own yeses go first; the stops are read from the plan as it
- * stands then, and a stop the person did not tick ends the chain (the card shows it). If agreeing changed the sentence,
- * nothing is approved: the card shows the new sentence to read and the click is theirs again.
+ * stands then, and a stop the person did not tick ends the chain (the card shows it). The sentence is read again after
+ * the yeses: when it moved only by the changes they just agreed to ("with 4 changes" -> "with 5 changes"), the click
+ * goes on and approves the sentence as it reads now; any other difference approves nothing, and the card shows the new
+ * sentence to read.
  */
 async function approveAndStart(entry) {
   const s = entry.state;
@@ -710,16 +720,23 @@ async function approveAndStart(entry) {
     entry,
     "approve",
     async () => {
+      let added = 0; // left-out changes the person ticked: each one the yes puts into the plan
+      const recorded = new Set();
       for (const yes of card.confirmations) {
-        if (!yes.can_agree || !s.confirms.has(yes.item_id)) continue;
+        if (!yes.can_agree || !(yes.required || s.confirms.has(yes.item_id))) continue;
         await confirmItem(theCase(entry), yes.item_id, yes.sentence);
+        recorded.add(yes.item_id);
+        if (!yes.required) added += 1;
         s.confirms.delete(yes.item_id);
         await latest();
       }
       const now = cardOf(await latest(), "ready");
       if (!now || now.stage !== "approve") return; // the plan moved under the click: the screen shows where it is
-      if (now.sentence !== card.sentence) {
-        s.notice = "Your yes is recorded. What you approve has changed, so read the sentence again, then click Approve and start.";
+      const only = now.sentence === card.sentence || (added > 0 && now.sentence === sentenceWithMore(card.sentence, added));
+      if (!only || now.blocked || now.hold || (now.confirmations || []).some((c) => c.required && c.can_agree && !recorded.has(c.item_id))) {
+        s.notice = only
+          ? "Your yes is recorded. Something else needs a look first, then click Approve and start."
+          : "Your yes is recorded. What you approve has changed, so read the sentence again, then click Approve and start.";
         return;
       }
       for (const stop of now.stops) {
@@ -731,7 +748,14 @@ async function approveAndStart(entry) {
         s.stops.delete(stop.key);
         await latest();
       }
-      await approveCase(theCase(entry), card.sentence);
+      // Approve carries the sentence that was checked above, never the server's fresh one: if acknowledging a stop moved it,
+      // nothing is approved and the card shows the new sentence to read.
+      const last = cardOf(s.screen, "ready");
+      if (!last || last.stage !== "approve" || last.sentence !== now.sentence) {
+        s.notice = "Your yes is recorded. What you approve has changed, so read the sentence again, then click Approve and start.";
+        return;
+      }
+      await approveCase(theCase(entry), now.sentence);
       go = true;
     },
     { announce: "Approved" },

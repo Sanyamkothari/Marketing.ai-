@@ -47,14 +47,15 @@ export const aboutMinutes = (speed) => `about ${minutesText(speedOf(speed).minut
 /**
  * The sentence above the Start button, as HTML: what we learn from, how many customers, and how long it takes.
  * `table` is the person's own file name; `customers` may be unknown; `reuse` is a goal that already has a model,
- * which is used instead of learning again (so there is no choice of time).
+ * which is used instead of learning again (so there is no choice of time). `time: false` leaves the minutes out, where the
+ * three speeds are drawn beside the sentence (the minutes are said in one place).
  */
-export function startSentenceHtml({ table, customers = null, speed = DEFAULT_SPEED, reuse = false }) {
+export function startSentenceHtml({ table, customers = null, speed = DEFAULT_SPEED, reuse = false, time: withTime = true }) {
   const from = table ? userText(table) : "your data";
   const many = Number.isFinite(customers) ? `, ${esc(fmtInt(customers))} customers,` : "";
   const verb = reuse ? "use last month's model on" : "learn from";
   const time = reuse ? "This takes a few minutes." : `${esc(speedOf(speed).name)}: ${esc(aboutMinutes(speed))}.`;
-  return `We will ${verb} ${from}${many} and build your contact list. ${time}`;
+  return `We will ${verb} ${from}${many} and build your contact list.${withTime ? ` ${time}` : ""}`;
 }
 
 /**

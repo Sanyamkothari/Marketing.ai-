@@ -135,6 +135,8 @@ if TYPE_CHECKING:
 __all__ = [
     "AGENT_APPLIED_STEPS",
     "AI_NEEDED_REPLY",
+    "CARRIED_KINDS",
+    "COMBINE_KINDS",
     "VISIT_CODES",
     "CombinePort",
     "ConversePort",
@@ -167,6 +169,8 @@ __all__ = [
     "lazy_converse",
     "mode_of",
     "open_blocking",
+    "plan_change_count",
+    "plan_change_items",
     "prescription_digest",
     "readiness_verify",
     "resume",
@@ -453,6 +457,40 @@ def stored_brief(storage: Storage, case: Case) -> GoalBrief | None:
         return None  # GOAL_BRIEF loads and writes it again
 
 
+COMBINE_KINDS: Final[frozenset[str]] = frozenset({"build_dataset", "stack_files"})
+"""The kinds of the approved join and stack (`engine.doctor.combine_run.JOIN_KIND`, `STACK_KIND`)."""
+CARRIED_KINDS: Final[frozenset[str]] = frozenset({"outcome_column", "as_of_column", "consent_column"})
+"""The decisions on what the data means; they stay with the case when a join or stack makes its files one table."""
+_CHECK_KIND: Final[str] = "data_check"
+"""A note or a flag for a person to read: nothing changes, so it is never counted as a change."""
+
+
+def plan_change_items(case: Case) -> tuple[CaseItem, ...]:
+    """The changes in the plan: the ticked items of the active section that change something, on the tables as they
+    stand now. What was said about a file before a join or stack made it into one table is that table's (the join
+    itself and the decisions on what the data means stay)."""
+    items, _ = active_section(case)
+    here = {f.upload_id for f in case.files}
+    return tuple(
+        item
+        for item in items
+        if item.state is ProposalState.ACCEPTED
+        and item.kind != _CHECK_KIND
+        and (
+            item.upload_id is None
+            or item.upload_id in here
+            or item.kind in COMBINE_KINDS
+            or item.kind in CARRIED_KINDS
+        )
+    )
+
+
+def plan_change_count(case: Case) -> int:
+    """How many changes the plan holds. The one number: the approval sentence, the first look and the checklist all
+    say this one."""
+    return len(plan_change_items(case))
+
+
 def approval_sentence(case: Case, *, goal_name: str | None = None) -> str:
     """The sentence the person approves, word for word (recorded with the approval).
 
@@ -461,13 +499,7 @@ def approval_sentence(case: Case, *, goal_name: str | None = None) -> str:
     """
     from engine.doctor.goal_names import goal_display_name
 
-    items, _ = active_section(case)
-    here = {f.upload_id for f in case.files}  # a file made into another table is counted in that table
-    ticked = sum(
-        1
-        for item in items
-        if item.state is ProposalState.ACCEPTED and (item.upload_id is None or item.upload_id in here)
-    )
+    ticked = plan_change_count(case)
     goal = active_goal(case)
     what = f"{ticked} change{'s' if ticked != 1 else ''}"
     files = len(case.files)

@@ -191,6 +191,14 @@ def test_a_join_then_approve_ends_ready_with_the_decisions_carried_and_nothing_d
     ), "kept on the case"
     assert cards[-1]["type"] == "ready" and cards[-1]["stage"] == "start" and cards[-1]["hold"] == ""
     first = cards[0]
-    assert first["type"] == "first_look" and first["fixes_count"] == sum(
-        1 for c in changes if c["state"] == "accepted"
-    )
+    in_plan = [
+        i
+        for i in case["items"]
+        if i["state"] == "accepted"
+        and i["kind"] != "data_check"
+        and (i["upload_id"] in {None, table["upload_id"]} or i["kind"] in carried)
+    ]
+    assert first["type"] == "first_look" and first["fixes_count"] == len(
+        in_plan
+    ), "one count of changes: the plan's own, the number the approval sentence says"
+    assert first["fixes_count"] >= sum(1 for c in changes if c["state"] == "accepted")

@@ -223,6 +223,63 @@ test("the agent's reply: what it did folded, what it took back, and an answer it
   assert.deepEqual({ q: posts("answers")[0].body.question_id, o: posts("answers")[0].body.option_id }, { q: q.question_id, o: "c0" });
 });
 
+test("a suggested answer is offered once, in its reply: the button, the other answers a tap away, no box that says it again", async () => {
+  const s = await show("question", {
+    ai: connected(),
+    patch: (a) => {
+      const q = a.case.questions.find((x) => x.code === "UNKNOWN_BOOLEAN");
+      const ready = a.view.conversation.findIndex((c) => c.type === "ready");
+      const at = a.view.conversation.findIndex((c) => c.type === "question" && c.question_id === q.question_id);
+      const [own] = a.view.conversation.splice(at, 1); // (the server leaves the open question's card out while its reply offers an answer)
+      const others = [...own.options.filter((o) => o.id !== "c0"), own.dont_know];
+      a.view.conversation.splice(ready === -1 ? a.view.conversation.length : ready - 1, 0, {
+        type: "message",
+        role: "agent",
+        text: "I understood: haa is yes. Use this?",
+        item_ids: [],
+        withdrawn: [],
+        tools: [],
+        sent: [],
+        suggestion: { question_id: q.question_id, option_id: "c0", label: "Yes: haa is yes, nahi is no", question: q.text, used: false, others },
+      });
+      return a;
+    },
+  });
+  const q = s.case.questions.find((x) => x.code === "UNKNOWN_BOOLEAN");
+  assert.equal($$(`[data-dds-question="${q.question_id}"]`).length, 0, "not also a question card");
+  assert.equal($$("[data-dds-suggestion]").length, 1, "one place");
+  assert.equal($$("[data-dds-use-answer]").length, 1, "one Use this answer");
+  assert.doesNotMatch($("[data-dds-suggestion]").textContent, /I understood/, "the reply already says what was understood");
+  assert.match($("[data-dds-suggestion]").textContent, /Yes: haa is yes, nahi is no/);
+  const other = $(`[data-dds-suggestion="${q.question_id}"] .ddc-others [data-dds-dk-chip]`);
+  assert.ok(other, "I don't know is one of the other answers");
+  world.next.answers = "question";
+  other.click();
+  await until(() => posts("answers").length === 1, 2000, "the other answer");
+  assert.equal(posts("answers")[0].body.question_id, q.question_id);
+});
+
+test("in the New campaign wizard the card around the chat names the customers: the chat adds no second heading", async () => {
+  await show("approve_class", { host: { place: "wizard", goalId: GOAL } });
+  assert.ok($("[data-dds-chat-view]") && $("[data-dds-verdict]"), "the verdict and the next step are still there");
+  assert.equal($("[data-dds-chat-view] .ddc-head .dds-title"), null, "no heading of its own");
+  assert.ok($("[data-dds-next]").textContent.length > 0);
+  await show("approve_class");
+  assert.match($("[data-dds-chat-view] .ddc-head .dds-title").textContent, /^Your data for/, "on the Data page the chat names itself");
+});
+
+test("one count of changes: the checklist, the first look and the Ready sentence say the same number", async () => {
+  const s = await show("approve_class");
+  const first = card(s, "first_look");
+  const said = /with (\d+) changes?/.exec(card(s, "ready").sentence);
+  assert.equal(first.fixes_count, Number(said[1]));
+  assert.equal(chat.checklistOf(s).find((r) => r.id === "fixes").text, `${first.fixes_count} changes made`);
+  assert.match($("[data-dds-first-look]").textContent, new RegExp(`I made ${first.fixes_count} changes on a copy`));
+  assert.equal($('[data-dds-check-item="fixes"]').textContent.trim(), `${first.fixes_count} changes made`);
+  const open = chat.checklistOf(s).find((r) => r.id === "questions");
+  assert.equal(open.done, first.questions_count === 0, "and the questions left are the server's count too");
+});
+
 // --- the data panel ---------------------------------------------------------------------------------------------
 
 const PREVIEW = {
@@ -296,7 +353,7 @@ test("an answer without a conversation, or a card this screen does not know, nev
 
 // --- the one approval -------------------------------------------------------------------------------------------
 
-test("Approve and start: the own yes, Approve with the sentence read, then the start - in that order, one click", async () => {
+test("Approve and start: the own yes, Approve with the sentence read, then the start - in that order, ONE click and no boxes to tick first", async () => {
   const s = await show("approve_class");
   const ready = card(s, "ready");
   const rows = ready.confirmations.find((c) => c.required);
@@ -305,21 +362,20 @@ test("Approve and start: the own yes, Approve with the sentence read, then the s
   assert.equal($$("[data-dds-approve-start]").length, 1, "one approval");
   assert.equal(go.textContent.trim(), "Approve and start");
   assert.equal($("[data-dds-approve-sentence]").textContent, ready.sentence, "the sentence, word for word");
-  assert.equal(go.disabled, true, "the change that needs its own yes is not ticked");
-  assert.match($(`[data-dds-confirm-row="${rows.item_id}"]`).textContent, /Needed to go on/);
-  assert.match($(`[data-dds-confirm-row="${consent.item_id}"]`).textContent, /Left out unless you agree/);
+  assert.equal(go.disabled, false, "the change that needs its own yes is agreed above: nothing to tick before the click");
+  assert.ok(!$(`input[data-dds-confirm="${rows.item_id}"]`), "an answer already given is not asked again as a box");
+  assert.match($(`[data-dds-agreed="${rows.item_id}"]`).textContent, /Needs your yes: .*Approve and start gives your yes\./, "this goal asks for a separate yes: said in a line, given by the click");
+  assert.match($(`[data-dds-confirm-row="${consent.item_id}"]`).textContent, /Also include: .*Left out unless you tick it/);
   assert.deepEqual(
     $$("[data-dds-speeds] .btn").map((b) => b.textContent.trim()),
     ["Quick: about 5 minutes", "Balanced: about 15 minutes (recommended)", "Thorough: about 40 minutes"],
   );
   $('[data-dds-speed="quick"]').click();
   await settle(1);
-  tick($(`input[data-dds-confirm="${rows.item_id}"]`));
-  assert.equal($("[data-dds-approve-start]").disabled, false, "ticked: Approve and start turns on, in place");
   world.next.approval = "ready";
   $("[data-dds-approve-start]").click();
   await until(() => world.posted.some((p) => p.path === "/campaign-runs"), 4000, "the start");
-  assert.deepEqual(order(), ["confirmations", "approval", "campaign-runs"]);
+  assert.deepEqual(order(), ["confirmations", "approval", "campaign-runs"], "the yes, Approve and the start from the one click");
   assert.deepEqual({ item: posts("confirmations")[0].body.item_id, sentence: posts("confirmations")[0].body.sentence }, { item: rows.item_id, sentence: rows.sentence });
   assert.equal(posts("approval")[0].body.sentence, ready.sentence, "Approve carries the sentence read");
   const run = world.posted.find((p) => p.path === "/campaign-runs").body;
@@ -328,15 +384,44 @@ test("Approve and start: the own yes, Approve with the sentence read, then the s
   assert.ok(!posts("confirmations").some((p) => p.body.item_id === consent.item_id), "what was not ticked is left out");
 });
 
+test("a left-out change the person includes is agreed in the same click; the sentence moving by just that is approved at once", async () => {
+  const bump = (a, delta) => {
+    const ready = a.view.conversation.find((c) => c.type === "ready");
+    if (ready && ready.stage === "approve" && world.posted.some((p) => p.path.endsWith("/confirmations"))) {
+      a.view.approval_sentence = chat.sentenceWithMore(a.view.approval_sentence, delta);
+      ready.sentence = a.view.approval_sentence;
+    }
+    return a;
+  };
+  const s = await show("approve_class", { patch: (a) => bump(a, 1) });
+  const ready = card(s, "ready");
+  const consent = ready.confirmations.find((c) => !c.required);
+  tick($(`input[data-dds-confirm="${consent.item_id}"]`));
+  world.next.approval = "ready";
+  $("[data-dds-approve-start]").click();
+  await until(() => world.posted.some((p) => p.path === "/campaign-runs"), 4000, "the start");
+  assert.equal(posts("confirmations").length, 2, "the answer's yes and the included change's yes");
+  assert.equal(posts("approval").length, 1, "one click, one approval: no second click for a sentence that only counted the yes");
+  assert.equal(posts("approval")[0].body.sentence, chat.sentenceWithMore(ready.sentence, 1), "the sentence as it reads now");
+  assert.ok(!$("[data-dds-notice]"), "nothing to read again");
+});
+
+test("the sentence only counts the changes the person just agreed to", () => {
+  const sentence = "Prepare 1 file with 4 changes for the goal “Find customers likely to buy”. Nothing else changes.";
+  assert.equal(chat.sentenceWithMore(sentence, 0), sentence);
+  assert.equal(chat.sentenceWithMore(sentence, 1), "Prepare 1 file with 5 changes for the goal “Find customers likely to buy”. Nothing else changes.");
+  assert.equal(chat.sentenceWithMore("Prepare 2 files with 0 changes. Nothing else changes.", 1), "Prepare 2 files with 1 change. Nothing else changes.");
+  assert.equal(chat.sentenceWithMore("Something else entirely.", 1), "Something else entirely.");
+});
+
 test("the approval card says what the click leaves out and what happens after it", async () => {
   const s = await show("approve_class");
   const ready = card(s, "ready");
-  const rows = ready.confirmations.find((c) => c.required);
   const consent = ready.confirmations.find((c) => !c.required);
-  tick($(`input[data-dds-confirm="${rows.item_id}"]`));
   assert.match($("[data-dds-approve-leaves-out]").textContent, /^Approve and start leaves out:/);
   assert.ok($("[data-dds-approve-leaves-out]").textContent.includes(consent.sentence.slice(0, 20)), "the unticked change is named next to the button");
-  assert.match($("[data-dds-approve-start-sentence]").textContent, /build your contact list\. \w+: about \d+ minutes\./);
+  assert.match($("[data-dds-approve-start-sentence]").textContent, /^We will learn from .+ and build your contact list\.$/, "the minutes are the buttons' only");
+  assert.doesNotMatch($("[data-dds-approve-start-sentence]").textContent, /minutes?/);
   assert.match($("[data-dds-ready] [data-dds-start-leave]").textContent, /You can close this page/);
   tick($(`input[data-dds-confirm="${consent.item_id}"]`));
   assert.ok(!$("[data-dds-approve-leaves-out]"), "ticked: nothing is left out");
@@ -395,9 +480,7 @@ test("a stop is a checkbox in the card: nothing goes on until it is ticked, then
     if (ready && ready.stage === "approve" && !world.posted.some((p) => p.path.endsWith("/acknowledgements"))) ready.stops = [stop];
     return a;
   };
-  const s = await show("approve_class", { patch });
-  const rows = card(s, "ready").confirmations.find((c) => c.required);
-  tick($(`input[data-dds-confirm="${rows.item_id}"]`));
+  await show("approve_class", { patch });
   assert.equal($("[data-dds-approve-start]").disabled, true, "a stop is open");
   assert.match($("[data-dds-stop-row]").textContent, /A safety check stops this plan: One step leaves no customers\./);
   tick($('input[data-dds-stop="k-stop"]'));
@@ -409,6 +492,28 @@ test("a stop is a checkbox in the card: nothing goes on until it is ticked, then
   assert.equal(posts("acknowledgements")[0].body.key, "k-stop");
 });
 
+test("if acknowledging a stop changes the sentence, nothing is approved: the new sentence is shown to read first", async () => {
+  const stop = { key: "k-stop", text: "One step leaves no customers.", item_id: null };
+  const next = "Prepare 3 files with 9 changes for the goal “Something else”. Nothing else changes.";
+  const patch = (a) => {
+    const ready = a.view.conversation.find((c) => c.type === "ready");
+    if (!ready || ready.stage !== "approve") return a;
+    if (world.posted.some((p) => p.path.endsWith("/acknowledgements"))) {
+      a.view.approval_sentence = next;
+      ready.sentence = next;
+      ready.stops = [];
+    } else ready.stops = [stop];
+    return a;
+  };
+  await show("approve_class", { patch });
+  tick($('input[data-dds-stop="k-stop"]'));
+  $("[data-dds-approve-start]").click();
+  await until(() => $("[data-dds-notice]"), 3000, "the notice");
+  assert.match($("[data-dds-notice]").textContent, /What you approve has changed/);
+  assert.equal($("[data-dds-approve-sentence]").textContent, next);
+  assert.equal(posts("approval").length, 0, "the sentence the person did not read is not approved");
+});
+
 test("a stop that appears after the own yeses ends the chain: nothing is approved until the person ticks it", async () => {
   const patch = (a) => {
     const ready = a.view.conversation.find((c) => c.type === "ready");
@@ -417,8 +522,7 @@ test("a stop that appears after the own yeses ends the chain: nothing is approve
     }
     return a;
   };
-  const s = await show("approve_class", { patch });
-  tick($(`input[data-dds-confirm="${card(s, "ready").confirmations.find((c) => c.required).item_id}"]`));
+  await show("approve_class", { patch });
   $("[data-dds-approve-start]").click();
   await until(() => $("[data-dds-notice]"), 3000, "the notice");
   assert.match($("[data-dds-notice]").textContent, /A safety check changed/);
@@ -428,7 +532,7 @@ test("a stop that appears after the own yeses ends the chain: nothing is approve
   assert.ok($("[data-dds-stop-row]"), "the new stop is in the card to read");
 });
 
-test("if agreeing changed the sentence, nothing is approved: the new sentence is shown to read first", async () => {
+test("if agreeing changed the sentence by more than the yeses, nothing is approved: the new sentence is shown to read first", async () => {
   const next = "Prepare 1 file with 5 changes for the goal “Find customers likely to buy”. Nothing else changes.";
   const patch = (a) => {
     const ready = a.view.conversation.find((c) => c.type === "ready");
@@ -439,8 +543,7 @@ test("if agreeing changed the sentence, nothing is approved: the new sentence is
     }
     return a;
   };
-  const s = await show("approve_class", { patch });
-  tick($(`input[data-dds-confirm="${card(s, "ready").confirmations.find((c) => c.required).item_id}"]`));
+  await show("approve_class", { patch });
   $("[data-dds-approve-start]").click();
   await until(() => $("[data-dds-notice]"), 3000, "the notice");
   assert.match($("[data-dds-notice]").textContent, /Your yes is recorded\. What you approve has changed/);
@@ -479,7 +582,6 @@ test("approved already: the card is the start - the sentence, what was left out,
 test("next month the card still offers last month's model or learning again; Approve and start then waits for the choice", async () => {
   const offer = { model_version_id: "m_last", usable: true, reason: null, suggest: "reuse", hint: "This data looks like last month's." };
   await show("approve_class", { offer });
-  tick($(`input[data-dds-confirm="${card(screen("approve_class"), "ready").confirmations.find((c) => c.required).item_id}"]`));
   world.next.approval = "ready";
   $("[data-dds-approve-start]").click();
   await until(() => $('[data-dds-ready="start"]'), 4000, "the start stage");
@@ -491,10 +593,9 @@ test("next month the card still offers last month's model or learning again; App
 
 test("in a goal's setup the one click approves and fills the form (nothing runs)", async () => {
   const filled = [];
-  const s = await show("approve_class", { host: { place: "setup", goalId: GOAL, approved: (fill) => filled.push(fill) } });
+  await show("approve_class", { host: { place: "setup", goalId: GOAL, approved: (fill) => filled.push(fill) } });
   assert.equal($("[data-dds-approve-start]").textContent.trim(), "Approve and continue", "nothing starts here, so the button does not say it does");
   assert.ok(!$("[data-dds-approve-start-sentence]"), "no start sentence where nothing starts");
-  tick($(`input[data-dds-confirm="${card(s, "ready").confirmations.find((c) => c.required).item_id}"]`));
   world.next.approval = "ready";
   $("[data-dds-approve-start]").click();
   await until(() => filled.length === 1, 4000, "the form filled");
@@ -546,7 +647,7 @@ test("the checklist and the prompts are plain functions of the answer", () => {
   assert.equal(chat.cardOf({ view: {} }, "ready"), null);
 });
 
-test("the learning times are the card's own, one minute is not 'minutes', and the sentence says what the buttons say", async () => {
+test("the learning times are the card's own, in one place and one set of numbers; one minute is not 'minutes'", async () => {
   const rules = await import("../../../../../ui/modules/campaigns/run_rules.js");
   const patch = (a) => {
     const ready = a.view.conversation.find((c) => c.type === "ready");
@@ -559,7 +660,8 @@ test("the learning times are the card's own, one minute is not 'minutes', and th
       $$("[data-dds-speeds] .btn").map((b) => b.textContent.trim()),
       ["Quick: about 1 minute", "Balanced: about 7 minutes (recommended)", "Thorough: about 20 minutes"],
     );
-    assert.match($("[data-dds-approve-start-sentence]").textContent, /Balanced: about 7 minutes\./, "not the screen's built-in 15");
+    assert.doesNotMatch($("[data-dds-approve-start-sentence]").textContent, /minutes?/, "the sentence does not say the minutes again: the buttons are the one place");
+    assert.match($('[data-dds-speed="balanced"]').textContent, /about 7 minutes/, "not the screen's built-in 15");
   } finally {
     rules.applySpeedMinutes(null);
   }
@@ -589,18 +691,38 @@ test("while the last check found something to fix, Approve is off and the card s
   assert.match($("[data-dds-ready-notes]").textContent, /Say which values/, "the reasons stay in the card");
 });
 
-test("a change the card repeats as a checkbox says it was shown above, with Undo", async () => {
+test("a change that needs its own yes is said once in the card, as agreed (an answer) or shown above with Undo; never a box", async () => {
   const patch = (a) => {
     const ready = a.view.conversation.find((c) => c.type === "ready");
-    ready.confirmations.find((c) => c.required).shown = true;
+    const required = ready.confirmations.find((c) => c.required);
+    required.separate = false;
+    required.answered = false;
+    required.shown = true;
     return a;
   };
   const s = await show("approve_class", { patch });
   const ready = card(s, "ready");
   const rows = ready.confirmations.find((c) => c.required);
   const consent = ready.confirmations.find((c) => !c.required);
-  assert.match($(`[data-dds-confirm-row="${rows.item_id}"]`).textContent, /Shown above, with Undo\. Needed to go on/);
-  assert.doesNotMatch($(`[data-dds-confirm-row="${consent.item_id}"]`).textContent, /Shown above/);
+  assert.match($(`[data-dds-agreed="${rows.item_id}"]`).textContent, /^Shown above, with Undo: /);
+  assert.equal($$("input[data-dds-confirm]").length, 1, "only the left-out change has a box");
+  assert.ok($(`input[data-dds-confirm="${consent.item_id}"]`));
+  await show("approve_class", { patch: (a) => (a.view.conversation.find((c) => c.type === "ready").confirmations.find((c) => c.required).separate = false, a) });
+  assert.match($(`[data-dds-agreed="${rows.item_id}"]`).textContent, /^Already agreed: .*Recorded when you click Approve and start\.$/);
+});
+
+test("when a separate yes is the rule the card says why in one line, and the one click gives it", async () => {
+  const patch = (a) => {
+    const ready = a.view.conversation.find((c) => c.type === "ready");
+    ready.confirmations.find((c) => c.required).separate = true;
+    return a;
+  };
+  const s = await show("approve_class", { patch });
+  const rows = card(s, "ready").confirmations.find((c) => c.required);
+  const line = $(`[data-dds-agreed="${rows.item_id}"]`).textContent;
+  assert.match(line, /^Needs your yes: .*Someone other than whoever suggested it must agree \(.+\)\. Approve and start gives your yes\.$/);
+  assert.equal($(`[data-dds-agreed="${rows.item_id}"]`).querySelectorAll("br").length, 1, "one line of why");
+  assert.equal($("[data-dds-approve-start]").disabled, false);
 });
 
 test("a refused start is told in the card with the Start button, not at the top of the page", async () => {

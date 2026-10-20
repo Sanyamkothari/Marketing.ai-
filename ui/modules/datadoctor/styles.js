@@ -156,10 +156,12 @@ export const CSS = `
 .ddc-goal{align-items:flex-start}
 .ddc-goal .btn{align-self:flex-start}
 .ddc-fit.is-not{border-color:var(--warning)}
-.ddc-suggestion{display:flex;flex-direction:column;gap:var(--s2);align-items:flex-start;padding:var(--s3) var(--s4);background:var(--brand-50);border:1px solid var(--brand-200);border-radius:var(--r-lg)}
+.ddc-suggestion{display:flex;flex-direction:column;gap:var(--s2);align-items:flex-start}
 .ddc-trace{font-size:var(--fs-small);color:var(--ink2)}
 .ddc-trace>summary{cursor:pointer;min-height:32px;display:flex;align-items:center}
 .ddc-trace ul{margin:0;padding-left:var(--s5)}
+.ddc-others{font-size:var(--fs-small);color:var(--ink2)}
+.ddc-others>summary{cursor:pointer;min-height:32px;display:flex;align-items:center}
 .ddc-ready{display:flex;flex-direction:column;gap:var(--s3);padding:var(--s4) var(--s5);background:var(--surface);border:2px solid var(--brand-blue);border-radius:var(--r-lg)}
 .ddc-ready.is-blocked{border-color:var(--warning)}
 .ddc-ready .dds-group-t{padding:0;border:0;background:none}
