@@ -397,6 +397,8 @@ def test_published_openapi_matches_the_routes(client: Any, tmp_path: Path) -> No
         ("/v2/batches/{batch_id}/reject", "post"),
         ("/v2/runtime/tick", "post"),
     }
-    assert ops(live) == expected
-    assert ops(published) == expected, "docs/v2/openapi.json is stale: run `python -m api.v2.app --openapi`"
+    # The marketer app's routes are all there; the standalone engines (/v2/engines/...) add their own.
+    assert expected <= ops(live)
+    assert {op for op in ops(live) - expected if not op[0].startswith("/v2/engines")} == set()
+    assert ops(published) == ops(live), "docs/v2/openapi.json is stale: run `python -m api.v2.app --openapi`"
     assert set(published["components"]["schemas"]) >= {"Goal", "Brief", "Decision", "ProofSummary"}

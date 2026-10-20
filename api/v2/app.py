@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.v2.deps import Services, attach_services, build_demo_services
+from api.v2.engines.router import router as engines_router
 from api.v2.routes import router
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -80,6 +81,7 @@ def create_app(
     if folder.is_dir():
         app.mount("/v2/app", StaticFiles(directory=folder, html=True), name="v2-app")
     app.include_router(router)
+    app.include_router(engines_router)  # the six standalone engines, /v2/engines/... (docs/v2/ENGINES.md)
     return app
 
 

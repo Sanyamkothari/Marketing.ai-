@@ -961,6 +961,939 @@
           }
         }
       }
+    },
+    "/v2/engines/doctor/profile": {
+      "post": {
+        "tags": [
+          "engines",
+          "engines: P1 data doctor"
+        ],
+        "summary": "Post Profile",
+        "description": "Profile an uploaded CSV. Options are form fields (or query params with a raw CSV body).",
+        "operationId": "post_profile_v2_engines_doctor_profile_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "snapshot": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "primary_key": {
+                    "type": "string"
+                  },
+                  "target": {
+                    "type": "string"
+                  },
+                  "date_columns": {
+                    "type": "string",
+                    "description": "Comma-separated"
+                  },
+                  "delimiter": {
+                    "type": "string",
+                    "default": ","
+                  },
+                  "use_v1": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "file"
+                ]
+              }
+            },
+            "text/csv": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/doctor/map-events": {
+      "post": {
+        "tags": [
+          "engines",
+          "engines: P1 data doctor"
+        ],
+        "summary": "Post Map Events",
+        "description": "Turn an uploaded CSV into events with an `EventMapping`; bad rows come back as problems.",
+        "operationId": "post_map_events_v2_engines_doctor_map_events_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "mapping": {
+                    "type": "string",
+                    "description": "An EventMapping as JSON"
+                  },
+                  "source": {
+                    "type": "string",
+                    "default": "csv"
+                  },
+                  "delimiter": {
+                    "type": "string",
+                    "default": ","
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "file",
+                  "mapping"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapEventsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/mandates/catalogue": {
+      "get": {
+        "tags": [
+          "engines",
+          "mandates"
+        ],
+        "summary": "Get Catalogue",
+        "description": "One catalogue version, or the latest when `version` is left out.",
+        "operationId": "get_catalogue_v2_engines_mandates_catalogue_get",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogueVersion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "engines",
+          "mandates"
+        ],
+        "summary": "Publish Catalogue",
+        "description": "Publish the next catalogue version. Old versions are kept, unchanged, forever.",
+        "operationId": "publish_catalogue_v2_engines_mandates_catalogue_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CataloguePublish"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogueVersion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/mandates/catalogue/diff": {
+      "get": {
+        "tags": [
+          "engines",
+          "mandates"
+        ],
+        "summary": "Diff Catalogue",
+        "operationId": "diff_catalogue_v2_engines_mandates_catalogue_diff_get",
+        "parameters": [
+          {
+            "name": "a",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "From this version",
+              "title": "A"
+            },
+            "description": "From this version"
+          },
+          {
+            "name": "b",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "To this version; default the latest",
+              "title": "B"
+            },
+            "description": "To this version; default the latest"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogueDiffView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/mandates/catalogue/history": {
+      "get": {
+        "tags": [
+          "engines",
+          "mandates"
+        ],
+        "summary": "Catalogue History",
+        "operationId": "catalogue_history_v2_engines_mandates_catalogue_history_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CatalogueHistoryItem"
+                  },
+                  "type": "array",
+                  "title": "Response Catalogue History V2 Engines Mandates Catalogue History Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/mandates": {
+      "post": {
+        "tags": [
+          "engines",
+          "mandates"
+        ],
+        "summary": "Draft Mandate",
+        "description": "Draft a mandate. Nothing may act on it until it is signed and certified.",
+        "operationId": "draft_mandate_v2_engines_mandates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MandateDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MandateView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/mandates/{mandate_id}": {
+      "get": {
+        "tags": [
+          "engines",
+          "mandates"
+        ],
+        "summary": "Get Mandate",
+        "operationId": "get_mandate_v2_engines_mandates__mandate_id__get",
+        "parameters": [
+          {
+            "name": "mandate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mandate Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MandateView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/mandates/{mandate_id}/ledger": {
+      "get": {
+        "tags": [
+          "engines",
+          "mandates"
+        ],
+        "summary": "Mandate Ledger",
+        "description": "This mandate's history, and whether the whole chain still verifies.",
+        "operationId": "mandate_ledger_v2_engines_mandates__mandate_id__ledger_get",
+        "parameters": [
+          {
+            "name": "mandate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mandate Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MandateLedgerView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/mandates/{mandate_id}/sign": {
+      "post": {
+        "tags": [
+          "engines",
+          "mandates"
+        ],
+        "summary": "Sign",
+        "description": "Add one verified signature. The mandate waits for `certify` even once the policy is met.",
+        "operationId": "sign_v2_engines_mandates__mandate_id__sign_post",
+        "parameters": [
+          {
+            "name": "mandate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mandate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MandateView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/mandates/{mandate_id}/certify": {
+      "post": {
+        "tags": [
+          "engines",
+          "mandates"
+        ],
+        "summary": "Certify",
+        "description": "Turn the mandate on (201), or 409 with every requirement still missing and whom to ask.",
+        "operationId": "certify_v2_engines_mandates__mandate_id__certify_post",
+        "parameters": [
+          {
+            "name": "mandate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mandate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActorRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MandateView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/mandates/{mandate_id}/check-action": {
+      "post": {
+        "tags": [
+          "engines",
+          "mandates"
+        ],
+        "summary": "Check",
+        "description": "Would this action be allowed? Every violation is listed, from the mandate and the catalogue.",
+        "operationId": "check_v2_engines_mandates__mandate_id__check_action_post",
+        "parameters": [
+          {
+            "name": "mandate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mandate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckActionResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/mandates/{mandate_id}/revoke": {
+      "post": {
+        "tags": [
+          "engines",
+          "mandates"
+        ],
+        "summary": "Revoke",
+        "description": "Withdraw the mandate for good. Every later check fails with `mandate_not_active`.",
+        "operationId": "revoke_v2_engines_mandates__mandate_id__revoke_post",
+        "parameters": [
+          {
+            "name": "mandate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mandate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MandateView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/decisions/evaluate": {
+      "post": {
+        "tags": [
+          "engines",
+          "engines: P3 decision hub"
+        ],
+        "summary": "Evaluate Route",
+        "description": "What the agent would do for this customer now: one action, or nothing, with its auction.",
+        "operationId": "evaluate_route_v2_engines_decisions_evaluate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/decisions/evaluate-batch": {
+      "post": {
+        "tags": [
+          "engines",
+          "engines: P3 decision hub"
+        ],
+        "summary": "Evaluate Batch Route",
+        "description": "`evaluate` for up to 1,000 customers sharing one plan, library and moment.",
+        "operationId": "evaluate_batch_route_v2_engines_decisions_evaluate_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluateBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluateBatchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/measurement/summary": {
+      "post": {
+        "tags": [
+          "engines",
+          "engines: P6 incrementality ledger"
+        ],
+        "summary": "Post Summary",
+        "description": "The ledger's summary for the decisions and events in the request; nothing is stored.",
+        "operationId": "post_summary_v2_engines_measurement_summary_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SummaryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasurementSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/measurement/goals/{goal_id}/summary": {
+      "get": {
+        "tags": [
+          "engines",
+          "engines: P6 incrementality ledger"
+        ],
+        "summary": "Get Goal Summary",
+        "description": "The summary for one goal of the running programme, from the attached `Services`.\n\nReads every decision up to now from the decision log and each decided customer's events. The\nhorizon is the goal's brief's; channel costs are the API's `SEND_COST` and offer costs the\nbrief's. 503 when the app runs without services, 404 for an unknown goal.",
+        "operationId": "get_goal_summary_v2_engines_measurement_goals__goal_id__summary_get",
+        "parameters": [
+          {
+            "name": "goal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Goal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasurementSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/measurement/ope": {
+      "post": {
+        "tags": [
+          "engines",
+          "engines: P6 incrementality ledger"
+        ],
+        "summary": "Post Ope",
+        "description": "How the target policy would have done on this log; 422 when the log can't be evaluated.",
+        "operationId": "post_ope_v2_engines_measurement_ope_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines/measurement/holdout/assign": {
+      "post": {
+        "tags": [
+          "engines",
+          "engines: P6 incrementality ledger"
+        ],
+        "summary": "Post Holdout Assign",
+        "description": "Each customer's group under our salted hash: the same answer on every call, for every client.\n\nRepeated ids are answered once. 422 when the shares leave no room for the agent.",
+        "operationId": "post_holdout_assign_v2_engines_measurement_holdout_assign_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HoldoutAssignRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldoutAssignResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/engines": {
+      "get": {
+        "tags": [
+          "engines"
+        ],
+        "summary": "List Engines",
+        "description": "The six engines and which of them this build serves.",
+        "operationId": "list_engines_v2_engines_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineIndex"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1038,6 +1971,85 @@
           "send_at"
         ],
         "title": "Action"
+      },
+      "ActionCosts": {
+        "properties": {
+          "offer_cost": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Offer Cost",
+            "default": 0.0
+          },
+          "channel_cost": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Channel Cost",
+            "default": 0.0
+          },
+          "revenue_if_converted": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revenue If Converted"
+          },
+          "margin_if_converted": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin If Converted"
+          },
+          "offer_cost_if_converted": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Cost If Converted"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ActionCosts",
+        "description": "What one action costs and is expected to earn, in the mandate's currency.\n\n`revenue_if_converted` and `margin_if_converted` describe the order the action hopes for:\nrevenue is what the customer pays before the offer, margin is gross margin before the offer.\nLeave them `None` when unknown (see `check_action` for how that is treated).\n\n`offer_cost` is what the action commits against the budget. A decide `Bid` carries the\n*expected* offer cost (cost per redemption times the chance of redemption), which is right for\nspend but far too small for the margin: a customer who converts redeems the offer, so the margin\nof that order loses the full cost per redemption. `offer_cost_if_converted` is that full cost;\n`None` means it equals `offer_cost`."
+      },
+      "ActorRequest": {
+        "properties": {
+          "actor": {
+            "type": "string",
+            "title": "Actor",
+            "default": ""
+          },
+          "now": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Now"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ActorRequest"
       },
       "Alert": {
         "properties": {
@@ -1535,6 +2547,414 @@
         ],
         "title": "BriefingSection"
       },
+      "BudgetIn": {
+        "properties": {
+          "amount": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Amount"
+          },
+          "currency": {
+            "type": "string",
+            "maxLength": 3,
+            "minLength": 3,
+            "title": "Currency"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "title": "BudgetIn"
+      },
+      "CatalogueChange": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "offer",
+              "channel",
+              "template"
+            ],
+            "title": "Kind"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "change": {
+            "type": "string",
+            "enum": [
+              "added",
+              "removed",
+              "changed"
+            ],
+            "title": "Change"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields",
+            "description": "For 'changed': the fields that differ",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "key",
+          "change"
+        ],
+        "title": "CatalogueChange",
+        "description": "One line of a diff: which entry, and whether it was added, removed or changed (and which fields)."
+      },
+      "CatalogueDiff": {
+        "properties": {
+          "from_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Version"
+          },
+          "to_version": {
+            "type": "integer",
+            "title": "To Version"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogueChange"
+            },
+            "type": "array",
+            "title": "Changes",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "from_version",
+          "to_version"
+        ],
+        "title": "CatalogueDiff",
+        "description": "What changed between two catalogue versions. `from_version` None means \"from nothing\"."
+      },
+      "CatalogueDiffView": {
+        "properties": {
+          "diff": {
+            "$ref": "#/components/schemas/CatalogueDiff"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "diff",
+          "summary"
+        ],
+        "title": "CatalogueDiffView"
+      },
+      "CatalogueHistoryItem": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "created_at",
+          "created_by",
+          "summary",
+          "content_hash"
+        ],
+        "title": "CatalogueHistoryItem"
+      },
+      "CataloguePublish": {
+        "properties": {
+          "offers": {
+            "items": {
+              "$ref": "#/components/schemas/OfferOption"
+            },
+            "type": "array",
+            "title": "Offers",
+            "default": []
+          },
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/ChannelRate"
+            },
+            "type": "array",
+            "title": "Channels",
+            "default": []
+          },
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogueTemplate"
+            },
+            "type": "array",
+            "title": "Templates",
+            "default": []
+          },
+          "created_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Created By"
+          },
+          "now": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Now"
+          },
+          "allow_unchanged": {
+            "type": "boolean",
+            "title": "Allow Unchanged",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "created_by"
+        ],
+        "title": "CataloguePublish"
+      },
+      "CatalogueTemplate": {
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Template Id"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "provider_template_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Provider Template Name"
+          },
+          "approved_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Approved At"
+          },
+          "locale": {
+            "type": "string",
+            "minLength": 2,
+            "title": "Locale",
+            "default": "en"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "template_id",
+          "channel",
+          "provider_template_name",
+          "approved_at"
+        ],
+        "title": "CatalogueTemplate",
+        "description": "A provider-side template that passed review (WhatsApp templates must be pre-approved by Meta)."
+      },
+      "CatalogueVersion": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Created By"
+          },
+          "offers": {
+            "items": {
+              "$ref": "#/components/schemas/OfferOption"
+            },
+            "type": "array",
+            "title": "Offers",
+            "default": []
+          },
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/ChannelRate"
+            },
+            "type": "array",
+            "title": "Channels",
+            "default": []
+          },
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogueTemplate"
+            },
+            "type": "array",
+            "title": "Templates",
+            "default": []
+          },
+          "diff_from_previous": {
+            "$ref": "#/components/schemas/CatalogueDiff"
+          },
+          "previous_hash": {
+            "type": "string",
+            "title": "Previous Hash",
+            "description": "content_hash of version - 1",
+            "default": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "created_at",
+          "created_by",
+          "diff_from_previous"
+        ],
+        "title": "CatalogueVersion",
+        "description": "One immutable published version. `content_hash` covers every field except itself."
+      },
+      "CausalMetrics": {
+        "properties": {
+          "treated_conversion_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Treated Conversion Rate"
+          },
+          "holdout_conversion_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holdout Conversion Rate"
+          },
+          "net_incremental_lift_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Incremental Lift Pct",
+            "description": "(treated rate / holdout rate - 1) x 100; None when the holdout never converted"
+          },
+          "confidence_interval_95": {
+            "anyOf": [
+              {
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Interval 95",
+            "description": "95% interval of the lift, in percent (delta method on the ratio of rates)"
+          },
+          "p_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P Value",
+            "description": "Two-sided, for treated rate minus holdout rate"
+          },
+          "conversion_rate_difference": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Estimate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Treated rate minus holdout rate, with its 95% interval"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "treated_conversion_rate",
+          "holdout_conversion_rate",
+          "net_incremental_lift_pct",
+          "confidence_interval_95",
+          "p_value"
+        ],
+        "title": "CausalMetrics"
+      },
       "Channel": {
         "type": "string",
         "enum": [
@@ -1547,6 +2967,39 @@
         ],
         "title": "Channel",
         "description": "Where a message can go. `WEBHOOK` means \"hand the decision to the client's own tool\"."
+      },
+      "ChannelRate": {
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "unit_cost": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Unit Cost"
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$",
+            "title": "Currency",
+            "description": "ISO code, e.g. INR"
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Provider"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "channel",
+          "unit_cost",
+          "currency",
+          "provider"
+        ],
+        "title": "ChannelRate",
+        "description": "What one message on a channel costs through one provider, e.g. WhatsApp via Gupshup at 0.78 INR."
       },
       "ChannelStats": {
         "properties": {
@@ -1623,6 +3076,199 @@
         "additionalProperties": false,
         "type": "object",
         "title": "ChannelStats"
+      },
+      "CheckActionRequest": {
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "costs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActionCosts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/CustomerState"
+          },
+          "now": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Now"
+          },
+          "spend": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpendToDate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending_touches": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pending Touches",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action",
+          "state",
+          "now"
+        ],
+        "title": "CheckActionRequest",
+        "description": "The action to test. `costs` left out are taken from the mandate's catalogue version."
+      },
+      "CheckActionResult": {
+        "properties": {
+          "allowed": {
+            "type": "boolean",
+            "title": "Allowed"
+          },
+          "violations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Violations"
+          },
+          "mandate_id": {
+            "type": "string",
+            "title": "Mandate Id"
+          },
+          "mandate_version": {
+            "type": "integer",
+            "title": "Mandate Version"
+          },
+          "catalogue_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalogue Version"
+          },
+          "costs": {
+            "$ref": "#/components/schemas/ActionCosts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "allowed",
+          "violations",
+          "mandate_id",
+          "mandate_version",
+          "costs"
+        ],
+        "title": "CheckActionResult"
+      },
+      "Clearing": {
+        "properties": {
+          "attention_price": {
+            "type": "number",
+            "title": "Attention Price",
+            "description": "What a bid had to beat: the cost of one more message"
+          },
+          "winning_bid": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winning Bid",
+            "description": "The chosen action's expected net value; None if none"
+          },
+          "runner_up": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunnerUp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The best allowed bid that did not win"
+          },
+          "clearing_price": {
+            "type": "number",
+            "title": "Clearing Price",
+            "description": "max(attention price, runner-up bid)"
+          },
+          "winner_surplus": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winner Surplus",
+            "description": "winning_bid - clearing_price; None if nothing won"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "attention_price",
+          "winning_bid",
+          "runner_up",
+          "clearing_price",
+          "winner_surplus"
+        ],
+        "title": "Clearing",
+        "description": "The second-price view of the auction. Informative only: it never changes what was chosen."
+      },
+      "ColumnProfile": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "empty",
+              "number",
+              "date",
+              "boolean",
+              "text"
+            ],
+            "title": "Kind"
+          },
+          "missing_share": {
+            "type": "number",
+            "title": "Missing Share"
+          },
+          "distinct": {
+            "type": "integer",
+            "title": "Distinct"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "missing_share",
+          "distinct"
+        ],
+        "title": "ColumnProfile"
       },
       "ContentItem": {
         "properties": {
@@ -2013,6 +3659,66 @@
         ],
         "title": "CustomerState"
       },
+      "DateColumn": {
+        "properties": {
+          "column": {
+            "type": "string",
+            "title": "Column"
+          },
+          "non_empty": {
+            "type": "integer",
+            "title": "Non Empty"
+          },
+          "unparseable": {
+            "type": "integer",
+            "title": "Unparseable"
+          },
+          "unparseable_share": {
+            "type": "number",
+            "title": "Unparseable Share"
+          },
+          "future_dated": {
+            "type": "integer",
+            "title": "Future Dated"
+          },
+          "earliest": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest"
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "column",
+          "non_empty",
+          "unparseable",
+          "unparseable_share",
+          "future_dated",
+          "earliest",
+          "latest"
+        ],
+        "title": "DateColumn"
+      },
       "Decision": {
         "properties": {
           "decision_id": {
@@ -2112,6 +3818,52 @@
           "nothing"
         ],
         "title": "DecisionKind"
+      },
+      "EngineIndex": {
+        "properties": {
+          "engines": {
+            "items": {
+              "$ref": "#/components/schemas/EngineInfo"
+            },
+            "type": "array",
+            "title": "Engines"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "engines"
+        ],
+        "title": "EngineIndex"
+      },
+      "EngineInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "module": {
+            "type": "string",
+            "title": "Module"
+          },
+          "mounted": {
+            "type": "boolean",
+            "title": "Mounted"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "module",
+          "mounted"
+        ],
+        "title": "EngineInfo"
       },
       "Envelope": {
         "properties": {
@@ -2266,6 +4018,306 @@
         ],
         "title": "Estimate",
         "description": "A number with its 95% interval. Every money figure shown to a person is one of these."
+      },
+      "EvaluateBatchRequest": {
+        "properties": {
+          "briefs": {
+            "items": {
+              "$ref": "#/components/schemas/Brief"
+            },
+            "type": "array",
+            "title": "Briefs",
+            "description": "Approved briefs of the active goals",
+            "default": []
+          },
+          "brief_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Brief Ids",
+            "description": "Briefs to read from the attached workspace, by brief_id",
+            "default": []
+          },
+          "content": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ContentItem"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content",
+            "description": "Approved content to choose from; None reads the workspace's library if one is attached"
+          },
+          "now": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Now",
+            "description": "The moment to decide for; the engine never reads a clock"
+          },
+          "seed": {
+            "type": "integer",
+            "title": "Seed",
+            "description": "Fixes the Thompson draw, so a call repeats exactly",
+            "default": 0
+          },
+          "budget_left": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Budget Left",
+            "description": "goal_id -> money left; a goal left out is not budget-checked"
+          },
+          "goal_kinds": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GoalKind"
+            },
+            "type": "object",
+            "title": "Goal Kinds",
+            "description": "goal_id -> kind (cart recovery fades fast); default custom"
+          },
+          "exploration_floor": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exploration Floor",
+            "description": "Overrides the envelopes' exploration floor"
+          },
+          "customer_states": {
+            "items": {
+              "$ref": "#/components/schemas/CustomerState"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Customer States"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "now",
+          "customer_states"
+        ],
+        "title": "EvaluateBatchRequest"
+      },
+      "EvaluateBatchResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/EvaluateResponse"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "n_customers": {
+            "type": "integer",
+            "title": "N Customers"
+          },
+          "n_take_action": {
+            "type": "integer",
+            "title": "N Take Action"
+          },
+          "n_do_nothing": {
+            "type": "integer",
+            "title": "N Do Nothing"
+          },
+          "policy_version": {
+            "type": "string",
+            "title": "Policy Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "results",
+          "n_customers",
+          "n_take_action",
+          "n_do_nothing",
+          "policy_version"
+        ],
+        "title": "EvaluateBatchResponse"
+      },
+      "EvaluateRequest": {
+        "properties": {
+          "briefs": {
+            "items": {
+              "$ref": "#/components/schemas/Brief"
+            },
+            "type": "array",
+            "title": "Briefs",
+            "description": "Approved briefs of the active goals",
+            "default": []
+          },
+          "brief_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Brief Ids",
+            "description": "Briefs to read from the attached workspace, by brief_id",
+            "default": []
+          },
+          "content": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ContentItem"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content",
+            "description": "Approved content to choose from; None reads the workspace's library if one is attached"
+          },
+          "now": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Now",
+            "description": "The moment to decide for; the engine never reads a clock"
+          },
+          "seed": {
+            "type": "integer",
+            "title": "Seed",
+            "description": "Fixes the Thompson draw, so a call repeats exactly",
+            "default": 0
+          },
+          "budget_left": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Budget Left",
+            "description": "goal_id -> money left; a goal left out is not budget-checked"
+          },
+          "goal_kinds": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GoalKind"
+            },
+            "type": "object",
+            "title": "Goal Kinds",
+            "description": "goal_id -> kind (cart recovery fades fast); default custom"
+          },
+          "exploration_floor": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exploration Floor",
+            "description": "Overrides the envelopes' exploration floor"
+          },
+          "customer_state": {
+            "$ref": "#/components/schemas/CustomerState"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "now",
+          "customer_state"
+        ],
+        "title": "EvaluateRequest"
+      },
+      "EvaluateResponse": {
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "title": "Customer Id"
+          },
+          "decision_id": {
+            "type": "string",
+            "title": "Decision Id"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "TAKE_ACTION",
+              "DO_NOTHING"
+            ],
+            "title": "Decision"
+          },
+          "group": {
+            "$ref": "#/components/schemas/Group"
+          },
+          "probability": {
+            "type": "number",
+            "title": "Probability",
+            "description": "The chance the policy had of this outcome, do-nothing included"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "winning_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WinningAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "suppressed_actions": {
+            "items": {
+              "$ref": "#/components/schemas/SuppressedAction"
+            },
+            "type": "array",
+            "title": "Suppressed Actions"
+          },
+          "blocked_by": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blocked By"
+          },
+          "clearing": {
+            "$ref": "#/components/schemas/Clearing"
+          },
+          "policy_version": {
+            "type": "string",
+            "title": "Policy Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "customer_id",
+          "decision_id",
+          "decision",
+          "group",
+          "probability",
+          "reason",
+          "winning_action",
+          "suppressed_actions",
+          "blocked_by",
+          "clearing",
+          "policy_version"
+        ],
+        "title": "EvaluateResponse"
       },
       "Event": {
         "properties": {
@@ -2428,6 +4480,74 @@
         ],
         "title": "EventType"
       },
+      "FinancialImpact": {
+        "properties": {
+          "gross_incremental_revenue": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Estimate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Agent vs holdout, x agent customers"
+          },
+          "dispatch_costs": {
+            "type": "number",
+            "title": "Dispatch Costs",
+            "description": "Channel costs of the treated group's sent messages"
+          },
+          "offer_cost": {
+            "type": "number",
+            "title": "Offer Cost",
+            "description": "Cost of offers the treated group redeemed"
+          },
+          "net_incremental_profit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Estimate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Margin - costs, agent vs holdout"
+          },
+          "net_incremental_profit_p_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Incremental Profit P Value"
+          },
+          "roi_ratio": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Estimate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Net incremental profit / spend"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "gross_incremental_revenue",
+          "dispatch_costs",
+          "offer_cost",
+          "net_incremental_profit",
+          "roi_ratio"
+        ],
+        "title": "FinancialImpact"
+      },
       "FollowUpStep": {
         "properties": {
           "after_days": {
@@ -2473,6 +4593,66 @@
           "video"
         ],
         "title": "Format"
+      },
+      "FrequencyCap": {
+        "properties": {
+          "max_touches": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Max Touches",
+            "default": 2
+          },
+          "window_days": {
+            "type": "integer",
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Window Days",
+            "default": 7
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "FrequencyCap",
+        "description": "At most `max_touches` messages to one customer in any `window_days` days, across goals.\n\n`window_days` is at most 30 because customer state keeps 30 days of send times."
+      },
+      "FrequencyCapIn": {
+        "properties": {
+          "max_touches": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Touches"
+          },
+          "max_per_customer": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Per Customer"
+          },
+          "window_days": {
+            "type": "integer",
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Window Days",
+            "default": 7
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "FrequencyCapIn",
+        "description": "`max_touches` (or its alias `max_per_customer`) in any `window_days` days."
       },
       "Goal": {
         "properties": {
@@ -2788,6 +4968,962 @@
         ],
         "title": "HealthStatus"
       },
+      "HoldoutAssignRequest": {
+        "properties": {
+          "customer_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 1000000,
+            "minItems": 1,
+            "title": "Customer Ids"
+          },
+          "salt": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Salt",
+            "description": "Fixed per business; a new salt reshuffles everyone"
+          },
+          "holdout_share": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Holdout Share",
+            "default": 0.1
+          },
+          "baseline_share": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Baseline Share",
+            "default": 0.1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "customer_ids",
+          "salt"
+        ],
+        "title": "HoldoutAssignRequest"
+      },
+      "HoldoutAssignResponse": {
+        "properties": {
+          "groups": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Group"
+            },
+            "type": "object",
+            "title": "Groups"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/Group"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "shares": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/Group"
+            },
+            "type": "object",
+            "title": "Shares",
+            "description": "The share of the distinct ids that fell in each group"
+          },
+          "salt": {
+            "type": "string",
+            "title": "Salt"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "groups",
+          "counts",
+          "shares",
+          "salt"
+        ],
+        "title": "HoldoutAssignResponse"
+      },
+      "KeyCheck": {
+        "properties": {
+          "column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Column"
+          },
+          "guessed": {
+            "type": "boolean",
+            "title": "Guessed"
+          },
+          "valid": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid"
+          },
+          "duplicate_keys": {
+            "type": "integer",
+            "title": "Duplicate Keys",
+            "description": "Distinct key values that appear more than once",
+            "default": 0
+          },
+          "duplicate_rows": {
+            "type": "integer",
+            "title": "Duplicate Rows",
+            "description": "Rows beyond the first for a repeated key",
+            "default": 0
+          },
+          "missing": {
+            "type": "integer",
+            "title": "Missing",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "column",
+          "guessed",
+          "valid"
+        ],
+        "title": "KeyCheck"
+      },
+      "LeakCheck": {
+        "properties": {
+          "checked": {
+            "type": "boolean",
+            "title": "Checked"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "suspects": {
+            "items": {
+              "$ref": "#/components/schemas/LeakSuspect"
+            },
+            "type": "array",
+            "title": "Suspects",
+            "default": []
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "checked",
+          "target",
+          "note"
+        ],
+        "title": "LeakCheck"
+      },
+      "LeakSuspect": {
+        "properties": {
+          "column": {
+            "type": "string",
+            "title": "Column"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "column",
+          "reason",
+          "score"
+        ],
+        "title": "LeakSuspect"
+      },
+      "LoggedDecision": {
+        "properties": {
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DecisionKind"
+          },
+          "probability": {
+            "type": "number",
+            "maximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Probability",
+            "description": "Chance the logging policy chose this option"
+          },
+          "reward": {
+            "type": "number",
+            "title": "Reward"
+          },
+          "act_probability": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Act Probability"
+          },
+          "q_act": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Q Act"
+          },
+          "q_nothing": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Q Nothing"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "probability",
+          "reward"
+        ],
+        "title": "LoggedDecision",
+        "description": "One logged decision with its outcome. The options are \"act\" and \"do nothing\".\n\n`act_probability` is the logging policy's chance of acting at all, for an ACT row whose policy\nchose among several actions; without it an ACT row's own probability is taken as that chance\n(one action to choose from). For a NOTHING row the chance of acting is `1 - probability`.\n`q_act` / `q_nothing` are an optional reward model's predictions for this row, for DR."
+      },
+      "Mandate": {
+        "properties": {
+          "mandate_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Mandate Id"
+          },
+          "business_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Business Id"
+          },
+          "goal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Goal Ids",
+            "description": "The goals this mandate governs"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version",
+            "default": 1
+          },
+          "budget_ceiling": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Budget Ceiling",
+            "description": "Total spend allowed over the validity window"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency",
+            "default": "USD"
+          },
+          "max_daily_spend": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Daily Spend",
+            "description": "Per calendar day (UTC)"
+          },
+          "margin_floor_pct": {
+            "type": "number",
+            "exclusiveMaximum": 1.0,
+            "minimum": 0.0,
+            "title": "Margin Floor Pct",
+            "description": "Expected margin after the offer's cost, as a share of revenue, must stay at or above this (0.2 = 20%)",
+            "default": 0.0
+          },
+          "quiet_hours": {
+            "$ref": "#/components/schemas/QuietHours",
+            "default": {
+              "start": 21,
+              "end": 9,
+              "timezone": "UTC"
+            }
+          },
+          "frequency_cap": {
+            "$ref": "#/components/schemas/FrequencyCap",
+            "default": {
+              "max_touches": 2,
+              "window_days": 7
+            }
+          },
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Channels"
+          },
+          "approved_template_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Approved Template Ids",
+            "description": "Content ids that may be sent; an action without one is refused",
+            "default": []
+          },
+          "approved_offer_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Approved Offer Ids",
+            "description": "Offer ids that may be used; 'none' (no offer) is always allowed",
+            "default": []
+          },
+          "cohort_exclusions": {
+            "items": {
+              "$ref": "#/components/schemas/AudienceFilter"
+            },
+            "type": "array",
+            "title": "Cohort Exclusions",
+            "description": "A customer matching any one of these is never contacted",
+            "default": []
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Valid From"
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Valid Until"
+          },
+          "signers": {
+            "items": {
+              "$ref": "#/components/schemas/MandateSignature"
+            },
+            "type": "array",
+            "title": "Signers",
+            "description": "Signatures collected so far",
+            "default": []
+          },
+          "status": {
+            "$ref": "#/components/schemas/MandateStatus",
+            "default": "draft"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By",
+            "default": ""
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "description": "Why this version exists, in plain words",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mandate_id",
+          "business_id",
+          "goal_ids",
+          "budget_ceiling",
+          "channels",
+          "valid_from",
+          "valid_until"
+        ],
+        "title": "Mandate",
+        "description": "The hard limits on autonomous action for one business, one version at a time.\n\nEverything except `signers` and `status` is the *body*: the part that is hashed and signed.\nChanging any limit therefore needs a new version and new signatures; revoking or expiring a\nmandate changes only its status and keeps old signatures checkable."
+      },
+      "MandateDraft": {
+        "properties": {
+          "mandate_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Mandate Id"
+          },
+          "business_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Business Id",
+            "default": "default"
+          },
+          "goal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Goal Ids"
+          },
+          "budget_ceiling_inr": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Ceiling Inr"
+          },
+          "budget_ceiling": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "$ref": "#/components/schemas/BudgetIn"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Ceiling"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 3,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "max_daily_spend": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Daily Spend"
+          },
+          "margin_floor_pct": {
+            "type": "number",
+            "exclusiveMaximum": 100.0,
+            "minimum": 0.0,
+            "title": "Margin Floor Pct",
+            "description": "A percentage: 18 = 18%",
+            "default": 0.0
+          },
+          "quiet_hours": {
+            "$ref": "#/components/schemas/QuietHoursIn",
+            "default": {
+              "start": 21,
+              "end": 9,
+              "timezone": "UTC"
+            }
+          },
+          "frequency_cap": {
+            "$ref": "#/components/schemas/FrequencyCapIn",
+            "default": {
+              "window_days": 7
+            }
+          },
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "type": "array",
+            "title": "Channels",
+            "default": []
+          },
+          "approved_templates": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Approved Templates",
+            "default": []
+          },
+          "approved_offers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Approved Offers",
+            "default": []
+          },
+          "cohort_exclusions": {
+            "items": {
+              "$ref": "#/components/schemas/AudienceFilter"
+            },
+            "type": "array",
+            "title": "Cohort Exclusions",
+            "default": []
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          },
+          "signers": {
+            "items": {
+              "$ref": "#/components/schemas/SignerSpec"
+            },
+            "type": "array",
+            "title": "Signers",
+            "default": []
+          },
+          "catalogue_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalogue Version",
+            "description": "Pin a catalogue version; default the latest, if any"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By",
+            "default": ""
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          },
+          "now": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Now"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mandate_id",
+          "goal_ids"
+        ],
+        "title": "MandateDraft",
+        "description": "A new mandate, in the shape of the founder's example request.\n\nGive the budget as `budget_ceiling_inr`, or as `budget_ceiling` (a number with `currency`, or\n`{amount, currency}`). A bare number with no currency is refused rather than guessed: the same\n500,000 is a very different ceiling in INR and in USD. Channels may be left out when a catalogue is published: they are then the\nchannels of the approved templates. The validity window defaults to 30 days from `now`."
+      },
+      "MandateLedgerView": {
+        "properties": {
+          "mandate_id": {
+            "type": "string",
+            "title": "Mandate Id"
+          },
+          "entries": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Entries"
+          },
+          "chain_ok": {
+            "type": "boolean",
+            "title": "Chain Ok"
+          },
+          "chain_problem": {
+            "type": "string",
+            "title": "Chain Problem",
+            "default": ""
+          },
+          "head": {
+            "type": "string",
+            "title": "Head"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mandate_id",
+          "entries",
+          "chain_ok",
+          "head"
+        ],
+        "title": "MandateLedgerView"
+      },
+      "MandateSignature": {
+        "properties": {
+          "person_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Person Id"
+          },
+          "role": {
+            "$ref": "#/components/schemas/SignerRole"
+          },
+          "key_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Key Id"
+          },
+          "algorithm": {
+            "$ref": "#/components/schemas/SignatureAlgorithm"
+          },
+          "body_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Body Hash"
+          },
+          "signed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Signed At"
+          },
+          "signature": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Signature"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "person_id",
+          "role",
+          "key_id",
+          "algorithm",
+          "body_hash",
+          "signed_at",
+          "signature"
+        ],
+        "title": "MandateSignature",
+        "description": "One person's signature over one mandate body, in one role.\n\nThe signature covers the mandate's body hash together with the person, role, key and time (see\n`autonomy.mandate.signing.signature_message`), so a signature cannot be moved to another\nmandate, another version, another role or another person without failing verification."
+      },
+      "MandateStatus": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "pending_signatures",
+          "active",
+          "expired",
+          "revoked"
+        ],
+        "title": "MandateStatus"
+      },
+      "MandateView": {
+        "properties": {
+          "mandate": {
+            "$ref": "#/components/schemas/Mandate"
+          },
+          "body_hash": {
+            "type": "string",
+            "title": "Body Hash"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MandateStatus",
+            "description": "As of the last change; expiry is applied on check"
+          },
+          "unmet": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unmet",
+            "description": "What the signatures still lack; empty when enough"
+          },
+          "expected_signers": {
+            "items": {
+              "$ref": "#/components/schemas/SignerSpec"
+            },
+            "type": "array",
+            "title": "Expected Signers",
+            "default": []
+          },
+          "catalogue_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalogue Version"
+          },
+          "ledger_head": {
+            "type": "string",
+            "title": "Ledger Head"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mandate",
+          "body_hash",
+          "status",
+          "unmet",
+          "ledger_head"
+        ],
+        "title": "MandateView"
+      },
+      "MapEventsResponse": {
+        "properties": {
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "mapped": {
+            "type": "integer",
+            "title": "Mapped"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/MappingProblem"
+            },
+            "type": "array",
+            "title": "Problems"
+          },
+          "problem_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Problem Counts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "rows",
+          "mapped",
+          "events",
+          "problems",
+          "problem_counts"
+        ],
+        "title": "MapEventsResponse"
+      },
+      "MappingProblem": {
+        "properties": {
+          "row": {
+            "type": "string",
+            "title": "Row",
+            "description": "The row key: the `row_key` values, or the row's index label"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "One of `ProblemCode`"
+          },
+          "column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Column",
+            "description": "The column at fault, when one is"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "row",
+          "code",
+          "message"
+        ],
+        "title": "MappingProblem",
+        "description": "One row that did not become an event, and why. Never carries the row's values (they may be personal)."
+      },
+      "MeasurementStatus": {
+        "type": "string",
+        "enum": [
+          "STATISTICALLY_SIGNIFICANT_POSITIVE",
+          "NOT_YET_SIGNIFICANT",
+          "SIGNIFICANT_NEGATIVE",
+          "INSUFFICIENT_DATA"
+        ],
+        "title": "MeasurementStatus"
+      },
+      "MeasurementSummary": {
+        "properties": {
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal Id"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "title": "As Of"
+          },
+          "objective": {
+            "$ref": "#/components/schemas/Objective"
+          },
+          "horizon_days": {
+            "type": "integer",
+            "title": "Horizon Days"
+          },
+          "treated_customers": {
+            "type": "integer",
+            "title": "Treated Customers"
+          },
+          "holdout_customers": {
+            "type": "integer",
+            "title": "Holdout Customers"
+          },
+          "baseline_customers": {
+            "type": "integer",
+            "title": "Baseline Customers"
+          },
+          "causal_metrics": {
+            "$ref": "#/components/schemas/CausalMetrics"
+          },
+          "financial_impact": {
+            "$ref": "#/components/schemas/FinancialImpact"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MeasurementStatus"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "goal_id",
+          "as_of",
+          "objective",
+          "horizon_days",
+          "treated_customers",
+          "holdout_customers",
+          "baseline_customers",
+          "causal_metrics",
+          "financial_impact",
+          "status"
+        ],
+        "title": "MeasurementSummary"
+      },
       "Objective": {
         "type": "string",
         "enum": [
@@ -2854,6 +5990,323 @@
           "kind"
         ],
         "title": "OfferOption"
+      },
+      "OpeEstimate": {
+        "properties": {
+          "value": {
+            "$ref": "#/components/schemas/Estimate"
+          },
+          "n": {
+            "type": "integer",
+            "title": "N"
+          },
+          "effective_n": {
+            "type": "number",
+            "title": "Effective N",
+            "description": "Kish's effective sample size of the weights"
+          },
+          "max_weight": {
+            "type": "number",
+            "title": "Max Weight"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "value",
+          "n",
+          "effective_n",
+          "max_weight"
+        ],
+        "title": "OpeEstimate"
+      },
+      "OpeRequest": {
+        "properties": {
+          "logged": {
+            "items": {
+              "$ref": "#/components/schemas/LoggedDecision"
+            },
+            "type": "array",
+            "maxItems": 500000,
+            "minItems": 2,
+            "title": "Logged"
+          },
+          "target_policy": {
+            "type": "string",
+            "enum": [
+              "always_act",
+              "never_act",
+              "logged"
+            ],
+            "title": "Target Policy"
+          },
+          "clip": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clip",
+            "description": "Cap on each importance weight"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "logged",
+          "target_policy"
+        ],
+        "title": "OpeRequest"
+      },
+      "OpeResponse": {
+        "properties": {
+          "target_policy": {
+            "type": "string",
+            "enum": [
+              "always_act",
+              "never_act",
+              "logged"
+            ],
+            "title": "Target Policy"
+          },
+          "n": {
+            "type": "integer",
+            "title": "N"
+          },
+          "logged_value": {
+            "type": "number",
+            "title": "Logged Value",
+            "description": "Mean reward under the logging policy"
+          },
+          "acted_share": {
+            "type": "number",
+            "title": "Acted Share"
+          },
+          "ips": {
+            "$ref": "#/components/schemas/OpeEstimate"
+          },
+          "snips": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpeEstimate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dr": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpeEstimate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Needs q_act and q_nothing on every row"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_policy",
+          "n",
+          "logged_value",
+          "acted_share",
+          "ips",
+          "snips",
+          "dr"
+        ],
+        "title": "OpeResponse"
+      },
+      "PiiFinding": {
+        "properties": {
+          "column": {
+            "type": "string",
+            "title": "Column"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "hash",
+              "mask",
+              "drop"
+            ],
+            "title": "Action"
+          },
+          "detected_by": {
+            "type": "string",
+            "enum": [
+              "value",
+              "header",
+              "v1"
+            ],
+            "title": "Detected By"
+          },
+          "match_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Match Share",
+            "description": "Share of sampled cells that matched"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "column",
+          "type",
+          "action",
+          "detected_by"
+        ],
+        "title": "PiiFinding"
+      },
+      "Problem": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning",
+              "info"
+            ],
+            "title": "Severity"
+          },
+          "column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Column"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "severity",
+          "message"
+        ],
+        "title": "Problem"
+      },
+      "ProfileReport": {
+        "properties": {
+          "readiness_score": {
+            "type": "integer",
+            "title": "Readiness Score"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "columns": {
+            "type": "integer",
+            "title": "Columns"
+          },
+          "column_profiles": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnProfile"
+            },
+            "type": "array",
+            "title": "Column Profiles"
+          },
+          "pii_detected": {
+            "items": {
+              "$ref": "#/components/schemas/PiiFinding"
+            },
+            "type": "array",
+            "title": "Pii Detected"
+          },
+          "leak_check": {
+            "$ref": "#/components/schemas/LeakCheck"
+          },
+          "primary_key_valid": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Key Valid"
+          },
+          "primary_key": {
+            "$ref": "#/components/schemas/KeyCheck"
+          },
+          "temporal_integrity": {
+            "$ref": "#/components/schemas/TemporalIntegrity"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "type": "array",
+            "title": "Problems"
+          },
+          "v1_enrichment": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "V1 Enrichment",
+            "description": "What v1's checks added, when the v1 engine is importable"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "readiness_score",
+          "rows",
+          "columns",
+          "column_profiles",
+          "pii_detected",
+          "leak_check",
+          "primary_key_valid",
+          "primary_key",
+          "temporal_integrity",
+          "problems"
+        ],
+        "title": "ProfileReport"
       },
       "ProofSummary": {
         "properties": {
@@ -2956,6 +6409,285 @@
         ],
         "title": "ProofSummary"
       },
+      "QuietHours": {
+        "properties": {
+          "start": {
+            "type": "integer",
+            "maximum": 23.0,
+            "minimum": 0.0,
+            "title": "Start",
+            "default": 21
+          },
+          "end": {
+            "type": "integer",
+            "maximum": 23.0,
+            "minimum": 0.0,
+            "title": "End",
+            "default": 9
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone",
+            "default": "UTC"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "QuietHours",
+        "description": "No message lands from `start` up to (not including) `end`, in the customer's local time.\n\nThe window may wrap midnight (21 -> 9 means 21:00-08:59); equal start and end means no quiet\nhours. `timezone` is used only for a customer whose own zone is blank or not a valid IANA name."
+      },
+      "QuietHoursIn": {
+        "properties": {
+          "start": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Start",
+            "default": 21
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "End",
+            "default": 9
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone",
+            "default": "UTC"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "QuietHoursIn"
+      },
+      "RevokeRequest": {
+        "properties": {
+          "actor": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Actor"
+          },
+          "now": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Now"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "actor"
+        ],
+        "title": "RevokeRequest",
+        "description": "Who revokes. (The ledger entry has no field for a reason yet; see docs/v2/MANDATE.md.)"
+      },
+      "RunnerUp": {
+        "properties": {
+          "goal_id": {
+            "type": "string",
+            "title": "Goal Id"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "offer_id": {
+            "type": "string",
+            "title": "Offer Id"
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Id"
+          },
+          "bid": {
+            "type": "number",
+            "title": "Bid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "goal_id",
+          "channel",
+          "offer_id",
+          "content_id",
+          "bid"
+        ],
+        "title": "RunnerUp"
+      },
+      "SignRequest": {
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/SignerRole"
+          },
+          "signer_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Signer Id"
+          },
+          "key_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Id"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signature"
+          },
+          "signed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signed At"
+          },
+          "algorithm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignatureAlgorithm"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "now": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Now"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "role",
+          "signer_id"
+        ],
+        "title": "SignRequest",
+        "description": "One signature. Either carry it (`signature` + `key_id` + `signed_at` + `algorithm`, made by\nthe signer over `signature_message`), or name a server-held key with `key_id` (or neither, to\nuse the custodial key registered to `signer_id`)."
+      },
+      "SignatureAlgorithm": {
+        "type": "string",
+        "enum": [
+          "ed25519",
+          "hmac-sha256"
+        ],
+        "title": "SignatureAlgorithm"
+      },
+      "SignerRole": {
+        "type": "string",
+        "enum": [
+          "marketing_lead",
+          "cfo",
+          "finance",
+          "compliance",
+          "approver"
+        ],
+        "title": "SignerRole"
+      },
+      "SignerSpec": {
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/SignerRole"
+          },
+          "signer_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Signer Id"
+          },
+          "key_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "role",
+          "signer_id"
+        ],
+        "title": "SignerSpec",
+        "description": "A person expected to sign, in a role. `key_id` names their key when it is known up front."
+      },
+      "SpendToDate": {
+        "properties": {
+          "total": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Total",
+            "default": 0.0
+          },
+          "today": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Today",
+            "default": 0.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SpendToDate",
+        "description": "Money already committed under this mandate: in total, and on the action's own UTC day."
+      },
       "StopMetric": {
         "type": "string",
         "enum": [
@@ -2993,6 +6725,222 @@
           "threshold"
         ],
         "title": "StopRule"
+      },
+      "SummaryRequest": {
+        "properties": {
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/Decision"
+            },
+            "type": "array",
+            "maxItems": 500000,
+            "title": "Decisions"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "type": "array",
+            "maxItems": 500000,
+            "title": "Events"
+          },
+          "horizon_days": {
+            "type": "integer",
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Horizon Days",
+            "description": "Outcome window after a decision",
+            "default": 14
+          },
+          "objective": {
+            "$ref": "#/components/schemas/Objective",
+            "default": "gross_profit"
+          },
+          "channel_costs": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "type": "object",
+            "title": "Channel Costs",
+            "description": "Cost of one message"
+          },
+          "offer_costs": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Offer Costs",
+            "description": "Cost per redemption"
+          },
+          "now": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Now",
+            "description": "Measure as of this moment; windows must close by then"
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal Id",
+            "description": "None: the whole programme"
+          },
+          "margin_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Margin Rate",
+            "description": "Margin share when a purchase has none",
+            "default": 1.0
+          },
+          "value_per_conversion": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Per Conversion",
+            "description": "For yes/no objectives"
+          },
+          "min_group": {
+            "type": "integer",
+            "minimum": 2.0,
+            "title": "Min Group",
+            "description": "Fewest customers per group to claim",
+            "default": 30
+          },
+          "alpha": {
+            "type": "number",
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Alpha",
+            "description": "Significance level for the status",
+            "default": 0.05
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decisions",
+          "events",
+          "now"
+        ],
+        "title": "SummaryRequest"
+      },
+      "SuppressedAction": {
+        "properties": {
+          "goal_id": {
+            "type": "string",
+            "title": "Goal Id"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Channel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "offer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Id"
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Id"
+          },
+          "reason_code": {
+            "type": "string",
+            "title": "Reason Code"
+          },
+          "plain_reason": {
+            "type": "string",
+            "title": "Plain Reason"
+          },
+          "bid": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bid",
+            "description": "The option's expected net value, when it bid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "goal_id",
+          "reason_code",
+          "plain_reason"
+        ],
+        "title": "SuppressedAction",
+        "description": "An option that did not go out, and why. `channel`/`offer_id` are None when a whole goal was out."
+      },
+      "TemporalIntegrity": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot"
+          },
+          "date_columns": {
+            "items": {
+              "$ref": "#/components/schemas/DateColumn"
+            },
+            "type": "array",
+            "title": "Date Columns"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "snapshot",
+          "date_columns"
+        ],
+        "title": "TemporalIntegrity"
       },
       "Theme": {
         "type": "string",
@@ -3211,6 +7159,97 @@
           "accepted"
         ],
         "title": "WebhookResult"
+      },
+      "WinningAction": {
+        "properties": {
+          "goal_id": {
+            "type": "string",
+            "title": "Goal Id"
+          },
+          "offer_id": {
+            "type": "string",
+            "title": "Offer Id"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Id"
+          },
+          "format": {
+            "$ref": "#/components/schemas/Format"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Id"
+          },
+          "follow_up_step": {
+            "type": "integer",
+            "title": "Follow Up Step",
+            "default": 0
+          },
+          "scheduled_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduled Time"
+          },
+          "expected_net_value": {
+            "type": "number",
+            "title": "Expected Net Value",
+            "description": "Uplift x value - offer cost - channel cost, x urgency"
+          },
+          "assigned_probability": {
+            "type": "number",
+            "title": "Assigned Probability",
+            "description": "The chance the policy had of choosing exactly this"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "goal_id",
+          "offer_id",
+          "channel",
+          "content_id",
+          "format",
+          "item_id",
+          "scheduled_time",
+          "expected_net_value",
+          "assigned_probability",
+          "reason"
+        ],
+        "title": "WinningAction",
+        "description": "The action the policy chose, ready for a dispatcher."
       }
     }
   }
