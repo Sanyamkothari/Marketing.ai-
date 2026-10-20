@@ -332,6 +332,11 @@ function chatMainHtml(entry) {
   // next to the button the person just clicked; at the top of a long page it would be out of sight.
   // The card's learning times are the server's; the sentence above Approve says the same ones (before a goal is chosen
   // no offer has brought them in yet).
+  // The learning time answered in See details opens the buttons on it (once per answer: a later click on a button wins).
+  if (ready && ready.speed && s.speedFrom !== ready.speed) {
+    s.speedFrom = ready.speed;
+    s.speed = ready.speed;
+  }
   if (ready && (ready.speeds || []).length) applySpeedMinutes(Object.fromEntries(ready.speeds.map((sp) => [sp.id, sp.minutes])));
   const alertInCard = s.alertAt === "card" && Boolean(ready && ["approve", "start"].includes(ready.stage));
   const parts = ready && ready.stage === "start" ? startParts(entry) : null;
@@ -743,8 +748,14 @@ async function approveAndStart(entry) {
         s.stops.delete(stop.key);
         await latest();
       }
+      // Approve carries the sentence that was checked above, never the server's fresh one: if acknowledging a stop moved it,
+      // nothing is approved and the card shows the new sentence to read.
       const last = cardOf(s.screen, "ready");
-      await approveCase(theCase(entry), last && last.stage === "approve" ? last.sentence : now.sentence);
+      if (!last || last.stage !== "approve" || last.sentence !== now.sentence) {
+        s.notice = "Your yes is recorded. What you approve has changed, so read the sentence again, then click Approve and start.";
+        return;
+      }
+      await approveCase(theCase(entry), now.sentence);
       go = true;
     },
     { announce: "Approved" },

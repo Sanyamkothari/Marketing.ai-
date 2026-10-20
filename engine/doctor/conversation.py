@@ -47,7 +47,7 @@ from engine.config import ConfigError, StrictBase, load_engine_config
 from engine.doctor.case import Case, CaseItem, CaseQuestion, TimelineEvent, TimelineKind
 from engine.doctor.goal_names import goal_display_name
 from engine.doctor.plan_check import open_stops, plan_digest
-from engine.doctor.protocol import REQUEST_CODES
+from engine.doctor.protocol import AGENT, REQUEST_CODES
 from engine.doctor.visit import (
     CARRIED_KINDS,
     COMBINE_KINDS,
@@ -214,6 +214,11 @@ class MessageSuggestion(StrictBase):
     option_id: str
     label: str
     question: str = Field(default="", description="The question it answers, in its own words.")
+    why: str = Field(default="", description="Why the question is asked.")
+    effect: str = Field(default="", description="What the suggested answer does, in a sentence.")
+    rows_changed: int | None = Field(
+        default=None, description="How many rows the suggested answer changes, if known."
+    )
     used: bool = Field(default=False, description="The question is answered by now.")
     others: tuple[ChatOption, ...] = Field(
         default=(),
@@ -286,6 +291,10 @@ class ReadyCard(StrictBase):
         default=(), description="Why it is not ready, in the check's own sentences."
     )
     speeds: tuple[Speed, ...] = ()
+    speed: str | None = Field(
+        default=None,
+        description="The learning time already chosen on the training question (a speed id), so the buttons open on it.",
+    )
     hold: str = Field(
         default="",
         description="Why Approve is off for now, in a plain sentence (no goal yet, a question still open, or the "
@@ -491,6 +500,17 @@ def _speeds(config_root: Path | None) -> tuple[Speed, ...]:
     )
 
 
+def _chosen_speed(case: Case, config_root: Path | None) -> str | None:
+    """The learning time answered on the folded training question, if any: the speed buttons open on it, so the two
+    never disagree."""
+    _, questions = active_section(case)
+    speeds = {s.id for s in _speeds(config_root)}
+    for q in questions:
+        if q.code == "TRAINING_BUDGET" and q.answer in speeds:
+            return q.answer
+    return None
+
+
 def _hold(case: Case, view: CaseScreenView) -> str:
     """Why Approve waits: nothing to approve it for yet, or something to fix first. Empty: it may go.
 
@@ -550,6 +570,7 @@ def _ready(
             blocked=any(c.required and not c.can_agree for c in confirmations),
             notes=notes,
             speeds=_speeds(config_root),
+            speed=_chosen_speed(case, config_root),
             hold=_hold(case, view),
         )
     if verdict.key in {"ready", "ready_with_warnings"} and view.start is not None:
@@ -559,6 +580,7 @@ def _ready(
             sentence=last.text_shown if last is not None else "",
             left_out=tuple(c.sentence for c in confirmations if not c.required),
             speeds=_speeds(config_root),
+            speed=_chosen_speed(case, config_root),
         )
     if verdict.key == "not_ready":
         return ReadyCard(stage="blocked", sentence=verdict.next, notes=notes)
@@ -651,6 +673,9 @@ def _message(case: Case, entry: Any, *, live: bool = False) -> MessageCard:
             option_id=wanted.option_id,
             label=wanted.label,
             question=question.text,
+            why=question.why,
+            effect=str(getattr(wanted, "effect", "") or ""),
+            rows_changed=getattr(wanted, "rows_changed", None),
             used=question.answer is not None,
             others=others,
         )
@@ -810,8 +835,22 @@ def build_conversation(
 
     # One count of changes everywhere: the plan's own (what the approval sentence says), not the cards alone.
     add(case.created_at, 0, _first_look(case, plan_change_count(case), len(open_questions), timeline))
+
     # Shown: a card with Undo. Answered: the person's own answer made it, and it is told on that question.
-    answered = {i for i, item in made.items() if item.state is ProposalState.ACCEPTED}
+    # Only the viewer's own answer counts: a rule's decision ("Decided for you"), the agent's or a teammate's is not
+    # an agreement they gave, so the ready card does not say "Already agreed" for it.
+    def own_answer(item_id: str) -> bool:
+        question = next((q for q in questions if item_id.startswith(f"{q.question_id}:")), None)
+        by = question.answered_by if question is not None else None
+        return (
+            question is not None
+            and not question.assumed
+            and by is not None
+            and by not in {"guided-setup", AGENT}
+            and (principal is None or by == principal.user_id)
+        )
+
+    answered = {i for i, item in made.items() if item.state is ProposalState.ACCEPTED and own_answer(i)}
     ready = _ready(case, view, config_root, {c.item_id for c in changes}, answered)
     if ready is not None:
         add(_LAST, 9, ready)

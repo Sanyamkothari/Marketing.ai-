@@ -492,6 +492,28 @@ test("a stop is a checkbox in the card: nothing goes on until it is ticked, then
   assert.equal(posts("acknowledgements")[0].body.key, "k-stop");
 });
 
+test("if acknowledging a stop changes the sentence, nothing is approved: the new sentence is shown to read first", async () => {
+  const stop = { key: "k-stop", text: "One step leaves no customers.", item_id: null };
+  const next = "Prepare 3 files with 9 changes for the goal “Something else”. Nothing else changes.";
+  const patch = (a) => {
+    const ready = a.view.conversation.find((c) => c.type === "ready");
+    if (!ready || ready.stage !== "approve") return a;
+    if (world.posted.some((p) => p.path.endsWith("/acknowledgements"))) {
+      a.view.approval_sentence = next;
+      ready.sentence = next;
+      ready.stops = [];
+    } else ready.stops = [stop];
+    return a;
+  };
+  await show("approve_class", { patch });
+  tick($('input[data-dds-stop="k-stop"]'));
+  $("[data-dds-approve-start]").click();
+  await until(() => $("[data-dds-notice]"), 3000, "the notice");
+  assert.match($("[data-dds-notice]").textContent, /What you approve has changed/);
+  assert.equal($("[data-dds-approve-sentence]").textContent, next);
+  assert.equal(posts("approval").length, 0, "the sentence the person did not read is not approved");
+});
+
 test("a stop that appears after the own yeses ends the chain: nothing is approved until the person ticks it", async () => {
   const patch = (a) => {
     const ready = a.view.conversation.find((c) => c.type === "ready");

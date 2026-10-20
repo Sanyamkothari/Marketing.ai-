@@ -329,7 +329,7 @@ function messageHtml(m, names, { busy, openSent, index }) {
     ? `<div class="ddc-suggestion" data-dds-suggestion="${esc(s.question_id)}">${
         s.used
           ? `<p class="dds-state">${icon("check", { size: 14 })}<span>That question is answered.</span></p>`
-          : `<p class="dds-why">${esc(plain(s.label))}</p>${button({ label: "Use this answer", kind: "primary", size: "sm", attrs: `data-dds-answer="${esc(s.option_id)}" data-dds-q="${esc(s.question_id)}" data-dds-use-answer`, disabled: busy })}${others}`
+          : `${s.question ? `<p class="dds-card-t">${userTextIn(s.question, names)}</p>` : ""}${s.why ? `<p class="dds-why"><span class="dds-label">Why we ask:</span> ${userTextIn(s.why, names)}</p>` : ""}<p class="dds-why" data-dds-suggested>${esc(plain(s.label))}${s.effect ? ` ${esc("·")} ${userTextIn(s.effect, names)}` : ""}${s.rows_changed != null ? ` ${esc("·")} ${esc(s.rows_changed === 0 ? "Changes no rows" : `Changes ${plural(s.rows_changed, "row", "rows")}`)}` : ""}</p>${button({ label: "Use this answer", kind: "primary", size: "sm", attrs: `data-dds-answer="${esc(s.option_id)}" data-dds-q="${esc(s.question_id)}" data-dds-use-answer aria-label="${esc(`Use this answer: ${plain(s.label)}${s.question ? ` (${plain(s.question)})` : ""}`)}"`, disabled: busy })}${others}`
       }</div>`
     : "";
   return agentRow(
@@ -545,8 +545,11 @@ export function headHtml(screen, { level = 2, titled = true } = {}) {
   const { view } = screen;
   const v = VERDICTS[view.verdict.key] || VERDICTS.working;
   const title = view.goal_id ? `Your data for "${goalName(view.goal_id)}"` : "Your data";
+  // The click on "Approve and start" gives the own yeses itself, so the header does not send the person to look for them.
+  const ready = cardOf(screen, "ready");
+  const next = view.verdict.key === "needs_approval" && ready && ready.stage === "approve" && !ready.blocked ? "Read the sentence, then click Approve and start." : view.verdict.next;
   const line = view.carried && view.carried.line ? `<p class="dds-why" data-dds-new-line role="status">${esc(view.carried.line)}</p>` : "";
   return `<div class="ddc-head" data-dds-verdict="${esc(view.verdict.key)}">${titled ? `<h${level} class="dds-title">${esc(title)}</h${level}>` : ""}${statusChip("health", v.status, { word: v.word })}<p class="dds-next" data-dds-next>${esc(
-    view.verdict.next,
+    next,
   )}</p>${line}</div>`;
 }
