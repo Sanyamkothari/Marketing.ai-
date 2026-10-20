@@ -1223,6 +1223,7 @@ def simulated_demo_services(
         from autonomy.runtime.demo import (
             BUSINESS_ID,
             DECIDE_HOUR,
+            EnrichingStateStore,
             SpendTrackingEventStore,
             goal_pacing,
             policy_factory,
@@ -1265,13 +1266,15 @@ def simulated_demo_services(
     def spend(goal_id: str, now: datetime) -> float:  # noqa: ARG001
         return events.spend.get(goal_id, 0.0)
 
+    # The refill goal selects its audience by refill scores, so later ticks read enriched states too.
+    hero = result.hero
     runtime = AutonomyRuntime(
         events=events,
-        states=st.states,
+        states=EnrichingStateStore(st.states, hero) if hero is not None else st.states,
         decisions=st.decisions,
         workspace=st.workspace,
         folder=ProductionFolder(),
-        policy_factory=policy_factory({g.goal_id: g.kind for g in result.goals}, costs),
+        policy_factory=policy_factory({g.goal_id: g.kind for g in result.goals}, costs, hero=hero),
         queue=st.queue,
         dispatcher=Dispatcher(adapters, _demo_address, st.workspace, events, st.queue),
         batches=st.batches,

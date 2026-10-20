@@ -1669,8 +1669,11 @@ def _runtime_hooks(hero: HeroLayer) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     out: dict[str, Any] = {}
-    if "state_enricher" in params:
-        out["state_enricher"] = hero.enrich
+    # Not passed on purpose: the runtime's `state_enricher` runs on each goal's audience *after* it is
+    # chosen, but the refill goal's audience is chosen *by* the refill scores. Enriching every state
+    # as it is read (`_EnrichingStateStore`) lets the audience see them. `hero.enrich` stays for
+    # runtimes whose goals do not select on enriched fields.
+    _ = params, hero
     return out
 
 
@@ -2489,3 +2492,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# Public name for callers outside the demo (the API keeps ticking the simulated shop after it).
+EnrichingStateStore = _EnrichingStateStore
