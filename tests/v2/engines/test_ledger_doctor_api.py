@@ -410,7 +410,13 @@ def test_profile_v1_enrichment(client: TestClient) -> None:
 
 def test_map_events(client: TestClient) -> None:
     csv = b"cust,when,total\nA,2026-03-01T10:00:00,12.50\n,2026-03-02T10:00:00,4\nB,yesterday,3\nC,2026-03-03,7\n"
-    mapping = {"customer_id": "cust", "timestamp": "when", "event_type": "purchase", "value_column": "total"}
+    mapping = {
+        "customer_id": "cust",
+        "timestamp": "when",
+        "event_type": "purchase",
+        "value_column": "total",
+        "timezone": "UTC",  # naive times: the route asks for the zone unless the mapping names it
+    }
     res = client.post(
         "/doctor/map-events",
         files={"file": ("orders.csv", csv, "text/csv")},

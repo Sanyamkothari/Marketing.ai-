@@ -165,6 +165,28 @@ def _window(
     return clauses
 
 
+def _after(
+    ts: KeyedColumnElement[Any],
+    seq: KeyedColumnElement[Any],
+    key: ColumnElement[Any],
+    last: tuple[datetime, int, str],
+) -> ColumnElement[bool]:
+    """Rows after `last` in (ts, seq, key) order: the keyset condition of a time-ordered scan.
+
+    The leading `ts >= last_ts` is implied by the rest but must be there. Without it the condition
+    is a bare `OR`, which SQLite (with bound parameters) plans as a walk of the whole index from the
+    start, filtering every row, and Postgres as an index scan from the start with a filter: every
+    page then costs as much as everything before it and a full scan is quadratic (709 s for 2.76M
+    events on SQLite, docs/v2/real_data/C-scale.md section 4). With it both start the index range
+    at `last_ts` (SQLite: `SEARCH ... (ts>?)`, Postgres: an `Index Cond` on ts).
+    """
+    last_ts, last_seq, last_key = last
+    return and_(
+        ts >= last_ts,
+        or_(ts > last_ts, and_(ts == last_ts, or_(seq > last_seq, and_(seq == last_seq, key > last_key)))),
+    )
+
+
 # --- events ---------------------------------------------------------------------------------------
 
 
@@ -220,21 +242,19 @@ class SqlEventStore:
         """Every event in time order, fetched `batch_size` at a time.
 
         Keyset paging on (ts, seq, event_id): no connection is held between batches, so a slow
-        consumer never pins a transaction open.
+        consumer never pins a transaction open. Each page starts where the last one ended
+        (`_after`), so a full scan costs one pass over the order index, not one per page.
         """
         t = event_table.c
         event_id = sortable(t.event_id, self._dialect)
         after: tuple[datetime, int, str] | None = None
         while True:
-            query = select(t.ts, t.seq, t.event_id, t.body).where(*_window(t.ts, since, until))
+            # After the first page `since` is implied by the keyset bound and left out: given two
+            # lower bounds on ts, SQLite may start the index range at `since` on every page.
+            start = since if after is None else None
+            query = select(t.ts, t.seq, t.event_id, t.body).where(*_window(t.ts, start, until))
             if after is not None:
-                ts, seq, eid = after
-                query = query.where(
-                    or_(
-                        t.ts > ts,
-                        and_(t.ts == ts, or_(t.seq > seq, and_(t.seq == seq, event_id > eid))),
-                    )
-                )
+                query = query.where(_after(t.ts, t.seq, event_id, after))
             query = query.order_by(*self._ordered()).limit(self._batch)
             with self._engine.connect() as conn:
                 rows = conn.execute(query).all()
@@ -363,18 +383,10 @@ class SqlDecisionLog:
         decision_id = sortable(t.decision_id, self._dialect)
         after: tuple[datetime, int, str] | None = None
         while True:
-            query = select(t.made_at, t.seq, t.decision_id, t.body).where(*_window(t.made_at, since, until))
+            start = since if after is None else None  # implied by the keyset bound (see SqlEventStore)
+            query = select(t.made_at, t.seq, t.decision_id, t.body).where(*_window(t.made_at, start, until))
             if after is not None:
-                made_at, seq, did = after
-                query = query.where(
-                    or_(
-                        t.made_at > made_at,
-                        and_(
-                            t.made_at == made_at,
-                            or_(t.seq > seq, and_(t.seq == seq, decision_id > did)),
-                        ),
-                    )
-                )
+                query = query.where(_after(t.made_at, t.seq, decision_id, after))
             query = query.order_by(*self._ordered()).limit(self._batch)
             with self._engine.connect() as conn:
                 rows = conn.execute(query).all()

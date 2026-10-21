@@ -199,6 +199,15 @@ people close to their segment. The rest of the gap:
 
 The existing `tests/v2/agent_gym` tests still pass.
 
+## Real data (fix wave, 21 Oct 2026)
+
+On real randomised campaigns the agent valued a message about 10x too high and could not use
+customer features. The fix wave added calibration from a past randomised campaign
+(`autonomy/learning/calibration.py`, `AgentPolicy._calibrate`, with the events-only control-group
+convention in that module's docstring), no-click channels valued per message, the runtime feeding
+whole histories, and a per-customer uplift model (`autonomy/uplift`) attached at the warm start.
+Results and remaining misses: [REAL_BENCH.md](REAL_BENCH.md), [streams/realfix.md](streams/realfix.md).
+
 ## Gaps and requests
 
 * **Contract additions requested:** none are needed for this work. It would be cleaner with

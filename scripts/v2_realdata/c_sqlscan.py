@@ -14,6 +14,11 @@ database through the product's `SqlEventStore`, then:
 The product code is not changed: the fixed query is only run here. Synthetic rows: this measures
 the store, not any dataset.
 
+Historical: this probe string-patches the keyset SQL of the store as it was at commit f55c57b3. The
+real-data fix wave put the fix in the store (`autonomy.store.sql._after`, index `ix_event_order`), so
+against today's store step 3 no longer builds a valid query; run it on a f55c57b3 checkout to
+reproduce docs/v2/real_data/C-scale.md section 4.
+
 Run:
 
     python3 -P scripts/v2_realdata/c_sqlscan.py --events 400000

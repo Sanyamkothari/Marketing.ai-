@@ -14,6 +14,7 @@ folding them into state could give a different answer.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -29,7 +30,10 @@ from sqlalchemy import (
     Table,
     Text,
 )
-from sqlalchemy.engine import Dialect, Engine
+from sqlalchemy.engine import Connection, Dialect, Engine
+from sqlalchemy.schema import SchemaItem
+from sqlalchemy.sql.compiler import DDLCompiler
+from sqlalchemy.sql.ddl import BaseDDLElement
 from sqlalchemy.types import TypeDecorator
 
 __all__ = [
@@ -93,7 +97,6 @@ event_table = Table(
     Column("body", JSON, nullable=False),
     Index("ix_event_customer_ts", "customer_id", "ts"),
     Index("ix_event_decision", "decision_id"),
-    Index("ix_event_ts_seq", "ts", "seq"),
     Index("ix_event_seq", "seq"),
 )
 
@@ -118,7 +121,6 @@ decision_table = Table(
     Column("seq", BigInteger, nullable=False, doc="First-write order; kept when a decision is re-recorded"),
     Column("body", JSON, nullable=False),
     Index("ix_decision_customer_made_at", "customer_id", "made_at"),
-    Index("ix_decision_made_at_seq", "made_at", "seq"),
     Index("ix_decision_seq", "seq"),
 )
 
@@ -169,6 +171,46 @@ job_table = Table(
 )
 
 
+def _not_postgres(  # the signature `ddl_if(callable_=...)` calls
+    ddl: BaseDDLElement,  # noqa: ARG001
+    target: SchemaItem | str,  # noqa: ARG001
+    bind: Connection | None,  # noqa: ARG001
+    tables: list[Table] | None = None,  # noqa: ARG001
+    state: Any | None = None,  # noqa: ARG001
+    *,
+    dialect: Dialect,
+    compiler: DDLCompiler | None = None,  # noqa: ARG001
+    checkfirst: bool = False,  # noqa: ARG001
+) -> bool:
+    return bool(dialect.name != "postgresql")
+
+
+def _order_index(name: str, table: Table, *columns: str) -> None:
+    """The index a time-ordered keyset scan walks: every ORDER BY column, the last one an id.
+
+    Postgres compares ids with `COLLATE "C"` (see `autonomy.store.sql`), and only an index built
+    with that collation serves that order, so Postgres gets its own copy. SQLite's default
+    collation already is code-point order.
+    """
+    *leading, key = (table.c[c] for c in columns)
+    Index(name, *leading, key).ddl_if(callable_=_not_postgres)
+    Index(f"{name}_c", *leading, key.collate("C")).ddl_if(dialect="postgresql")
+
+
+_order_index("ix_event_order", event_table, "ts", "seq", "event_id")
+_order_index("ix_decision_order", decision_table, "made_at", "seq", "decision_id")
+# `SqlStateStore.scan` pages on `customer_id COLLATE "C"`, which the primary key cannot serve there.
+Index("ix_customer_state_id_c", customer_state_table.c.customer_id.collate("C")).ddl_if(dialect="postgresql")
+
+
 def create_all(engine: Engine) -> None:
-    """Create every v2 table that does not exist yet. Safe to call twice."""
+    """Create every v2 table and index that does not exist yet. Safe to call twice.
+
+    `metadata.create_all` skips a table that exists, indexes and all, so an index added to the
+    schema later (the scan order indexes above) is created here on a database made before it. On a
+    big existing table that is a one-off index build at the next start.
+    """
     metadata.create_all(engine)
+    for table in metadata.sorted_tables:
+        for index in sorted(table.indexes, key=lambda i: str(i.name)):
+            index.create(engine, checkfirst=True)

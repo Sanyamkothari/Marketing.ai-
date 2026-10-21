@@ -1,0 +1,129 @@
+# The real-data scoreboard (docs/v2/REAL_BENCH.md): Autonomy's agent against simple policies on four
+# real randomised campaigns (Hillstrom, X5 RetailHero, Criteo, MegaFon), scored off-policy on a
+# held-out half split by customer.
+#
+# Its own workflow, like the Gym's: it runs on a push to version-2 whose commit message contains
+# "[real]", or by hand (workflow_dispatch). Report-only: the targets are read from the uploaded
+# JSON, not enforced; the job turns red only when the bench itself crashes or a dataset errors.
+# The datasets (about 1.27 GB) are downloaded from public mirrors with fixed SHA-256 checksums
+# (scripts/v2_realbench/fetch.py) and cached between runs; nothing is written into the repository.
+
+name: realbench
+
+on:
+  push:
+    branches: ["version-2"]
+  workflow_dispatch:
+
+concurrency:
+  group: realbench-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  scoreboard:
+    name: scoreboard ${{ matrix.dataset }}
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[real]')
+    runs-on: ubuntu-latest
+    # Locally (4 CPUs) the slowest dataset takes about 8 minutes plus its download.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        dataset: [hillstrom, x5, criteo, megafon]
+    env:
+      DATA_DIR: ${{ github.workspace }}/../realbench-data
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: .github/workflows/realbench.yml
+      - name: Install the light deps
+        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54"
+      # Only the raw downloads are cached (keyed on the checksums in fetch.py); the bench's own
+      # derived caches (<data-dir>/_cache) are rebuilt every run so they always match the code.
+      - name: Cache the dataset
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.DATA_DIR }}/hillstrom
+            ${{ env.DATA_DIR }}/x5_retailhero
+            ${{ env.DATA_DIR }}/criteo_uplift
+            ${{ env.DATA_DIR }}/megafon
+          key: realbench-data-${{ matrix.dataset }}-${{ hashFiles('scripts/v2_realbench/fetch.py') }}
+      - name: Download (checksummed)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            python -m scripts.v2_realbench.fetch --data-dir "$DATA_DIR" --dataset ${{ matrix.dataset }} && break
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep $((attempt * 20))
+          done
+      - name: Scoreboard
+        shell: bash   # bash -eo pipefail: a crash under tee must turn the job red
+        run: |
+          mkdir -p realbench-report
+          python -m scripts.v2_realbench.run --dataset ${{ matrix.dataset }} --data-dir "$DATA_DIR" \
+            --json realbench-report/${{ matrix.dataset }}.json --quiet \
+            --note "CI ${{ github.sha }}" | tee realbench-report/${{ matrix.dataset }}.md
+      - name: Fail on a dataset error (out of memory and the like)
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import json, sys
+          report = json.load(open("realbench-report/${{ matrix.dataset }}.json"))
+          bad = {k: v["error"] for k, v in report["datasets"].items() if "error" in v}
+          if bad:
+              sys.exit(f"dataset error: {bad}")
+          EOF
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: realbench-${{ matrix.dataset }}
+          path: realbench-report/
+          if-no-files-found: ignore
+
+  summary:
+    name: scoreboard summary
+    needs: scoreboard
+    if: always() && needs.scoreboard.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install the light deps
+        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: realbench-*
+          path: parts
+          merge-multiple: true
+      - name: One report for all four datasets
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import json, pathlib
+          parts = sorted(pathlib.Path("parts").glob("*.json"))
+          merged = None
+          for p in parts:
+              r = json.loads(p.read_text())
+              if merged is None:
+                  merged = {**r, "datasets": {}}
+              merged["datasets"].update(r["datasets"])
+          if merged is None:
+              raise SystemExit("no dataset report was produced")
+          merged["command"] = "CI matrix: python -m scripts.v2_realbench.run --dataset <each> --quiet"
+          pathlib.Path("realbench.json").write_text(json.dumps(merged, indent=1))
+          EOF
+          python -m scripts.v2_realbench.run --render realbench.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: realbench-report
+          path: realbench.json

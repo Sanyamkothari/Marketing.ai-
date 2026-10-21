@@ -15,6 +15,28 @@ A second agent re-ran each family's headline numbers. All of them reproduced. Th
 withdrew or corrected several claims; each family note has a "Skeptical review" section that lists
 them. This page uses the corrected figures.
 
+## After the fix wave (21 Oct 2026)
+
+A fix wave (branch `v2/realfix`, notes in [streams/realfix.md](streams/realfix.md)) addressed
+failures 1-5 and 7-9 below, the SQL scan part of 11 and most silent mapping risks, and measured the result with one
+command, the real-data scoreboard: [REAL_BENCH.md](REAL_BENCH.md) has the method, the BEFORE and
+AFTER tables and the CI workflow. Agent minus the best simple policy chosen on train, profit per
+customer on the held-out half (95% paired intervals, not corrected for multiple comparisons, so
+suggestive):
+
+| Dataset | Before | After |
+|---|---|---|
+| Hillstrom | -0.018 [-0.037, +0.0004] | -0.025 [-0.048, -0.003]: still loses to send-all men's, by its exploration |
+| X5 (100k clients) | -1.75 [-3.24, -0.25] (contacts nobody) | -0.10 [-0.55, +0.35]: ties the segment rule |
+| Criteo (300k rows) | -0.019 [-0.022, -0.016] | +0.002 [-0.001, +0.005]: ties the f8 segment rule, +0.021 over send-to-all |
+| MegaFon (200k rows) | -0.101 [-0.172, -0.029] (contacts nobody) | +0.463 [+0.395, +0.531]: beats it, ties the T-learner |
+
+Value per message, expected vs measured: Hillstrom 11x -> 1.46x, Criteo 48x -> 0.48x (now just
+outside 2x on the low side), X5 1.33x and MegaFon 0.84x (both contacted nobody before). Messy
+files: silent wrong results 20 -> 2 of 43. SQLite scan of 1M events 104 s -> 15 s. Not met:
+Hillstrom "never worse than send-to-all", Criteo "beat the segment rule" and Criteo calibration
+within 2x. The rest of this page is the original stress test, unchanged.
+
 ## The short version
 
 1. **On randomised data the agent never beat the best simple policy.** On Hillstrom it came close

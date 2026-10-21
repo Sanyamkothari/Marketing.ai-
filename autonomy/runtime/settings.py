@@ -330,12 +330,20 @@ def agent_policy_factory(
     """The agent's policy (`autonomy.runtime.agent.build_agent_policy`), imported when first needed.
 
     `kinds` gives each goal's kind (cart recovery fades fast), as the demo passes it too. The agent
-    keeps its own default channel costs and baseline policy."""
+    keeps its own default channel costs. The baseline group is decided by the simple rule a careful
+    marketer would set up (`autonomy.gym.baselines.RuleBaseline`: e-mail customers who have not bought
+    in 60 days, at most every 14 days): without it the baseline group was never contacted, and the
+    proof's "agent vs the simple rule" comparison compared the agent with doing nothing."""
     module = importlib.import_module("autonomy.runtime.agent")
     build = module.build_agent_policy
     if kinds is None:
-        return cast(Policy, build(list(briefs), list(content)))
-    return cast(Policy, build(list(briefs), list(content), kinds=dict(kinds)))
+        built = build(list(briefs), list(content))
+    else:
+        built = build(list(briefs), list(content), kinds=dict(kinds))
+    use_baseline = getattr(built, "use_baseline", None)
+    if callable(use_baseline):
+        use_baseline(importlib.import_module("autonomy.gym.baselines").RuleBaseline())
+    return cast(Policy, built)
 
 
 def workspace_policy_factory(workspace: Workspace) -> PolicyFactory:

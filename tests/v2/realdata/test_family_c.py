@@ -101,7 +101,9 @@ def test_views_and_carts_only_move_last_seen() -> None:
     assert s.top_categories == () and s.channels == {} and s.hour_counts == ()
 
 
-def test_finding_sqlite_event_scan_pages_are_full_index_scans() -> None:
+def test_sqlite_event_scan_pages_search_the_order_index() -> None:
+    """Was a finding: every keyset page walked the index from the start (quadratic scans). Fixed by
+    the real-data fix wave (a leading `ts >= last_ts` and the ix_event_order index)."""
     engine = memory_engine()
     create_all(engine)
     store = SqlEventStore(engine, batch_size=2)
@@ -124,6 +126,5 @@ def test_finding_sqlite_event_scan_pages_are_full_index_scans() -> None:
     statement, params = paged[-1]
     with engine.connect() as conn:
         plan = " ".join(str(r[3]) for r in conn.exec_driver_sql("EXPLAIN QUERY PLAN " + statement, params))
-    # Today: "SCAN event USING INDEX ix_event_ts_seq" (every page walks the index from the start).
-    # Fixed: "SEARCH event USING INDEX ix_event_ts_seq (ts>?)".
-    assert "SCAN event" in plan, plan
+    # Was: "SCAN event USING INDEX ix_event_ts_seq" (every page walked the index from the start).
+    assert "SEARCH event" in plan and "TEMP B-TREE" not in plan, plan

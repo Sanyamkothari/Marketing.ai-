@@ -9,6 +9,11 @@ offer x approved content for that channel and offer, one item per theme and form
 * `uplift` and its spread come from the `ResponseModel`, keyed by the content's labels
   (`channel|offer_id|theme`, plus `|format` for an image, carousel or video), so learning transfers
   across goals.
+* When an uplift model is attached (`uplift=`, or `autonomy.uplift.attach_uplift` on the response
+  model), its per-customer score for the same key (learned from a past campaign and the customer's
+  features, validated out of sample) is blended in by measured precision
+  (`autonomy.uplift.score.blend`): customer features move the bid as far as the campaign showed they
+  predict lift, and a response model that disagrees with what the campaign measured loses its weight.
 * `value` is what one conversion is worth for this customer (`ValueModel`).
 * `p_redeem` is the chance they buy when treated, organic chance of buying + uplift: an offer is
   paid for by everyone who redeems it, including people who would have bought anyway, which is why
@@ -117,6 +122,7 @@ from autonomy.decide.models import (
     ValueModel,
     action_key,
 )
+from autonomy.uplift.score import UpliftScorer, blend, uplift_of
 
 DEFAULT_CHANNEL_COSTS: Mapping[Channel, float] = MappingProxyType(
     {
@@ -1231,7 +1237,8 @@ def _normal_on_grid(
     """Per row, a Normal(centre, spread) on the log-ratio grid, normalised to sum to 1."""
     z = (_LOG_GRID[None, :] - centre[:, None]) / np.maximum(spread[:, None], 1e-6)
     out = np.exp(-0.5 * z * z)
-    return out / np.maximum(out.sum(axis=1, keepdims=True), _TINY)
+    normalised: npt.NDArray[np.float64] = out / np.maximum(out.sum(axis=1, keepdims=True), _TINY)
+    return normalised
 
 
 def _stable_key(customer_id: str) -> int:
@@ -1480,6 +1487,14 @@ class GoalBidder:
     docstring). Off, every option pays the credible dent only, as for a model whose uplift is read
     from purchases.
 
+    `uplift` (None: whatever `autonomy.uplift.uplift_of(response_model)` finds, usually nothing) is a
+    per-customer, per-action uplift scorer (`autonomy.uplift.UpliftScorer`). For an option whose key
+    it scores, the response model's uplift and spread are replaced by their blend with the score
+    (`autonomy.uplift.score.blend`). With `own_spread` the sampling spread keeps only the share of it
+    that is the option's own (`UpliftScore.own_sd`: its treated customers' noise, not the control
+    group's that all the customer's options share). An option it does not score is priced by the
+    response model alone, exactly as without it.
+
     `bids()` remembers each customer's segment and each content item's labels for `learn()`;
     `quote()` prices the same options and remembers nothing (for explaining a decision).
     """
@@ -1507,10 +1522,12 @@ class GoalBidder:
         format_costs: Mapping[Format, float] | None = None,
         harm: ContactHarm | None = None,
         purchase_weighted: bool | None = None,
+        uplift: UpliftScorer | None = None,
     ) -> None:
         if prune_z is not None and prune_z < 0:
             raise ValueError("prune_z must be >= 0")
         self.harm = harm
+        self.uplift = uplift
         self.response_model: ResponseModel = response_model or BetaResponseModel()
         self.purchase_weighted = (
             purchase_weighted
@@ -1607,7 +1624,8 @@ class GoalBidder:
         boost = refill_boost(state) if self.refill and choice is not None else 1.0
         p14 = min(max(_score(state, REFILL_P14) or 0.0, 0.0), 1.0) if boost > 1.0 else 0.0
 
-        raw = self._raw_options(state, library, channels, choice)
+        scorer = self.uplift if self.uplift is not None else uplift_of(self.response_model)
+        raw = self._raw_options(state, library, channels, choice, scorer, ctx.now)
         if not raw:
             return []
         organic = organic_chance(self.response_model, state, raw[0].key)
@@ -1779,15 +1797,25 @@ class GoalBidder:
         library: Sequence[ContentItem],
         channels: Sequence[Channel],
         choice: ItemChoice | None,
+        scorer: UpliftScorer | None = None,
+        now: datetime | None = None,
     ) -> list[_Raw]:
-        """Every allowed option with the response model's uplift and spread, in bidding order."""
+        """Every allowed option with the response model's uplift and spread, in bidding order; blended
+        with the uplift score where `scorer` scores the option's key."""
         out: list[_Raw] = []
         for channel in channels:
             for offer in self.brief.envelope.offers:
                 for item in self._options(library, channel, offer.offer_id, choice):
                     key = action_key(channel, offer.offer_id, item.theme, item.format)
                     mean, std = self.response_model.predict(state, key)
-                    if self.own_spread:
+                    found = scorer.score(state, key, now) if scorer is not None and now is not None else None
+                    if found is not None:
+                        mean, std = blend(mean, std, found)
+                        if self.own_spread and found.own_sd is not None and found.sd > 0:
+                            # Sample on the option's own noise, not the control group's that all of
+                            # the customer's options share (as `_option_std` does for the model).
+                            std *= min(found.own_sd / found.sd, 1.0)
+                    elif self.own_spread:
                         std = _option_std(self.response_model, state, key, std)
                     out.append(_Raw(channel, offer.offer_id, item, key, min(max(mean, -1.0), 1.0), std))
         return out

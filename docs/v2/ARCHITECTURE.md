@@ -87,6 +87,15 @@ net = bid − attention_price(customer)                  # learned fatigue: P(un
 - **CUPED.** Each customer's pre-period purchases are used to reduce variance, with
   DerSimonian–Laird pooling across segments.
 - **Warm start.** Learning starts from the client's past campaigns, weighted by inverse propensity.
+- **Calibrated value.** A past campaign that was randomised (constant logged probability per arm, a
+  left-out pool of the size its design implies, balanced pre-period buying) is measured in money
+  against the customers it left out, and that sets the lift per click, or per message on a channel
+  that logs no clicks (`autonomy/learning/calibration.py`). The runtime streams each customer's
+  whole history to a new policy before its first decision.
+- **Customer-level uplift.** The latest closed past campaign also fits a per-customer uplift model
+  on customer features (`CustomerState.preferences`) and behaviour, cross-fitted and calibrated out
+  of sample (`autonomy/uplift`); each goal bidder blends its score with the response model by
+  precision. See docs/v2/REAL_BENCH.md for what this does on real randomised campaigns.
 
 ---
 
@@ -234,6 +243,7 @@ service later without a rewrite.
 | Beats send-to-all and simple rules | **Done**, where messaging pays |
 | Beats the best fixed rule | **Mostly** (3 of 4 measured scenarios). It loses where discounts are mostly wasted, because the first month of learning costs about 12% |
 | Per-person ranking | **Weak.** About 2–3 clicks per customer in 90 days is thin evidence |
+| Real randomised campaigns | **Mixed.** Ties or beats the best simple policy on X5, Criteo and MegaFon (beats it on MegaFon, +0.46 per customer); loses to send-all men's on Hillstrom by its exploration; value per message within 2x except Criteo (0.48x). Suggestive intervals; docs/v2/REAL_BENCH.md |
 | Real sends | **Not yet.** The code is ready; it needs SES and WhatsApp credentials and network access |
 | Real client | **None yet.** The plan is Shadow mode on one company's data first |
 

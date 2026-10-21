@@ -514,7 +514,11 @@ HILLSTROM_NOTES: Final[tuple[str, ...]] = (
     "History is approximate (attrs approximate=true): `history`, the past year's spend, becomes one "
     "PURCHASE dated `recency` months before the campaign (30 x recency - 15 days, the middle of that "
     "month), with category 'mens' or 'womens'. A customer who bought both gets two purchases, the "
-    "spend split equally, the second halfway back to a year before the campaign.",
+    "spend split equally, the second halfway back to a year before the campaign. That is the fewest "
+    "orders the file allows, so a customer's average order (mean $242) is an upper bound: real "
+    "campaign orders average about $116. The agent's value of a message need not rest on it: when the "
+    "SENDs carry the design's chance as logged_probability, it is calibrated in money on the "
+    "experiment's unmailed third (autonomy.learning.calibration).",
     "Each customer gets a SIGNUP with their area (zip_code), purchase channel and newbie flag: a newbie "
     "364 days before the campaign (new within the year), anyone else two years before.",
     "E-mail consent is granted to every customer at signup: two thirds of them were e-mailed in the "

@@ -7,6 +7,11 @@ either path gives the same states; the tests hold both to that.
 
 Both write in batches, so a Postgres `StateStore` sees a few large `put` calls rather than one per
 event.
+
+**Money in different currencies is never added.** A state's revenue is one number, so a rebuild
+refuses (`MixedCurrencyError`, before writing anything) when stored events with an amount carry
+different `attrs["currency"]` codes, for example two files mapped with different currencies. Map
+them with `EventMapping.currency` and `currency_rates` into one business currency first.
 """
 
 from __future__ import annotations
@@ -18,6 +23,24 @@ from autonomy.contracts import CustomerState, Event
 from autonomy.interfaces import EventStore, StateFolder, StateStore
 
 DEFAULT_BATCH = 1000
+
+CURRENCY_ATTR = "currency"
+
+
+class MixedCurrencyError(ValueError):
+    """Stored amounts are in more than one currency, so revenue cannot be one number."""
+
+    def __init__(self, counts: dict[str, int]) -> None:
+        self.counts = dict(counts)
+        listed = ", ".join(
+            f"{code} ({n:,} events)" for code, n in sorted(counts.items(), key=lambda kv: -kv[1])
+        )
+        super().__init__(
+            f"the event log holds amounts in several currencies: {listed}. Adding them would mix "
+            "different money; map them into one business currency (EventMapping.currency and "
+            "currency_rates) and load again"
+        )
+
 
 KEPT_ON_REBUILD: tuple[str, ...] = ("group", "scores")
 """Fields no event produces, so a rebuild must carry them over rather than reset them.
@@ -58,6 +81,8 @@ def rebuild_states(
 ) -> int:
     """Rebuild every customer with events from scratch, refreshed to `now`; return how many were written.
 
+    Raises `MixedCurrencyError`, having written nothing, when amounts carry different currency codes.
+
     Every stored event is folded, in the store's time order, into a fresh state per customer, then
     each state is refreshed at `now` so windows and segments are current. Fields named in `keep` are
     copied from the state already stored, if any. Customers with stored state but no events are left
@@ -84,8 +109,16 @@ def rebuild_states(
                 kept[old.customer_id] = carried
 
     built: dict[str, CustomerState] = {}
+    currencies: dict[str, int] = {}
     for event in events.scan():
+        if event.value is not None:
+            code = event.attrs.get(CURRENCY_ATTR)
+            if isinstance(code, str) and code.strip():
+                key = code.strip().upper()
+                currencies[key] = currencies.get(key, 0) + 1
         built[event.customer_id] = folder.fold(built.get(event.customer_id), event)
+    if len(currencies) > 1:
+        raise MixedCurrencyError(currencies)
 
     def finished() -> Iterable[CustomerState]:
         for customer_id in sorted(built):

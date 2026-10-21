@@ -6,13 +6,19 @@ Postgres in production and CI, SQLite on a laptop; both through SQLAlchemy Core 
     engine = create_engine(url)
     create_all(engine)
     events = SqlEventStore(engine)
+
+`CompactEventStore` is the in-memory event store for runs that hold millions of events in one
+process (the Gym, benches, a laptop import): the same protocol as the fake at about a sixth of the
+memory per event.
 """
 
+from autonomy.store.memory import CompactEventStore
 from autonomy.store.queue import SqlJobQueue
 from autonomy.store.schema import create_all, metadata
 from autonomy.store.sql import SqlDecisionLog, SqlEventStore, SqlStateStore, SqlWorkspace, memory_engine
 
 __all__ = [
+    "CompactEventStore",
     "SqlDecisionLog",
     "SqlEventStore",
     "SqlJobQueue",
