@@ -19,6 +19,13 @@ gets fixed template copy instead (`TEMPLATE_COPY`): plain sentences per theme, t
 `{{offer_label}}`, only allowed slots, and the same footer and length checks as model copy. A
 library always comes out, and the cells that used templates are listed in `templated`.
 
+Brand kit (`autonomy.brand`). Given the shop's `BrandKit`, the Creative writes in the voice read
+from the shop's own tools: the model is told the kit's voice and hard rules (words never used,
+subject length, emoji, exclamation marks), and template copy is put into the voice by code
+(`autonomy.brand.rules.apply_voice`: the shop's greeting, its sign-off, a subject that fits its
+length). A cell whose offer is a discount form the shop's copy never uses is skipped and noted in
+`dropped` (the Critic would reject every variant). The Critic checks the same hard rules.
+
 Items come out as DRAFT. Nothing reaches a customer until the Critic approves it.
 """
 
@@ -33,6 +40,8 @@ from typing import Protocol
 from pydantic import BaseModel, Field
 
 from autonomy.agents.base import AgentOutputError, ask_json, load_prompt
+from autonomy.brand.kit import BrandKit
+from autonomy.brand.rules import apply_voice, fits_subject, offer_in_style
 from autonomy.channels.render import (
     CAROUSEL_MAX,
     CAROUSEL_MIN,
@@ -238,12 +247,29 @@ TEMPLATE_OFFER_LINE = " Your offer: {{offer_label}}."
 """Appended to template copy for a cell with an offer, so the approved offer's label is the only claim."""
 
 
-def template_variants(channel: Channel, offer: OfferOption, theme: Theme, n: int) -> list[Variant]:
-    """Up to `n` fixed variants for one cell, the same every time (P4 LLM unavailable)."""
+def template_variants(
+    channel: Channel, offer: OfferOption, theme: Theme, n: int, *, kit: BrandKit | None = None
+) -> list[Variant]:
+    """Up to `n` fixed variants for one cell, the same every time (P4 LLM unavailable).
+
+    With a brand kit, each is put into the shop's voice (greeting, sign-off, subject length); a
+    variant whose subject cannot fit the shop's length is left out."""
     out: list[Variant] = []
+    subjects = [s for s, _ in TEMPLATE_COPY[theme]]
     for subject, body in TEMPLATE_COPY[theme][:n]:
         text = body if offer.kind is OfferKind.NONE else body + TEMPLATE_OFFER_LINE
-        out.append(Variant(subject=subject if channel is Channel.EMAIL else None, body=text))
+        voiced = apply_voice(
+            subject if channel is Channel.EMAIL else None,
+            text,
+            channel=channel,
+            style=kit.style if kit else None,
+            rules=kit.rules if kit else None,
+            subjects=subjects,
+            ceiling=EMAIL_SUBJECT_MAX,
+        )
+        if voiced is None:
+            continue
+        out.append(Variant(subject=voiced[0], body=voiced[1]))
     return out
 
 
@@ -425,6 +451,7 @@ class Creative:
         self.templated: list[str] = []
         """Cells from the last build written from `TEMPLATE_COPY` because the model could not be reached."""
         self._down: str | None = None
+        self._kit: BrandKit | None = None
 
     def build_library(
         self,
@@ -436,6 +463,7 @@ class Creative:
         themes: Sequence[Theme] | None = None,
         assets: Iterable[ApprovedAsset] = (),
         formats: Mapping[Channel, Sequence[Format]] | None = None,
+        kit: BrandKit | None = None,
     ) -> list[ContentItem]:
         """Write `n_per_cell` variants for every channel x offer x theme cell of the brief's envelope.
 
@@ -449,6 +477,10 @@ class Creative:
         as before. `formats` overrides which formats each channel may use (default
         `FORMAT_SUPPORT`); it can narrow the defaults, and anything the renderer cannot carry is
         still refused at send time.
+
+        `kit` is the shop's brand kit: its voice is added to `brand_voice`, its hard rules go to the
+        model, template copy is put into its voice, and offers in a discount form the shop never
+        uses are skipped.
         """
         if n_per_cell < 1:
             raise ValueError("n_per_cell must be at least 1")
@@ -456,11 +488,19 @@ class Creative:
         self.failures = []
         self.templated = []
         self._down = None
+        self._kit = kit
+        if kit is not None:
+            brand_voice = " ".join(p for p in (brand_voice.strip(), kit.voice_text()) if p)
         pool = list(assets)
         support = formats if formats is not None else FORMAT_SUPPORT
         items: list[ContentItem] = []
         for channel in brief.envelope.channels:
             for offer in brief.envelope.offers:
+                if kit is not None and not offer_in_style(offer, kit.rules):
+                    self.dropped.append(
+                        f"{channel.value}/{offer.offer_id}: the shop's own copy never states this kind of discount"
+                    )
+                    continue
                 for theme in tuple(themes) if themes else OFFER_THEMES[offer.kind]:
                     texts = self._cell(
                         brief, channel, offer, theme, brand_voice=brand_voice, n=n_per_cell, now=now
@@ -539,7 +579,7 @@ class Creative:
         cell = f"{channel.value}/{offer.offer_id}/{theme.value}"
         variants: Sequence[Variant]
         if self._down is not None:
-            variants = template_variants(channel, offer, theme, n)
+            variants = template_variants(channel, offer, theme, n, kit=self._kit)
             self.templated.append(f"{cell}: {self._down}")
         else:
             try:
@@ -547,7 +587,9 @@ class Creative:
                     self._llm,
                     VariantSet,
                     system=self._system(),
-                    prompt=self._cell_prompt(brief, channel, offer, theme, tone, brand_voice, n),
+                    prompt=self._cell_prompt(
+                        brief, channel, offer, theme, tone, brand_voice, n, kit=self._kit
+                    ),
                     model_id=self._model_id,
                 ).variants
             except AgentOutputError as exc:
@@ -555,7 +597,7 @@ class Creative:
                 return []
             except Exception as exc:  # P4 LLM unavailable: fixed template copy, still DRAFT for the Critic
                 self._down = f"the model could not be reached ({_why(exc)})"
-                variants = template_variants(channel, offer, theme, n)
+                variants = template_variants(channel, offer, theme, n, kit=self._kit)
                 self.templated.append(f"{cell}: {self._down}")
         return self._items(brief, channel, offer, theme, variants, n=n, now=now)
 
@@ -585,6 +627,10 @@ class Creative:
                 if len(subject) > EMAIL_SUBJECT_MAX:
                     self.dropped.append(f"{cell}: subject over {EMAIL_SUBJECT_MAX} characters")
                     continue
+                kit_rules = self._kit.rules if self._kit is not None else None
+                if not fits_subject(subject, kit_rules, EMAIL_SUBJECT_MAX):
+                    self.dropped.append(f"{cell}: subject longer than the shop's own subjects")
+                    continue
                 if not has_unsubscribe_hint(body):
                     body = f"{body}\n\n{EMAIL_FOOTER}"
             # After the footer, so two emails that differ only by a missing footer still count as one.
@@ -594,6 +640,10 @@ class Creative:
             limit = CHANNEL_BODY_MAX[channel]
             if len(body) > limit:
                 self.dropped.append(f"{cell}: body over {limit} characters")
+                continue
+            kit_sms = self._kit.rules.sms_body_max if self._kit is not None else None
+            if channel is Channel.SMS and kit_sms is not None and len(body) > kit_sms:
+                self.dropped.append(f"{cell}: text longer than the shop's own texts ({kit_sms} characters)")
                 continue
             seen_bodies.add(body)
             index = len(out)
@@ -640,6 +690,8 @@ class Creative:
         tone: Tone,
         brand_voice: str,
         n: int,
+        *,
+        kit: BrandKit | None = None,
     ) -> str:
         if offer.kind is OfferKind.NONE:
             offer_line = "No offer. Do not mention any discount, price, saving or free item."
@@ -648,15 +700,38 @@ class Creative:
                 f"Offer: {offer.label}. Refer to it with {{{{offer_label}}}}; "
                 "do not write any percentage or amount yourself."
             )
+        rules = kit.rules if kit is not None else None
+        subject_max = (
+            min(EMAIL_SUBJECT_MAX, rules.subject_max)
+            if rules is not None and rules.subject_max is not None
+            else EMAIL_SUBJECT_MAX
+        )
         subject_line = (
-            f"Each variant needs a subject of at most {EMAIL_SUBJECT_MAX} characters."
+            f"Each variant needs a subject of at most {subject_max} characters."
             if channel is Channel.EMAIL
             else "Leave subject null: this channel has no subject."
         )
+        body_max = CHANNEL_BODY_MAX[channel]
+        if channel is Channel.SMS and rules is not None and rules.sms_body_max is not None:
+            body_max = min(body_max, rules.sms_body_max)
+        kit_lines: list[str] = []
+        if rules is not None:
+            if rules.banned_words:
+                kit_lines.append(
+                    f"Never use these words (the shop never does): {', '.join(rules.banned_words)}."
+                )
+            if rules.max_emoji == 0:
+                kit_lines.append("No emoji.")
+            elif rules.max_emoji is not None:
+                kit_lines.append(f"At most {rules.max_emoji} emoji.")
+            if rules.max_exclamations == 0:
+                kit_lines.append("No exclamation marks.")
+            elif rules.max_exclamations is not None:
+                kit_lines.append(f"At most {rules.max_exclamations} exclamation marks.")
         return "\n".join(
             [
                 f"Write {n} distinct variants.",
-                f"Channel: {channel.value}. Body at most {CHANNEL_BODY_MAX[channel]} characters.",
+                f"Channel: {channel.value}. Body at most {body_max} characters.",
                 subject_line,
                 f"Theme: {theme.value}. Tone: {tone.value}.",
                 *([f"Angle: {THEME_GUIDANCE[theme]}"] if theme in THEME_GUIDANCE else []),
@@ -665,6 +740,7 @@ class Creative:
                 f"Objective: {brief.objective.value}",
                 f"Why this plan: {brief.rationale or 'not given'}",
                 f"Brand voice: {brand_voice}",
+                *kit_lines,
                 f"Allowed slots: {', '.join(ALLOWED_SLOTS)}",
             ]
         )

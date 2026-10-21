@@ -40,6 +40,7 @@ from autonomy.connectors.base import (
     Connection,
     ConnectionContext,
     ConnectorCapabilities,
+    ConnectorFailure,
     CursorExpired,
     Identity,
     MappedRecords,
@@ -53,6 +54,7 @@ from autonomy.connectors.base import (
     StreamPage,
     StreamSpec,
     SyncWindow,
+    Teardown,
     WebhookDelivery,
     WebhookTopic,
     WriteActionSpec,
@@ -65,7 +67,6 @@ from autonomy.connectors.shopify.api import (
     API_VERSION,
     AUTH_HEADER,
     LIVE_PAGE_SIZE,
-    LIVE_QUERIES,
     OAUTH,
     SHOP_PATTERN,
     SHOP_QUERY,
@@ -73,6 +74,7 @@ from autonomy.connectors.shopify.api import (
     WEBHOOK_CREATE,
     WEBHOOK_UPDATE,
     WEBHOOKS_QUERY,
+    live_query,
     normalize_shop,
     shop_from,
 )
@@ -215,6 +217,12 @@ CAPABILITIES: Final[ConnectorCapabilities] = ConnectorCapabilities(
 )
 
 
+_REMOVE_BY_HAND: Final[str] = (
+    "Autonomy could not remove its app from the shop ({why}). Uninstall the Autonomy app in your "
+    "Shopify admin under Settings > Apps and sales channels."
+)
+
+
 class ShopifyConnector(SaasConnector):
     """See the module docstring. Stateless: one instance serves every shop."""
 
@@ -303,7 +311,7 @@ class ShopifyConnector(SaasConnector):
                 raise CursorExpired("the saved page position is unreadable")
             after = cursor[len(PAGE_PREFIX) :]
         variables = {"first": LIVE_PAGE_SIZE[stream.value], "after": after, "query": search_filter(window)}
-        data = gql.query(ctx, LIVE_QUERIES[stream.value], variables)
+        data = gql.query(ctx, live_query(stream.value, ctx.connection.config), variables)
         nodes, nxt = graphql_page(data, (stream.value,))
         records = tuple(normalize(node) for node in nodes)
         return StreamPage(records=records, next_cursor=PAGE_PREFIX + nxt if nxt else None)
@@ -376,6 +384,38 @@ class ShopifyConnector(SaasConnector):
         record = _REST[stream](data)
         return WebhookDelivery(
             delivery_id=delivery_id, topic=topic, stream=stream, records=(record,), occurred_at=occurred
+        )
+
+    def teardown(self, ctx: ConnectionContext, tokens: TokenSet | None) -> Teardown:  # noqa: ARG002
+        """A person disconnected the shop: revoke our app's access, which uninstalls it from the shop.
+
+        `DELETE /admin/api_permissions/current.json` revokes the access token our OAuth app holds;
+        Shopify then removes the app with its webhook subscriptions and sends `app/uninstalled` (the
+        engine expects it and raises nothing). A custom-app token belongs to the shop's own app, which
+        we must not remove, so the person is told how to delete it."""
+        app = ctx.app
+        try:
+            installed = gql.query(ctx, SHOP_QUERY)
+        except ConnectorFailure as failure:
+            return Teardown(left=(_REMOVE_BY_HAND.format(why=failure.message),))
+        api_key = _dig(installed, "currentAppInstallation", "app", "apiKey")
+        if app is None or api_key != app.client_id:
+            return Teardown(
+                left=(
+                    "This shop was connected with a custom-app token. If you no longer use it, delete "
+                    "that custom app (or its token) in your Shopify admin under Settings > Apps and "
+                    "sales channels > Develop apps.",
+                )
+            )
+        shop = normalize_shop(ctx.connection.config.get("shop") or ctx.connection.external_id or "")
+        try:
+            result = ctx.http.send("DELETE", f"https://{shop}/admin/api_permissions/current.json")
+        except ConnectorFailure as failure:
+            return Teardown(left=(_REMOVE_BY_HAND.format(why=failure.message),))
+        if not result.ok:
+            return Teardown(left=(_REMOVE_BY_HAND.format(why=f"Shopify answered HTTP {result.status}"),))
+        return Teardown(
+            done=("Revoked Autonomy's access to the shop; Shopify removes the app and its webhooks.",)
         )
 
     def register_webhooks(

@@ -23,7 +23,8 @@ hands-off checklist is in `03_competitors_build_vs_buy.md` section 4).
 | `webhooks.py` | `WebhookIntake`: verify (constant time), dedupe, queue, ack fast; process later; `hmac_matches`, `query_hmac_matches` |
 | `health.py` | `HealthMonitor`: freshness, history readiness, row drops, drift, error streaks; `ready_to_act`; `send_gate`; `IncidentDesk` (one alert per problem) |
 | `registry.py` | `ConnectorRegistry`, `default_registry()`, the catalogue for the API and the Connect screen |
-| `wiring.py` | How it plugs in: `production_registry`, `after_connect`, `worker_handlers`, `send_providers` / `send_adapters` (the customer's Klaviyo first, our SES as the fallback) |
+| `wiring.py` | How it plugs in: `production_registry`, `after_connect`, `worker_handlers`, `send_providers` / `send_adapters` (the customer's Klaviyo first, our SES as the fallback), `klaviyo_connection` |
+| `identity.py` | One person, one customer id: Klaviyo profiles linked to Shopify customer ids by email or phone (`IdentityLinker`, the engine's `record_hook`), conflicts kept apart and counted, reads through the links (`AliasedEvents`, `AliasedStates`), the hand-off's address book, the privacy eraser |
 | `shopify/`, `klaviyo/` | The first two platforms (sections below); Klaviyo's send channel is `autonomy/channels/klaviyo.py` |
 
 Nothing imports httpx, cryptography or v1's `engine` at module scope, so `import autonomy.connectors`
@@ -115,7 +116,8 @@ runs, and restarts any chain that ended. Wire it with
 | `TransientFailure` | timeouts, resets, 5xx after 5 attempts | error streak +1, retry with backoff (1, 2, 4 … min, capped at the cadence) |
 | `SourceUnavailable` | 402 (frozen shop), 423 (locked) | retry in an hour; alerts after the error streak |
 | `CursorExpired` | the platform no longer accepts a saved cursor | restarts the window (ids dedupe) |
-| `NeedsReconnect` (`AuthRejected`, `AccessDenied`, `VaultUnreadable`) | refresh `invalid_grant`, 401 after a fresh token, 403, uninstall, unreadable vault | `needs_reconnect`, one critical alert, every job for it stops |
+| `NeedsReconnect` (`AuthRejected`, `AccessDenied`, `VaultUnreadable`) | refresh `invalid_grant`, 401 after a fresh token, 403 on a critical stream, uninstall, unreadable vault | `needs_reconnect`, one critical alert, every job for it stops |
+| `AccessDenied` on an optional stream (`critical=False`: Shopify products, Klaviyo browsing events) | 403: that permission was not granted | only that stream is degraded: retried daily (`DENIED_RETRY`), one `info` note (`connector.stream_denied`) naming it; the connection stays active and decisions go on |
 | `RemoteError`, `NotSupported` | a 4xx that retrying will not change | recorded as a failed run |
 | anything else (a connector bug) | | recorded as a failed run; the chain continues |
 
@@ -219,33 +221,72 @@ The store tests run on SQLite locally and on Postgres in CI (`MARKETING_AI_TEST_
 
 ## Wiring (for the API and the runtime)
 
-`autonomy/connectors/wiring.py` is the one place the pieces meet, so the API, the worker and the
-runtime agree:
+`autonomy/connectors/wiring.py` is the one place the pieces meet, and
+`autonomy/runtime/settings.py` builds them for a deployment, so the API, the worker and the runtime
+agree. With `AUTONOMY_CONNECTORS=true` nothing else is needed:
 
 ```python
-db = create_engine(url); create_all(db); create_connector_tables(db); create_privacy_tables(db)
-store, events = ConnectorStore(db), SqlEventStore(db)
-registry = production_registry(events, product_sink=catalogue.add)  # Klaviyo linked to hand-offs
-engine = ConnectorEngine(
-    registry=registry, store=store,
-    vault=SqlTokenVault(store, FernetCipher.from_settings(settings, storage)),
-    sink=events.append, clock=SystemClock(),
-    apps={k: a for k in registry.kinds() if (a := AppCredentials.from_env(k, os.environ))},
-    monitor=HealthMonitor(store, registry, desk=IncidentDesk(store, SqlAlertStore(db))),
-    history_hook=on_history,   # runtime-side: rebuild state once history lands (rebuild_states)
-    webhook_base_url="https://<host>/v2/connectors/webhooks", holder=worker_name,
-)
-desk = ShopifyPrivacyDesk(store, db, desk=engine.monitor.desk)
-worker = Worker(queue, handlers={**runtime_handlers,
-                                 **connector_handlers(engine, queue, events=events, privacy_desk=desk)})
-
-# Sending: decide in Autonomy, send through the customer's own tool; our SES stays the fallback.
-providers = send_providers(engine, business_id, fallback=build_adapters(settings),
-                           details=details_from(decision_log, workspace, discount_code=codes))
-gateway = DispatchGateway(providers, limiter=RateLimiter(provider_rates=provider_rates()), ...)
-# (a plain Dispatcher without failover: send_adapters(engine, business_id, fallback=...))
+settings = RuntimeSettings.from_env()          # AUTONOMY_BUSINESS_ID, AUTONOMY_CONNECTORS, AUTONOMY_PUBLIC_URL, ...
+db = engine_for(settings.database_url)
+wiring = build_connector_engine(settings, db=db, events=SqlEventStore(db), alerts=SqlAlertStore(db))
+runtime = build_runtime(settings, engine=db, connectors=wiring, run_send_jobs=False)
+# what python -m autonomy.runtime.worker does (service.build_worker), plus every connector job kind:
+worker = Worker(queue, handlers={tick, send (hold=runtime.data_send_gate), gateway, webhooks,
+                                 **connector_handlers(wiring.engine, queue, events=wiring.events,
+                                                      privacy_desk=wiring.privacy_desk)})
+# the API (python -m api.v2.app --production, or api.main with AUTONOMY_V2_API=on, mounted at /v2):
+app = create_production_app()                  # ConnectorServices over the same engine and queue
 ```
 
+`build_connector_engine` builds the `ConnectorEngine` over the deployment's database: tokens in the
+`SqlTokenVault`, encrypted with the key `MARKETING_AI_CONNECTIONS_KEY` holds (it refuses to start
+without it), our OAuth apps from `AUTONOMY_<KIND>_CLIENT_ID` / `_CLIENT_SECRET`, alerts into the
+runtime's alert store (one per problem), `production_registry` (Klaviyo linked to hand-offs through
+the identity view), the `IdentityLinker` as `record_hook`, and the `ShopifyPrivacyDesk` with the
+identity eraser. `build_runtime(..., connectors=wiring)` then ties the runtime to the shop:
+
+* **Business.** `AutonomyRuntime.business_id` is the business the connections belong to
+  (`AUTONOMY_BUSINESS_ID`, default `default`); it is what `ready_to_act`, `send_providers` and the
+  identity links are asked for.
+* **Sending: the customer's Klaviyo first, our SES second.** A `DispatchGateway` over
+  `send_providers(engine, business_id, fallback=build_adapters(settings))`, with
+  `RateLimiter(provider_rates=provider_rates())`. `SendRouting.refresh` runs at the start of every
+  tick and rebuilds the providers when the business's Klaviyo connection (its id, and the channels it
+  sends) changed: made, lost (needs reconnect, disconnected, `send=off`) or reconnected takes effect
+  on the next tick, no restart. **No double send:** the gateway keeps the provider an ambiguous
+  attempt went to and retries only there with the same `unique_id`, so a Klaviyo hand-off whose
+  answer was lost is never re-sent through SES, even if Klaviyo is dropped from the chain meanwhile
+  (the decision then fails rather than goes out twice; after a reconnect it is handed over again and
+  Klaviyo records it once). The dispatcher never re-sends a decision that has a SEND. Consent: Klaviyo
+  keeps the shop's unsubscribes and suppressions and the dispatcher checks consent in state; the SQL
+  consent-proof registry applies only when `AUTONOMY_GATEWAY_ENABLED` turns it on.
+* **Holding on bad data, with one alert.** `connector_data_gate(monitor, business_id)` is the
+  runtime's `data_gate`: every tick asks `ready_to_act`. Stale, never-synced or still-loading data, or a
+  connection that needs reconnecting (or was uninstalled), holds that business's decisions and approved
+  batches (`TickReport.data_held` says why), and queued sends are put back on the queue every 30 minutes
+  for up to 24 h past their send time (`worker.HOLD_RETRY`, `MAX_HOLD`), then skipped. The connector
+  side raises the one alert: one `connector.stale` per connection however many of its critical streams
+  are behind (an optional stream stale at the same time is only an `info` note), or the one
+  `connector.needs_reconnect`. A hold while history loads raises nothing: nothing is wrong.
+  `AUTONOMY_HOLD_ON_STALE_DATA=false` turns the gate off.
+* **A person's disconnect is intentional.** `ready_to_act` leaves out a connection a person
+  disconnected (`DISCONNECTED_BY_PERSON`), so it never holds the business. `engine.disconnect`
+  (behind `DELETE /v2/connectors/connections/{id}`) first takes our setup out of the platform where the
+  API allows (`SaasConnector.teardown`): Shopify (our OAuth app) `DELETE /admin/api_permissions/current.json`
+  revokes the token, which uninstalls the app and its webhooks (the `app/uninstalled` that follows
+  raises nothing); Klaviyo deletes the `Autonomy · email` / `Autonomy · SMS` flows and the
+  `Autonomy · decision email` template, and revokes an OAuth grant at `https://a.klaviyo.com/oauth/revoke`.
+  Then it forgets the tokens and closes the connection's open incidents. What the API cannot do (a
+  pasted Klaviyo private key or Shopify custom-app token, a key without `flows:write`) comes back in
+  `DisconnectReport.left` and as one `info` alert, `connector.disconnect_followup`, with the exact step.
+  A connection that needs reconnecting, or was uninstalled on the platform, holds until it is
+  reconnected or a person removes it on Connect (its alert says so).
+* **Identity.** With `AUTONOMY_IDENTITY_LINKING` (on), the runtime reads events and states through the
+  links (`AliasedEvents`, `AliasedStates`) and the address book hands Klaviyo the linked profile's
+  email (see "Identity linking" below).
+* **History rebuilds state.** `engine.history_hook` and the linker's `on_change` are
+  `runtime.request_rebuild`: history older than the late window, or a new link, makes the next tick
+  rebuild every state from the log (at most once per `RuntimeConfig.rebuild_every`, 15 minutes).
 * **After every connect** the API calls `after_connect(connection, queue, now)` (idempotent): it
   starts Klaviyo's hourly setup-and-delivery watch, and the Shopify privacy chain. `engine.seed`
   (called by `finish_oauth` / `connect_api_key` with a queue) starts the syncs and the daily job.
@@ -254,12 +295,12 @@ gateway = DispatchGateway(providers, limiter=RateLimiter(provider_rates=provider
   never refreshes and never touches the vault), and stores them only once `identify` succeeds. A
   mistyped key for a shop that is already connected is a 400, and the live tokens stay as they were
   (`test_base_sync::test_a_mistyped_key_for_a_connected_account_leaves_the_live_connection_alone`).
-* **Providers.** `send_providers` gives each channel the business's active Klaviyo connection sends
-  (email, plus SMS with `sms=on`) as `[Provider("klaviyo", ...), Provider("<channel>", fallback)]`.
-  Klaviyo's definite refusals (`not_ready:`, `needs_reconnect:`, `rate_limited:`) fail over to our
-  own adapter; `ambiguous:` never does (it may have arrived). With no active Klaviyo connection
-  (none yet, or one that needs reconnecting) the fallback sends alone. Rebuild the providers when a
-  connection changes (the runtime reads them at start-up; a restart or a periodic rebuild is enough).
+* **Providers by hand.** `send_providers` gives each channel the business's active Klaviyo connection
+  sends (email, plus SMS with `sms=on`; none with `send=off`) as `[Provider("klaviyo", ...),
+  Provider("<channel>", fallback)]`. Klaviyo's definite refusals (`not_ready:`, `needs_reconnect:`,
+  `rate_limited:`) fail over to our own adapter; `ambiguous:` never does (it may have arrived). With
+  no active Klaviyo connection the fallback sends alone. A plain `Dispatcher` without failover takes
+  `send_adapters(engine, business_id, fallback=...)`.
 * **API routes** (`api/v2/connectors.py`, under `/v2/connectors`; its module docstring has the
   full table): `GET /` (platforms, connections and `can_act` in words), `POST /{kind}/connect`
   (OAuth consent URL), `GET /{kind}/callback`, `GET /{kind}/install` (installs started in the
@@ -267,16 +308,71 @@ gateway = DispatchGateway(providers, limiter=RateLimiter(provider_rates=provider
   `GET|DELETE /connections/{id}`, `POST /connections/{id}/sync`, `GET /connections/{id}/setup`
   (Klaviyo's automatic setup or its guided steps), `POST /webhooks/{kind}` and
   `POST /webhooks/{kind}/{connection_id}` (raw body to `WebhookIntake.receive`, answered at once).
-* **Runtime**: call `monitor.ready_to_act(business_id, now)` before deciding and hold the business
-  when `can_act` is false (its `reasons` are plain words); pass `monitor.send_gate(business_id)` as
-  the worker's send `gate` so queued messages wait too. Not wired yet (see "Before going live").
+  `api.main` mounts the production v2 app at `/v2` only with `AUTONOMY_V2_API=on`, outside v1's
+  access control: OAuth redirects and webhooks arrive with no session and are checked by their own
+  state or signature. Every other v2 route (goals, approvals, mandates, connect, disconnect, tick)
+  asks for `Authorization: Bearer $AUTONOMY_V2_API_TOKEN` and is refused (503) when no token is set;
+  `--production` serves behind the same guard. The v2 UI does not send that token yet, so in
+  production its data calls are refused until it is signed in. The API process re-reads the identity
+  links the worker makes at most once a minute, on a request.
+
+The guarantees above are held by `tests/v2/zero_touch/test_wiring_*.py`: `providers` (Klaviyo first
+with SES behind; the providers follow a connection made, lost, re-made and `send=off`; an ambiguous
+hand-off never re-sent through SES), `gate` (the business; one alert per hold; reconnect holds until
+reconnected or removed; a disconnect never blocks; teardown on Klaviyo key, Klaviyo OAuth and Shopify;
+queued sends held and sent once), `identity`, `proof`, `history`, `degrade` and `production` (the
+worker's handlers and hold, the API over the shared engine, the `/v2` mount).
+
+## Identity linking (`identity.py`)
+
+Shopify keys a customer by its numeric id; Klaviyo's events name a profile by the connection's
+`identity` setting (`auto`: `external_id`, else the lower-cased email, else the phone). Klaviyo's
+Shopify integration is reported **not** to put the Shopify id in `external_id`, so without a link the
+same person would be two customers, and a Klaviyo delivery would never meet its decision.
+
+* **Facts.** The engine's `record_hook` (`IdentityLinker`) reads every new record version: Shopify
+  customers (the id, plus email and phone when the connection reads them, below) and Klaviyo profiles
+  (the consent stream, and the profile attached to every engagement and browsing event: event key,
+  email, phone, `external_id`). Emails are trimmed and lower-cased, phones kept only in international
+  form (`+` and 8 to 15 digits, never guessed); both are stored as SHA-256 hashes (`identity_fact`).
+* **Links.** A Klaviyo key is linked to a Shopify customer id when exactly one Shopify customer
+  matches it by `external_id`, email or phone (`identity_link`, with the method). The Shopify id stays
+  the key. Two candidates (an address two Shopify customers share, or an email pointing at one and a
+  phone at another, or a phone shared with a customer whose known email is a different one, as in a
+  household) are a **conflict**: kept separate and counted (`IdentityStore.summary`: Shopify
+  customers, Klaviyo profiles, linked, conflicts, keyed by the Shopify id already, unlinked). A Shopify
+  id is never linked to another, so two Shopify customers are never merged. Links are recomputed
+  whenever either side changes, so a changed address moves or drops the link. A record that does not
+  carry an address (a Shopify poll without `contact=read` after a webhook that had the email, or a
+  Klaviyo event profile without the phone) keeps the address stored before, so links do not flap.
+* **Use.** Events stay as stored (their ids are stable). The runtime reads through `AliasedEvents`
+  (a linked key's events read as the Shopify customer's; `for_customer(<Shopify id>)` includes every
+  linked key) and `AliasedStates` (a state left under a linked key is hidden, so nobody is swept twice).
+  The Klaviyo connector's hand-off lookup reads the same view, so a "Received Email" under the email
+  key links to the decision made for the Shopify id, and the delivery watch sees it. The address book
+  gives the hand-off the linked profile's email (SMS: phone), else the linked `external_id`, else the
+  Shopify id when a Klaviyo profile is keyed by it; anyone else is skipped (`no_address`) rather than
+  handed to Klaviyo as a new, empty profile. A Shopify `customers/redact` also erases the linked
+  Klaviyo keys' events, states, decisions, facts and links (`identity_eraser`).
+* **Reading Shopify's email.** Shopify gives a customer's email and phone only to apps approved for
+  protected customer data **level 2**. Set the Shopify connection's `contact=read` once the app has it
+  (the live and bulk customer queries then add `emailAddress` / `phoneNumber`); without that approval
+  Shopify refuses the query, so it is off by default. Customer webhooks carry `email` / `phone` when
+  Shopify includes them, and those are used either way. Until then, profiles link only through an
+  `external_id` that is a Shopify id, and `IdentityStore.summary` shows how many stay unlinked.
 
 ## Environment variables
 
 | Variable | For |
 |---|---|
 | `AUTONOMY_<KIND>_CLIENT_ID`, `AUTONOMY_<KIND>_CLIENT_SECRET` | our app's OAuth credentials per platform (e.g. `AUTONOMY_SHOPIFY_CLIENT_ID`); Shopify webhooks are signed with the client secret |
-| `MARKETING_AI_CONNECTIONS_KEY` | the encryption key (v1's), shared with saved v1 connections |
+| `MARKETING_AI_CONNECTIONS_KEY` | the encryption key (v1's), shared with saved v1 connections; the runtime refuses to start connectors without it |
+| `AUTONOMY_CONNECTORS` | `true`: the worker and `build_runtime` build the connector engine, send Klaviyo-first and hold on stale data |
+| `AUTONOMY_BUSINESS_ID` | the business this deployment runs for (default `default`); connections belong to it |
+| `AUTONOMY_PUBLIC_URL` | `https://<host>` the platforms call back (OAuth, webhooks) |
+| `AUTONOMY_IDENTITY_LINKING`, `AUTONOMY_HOLD_ON_STALE_DATA` | both on by default; `false` turns linking or the stale-data hold off |
+| `AUTONOMY_V2_API` | `on`: `api.main` mounts the production v2 API (with `/v2/connectors`) at `/v2` |
+| `AUTONOMY_V2_API_TOKEN` | the operator bearer token every mounted v2 route except platform callbacks needs; unset: those routes answer 503 |
 | `AUTONOMY_LIVE_SHOPIFY_SHOP`, `AUTONOMY_LIVE_SHOPIFY_TOKEN` | live tests against a Shopify development store (custom-app token, read scopes) |
 | `AUTONOMY_LIVE_KLAVIYO_API_KEY` | live tests against a Klaviyo test account (private key, read scopes) |
 | `MARKETING_AI_TEST_DATABASE_URL` | the Postgres variant of the store tests (CI sets it) |
@@ -284,15 +380,30 @@ gateway = DispatchGateway(providers, limiter=RateLimiter(provider_rates=provider
 ## Known limits
 
 * Privacy requests are recorded with one alert each. For Shopify, `ShopifyPrivacyDesk` (the hourly
-  `shopify_privacy` job) carries them out on our copy; a data-request export still needs a person
-  to send it to the merchant, so its alert stays open.
+  `shopify_privacy` job) carries them out on our copy, including the linked Klaviyo profiles'
+  events; a data-request export still needs a person to send it to the merchant, so its alert stays
+  open.
 * A store-initiated Shopify install (from the Shopify admin, not our Connect screen) arrives without
   a `business_id`; the API attaches it to the deployment's one business (the pilot shape). A
-  multi-tenant deployment must map the shop to a business (or a pending sign-up) first.
+  multi-tenant deployment must map the shop to a business (or a pending sign-up) first. The runtime
+  serves one business (`AUTONOMY_BUSINESS_ID`); a multi-tenant deployment runs one runtime per
+  business or grows the runtime a business per goal.
 * The token bucket is per process; across processes the 429 path is the limiter. Klaviyo gives OAuth
   apps their own quota per install, Shopify's GraphQL cost header lets each process pace itself.
-* `ready_to_act` treats every connection of a business as required; a business that wants to keep
-  deciding without a disconnected source must remove the connection.
+* `ready_to_act` treats every **active** connection of a business as required; a person-disconnected
+  one is left out. A connection that needs reconnecting (or was uninstalled on the platform) holds
+  the business until it is reconnected or removed on Connect: that is deliberate, because its data
+  (consent included) stopped arriving.
+* Identity: linking by email needs Shopify's protected customer data level 2 (`contact=read`); until
+  it is granted, only profiles whose `external_id` is the Shopify id link. Decisions logged for a
+  Klaviyo key before its link was found stay under that key (intent to treat); its old state row is
+  hidden, not deleted (the state store has no delete).
+* Providers are named by platform (`klaviyo`), not by connection: if a business replaced its Klaviyo
+  account with another while a hand-off was ambiguous, the retry would go to the new account.
+* Disconnect leaves Klaviyo's setup profile (`external_id=autonomy-setup`, no email or phone): Klaviyo
+  deletes profiles only through a privacy request.
+* Discount codes in hand-offs: `details_from` is wired without `discount_code`, so a hand-off carries
+  the offer but not a per-person Shopify code yet.
 
 ## Before going live
 
@@ -350,7 +461,14 @@ Platform settings, exactly:
   `invalid_grant` for a dead refresh token.
 - [ ] Klaviyo authorize URL `https://www.klaviyo.com/oauth/authorize`, space-separated scopes, and
   whether a refresh returns a new `refresh_token` (the code keeps the old one when absent). The
-  revoke URL `https://a.klaviyo.com/oauth/revoke` (not called yet; see "Still open").
+  revoke endpoint `https://a.klaviyo.com/oauth/revoke` (form `token`, `token_type_hint=refresh_token`,
+  HTTP Basic client auth), called on disconnect (`klaviyo/connector.py: REVOKE_URL`).
+- [ ] Klaviyo `DELETE /api/flows/{id}` and `DELETE /api/templates/{id}` (204; allowed on a live flow;
+  the per-endpoint limits used: `flows:update` 3/s, `templates` 75/s).
+- [ ] Shopify `DELETE /admin/api_permissions/current.json` revokes an OAuth app's token and uninstalls
+  it (webhooks removed, `app/uninstalled` sent); never called for a custom-app token.
+- [ ] Shopify `defaultEmailAddress.emailAddress` / `defaultPhoneNumber.phoneNumber` with protected
+  customer data level 2 (`contact=read`), and the refusal shape without it.
 - [ ] Klaviyo refresh rules: access token about 1 h (`expires_in` is read), refresh token revoked
   after 90 days unused (keep-alive every 30 days), at most 10 refreshes a minute.
 - [ ] Shopify expiring offline tokens: `expiring=1` in the code-exchange POST (not the authorize
@@ -427,11 +545,11 @@ Platform settings, exactly:
   properties `$flow`, `$message`, `URL`, `Bounce Type`, `Reason`.
 - [ ] Whether a profile's `updated` moves when only its subscriptions change (else a consent-only
   change waits for the next profile update or the history lane).
-- [ ] **Identity (the biggest open risk):** whether Klaviyo's Shopify integration puts the Shopify
-  customer id in the profile's `external_id`. Community threads from 2022-2023 suggest it does
-  not. If not, the default identity `auto` will not meet Shopify's ids: the watch holds and raises
-  `connector.klaviyo_unlinked` instead of writing false FAILs, but linking needs a customer-id to
-  email map before go-live.
+- [ ] **Identity:** whether Klaviyo's Shopify integration puts the Shopify customer id in the
+  profile's `external_id`. Community threads from 2022-2023 suggest it does not. Either way the
+  identity links meet them (`identity.py`): by `external_id` when it is the Shopify id, else by
+  email or phone, which needs Shopify's email (`contact=read`, protected customer data level 2).
+  Check on the dry run that `IdentityStore.summary` shows the test customers linked and no conflicts.
 - [ ] A `backfill: true` Create Event still creates the custom metric (setup falls back to one
   plain event after 30 minutes if not).
 - [ ] Template tags: `{{ event.body|linebreaks }}`, `{% unsubscribe %}`, `{% unsubscribe_link %}`,
@@ -480,22 +598,25 @@ For the Klaviyo App Marketplace: submit the listing (description, logo, support 
 policy), a scope-by-scope justification (flows:write and templates:write create the one send flow),
 and a test account for the reviewer.
 
-### 6. Still open after wave 1 (integration, not platform checks)
+### 6. Still open (integration, not platform checks)
 
-- The runtime does not yet call `monitor.ready_to_act` before deciding or pass
-  `monitor.send_gate(business_id)` to the worker, and the runtime has no `business_id` yet.
-- `history_hook` is not yet wired to `rebuild_states`.
-- `autonomy/runtime/settings.build_runtime` does not yet build the connector engine or use
-  `send_providers`; the production `api/main.py` does not yet attach `ConnectorServices`.
-- Proof (`autonomy/proof/rewards.py`) still counts a SEND as sent when a `FAIL`
-  `not_delivered_by_tool` exists.
-- `ready_to_act` counts a person-disconnected connection as blocking the business for ever.
-- `DELETE /connections/{id}` forgets our tokens but does not revoke them at the platform or remove
-  the webhooks and Klaviyo flows.
+Closed by the zero-touch wiring (`tests/v2/zero_touch/test_wiring_*.py`): the runtime has a
+`business_id`, checks `ready_to_act` every tick and holds sends with `data_send_gate`;
+`history_hook` rebuilds state; `build_runtime` builds the engine and sends Klaviyo-first through
+`send_providers` and refreshes the providers every tick; the production API (`create_production_app`,
+`api.main` with `AUTONOMY_V2_API=on`) attaches `ConnectorServices` over the same engine; proof no
+longer counts an undelivered hand-off as sent; a person's disconnect never holds and takes our setup
+out of the platform (token revoked, webhooks and Klaviyo flows removed where the API allows); Klaviyo
+profiles are linked to Shopify customers; a 403 on an optional stream degrades only that stream.
+
+Still open:
+
 - `Alert` has no `connection_id`, so alerts name the connection in their text only.
 - No per-connection webhook secret (legacy Shopify custom-app tokens are poll-only) and no
   client-credentials grant.
-- A 403 on one optional stream marks the whole connection `needs_reconnect`.
+- Shopify's protected customer data level 2 (for `contact=read`) must be requested in the app's
+  settings before email linking works in production.
+- A per-person Shopify discount code in the hand-off (`details_from(..., discount_code=...)`).
 
 ## Shopify
 
@@ -509,7 +630,7 @@ shopify.dev docs as of 2026-10-20 (read through search extracts; see "verify" be
 | API | Admin GraphQL, **pinned to `2026-10`** in the URL (`/admin/api/2026-10/graphql.json`); `ApiVersion.review_by` 2027-07-01. All queries live in `shopify/api.py`, so the quarterly bump reads one file |
 | Auth | `X-Shopify-Access-Token`. Public app: OAuth, offline **expiring** tokens (`expiring=1` in the code exchange, 1 h access, 90-day rotating refresh, client id and secret in the body). Pilot before app review: a custom-app Admin API token through `connect_api_key(..., config={"shop": "acme.myshopify.com"})`, never refreshed |
 | Scopes | `read_customers, write_customers` (tags only), `read_orders, read_all_orders` (older than 60 days; a Partner app must request it), `read_products, write_discounts` |
-| Protected data | The queries read no name, email, phone or address, so level 1 protected customer data access is enough. Consent comes from `defaultEmailAddress` / `defaultPhoneNumber` (`marketingState`, `marketingOptInLevel`, `marketingUpdatedAt`) |
+| Protected data | By default the queries read no name, email, phone or address, so level 1 protected customer data access is enough. Consent comes from `defaultEmailAddress` / `defaultPhoneNumber` (`marketingState`, `marketingOptInLevel`, `marketingUpdatedAt`). With the connection setting `contact=read` (needs **level 2**) the customer queries also read `emailAddress` and `phoneNumber`, used only to link Klaviyo profiles and stored only as hashes (`identity.py`) |
 | Rate limit | Cost-based: `pacing` = `graphql_throttle_wait` (waits for points before the next query), `retry_signal` = `graphql_throttled` (a `THROTTLED` 200 waits for the restore time). Page sizes keep each query's requested cost (2 + `first` x node cost, multiplied through nesting) under 80% of the 1,000-point single-query limit; `test_shopify_mapping::test_every_live_query_stays_under_shopifys_single_query_cost_limit` recomputes it |
 
 ### Streams
@@ -662,9 +783,10 @@ with nothing usable yields only what it has: it never invents consent.
 
 **Which customer** (`identity` in the connection's config): `auto` (the default) takes the
 profile's `external_id` first, then the lower-cased email, then the phone, then `klaviyo:<profile
-id>`. Klaviyo's Shopify integration keys Shopify-synced profiles by the Shopify customer id, which is
-the id the Shopify connector uses, and the Shopify connector reads no email. `email` skips the
-external id; `profile_id` always uses Klaviyo's id. Choose one per deployment; it is in every event id.
+id>`. `email` skips the external id; `profile_id` always uses Klaviyo's id. Choose one per
+deployment; it is in every event id. Klaviyo's Shopify integration is reported not to set
+`external_id` to the Shopify id, so the events of a Shopify customer's profile are usually keyed by
+its email: the identity links ("Identity linking" above) make them read as the Shopify customer's.
 
 ### Send through Klaviyo (decide here, send there)
 
@@ -750,9 +872,12 @@ been read past the window (live watermark minus the 3 h overlap), the watch reco
 **`FAIL` with `reason=not_delivered_by_tool`** at the window's end. Causes include a suppression, a
 flow filter, a flow someone switched off, or quiet hours that ran out. The watch never concludes
 while engagement data is stale (`held` says why). It also holds when the connector has no
-`handoffs` lookup, and when hand-offs are overdue but **none** in the lookback was delivered.
-That happens when Klaviyo's profiles do not carry Autonomy's customer ids, so nothing links, or
-when the flows never send. A false "not delivered" would take real sends out of the proof. Once
+`handoffs` lookup, and when hand-offs are overdue but **none** was delivered, neither in the
+2-day lookback nor in the last 14 days (`linked_lookback`). That happens when Klaviyo's profiles do
+not carry Autonomy's customer ids, so nothing links, or when the flows never send. The 14-day look
+exists for small shops: one that sends every few days can have a single hand-off in the 2-day
+window, and a silent drop of that one still counts as not delivered when an earlier delivery proves
+the linking works (found by the end-to-end rehearsal, `scripts/v2_zero_touch_rehearsal.py`). A false "not delivered" would take real sends out of the proof. Once
 3 hand-offs are held this way it raises one alert, `connector.klaviyo_unlinked`. Klaviyo's own `Dropped Email` / `Failed to
 Deliver SMS` count at once. A late `Received` still lands as `DELIVER`, and learning already
 prefers `DELIVER` over `FAIL`.
@@ -797,11 +922,13 @@ the connect-time setup.
 
 ### Needed outside this package, and known limits
 
-* **Proof must not count a silent drop as sent.** `proof/rewards.py` counts a decision as sent when
-  it has a SEND or a DELIVER. A hand-off is a SEND, so it should also exclude decisions with a
-  `FAIL` (`reason=not_delivered_by_tool`, or any FAIL/BOUNCE/BLOCK) and no `DELIVER`, as
-  `learning/observations.Timeline.undelivered` already does. No contract change is needed:
-  existing event types carry it.
+* **Proof does not count a silent drop as sent** (done). `proof/rewards.sent_decisions` counts a
+  SEND or DELIVER as sent unless a FAIL came at or after the last SEND and no DELIVER ever did
+  (Klaviyo's `not_delivered_by_tool` is such a FAIL). Such a decision carries no channel cost. A
+  BOUNCE or BLOCK keeps its cost: the provider sent and billed the message, and dropping it would
+  overstate profit (`undelivered_decisions` still lists them, for what reached the person). The proof stays **intent to treat**: the decision keeps its agent or
+  baseline group and its purchases; only the cost it never incurred is dropped (the module docstring
+  says why). Learning leaves undelivered sends out of the treated side, as before.
 * `Alert` has no `connection_id`, so the setup alert names the connection in its message.
 * The watch scans the event store for the lookback window (2 days plus the longest window) every
   hour. That is fine for pilots; a big store wants an index on (type, source) or a query by
@@ -810,8 +937,9 @@ the connect-time setup.
   land within minutes and the first is dropped, the second's Received can be credited to the
   first. That is rare, because Autonomy paces each person.
 * Lists and segments are listed (`KlaviyoConnector.audiences`), not synced as membership.
-* The Klaviyo setup profile (`external_id=autonomy-setup`) and the `Autonomy ·` flows and
-  template stay in the customer's account after a disconnect.
+* A disconnect deletes the `Autonomy ·` flows and template (where the key allows `flows:write`) and
+  revokes an OAuth grant; the setup profile (`external_id=autonomy-setup`) stays, and a pasted private
+  key must be deleted in Klaviyo by the person (the follow-up alert says so).
 * Verify against the live docs: the OAuth details (Basic header, whether a refresh returns a new
   refresh token, `invalid_grant`); the names of the built-in metrics (`Received Email`, `Opened
   Email`, `Clicked Email`, `Bounced Email`, `Marked Email as Spam`, `Unsubscribed` / `Unsubscribed
@@ -819,6 +947,7 @@ the connect-time setup.
   `Unsubscribed from SMS Marketing`) and their properties (`$flow`, `$message`, `URL`, `Bounce
   Type`); whether a profile's `updated` moves when only its subscriptions change; template tags
   (`linebreaks`, `{% unsubscribe %}`, `{% unsubscribe_link %}`, `organization.full_address`);
-  that Klaviyo's Shopify integration sets `external_id` to the Shopify customer id; that the
+  whether Klaviyo's Shopify integration sets `external_id` to the Shopify customer id (linking by
+  email covers it when it does not); that the
   metric-property trigger filter uses the field `channel` as written; and whether accounts need
   Klaviyo's approval before a flow created by API can go live.

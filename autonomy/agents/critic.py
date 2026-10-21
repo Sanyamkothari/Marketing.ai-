@@ -11,7 +11,11 @@ Two stages, cheapest and surest first:
    model to score copy we already know is unsendable. When the brand rules name countries, each
    country's compliance pack (`autonomy.compliance_packs`) adds its own rules here too: India's
    DLT template registration and opt-out line, the US's STOP keyword and postal address, the EU's
-   unsubscribe link. With no countries named, the rules are exactly the brand's own.
+   unsubscribe link. With no countries named, the rules are exactly the brand's own. When the
+   rules carry the shop's brand kit (`BrandRules.voice`, read from its own tools by
+   `autonomy.brand`), its hard rules are checked too: words the shop never uses, its subject and
+   SMS lengths, emoji, exclamation marks, and the discount forms its copy uses
+   (`autonomy.brand.rules.voice_problems`, noted as `brand kit: ...`).
 2. **Judge** (an LLM, ideally from a different model family than the Creative, to avoid a model
    grading its own style): scores brand voice and honesty from 1 to 5 with reasons. To reduce
    position and self bias, each item is judged alone (never side by side with others) and twice,
@@ -52,6 +56,8 @@ from autonomy.agents.creative import (
     is_approved,
     media_kind,
 )
+from autonomy.brand.kit import BrandKit, VoiceRules
+from autonomy.brand.rules import voice_problems
 from autonomy.channels.render import CAROUSEL_MAX, CAROUSEL_MIN, FORMAT_MEDIA, FORMAT_SUPPORT, asset_urls
 from autonomy.compliance_packs import CompliancePack, PackSettings, Purpose, packs_for
 from autonomy.contracts import (
@@ -185,6 +191,10 @@ class BrandRules(Contract):
             "False (the default) holds it as a draft until the judge is back."
         ),
     )
+    voice: VoiceRules | None = Field(
+        default=None,
+        description="The hard rules of the shop's brand kit (autonomy.brand). None: no kit rules.",
+    )
 
     @classmethod
     def from_brief(
@@ -196,15 +206,23 @@ class BrandRules(Contract):
         assets: Iterable[ApprovedAsset] = (),
         countries: Sequence[str] = (),
         pack_settings: PackSettings | None = None,
+        kit: BrandKit | None = None,
     ) -> BrandRules:
-        """Rules whose approved offers are the brief's envelope offers, and assets the approved ones given."""
+        """Rules whose approved offers are the brief's envelope offers, and assets the approved ones given.
+
+        With the shop's brand `kit`, its hard rules are checked too, and its voice joins `brand_voice`
+        for the judge."""
+        voice = brand_voice
+        if kit is not None:
+            voice = " ".join(p for p in (brand_voice.strip(), kit.voice_text()) if p)
         return cls(
-            brand_voice=brand_voice,
+            brand_voice=voice,
             offers=brief.envelope.offers,
             allowed_domains=tuple(allowed_domains),
             approved_assets=tuple(AssetRef.of(a) for a in assets if is_approved(a)),
             countries=tuple(countries),
             pack_settings=pack_settings or PackSettings(),
+            voice=kit.rules if kit is not None else None,
         )
 
     def compliance_packs(self) -> tuple[CompliancePack, ...]:
@@ -371,6 +389,9 @@ def check_rules(
         for raw in [*_MONEY_BEFORE.findall(text), *_MONEY_AFTER.findall(text)]:
             if allowed_money is None or abs(_number(raw) - allowed_money) > 1e-9:
                 problems.append(f"unapproved money figure: {raw}")
+
+    # The shop's brand kit: its own habits, read from its own tools.
+    problems.extend(f"brand kit: {p}" for p in voice_problems(item, rules.voice, offer))
 
     # Links.
     for host in _hosts(text):

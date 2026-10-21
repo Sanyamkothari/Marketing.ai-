@@ -47,7 +47,23 @@ export const MOCK_FILES = Object.freeze({
   // The SaaS connectors (api/v2/connectors.py): the platform cards, and each sample connection's guided setup.
   connectors: "connectors.json",
   connectorSetup: "connector_setup.json",
+  // Zero-touch setup (api/v2/onboarding.py, onboarding_brand.py) and the exceptions-only inbox (api/v2/inbox.py).
+  onboardingProposals: "onboarding_proposals.json",
+  onboardingLimits: "onboarding_limits.json",
+  onboardingBrand: "onboarding_brand.json",
+  inbox: "inbox.json",
+  autopilot: "autopilot.json",
 });
+
+/**
+ * `?scenario=` for the sample data: "setup" is a shop that has connected Shopify and Klaviyo (history still
+ * loading) and runs no goal yet, so Getting started shows the five-click setup; "new" is the same with nothing
+ * connected. Anything else (or none) is the usual sample shop with its running goal.
+ */
+export function scenarioParam(search) {
+  const v = new URLSearchParams(search || "").get("scenario");
+  return v === "setup" || v === "new" ? v : null;
+}
 
 // The values Goal.kind and Goal.objective may take (autonomy/contracts/goals.py), for the mock's checks.
 const GOAL_KINDS = Object.freeze(["win_back", "repeat_purchase", "cart_recovery", "cross_sell", "onboarding", "retention", "custom"]);
@@ -162,6 +178,7 @@ export function createApi(options = {}) {
   const mockBase = options.mockBase || new URL("./mock/", import.meta.url).href;
   const now = options.now || (() => new Date());
   const forced = options.mock ?? (g.location ? mockParam(g.location.search) : null);
+  const scenario = options.scenario ?? (g.location ? scenarioParam(g.location.search) : null);
 
   let mode = forced === true ? "mock" : "live";
   let reason = forced === true ? "You opened the page with ?mock=1." : "";
@@ -291,8 +308,20 @@ export function createApi(options = {}) {
   async function state() {
     if (store) return store;
     const [goals, detail] = await Promise.all([loadMock(MOCK_FILES.goals), loadMock(MOCK_FILES.goalDetail)]);
-    store = { goals: Array.isArray(goals) ? goals : [], details: new Map(), template: detail || null, primary: null, made: 0, batches: null };
-    if (detail && detail.goal) {
+    const fresh = scenario === "setup" || scenario === "new";
+    store = {
+      goals: fresh || !Array.isArray(goals) ? [] : goals,
+      details: new Map(),
+      template: detail || null,
+      primary: null,
+      made: 0,
+      batches: null,
+      // Zero-touch writes in this page load: signed mandates, the voice approval, inbox items handled.
+      mandates: [],
+      brandApproval: null,
+      handled: new Set(),
+    };
+    if (detail && detail.goal && !fresh) {
       store.primary = detail.goal.goal_id;
       if (!store.goals.some((x) => x.goal_id === detail.goal.goal_id)) store.goals.unshift(detail.goal);
       store.details.set(detail.goal.goal_id, { brief: detail.brief ?? null, content: detail.content ?? [], proof: detail.proof ?? null });
@@ -382,12 +411,95 @@ export function createApi(options = {}) {
     return { state, decisions: byTime, events: [] };
   }
 
+  /**
+   * The sample proposals, marked like the server marks them: a proposal whose kind a running (or paused) goal
+   * already holds is "already running", and the best one with enough history that is not running is preselected.
+   */
+  async function mockProposals(s) {
+    const scan = await loadMock(MOCK_FILES.onboardingProposals);
+    if (!scan) return null;
+    const held = new Set(s.goals.filter((g) => g.status === "active" || g.status === "paused").map((g) => g.kind));
+    let pick = null;
+    for (const p of [...(scan.proposals || [])].sort((a, b) => a.rank - b.rank)) {
+      p.already_running = held.has(p.kind);
+      if (!pick && p.enough_history && p.monthly_profit && !p.already_running) pick = p.opportunity_id;
+    }
+    for (const p of scan.proposals || []) p.preselected = p.opportunity_id === pick;
+    scan.preselected_id = pick;
+    return scan;
+  }
+
+  /** POST /onboarding/accept in mock mode: the proposal becomes a goal in Shadow with a signed (sample) mandate. */
+  async function mockAccept(s, body) {
+    const scan = await mockProposals(s);
+    const id = body.opportunity_id || (scan && scan.preselected_id);
+    const proposal = scan && (scan.proposals || []).find((p) => p.opportunity_id === id);
+    if (!proposal) throw new ApiError(409, "CONFLICT", (scan && scan.not_enough) || "No proposal is ready yet.", null);
+    if (proposal.already_running) throw new ApiError(409, "CONFLICT", "A goal of this kind is already running or paused.", null);
+    const limits = ((await loadMock(MOCK_FILES.onboardingLimits)) || {})[id];
+    const terms = (limits && limits.terms) || {};
+    s.made += 1;
+    const at = now().toISOString();
+    const until = new Date(now().getTime() + (terms.valid_days || 30) * 86400000).toISOString();
+    const goal = {
+      goal_id: `goal_mock_${s.made}`,
+      business_id: (s.goals[0] && s.goals[0].business_id) || "demo",
+      text: proposal.goal_text,
+      kind: proposal.kind,
+      objective: "gross_profit",
+      budget: terms.budget_ceiling ?? proposal.budget,
+      currency: proposal.currency || "USD",
+      starts_at: at,
+      ends_at: null,
+      autonomy: "shadow",
+      status: "active",
+      created_at: at,
+    };
+    s.goals.push(goal);
+    const brief = detailFor(s, goal).brief;
+    if (brief) Object.assign(brief, { approved_by: "you", approved_at: at, audience: proposal.audience });
+    const mandate = {
+      mandate_id: `mandate_mock_${s.made}`,
+      version: 1,
+      business_id: goal.business_id,
+      goal_ids: [goal.goal_id],
+      status: "active",
+      valid_from: at,
+      valid_until: until,
+      created_by: body.owner_id || "owner",
+    };
+    const record = { mandate, goal_id: goal.goal_id, body_hash: "", unmet: [], single_owner: body.single_owner !== false, ledger_head: "" };
+    s.mandates.unshift(record);
+    return clone({
+      goal,
+      brief,
+      proposal: { ...proposal, already_running: true, preselected: false },
+      limits,
+      mandate: record,
+      words: `${proposal.title} is running: it decides every day and sends nothing. Limits signed by you alone (single-owner path).`,
+      notes: ["Sample data: nothing is signed or sent."],
+    });
+  }
+
+  /** The sample brand page: the voice read from the sample shop, for the goal asked for, approved once approved. */
+  async function mockBrand(s, goalId) {
+    const page = await loadMock(MOCK_FILES.onboardingBrand);
+    if (!page) return null;
+    const goal = goalId ? s.goals.find((g) => g.goal_id === goalId) : null;
+    if (goalId && !goal) throw notFound(`Goal ${goalId}`);
+    if (goal) page.goal = { goal_id: goal.goal_id, text: goal.text, kind: goal.kind };
+    if (s.brandApproval) {
+      Object.assign(page, { status: "approved", approved_by: s.brandApproval.by, approved_at: s.brandApproval.at, words: `Approved by ${s.brandApproval.by}; every message is checked against it.` });
+    }
+    return page;
+  }
+
   async function mockRequest(method, path, body) {
     const url = new URL(path, "http://mock.invalid");
     const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
     const q = url.searchParams;
     const s = await state();
-    const key = `${method} /${parts.map((p, i) => (i > 0 && ["goals", "content", "customers", "batches", "connections"].includes(parts[i - 1]) ? "{id}" : p)).join("/")}`;
+    const key = `${method} /${parts.map((p, i) => (i > 0 && ["goals", "content", "customers", "batches", "connections", "inbox", "autopilot"].includes(parts[i - 1]) ? "{id}" : p)).join("/")}`;
     const id = parts[1];
     // Connecting, syncing and disconnecting need a real platform: the sample data only shows what it looks like.
     if (parts[0] === "connectors" && method !== "GET") {
@@ -484,8 +596,12 @@ export function createApi(options = {}) {
       }
       case "GET /health/limits":
         return (await loadMock(MOCK_FILES.healthLimits)) ?? null;
-      case "GET /data/status":
-        return (await loadMock(MOCK_FILES.dataStatus)) ?? null;
+      case "GET /data/status": {
+        const report = await loadMock(MOCK_FILES.dataStatus);
+        // A shop that has connected nothing has no data yet.
+        if (report && scenario === "new") return { ...report, customers: 0, orders: 0, products: 0, sources: [], fixes: [], problems: [], questions: [] };
+        return report ?? null;
+      }
       case "GET /channels":
         return (await loadMock(MOCK_FILES.channels)) || [];
       case "GET /opportunities/sized":
@@ -557,17 +673,91 @@ export function createApi(options = {}) {
         if (key === "GET /proof" && goalId && s.details.has(goalId)) return clone(s.details.get(goalId).proof);
         return null;
       }
-      case "GET /health":
-        return (await loadMock(MOCK_FILES.health)) ?? null;
-      case "GET /connectors":
-        return (await loadMock(MOCK_FILES.connectors)) ?? null;
+      case "GET /health": {
+        const health = await loadMock(MOCK_FILES.health);
+        return health && scenario ? { ...health, alerts: [] } : health ?? null;
+      }
+      case "GET /connectors": {
+        const all = await loadMock(MOCK_FILES.connectors);
+        // A shop that has connected nothing yet: the same platforms, with no connection.
+        if (all && scenario === "new") for (const p of all.platforms || []) p.connections = [];
+        if (all && scenario === "new") Object.assign(all, { can_act: false, on_hold: [] });
+        return all ?? null;
+      }
+      case "GET /onboarding/proposals":
+        if (scenario === "new") {
+          const scan = await mockProposals(s);
+          if (!scan) return null;
+          return { ...scan, proposals: [], preselected_id: null, history_days: 0, buyers: 0, orders: 0, enough_history: false, not_enough: "Not enough history yet: no orders have been read." };
+        }
+        return mockProposals(s);
+      case "GET /onboarding/limits": {
+        const scan = await mockProposals(s);
+        const id = q.get("opportunity_id") || (scan && scan.preselected_id);
+        const all = (await loadMock(MOCK_FILES.onboardingLimits)) || {};
+        if (!id || !all[id]) throw notFound(`Proposal ${id}`);
+        return all[id];
+      }
+      case "GET /onboarding/mandates":
+        return clone(s.mandates);
+      case "POST /onboarding/answers":
+        // The sample shop's orders carry their margins, so an answer changes nothing here.
+        return mockProposals(s);
+      case "POST /onboarding/accept":
+        return mockAccept(s, body || {});
+      case "GET /onboarding/brand":
+      case "POST /onboarding/brand/read":
+        return mockBrand(s, q.get("goal_id"));
+      case "POST /onboarding/brand/approve": {
+        const page = await mockBrand(s, null);
+        if (!body || body.fingerprint !== page.fingerprint) throw new ApiError(409, "CONFLICT", "The voice changed since it was shown; look again before approving.", null);
+        s.brandApproval = { by: body.approved_by || "the owner", at: now().toISOString() };
+        return mockBrand(s, null);
+      }
+      case "GET /inbox": {
+        const box = await loadMock(MOCK_FILES.inbox);
+        if (!box) return null;
+        // The sample items belong to the sample goal: a fresh shop has nothing in its inbox.
+        const items = scenario ? [] : (box.items || []).filter((i) => !s.handled.has(i.item_id));
+        const n = items.length;
+        return { ...box, items, count: n, words: n === 0 ? "Nothing needs you." : n === 1 ? "One thing needs you." : `${n} things need you.` };
+      }
+      case "POST /inbox/{id}/act": {
+        const box = (await loadMock(MOCK_FILES.inbox)) || { items: [] };
+        const found = (box.items || []).find((i) => i.item_id === id);
+        if (!found || s.handled.has(id)) throw notFound(`Inbox item ${id}`);
+        s.handled.add(id);
+        const at = now().toISOString();
+        return { item: { ...found, resolved_at: at, resolved_by: "person" }, done: true, words: `Done: ${found.button.label.toLowerCase()}. Nothing is sent from the sample data.`, target: found.button.target };
+      }
+      case "GET /autopilot/{id}": {
+        const all = (await loadMock(MOCK_FILES.autopilot)) || {};
+        const goal = s.goals.find((x) => x.goal_id === id);
+        if (!goal) throw notFound(`Goal ${id}`);
+        if (!all[id] || goal.autonomy === "autopilot" || goal.status !== "active") throw new ApiError(404, "NOT_FOUND", "This goal is already on Autopilot, or not running.", null);
+        return all[id];
+      }
+      case "POST /autopilot/{id}/turn-on": {
+        const all = (await loadMock(MOCK_FILES.autopilot)) || {};
+        const goal = findGoal(s, id);
+        if (!all[id] || !all[id].ready || goal.autonomy === "autopilot") throw new ApiError(409, "CONFLICT", "This goal has not earned Autopilot yet.", null);
+        const next = setGoal(s, { ...goal, autonomy: "autopilot" });
+        return {
+          seq: 1, at: now().toISOString(), business_id: next.business_id, goal_id: id, from_level: goal.autonomy, to_level: "autopilot",
+          actor: "person:owner", reason: "turned_on", words: "Autopilot is on: it acts on its own inside your signed limits, and drops back to Approve by itself if proof turns negative.",
+          evidence: {}, mandate_id: null, mandate_version: null, mandate_hash: null, mandate_ledger_head: null, prev_hash: "", hash: "",
+        };
+      }
       case "GET /connectors/connections/{id}/setup": {
         const all = (await loadMock(MOCK_FILES.connectorSetup)) || {};
+        // The setup scenario is the usual case: Autonomy set up sending in Klaviyo on its own.
+        if (scenario && all[parts[2]]) return { ...all[parts[2]], state: "ready", words: "Sending is set up in Klaviyo.", steps: [], channels: (all[parts[2]].channels || []).map((c) => ({ ...c, ready: true, words: "Email: ready", steps: [] })) };
         if (all[parts[2]]) return all[parts[2]];
         throw notFound(`Connection ${parts[2]}`);
       }
       case "GET /alerts":
-        return (await loadMock(MOCK_FILES.alerts)) || [];
+        // The sample alerts belong to the sample goal: a fresh shop has none.
+        return scenario ? [] : (await loadMock(MOCK_FILES.alerts)) || [];
       case "GET /opportunities":
         return (await loadMock(MOCK_FILES.opportunities)) || [];
       default:
@@ -748,6 +938,63 @@ export function createApi(options = {}) {
     /** GET /v2/connectors/connections/{id}/setup?refresh= -> {state: ready|pending|guided|not_needed|unavailable, words, steps} */
     getConnectorSetup: (connectionId, opts = {}) =>
       get(`/connectors/connections/${enc(connectionId)}/setup${query({ refresh: opts.refresh ? "true" : null })}`),
+    // ---- zero-touch setup (api/v2/onboarding.py, api/v2/onboarding_brand.py; docs/v2/ZERO_TOUCH.md) ----
+    /**
+     * GET /v2/onboarding/proposals?margin_pct= -> OpportunityScan: {as_of, currency, proposals: [Proposal], preselected_id,
+     * enough_history, not_enough, margin, skipped, notes}. A Proposal carries monthly_profit {point, low, high} (or null
+     * when the history cannot size it, with `not_enough` saying why), audience_now, why, basis and goal_text. Null when
+     * this API build has no onboarding routes.
+     */
+    getProposals: (opts = {}) => optional(`/onboarding/proposals${query({ margin_pct: opts.marginPct })}`),
+    /** GET /v2/onboarding/limits?opportunity_id=&offers=&margin_pct= -> LearnedLimits: limits [{key, label, found, use, description, source, from_data, question}], terms. */
+    getLimits: (opportunityId, opts = {}) =>
+      optional(`/onboarding/limits${query({ opportunity_id: opportunityId, offers: opts.offers ? "true" : null, margin_pct: opts.marginPct })}`),
+    /** POST /v2/onboarding/answers {margin_pct} -> OpportunityScan: the margin, asked once and kept. */
+    answerMargin: (marginPct) => post("/onboarding/answers", { margin_pct: Number(marginPct) }),
+    /**
+     * POST /v2/onboarding/accept {opportunity_id?, margin_pct?, offers?} -> {goal, brief, proposal, limits, mandate, words,
+     * notes}: the proposal becomes a goal, the limits a signed mandate, and the plan runs in Shadow.
+     */
+    acceptProposal: (body = {}) =>
+      post("/onboarding/accept", body).then((out) => {
+        goalChanged(out && out.goal);
+        return out;
+      }),
+    /** GET /v2/onboarding/mandates -> [MandateRecord]: the mandates signed in setup, newest first. Null without the route. */
+    listMandates: () => optional("/onboarding/mandates"),
+    /** GET /v2/onboarding/brand?goal_id= -> BrandPage {status: not_read|waiting|approved, words, found, samples, fingerprint, ...}. */
+    getBrand: (goalId) => optional(`/onboarding/brand${query({ goal_id: goalId })}`),
+    /** POST /v2/onboarding/brand/read?goal_id= -> BrandPage: read the voice from Klaviyo and Shopify now (409 with nothing connected). */
+    readBrand: (goalId) => post(`/onboarding/brand/read${query({ goal_id: goalId })}`),
+    /** POST /v2/onboarding/brand/approve {fingerprint, approved_by?} -> BrandPage: the one approval of the voice. */
+    approveBrand: (fingerprint, approvedBy) => post("/onboarding/brand/approve", approvedBy ? { fingerprint, approved_by: approvedBy } : { fingerprint }),
+
+    // ---- the exceptions-only inbox and Shadow -> Autopilot (api/v2/inbox.py) ----
+    /** GET /v2/inbox?refresh= -> {as_of, items: [InboxItem], count, this_week, quiet, words}; null without the route. */
+    listInbox: (opts = {}) => optional(`/inbox${query({ refresh: opts.refresh ? "true" : null })}`),
+    /** POST /v2/inbox/{id}/act -> {item, done, words, target}: press the item's one button. */
+    actOnInbox: (itemId) => post(`/inbox/${enc(itemId)}/act`),
+    /**
+     * GET /v2/autopilot/{goal} -> Readiness {ready, sentence, detail, forecast, observed, value_error, checks, ...}: has the
+     * goal earned Autopilot. Null when the route is missing, or the goal is already on Autopilot or not running (404).
+     */
+    getAutopilot: (goalId) =>
+      get(`/autopilot/${enc(goalId)}`).catch((err) => {
+        if (err && (err.status === 404 || err.status === 405)) return null;
+        throw err;
+      }),
+    /** POST /v2/autopilot/{goal}/turn-on -> AutonomyChange; the goal is re-read so every screen sees the new level. */
+    turnOnAutopilot: async (goalId) => {
+      const change = await post(`/autopilot/${enc(goalId)}/turn-on`);
+      try {
+        const detail = await get(`/goals/${enc(goalId)}`);
+        goalChanged(detail && detail.goal ? detail.goal : detail);
+      } catch {
+        /* the change stands; the screens re-read the goal themselves */
+      }
+      return change;
+    },
+
     /** POST /v2/goals/read {text} -> {text, budget, currency, ends_at, period, words}: what the words say. */
     readGoal: (text) => post("/goals/read", { text }),
     /** PATCH /v2/goals/{id} {budget} -> {goal, brief}: lower a budget ("Approve with a small budget"). 409 above the approved plan. */

@@ -469,6 +469,22 @@ def _install_case_screen(app: FastAPI) -> None:
 PHASE_APP_HOOKS.append(_install_case_screen)
 # ---- END PLAN-O ----
 
+# ---- AUTONOMY v2 (connected shops) — append only below this line ----
+
+
+# The v2 API with its Shopify/Klaviyo connectors over the production runtime (docs/v2/CONNECTORS.md), mounted
+# at /v2 only when AUTONOMY_V2_API is on. Off - the default - nothing is imported and every response is unchanged.
+def _install_autonomy_v2(app: FastAPI) -> None:
+    if os.environ.get("AUTONOMY_V2_API", "").strip().lower() not in {"1", "true", "on", "yes"}:
+        return
+    from api.v2.app import mount_production
+
+    mount_production(app)
+
+
+PHASE_APP_HOOKS.append(_install_autonomy_v2)
+# ---- END AUTONOMY v2 ----
+
 # The campaign run: train, score, contact list and campaign on the server, so the browser can close. Its startup
 # hook builds nothing unless a run was ever started here.
 from api.routes.campaign_runs import install_campaign_runs  # noqa: E402

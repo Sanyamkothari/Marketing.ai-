@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 __all__ = [
     "JobHandler",
     "after_connect",
+    "klaviyo_connection",
     "production_registry",
     "send_adapters",
     "send_providers",
@@ -103,14 +104,15 @@ def worker_handlers(
     return handlers
 
 
-def _klaviyo_connection(engine: ConnectorEngine, business_id: str) -> Connection | None:
-    """The business's Klaviyo connection to send through: the active one, else none (oldest first)."""
+def klaviyo_connection(engine: ConnectorEngine, business_id: str) -> Connection | None:
+    """The business's Klaviyo connection to send through: the oldest active one whose `send` setting is
+    not `off`, else none. What `send_providers` and `send_adapters` route to."""
     if engine.registry.find("klaviyo") is None:
         return None
     found = [
         c
         for c in engine.store.connections(business_id=business_id, kind="klaviyo")
-        if c.status is ConnectionStatus.ACTIVE
+        if c.status is ConnectionStatus.ACTIVE and c.config.get("send", "on") != "off"
     ]
     found.sort(key=lambda c: (c.created_at, c.connection_id))
     return found[0] if found else None
@@ -125,7 +127,7 @@ def send_adapters(
 ) -> dict[Channel, ChannelAdapter]:
     """One adapter per channel for a plain `Dispatcher`: Klaviyo where it is connected, else `fallback`."""
     adapters: dict[Channel, ChannelAdapter] = dict(fallback or {})
-    connection = _klaviyo_connection(engine, business_id)
+    connection = klaviyo_connection(engine, business_id)
     if connection is not None:
         from autonomy.channels.klaviyo import klaviyo_adapters
 
@@ -149,7 +151,7 @@ def send_providers(
     from autonomy.channels.gateway import Provider
 
     providers: dict[Channel, list[Provider]] = {}
-    connection = _klaviyo_connection(engine, business_id)
+    connection = klaviyo_connection(engine, business_id)
     if connection is not None:
         from autonomy.channels.klaviyo import PROVIDER, klaviyo_adapters
 

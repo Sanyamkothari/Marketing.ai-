@@ -263,3 +263,333 @@
     min-height: var(--touch);
   }
 }
+
+/* ---- zero-touch setup: five clicks to Shadow (`zt-` classes) -------------------------------------------------
+   The same path card and step rows as above. Only the step being done shows its body: the connect field, the
+   proposals as radio rows (money and its range on the right, tabular), the limits as "found -> use" rows, or the
+   three sample messages. Done steps are one line; later steps are their title and one grey line. */
+
+.zt-account {
+  font-weight: 500;
+}
+
+.zt-connect {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 520px;
+  margin-top: 4px;
+}
+
+.zt-connect-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.zt-connect .field {
+  margin: 0;
+}
+
+.zt-connect .field-error:empty {
+  display: none;
+}
+
+.zt-connect-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* "Reading your history": a quiet line with a small pulsing dot (opacity only, nothing moves). */
+.zt-reading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+}
+
+.zt-reading-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  transform: translateY(-1px);
+  animation: zt-pulse 1.6s var(--ease-out) infinite alternate;
+}
+
+@keyframes zt-pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zt-reading-dot {
+    animation: none;
+  }
+}
+
+.zt-ok {
+  color: var(--positive);
+}
+
+.zt-attention {
+  color: var(--warning);
+}
+
+.zt-lead {
+  color: var(--muted);
+}
+
+/* The proposals: one hairline list, a radio per row, the chosen row on the accent tint (the one selected thing). */
+.zt-opps,
+.zt-limits,
+.zt-samples {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.zt-opps {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+
+.zt-opp {
+  position: relative;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 12px;
+  min-height: var(--row-height);
+  padding: 10px 14px;
+  border-top: 1px solid var(--rule);
+  transition: background-color var(--t-hover) var(--ease-out);
+}
+
+.zt-opp:first-child {
+  border-top: 0;
+}
+
+.zt-opp:hover:not(.is-off) {
+  background: var(--raised);
+}
+
+.zt-opp.is-chosen {
+  background: var(--accent-tint);
+}
+
+.zt-opp input[type="radio"] {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.zt-opp-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  cursor: pointer;
+}
+
+/* The whole row picks the goal: the label stretches over it (the money's description still opens on hover). */
+.zt-opp-main::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.zt-opp.is-off .zt-opp-main {
+  cursor: default;
+}
+
+.zt-opp-title {
+  font-weight: 500;
+}
+
+.zt-opp.is-off .zt-opp-title {
+  color: var(--muted);
+}
+
+.zt-opp-meta,
+.zt-opp-range {
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+}
+
+.zt-opp-money {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.zt-opp-value {
+  font-weight: 600;
+}
+
+.zt-opp-value.is-missing {
+  color: var(--faint);
+  font-weight: 400;
+}
+
+/* The limits: label | what we found | what we will use, one rule between rows; two lines under 720px. */
+.zt-limit {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 16px;
+  padding: 10px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.zt-limit:first-child {
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.zt-limit-label {
+  font-weight: 500;
+}
+
+.zt-limit-found {
+  color: var(--muted);
+}
+
+.zt-arrow {
+  color: var(--faint);
+}
+
+.zt-limit-extra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+
+.zt-limit-extra .field {
+  margin: 0;
+  max-width: 160px;
+}
+
+.zt-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.zt-check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* The three samples, side by side on a desktop: each a quiet email card. */
+.zt-samples {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.zt-sample {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.zt-sample-img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: var(--raised);
+}
+
+.zt-sample-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px 14px;
+}
+
+.zt-sample-subject {
+  margin: 0;
+  font-weight: 600;
+}
+
+.zt-sample-text {
+  margin: 0;
+  color: var(--muted);
+  white-space: pre-line;
+}
+
+.zt-sample-offer {
+  align-self: flex-start;
+}
+
+.zt-swatches {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.zt-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+}
+
+/* Shadow is running: the setup's last line, above the card's bottom edge. */
+.zt-done {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 20px;
+  margin: 0;
+  padding: 16px var(--card-pad) 20px;
+  border-top: 1px solid var(--rule);
+}
+
+.zt-done-line {
+  margin: 0;
+}
+
+@media (max-width: 719px) {
+  .zt-limit {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .zt-samples {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .zt-opp {
+    padding: 10px 12px;
+  }
+
+  .zt-done {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .zt-connect-actions .btn {
+    width: 100%;
+  }
+}

@@ -295,6 +295,28 @@ def test_a_silent_drop_becomes_not_delivered_but_only_once_engagement_is_fresh()
     assert not [e for e in shop.rig.events.for_decision("dec_ok") if e.type is EventType.FAIL]
 
 
+def test_a_lone_drop_days_after_the_last_delivery_still_becomes_not_delivered() -> None:
+    # A small shop sends every few days: the drop is the only hand-off in the 2-day window, and the
+    # delivery four days earlier is what proves Klaviyo's deliveries link to Autonomy's hand-offs.
+    shop = Shop()
+    shop.send(shop.decide("dec_early"))
+    shop.fake.add_event(
+        "Received Email", pid="P1", at=shop.now + timedelta(minutes=1), props={"$flow": shop.flow_id()}
+    )
+    shop.rig.clock.advance(timedelta(hours=1))
+    shop.sync_engagement()
+    shop.rig.clock.advance(timedelta(days=4))
+    shop.send(shop.decide("dec_lone"))  # never delivered
+    shop.rig.clock.advance(timedelta(hours=10))
+    shop.sync_engagement()
+    watch = KlaviyoDeliveryWatch(shop.rig.engine, shop.rig.events, shop.connection.connection_id)
+    report = watch.check(shop.now)
+    assert report.not_delivered == 1 and report.held is None
+    assert [
+        e.attrs["reason"] for e in shop.rig.events.for_decision("dec_lone") if e.type is EventType.FAIL
+    ] == [NOT_DELIVERED]
+
+
 def test_the_watch_never_concludes_not_delivered_while_deliveries_do_not_link() -> None:
     # Klaviyo delivers, but its profiles key by email while Autonomy's customer ids are Shopify ids
     # and the profile has no external id: nothing links, so every hand-off would look dropped.

@@ -95,6 +95,15 @@ class KlaviyoClient:
         result = self.http.send("PATCH", path, json_body=dict(body), headers=_WRITE_HEADERS, retry_safe=True)
         return _document(_checked(result))
 
+    def delete(self, path: str, group: str) -> bool:
+        """DELETE a resource; True when it is gone (deleted now, or already missing: 404)."""
+        self._pace(group)
+        result = self.http.send("DELETE", path, headers=_HEADERS)
+        if result.status == 404:
+            return True
+        _checked(result)
+        return True
+
 
 def _checked(result: HttpResult) -> HttpResult:
     if result.ok:

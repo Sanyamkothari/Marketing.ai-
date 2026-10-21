@@ -361,12 +361,17 @@ class KlaviyoDeliveryWatch:
         *,
         windows: Mapping[Channel, timedelta] | None = None,
         lookback: timedelta = timedelta(days=2),
+        linked_lookback: timedelta = timedelta(days=14),
     ) -> None:
         self.engine = engine
         self.events = events
         self.connection_id = connection_id
         self.windows = dict(DEFAULT_WINDOWS if windows is None else windows)
         self.lookback = lookback
+        self.linked_lookback = linked_lookback
+        """How far back a delivered hand-off still proves that Klaviyo's deliveries link to ours: a shop
+        that sends every few days can have one lone hand-off in `lookback`, and a drop of that one
+        must still count as not delivered."""
 
     def synced_through(self) -> datetime | None:
         """Up to when engagement is known complete: the live watermark minus the overlap re-read
@@ -383,8 +388,8 @@ class KlaviyoDeliveryWatch:
     def check(self, now: datetime) -> WatchReport:
         """Record a FAIL for each overdue hand-off with no delivery outcome, unless the data cannot
         tell: engagement not read past the window, engagement not linked to hand-offs at all (the
-        connector has no `handoffs` lookup), or several overdue hand-offs and not one delivered
-        (customer ids that do not meet, or flows that never send). A false "not delivered" would
+        connector has no `handoffs` lookup), or overdue hand-offs and not one delivered, neither in
+        `lookback` nor in `linked_lookback` (customer ids that do not meet, or flows that never send). A false "not delivered" would
         take real sends out of the proof, so in those cases it holds, and the last one alerts once."""
         report = WatchReport(self.connection_id)
         connector = self.engine.registry.find(PROVIDER)
@@ -417,7 +422,7 @@ class KlaviyoDeliveryWatch:
                 report.held = "Klaviyo engagement has not been read past the delivery window yet"
                 continue
             overdue.append(self._not_delivered(send, deadline))
-        if overdue and report.delivered == 0:
+        if overdue and report.delivered == 0 and not self._linked_since(now - self.linked_lookback, now):
             report.waiting += len(overdue)
             report.held = (
                 f"{len(overdue)} hand-offs to Klaviyo are overdue and none in the last "
@@ -432,6 +437,16 @@ class KlaviyoDeliveryWatch:
             self.events.append(report.events)
             report.not_delivered = len(report.events)
         return report
+
+    def _linked_since(self, since: datetime, now: datetime) -> bool:
+        """Whether any hand-off of this connection since `since` has a linked delivery (read only when
+        the short window has none, so the longer scan is rare)."""
+        for send in self.events.scan(since=since, until=now):
+            if not is_handoff(send, self.connection_id) or send.decision_id is None:
+                continue
+            if any(e.type is EventType.DELIVER for e in self.events.for_decision(send.decision_id)):
+                return True
+        return False
 
     def _alert_unlinked(self, now: datetime, overdue: int) -> None:
         sink = self.engine.monitor.desk.alerts

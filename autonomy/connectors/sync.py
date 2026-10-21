@@ -28,7 +28,15 @@
   one poll. `handlers(queue)` gives the worker its handlers.
 * **Fail well.** A failure's class says what to do (`base.ConnectorFailure.action`): retry at its
   `retry_at`, restart the window, or mark the connection `needs_reconnect` and raise its one
-  alert. Error streaks back off exponentially up to the stream's cadence.
+  alert. Error streaks back off exponentially up to the stream's cadence. A 403 (`AccessDenied`) on
+  an optional stream (`StreamSpec.critical=False`) degrades only that stream: it is retried daily
+  and one quiet note says which permission is missing, while every other stream keeps syncing.
+* **Disconnect** is a person's choice: `disconnect` takes our setup out of the platform where its
+  API allows (`SaasConnector.teardown`: revoke the token, remove webhooks, delete Autonomy's own
+  Klaviyo flows), forgets the tokens, closes the connection's open incidents and tells a person,
+  once, anything they still have to do by hand. A disconnected connection never holds decisions.
+* **Records hook.** `record_hook(connection, stream, records, now)` sees every new record version
+  after its events are stored (identity linking reads profiles there, `autonomy.connectors.identity`).
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from autonomy.channels.ratelimit import TokenBucket
 from autonomy.connectors.base import (
+    AccessDenied,
     AuthMethod,
     Connection,
     ConnectionContext,
@@ -56,9 +65,11 @@ from autonomy.connectors.base import (
     Stream,
     StreamSpec,
     SyncWindow,
+    Teardown,
     redact,
 )
 from autonomy.connectors.health import (
+    ALERT_DISCONNECT,
     ALERT_RECONNECT,
     ALERT_UNINSTALLED,
     ALERT_WEBHOOKS,
@@ -85,10 +96,14 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DAILY_KIND",
+    "DENIED_RETRY",
+    "DISCONNECTED_BY_PERSON",
     "JOB_KINDS",
     "SYNC_KIND",
     "WEBHOOK_KIND",
     "ConnectorEngine",
+    "DisconnectReport",
+    "RecordHook",
     "SyncReport",
     "daily_job",
     "enqueue_once",
@@ -109,11 +124,18 @@ RUN_MEMORY: Final[timedelta] = timedelta(days=35)
 TOKEN_READ_TIMEOUT_S: Final[float] = 20.0
 LATE_WINDOW: Final[timedelta] = timedelta(days=2)
 """Events older than this when stored are 'history' for the runtime (see `history_hook`)."""
+DENIED_RETRY: Final[timedelta] = timedelta(days=1)
+"""An optional stream refused with 403 is tried again this much later (a person may grant the scope)."""
+DISCONNECTED_BY_PERSON: Final[str] = "disconnected by a person"
+"""The status reason of a connection a person removed: intentional, so it never holds decisions."""
 
 Sink = Callable[[Sequence[Event]], int]
 """Stores events, dropping ids it already has; returns how many were new (`EventStore.append`)."""
 HistoryHook = Callable[[Connection, int, datetime], None]
 """(connection, new events older than the late window, now): the runtime should rebuild state."""
+RecordHook = Callable[[Connection, Stream, Sequence[Mapping[str, Any]], datetime], None]
+"""(connection, stream, new record versions, now), after their events were stored. Must be idempotent:
+a crash before the versions are recorded replays the same records."""
 TransportFor = Callable[[str], "httpx.BaseTransport | None"]
 """base URL -> the transport to use (tests: an httpx.MockTransport); None: the real network."""
 
@@ -188,6 +210,16 @@ class SyncReport:
 
 
 @dataclass
+class DisconnectReport:
+    """What a disconnect did on the platform, and what a person still has to do there (plain words)."""
+
+    connection_id: str
+    done: list[str] = field(default_factory=list)
+    left: list[str] = field(default_factory=list)
+    alert: Alert | None = None
+
+
+@dataclass
 class _Ingested:
     rows: int = 0
     new_records: int = 0
@@ -215,6 +247,7 @@ class ConnectorEngine:
         webhook_base_url: str | None = None,
         holder: str = "worker-1",
         host_guard: Callable[[str], None] | None = None,
+        record_hook: RecordHook | None = None,
     ) -> None:
         self.registry = registry
         self.store = store
@@ -224,6 +257,7 @@ class ConnectorEngine:
         self.transport_for = transport_for
         self.monitor = monitor or HealthMonitor(store, registry)
         self.history_hook = history_hook
+        self.record_hook = record_hook
         self.webhook_base_url = webhook_base_url
         self.holder = holder
         self.host_guard = (
@@ -233,6 +267,8 @@ class ConnectorEngine:
             vault, store, self._oauth_client, holder=holder, on_revoked=self._on_revoked
         )
         self._buckets: dict[str, TokenBucket | None] = {}
+        self._tearing_down: set[str] = set()
+        """Connections being disconnected: a dead token found while removing our setup is not an alert."""
 
     # -- clients ----------------------------------------------------------------------------------
 
@@ -439,11 +475,80 @@ class ConnectorEngine:
         return app
 
     def disconnect(
-        self, connection_id: str, now: datetime, *, reason: str = "disconnected by a person"
-    ) -> None:
-        """Forget the tokens and stop every job for this connection (they find it inactive and end)."""
+        self, connection_id: str, now: datetime, *, reason: str = DISCONNECTED_BY_PERSON
+    ) -> DisconnectReport:
+        """A person removed the connection: stop using it, and take our setup out of the platform.
+
+        While the connection still has working access, the connector's `teardown` revokes our token
+        and removes what Autonomy created there (webhooks, Klaviyo's `Autonomy ·` flows and
+        template), as far as the platform's API allows; it never raises. Then the tokens are
+        forgotten, every job for the connection ends (they find it inactive), its open incidents
+        close (a reconnect alert is moot once a person chose to disconnect), and, when something
+        could not be done by API, one alert says exactly what is left to do by hand. A connection
+        disconnected this way never holds decisions (`HealthMonitor.ready_to_act`)."""
+        report = DisconnectReport(connection_id)
+        connection = self.store.get_connection(connection_id)
+        if connection is not None and connection.status is ConnectionStatus.ACTIVE:
+            outcome = self._teardown(connection, now)
+            report.done.extend(outcome.done)
+            report.left.extend(outcome.left)
         self.store.set_status(connection_id, ConnectionStatus.DISCONNECTED, reason, now)
         self.tokens.vault.delete(connection_id)
+        self.monitor.desk.resolve_others(connection_id, (), now)
+        if connection is not None and report.left:
+            report.alert = self._left_to_do(connection, report.left, now)
+        return report
+
+    def _teardown(self, connection: Connection, now: datetime) -> Teardown:
+        connector = self.registry.find(connection.kind)
+        if connector is None:
+            return Teardown()
+        self._tearing_down.add(connection.connection_id)
+        try:
+            tokens = self.tokens.vault.load(connection.connection_id)
+            ctx = self.context(connection, now)
+            try:
+                return connector.teardown(ctx, tokens)
+            finally:
+                ctx.http.close()
+        except ConnectorFailure as failure:
+            label = connector.capabilities.label
+            return Teardown(
+                left=(
+                    f"Autonomy could not reach {label} to remove its access ({failure.message}). "
+                    f"Remove the Autonomy app in {label}'s settings if it is still listed.",
+                )
+            )
+        except Exception as exc:  # a connector bug must never stop a person disconnecting
+            label = connector.capabilities.label
+            return Teardown(
+                left=(
+                    f"Removing Autonomy's setup from {label} failed ({type(exc).__name__}). Remove the "
+                    f"Autonomy app in {label}'s settings if it is still listed.",
+                )
+            )
+        finally:
+            self._tearing_down.discard(connection.connection_id)
+
+    def _left_to_do(self, connection: Connection, left: Sequence[str], now: datetime) -> Alert | None:
+        sink = self.monitor.desk.alerts
+        connector = self.registry.find(connection.kind)
+        name = connector.capabilities.label if connector is not None else connection.kind
+        alert = Alert(
+            alert_id=stable_id("alert", ALERT_DISCONNECT, connection.connection_id, now.isoformat()),
+            at=now,
+            severity="info",
+            code=ALERT_DISCONNECT,
+            message=redact(
+                f"{name} ({connection.label}) is disconnected and Autonomy no longer uses it. "
+                + ("Left to do by hand: " if len(left) > 1 else "One thing is left to do by hand: ")
+                + " ".join(left),
+                limit=1000,
+            ),
+        )
+        if sink is not None:
+            sink.put([alert])
+        return alert
 
     # -- scheduling -------------------------------------------------------------------------------
 
@@ -726,6 +831,20 @@ class ConnectorEngine:
     ) -> SyncPosition:
         report.error_code = failure.code
         report.error = failure.message
+        if isinstance(failure, AccessDenied) and not spec.critical:
+            # A permission missing for an optional stream (Klaviyo's browsing metrics, Shopify's
+            # products) degrades that stream only; the rest keeps syncing and decisions go on. The
+            # health check names the missing permission once (`ALERT_STREAM_DENIED`).
+            report.status = "retry"
+            report.retry_at = now + DENIED_RETRY
+            return position.model_copy(
+                update={
+                    "error_streak": position.error_streak + 1,
+                    "last_error_code": failure.code,
+                    "last_error": redact(failure.message),
+                    "cursor": None,
+                }
+            )
         if isinstance(failure, NeedsReconnect):
             report.status = "reconnect"
             self._on_revoked(connection, failure, now)
@@ -785,6 +904,8 @@ class ConnectorEngine:
             out.events = self.sink(list(mapped.events))
             floor = now - LATE_WINDOW
             out.historical = sum(1 for e in mapped.events if e.ts < floor) if out.events else 0
+        if self.record_hook is not None:
+            self.record_hook(connection, spec.stream, [r for _, r in fresh], now)
         self.store.claim_newer(connection.connection_id, spec.stream, [k for k, _ in fresh])
         return out
 
@@ -866,6 +987,8 @@ class ConnectorEngine:
     # -- status changes ---------------------------------------------------------------------------
 
     def _on_revoked(self, connection: Connection, failure: NeedsReconnect, now: datetime) -> None:
+        if connection.connection_id in self._tearing_down:
+            return  # a person is disconnecting it: dead access then is not a problem to report
         current = self.store.get_connection(connection.connection_id)
         if current is None or current.status is ConnectionStatus.DISCONNECTED:
             return  # not connected yet (a bad key at connect time is answered to the person directly)
@@ -887,7 +1010,18 @@ class ConnectorEngine:
         )
 
     def uninstalled(self, connection: Connection, now: datetime) -> Alert | None:
-        """The app was removed on the platform: forget tokens, stop syncing, tell a person once."""
+        """The app was removed on the platform: forget tokens, stop syncing, tell a person once.
+
+        After a person disconnected it here, the platform's own "uninstalled" notice (Shopify sends
+        `app/uninstalled` once our teardown revoked access) is expected and raises nothing."""
+        current = self.store.get_connection(connection.connection_id)
+        if (
+            current is not None
+            and current.status is ConnectionStatus.DISCONNECTED
+            and current.status_reason == DISCONNECTED_BY_PERSON
+        ):
+            self.tokens.vault.delete(connection.connection_id)
+            return None
         self.store.set_status(connection.connection_id, ConnectionStatus.DISCONNECTED, "uninstalled", now)
         self.tokens.vault.delete(connection.connection_id)
         connector = self.registry.find(connection.kind)
@@ -898,7 +1032,7 @@ class ConnectorEngine:
                 code=ALERT_UNINSTALLED,
                 severity="critical",
                 message=f"The Autonomy app was removed from {name} ({connection.label}). Decisions that rely on it "
-                "are on hold. Connect it again to resume.",
+                "are on hold. Connect it again to resume, or remove it on Connect to carry on without it.",
             ),
             now,
             auto_paused=True,

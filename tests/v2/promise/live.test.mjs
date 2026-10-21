@@ -308,8 +308,12 @@ test("tapping a customer shows what it knows in words, every decision, and the o
   const { root } = await draw();
   const maya = byTag(root, "button").find((b) => b.getAttribute("aria-label") === "Open Maya (customer cust_1042)");
   await maya.fire("click");
-  await settle();
-  await settle();
+  // The panel reads the sample files from disk: wait for its insight to land (a few ticks at most), not a fixed two.
+  for (let i = 0; i < 40; i += 1) {
+    await settle();
+    const open = byClass(root, "ap-panel")[0];
+    if (open && open.textContent.includes(insight.best_hour_words)) break;
+  }
   const panel = byClass(root, "ap-panel")[0];
   assert.ok(panel, "panel open");
   const text = panel.textContent;

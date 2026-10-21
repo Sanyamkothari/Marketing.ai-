@@ -151,7 +151,7 @@ const UI = new URL("../../../ui/v2/", import.meta.url);
 const { createApi } = await import(new URL("api.js", UI).href);
 const C = await import(new URL("components.js", UI).href);
 const ob = await import(new URL("screens/onboarding.js", UI).href);
-const { autonomyBadge, inboxAlerts, START, SCREENS } = await import(new URL("app.js", UI).href);
+const { autonomyBadge, inboxAlerts, inboxItems, START, SCREENS } = await import(new URL("app.js", UI).href);
 
 function fakeFetch() {
   return async (url) => {
@@ -213,6 +213,9 @@ test("the inbox counts what Live's Inbox lists: both endpoints, once each, info 
   const other = { alert_id: "c", goal_id: "g2", severity: "warning", at: "2026-10-20T11:00:00Z" };
   const out = inboxAlerts([[a, b, other], [a]], "g1");
   assert.deepEqual(out.map((x) => x.alert_id), ["b", "a"]);
+  // With the exceptions-only inbox the count is its items: this goal's and the account-wide ones, nothing else.
+  const items = { items: [{ item_id: "i1", goal_id: "g1" }, { item_id: "i2", goal_id: null }, { item_id: "i3", goal_id: "g2" }] };
+  assert.deepEqual(inboxItems(items, "g1").map((x) => x.item_id), ["i1", "i2"]);
 });
 
 // ---- Getting started ------------------------------------------------------------------------------------------
@@ -350,10 +353,13 @@ test("the shell: autonomy badge, Paused itself, inbox count, Pause all sending, 
     await import(new URL("app.js?shell-onboarding-test", UI).href);
     await until(() => $("autonomy-badge").textContent === "You approve each batch", "the autonomy badge");
     assert.equal($("autonomy-badge").getAttribute("href"), "#/plan/goal_winback");
-    // This goal's alerts and the account-wide ones, info included; health.json repeats one, counted once.
+    // The count is what Live's Inbox lists: with the exceptions-only inbox (GET /v2/inbox), this goal's items and the
+    // account-wide ones. The "Paused itself" badge still reads the alerts (health.json repeats one, counted once).
+    const box = JSON.parse(await readFile(fileURLToPath(new URL("mock/inbox.json", UI)), "utf8"));
+    const listed = box.items.filter((i) => !i.goal_id || i.goal_id === "goal_winback");
+    await until(() => $("inbox-count").textContent === String(listed.length), "the inbox count");
     const alerts = JSON.parse(await readFile(fileURLToPath(new URL("mock/alerts.json", UI)), "utf8"));
     const expected = alerts.filter((a) => !a.goal_id || a.goal_id === "goal_winback");
-    await until(() => $("inbox-count").textContent === String(expected.length), "the inbox count");
     const selfPaused = expected.filter((a) => a.auto_paused).length;
     assert.equal($("selfpause-badge").hidden, false);
     assert.equal($("selfpause-badge").textContent, `Paused itself (${selfPaused})`);

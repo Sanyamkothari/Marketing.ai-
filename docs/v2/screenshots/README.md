@@ -183,3 +183,14 @@ Changed since the round before, and visible in these shots:
 Still visible: Live says "The next check was due 20 Oct, 09:00 and has not run yet." in these shots: the demo's
 latest decisions are from the 19 Oct sweep, and the API's next run time (20 Oct, 09:00) had passed when they were
 taken (17:25 UTC).
+
+## Retaken for zero-touch setup (21 Oct 2026)
+
+All 22 shots were retaken on the demo API after the zero-touch work (docs/v2/ZERO_TOUCH.md). The folder is 1.3 MB after
+the palette step. Visible in these shots:
+
+- **Live**: the Inbox card is the exceptions-only inbox (`GET /v2/inbox`); on the healthy demo shop it says
+  "Nothing needs you." The Autopilot offer does not show, because the demo's Approve goal has not yet earned it.
+- **Getting started**: the demo already runs goals, so it keeps the old path. The five-click setup path ("Five clicks
+  to Shadow") shows only on a shop with no running goal; it is shot in mock mode by the flow tests
+  (`tests/v2/zero_touch/flow.test.mjs`), not here.

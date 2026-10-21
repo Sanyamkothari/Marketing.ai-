@@ -17,7 +17,10 @@ Three kinds of job keep Autonomy moving between requests:
   `docs/v2/CONNECTORS.md`).
 
 Both send handlers take an optional `gate`: the runtime's mandate check, run again when a held
-message comes due, so a mandate revoked (or a daily cap reached) while it waited stops it.
+message comes due, so a mandate revoked (or a daily cap reached) while it waited stops it. They also
+take an optional `hold` (the runtime's `data_send_gate`): while the shop's connected data cannot be
+trusted, a due send is put back on the queue for `HOLD_RETRY` instead of going out, for up to
+`MAX_HOLD` past its send time; after that it is skipped (a decision that old is out of date).
 
 The library code never sleeps and never reads the clock: `Worker.run_once(now)` and
 `Worker.drain(now)` take `now`, so the demo and the tests drive it on simulated time. Only the
@@ -63,6 +66,8 @@ __all__ = [
     "CONNECTOR_KINDS",
     "DEFAULT_KINDS",
     "GATEWAY_KIND",
+    "HOLD_RETRY",
+    "MAX_HOLD",
     "SEND_KIND",
     "TICK_KIND",
     "WEBHOOK_KIND",
@@ -96,6 +101,11 @@ GATEWAY_KIND = "gateway_send_decision"
 DEFAULT_KINDS: tuple[str, ...] = (TICK_KIND, SEND_KIND, WEBHOOK_KIND)
 CONNECTOR_KINDS: tuple[str, ...] = ("connector_sync", "connector_webhook", "connector_daily")
 """The SaaS connector job kinds (`autonomy.connectors.sync.JOB_KINDS`)."""
+
+HOLD_RETRY = timedelta(minutes=30)
+"""How long a send held for stale data waits before it is checked again."""
+MAX_HOLD = timedelta(hours=24)
+"""How long past its send time a held send may still go out; older ones are skipped."""
 
 DEFAULT_MAX_ATTEMPTS = 5
 DEFAULT_BACKOFF = timedelta(minutes=1)
@@ -313,6 +323,47 @@ def _gated(job: Job, decisions: DecisionLog, gate: SendGate | None, now: datetim
     )
 
 
+def _held(
+    job: Job, decisions: DecisionLog, hold: SendGate | None, queue: JobQueue | None, now: datetime
+) -> DispatchReport | None:
+    """While `hold` says the data cannot be trusted: put the job back for later (or, once it is
+    `MAX_HOLD` past due, skip it). None when it may go ahead."""
+    if hold is None:
+        return None
+    decision_id = str(job.payload.get("decision_id") or "")
+    decision = decisions.get(decision_id) if decision_id else None
+    if decision is None:
+        return None
+    reason = hold(decision, now)
+    if not reason:
+        return None
+    due = decision.action.send_at if decision.action is not None else decision.made_at
+    if queue is not None and now - due <= MAX_HOLD:
+        later = now + HOLD_RETRY
+        queue.enqueue(
+            Job(
+                job_id=stable_id("job", "held", job.job_id, later.isoformat()),
+                kind=job.kind,
+                payload=dict(job.payload),
+                run_at=later,
+            )
+        )
+        status, detail = DispatchStatus.QUEUED, f"held until {later.isoformat()}: the data is not fresh"
+    else:
+        status, detail = DispatchStatus.SKIPPED, "held too long for stale data; not sent"
+    return DispatchReport(
+        results=[
+            DispatchResult(
+                decision_id=decision.decision_id,
+                customer_id=decision.customer_id,
+                status=status,
+                reason=reason,
+                detail=detail,
+            )
+        ]
+    )
+
+
 class SendHandler:
     """Finish a `send_message` job through the dispatcher: the one code path for queued sends.
 
@@ -330,15 +381,21 @@ class SendHandler:
         *,
         on_report: Callable[[DispatchReport], None] | None = None,
         gate: SendGate | None = None,
+        hold: SendGate | None = None,
+        queue: JobQueue | None = None,
     ) -> None:
         self.dispatcher = dispatcher
         self.decisions = decisions
         self.states = states
         self.on_report = on_report
         self.gate = gate
+        self.hold = hold
+        self.queue = queue
 
     def __call__(self, job: Job, now: datetime) -> None:
-        report = _gated(job, self.decisions, self.gate, now)
+        report = _held(job, self.decisions, self.hold, self.queue, now)
+        if report is None:
+            report = _gated(job, self.decisions, self.gate, now)
         if report is None:
             report = self.dispatcher.run_send_job(job, self.decisions, self.states, now)
         if self.on_report is not None:
@@ -355,9 +412,12 @@ def send_handler(
     *,
     on_report: Callable[[DispatchReport], None] | None = None,
     gate: SendGate | None = None,
+    hold: SendGate | None = None,
+    queue: JobQueue | None = None,
 ) -> SendHandler:
-    """A `SendHandler` for a worker. A worker given it owns the dispatcher's send jobs."""
-    return SendHandler(dispatcher, decisions, states, on_report=on_report, gate=gate)
+    """A `SendHandler` for a worker. A worker given it owns the dispatcher's send jobs. `hold` puts a
+    due send back on `queue` while the data is not fresh."""
+    return SendHandler(dispatcher, decisions, states, on_report=on_report, gate=gate, hold=hold, queue=queue)
 
 
 class GatewayHandler:
@@ -376,15 +436,21 @@ class GatewayHandler:
         *,
         on_report: Callable[[DispatchReport], None] | None = None,
         gate: SendGate | None = None,
+        hold: SendGate | None = None,
+        queue: JobQueue | None = None,
     ) -> None:
         self.gateway = gateway
         self.decisions = decisions
         self.states = states
         self.on_report = on_report
         self.gate = gate
+        self.hold = hold
+        self.queue = queue
 
     def __call__(self, job: Job, now: datetime) -> None:
-        report = _gated(job, self.decisions, self.gate, now)
+        report = _held(job, self.decisions, self.hold, self.queue, now)
+        if report is None:
+            report = _gated(job, self.decisions, self.gate, now)
         if report is None:
             report = self.gateway.run_decision_job(job, self.decisions, self.states, now)
         if self.on_report is not None:
@@ -398,9 +464,11 @@ def gateway_handler(
     *,
     on_report: Callable[[DispatchReport], None] | None = None,
     gate: SendGate | None = None,
+    hold: SendGate | None = None,
+    queue: JobQueue | None = None,
 ) -> GatewayHandler:
     """A `GatewayHandler` for a worker: register it under `GATEWAY_KIND`."""
-    return GatewayHandler(gateway, decisions, states, on_report=on_report, gate=gate)
+    return GatewayHandler(gateway, decisions, states, on_report=on_report, gate=gate, hold=hold, queue=queue)
 
 
 def webhook_job(channel: Channel, headers: Mapping[str, str], body: bytes, *, received_at: datetime) -> Job:

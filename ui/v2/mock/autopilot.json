@@ -1,0 +1,76 @@
+{
+  "goal_winback": {
+    "goal_id": "goal_winback",
+    "as_of": "2026-10-20T08:00:00Z",
+    "level": "approve",
+    "ready": true,
+    "since": "2026-09-22T09:00:00Z",
+    "days": 28.0,
+    "contacts": 8120,
+    "closed": 6900,
+    "forecast": {
+      "point": 4600.0,
+      "low": 3900.0,
+      "high": 5300.0
+    },
+    "forecast_total": {
+      "point": 4300.0,
+      "low": 3650.0,
+      "high": 4950.0
+    },
+    "value_error": null,
+    "value_checks": 0,
+    "observed": {
+      "point": 4300.0,
+      "low": 900.0,
+      "high": 7700.0
+    },
+    "observed_forecast": 4100.0,
+    "checks": [
+      {
+        "name": "level",
+        "ok": true,
+        "words": "The goal is active in approve."
+      },
+      {
+        "name": "days",
+        "ok": true,
+        "words": "28 of 28 days at approve."
+      },
+      {
+        "name": "forecasts",
+        "ok": true,
+        "words": "6900 of 100 contact decisions have a closed outcome window."
+      },
+      {
+        "name": "pays",
+        "ok": true,
+        "words": "Forecast over closed windows $4,300 ($3,650 to $4,950)."
+      },
+      {
+        "name": "proof",
+        "ok": true,
+        "words": "Against the people we never contact it made $4,300 ($900 to $7,700); its forecast for the same messages was $4,100."
+      },
+      {
+        "name": "safety",
+        "ok": true,
+        "words": "No safety stop in the last 14 days."
+      },
+      {
+        "name": "data",
+        "ok": true,
+        "words": "The data is trusted."
+      },
+      {
+        "name": "mandate",
+        "ok": true,
+        "words": "Its signed limits are active."
+      }
+    ],
+    "sentence": "Approve ran 28 days: it would have made about $4,600 a month ($3,900 to $5,300), and the people we never contact confirm it ($900 to $7,700).",
+    "detail": "The goal is active in approve. 28 of 28 days at approve. 6900 of 100 contact decisions have a closed outcome window. Forecast over closed windows $4,300 ($3,650 to $4,950). Against the people we never contact it made $4,300 ($900 to $7,700); its forecast for the same messages was $4,100. No safety stop in the last 14 days. The data is trusted. Its signed limits are active. A forecast is the agent's own estimate of extra profit after offer and message costs, summed over the contacts it chose; the monthly figure is that sum at the rate of the days it ran. Proof compares everyone it could contact with the people we never contact, over closed outcome windows.",
+    "currency": "USD",
+    "auto": false
+  }
+}

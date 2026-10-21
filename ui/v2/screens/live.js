@@ -12,6 +12,10 @@
        approval / Scheduled / Sent / Delivered / Failed, channel, offer, message, image, send time, how many
        messages this week, and the reason; "left alone" is a decision with its own reason, folded under a count);
      - What did it learn, and are customers OK? (learning notes, the inbox, health against each safety stop).
+     - Has it earned Autopilot? When the goal meets the bar (GET /v2/autopilot/{goal}), one card says what it would
+       have made, with its range and its proof, and one click turns Autopilot on (POST .../turn-on).
+   The Inbox is exceptions only (GET /v2/inbox, docs/v2/ZERO_TOUCH.md item 4): each item is one sentence, money with
+   its range when there is money, and one button. An API without that route gets the older alert list.
    Tapping a customer opens a panel with what it knows about them in words (reading hours, offer habit, refill
    due, what they might like next), every decision with its reason, the options it weighed and why each lost.
 
@@ -824,7 +828,7 @@ export async function render(root, ctx) {
   const goalId = goal.goal_id;
   const currency = goal.currency;
   const contentIndex = new Map((bundle.content || []).map((c) => [c.content_id, c]));
-  const state = { panelClose: null, batches: undefined, batchesFor: null, batchLoad: null, breakdowns: new Map(), alerts: [], limits: null, since: null };
+  const state = { panelClose: null, batches: undefined, batchesFor: null, batchLoad: null, breakdowns: new Map(), alerts: [], limits: null, since: null, inbox: null };
   const topbarPause = Boolean(ctx.pauseInTopBar);
   const pauseWord = ctx.pauseAllInTopBar ? "Pause this goal" : "Pause everything";
 
@@ -909,6 +913,7 @@ export async function render(root, ctx) {
   const batchSec = liveSection("Waiting for your approval", { extraClass: "ap-batches lv-batches", skeleton: [16, 56, 56] });
   batchSec.about("Nothing in a batch is sent until you approve it. Each message still follows the plan's limits. One click approves the whole batch. The expected numbers are its own forecast before sending, not a result.");
   const batchSlot = h("div", { class: "ap-batch-slot lv-batch-slot" });
+  const offerSlot = h("div", { class: "lv-offer-slot" });
   function paintBatches() {
     if (goal.autonomy !== "approve") {
       batchSlot.replaceChildren();
@@ -1023,7 +1028,7 @@ export async function render(root, ctx) {
     header,
     selfPause,
     h("div", { class: "grid lv-grid" },
-      h("div", { class: "span-8 stack lv-main" }, batchSlot, todaySec.card, feedSec.card),
+      h("div", { class: "span-8 stack lv-main" }, offerSlot, batchSlot, todaySec.card, feedSec.card),
       h("div", { class: "span-4 stack lv-side" }, inboxSec.card, healthSec.card, learnedSec.card, briefingSec.card)),
     announcer,
   );
@@ -1041,7 +1046,7 @@ export async function render(root, ctx) {
     return { rich: false, rows: (decisions || []).map((d) => ({ d, x: null })) };
   })();
 
-  const [briefing, feed, health, alerts, today, proof, limits] = await Promise.allSettled([
+  const [briefing, feed, health, alerts, today, proof, limits, inbox, readiness] = await Promise.allSettled([
     call(api, "getBriefing", goalId),
     feedLoad,
     call(api, "getHealth"),
@@ -1049,6 +1054,8 @@ export async function render(root, ctx) {
     maybe(api, "getToday", goalId),
     maybe(api, "getProof", goalId),
     maybe(api, "getHealthLimits", goalId),
+    maybe(api, "listInbox"),
+    goal.autonomy !== "autopilot" && goal.status === "active" ? maybe(api, "getAutopilot", goalId) : Promise.resolve(null),
   ]);
   if (limits.status === "fulfilled") state.limits = limits.value;
   const todayValue = today.status === "fulfilled" ? today.value : null;
@@ -1098,17 +1105,76 @@ export async function render(root, ctx) {
     feedSec.body.replaceChildren(...feedView(feed.value, { brief, contentIndex, autonomy: goal.autonomy, today: todayValue, openCustomer }));
   }
 
-  // Inbox: alerts from both endpoints; one failing still shows the other's.
+  // The Autopilot offer: only once the goal has earned it, with what it would have made and its proof.
+  const ready = readiness.status === "fulfilled" && readiness.value && readiness.value.ready ? readiness.value : null;
+  const drawOffer = () => {
+    if (!ready || goal.autonomy === "autopilot" || goal.status !== "active") {
+      offerSlot.replaceChildren();
+      return;
+    }
+    offerSlot.replaceChildren(offerView(ready, goal, async (btn) => {
+      btn.disabled = true;
+      try {
+        const change = await call(api, "turnOnAutopilot", goalId);
+        goal = { ...goal, autonomy: "autopilot" };
+        notify(ctx, (change && change.words) || "Autopilot is on.", "good", announcer);
+        if (typeof ctx.refreshGoals === "function") await ctx.refreshGoals();
+        paintHeader();
+        drawOffer();
+        drawInbox();
+      } catch (e) {
+        notify(ctx, `Couldn't turn on Autopilot: ${errText(e)}`, "critical", announcer);
+        btn.disabled = false;
+      }
+    }));
+  };
+  drawOffer();
+
+  // Inbox: the exceptions-only inbox when the API has it; else the alerts from both endpoints (one failing still
+  // shows the other's).
   const lists = [];
   if (alerts.status === "fulfilled") lists.push(alerts.value);
   if (health.status === "fulfilled" && health.value) lists.push(health.value.alerts);
   const merged = mergeAlerts(lists, goalId);
   state.alerts = merged;
-  inboxSec.heading.textContent = merged.length ? `Inbox (${merged.length})` : "Inbox";
-  inboxSec.body.replaceChildren(
-    ...(alerts.status === "rejected" ? [lvFailed("alerts", alerts.reason, retry)] : []),
-    ...inboxView(merged, new Set(merged.filter((a) => a.auto_paused).slice(0, 3))),
-  );
+  const box = inbox.status === "fulfilled" ? inbox.value : null;
+  state.inbox = box ? inboxItemsFor(box, goalId) : null;
+  function drawInbox() {
+    if (!state.inbox) {
+      inboxSec.heading.textContent = merged.length ? `Inbox (${merged.length})` : "Inbox";
+      inboxSec.body.replaceChildren(
+        ...(alerts.status === "rejected" ? [lvFailed("alerts", alerts.reason, retry)] : []),
+        ...inboxView(merged, new Set(merged.filter((a) => a.auto_paused).slice(0, 3))),
+      );
+      return;
+    }
+    // The Autopilot offer for this goal is its own card above: say it once.
+    const shown = state.inbox.filter((i) => !(ready && offerSlot.childNodes.length && i.button && i.button.action === "turn_on_autopilot" && i.goal_id === goalId));
+    inboxSec.heading.textContent = shown.length ? `Inbox (${shown.length})` : "Inbox";
+    inboxSec.about("Only what needs a person: a safety stop, a goal losing money, a reconnect, data that can't be trusted, something bigger than your signed limits, a customer who needs you. Everything else is in the weekly briefing.");
+    inboxSec.body.replaceChildren(...inboxItemsView(shown, box, async (item, btn) => {
+      const b = item.button || {};
+      if (b.action === "open") {
+        if (present(b.target) && typeof ctx.navigate === "function" && String(b.target).startsWith("#")) ctx.navigate(b.target);
+        else if (present(b.target) && typeof window !== "undefined") window.location.assign(b.target);
+        return;
+      }
+      btn.disabled = true;
+      try {
+        const out = await call(api, "actOnInbox", item.item_id);
+        state.inbox = state.inbox.filter((i) => i.item_id !== item.item_id);
+        notify(ctx, (out && out.words) || "Done.", "good", announcer);
+        if (b.action === "turn_on_autopilot" && b.goal_id === goalId) goal = { ...goal, autonomy: "autopilot" };
+        if (["resume_in_approve", "pause_goal", "turn_on_autopilot"].includes(b.action) && typeof ctx.refreshGoals === "function") await ctx.refreshGoals();
+        paintHeader();
+        drawInbox();
+      } catch (e) {
+        notify(ctx, `Couldn't do that: ${errText(e)}`, "critical", announcer);
+        btn.disabled = false;
+      }
+    }));
+  }
+  drawInbox();
   paintHeader();
 
   // Health
@@ -1514,6 +1580,79 @@ function inboxView(alerts, inBanner = new Set()) {
       }),
     ),
   ];
+}
+
+/** Inbox items Live lists for a goal: its own and the account-wide ones, in the order the API sends (worst first). */
+export function inboxItemsFor(view, goalId) {
+  const items = view && Array.isArray(view.items) ? view.items : [];
+  return items.filter((i) => i && (!present(i.goal_id) || i.goal_id === goalId));
+}
+
+/** The kind of an inbox item, in a word or two, and its tone (autonomy/inbox/items.py InboxKind). */
+export const INBOX_KINDS = Object.freeze({
+  safety_stop: ["Safety stop", "bad"],
+  losing: ["Losing money", "bad"],
+  reconnect: ["Reconnect", "warn"],
+  data: ["Data", "warn"],
+  approval: ["Your call", "info"],
+  customer: ["Customer", "info"],
+  privacy: ["Privacy request", "info"],
+});
+
+/** The exceptions-only inbox: each item its kind, one sentence (the why behind it), money with its range, one button. */
+function inboxItemsView(items, view, press) {
+  if (!items.length) {
+    const quiet = view && view.quiet && present(view.quiet.body) ? view.quiet.body : null;
+    return [lvEmpty(quiet ? explained("Nothing needs you.", quiet) : "Nothing needs you.")];
+  }
+  return [
+    h(
+      "ul",
+      { class: "list lv-inbox lv-inbox-items" },
+      ...items.map((item) => {
+        const [word, tone] = INBOX_KINDS[item.kind] || [String(item.kind || ""), "quiet"];
+        const btn = h("button", { type: "button", class: "btn btn-secondary btn-sm lv-inbox-btn", "aria-label": `${item.button?.label || "Open"}. ${item.action || ""}`.trim() }, item.button?.label || "Open");
+        btn.addEventListener("click", () => press(item, btn));
+        const cur = item.currency || "USD";
+        return h(
+          "li",
+          { class: `lv-alert lv-inbox-item lv-inbox-${item.kind}`, dataset: { item: item.item_id } },
+          h("div", { class: "lv-alert-top" }, chip(word, tone, "lv-inbox-kind"), present(item.opened_at) && h("span", { class: "lv-alert-when" }, when(item.opened_at))),
+          h("p", { class: "lv-alert-msg" }, explained(item.sentence, [item.action, item.detail])),
+          item.money && present(item.money.low) && h("p", { class: "lv-meta num" }, `${money(item.money.point, cur)} (${money(item.money.low, cur)} to ${money(item.money.high, cur)})`),
+          h("div", { class: "lv-inbox-actions" }, withInfo(btn, item.action)),
+        );
+      }),
+    ),
+  ];
+}
+
+/**
+ * "Turn on Autopilot?": what it would have made a month, with its range; the proof against the people we never
+ * contact (Approve) or how well its spend forecasts matched (Shadow); the server's one sentence; one button.
+ */
+function offerView(r, goal, turnOn) {
+  const cur = r.currency || goal.currency;
+  const usd = (v) => money(v, cur);
+  const cells = [];
+  if (r.forecast) cells.push(kpiCell("Would make a month", usd(r.forecast.point), `${usd(r.forecast.low)} to ${usd(r.forecast.high)}`, "", "Its own forecast of extra profit after offer and message costs, at the rate of the days it ran."));
+  if (r.observed) cells.push(kpiCell("Proof so far", usd(r.observed.point), `${usd(r.observed.low)} to ${usd(r.observed.high)}`, "", "Extra profit measured against the people we never contact, over closed outcome windows."));
+  else if (r.value_error && present(r.value_error.point)) {
+    const e = Number(r.value_error.point);
+    cells.push(kpiCell("Spend forecasts", e >= 0 ? `+${pct(e)}` : pct(e), `${count(r.value_checks)} purchases checked`, "", "What customers really spent per purchase against what it forecast. Spending more than forecast makes its figure cautious."));
+  }
+  const btn = h("button", { type: "button", class: `btn ${goal.autonomy === "approve" ? "btn-secondary" : "btn-primary"} lv-offer-btn`, "aria-label": "Turn on Autopilot: it acts on its own inside your signed limits and drops back to Approve by itself if proof turns negative." }, "Turn on Autopilot");
+  btn.addEventListener("click", () => turnOn(btn));
+  const title = h("h2", { class: "card-title", id: "lv-offer-title" }, "Turn on Autopilot?");
+  // The numbers are the strip's; the line says how it earned them, and the server's own sentence and every check
+  // are its description (say each thing once).
+  const level = r.level === "approve" ? "Approve" : "Shadow";
+  const line = present(r.days) ? `Earned in ${count(r.days)} days of ${level}: every check passed.` : "Every check passed.";
+  return h("section", { class: "card lv-card lv-offer", "aria-labelledby": "lv-offer-title" },
+    h("div", { class: "card-head" }, h("div", { class: "lv-title-row" }, title)),
+    cells.length && h("dl", { class: "kpis lv-offer-kpis", style: `--kpi-count: ${cells.length}` }, ...cells),
+    h("p", { class: "lv-offer-sentence" }, explained(line, [r.sentence, r.detail])),
+    h("div", { class: "lv-offer-actions" }, withInfo(btn, "It acts on its own inside your signed limits, keeps the people we never contact, and drops back to Approve by itself if proof turns negative.")));
 }
 
 /** The brief's stop-rule threshold for a metric, if the plan has one. */

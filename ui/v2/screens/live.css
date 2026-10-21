@@ -585,6 +585,27 @@
   overflow-wrap: anywhere;
 }
 
+/* The exceptions-only inbox (GET /v2/inbox): each item its kind, one sentence, and its one button under it. */
+.lv-inbox-actions {
+  margin-top: 8px;
+}
+
+/* "Turn on Autopilot?": the earned offer at the top of the main column, its numbers in one open strip. Until it is
+   earned the slot takes no room, so the column's top edge stays level with the inbox beside it. */
+.lv-offer-slot:empty {
+  display: none;
+}
+.lv-offer .lv-offer-kpis {
+  margin: 4px 0 12px;
+}
+.lv-offer-sentence {
+  margin: 0;
+  max-width: 72ch;
+}
+.lv-offer-actions {
+  margin-top: 16px;
+}
+
 /* A self-pause the banner above already names: one quiet line, its words in the description. */
 .lv-alert-msg.lv-alert-named {
   color: var(--muted);

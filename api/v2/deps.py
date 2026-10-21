@@ -979,9 +979,30 @@ def suggest_opportunities(
     now: datetime,
     *,
     taken: frozenset[GoalKind] = frozenset(),
+    events: Iterable[Event] | None = None,
 ) -> list[Goal]:
-    """Draft goals sized from customer state; kinds in `taken` (already being worked on) are left out."""
+    """Draft goals for the shop; kinds in `taken` (already being worked on) are left out.
+
+    With `events` (the shop's history), these are the money-sized proposals of
+    `autonomy.onboarding.scan_opportunities`, best first: refill due, first to second purchase,
+    win-back, VIP at risk, and cart and browse when such events exist. Each goal's text carries its
+    audience and its expected extra profit a month with a range, and its budget is what its
+    messages cost at most; a proposal without enough history keeps its count and gets no money.
+    `GET /v2/onboarding/proposals` returns the full proposals (why, basis, ranges).
+
+    Without `events`, only counts from customer state are possible: one-time buyers and sign-ups who
+    never bought, each budgeted at what two messages to every one of them cost (the starting plan's
+    message and follow-up), never a made-up amount.
+    """
     rows = list(states)
+    if events is not None:
+        from autonomy.onboarding import proposal_goal, scan_opportunities
+
+        scan = scan_opportunities(events, rows, now, taken=taken)
+        return [proposal_goal(p, business_id, now) for p in scan.proposals if p.kind not in taken]
+    from autonomy.onboarding.priors import CHANNEL_COSTS
+
+    per_message = CHANNEL_COSTS.get(Channel.EMAIL, 0.0)
     ideas = [
         (
             "opp_repeat_purchase",
@@ -1002,7 +1023,7 @@ def suggest_opportunities(
             business_id=business_id,
             text=text.format(n=n),
             kind=kind,
-            budget=1000,
+            budget=float(max(1, math.ceil(n * 2 * per_message))),
             starts_at=now,
             created_at=now,
         )

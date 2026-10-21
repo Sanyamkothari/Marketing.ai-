@@ -427,6 +427,23 @@ def test_published_openapi_matches_the_routes(client: Any, tmp_path: Path) -> No
         ("/v2/connectors/{kind}/callback", "get"),
         ("/v2/connectors/{kind}/install", "get"),
         ("/v2/connectors/{kind}/key", "post"),
+        # Zero-touch setup (docs/v2/ZERO_TOUCH.md): sized goals, learned limits, the brand voice, the
+        # exceptions-only inbox and Shadow -> Autopilot in one click.
+        ("/v2/onboarding/proposals", "get"),
+        ("/v2/onboarding/limits", "get"),
+        ("/v2/onboarding/answers", "post"),
+        ("/v2/onboarding/accept", "post"),
+        ("/v2/onboarding/mandates", "get"),
+        ("/v2/onboarding/brand", "get"),
+        ("/v2/onboarding/brand/read", "post"),
+        ("/v2/onboarding/brand/approve", "post"),
+        ("/v2/inbox", "get"),
+        ("/v2/inbox/{item_id}/act", "post"),
+        ("/v2/inbox/history", "get"),
+        ("/v2/inbox/data", "get"),
+        ("/v2/autopilot/ledger", "get"),
+        ("/v2/autopilot/{goal_id}", "get"),
+        ("/v2/autopilot/{goal_id}/turn-on", "post"),
     }
     # The marketer app's routes are all there; the standalone engines (/v2/engines/...) add their own.
     assert expected <= ops(live)

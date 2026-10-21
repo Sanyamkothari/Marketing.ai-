@@ -440,14 +440,30 @@ export function inboxAlerts(lists, goalId) {
     .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
 }
 
+/** Inbox kinds that mean harm or a stopped business (autonomy/inbox/items.py); the rest are decisions to take. */
+const URGENT_KINDS = new Set(["safety_stop", "losing", "reconnect", "data"]);
+
+/** The exceptions-only inbox's items Live lists for this goal: this goal's and the account-wide ones. */
+export function inboxItems(view, goalId) {
+  const items = view && Array.isArray(view.items) ? view.items : [];
+  return items.filter((i) => i && (!goalId || !i.goal_id || i.goal_id === goalId));
+}
+
 async function loadInbox() {
   const seq = ++shell.inboxSeq;
-  const [alertsR, healthR] = await Promise.allSettled([api.listAlerts(), api.getHealth()]);
+  const [alertsR, healthR, boxR] = await Promise.allSettled([
+    api.listAlerts(),
+    api.getHealth(),
+    typeof api.listInbox === "function" ? api.listInbox() : Promise.resolve(null),
+  ]);
   if (seq !== shell.inboxSeq) return;
-  if (alertsR.status === "rejected" && healthR.status === "rejected") return; // a hint; Live shows the inbox itself
+  const box = boxR.status === "fulfilled" ? boxR.value : null;
+  if (alertsR.status === "rejected" && healthR.status === "rejected" && !box) return; // a hint; Live shows the inbox itself
   const lists = [alertsR.status === "fulfilled" ? alertsR.value : [], healthR.status === "fulfilled" && healthR.value ? healthR.value.alerts : []];
-  const all = inboxAlerts(lists, shell.goalId);
-  const urgent = all.filter((a) => a.severity === "critical" || a.severity === "warning").length;
+  // With the exceptions-only inbox (GET /v2/inbox) the count is its items, the same set Live's Inbox lists; an older
+  // API counts the alerts, as Live then lists them.
+  const all = box ? inboxItems(box, shell.goalId) : inboxAlerts(lists, shell.goalId);
+  const urgent = box ? all.filter((i) => URGENT_KINDS.has(i.kind)).length : all.filter((a) => a.severity === "critical" || a.severity === "warning").length;
   const count = $("inbox-count");
   count.hidden = all.length === 0;
   count.textContent = String(all.length);
@@ -456,7 +472,7 @@ async function loadInbox() {
     "aria-label",
     all.length ? `Inbox, ${all.length} ${all.length === 1 ? "message" : "messages"}${urgent ? `, ${urgent} need a look` : ", nothing urgent"}` : "Inbox, empty",
   );
-  drawSelfPause(all.filter((a) => a.auto_paused));
+  drawSelfPause(inboxAlerts(lists, shell.goalId).filter((a) => a.auto_paused));
 }
 
 /** The red "Paused itself" badge: Autonomy stopped a goal or a channel on its own (a stop rule fired). */
@@ -535,6 +551,8 @@ async function loadBatchBadge() {
 /** Reload the goal list (after a screen created, approved, paused or resumed one) and redraw the bar. */
 async function refreshGoals() {
   await loadGoals();
+  // A first goal made on a screen (the setup on Getting started) becomes the current one, so the bar shows it.
+  if (!shell.goalId) shell.goalId = defaultGoalId();
   const route = parseHash(location.hash);
   drawTopbar(route.screen);
   return shell.goals;
