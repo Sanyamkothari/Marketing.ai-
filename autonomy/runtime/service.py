@@ -49,6 +49,16 @@ and the operator endpoint call it by hand. Each tick does, in order:
   every decision through its send-time compliance gate: consent proof, do-not-disturb registers,
   country quiet hours, rate limits and carrier failover. A refusal is a skipped send and an
   alert; held decisions come back as `gateway_send_decision` jobs.
+- `business_id` and `data_gate` tie the runtime to one shop's connected data
+  (`autonomy.runtime.settings.build_runtime` with connectors). Each tick asks
+  `data_gate(now)` first; a `DataHold` (the shop's Shopify or Klaviyo data is stale, still loading
+  its history, or needs reconnecting) holds every decision and approved batch of the business for
+  that tick, and queued sends wait too (`data_send_gate`). The connector's incident desk raises the
+  one alert for the problem; the runtime adds none of its own. `request_rebuild` (the connectors'
+  `history_hook`, and identity links that changed) makes the next tick rebuild every state from the
+  log, at most once per `RuntimeConfig.rebuild_every`. `before_tick` hooks run first in every tick
+  (the connector send routing re-reads which tools are connected there, so a connection made, lost
+  or reconnected changes the providers without a restart).
 
 **When an engine fails**, the tick goes on with what is still safe (the founder's table,
 `docs/v2/FAILURE_ISOLATION.md`). An unreadable event feed folds nothing, keeps the watermark and
@@ -176,6 +186,7 @@ if TYPE_CHECKING:
     from autonomy.channels.gateway import DispatchGateway
 
 __all__ = [
+    "DATA_HOLD_PREFIX",
     "INGEST_TYPES",
     "LEFT_ALONE",
     "MANDATE_PACED",
@@ -183,6 +194,8 @@ __all__ = [
     "TRIGGER_TYPES",
     "AutonomyRuntime",
     "BreakersFn",
+    "DataGate",
+    "DataHold",
     "EvenPacing",
     "MandateBook",
     "MandateSource",
@@ -223,6 +236,23 @@ on. Runs right before deciding; the result is matched back by customer id, and a
 out is decided on its plain state."""
 
 Severity = Literal["info", "warning", "critical"]
+
+DATA_HOLD_PREFIX = "data_not_fresh: "
+"""The reason a queued send is held while the business's connected data cannot be trusted."""
+
+
+@dataclass(frozen=True)
+class DataHold:
+    """Why the business must not act right now, in plain words, and alerts the check raised (if any)."""
+
+    reasons: tuple[str, ...]
+    alerts: tuple[Alert, ...] = ()
+
+
+DataGate = Callable[[datetime], DataHold | None]
+"""now -> a `DataHold` while the connected data cannot be trusted, else None (see `build_runtime`)."""
+TickHook = Callable[[datetime], object]
+"""Run at the start of every tick (e.g. re-reading which tools are connected)."""
 
 MANDATE_PACED = "mandate_paced"
 """Noted on a decision the mandate's spend pacer (`TokenBucket`) held back: allowed, but not today."""
@@ -321,6 +351,9 @@ class RuntimeConfig:
     """How much of a goal's decision log the nightly negative-lift check reads (from its start at most)."""
     mandate_burst_share: float = 0.25
     """The share of a mandate's daily cap its spend pacer lets go at once (see `TokenBucket`)."""
+    rebuild_every: timedelta = timedelta(minutes=15)
+    """A requested rebuild (`request_rebuild`: connector history landed, identity links changed) runs at
+    most this often, so a backfill landing chunk after chunk rebuilds a few times, not every page."""
     ingest_stale_after: timedelta | None = timedelta(days=2)
     """Raise an `ingest.stale` alert when the newest customer event (`INGEST_TYPES`) is older than
     this, counted from the process's first fold at most: the feed has probably gone quiet. The
@@ -396,6 +429,8 @@ class TickReport:
     """Goals that did not act this tick because their mandate is missing, inactive or unsigned."""
     mandate_blocked: list[str] = field(default_factory=list)
     """Decisions a mandate check stopped (violations, or the spend pacer) before batching or sending."""
+    data_held: list[str] = field(default_factory=list)
+    """Why the business's decisions and approved batches were held this tick (stale connected data)."""
 
     @property
     def sent(self) -> list[DispatchResult]:
@@ -431,6 +466,7 @@ class TickReport:
             "weekly": [w.brief.goal_id for w in self.weekly],
             "halted_goals": list(self.halted_goals),
             "mandate_blocked": len(self.mandate_blocked),
+            "data_held": list(self.data_held),
         }
 
 
@@ -899,6 +935,9 @@ class AutonomyRuntime:
         mandates: MandateSource | None = None,
         gateway: DispatchGateway | None = None,
         lift_guards: LiftGuards | None = None,
+        business_id: str | None = None,
+        data_gate: DataGate | None = None,
+        before_tick: Sequence[TickHook] = (),
     ) -> None:
         """`conversation` defaults to one over `text_signals`, else over `PersonReadsReplies`: STOP
         is always honoured. `strategist` is the weekly adjustment, e.g. `Strategist.adjust_brief`;
@@ -912,7 +951,7 @@ class AutonomyRuntime:
         on each goal's candidate states right before deciding; `mandates` puts goals under signed
         mandates; `gateway` sends through a `DispatchGateway` (its attached dispatcher becomes
         `dispatcher`, so pauses reach it); `lift_guards` turns on the nightly negative-lift
-        breaker."""
+        breaker; `business_id`, `data_gate` and `before_tick` tie it to a connected shop."""
         if gateway is not None:
             if gateway.dispatcher is None:
                 raise ValueError("attach a dispatcher to the gateway (attach_dispatcher) before using it")
@@ -931,6 +970,13 @@ class AutonomyRuntime:
         self.state_enricher = state_enricher
         self.mandates = mandates
         self.lift_guards = lift_guards
+        self.business_id = business_id
+        self.data_gate = data_gate
+        self.before_tick: list[TickHook] = list(before_tick)
+        self._rebuild_requested = False
+        self._last_rebuild: datetime | None = None
+        self._hold_seen: tuple[datetime, DataHold | None] | None = None
+        """The data gate's last answer and its minute: queued sends reuse it, not one check each."""
         self.channel_costs: dict[Channel, float] = dict(
             DEFAULT_CHANNEL_COSTS if channel_costs is None else channel_costs
         )
@@ -1004,6 +1050,33 @@ class AutonomyRuntime:
         self.alert_store.put(alerts)
         self.briefing_store.put(briefings)
 
+    def request_rebuild(self, *_: object) -> None:
+        """Rebuild every state from the log on the next tick (at most once per `rebuild_every`).
+
+        The connectors' `history_hook` (history older than the late window landed) and the identity
+        linker's `on_change` (a Klaviyo profile was linked to a Shopify customer) both call this;
+        it takes and ignores their arguments."""
+        self._rebuild_requested = True
+
+    def data_send_gate(self, decision: Decision, now: datetime) -> str | None:  # noqa: ARG002
+        """A `SendGate` holding queued sends while the connected data cannot be trusted.
+
+        The answer is kept for the minute it was asked in (the tick's own check counts), so a sweep
+        that sends thousands of queued messages checks the shop's data once, not once per message."""
+        if self.data_gate is None:
+            return None
+        minute = now.replace(second=0, microsecond=0)
+        seen = self._hold_seen
+        if seen is not None and seen[0] == minute:
+            hold = seen[1]
+        else:
+            try:
+                hold = self.data_gate(now)
+            except Exception as err:  # cannot tell: hold rather than send on data nobody checked
+                return f"{DATA_HOLD_PREFIX}the data check failed ({type(err).__name__})"
+            self._hold_seen = (minute, hold)
+        return None if hold is None else DATA_HOLD_PREFIX + "; ".join(hold.reasons)
+
     def check_brief(self, brief: Brief) -> None:
         """Raise `SplitMismatchError` if the brief asks for another proof split than the business's.
 
@@ -1020,6 +1093,7 @@ class AutonomyRuntime:
         report = TickReport(now=now)
         local = now.astimezone(self._tz)
         self._start_day(local.date())
+        self._run_hooks(now, report)
         if self.spend_ledger is not None:
             self.spend_ledger.refresh()  # a weekly brief may have moved a window or an offer price
 
@@ -1027,13 +1101,23 @@ class AutonomyRuntime:
         # while the tick runs (the API stores webhooks at any time) must still reach the replies
         # and triggers below, and a rebuild late in the tick would fold them out of their sight.
         nightly_due = self._nightly_due(local)
-        new_events = self._fold(now, report, rebuild=nightly_due and self.config.nightly_rebuild)
+        requested = self._rebuild_due(now)
+        if requested:
+            self._rebuild_requested = False  # a request made while this rebuild runs waits for the next
+        new_events = self._fold(
+            now, report, rebuild=(nightly_due and self.config.nightly_rebuild) or requested
+        )
+        if requested and not report.rebuilt:
+            self._rebuild_requested = True  # the log could not be read: try again next tick
         self._handle_replies(new_events, now, report)
         self._run_breakers(now, report)
         self._expire_batches(now, report)
-        self._send_approved(now, report)
+        held = self._data_hold(now, report)
+        if not held:
+            self._send_approved(now, report)
         self._run_send_jobs(now, report)
-        self._decide(now, local, new_events, report)
+        if not held:
+            self._decide(now, local, new_events, report)
         if nightly_due:
             self._nightly(now, local, report)
         self._weekly(now, local, report)
@@ -1043,6 +1127,69 @@ class AutonomyRuntime:
         self.alert_store.put(report.alerts)
         self.briefing_store.put(report.briefings)
         return report
+
+    # --- 0. hooks and the data gate -------------------------------------------------------------
+
+    def _run_hooks(self, now: datetime, report: TickReport) -> None:
+        """`before_tick` hooks; one that raises is an alert (once a day each), never a stopped tick."""
+        for hook in self.before_tick:
+            try:
+                hook(now)
+            except Exception as err:
+                name = getattr(hook, "__qualname__", type(hook).__name__)
+                day = self._today()
+                if ("runtime.hook_error", name) in day.alerted:
+                    continue
+                day.alerted.add(("runtime.hook_error", name))
+                self._alert(
+                    report,
+                    code="runtime.hook_error",
+                    key=f"{name}:{day.day.isoformat()}",
+                    severity="warning",
+                    message=(
+                        f"A start-of-tick step ({name}) failed ({type(err).__name__}: {err}); the tick "
+                        "went on with what it had."
+                    )[:1000],
+                )
+
+    def _data_hold(self, now: datetime, report: TickReport) -> bool:
+        """True when the business's connected data cannot be trusted: nothing is decided or sent.
+
+        The connector side raises the one alert per problem (stale, needs reconnect); a hold while
+        history is still loading raises none, because nothing is wrong. A check that fails is a
+        hold too, with one alert a day."""
+        if self.data_gate is None:
+            return False
+        try:
+            hold = self.data_gate(now)
+        except Exception as err:
+            report.data_held.append(f"the data check failed ({type(err).__name__})")
+            day = self._today()
+            if ("data.gate_error", None) not in day.alerted:
+                day.alerted.add(("data.gate_error", None))
+                self._alert(
+                    report,
+                    code="data.gate_error",
+                    key=day.day.isoformat(),
+                    severity="warning",
+                    message=(
+                        "Autonomy could not check whether the shop's connected data is up to date "
+                        f"({type(err).__name__}), so it decided and sent nothing this tick."
+                    ),
+                )
+            return True
+        self._hold_seen = (now.replace(second=0, microsecond=0), hold)
+        if hold is None:
+            return False
+        report.data_held.extend(hold.reasons)
+        report.alerts.extend(hold.alerts)
+        return True
+
+    def _rebuild_due(self, now: datetime) -> bool:
+        if not self._rebuild_requested or not self._warm:
+            return False  # a process's first tick rebuilds anyway
+        last = self._last_rebuild
+        return last is None or now - last >= self.config.rebuild_every
 
     # --- 1. fold ---------------------------------------------------------------------------------
 
@@ -1107,6 +1254,7 @@ class AutonomyRuntime:
         self._assign_groups(None)
         self._advance_watermark(now)
         self._warm = True
+        self._last_rebuild = now
         report.rebuilt = True
         report.events_folded += len(fresh)
         return fresh
@@ -1362,13 +1510,30 @@ class AutonomyRuntime:
             self._take_dispatch(result, now, report)
 
         gate = self.send_gate if self.mandates is not None else None
+        hold = self.data_send_gate if self.data_gate is not None else None
         handlers: dict[str, JobHandler] = {
-            SEND_KIND: send_handler(dispatcher, self.decisions, self.states, on_report=take, gate=gate)
+            SEND_KIND: send_handler(
+                dispatcher,
+                self.decisions,
+                self.states,
+                on_report=take,
+                gate=gate,
+                hold=hold,
+                queue=self.queue,
+            )
         }
         gateway = self.gateway
         gateway_jobs: JobHandler | None = None
         if gateway is not None and gateway.queue is not None:
-            gateway_jobs = gateway_handler(gateway, self.decisions, self.states, on_report=take, gate=gate)
+            gateway_jobs = gateway_handler(
+                gateway,
+                self.decisions,
+                self.states,
+                on_report=take,
+                gate=gate,
+                hold=hold,
+                queue=gateway.queue,
+            )
             if gateway.queue is self.queue:
                 handlers[GATEWAY_KIND] = gateway_jobs
                 gateway_jobs = None
@@ -2576,38 +2741,98 @@ def build_worker(
     restart queues either the same job as the running chain (the id is its time) or one whose
     successor is the chain's next job, and the two chains merge at once instead of running twice.
     The worker owns send jobs: the runtime is built with `run_send_jobs=False`.
+
+    With `AUTONOMY_CONNECTORS=true` the same worker runs the connector jobs too (every stream's sync,
+    webhooks, the daily maintenance, Klaviyo's delivery watch and Shopify's privacy desk), over the
+    engine `build_runtime` ties to the runtime, and queued sends wait while the shop's data cannot
+    be trusted (`AutonomyRuntime.data_send_gate`).
     """
-    from autonomy.runtime.settings import RuntimeSettings, build_runtime
-    from autonomy.runtime.worker import (
-        TICK_KIND,
-        WEBHOOK_KIND,
-        tick_handler,
-        tick_job,
-        webhook_handler,
+    from autonomy.runtime.settings import (
+        RuntimeSettings,
+        build_connector_engine,
+        build_runtime,
+        engine_for,
     )
+    from autonomy.runtime.stores import SqlAlertStore, create_record_tables
+    from autonomy.runtime.worker import tick_job
+    from autonomy.store import SqlEventStore, create_all
 
     settings = RuntimeSettings.from_env(environ)
-    runtime = build_runtime(settings, environ=environ, run_send_jobs=False)
-    runtime.config = replace(runtime.config, run_send_jobs=False, worker=name)
-    if runtime.queue is None or runtime.dispatcher is None:  # build_runtime always sets both
-        raise RuntimeError("the runtime has no queue or dispatcher")
+    db = engine_for(settings.database_url)
+    wiring = None
+    if settings.connectors:
+        create_all(db)
+        create_record_tables(db)
+        wiring = build_connector_engine(
+            settings,
+            db=db,
+            events=SqlEventStore(db),
+            alerts=SqlAlertStore(db),
+            environ=environ,
+            holder=name,
+        )
+    runtime = build_runtime(settings, environ=environ, engine=db, run_send_jobs=False, connectors=wiring)
     every = timedelta(minutes=settings.tick_every_minutes)
     if start is None:
         start = tick_slot(datetime.now(UTC), every)
-    runtime.queue.enqueue(tick_job(start, every_minutes=settings.tick_every_minutes))
+    worker = worker_for_runtime(runtime, name=name, wiring=wiring, db=db if wiring is not None else None)
+    worker.queue.enqueue(tick_job(start, every_minutes=settings.tick_every_minutes))
+    return worker
+
+
+def worker_for_runtime(
+    runtime: AutonomyRuntime,
+    *,
+    name: str = "worker-1",
+    wiring: Any = None,
+    db: Any = None,
+    zero_touch: bool = True,
+) -> Worker:
+    """The worker's handlers over a built production runtime (`build_worker` without the settings).
+
+    Tick, send, gateway and webhook handlers, plus every connector job when `wiring` (a
+    `ConnectorWiring`) is given. With connectors and `zero_touch`, the exceptions-only inbox, the data
+    watchdog and the Autopilot guard are installed on the runtime's ticks
+    (`autonomy.inbox.install`), their tables in `db`: automatic demotion runs with every tick, not
+    only when someone opens the inbox, and the watchdog's holds join the connector data gate. Queued
+    sends wait while that gate holds (`AutonomyRuntime.data_send_gate`). It enqueues no tick job."""
+    from autonomy.runtime.worker import (
+        TICK_KIND,
+        WEBHOOK_KIND,
+        connector_handlers,
+        tick_handler,
+        webhook_handler,
+    )
+
+    runtime.config = replace(runtime.config, run_send_jobs=False, worker=name)
+    if runtime.queue is None or runtime.dispatcher is None:  # build_runtime always sets both
+        raise RuntimeError("the runtime has no queue or dispatcher")
+    if wiring is not None and zero_touch:
+        from autonomy.inbox.install import install, zero_touch_for_runtime
+
+        zt = zero_touch_for_runtime(runtime, engine=db, wiring=wiring)
+        install(runtime, zt, monitor=wiring.engine.monitor)
     events = runtime.events
     gate = runtime.send_gate if runtime.mandates is not None else None
+    hold = runtime.data_send_gate if runtime.data_gate is not None else None
+    queue = runtime.queue
     handlers: dict[str, JobHandler] = {
-        TICK_KIND: tick_handler(runtime.tick, runtime.queue),
-        SEND_KIND: send_handler(runtime.dispatcher, runtime.decisions, runtime.states, gate=gate),
+        TICK_KIND: tick_handler(runtime.tick, queue),
+        SEND_KIND: send_handler(
+            runtime.dispatcher, runtime.decisions, runtime.states, gate=gate, hold=hold, queue=queue
+        ),
         WEBHOOK_KIND: webhook_handler(runtime.dispatcher.adapters, events.append),
     }
     if runtime.gateway is not None:
         # build_runtime gives the gateway the runtime's queue, so this worker claims its held decisions.
         handlers[GATEWAY_KIND] = gateway_handler(
-            runtime.gateway, runtime.decisions, runtime.states, gate=gate
+            runtime.gateway, runtime.decisions, runtime.states, gate=gate, hold=hold, queue=queue
         )
-    return Worker(queue=runtime.queue, handlers=handlers, name=name)
+    if wiring is not None:
+        handlers.update(
+            connector_handlers(wiring.engine, queue, events=wiring.events, privacy_desk=wiring.privacy_desk)
+        )
+    return Worker(queue=queue, handlers=handlers, name=name)
 
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)

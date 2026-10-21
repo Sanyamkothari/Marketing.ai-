@@ -14,8 +14,18 @@
 **Per business**: `HealthMonitor.ready_to_act(business_id, now)` is the single answer the runtime
 asks before deciding: every connection with a critical stream (orders, consent: `StreamSpec.critical`)
 must be active, fresh and have enough history. Otherwise decisions for that business are held,
-and the verdict says why in plain words. `send_gate(business_id)` wraps it as the worker's
+and the verdict says why in plain words. A connection a person disconnected
+(`sync.DISCONNECTED_BY_PERSON`) is left out: disconnecting is a choice, so it stops holding
+anything at once. One that needs reconnecting, or whose app was uninstalled on the platform, holds
+until it is reconnected or a person removes it on Connect. An optional stream refused with 403
+(`ALERT_STREAM_DENIED`) is degraded, never a hold. `send_gate(business_id)` wraps it as the worker's
 `SendGate`, so a message queued before the data went stale is held too.
+
+**The data watchdog** (`HealthMonitor.watchdog`, a `WatchdogCheck` such as
+`autonomy.inbox.watchdog.DataWatchdog`) reads what actually arrived, not whether the sync ran: a
+missing day of orders, a customer id that changed form, a consent jump. Each of its holds is one
+more reason in `ready_to_act`, so the same gate holds decisions and queued sends. A watchdog that
+raises does not hold (the freshness checks above still do); the verdict carries `watchdog_error`.
 
 **Alerts** go through `IncidentDesk`: one open incident per (connection, problem), opened
 atomically (`ConnectorStore.open_incident_once`), so a problem noticed by every hourly check and by
@@ -41,12 +51,14 @@ from autonomy.connectors.store import ConnectorStore, Incident, SyncPosition, Sy
 from autonomy.contracts import Alert, Decision, stable_id
 
 __all__ = [
+    "ALERT_DISCONNECT",
     "ALERT_DRIFT",
     "ALERT_ERRORS",
     "ALERT_PRIVACY",
     "ALERT_RECONNECT",
     "ALERT_ROW_DROP",
     "ALERT_STALE",
+    "ALERT_STREAM_DENIED",
     "ALERT_UNINSTALLED",
     "ALERT_WEBHOOKS",
     "ActVerdict",
@@ -58,6 +70,7 @@ __all__ = [
     "IncidentDesk",
     "Problem",
     "StreamHealth",
+    "WatchdogCheck",
 ]
 
 ALERT_RECONNECT = "connector.needs_reconnect"
@@ -68,6 +81,12 @@ ALERT_DRIFT = "connector.schema_drift"
 ALERT_ERRORS = "connector.errors"
 ALERT_WEBHOOKS = "connector.webhooks"
 ALERT_PRIVACY = "connector.privacy_request"
+ALERT_STREAM_DENIED = "connector.stream_denied"
+ALERT_DISCONNECT = "connector.disconnect_followup"
+ACCESS_DENIED_CODE = "connector.access_denied"
+"""`base.AccessDenied.code` (not imported: the error classes stay in `base`, the words here)."""
+PERSON_DISCONNECT_REASON = "disconnected by a person"
+"""`sync.DISCONNECTED_BY_PERSON` (sync imports this module)."""
 
 ROOT_CAUSES: frozenset[str] = frozenset({ALERT_RECONNECT, ALERT_UNINSTALLED})
 """While one of these is open for a connection, nothing else is raised for it."""
@@ -77,6 +96,12 @@ class AlertSink(Protocol):
     """Where alerts go: `autonomy.runtime.stores.AlertStore` fits."""
 
     def put(self, alerts: Iterable[Alert]) -> int: ...
+
+
+class WatchdogCheck(Protocol):
+    """Reasons the connected data should not be trusted right now (`autonomy.inbox.watchdog`)."""
+
+    def holds(self, business_id: str, now: datetime) -> Sequence[str]: ...
 
 
 @dataclass(frozen=True)
@@ -146,6 +171,8 @@ class ActVerdict(_Model):
     reasons: tuple[str, ...] = ()
     connections: tuple[ConnectionHealth, ...] = ()
     as_of: datetime
+    watchdog: tuple[str, ...] = Field(default=(), description="The data watchdog's holds (also in reasons)")
+    watchdog_error: str | None = None
 
 
 class IncidentDesk:
@@ -222,11 +249,14 @@ class HealthMonitor:
         *,
         policy: HealthPolicy | None = None,
         desk: IncidentDesk | None = None,
+        watchdog: WatchdogCheck | None = None,
     ) -> None:
         self.store = store
         self.registry = registry
         self.policy = policy or HealthPolicy()
         self.desk = desk or IncidentDesk(store)
+        self.watchdog = watchdog
+        """Set after construction too (`autonomy.inbox.install`): its holds join `ready_to_act`."""
         self._gate_cache: dict[tuple[str, datetime], ActVerdict] = {}
 
     # -- reading ----------------------------------------------------------------------------------
@@ -307,11 +337,27 @@ class HealthMonitor:
     def ready_to_act(self, business_id: str, now: datetime) -> ActVerdict:
         """The one answer the runtime checks before deciding for `business_id`."""
         healths = tuple(
-            self.connection_health(c, now) for c in self.store.connections(business_id=business_id)
+            self.connection_health(c, now)
+            for c in self.store.connections(business_id=business_id)
+            if not _removed_by_person(c)
         )
         reasons = tuple(_reason(h) for h in healths if not h.can_act)
+        held: tuple[str, ...] = ()
+        error: str | None = None
+        if self.watchdog is not None:
+            try:
+                held = tuple(self.watchdog.holds(business_id, now))
+            except Exception as err:  # the freshness checks still guard; say why the watchdog is quiet
+                error = f"{type(err).__name__}: {err}"[:300]
+        reasons = (*reasons, *held)
         return ActVerdict(
-            business_id=business_id, can_act=not reasons, reasons=reasons, connections=healths, as_of=now
+            business_id=business_id,
+            can_act=not reasons,
+            reasons=reasons,
+            connections=healths,
+            as_of=now,
+            watchdog=held,
+            watchdog_error=error,
         )
 
     def send_gate(self, business_id: str) -> Callable[[Decision, datetime], str | None]:
@@ -338,7 +384,7 @@ class HealthMonitor:
         if health.status is not ConnectionStatus.ACTIVE:
             return raised  # reconnect / uninstall alerts are raised where the status changes
         present: list[str] = []
-        for problem in health.problems:
+        for problem in _one_hold(health, self._label(connection)):
             key = problem.code if problem.stream is None else f"{problem.code}:{problem.stream}"
             present.append(key)
             alert = self.desk.raise_problem(
@@ -346,10 +392,17 @@ class HealthMonitor:
             )
             if alert is not None:
                 raised.append(alert)
-        self.desk.resolve_others(connection.connection_id, present, now)
+        # The webhooks incident belongs to the daily renewal (`ConnectorEngine._reregister`), which
+        # closes it when the subscriptions are back. Closing it here would reopen it, and alert a
+        # person again, every day the renewal still fails.
+        self.desk.resolve_others(connection.connection_id, [*present, ALERT_WEBHOOKS], now)
         return raised
 
     # -- internals --------------------------------------------------------------------------------
+
+    def _label(self, connection: Connection) -> str:
+        connector = self.registry.find(connection.kind)
+        return connector.capabilities.label if connector is not None else connection.kind
 
     def _problems(
         self,
@@ -361,6 +414,20 @@ class HealthMonitor:
     ) -> Iterable[Problem]:
         for spec, health in zip(specs, streams, strict=True):
             name = spec.stream.value
+            denied = ACCESS_DENIED_CODE in (health.last_error_code, health.history_error_code)
+            if denied and not spec.critical:
+                # Degraded, not broken: the other streams keep the business deciding. One quiet note.
+                yield Problem(
+                    code=ALERT_STREAM_DENIED,
+                    severity="info",
+                    message=(
+                        f"{label} did not give Autonomy access to {name}; everything else keeps "
+                        f"syncing and deciding. To add {name}, reconnect {label} and approve the "
+                        "access it asks for."
+                    ),
+                    stream=name,
+                )
+                continue
             if health.freshness is Freshness.STALE or (
                 health.freshness is Freshness.NEVER
                 and now - connection.created_at > spec.cadence * self.policy.stale_after + self.policy.grace
@@ -477,6 +544,49 @@ class HealthMonitor:
             problems=problems,
             as_of=now,
         )
+
+
+def _one_hold(health: ConnectionHealth, label: str) -> list[Problem]:
+    """The problems to alert on: every critical stream that is stale is one hold, so one alert.
+
+    Health keeps a problem per stream (the Connect screen words each); a person is told once that
+    the connection holds decisions, whichever of its critical streams fell behind. An optional stream
+    stale at the same time is the same outage, so it is only an `info` note beside that one alert."""
+    held = [p for p in health.problems if p.code == ALERT_STALE and p.severity == "critical"]
+    rest = [p for p in health.problems if p not in held]
+    if not held:
+        return rest
+    # The same outage behind an optional stream is a symptom of the hold, not a second problem to
+    # act on: it is kept as a quiet note (for the weekly briefing), never a second warning.
+    rest = [
+        (
+            p.model_copy(update={"severity": "info", "message": p.message + " (Part of the hold above.)"})
+            if p.code == ALERT_STALE
+            else p
+        )
+        for p in rest
+    ]
+    if len(held) == 1:
+        one = held[0].model_copy(update={"stream": None})
+    else:
+        names = [p.stream for p in held if p.stream]
+        listed = ", ".join(names[:-1]) + f" and {names[-1]}" if len(names) > 1 else "".join(names)
+        one = Problem(
+            code=ALERT_STALE,
+            severity="critical",
+            message=(
+                f"{label} {listed} are out of date. Decisions for this business are on hold until they "
+                "catch up."
+            ),
+        )
+    return [one, *rest]
+
+
+def _removed_by_person(connection: Connection) -> bool:
+    return (
+        connection.status is ConnectionStatus.DISCONNECTED
+        and connection.status_reason == PERSON_DISCONNECT_REASON
+    )
 
 
 def _history(connection: Connection, spec: StreamSpec, history: SyncPosition) -> tuple[bool, float]:

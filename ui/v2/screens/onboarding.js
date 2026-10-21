@@ -16,7 +16,7 @@
 // says. What a step means (the teaching) is the title's description, and the detail behind a number (who it left
 // alone and why, what a forecast covers, what a budget change needs) is that number's description.
 
-import { button, clear, describe, el, errorBox, info, int, money, pageHead, present, range, skeleton, when, withInfo } from "../components.js";
+import { EM_DASH, button, clear, describe, el, errorBox, info, int, money, pageHead, pct, present, range, skeleton, when, withInfo } from "../components.js";
 
 /** The Shadow trial the pitch asks for: two weeks. */
 export const TRIAL_DAYS = 14;
@@ -368,6 +368,656 @@ function proofStep(goal, proof, proofErr) {
   return step(5, state, [body, guidance()], actions);
 }
 
+// ---- zero-touch setup: five clicks from Connect to a running Shadow plan (docs/v2/ZERO_TOUCH.md) -----------------
+// While no goal runs yet (or the goal set up here still waits for its voice), Getting started is the setup itself:
+//
+//   1 Connect Shopify        one click (the shop address is typed in the row; OAuth, or a pasted key for pilots)
+//   2 Connect Klaviyo        one click; Autonomy sets up sending in their Klaviyo by itself ("Sending is set up in
+//                            your Klaviyo"), and a calm line says what it is reading while the history loads
+//   3 Pick a goal            GET /v2/onboarding/proposals: each proposal sized in money with its range, from the
+//                            shop's own history; the best one is preselected, so "Use this goal" is the one click
+//   4 Confirm limits         GET /v2/onboarding/limits: what we found -> what we will use; one button signs them as
+//                            the mandate and starts the goal in Shadow (POST /v2/onboarding/accept)
+//   5 Approve the voice      GET /v2/onboarding/brand: three sample messages in the shop's own voice (read
+//                            automatically once a tool is connected); one button approves it
+//
+// Then "Shadow is running", with a link to Live. Every number on it comes from those answers; a step the server
+// cannot serve says so in words, and nothing is made up to fill it.
+
+/** The setup flag a platform's sign-in round trip carries: Connect sends the browser back here while it is set. */
+export const SETUP_KEY = "autonomy.v2.setup";
+
+/** The clicks the setup takes when every default is kept (the measure in ZERO_TOUCH.md: 5 or fewer). */
+export const SETUP_CLICKS = Object.freeze(["Continue to Shopify", "Connect Klaviyo", "Use this goal", "Sign and start Shadow", "Approve this voice"]);
+
+const SETUP_STEPS = {
+  1: ["Connect Shopify", "Your orders, customers and products. Autonomy reads them, and only writes single-use discount codes and customer tags."],
+  2: ["Connect Klaviyo", "Your marketing consent and how people answer your messages. Autonomy sends through your own Klaviyo, so your unsubscribes, sender and footer stay yours."],
+  3: ["Pick a goal", "Sized in money from your own order history and published test results, never made up. The range is honest about what is not known yet."],
+  4: ["Confirm your limits", "Learned from your own history. Signed once, they become the mandate: inside it Autonomy never asks you again."],
+  5: ["Approve the voice", "Read from your own Klaviyo messages and Shopify shop. Every message is checked against it before anything is sent."],
+};
+
+const remember = (on) => {
+  try {
+    if (typeof sessionStorage === "undefined") return;
+    if (on) sessionStorage.setItem(SETUP_KEY, "1");
+    else sessionStorage.removeItem(SETUP_KEY);
+  } catch {
+    /* private mode: the round trip lands on Connect, one click from here */
+  }
+};
+
+const livePlatform = (overview, kind) => {
+  const p = overview && Array.isArray(overview.platforms) ? overview.platforms.find((x) => x.kind === kind) : null;
+  return p || null;
+};
+const liveConnections = (p) => (p && Array.isArray(p.connections) ? p.connections.filter((c) => c.phase !== "disconnected") : []);
+const LOADING_PHASES = new Set(["syncing", "backfilling"]);
+const running = (goals) => goals.filter((g) => g.status === "active" || g.status === "paused");
+
+/** Only a web address or a path can be an image; a host under ".invalid" can never load, so it is not requested. */
+const imageSrc = (url) => {
+  const u = present(url) ? String(url).trim() : "";
+  if (!/^(https?:\/\/|\/|\.\/)/i.test(u)) return null;
+  return /^https?:\/\/[^/]*\.invalid(?::\d+)?(?:\/|$)/i.test(u) ? null : u;
+};
+
+/**
+ * Everything the setup reads: the platforms and the mandates signed here first (both quick), then, only when the
+ * setup is wanted (nothing runs yet, or the goal set up here still runs), the proposals, which read the shop's whole
+ * history. Null when this server has none of the setup routes, or the setup is not wanted.
+ */
+async function loadSetup(api, goals) {
+  if (typeof api.getProposals !== "function" && typeof api.listConnectors !== "function") return null;
+  const call = (name, ...args) => (typeof api[name] === "function" ? Promise.resolve(api[name](...args)) : Promise.resolve(null));
+  const [connR, mandR] = await Promise.allSettled([call("listConnectors"), call("listMandates")]);
+  const setup = { connectors: valueOf(connR), scan: null, scanError: null, mandates: Array.isArray(valueOf(mandR)) ? valueOf(mandR) : [] };
+  if (running(goals).length && !setupGoal(setup, goals)) return setup; // a shop already running: no scan needed
+  const [scanR] = await Promise.allSettled([call("getProposals")]);
+  setup.scan = valueOf(scanR);
+  setup.scanError = errorOf(scanR);
+  if (!setup.connectors && !setup.scan && !setup.scanError) return null;
+  return setup;
+}
+
+/** The goal set up here, when it still runs: the newest mandate's goal. */
+function setupGoal(setup, goals) {
+  for (const m of setup.mandates) {
+    const g = goals.find((x) => x.goal_id === m.goal_id && (x.status === "active" || x.status === "paused"));
+    if (g) return { goal: g, record: m };
+  }
+  return null;
+}
+
+const anyConnection = (overview) => ["shopify", "klaviyo"].some((k) => liveConnections(livePlatform(overview, k)).length > 0);
+
+/**
+ * Whether Getting started is the setup: nothing runs yet, or the goal set up here still waits for its voice and the
+ * voice can be read (a tool is connected, or it was read already).
+ */
+export function wantsSetup(setup, goals, brand) {
+  if (!setup) return false;
+  if (!running(goals).length) return true;
+  if (!setupGoal(setup, goals) || !brand) return false;
+  return brand.status === "waiting" || (brand.status === "not_read" && anyConnection(setup.connectors));
+}
+
+const STEP_PILL = { done: "Done", now: "Doing now", next: "Next", later: "Later", optional: "Optional", unknown: "Can't tell yet" };
+const STEP_TONE = { done: "positive", now: "accent", next: "neutral", later: "neutral", optional: "neutral", unknown: "warning" };
+
+/** One setup step: the number, the title (its meaning on hover), the state in a word, then the body and one button. */
+function setupStep(n, state, body = [], actions = [], about = null) {
+  const [title, teach] = SETUP_STEPS[n];
+  const tag = el("span", { class: ["pill", `pill-${STEP_TONE[state] || "neutral"}`, "ob-state", `ob-state-${state}`] }, STEP_PILL[state] || state);
+  const kids = [body].flat().filter(Boolean);
+  return el(
+    "li",
+    { class: ["ob-step", `ob-step-${state === "optional" ? "past" : state}`, "zt-step"], dataset: { step: String(n) } },
+    el("span", { class: "ob-num", "aria-hidden": "true" }, String(n)),
+    el(
+      "div",
+      { class: "ob-step-body" },
+      el(
+        "div",
+        { class: "ob-step-head" },
+        el("h3", { class: "ob-step-title" }, el("span", { class: "visually-hidden" }, `Step ${n}: `), withInfo(el("span", {}, title), teach)),
+        present(about) ? withInfo(tag, about) : tag,
+      ),
+      kids.length ? el("div", { class: "ob-step-text" }, kids) : null,
+      actions.length ? el("div", { class: "ob-actions" }, actions) : null,
+    ),
+  );
+}
+
+/** A labelled field for the connect rows; returns [field, input]. */
+let ztField = 0;
+function setupField(name, label, help, { secret = false, placeholder = null } = {}) {
+  ztField += 1;
+  const id = `zt-${name}-${ztField}`;
+  const input = el("input", { id, name, type: secret ? "password" : "text", autocomplete: "off", spellcheck: "false", placeholder });
+  const lab = el("label", { for: id }, label);
+  return [el("div", { class: "field zt-field" }, present(help) ? withInfo(lab, help) : lab, input), input];
+}
+
+/**
+ * Connect a platform from its step: OAuth goes straight to the platform's consent (Shopify needs the shop address,
+ * typed in the row, so it is still one click); a server without our app's credentials takes a pasted key (pilots).
+ */
+function connectBlock(platform, env, { primary }) {
+  const p = platform;
+  const oauth = Boolean(p.oauth_ready);
+  const fields = (p.config_fields || []).map((f) => setupField(f.name, f.label, f.help, { placeholder: f.name === "shop" ? "your-shop.myshopify.com" : null }));
+  const key = oauth ? null : setupField("api_key", p.kind === "shopify" ? "Admin API access token" : "Private API key", `Pilots: create a key in ${p.label} with this access: ${(p.scopes || []).join(", ")}. Autonomy keeps it encrypted and uses only that access.`, { secret: true });
+  const label = oauth ? (fields.length ? `Continue to ${p.label}` : `Connect ${p.label}`) : `Connect ${p.label}`;
+  const msg = el("p", { class: "field-error", role: "alert" });
+  const submit = el("button", { type: "submit", class: ["btn", primary ? "btn-primary" : "btn-secondary"] }, label);
+  const config = () => Object.fromEntries((p.config_fields || []).map((f, i) => [f.name, String(fields[i][1].value || "").trim()]));
+  return el(
+    "form",
+    {
+      class: "zt-connect",
+      novalidate: true,
+      onsubmit: async (event) => {
+        if (event && event.preventDefault) event.preventDefault();
+        msg.textContent = "";
+        const cfg = config();
+        const missing = (p.config_fields || []).find((f) => f.required && !cfg[f.name]);
+        if (missing) {
+          msg.textContent = `Type your ${missing.label.toLowerCase()} first.`;
+          return;
+        }
+        submit.disabled = true;
+        try {
+          if (oauth) {
+            remember(true);
+            const out = await env.api.startConnect(p.kind, cfg);
+            env.redirect(out.url);
+            return;
+          }
+          const value = String(key[1].value || "").trim();
+          if (!value) {
+            msg.textContent = "Paste the key first.";
+            return;
+          }
+          await env.api.connectWithKey(p.kind, value, cfg);
+          env.toast(`${p.label} is connected. The first sync has started.`, "good");
+          await env.rerender();
+        } catch (err) {
+          msg.textContent = (err && err.message) || `Could not connect ${p.label}.`;
+        } finally {
+          submit.disabled = false;
+        }
+      },
+    },
+    fields.length || key ? el("div", { class: "form-row zt-connect-row" }, fields.map(([f]) => f), key ? key[0] : null) : null,
+    msg,
+    el("div", { class: "zt-connect-actions" }, submit),
+  );
+}
+
+/** "Reading Klaviyo: Marketing consent, history 12% loaded." The calm progress line while the backfill runs. */
+export function readingLine(overview) {
+  const parts = [];
+  let detail = null;
+  for (const kind of ["shopify", "klaviyo"]) {
+    const p = livePlatform(overview, kind);
+    for (const c of liveConnections(p)) {
+      if (!LOADING_PHASES.has(c.phase)) continue;
+      const loading = (c.streams || []).filter((s) => present(s.history_progress) && Number(s.history_progress) < 1);
+      const what = loading.length ? loading.map((s) => `${String(s.label).toLowerCase()} ${Math.round(Number(s.history_progress) * 100)}%`).join(", ") : String(c.words || "").toLowerCase();
+      parts.push(`${p.label}: ${what}`);
+      detail = detail || c.detail;
+    }
+  }
+  if (!parts.length) return null;
+  const line = el("p", { class: "zt-reading", role: "status" }, el("span", { class: "zt-reading-dot", "aria-hidden": "true" }), withInfo(el("span", {}, `Reading your history. ${parts.join("; ")}.`), detail));
+  return line;
+}
+
+/** Step 1 and step 2: a platform's row. */
+function platformStep(n, kind, s, env) {
+  const p = livePlatform(s.connectors, kind);
+  const label = kind === "shopify" ? "Shopify" : "Klaviyo";
+  if (!s.connectors) {
+    return setupStep(n, "unknown", el("p", {}, withInfo(el("span", {}, `This server can't connect ${label} yet.`), "Connect your data on the Connect page instead.")), [link("Go to Connect", "#/connect")]);
+  }
+  const conns = liveConnections(p);
+  if (conns.length) {
+    const c = conns[0];
+    const loud = c.phase === "needs_reconnect";
+    const lines = [el("p", {}, el("span", { class: "zt-account" }, c.label), " · ", withInfo(el("span", {}, c.words), c.detail))];
+    if (kind === "klaviyo") lines.push(s.setupLine);
+    return setupStep(n, loud ? "now" : "done", lines, loud ? [link(`Reconnect on the Connect page`, "#/connect")] : []);
+  }
+  if (!p) return setupStep(n, "unknown", el("p", {}, `${label} is not available on this server yet.`), [link("Go to Connect", "#/connect")]);
+  const state = s.states[n - 1];
+  if (state === "optional") {
+    const why = s.otherSource ? `Your data already comes from ${s.otherSource}, so this step can wait.` : "This step can wait.";
+    return setupStep(n, "optional", el("p", {}, withInfo(el("span", {}, p.tagline), `${why} Connect ${label} on the Connect page any time.`)));
+  }
+  if (state !== "now") return setupStep(n, state, el("p", {}, p.tagline));
+  return setupStep(n, "now", [el("p", {}, p.tagline), connectBlock(p, env, { primary: true })]);
+}
+
+/** Step 2's line once Klaviyo is connected: "Sending is set up in your Klaviyo." (or the one step to do by hand). */
+async function sendingLine(api, overview) {
+  const c = liveConnections(livePlatform(overview, "klaviyo"))[0];
+  if (!c || typeof api.getConnectorSetup !== "function" || c.status !== "active") return null;
+  try {
+    const out = await api.getConnectorSetup(c.connection_id);
+    if (!out) return null;
+    if (out.state === "ready") return el("p", { class: "zt-ok" }, withInfo(el("span", {}, "Sending is set up in your Klaviyo."), "Autonomy created its own send flows and template there. Nothing goes out while the goal is in Shadow."));
+    if (out.state === "guided") return el("p", { class: "zt-attention" }, withInfo(el("span", {}, out.words), (out.steps || []).join(" ")), " ", link("See the steps", "#/connect"));
+    if (out.state === "pending") return el("p", { class: "ob-muted" }, out.words);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Money as people say it: whole units from 10 up ("$60", "$29"), cents below ("$8.69"). */
+function roundMoney(value, cur) {
+  const v = Number(value);
+  if (!Number.isFinite(v) || Math.abs(v) < 10) return money(value, cur);
+  return money(Math.round(v), cur).replace(/\.00$/, "");
+}
+const moneyMonth = (est, cur) => `${roundMoney(est.point, cur)} a month`;
+/** "$29 – $94": the range, in the same rounding as its point. */
+const moneyRange = (est, cur) => (est && present(est.low) && present(est.high) ? `${roundMoney(est.low, cur)} – ${roundMoney(est.high, cur)}` : EM_DASH);
+
+/**
+ * A number's source in an owner's words: a code or file reference ("autonomy/decide/bidders.py REFILL_LIFT") is
+ * "Autonomy's documented default", a path in brackets after a sentence is dropped, and "holdout" is always "people
+ * we never contact" (DESIGN.md section 6).
+ */
+export function plainSource(source) {
+  const raw = String(source || "").trim();
+  const words = raw.replace(/\s*\((?:library|autonomy|docs)\/[^)]*\)/g, "").trim();
+  const plain = /^(?:autonomy|library|docs)\/\S+/.test(words) ? "Autonomy's documented default" : words;
+  return plain.replace(/\bholdouts?\b/gi, "people we never contact");
+}
+
+/** One proposal as a radio row: title (why behind it), the people, and the money with its range on the right. */
+function proposalRow(p, scan, chosen, onPick) {
+  const cur = p.currency || scan.currency;
+  const id = `zt-opp-${p.opportunity_id}`;
+  const sized = Boolean(p.monthly_profit) && p.enough_history;
+  const disabled = p.already_running || !sized;
+  const input = el("input", { type: "radio", name: "zt-goal", id, value: p.opportunity_id, checked: chosen === p.opportunity_id, disabled });
+  input.addEventListener("change", () => onPick(p.opportunity_id));
+  const basis = (p.basis || []).map((b) => `${b.label}: ${b.value} (${b.assumed ? "assumed: " : ""}${plainSource(b.source)}).`);
+  const why = [p.why, ...basis].join(" ");
+  const people = p.already_running ? "Already running" : sized ? `${int(p.audience_now)} customers now` : "Not enough history yet";
+  return el(
+    "li",
+    { class: ["zt-opp", chosen === p.opportunity_id && "is-chosen", disabled && "is-off"], dataset: { opportunity: p.opportunity_id } },
+    input,
+    el(
+      "label",
+      { for: id, class: "zt-opp-main" },
+      el("span", { class: "zt-opp-title" }, p.title),
+      el("span", { class: "zt-opp-meta" }, people),
+    ),
+    el(
+      "div",
+      { class: "zt-opp-money" },
+      sized ? withInfo(el("span", { class: "zt-opp-value num" }, moneyMonth(p.monthly_profit, cur)), why) : withInfo(el("span", { class: "zt-opp-value is-missing" }, EM_DASH), p.not_enough || why),
+      sized ? el("span", { class: "zt-opp-range num" }, moneyRange(p.monthly_profit, cur)) : null,
+    ),
+  );
+}
+
+/** Step 3: the proposals, best first, the best one preselected; one click takes it to the limits. */
+function goalStepSetup(s, env) {
+  const { scan } = s;
+  if (s.accepted) {
+    return setupStep(3, "done", el("p", {}, el("strong", {}, s.accepted.goal.text || s.accepted.goal.goal_id)));
+  }
+  if (!scan) {
+    const words = s.scanError ? "We couldn't size goals from your history." : "This server can't size goals from your history yet.";
+    return setupStep(3, s.states[2] === "now" ? "unknown" : s.states[2], el("p", {}, s.scanError && present(s.scanError.message) ? withInfo(el("span", {}, words), s.scanError.message) : words), [link("Set a goal yourself", "#/goal")]);
+  }
+  const state = s.states[2];
+  const list = Array.isArray(scan.proposals) ? scan.proposals : [];
+  const chosen = list.find((p) => p.opportunity_id === s.chosen);
+  if (s.stage === "limits" && chosen && chosen.monthly_profit) {
+    const cur = chosen.currency || scan.currency;
+    return setupStep(3, "done", el("p", {}, el("strong", {}, chosen.title), " · ", withInfo(el("span", { class: "num" }, `${moneyMonth(chosen.monthly_profit, cur)} (${moneyRange(chosen.monthly_profit, cur)})`), chosen.why)));
+  }
+  if (state !== "now") {
+    const best = list.find((p) => p.opportunity_id === scan.preselected_id);
+    return setupStep(3, state, el("p", {}, best && best.monthly_profit ? `${int(list.length)} found in your history; the best is about ${moneyMonth(best.monthly_profit, best.currency || scan.currency)}.` : "Goals sized in money, from your own order history."));
+  }
+  if (!list.length || !scan.preselected_id) {
+    const words = scan.not_enough || "No goal has enough history behind it yet.";
+    return setupStep(3, "now", [el("p", {}, words), list.length ? el("ul", { class: "zt-opps" }, list.map((p) => proposalRow(p, scan, null, () => {}))) : null], [link("Set a goal yourself", "#/goal")]);
+  }
+  const notes = [...(scan.notes || []), ...(scan.skipped || []).map((x) => `Left out: ${x}`)].join(" ");
+  const use = button(SETUP_CLICKS[2], () => env.pick(), { kind: "primary" });
+  return setupStep(
+    3,
+    "now",
+    [
+      el("p", { class: "zt-lead" }, withInfo(el("span", {}, "Extra profit over 30 days, from your own history."), notes)),
+      el("ul", { class: "zt-opps", role: "radiogroup", "aria-label": "Goals found in your history" }, list.map((p) => proposalRow(p, scan, s.chosen, env.choose))),
+    ],
+    [use],
+  );
+}
+
+const hh = (h) => `${String(Number(h)).padStart(2, "0")}:00`;
+
+/**
+ * What we will use, in a few words, from the signed terms themselves (MandateTerms): the figure the mandate holds.
+ * The full sentence stays the row's description. Null for a limit the terms do not hold as one figure.
+ */
+export function shortUse(key, terms) {
+  const t = terms || {};
+  switch (key) {
+    case "cadence":
+      if (!present(t.max_touches)) return null;
+      return Number(t.window_days) === 7 ? `At most ${int(t.max_touches)} a week` : `At most ${int(t.max_touches)} in ${int(t.window_days)} days`;
+    case "discount_depth":
+      if (!present(t.max_offer_pct)) return t.offers_on === false ? "No offers" : null;
+      return t.offers_on ? `Offers up to ${pct(t.max_offer_pct, 0)}` : `No offers; never over ${pct(t.max_offer_pct, 0)}`;
+    case "margin":
+      return present(t.margin_rate) && present(t.margin_floor_pct) ? `${pct(t.margin_rate, 0)}, floor ${pct(t.margin_floor_pct, 0)}` : null;
+    case "quiet_hours":
+      return present(t.quiet_start) && present(t.quiet_end) ? `Quiet ${hh(t.quiet_start)} to ${hh(t.quiet_end)}` : null;
+    case "budget":
+      return present(t.budget_ceiling) ? `${money(t.budget_ceiling, t.currency || "USD")} for ${int(t.valid_days || 30)} days` : null;
+    default:
+      return null;
+  }
+}
+
+/** Limits shown for reference only (not part of what is signed) fold into the row they explain. */
+const FOLDED = { discount_frequency: "discount_depth" };
+
+/** One limit: what we found, then what we will use; a flagged default says so, and the margin can be answered once. */
+function limitRow(l, s, env, folded = []) {
+  const terms = s.limits && s.limits.terms;
+  const short = shortUse(l.key, terms);
+  const about = [short ? `We will use: ${l.use}` : null, l.description, `Source: ${plainSource(l.source)}.`, ...folded.map((f) => `${f.label}: ${f.found} ${f.use}`)].filter(Boolean).join(" ");
+  const extra = [];
+  if (!l.from_data) extra.push(withInfo(el("span", { class: "pill pill-neutral zt-default" }, "Safe default"), "Your data could not tell us this, so we start with a safe default. It is part of what you sign, and you can change it later."));
+  if (l.key === "margin" && present(l.question)) {
+    const [field, input] = setupField("margin_pct", "Your margin, %", l.question, { placeholder: "40" });
+    input.setAttribute("type", "number");
+    input.setAttribute("min", "1");
+    input.setAttribute("max", "99");
+    input.setAttribute("inputmode", "decimal");
+    if (present(s.marginPct)) input.value = String(s.marginPct);
+    input.addEventListener("change", () => env.margin(input.value));
+    extra.push(field);
+  }
+  if (l.key === "discount_depth" && s.limits && s.limits.terms && present(s.limits.terms.max_offer_pct)) {
+    ztField += 1;
+    const id = `zt-offers-${ztField}`;
+    const box = el("input", { type: "checkbox", id, checked: Boolean(s.offers) });
+    box.addEventListener("change", () => env.offers(Boolean(box.checked)));
+    extra.push(el("div", { class: "zt-check" }, box, withInfo(el("label", { for: id }, `Allow offers up to ${pct(s.limits.terms.max_offer_pct, 0)}`), "Off by default. On, the agent may offer up to your usual discount, only to people the evidence says need it, and never below your margin floor.")));
+  }
+  return el(
+    "li",
+    { class: "zt-limit", dataset: { key: l.key } },
+    el("div", { class: "zt-limit-label" }, withInfo(el("span", {}, l.label), about)),
+    el("div", { class: "zt-limit-found" }, l.found),
+    el("div", { class: "zt-limit-use" }, el("span", { class: "zt-arrow", "aria-hidden": "true" }, "→ "), el("span", { class: "visually-hidden" }, "We will use: "), short ? el("strong", { class: "num" }, short) : l.use, extra.length ? el("div", { class: "zt-limit-extra" }, extra) : null),
+  );
+}
+
+function limitRows(s, env) {
+  const all = s.limits.limits || [];
+  return all.filter((l) => !FOLDED[l.key]).map((l) => limitRow(l, s, env, all.filter((f) => FOLDED[f.key] === l.key)));
+}
+
+/** Step 4: the learned limits for the chosen goal, and the one button that signs them and starts Shadow. */
+function limitsStep(s, env) {
+  if (s.accepted) {
+    const rec = s.accepted.mandate || {};
+    const m = rec.mandate || {};
+    const unmet = Array.isArray(rec.unmet) ? rec.unmet : [];
+    const who = unmet.length ? "Waiting for a second signature." : rec.single_owner ? "Signed by you alone." : "Signed.";
+    const until = present(m.valid_until) ? ` Valid until ${when(m.valid_until, { time: false })}.` : "";
+    return setupStep(4, unmet.length ? "now" : "done", el("p", {}, withInfo(el("span", {}, `${who}${until}`), unmet.length ? "The goal stays in Shadow until the limits are signed." : "The single-owner path: one signature is enough for a shop run by one person. Inside these limits Autonomy never asks you again.")));
+  }
+  if (s.states[3] !== "now") return setupStep(4, s.states[3], el("p", {}, "What we found in your history, and what we will use."));
+  if (s.limitsError) return setupStep(4, "unknown", errorBox("We couldn't learn your limits.", s.limitsError, { retry: env.rerender }));
+  if (!s.limits) return setupStep(4, "now", skeleton({ width: "100%", height: "120px" }));
+  const sign = button(SETUP_CLICKS[3], () => env.sign(sign), {
+    kind: "primary",
+    ariaLabel: "Sign and start Shadow: signs these limits as your mandate and starts the goal in Shadow, where it decides every day and sends nothing.",
+  });
+  return setupStep(
+    4,
+    "now",
+    [
+      el("ul", { class: "zt-limits", "aria-label": "What we found, and what we will use" }, limitRows(s, env)),
+      present((s.limits.notes || []).join(" ")) ? el("p", { class: "ob-muted" }, s.limits.notes.join(" ")) : null,
+    ],
+    [withInfo(sign, "Signs these limits as your mandate (you alone, the single-owner path) and starts the goal in Shadow: it decides every day and sends nothing."), el("button", { type: "button", class: "link-btn", onclick: () => env.back() }, "Choose another goal")],
+  );
+}
+
+/** The email's own footer ("You can unsubscribe at any time."), which every message keeps; the card shows the rest. */
+export function withoutFooter(body) {
+  const parts = String(body || "").split(/\n\s*\n/);
+  return parts.length > 1 && /unsubscribe/i.test(parts[parts.length - 1]) ? parts.slice(0, -1).join("\n\n") : String(body || "");
+}
+
+/** One sample message, as the customer would see it: subject, the words, the offer when there is one. */
+function sampleCard(m) {
+  const src = imageSrc(m.image_url);
+  return el(
+    "li",
+    { class: "zt-sample" },
+    src ? el("img", { class: "zt-sample-img", src, alt: m.image_alt || "", loading: "lazy" }) : null,
+    el(
+      "div",
+      { class: "zt-sample-body" },
+      present(m.preview_subject) ? el("p", { class: "zt-sample-subject" }, m.preview_subject) : null,
+      el("p", { class: "zt-sample-text" }, withoutFooter(m.preview_body)),
+      present(m.offer_label) ? el("span", { class: "pill pill-neutral zt-sample-offer" }, m.offer_label) : null,
+    ),
+  );
+}
+
+/** Step 5: the voice read from their tools, three samples, and one approval. */
+function voiceStep(s, env) {
+  const b = s.brand;
+  if (b && b.status === "approved") {
+    return setupStep(5, "done", el("p", {}, withInfo(el("span", {}, `Approved${present(b.approved_by) ? ` by ${b.approved_by}` : ""}.`), b.words)));
+  }
+  if (!s.accepted) return setupStep(5, "later", el("p", {}, "Three sample messages, in your own voice."));
+  if (s.brandError) return setupStep(5, "unknown", errorBox("We couldn't read your voice.", s.brandError, { retry: env.rerender }));
+  if (!b) return setupStep(5, "unknown", el("p", {}, "This server can't read your voice yet."));
+  if (b.status === "not_read") {
+    if (!anyConnection(s.connectors)) return setupStep(5, "optional", el("p", {}, withInfo(el("span", {}, "Connect Klaviyo or Shopify and we read your voice from them."), "Shadow runs without it: it sends nothing. The voice is needed before anything is sent.")));
+    return setupStep(5, "now", [el("p", { role: "status" }, "Reading your voice from Klaviyo and Shopify…"), skeleton({ width: "100%", height: "96px" })]);
+  }
+  const hard = (b.found || []).filter((f) => f.hard);
+  const rules = `${hard.map((f) => `${f.use} (${f.found}).`).join(" ")} Every email keeps your unsubscribe footer.`;
+  const read = `Read from ${int(b.messages_read)} of your messages: ${int(hard.length)} ${hard.length === 1 ? "rule" : "rules"} every message must follow.`;
+  const samples = Array.isArray(b.samples) ? b.samples : [];
+  const approve = button(SETUP_CLICKS[4], () => env.approveVoice(approve), {
+    kind: "primary",
+    disabled: !present(b.fingerprint),
+    ariaLabel: `Approve this voice: ${b.words}`,
+  });
+  return setupStep(
+    5,
+    "now",
+    [
+      el("p", {}, withInfo(el("span", {}, read), rules), (b.colours || []).length ? el("span", { class: "zt-swatches", "aria-hidden": "true" }, b.colours.slice(0, 4).map((c) => el("span", { class: "zt-swatch", style: { background: /^#[0-9a-f]{3,8}$/i.test(c) ? c : "transparent" } }))) : null),
+      samples.length ? el("ul", { class: "zt-samples", "aria-label": "Sample messages" }, samples.map(sampleCard)) : el("p", { class: "ob-muted" }, "No sample could be written that passes your rules yet."),
+    ],
+    [withInfo(approve, b.words)],
+  );
+}
+
+/** The end of the setup: Shadow runs, and the weekly routine from here. */
+function runningCard(s) {
+  const goal = s.accepted && s.accepted.goal;
+  if (!goal) return null;
+  return el(
+    "div",
+    { class: "zt-done", role: "status" },
+    el("p", { class: "zt-done-line" }, el("strong", {}, "Shadow is running."), " ", withInfo(el("span", {}, "It decides every day and sends nothing."), "Come back once a week: Live lists only what needs you, and when Shadow has earned it, one click turns on Autopilot.")),
+    link("See what it would do", `#/live/${encodeURIComponent(goal.goal_id)}`),
+  );
+}
+
+/** Where each step stands. Exactly one is "now" (the one with the primary button), or none once all are done. */
+function stepStates(s) {
+  const has = (k) => liveConnections(livePlatform(s.connectors, k)).length > 0;
+  const shop = has("shopify");
+  const klav = has("klaviyo");
+  const optional = Boolean(s.otherSource) && !shop && !klav;
+  const out = [];
+  out[0] = shop ? "done" : optional ? "optional" : "now";
+  out[1] = klav ? "done" : optional ? "optional" : shop ? "now" : "next";
+  const connected = (shop || optional) && (klav || optional);
+  out[2] = s.accepted ? "done" : connected && s.stage !== "limits" ? "now" : connected ? "done" : "later";
+  out[3] = s.accepted ? "done" : connected && s.stage === "limits" ? "now" : connected ? "next" : "later";
+  out[4] = s.brand && s.brand.status === "approved" ? "done" : s.accepted ? "now" : "later";
+  // A step left behind before its "done" (step 3 while its limits are confirmed) still reads done: its choice stands.
+  return out;
+}
+
+const SETUP_TITLE = "Five clicks to Shadow";
+
+/** The setup card: the five steps, the reading line, and "Shadow is running" once it is. */
+function setupCard(s, env) {
+  s.states = stepStates(s);
+  const steps = [platformStep(1, "shopify", s, env), platformStep(2, "klaviyo", s, env), goalStepSetup(s, env), limitsStep(s, env), voiceStep(s, env)];
+  const reading = readingLine(s.connectors);
+  if (reading) {
+    const at = s.states[1] === "done" ? 1 : 0;
+    steps[at].querySelector(".ob-step-body").append(reading);
+  }
+  const isNow = (node) => String(node.getAttribute("class") || "").split(/\s+/).includes("ob-step-now");
+  const current = steps.find(isNow);
+  if (current) current.setAttribute("aria-current", "step");
+  const done = s.states.filter((x) => x === "done").length;
+  return pathCard(SETUP_TITLE, `${int(done)} of 5 done`, [el("ol", { class: "ob-steps zt-steps" }, steps), runningCard(s)]);
+}
+
+/** Draw the setup, and keep it drawn as each click lands. */
+async function renderSetup(root, ctx, setup, goals, report, brand) {
+  const api = ctx.api;
+  const sources = report && Array.isArray(report.sources) ? report.sources : [];
+  const other = sources.find((x) => x && x.kind !== "shop");
+  const found = setupGoal(setup, goals);
+  const s = {
+    ...setup,
+    goals,
+    brand,
+    brandError: null,
+    accepted: found ? { goal: found.goal, mandate: found.record } : null,
+    chosen: setup.scan ? setup.scan.preselected_id : null,
+    stage: "pick",
+    limits: null,
+    limitsError: null,
+    offers: false,
+    marginPct: null,
+    otherSource: other && !anyConnection(setup.connectors) && Number(report.customers) > 0 ? (SOURCE_WORDS[other.kind] || "your files") : null,
+    setupLine: await sendingLine(api, setup.connectors),
+  };
+  const say = typeof ctx.toast === "function" ? ctx.toast : () => {};
+  const draw = () => clear(root, ...frame(setupCard(s, env), true));
+  const loadLimits = async () => {
+    s.limits = null;
+    s.limitsError = null;
+    draw();
+    try {
+      s.limits = await api.getLimits(s.chosen, { offers: s.offers, marginPct: s.marginPct });
+    } catch (err) {
+      s.limitsError = err;
+    }
+    draw();
+  };
+  const loadBrand = async () => {
+    const goalId = s.accepted && s.accepted.goal ? s.accepted.goal.goal_id : null;
+    try {
+      s.brand = typeof api.getBrand === "function" ? await api.getBrand(goalId) : null;
+      if (s.brand && s.brand.status === "not_read" && anyConnection(s.connectors) && typeof api.readBrand === "function") {
+        draw();
+        s.brand = await api.readBrand(goalId);
+      }
+    } catch (err) {
+      s.brandError = err;
+    }
+    draw();
+  };
+  const env = {
+    api,
+    toast: say,
+    redirect: typeof ctx.redirect === "function" ? ctx.redirect : (url) => window.location.assign(url),
+    rerender: () => render(root, ctx),
+    choose: (id) => {
+      s.chosen = id;
+      draw();
+    },
+    back: () => {
+      s.stage = "pick";
+      draw();
+    },
+    pick: () => {
+      s.stage = "limits";
+      remember(true);
+      loadLimits();
+    },
+    offers: (on) => {
+      s.offers = on;
+      loadLimits();
+    },
+    margin: async (value) => {
+      const v = Number(value);
+      if (!Number.isFinite(v) || v <= 0 || v >= 100) return;
+      s.marginPct = v;
+      try {
+        if (typeof api.answerMargin === "function") s.scan = (await api.answerMargin(v)) || s.scan;
+      } catch (err) {
+        say(`Couldn't keep your margin. ${err.message || ""}`.trim(), "critical");
+      }
+      loadLimits();
+    },
+    sign: async (btn) => {
+      btn.disabled = true;
+      try {
+        const body = { opportunity_id: s.chosen, offers: s.offers };
+        if (present(s.marginPct)) body.margin_pct = s.marginPct;
+        const out = await api.acceptProposal(body);
+        s.accepted = out;
+        say(out.words || "Shadow is running: it decides every day and sends nothing.", "good");
+        if (typeof ctx.refreshGoals === "function") await ctx.refreshGoals();
+        await loadBrand();
+      } catch (err) {
+        say(`Couldn't sign the limits. ${err.message || ""}`.trim(), "critical");
+        btn.disabled = false;
+      }
+    },
+    approveVoice: async (btn) => {
+      btn.disabled = true;
+      try {
+        s.brand = await api.approveBrand(s.brand.fingerprint);
+        remember(false);
+        say("Voice approved. Every message is checked against it.", "good");
+        draw();
+      } catch (err) {
+        say(`Couldn't approve the voice. ${err.message || ""}`.trim(), "critical");
+        btn.disabled = false;
+      }
+    },
+  };
+  draw();
+  if (s.accepted && (!s.brand || s.brand.status === "not_read")) await loadBrand();
+}
+
+const SOURCE_WORDS = { file: "your uploaded files", database: "your database", simulation: "the simulated sample shop", other: "another source" };
+
 // ---- the page --------------------------------------------------------------------------------------------------------
 // One question: where am I on the safe path, and what is next? The path is the biggest block (8 of 12 columns); the
 // ask (first run only), the honest status and the control promise sit in the rail beside it (under it on a phone).
@@ -457,13 +1107,26 @@ const frame = (path, hasGoals) => [pageHead({ title: TITLE, sub: SUB, info: SUB_
 export async function render(root, ctx) {
   clear(root, ...frame(pathCard("Your path", null, pathSkeleton()), true));
   const api = ctx.api;
-  const [goalsR, dataR] = await Promise.allSettled([api.listGoals(), typeof api.getDataReport === "function" ? api.getDataReport() : Promise.resolve(null)]);
+  const [goalsR, dataR] = await Promise.allSettled([
+    api.listGoals(),
+    typeof api.getDataReport === "function" ? api.getDataReport() : Promise.resolve(null),
+  ]);
   if (goalsR.status === "rejected") {
     const failed = pathCard("Your path", null, el("div", { class: "ob-error" }, errorBox("We couldn't load your goals.", goalsR.reason, { retry: () => render(root, ctx) })));
     clear(root, ...frame(failed, true));
     return;
   }
   const goals = Array.isArray(goalsR.value) ? goalsR.value : [];
+
+  // Zero-touch setup first: while nothing runs yet (or the goal set up here waits for its voice), this page is the setup.
+  const setup = await loadSetup(api, goals).catch(() => null);
+  let brand = null;
+  const mine = setup ? setupGoal(setup, goals) : null;
+  if (mine && typeof api.getBrand === "function") brand = await Promise.resolve(api.getBrand(mine.goal.goal_id)).catch(() => null);
+  if (wantsSetup(setup, goals, brand)) {
+    await renderSetup(root, ctx, setup, goals, valueOf(dataR), brand);
+    return;
+  }
   let goal = focusGoal(goals, ctx);
   if (goal && ctx.goal && ctx.goal.goal_id === goal.goal_id && ctx.goal !== goal) goal = { ...goal, ...ctx.goal };
 

@@ -25,6 +25,7 @@ bump is a read of this one file.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import date, timedelta
 from typing import Final
 
@@ -35,11 +36,15 @@ __all__ = [
     "API_VERSION",
     "AUTH_HEADER",
     "BULK_QUERIES",
+    "CONTACT_CONFIG",
     "LIVE_QUERIES",
     "OAUTH",
     "SCOPES",
     "SHOP_PATTERN",
+    "bulk_query",
+    "live_query",
     "normalize_shop",
+    "reads_contact",
     "shop_from",
 ]
 
@@ -174,6 +179,16 @@ PRODUCT_FIELDS: Final[str] = """
       priceRangeV2 { minVariantPrice { amount currencyCode } }
 """
 
+CONTACT_CONFIG: Final[str] = "contact"
+"""Connection setting: `read` also reads each customer's email address and phone number, so their
+Klaviyo profiles can be linked to them (`autonomy.connectors.identity`). Shopify gives these fields
+only to apps approved for protected customer data **level 2**; without that approval the query is
+refused, so it is off unless the setting says `read`. The address is used only to link profiles and
+is kept as a SHA-256 hash."""
+CUSTOMER_CONTACT_FIELDS: Final[str] = CUSTOMER_FIELDS.replace(
+    "defaultEmailAddress { ", "defaultEmailAddress { emailAddress "
+).replace("defaultPhoneNumber { ", "defaultPhoneNumber { phoneNumber ")
+
 MAX_QUERY_COST: Final[int] = 1000
 LIVE_PAGE_SIZE: Final[dict[str, int]] = {"customers": 100, "orders": 4, "products": 50}
 LINE_ITEMS_PER_ORDER: Final[int] = 20
@@ -306,3 +321,28 @@ TAGS_REMOVE: Final[str] = """
 mutation AutonomyTagsRemove($id: ID!, $tags: [String!]!) {
   tagsRemove(id: $id, tags: $tags) { node { id } userErrors { field message } }
 }"""
+
+
+def reads_contact(config: Mapping[str, str]) -> bool:
+    """Whether a connection reads customers' email and phone (`CONTACT_CONFIG`)."""
+    return (config.get(CONTACT_CONFIG) or "").strip().lower() == "read"
+
+
+def live_query(stream: str, config: Mapping[str, str]) -> str:
+    """The live query for a stream, with the contact fields when the connection reads them."""
+    text = LIVE_QUERIES[stream]
+    return (
+        text.replace(CUSTOMER_FIELDS, CUSTOMER_CONTACT_FIELDS)
+        if stream == "customers" and reads_contact(config)
+        else text
+    )
+
+
+def bulk_query(stream: str, config: Mapping[str, str]) -> str:
+    """The bulk export query for a stream (`{query}` still to fill), with contact fields when read."""
+    text = BULK_QUERIES[stream]
+    return (
+        text.replace(CUSTOMER_FIELDS, CUSTOMER_CONTACT_FIELDS)
+        if stream == "customers" and reads_contact(config)
+        else text
+    )

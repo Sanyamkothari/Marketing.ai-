@@ -1,0 +1,398 @@
+{
+  "as_of": "2026-10-20T08:00:00Z",
+  "currency": "USD",
+  "proposals": [
+    {
+      "opportunity_id": "opp_refill_due",
+      "kind": "repeat_purchase",
+      "title": "Refill reminders",
+      "why": "308 customers are due to reorder a product they buy again and again, and 147 more come due within 30 days; 25% of people like them reordered within a month.",
+      "audience_now": 308,
+      "reachable_now": 276,
+      "reached_in_month": 368,
+      "monthly_profit": {
+        "point": 60.1,
+        "low": 28.82,
+        "high": 94.34
+      },
+      "extra_orders": {
+        "point": 2.46,
+        "low": 1.26,
+        "high": 3.66
+      },
+      "message_cost": 0.74,
+      "contacts_lost": 3.7,
+      "base_rate": {
+        "point": 0.2462,
+        "low": 0.2086,
+        "high": 0.2881
+      },
+      "base_sample": 449,
+      "enough_history": true,
+      "not_enough": null,
+      "basis": [
+        {
+          "label": "People we never contact",
+          "value": "10% are left out of the money: they are what proves the effect",
+          "source": "the default share of people we never contact (autonomy/contracts Envelope)",
+          "assumed": true
+        },
+        {
+          "label": "Your buying rate",
+          "value": "25% (21% to 29%) of 449 people like them bought within 30 days (3 look-backs)",
+          "source": "your order history",
+          "assumed": false
+        },
+        {
+          "label": "Refill boost",
+          "value": "x1.49 on the message's lift while the refill window is open",
+          "source": "autonomy/decide/bidders.py REFILL_LIFT; docs/v2/CATALOG.md",
+          "assumed": true
+        },
+        {
+          "label": "What one message adds",
+          "value": "+0.67 points (0.34 to 1.00) to the chance of a purchase",
+          "source": "One e-mail added 0.45 points (0.23 to 0.67) to the chance of a purchase within 14 days, against sending nothing, in the randomised Hillstrom e-mail test (library/hillstrom-email/run_report.md)",
+          "assumed": true
+        },
+        {
+          "label": "Their average order",
+          "value": "$62 ($59 to $65)",
+          "source": "your order history",
+          "assumed": false
+        },
+        {
+          "label": "Margin",
+          "value": "40%",
+          "source": "your orders' margins",
+          "assumed": false
+        },
+        {
+          "label": "Message cost",
+          "value": "2 messages each at about 0.001 USD",
+          "source": "autonomy/decide/bidders.py DEFAULT_CHANNEL_COSTS",
+          "assumed": true
+        }
+      ],
+      "audience": {
+        "description": "Due to reorder a product they buy again and again",
+        "filters": [
+          {
+            "field": "scores.refill_window_open",
+            "op": "gte",
+            "value": 0.5
+          }
+        ]
+      },
+      "goal_text": "Refill reminders for 409 customers in the next 30 days: about $60 extra profit a month ($29 to $94)",
+      "budget": 1.0,
+      "currency": "USD",
+      "already_running": false,
+      "preselected": true,
+      "rank": 1
+    },
+    {
+      "opportunity_id": "opp_first_to_second",
+      "kind": "repeat_purchase",
+      "title": "Second purchase",
+      "why": "151 customers bought once 7 to 97 days ago, when your second orders happen, and only 22% of them usually do within a month.",
+      "audience_now": 151,
+      "reachable_now": 135,
+      "reached_in_month": 122,
+      "monthly_profit": {
+        "point": 13.27,
+        "low": 5.87,
+        "high": 22.18
+      },
+      "extra_orders": {
+        "point": 0.55,
+        "low": 0.28,
+        "high": 0.82
+      },
+      "message_cost": 0.24,
+      "contacts_lost": 1.2,
+      "base_rate": {
+        "point": 0.2192,
+        "low": 0.1776,
+        "high": 0.2673
+      },
+      "base_sample": 325,
+      "enough_history": true,
+      "not_enough": null,
+      "basis": [
+        {
+          "label": "People we never contact",
+          "value": "10% are left out of the money: they are what proves the effect",
+          "source": "the default share of people we never contact (autonomy/contracts Envelope)",
+          "assumed": true
+        },
+        {
+          "label": "Your buying rate",
+          "value": "22% (18% to 27%) of 325 people like them bought within 30 days (3 look-backs)",
+          "source": "your order history",
+          "assumed": false
+        },
+        {
+          "label": "What one message adds",
+          "value": "+0.45 points (0.23 to 0.67) to the chance of a purchase",
+          "source": "One e-mail added 0.45 points (0.23 to 0.67) to the chance of a purchase within 14 days, against sending nothing, in the randomised Hillstrom e-mail test (library/hillstrom-email/run_report.md)",
+          "assumed": true
+        },
+        {
+          "label": "Their average order",
+          "value": "$62 ($54 to $69)",
+          "source": "your order history",
+          "assumed": false
+        },
+        {
+          "label": "Margin",
+          "value": "40%",
+          "source": "your orders' margins",
+          "assumed": false
+        },
+        {
+          "label": "Message cost",
+          "value": "2 messages each at about 0.001 USD",
+          "source": "autonomy/decide/bidders.py DEFAULT_CHANNEL_COSTS",
+          "assumed": true
+        }
+      ],
+      "audience": {
+        "description": "Bought once, 7 to 97 days ago",
+        "filters": [
+          {
+            "field": "purchases",
+            "op": "eq",
+            "value": 1
+          },
+          {
+            "field": "last_purchase_at",
+            "op": "days_since_gt",
+            "value": 7
+          },
+          {
+            "field": "last_purchase_at",
+            "op": "days_since_lt",
+            "value": 97
+          }
+        ]
+      },
+      "goal_text": "Second purchase for 135 customers: about $13 extra profit a month ($6 to $22)",
+      "budget": 1.0,
+      "currency": "USD",
+      "already_running": false,
+      "preselected": false,
+      "rank": 2
+    },
+    {
+      "opportunity_id": "opp_vip_at_risk",
+      "kind": "retention",
+      "title": "Keep VIPs who are slowing",
+      "why": "71 of your top-spending customers are overdue for their next order; 31% of people like them bought within a month.",
+      "audience_now": 71,
+      "reachable_now": 67,
+      "reached_in_month": 60,
+      "monthly_profit": {
+        "point": 8.69,
+        "low": 3.97,
+        "high": 14.21
+      },
+      "extra_orders": {
+        "point": 0.27,
+        "low": 0.14,
+        "high": 0.4
+      },
+      "message_cost": 0.12,
+      "contacts_lost": 0.6,
+      "base_rate": {
+        "point": 0.3086,
+        "low": 0.2306,
+        "high": 0.3993
+      },
+      "base_sample": 112,
+      "enough_history": true,
+      "not_enough": null,
+      "basis": [
+        {
+          "label": "People we never contact",
+          "value": "10% are left out of the money: they are what proves the effect",
+          "source": "the default share of people we never contact (autonomy/contracts Envelope)",
+          "assumed": true
+        },
+        {
+          "label": "Your buying rate",
+          "value": "31% (23% to 40%) of 112 people like them bought within 30 days (3 look-backs)",
+          "source": "your order history",
+          "assumed": false
+        },
+        {
+          "label": "What one message adds",
+          "value": "+0.45 points (0.23 to 0.67) to the chance of a purchase",
+          "source": "One e-mail added 0.45 points (0.23 to 0.67) to the chance of a purchase within 14 days, against sending nothing, in the randomised Hillstrom e-mail test (library/hillstrom-email/run_report.md)",
+          "assumed": true
+        },
+        {
+          "label": "Their average order",
+          "value": "$82 ($74 to $89)",
+          "source": "your order history",
+          "assumed": false
+        },
+        {
+          "label": "Margin",
+          "value": "40%",
+          "source": "your orders' margins",
+          "assumed": false
+        },
+        {
+          "label": "Message cost",
+          "value": "2 messages each at about 0.001 USD",
+          "source": "autonomy/decide/bidders.py DEFAULT_CHANNEL_COSTS",
+          "assumed": true
+        }
+      ],
+      "audience": {
+        "description": "Top fifth by spend (at least 220), quiet for longer than usual",
+        "filters": [
+          {
+            "field": "purchases",
+            "op": "gte",
+            "value": 2
+          },
+          {
+            "field": "revenue",
+            "op": "gte",
+            "value": 220.21
+          },
+          {
+            "field": "last_purchase_at",
+            "op": "days_since_gt",
+            "value": 37
+          },
+          {
+            "field": "last_purchase_at",
+            "op": "days_since_lt",
+            "value": 156
+          }
+        ]
+      },
+      "goal_text": "Keep VIPs who are slowing for 67 customers: about $9 extra profit a month ($4 to $14)",
+      "budget": 1.0,
+      "currency": "USD",
+      "already_running": false,
+      "preselected": false,
+      "rank": 3
+    },
+    {
+      "opportunity_id": "opp_win_back",
+      "kind": "win_back",
+      "title": "Win back lapsed customers",
+      "why": "100 customers have gone longer than their own buying rhythm says they should; 20% of people like them came back within a month.",
+      "audience_now": 100,
+      "reachable_now": 88,
+      "reached_in_month": 79,
+      "monthly_profit": {
+        "point": 8.55,
+        "low": 3.63,
+        "high": 14.75
+      },
+      "extra_orders": {
+        "point": 0.36,
+        "low": 0.18,
+        "high": 0.53
+      },
+      "message_cost": 0.16,
+      "contacts_lost": 0.8,
+      "base_rate": {
+        "point": 0.2047,
+        "low": 0.1486,
+        "high": 0.2753
+      },
+      "base_sample": 154,
+      "enough_history": true,
+      "not_enough": null,
+      "basis": [
+        {
+          "label": "People we never contact",
+          "value": "10% are left out of the money: they are what proves the effect",
+          "source": "the default share of people we never contact (autonomy/contracts Envelope)",
+          "assumed": true
+        },
+        {
+          "label": "Your buying rate",
+          "value": "20% (15% to 28%) of 154 people like them bought within 30 days (3 look-backs)",
+          "source": "your order history",
+          "assumed": false
+        },
+        {
+          "label": "What one message adds",
+          "value": "+0.45 points (0.23 to 0.67) to the chance of a purchase",
+          "source": "One e-mail added 0.45 points (0.23 to 0.67) to the chance of a purchase within 14 days, against sending nothing, in the randomised Hillstrom e-mail test (library/hillstrom-email/run_report.md)",
+          "assumed": true
+        },
+        {
+          "label": "Their average order",
+          "value": "$61 ($52 to $70)",
+          "source": "your order history",
+          "assumed": false
+        },
+        {
+          "label": "Margin",
+          "value": "40%",
+          "source": "your orders' margins",
+          "assumed": false
+        },
+        {
+          "label": "Message cost",
+          "value": "2 messages each at about 0.001 USD",
+          "source": "autonomy/decide/bidders.py DEFAULT_CHANNEL_COSTS",
+          "assumed": true
+        }
+      ],
+      "audience": {
+        "description": "Bought before, nothing for 156 to 365 days (past the point by which 90% of your returning customers come back)",
+        "filters": [
+          {
+            "field": "purchases",
+            "op": "gte",
+            "value": 1
+          },
+          {
+            "field": "last_purchase_at",
+            "op": "days_since_gt",
+            "value": 156
+          },
+          {
+            "field": "last_purchase_at",
+            "op": "days_since_lt",
+            "value": 365
+          }
+        ]
+      },
+      "goal_text": "Win back lapsed customers for 88 customers: about $9 extra profit a month ($4 to $15)",
+      "budget": 1.0,
+      "currency": "USD",
+      "already_running": false,
+      "preselected": false,
+      "rank": 4
+    }
+  ],
+  "preselected_id": "opp_refill_due",
+  "history_days": 236.5,
+  "buyers": 808,
+  "orders": 2023,
+  "enough_history": true,
+  "not_enough": null,
+  "margin": {
+    "rate": 0.4,
+    "source": "your orders' margins",
+    "from_data": true,
+    "orders_with_margin": 2023,
+    "orders": 2023
+  },
+  "skipped": [
+    "Cart and browse follow-up: no cart or product-view events from your tools yet (Klaviyo's Added to Cart and Viewed Product bring them)."
+  ],
+  "notes": [
+    "Money is extra profit over the next 30 days if each person gets one message. The range puts the low ends of every input together, and the high ends together, so it is wider than any one 95% interval; people can be in more than one group, so the groups do not add up."
+  ]
+}

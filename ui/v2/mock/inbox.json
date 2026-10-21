@@ -1,0 +1,84 @@
+{
+  "as_of": "2026-10-20T08:00:00Z",
+  "items": [
+    {
+      "item_id": "inbox_safety_wa",
+      "business_id": "demo",
+      "cause": "safety_stop:goal_winback:whatsapp",
+      "kind": "safety_stop",
+      "goal_id": "goal_winback",
+      "sentence": "WhatsApp is paused for this goal: its quality rating turned yellow. Email carries on.",
+      "action": "Resume WhatsApp once the rating is green again.",
+      "button": {
+        "label": "Resume WhatsApp",
+        "action": "resume_channel",
+        "target": null,
+        "goal_id": "goal_winback",
+        "connection_id": null,
+        "channel": "whatsapp"
+      },
+      "detail": "Autonomy paused WhatsApp on its own when Meta's quality rating for your number turned yellow. Nothing goes out on WhatsApp for this goal until you resume it; email keeps running inside the plan.",
+      "money": null,
+      "currency": "USD",
+      "opened_at": "2026-10-20T12:40:00Z",
+      "last_seen_at": "2026-10-20T08:00:00Z",
+      "resolved_at": null,
+      "resolved_by": null,
+      "episode": 1,
+      "reopened": 0,
+      "fingerprint": "alert_wa_quality_1020",
+      "handled_fingerprint": null,
+      "missing_since": null,
+      "clear_after_s": 0.0,
+      "refs": [
+        "alert_wa_quality_1020"
+      ]
+    },
+    {
+      "item_id": "inbox_customer_replies",
+      "business_id": "demo",
+      "cause": "customer:demo",
+      "kind": "customer",
+      "goal_id": null,
+      "sentence": "2 customers replied and need a person: they asked whether the house blend has changed.",
+      "action": "Answer them in your inbox, then mark this as read.",
+      "button": {
+        "label": "Mark as read",
+        "action": "mark_handled",
+        "target": null,
+        "goal_id": null,
+        "connection_id": null,
+        "channel": null
+      },
+      "detail": "The agent wasn't sure how to answer, so it handed both replies to a person instead of guessing. Nothing more is sent to these two customers until you have answered.",
+      "money": null,
+      "currency": "USD",
+      "opened_at": "2026-10-20T10:15:00Z",
+      "last_seen_at": "2026-10-20T08:00:00Z",
+      "resolved_at": null,
+      "resolved_by": null,
+      "episode": 1,
+      "reopened": 0,
+      "fingerprint": "alert_question_1020",
+      "handled_fingerprint": null,
+      "missing_since": null,
+      "clear_after_s": 0.0,
+      "refs": [
+        "alert_question_1020"
+      ]
+    }
+  ],
+  "count": 2,
+  "this_week": 2,
+  "quiet": {
+    "title": "Handled without you",
+    "body": "2 things needed you this week. Handled on their own: 1 safety pause (email bounces) that cleared in 2 hours. Noted, nothing to do: 1 learning note.",
+    "numbers": {
+      "inbox_items": 2.0,
+      "cleared_on_their_own": 1.0,
+      "notes_learning": 1.0,
+      "faults_for_operator": 0.0
+    }
+  },
+  "words": "2 things need you."
+}

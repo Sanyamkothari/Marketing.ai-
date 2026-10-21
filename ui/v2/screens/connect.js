@@ -11,6 +11,7 @@
 // server does not report says so in words.
 
 import { card, clear, dash, describe, el, emptyState, errorBox, freshness, int, notice, num, pageHead, pct, pill, present, skeletonKpis, skeletonLines, table, titleInfo, toast, when, withInfo } from "../components.js";
+import { SETUP_KEY } from "./onboarding.js";
 
 const V1_APP = "/";
 const V1_CONNECTIONS = "/#/connections";
@@ -469,15 +470,25 @@ function toolsCard(overview, error, env) {
 }
 
 /** After the platform's sign-in, the callback sends the browser to `#/connect?connected=shopify` (or
- * `?connect_error=...`): say so once, then tidy the address. */
+ * `?connect_error=...`): say so once, then tidy the address. True when there was an outcome to say. */
 function connectOutcome(say) {
-  if (typeof location === "undefined" || !location.hash || !location.hash.includes("?")) return;
+  if (typeof location === "undefined" || !location.hash || !location.hash.includes("?")) return false;
   const params = new URLSearchParams(location.hash.split("?")[1]);
   const kind = params.get("connected") || params.get("kind");
   if (params.get("connected")) say(`${platformName(kind)} is connected. The first sync has started.`, "good");
   else if (params.get("connect_error")) say(params.get("connect_error"), "critical");
-  else return;
+  else return false;
   if (typeof history !== "undefined" && history.replaceState) history.replaceState(null, "", "#/connect");
+  return true;
+}
+
+/** True while the five-click setup on Getting started is under way (it set the flag before the sign-in round trip). */
+function settingUp() {
+  try {
+    return typeof sessionStorage !== "undefined" && sessionStorage.getItem(SETUP_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 /** True when every source the API reports is the simulated sample shop. */
@@ -801,7 +812,11 @@ export async function render(root, ctx) {
     state: { waiting: false, hasData: false },
   };
   clear(root, ...skeletonScreen(env));
-  connectOutcome(say);
+  // Back from a platform's sign-in in the middle of the setup: straight on to the next step, no extra click.
+  if (connectOutcome(say) && settingUp() && typeof ctx.navigate === "function") {
+    ctx.navigate("start");
+    return;
+  }
   const retry = () => render(root, ctx);
   const [report, channels, health, limits, platforms] = await Promise.all([
     call(api, "getDataReport"),

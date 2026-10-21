@@ -75,6 +75,7 @@ __all__ = [
     "StreamPage",
     "StreamSpec",
     "SyncWindow",
+    "Teardown",
     "TransientFailure",
     "WebhookDelivery",
     "WebhookTopic",
@@ -346,6 +347,14 @@ class WebhookDelivery:
 
 
 @dataclass(frozen=True)
+class Teardown:
+    """What `SaasConnector.teardown` did on the platform, and what a person must still do there, in words."""
+
+    done: tuple[str, ...] = ()
+    left: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class WriteResult:
     accepted: bool
     provider_id: str | None = None
@@ -463,6 +472,14 @@ class SaasConnector:
     ) -> tuple[str, ...]:
         """Make sure every topic is subscribed to `callback_url`; idempotent; return the topics now live."""
         return ()
+
+    def teardown(self, ctx: ConnectionContext, tokens: TokenSet | None) -> Teardown:  # noqa: ARG002
+        """A person disconnected: remove what Autonomy set up on the platform, then revoke our access.
+
+        Called once, while the connection still works, before its tokens are forgotten. Best effort
+        and it must not raise for a platform refusal: what the API does not allow comes back in
+        `Teardown.left` as one plain instruction. Default: nothing to remove."""
+        return Teardown()
 
     # -- writing ----------------------------------------------------------------------------------
 

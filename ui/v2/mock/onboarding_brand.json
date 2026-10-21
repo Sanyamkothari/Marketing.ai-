@@ -1,0 +1,220 @@
+{
+  "status": "waiting",
+  "words": "Approve these 3 messages and Autonomy writes like this from now on.",
+  "shop_name": "Sample Shop",
+  "read_at": "2026-10-20T07:58:00Z",
+  "sources": [
+    "Klaviyo: 4 templates, 10 email campaigns, 6 text campaigns",
+    "Shopify: Sample Shop, 3 products"
+  ],
+  "messages_read": 20,
+  "found": [
+    {
+      "key": "greeting",
+      "label": "Greeting",
+      "found": "'Hey {first name},' opens 14 of 14 emails",
+      "use": "Messages open 'Hey {first name},'",
+      "hard": false,
+      "source": "Klaviyo templates and campaigns",
+      "seen": 14,
+      "of": 14
+    },
+    {
+      "key": "sign_off",
+      "label": "Sign-off",
+      "found": "'Cheers, The Sample Shop team' closes 14 of 14 emails",
+      "use": "Emails close 'Cheers, The Sample Shop team'",
+      "hard": false,
+      "source": "Klaviyo templates and campaigns",
+      "seen": 14,
+      "of": 14
+    },
+    {
+      "key": "subject_max",
+      "label": "Subject length",
+      "found": "9 in 10 of your 10 subjects are 39 characters or fewer",
+      "use": "Subjects at most 40 characters",
+      "hard": true,
+      "source": "Klaviyo campaigns",
+      "seen": 10,
+      "of": 10
+    },
+    {
+      "key": "sms_body_max",
+      "label": "Text message length",
+      "found": "9 in 10 of your 6 text messages are 52 characters or fewer",
+      "use": "Text messages at most 120 characters",
+      "hard": true,
+      "source": "Klaviyo SMS campaigns",
+      "seen": 6,
+      "of": 6
+    },
+    {
+      "key": "max_emoji",
+      "label": "Emoji",
+      "found": "None of your 20 messages uses an emoji",
+      "use": "No emoji",
+      "hard": true,
+      "source": "Klaviyo templates and campaigns",
+      "seen": 0,
+      "of": 20
+    },
+    {
+      "key": "max_exclamations",
+      "label": "Exclamation marks",
+      "found": "9 in 10 of your 20 messages use none",
+      "use": "No exclamation marks",
+      "hard": true,
+      "source": "Klaviyo templates and campaigns",
+      "seen": 20,
+      "of": 20
+    },
+    {
+      "key": "banned_words",
+      "label": "Words you never use",
+      "found": "34 common hype words appear in none of your 20 messages",
+      "use": "Never: cheap, bargain, deal, deals, hurry, act now, act fast, buy now and more",
+      "hard": true,
+      "source": "Klaviyo templates and campaigns",
+      "seen": 0,
+      "of": 20
+    },
+    {
+      "key": "discount_kinds",
+      "label": "Discount style",
+      "found": "4 of your 20 messages state a discount, as percentages; most often '15% off' (4 times)",
+      "use": "Offers only as percentages; no money off and free shipping",
+      "hard": true,
+      "source": "Klaviyo templates and campaigns",
+      "seen": 4,
+      "of": 20
+    },
+    {
+      "key": "words_they_use",
+      "label": "Words you use",
+      "found": "roast, blend, fresh, brew, morning, beans appear across your messages",
+      "use": "The Creative uses your words where they fit",
+      "hard": false,
+      "source": "Klaviyo templates and campaigns",
+      "seen": 20,
+      "of": 20
+    },
+    {
+      "key": "tone",
+      "label": "Tone",
+      "found": "5.2 contractions per 100 words, 0.0 '!' and 0.0 emoji per message",
+      "use": "Friendly: casual, calm, neutral",
+      "hard": false,
+      "source": "Klaviyo templates and campaigns",
+      "seen": 20,
+      "of": 20
+    },
+    {
+      "key": "logo",
+      "label": "Logo",
+      "found": "Your logo, from your Shopify brand settings",
+      "use": "Shown on emails we send",
+      "hard": false,
+      "source": "your Shopify brand settings",
+      "seen": 1,
+      "of": 1
+    },
+    {
+      "key": "colours",
+      "label": "Colours",
+      "found": "#1f6f43 and #f2b705, from your Shopify brand settings",
+      "use": "Used for buttons and links in our emails",
+      "hard": false,
+      "source": "your Shopify brand settings",
+      "seen": 1,
+      "of": 1
+    },
+    {
+      "key": "assets",
+      "label": "Product photos",
+      "found": "3 product photos from the 3 active products read (the most recently updated first)",
+      "use": "Messages may show them once you approve this voice",
+      "hard": false,
+      "source": "Shopify products",
+      "seen": 3,
+      "of": 3
+    }
+  ],
+  "colours": [
+    "#1f6f43",
+    "#f2b705"
+  ],
+  "logo_url": "https://sample-shop.invalid/logo.png",
+  "logo_alt": "Sample Shop",
+  "assets_count": 3,
+  "assets": [
+    {
+      "asset_id": "shopify-sample-shop-11-1100",
+      "url": "https://sample-shop.invalid/products/11.jpg",
+      "alt_text": "House Blend, 1 kg",
+      "title": "House Blend, 1 kg",
+      "source": "Shopify product gid://shopify/Product/11"
+    },
+    {
+      "asset_id": "shopify-sample-shop-12-1200",
+      "url": "https://sample-shop.invalid/products/12.jpg",
+      "alt_text": "Single Origin Ethiopia, 250 g",
+      "title": "Single Origin Ethiopia, 250 g",
+      "source": "Shopify product gid://shopify/Product/12"
+    },
+    {
+      "asset_id": "shopify-sample-shop-13-1300",
+      "url": "https://sample-shop.invalid/products/13.jpg",
+      "alt_text": "Decaf Colombia, 500 g",
+      "title": "Decaf Colombia, 500 g",
+      "source": "Shopify product gid://shopify/Product/13"
+    }
+  ],
+  "goal": null,
+  "samples": [
+    {
+      "content_id": "ci_e623356445272c39e52d",
+      "channel": "email",
+      "theme": "reminder",
+      "format": "text_image",
+      "offer_label": null,
+      "subject": "Still thinking about {{top_category}}?",
+      "body": "Hey {{first_name}}, your favourites in {{top_category}} are still here when you are ready.\n\nCheers,\nThe Sample Shop team\n\nYou can unsubscribe at any time.",
+      "preview_subject": "Still thinking about coffee?",
+      "preview_body": "Hey [first name], your favourites in coffee are still here when you are ready.\n\nCheers,\nThe Sample Shop team\n\nYou can unsubscribe at any time.",
+      "image_url": "https://sample-shop.invalid/products/11.jpg",
+      "image_alt": "House Blend, 1 kg"
+    },
+    {
+      "content_id": "ci_e68dff0ac04fcaf58a41",
+      "channel": "email",
+      "theme": "quality",
+      "format": "text_image",
+      "offer_label": null,
+      "subject": "Made to last, {{first_name}}",
+      "body": "Hey {{first_name}}, everything in {{top_category}} at {{store_name}} is chosen with care.\n\nCheers,\nThe Sample Shop team\n\nYou can unsubscribe at any time.",
+      "preview_subject": "Made to last, [first name]",
+      "preview_body": "Hey [first name], everything in coffee at Sample Shop is chosen with care.\n\nCheers,\nThe Sample Shop team\n\nYou can unsubscribe at any time.",
+      "image_url": "https://sample-shop.invalid/products/11.jpg",
+      "image_alt": "House Blend, 1 kg"
+    },
+    {
+      "content_id": "ci_28f1ab88ad137a77f5ea",
+      "channel": "email",
+      "theme": "savings",
+      "format": "text_image",
+      "offer_label": "15% off",
+      "subject": "Ready when you are, {{first_name}}",
+      "body": "Hey {{first_name}}, a good moment to stock up on {{top_category}}. Your offer: {{offer_label}}.\n\nCheers,\nThe Sample Shop team\n\nYou can unsubscribe at any time.",
+      "preview_subject": "Ready when you are, [first name]",
+      "preview_body": "Hey [first name], a good moment to stock up on coffee. Your offer: 15% off.\n\nCheers,\nThe Sample Shop team\n\nYou can unsubscribe at any time.",
+      "image_url": "https://sample-shop.invalid/products/11.jpg",
+      "image_alt": "House Blend, 1 kg"
+    }
+  ],
+  "written_by": "template",
+  "fingerprint": "d084937007fd8d888efdd463",
+  "approved_by": null,
+  "approved_at": null,
+  "notes": []
+}

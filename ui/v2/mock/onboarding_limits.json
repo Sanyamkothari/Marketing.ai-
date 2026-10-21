@@ -1,0 +1,346 @@
+{
+  "opp_refill_due": {
+    "as_of": "2026-10-20T08:00:00Z",
+    "currency": "USD",
+    "opportunity_id": "opp_refill_due",
+    "limits": [
+      {
+        "key": "cadence",
+        "label": "How often we message",
+        "found": "Customers received a median of 1.5 messages a week (yours and ours; 90% got at most 3.5), across 480 people over 8 weeks.",
+        "use": "At most 2 messages of ours a week per customer, on top of yours.",
+        "description": "Counted from 7,192 delivered messages. We add no more than you already send a week (rounded up), at least 1 and at most the starting cap of 2; and only 1 when you already send 2 or more.",
+        "source": "your email tool's delivery history",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "discount_depth",
+        "label": "Discounts",
+        "found": "Your discounted orders took a median 10% off (334 orders, last 12 months).",
+        "use": "Never deeper than 10%. Offers stay off at the start; turning them on is one switch.",
+        "description": "The deepest offer the agent may ever make is your own usual depth. Even then it offers one only to people the evidence says need it, and the margin floor below still applies.",
+        "source": "your orders' discounts",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "discount_frequency",
+        "label": "How often you discount",
+        "found": "17% of your 2,023 orders in the last 12 months used a discount.",
+        "use": "Shown for reference: the mandate cannot cap offers per customer yet, so offers start off.",
+        "description": "This is not a hard limit: a mandate has no per-customer offer frequency field. The message cap and the agent's own rule (offer only when it pays for itself) are what hold it.",
+        "source": "your orders' discounts",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "margin",
+        "label": "Margin",
+        "found": "40% gross margin across 2,023 orders that carry one.",
+        "use": "Size every goal at 40%; an offer may never take an order below a 30% margin.",
+        "description": "Margin turns extra orders into extra profit, and sets the floor any offer must respect: your margin less your usual discount.",
+        "source": "your orders' margins",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "quiet_hours",
+        "label": "Quiet hours",
+        "found": "Only 0 of 1,200 customers have a known time zone.",
+        "use": "No messages from 21:00 to 09:00, in UTC for anyone whose zone we do not know.",
+        "description": "With few known time zones we fall back to UTC, the safe choice for a shop we cannot place yet. 3% of their 1,231 opens and clicks fell in those hours.",
+        "source": "default: autonomy/mandate QuietHours",
+        "from_data": false,
+        "question": null
+      },
+      {
+        "key": "budget",
+        "label": "Budget",
+        "found": "About 129 USD a month in discounts and 3,853 messages a month (last 90 days of orders, last 8 weeks of sends).",
+        "use": "1 USD for the first 30 days: 368 people x 2 messages and no offers, 1% of what you give in discounts today.",
+        "description": "Messages are costed at about 0.001 USD per e-mail (documented default). Offers, when on, are budgeted for everyone who would buy and redeem them, and never above what you already give in discounts in a month.",
+        "source": "your orders and sends, and the chosen goal",
+        "from_data": true,
+        "question": null
+      }
+    ],
+    "terms": {
+      "max_touches": 2,
+      "window_days": 7,
+      "quiet_start": 21,
+      "quiet_end": 9,
+      "timezone": "UTC",
+      "margin_rate": 0.4,
+      "margin_floor_pct": 0.3,
+      "max_offer_pct": 0.1,
+      "offers_on": false,
+      "budget_ceiling": 1.0,
+      "currency": "USD",
+      "channels": [
+        "email"
+      ],
+      "valid_days": 30
+    },
+    "questions": [],
+    "notes": []
+  },
+  "opp_first_to_second": {
+    "as_of": "2026-10-20T08:00:00Z",
+    "currency": "USD",
+    "opportunity_id": "opp_first_to_second",
+    "limits": [
+      {
+        "key": "cadence",
+        "label": "How often we message",
+        "found": "Customers received a median of 1.5 messages a week (yours and ours; 90% got at most 3.5), across 480 people over 8 weeks.",
+        "use": "At most 2 messages of ours a week per customer, on top of yours.",
+        "description": "Counted from 7,192 delivered messages. We add no more than you already send a week (rounded up), at least 1 and at most the starting cap of 2; and only 1 when you already send 2 or more.",
+        "source": "your email tool's delivery history",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "discount_depth",
+        "label": "Discounts",
+        "found": "Your discounted orders took a median 10% off (334 orders, last 12 months).",
+        "use": "Never deeper than 10%. Offers stay off at the start; turning them on is one switch.",
+        "description": "The deepest offer the agent may ever make is your own usual depth. Even then it offers one only to people the evidence says need it, and the margin floor below still applies.",
+        "source": "your orders' discounts",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "discount_frequency",
+        "label": "How often you discount",
+        "found": "17% of your 2,023 orders in the last 12 months used a discount.",
+        "use": "Shown for reference: the mandate cannot cap offers per customer yet, so offers start off.",
+        "description": "This is not a hard limit: a mandate has no per-customer offer frequency field. The message cap and the agent's own rule (offer only when it pays for itself) are what hold it.",
+        "source": "your orders' discounts",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "margin",
+        "label": "Margin",
+        "found": "40% gross margin across 2,023 orders that carry one.",
+        "use": "Size every goal at 40%; an offer may never take an order below a 30% margin.",
+        "description": "Margin turns extra orders into extra profit, and sets the floor any offer must respect: your margin less your usual discount.",
+        "source": "your orders' margins",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "quiet_hours",
+        "label": "Quiet hours",
+        "found": "Only 0 of 1,200 customers have a known time zone.",
+        "use": "No messages from 21:00 to 09:00, in UTC for anyone whose zone we do not know.",
+        "description": "With few known time zones we fall back to UTC, the safe choice for a shop we cannot place yet. 3% of their 1,231 opens and clicks fell in those hours.",
+        "source": "default: autonomy/mandate QuietHours",
+        "from_data": false,
+        "question": null
+      },
+      {
+        "key": "budget",
+        "label": "Budget",
+        "found": "About 129 USD a month in discounts and 3,853 messages a month (last 90 days of orders, last 8 weeks of sends).",
+        "use": "1 USD for the first 30 days: 122 people x 2 messages and no offers, 1% of what you give in discounts today.",
+        "description": "Messages are costed at about 0.001 USD per e-mail (documented default). Offers, when on, are budgeted for everyone who would buy and redeem them, and never above what you already give in discounts in a month.",
+        "source": "your orders and sends, and the chosen goal",
+        "from_data": true,
+        "question": null
+      }
+    ],
+    "terms": {
+      "max_touches": 2,
+      "window_days": 7,
+      "quiet_start": 21,
+      "quiet_end": 9,
+      "timezone": "UTC",
+      "margin_rate": 0.4,
+      "margin_floor_pct": 0.3,
+      "max_offer_pct": 0.1,
+      "offers_on": false,
+      "budget_ceiling": 1.0,
+      "currency": "USD",
+      "channels": [
+        "email"
+      ],
+      "valid_days": 30
+    },
+    "questions": [],
+    "notes": []
+  },
+  "opp_vip_at_risk": {
+    "as_of": "2026-10-20T08:00:00Z",
+    "currency": "USD",
+    "opportunity_id": "opp_vip_at_risk",
+    "limits": [
+      {
+        "key": "cadence",
+        "label": "How often we message",
+        "found": "Customers received a median of 1.5 messages a week (yours and ours; 90% got at most 3.5), across 480 people over 8 weeks.",
+        "use": "At most 2 messages of ours a week per customer, on top of yours.",
+        "description": "Counted from 7,192 delivered messages. We add no more than you already send a week (rounded up), at least 1 and at most the starting cap of 2; and only 1 when you already send 2 or more.",
+        "source": "your email tool's delivery history",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "discount_depth",
+        "label": "Discounts",
+        "found": "Your discounted orders took a median 10% off (334 orders, last 12 months).",
+        "use": "Never deeper than 10%. Offers stay off at the start; turning them on is one switch.",
+        "description": "The deepest offer the agent may ever make is your own usual depth. Even then it offers one only to people the evidence says need it, and the margin floor below still applies.",
+        "source": "your orders' discounts",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "discount_frequency",
+        "label": "How often you discount",
+        "found": "17% of your 2,023 orders in the last 12 months used a discount.",
+        "use": "Shown for reference: the mandate cannot cap offers per customer yet, so offers start off.",
+        "description": "This is not a hard limit: a mandate has no per-customer offer frequency field. The message cap and the agent's own rule (offer only when it pays for itself) are what hold it.",
+        "source": "your orders' discounts",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "margin",
+        "label": "Margin",
+        "found": "40% gross margin across 2,023 orders that carry one.",
+        "use": "Size every goal at 40%; an offer may never take an order below a 30% margin.",
+        "description": "Margin turns extra orders into extra profit, and sets the floor any offer must respect: your margin less your usual discount.",
+        "source": "your orders' margins",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "quiet_hours",
+        "label": "Quiet hours",
+        "found": "Only 0 of 1,200 customers have a known time zone.",
+        "use": "No messages from 21:00 to 09:00, in UTC for anyone whose zone we do not know.",
+        "description": "With few known time zones we fall back to UTC, the safe choice for a shop we cannot place yet. 3% of their 1,231 opens and clicks fell in those hours.",
+        "source": "default: autonomy/mandate QuietHours",
+        "from_data": false,
+        "question": null
+      },
+      {
+        "key": "budget",
+        "label": "Budget",
+        "found": "About 129 USD a month in discounts and 3,853 messages a month (last 90 days of orders, last 8 weeks of sends).",
+        "use": "1 USD for the first 30 days: 60 people x 2 messages and no offers, 1% of what you give in discounts today.",
+        "description": "Messages are costed at about 0.001 USD per e-mail (documented default). Offers, when on, are budgeted for everyone who would buy and redeem them, and never above what you already give in discounts in a month.",
+        "source": "your orders and sends, and the chosen goal",
+        "from_data": true,
+        "question": null
+      }
+    ],
+    "terms": {
+      "max_touches": 2,
+      "window_days": 7,
+      "quiet_start": 21,
+      "quiet_end": 9,
+      "timezone": "UTC",
+      "margin_rate": 0.4,
+      "margin_floor_pct": 0.3,
+      "max_offer_pct": 0.1,
+      "offers_on": false,
+      "budget_ceiling": 1.0,
+      "currency": "USD",
+      "channels": [
+        "email"
+      ],
+      "valid_days": 30
+    },
+    "questions": [],
+    "notes": []
+  },
+  "opp_win_back": {
+    "as_of": "2026-10-20T08:00:00Z",
+    "currency": "USD",
+    "opportunity_id": "opp_win_back",
+    "limits": [
+      {
+        "key": "cadence",
+        "label": "How often we message",
+        "found": "Customers received a median of 1.5 messages a week (yours and ours; 90% got at most 3.5), across 480 people over 8 weeks.",
+        "use": "At most 2 messages of ours a week per customer, on top of yours.",
+        "description": "Counted from 7,192 delivered messages. We add no more than you already send a week (rounded up), at least 1 and at most the starting cap of 2; and only 1 when you already send 2 or more.",
+        "source": "your email tool's delivery history",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "discount_depth",
+        "label": "Discounts",
+        "found": "Your discounted orders took a median 10% off (334 orders, last 12 months).",
+        "use": "Never deeper than 10%. Offers stay off at the start; turning them on is one switch.",
+        "description": "The deepest offer the agent may ever make is your own usual depth. Even then it offers one only to people the evidence says need it, and the margin floor below still applies.",
+        "source": "your orders' discounts",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "discount_frequency",
+        "label": "How often you discount",
+        "found": "17% of your 2,023 orders in the last 12 months used a discount.",
+        "use": "Shown for reference: the mandate cannot cap offers per customer yet, so offers start off.",
+        "description": "This is not a hard limit: a mandate has no per-customer offer frequency field. The message cap and the agent's own rule (offer only when it pays for itself) are what hold it.",
+        "source": "your orders' discounts",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "margin",
+        "label": "Margin",
+        "found": "40% gross margin across 2,023 orders that carry one.",
+        "use": "Size every goal at 40%; an offer may never take an order below a 30% margin.",
+        "description": "Margin turns extra orders into extra profit, and sets the floor any offer must respect: your margin less your usual discount.",
+        "source": "your orders' margins",
+        "from_data": true,
+        "question": null
+      },
+      {
+        "key": "quiet_hours",
+        "label": "Quiet hours",
+        "found": "Only 0 of 1,200 customers have a known time zone.",
+        "use": "No messages from 21:00 to 09:00, in UTC for anyone whose zone we do not know.",
+        "description": "With few known time zones we fall back to UTC, the safe choice for a shop we cannot place yet. 3% of their 1,231 opens and clicks fell in those hours.",
+        "source": "default: autonomy/mandate QuietHours",
+        "from_data": false,
+        "question": null
+      },
+      {
+        "key": "budget",
+        "label": "Budget",
+        "found": "About 129 USD a month in discounts and 3,853 messages a month (last 90 days of orders, last 8 weeks of sends).",
+        "use": "1 USD for the first 30 days: 79 people x 2 messages and no offers, 1% of what you give in discounts today.",
+        "description": "Messages are costed at about 0.001 USD per e-mail (documented default). Offers, when on, are budgeted for everyone who would buy and redeem them, and never above what you already give in discounts in a month.",
+        "source": "your orders and sends, and the chosen goal",
+        "from_data": true,
+        "question": null
+      }
+    ],
+    "terms": {
+      "max_touches": 2,
+      "window_days": 7,
+      "quiet_start": 21,
+      "quiet_end": 9,
+      "timezone": "UTC",
+      "margin_rate": 0.4,
+      "margin_floor_pct": 0.3,
+      "max_offer_pct": 0.1,
+      "offers_on": false,
+      "budget_ceiling": 1.0,
+      "currency": "USD",
+      "channels": [
+        "email"
+      ],
+      "valid_days": 30
+    },
+    "questions": [],
+    "notes": []
+  }
+}

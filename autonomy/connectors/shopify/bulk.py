@@ -45,7 +45,7 @@ from autonomy.connectors.base import (
 )
 from autonomy.connectors.http import idempotency_key
 from autonomy.connectors.shopify import gql
-from autonomy.connectors.shopify.api import BULK_QUERIES, BULK_START, BULK_STATUS
+from autonomy.connectors.shopify.api import BULK_START, BULK_STATUS, bulk_query
 from autonomy.connectors.shopify.normalize import parse_time
 
 __all__ = [
@@ -143,7 +143,7 @@ def read_bulk(
 
 
 def _start(ctx: ConnectionContext, stream: str, window: SyncWindow, failures: int) -> StreamPage:
-    text = BULK_QUERIES[stream].replace("{query}", json.dumps(search_filter(window)))
+    text = bulk_query(stream, ctx.connection.config).replace("{query}", json.dumps(search_filter(window)))
     # Retried after a timeout under a key: at worst a second export starts, which the limit allows
     # and which is never read (the cursor names one operation).
     key = idempotency_key(

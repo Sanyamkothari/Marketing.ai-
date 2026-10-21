@@ -29,6 +29,7 @@ call takes a token from its endpoint's burst and steady buckets (`api.EndpointPa
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import threading
 from collections.abc import Mapping, Sequence
@@ -55,6 +56,7 @@ from autonomy.connectors.base import (
     StreamPage,
     StreamSpec,
     SyncWindow,
+    Teardown,
     WriteActionSpec,
     WriteResult,
     map_with,
@@ -80,7 +82,15 @@ from autonomy.connectors.klaviyo.mapping import (
     event_rows,
     profile_rows,
 )
-from autonomy.connectors.klaviyo.setup import SetupStatus, _mapping, _text, ensure_send_setup
+from autonomy.connectors.klaviyo.setup import (
+    EMAIL_TEMPLATE,
+    FLOW_NAMES,
+    SetupStatus,
+    _find_flows,
+    _mapping,
+    _text,
+    ensure_send_setup,
+)
 from autonomy.connectors.tokens import TokenSet
 from autonomy.contracts import Channel
 
@@ -120,6 +130,13 @@ class Audience:
 class _Cached:
     value: Any
     at: datetime
+
+
+REVOKE_URL: Final[str] = "https://a.klaviyo.com/oauth/revoke"
+"""Klaviyo's OAuth token revocation endpoint (form body, HTTP Basic client auth); verify before launch."""
+_REMOVE_APP: Final[str] = (
+    "Autonomy could not revoke its own access: remove the Autonomy app in Klaviyo (Settings > Integrations)."
+)
 
 
 class KlaviyoConnector(SaasConnector):
@@ -226,6 +243,75 @@ class KlaviyoConnector(SaasConnector):
         with self._lock:
             self._accounts[key] = _Cached(account, ctx.now)
         return account
+
+    def teardown(self, ctx: ConnectionContext, tokens: TokenSet | None) -> Teardown:
+        """A person disconnected Klaviyo: delete Autonomy's own flows and template, then revoke our token.
+
+        Only what Autonomy created is touched: the flows named `Autonomy · email` / `Autonomy · SMS`
+        and the template `Autonomy · decision email`. An OAuth grant is revoked at
+        `https://a.klaviyo.com/oauth/revoke`; a pasted private key cannot be revoked by API, so the
+        person is told where to delete it. What Klaviyo refuses (a key without `flows:write`) comes
+        back as one instruction. The setup profile (`external_id=autonomy-setup`, no email or phone)
+        is left: Klaviyo deletes profiles only through a privacy request."""
+        done: list[str] = []
+        left: list[str] = []
+        client = self.client(ctx)
+        connection_id = ctx.connection.connection_id
+        for name in FLOW_NAMES.values():
+            try:
+                flows = _find_flows(client, name)
+            except ConnectorFailure:
+                flows = []
+                left.append(f"Delete the flow '{name}' in Klaviyo (Flows) if it is there.")
+                continue
+            for flow in flows:
+                flow_id = _text(flow.get("id"))
+                if flow_id is None:
+                    continue
+                try:
+                    client.delete(f"flows/{flow_id}", "flows:update")
+                    done.append(f"Deleted the Klaviyo flow '{name}'.")
+                except ConnectorFailure:
+                    left.append(f"Delete the flow '{name}' in Klaviyo (Flows); Klaviyo did not let Autonomy.")
+        try:
+            items = client.collect(
+                "templates",
+                "templates",
+                {"filter": f'equals(name,"{EMAIL_TEMPLATE}")', "fields[template]": "name"},
+            )
+            for item in items:
+                template_id = _text(item.get("id"))
+                same = _text(_mapping(item.get("attributes")).get("name")) == EMAIL_TEMPLATE
+                if template_id is not None and same:
+                    client.delete(f"templates/{template_id}", "templates")
+                    done.append(f"Deleted the Klaviyo template '{EMAIL_TEMPLATE}'.")
+        except ConnectorFailure:
+            left.append(f"Delete the template '{EMAIL_TEMPLATE}' in Klaviyo (Content > Templates).")
+        with self._lock:
+            self._setup.pop(connection_id, None)
+            self._accounts.pop(connection_id, None)
+        if tokens is None or tokens.token_type == "api_key":
+            left.append(
+                "Delete the private API key you created for Autonomy in Klaviyo (Settings > API keys)."
+            )
+        elif ctx.app is not None and tokens.refresh_token:
+            credentials = base64.b64encode(f"{ctx.app.client_id}:{ctx.app.client_secret}".encode()).decode()
+            try:
+                result = ctx.http.send(
+                    "POST",
+                    REVOKE_URL,
+                    form={"token": tokens.refresh_token, "token_type_hint": "refresh_token"},
+                    headers={"Authorization": f"Basic {credentials}"},
+                    authenticated=False,
+                    retry_safe=True,
+                )
+                if result.ok:
+                    done.append("Revoked Autonomy's access to Klaviyo.")
+                else:
+                    left.append(_REMOVE_APP)
+            except ConnectorFailure:
+                left.append(_REMOVE_APP)
+        return Teardown(done=tuple(done), left=tuple(left))
 
     def identify(self, ctx: ConnectionContext) -> Identity | None:
         account = self.account(ctx, fresh=True)

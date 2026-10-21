@@ -9,7 +9,24 @@ window has closed (its end is at or before `now`), the decision gets a `Reward`:
   decision's id; an ACT decision that never went out, as in shadow mode, cost nothing) plus the
   offer's cost when a purchase used the decision's offer (the purchase's `attrs["offer_id"]` matches
   the action's `offer_id`). A redemption is charged once, to one decision, however many windows it
-  falls in.
+  falls in. A SEND does **not** carry the channel cost when the message then failed and was never
+  delivered (`sent_decisions`): a FAIL for the decision at or after its last SEND and no DELIVER.
+  That is how a hand-off the customer's own tool never delivered reads (Klaviyo: a FAIL with
+  `reason=not_delivered_by_tool`, from the delivery watch, or Klaviyo's own Dropped Email). A
+  BOUNCE or BLOCK keeps its cost: the provider sent the message and bills it (SES charges bounced
+  mail, carriers charge undelivered SMS), and leaving it out would overstate profit. A provider
+  failure that a later retry got past is followed by a SEND, so it does not count against it.
+
+**Intent to treat.** Who is agent, baseline or holdout is fixed when the customer is assigned
+(`autonomy.proof.split`) and every decision keeps its group, whatever happened to the message.
+A decision whose message was not delivered is still an agent (or baseline) decision: its reward
+keeps the purchases in its window, and only the channel cost it never incurred is dropped.
+Moving undelivered customers out of the agent group, or counting only the delivered ones, would
+compare the customers a tool chose to deliver to (often the more engaged) against a random
+holdout, and overstate the lift. The comparison therefore measures the effect of deciding to
+contact, including the share of messages the tool drops; learning, which needs the effect of a
+message received, reads the same events and leaves undelivered sends out
+(`autonomy.learning.observations`).
 * **net** depends on the objective: margin - cost for gross profit, revenue - cost for revenue, and
   for yes/no objectives (conversion, retention, lead, activation) `converted x value_per_conversion
   - cost` when a value per conversion is given, else just 1.0 or 0.0.
@@ -61,7 +78,14 @@ from autonomy.contracts import (
     Reward,
 )
 
-__all__ = ["Attribution", "Costs", "build_rewards", "proof_rewards"]
+__all__ = [
+    "Attribution",
+    "Costs",
+    "build_rewards",
+    "proof_rewards",
+    "sent_decisions",
+    "undelivered_decisions",
+]
 
 Attribution = Literal["window", "last_touch"]
 
@@ -154,11 +178,7 @@ def build_rewards(
         mine.sort(key=lambda d: (d.made_at, d.decision_id))
         events = sorted(events_by_customer.get(customer_id, ()), key=lambda e: e.ts)
         tallies = _tally(mine, events, horizon, costs, attribution, cutoff)
-        sent = {
-            e.decision_id
-            for e in events
-            if e.decision_id is not None and e.type in (EventType.SEND, EventType.DELIVER)
-        }
+        sent = sent_decisions(events)
         for d in mine:
             end = d.made_at + horizon
             if end > now:
@@ -185,6 +205,52 @@ def proof_rewards(
     return build_rewards(
         decisions, events_by_customer, horizon_days, objective, costs, now=now, attribution="last_touch"
     )
+
+
+_UNDELIVERED: frozenset[EventType] = frozenset({EventType.FAIL, EventType.BOUNCE, EventType.BLOCK})
+"""Outcomes that say a message did not reach the person (the same set learning uses)."""
+_UNBILLED: frozenset[EventType] = frozenset({EventType.FAIL})
+"""Outcomes that say the message never left (no provider bills it). A bounce or block was sent."""
+
+
+def undelivered_decisions(
+    events: Iterable[Event], types: frozenset[EventType] = _UNDELIVERED
+) -> frozenset[str]:
+    """Decisions whose message was reported undelivered after it was sent, and never delivered.
+
+    An outcome in `types` (default FAIL, BOUNCE or BLOCK) at or after the decision's latest SEND,
+    with no DELIVER at all: the customer's tool took the hand-off and did not deliver it
+    (`not_delivered_by_tool`), or the provider dropped or bounced it. A FAIL before a later SEND is
+    a retry that got through."""
+    last_send: dict[str, datetime] = {}
+    delivered: set[str] = set()
+    failed: list[tuple[str, datetime]] = []
+    for e in events:
+        if e.decision_id is None:
+            continue
+        if e.type is EventType.SEND:
+            seen = last_send.get(e.decision_id)
+            last_send[e.decision_id] = e.ts if seen is None else max(seen, e.ts)
+        elif e.type is EventType.DELIVER:
+            delivered.add(e.decision_id)
+        elif e.type in types:
+            failed.append((e.decision_id, e.ts))
+    return frozenset(
+        d for d, ts in failed if d not in delivered and (d not in last_send or ts >= last_send[d])
+    )
+
+
+def sent_decisions(events: Iterable[Event]) -> frozenset[str]:
+    """Decisions whose message counts as sent (and so carries its channel cost): a SEND or DELIVER,
+    unless it then failed and was never delivered. A bounced or blocked message was sent and billed,
+    so it stays sent here (`undelivered_decisions` with its default types also lists those)."""
+    listed = list(events)
+    went = {
+        e.decision_id
+        for e in listed
+        if e.decision_id is not None and e.type in (EventType.SEND, EventType.DELIVER)
+    }
+    return frozenset(went - undelivered_decisions(listed, _UNBILLED))
 
 
 def _covers(d: Decision, ts: datetime, horizon: timedelta) -> bool:

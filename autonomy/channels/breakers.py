@@ -12,7 +12,8 @@ How each metric is measured:
 - `unsubscribe_multiple`: the unsubscribe rate per delivery, per channel, divided by the account's
   own baseline rate (`baselines["unsubscribe_rate/<channel>"]`, else `baselines["unsubscribe_rate"]`).
   No baseline, no verdict: we never guess one.
-- `delivery_rate_below`: of the sends at least `delivery_grace` old (receipts lag), the share that
+- `delivery_rate_below`: of the sends at least `delivery_grace` old (receipts lag; `channel_grace`
+  per channel, e.g. Klaviyo's read-back windows when Klaviyo sends), the share that
   got through; dispatcher failures count as attempts that did not. On a channel that reports
   delivery receipts, getting through means a DELIVER event. On one that does not (a webhook to the
   client's tool, or SES set up with bounce notices only), it means the provider accepted the send
@@ -93,6 +94,14 @@ class Guards:
     fast_window: timedelta | None = timedelta(hours=1)
     """The extra, short window complaint rates are also judged over; None turns it off."""
     delivery_grace: timedelta = timedelta(hours=1)
+    channel_grace: tuple[tuple[Channel, timedelta], ...] = ()
+    """Per-channel overrides of `delivery_grace`: a channel whose receipts come back by polling a
+    provider (Klaviyo's engagement, read hourly, and an SMS waiting out quiet hours) needs that long
+    before a send without a receipt counts as not delivered."""
+
+    def grace(self, channel: Channel) -> timedelta:
+        """How old a send must be before the delivery rate judges it, on this channel."""
+        return next((g for ch, g in self.channel_grace if ch is channel), self.delivery_grace)
 
 
 DEFAULT_GUARDS = Guards()
@@ -276,7 +285,6 @@ def _unsubscribe_multiple(
 
 def _delivery_rate(rule: StopRule, events: Sequence[Event], now: datetime, guards: Guards) -> list[_Trip]:
     trips: dict[Channel, _Trip] = {}
-    cutoff = now - guards.delivery_grace
     for label, span in _windows(guards):
         since = now - span
         attempted: dict[Channel, set[str]] = defaultdict(set)
@@ -290,7 +298,7 @@ def _delivery_rate(rule: StopRule, events: Sequence[Event], now: datetime, guard
             if e.decision_id is None and quality_level(e) is not None:
                 continue  # an account-level quality report, not a message
             key = e.decision_id or e.event_id
-            if e.type in (EventType.SEND, EventType.FAIL) and e.ts <= cutoff:
+            if e.type in (EventType.SEND, EventType.FAIL) and e.ts <= now - guards.grace(e.channel):
                 attempted[e.channel].add(key)
             if e.type is EventType.SEND:
                 accepted.add((e.channel, key))

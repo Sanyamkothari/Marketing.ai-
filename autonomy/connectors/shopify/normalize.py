@@ -184,6 +184,10 @@ def customer_from_graphql(node: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(phone, Mapping)
             else None
         ),
+        # Only with the `contact=read` setting (protected customer data level 2); for identity
+        # linking alone (`autonomy.connectors.identity` hashes them), never mapped into events.
+        "email": _text(email.get("emailAddress")) if isinstance(email, Mapping) else None,
+        "phone": _text(phone.get("phoneNumber")) if isinstance(phone, Mapping) else None,
     }
 
 
@@ -213,6 +217,9 @@ def customer_from_rest(payload: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(sms, Mapping) and payload.get("phone")
             else None
         ),
+        # Present only for apps with protected customer data level 2; identity linking hashes them.
+        "email": _text(payload.get("email")),
+        "phone": _text(payload.get("phone")),
         "_via": VIA_WEBHOOK,
     }
 
