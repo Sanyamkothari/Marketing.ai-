@@ -131,6 +131,8 @@ def update_models(
     learn_harm: bool = True,
     harm_holdout: Iterable[str] = (),
     harm_split_at: datetime | None = None,
+    harm_data_start: datetime | None = None,
+    refit_harm: bool = True,
 ) -> LearnReport:
     """Learn from every outcome window that has closed by `now`, once; returns what was learned.
 
@@ -148,7 +150,9 @@ def update_models(
     * `learn_harm`: also update who contact puts off (`learn_contact_harm`). Its organic baseline
       is the holdout: the customers in `holdout_customers`, in `harm_holdout`, and those with
       holdout decisions in `decisions`. `harm_split_at` is where the agent started (default: the
-      earliest decision the harm model has seen).
+      earliest decision the harm model has seen). `harm_data_start` is where the business's records
+      begin (its first purchase in the full history; see `learn_contact_harm`). `refit_harm=False`
+      only gathers the evidence (a history streamed in slices is fitted once, at the end).
 
     See `observations.py` for the windows, the control-group rule and the weights. Time is `now`,
     never the clock.
@@ -206,6 +210,8 @@ def update_models(
             holdout=held.union(holdout_ids, harm_holdout),
             segment_of=segment_of,
             split_at=harm_split_at if harm_split_at is not None else (min(firsts) if firsts else None),
+            data_start=harm_data_start,
+            refit=refit_harm,
         )
     return LearnReport.from_set(obs)
 
@@ -220,6 +226,8 @@ def learn_contact_harm(
     holdout: Iterable[str] = (),
     segment_of: SegmentOf | None = None,
     split_at: datetime | None = None,
+    data_start: datetime | None = None,
+    refit: bool = True,
 ) -> ContactHarm | None:
     """Add the events in `events_by_customer` up to `now` to each customer's contact evidence and
     refit the contact-harm model of `bundle.response` (made on first use). Each moment is counted
@@ -233,6 +241,13 @@ def learn_contact_harm(
     * `segment_of`: each customer's segment, so that level is read per segment (each customer keeps
       the first segment they are given).
     * `split_at`: where the agent started (kept from the first pass that gives one).
+    * `data_start`: where the business's records begin, from its full history (the runtime and the
+      agent pass the first purchase on file). Without it, the first purchase in these events. Either
+      way it never falls after `split_at`, and a later pass can only move it earlier: evidence
+      starts at `data_start`, and a start set from a later slice of the log (a win-back goal's
+      first night, whose customers bought nothing in the 30 days before it) dropped the agent's
+      messages before it and read "about 100% put off" on outcomes where messages did nothing.
+    * `refit=False` adds the evidence without refitting (call `refit()` once at the end).
     """
     harm = contact_harm_of(bundle.response, create=True)
     if harm is None:
@@ -244,16 +259,23 @@ def learn_contact_harm(
         holdout=holdout,
         segments={cid: lookup(cid) for cid in sorted(events_by_customer)} if segment_of is not None else None,
     )
-    if harm.data_start is None:
-        # Where the business's records begin: its first purchase on file (as the agent's segments
-        # count frequency), so the time before an import is not taken for days without buying.
+    # Where the business's records begin: its first purchase on file (as the agent's segments count
+    # frequency), so the time before an import is not taken for days without buying. Never after the
+    # agent's start: the agent's own messages are what the evidence is about.
+    start = data_start
+    if start is None:
         firsts = [
             e.ts
             for events in events_by_customer.values()
             for e in events
             if e.type is EventType.PURCHASE and e.ts < now
         ]
-        harm.data_start = min(firsts) if firsts else None
+        start = min(firsts) if firsts else None
+    if harm.split_at is not None:
+        start = harm.split_at if start is None else min(start, harm.split_at)
+    if start is not None and (harm.data_start is None or start < harm.data_start):
+        # Moving it earlier is safe: evidence already counted carries on from where it stopped.
+        harm.data_start = start
     previous = {
         cid: e for cid in events_by_customer if isinstance(e := harm.evidence.get(cid), ContactEvidence)
     }
@@ -269,7 +291,8 @@ def learn_contact_harm(
             split_at=harm.split_at,
         )
     )
-    harm.refit()
+    if refit:
+        harm.refit()
     return harm
 
 

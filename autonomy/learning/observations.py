@@ -470,6 +470,8 @@ class LoggedSend:
     format: str | None = None
     """From the content library when the content id is known, else the send's `format` attr; None
     (plain text) for campaigns that never recorded one."""
+    campaign_id: str | None = None
+    """The send's `campaign_id` attr, when the history names its campaign."""
 
     def action_key(self) -> str:
         return action_key(self.channel, self.offer_id, self.theme or "*", self.format)
@@ -566,6 +568,7 @@ def logged_sends(
                     click_at=click_at if delivered else None,
                     decision_id=did,
                     format=fmt,
+                    campaign_id=campaign if isinstance(campaign := s.attrs.get("campaign_id"), str) else None,
                 )
             )
     return out

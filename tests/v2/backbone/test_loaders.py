@@ -69,7 +69,11 @@ def test_maps_rows_to_events_with_stable_ids() -> None:
 
     assert problems == []
     first, second = events
-    assert first.event_id == stable_id("evt", "csv", "0")
+    # Without row_key the id comes from the row's content, not its position (a re-export that puts
+    # new rows first neither drops them nor counts old rows twice).
+    assert first.event_id != stable_id("evt", "csv", "0")
+    flipped, _ = map_frame(frame.iloc[::-1].reset_index(drop=True), mapping, "csv")
+    assert {e.event_id for e in flipped} == {e.event_id for e in (first, second)}
     assert first.ts == datetime(2024, 1, 2, 10, tzinfo=UTC)  # no offset: the mapping's zone (UTC)
     assert second.ts == datetime(2024, 1, 3, 9, 30, tzinfo=UTC)  # its own offset wins
     assert (first.value, second.value) == (12.5, 40.0)

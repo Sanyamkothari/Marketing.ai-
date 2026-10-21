@@ -32,12 +32,14 @@ leak); warnings are what a person should look at.
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 import re
+import zlib
 from collections import Counter
 from collections.abc import Callable, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
@@ -50,7 +52,15 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, V
 from starlette.concurrency import run_in_threadpool
 
 from autonomy.contracts import Event
-from autonomy.data.mapping import EventMapping, MappingProblem, map_frame, problem_counts
+from autonomy.data.mapping import (
+    DEFAULT_ID_PLACEHOLDERS,
+    EventMapping,
+    MappingProblem,
+    MappingQuestionsError,
+    inspect_frame,
+    map_frame,
+    problem_counts,
+)
 
 __all__ = [
     "MAX_UPLOAD_BYTES",
@@ -131,6 +141,13 @@ class DateColumn(_Out):
     future_dated: int
     earliest: datetime | None
     latest: datetime | None
+    ambiguous_day_month: int = Field(
+        default=0, description="Values such as 03/04 that read as two different days (d/m or m/d)"
+    )
+    day_first_evidence: int = Field(default=0, description="Values that read only day first (13/04)")
+    month_first_evidence: int = Field(default=0, description="Values that read only month first (04/13)")
+    placeholder_dates: int = Field(default=0, description="1900-01-01, 1970-01-01 and the like at midnight")
+    two_digit_years: int = Field(default=0, description="Values written with a two-digit year")
 
 
 class TemporalIntegrity(_Out):
@@ -171,6 +188,9 @@ class MapEventsResponse(_Out):
     events: tuple[Event, ...]
     problems: tuple[MappingProblem, ...]
     problem_counts: dict[str, int]
+    inferred: tuple[str, ...] = Field(
+        default=(), description="What the file itself settled (a decimal comma, the date order), in words"
+    )
 
 
 # --- checksums and patterns -----------------------------------------------------------------------
@@ -296,6 +316,258 @@ _KEY_HEADER: Final = re.compile(r"(^|_)id$|^id_|_key$|^key$|(^|_)(uuid|guid)$")
 _BOOLEAN: Final = frozenset({"true", "false", "yes", "no", "y", "n", "0", "1", "t", "f"})
 
 
+# --- messy-file checks: ids, separators, currencies, totals, sentinels -------------------------------
+
+_ID_HEADER: Final = re.compile(
+    r"(^|_)(customer|client|user|member|account|buyer|shopper|person|contact|cust)(_?(id|no|num|number|key|code))?$"
+)
+_PLACEHOLDERS: Final = frozenset(DEFAULT_ID_PLACEHOLDERS)
+_SCIENTIFIC: Final = re.compile(r"^[+-]?\d(\.\d+)?[eE][+-]\d{1,3}$")
+_TOTAL_WORDS: Final = frozenset({"total", "totals", "grand total", "subtotal", "sum", "sum total"})
+_THREE_AFTER: Final = re.compile(r"^[+-]?[1-9]\d{0,2}[.,]\d{3}$")
+_POINT_NUMBER: Final = re.compile(r"^[+-]?(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$")
+_COMMA_NUMBER: Final = re.compile(r"^[+-]?(\d+|\d{1,3}(\.\d{3})+)(,\d+)?$")
+_MONEY_MARK: Final = re.compile(r"^[£$€¥₹R]\s?[-+]?\d|\d\s?[£$€¥₹]$|\d\s?[A-Z]{3}$|^[A-Z]{3}\s?\d")
+_NUMBERISH: Final = re.compile(r"^([£$€¥₹]|[A-Z]{3})?\s?[+-]?\d[\d.,\s']*\s?([£$€¥₹]|[A-Z]{3})?$")
+_CURRENCY_HEADER: Final = re.compile(r"(^|_)(currency|curr|ccy|currency_code|iso_currency)($|_)")
+SENTINEL_MIN_SHARE: Final[float] = 0.01
+SENTINEL_RATIO: Final[float] = 10.0
+HEAVY_SHARE: Final[float] = 0.2
+
+
+def _id_problems(column: str, cells: Sequence[str]) -> list[Problem]:
+    """Ids that would silently merge, split or vanish people: placeholders, lost digits, zeros, case."""
+    out: list[Problem] = []
+    n = len(cells)
+    if not n:
+        return out
+    placeholder = sum(1 for c in cells if c.lower() in _PLACEHOLDERS or (c.isdigit() and not c.strip("0")))
+    if placeholder:
+        out.append(
+            Problem(
+                code="placeholder_ids",
+                severity="warning",
+                column=column,
+                message=(
+                    f"{placeholder:,} rows have a placeholder id (such as 0, unknown, guest or TOTAL) "
+                    "instead of a customer; they are left out when mapping, never merged into one customer"
+                ),
+            )
+        )
+    scientific = sum(1 for c in cells if _SCIENTIFIC.match(c))
+    if scientific:
+        out.append(
+            Problem(
+                code="scientific_ids",
+                severity="error",
+                column=column,
+                message=(
+                    f"{scientific:,} ids are numbers in scientific notation (1.23457E+11), as a spreadsheet "
+                    "saves long ids: their last digits are lost and many people share one id. Export the "
+                    "column as text"
+                ),
+            )
+        )
+    zeros = sum(1 for c in cells if c.isdigit() and c.startswith("0") and c.strip("0"))
+    if zeros:
+        out.append(
+            Problem(
+                code="leading_zero_ids",
+                severity="warning",
+                column=column,
+                message=(
+                    f"{zeros:,} ids start with 0. A spreadsheet or pandas drops those zeros, so another "
+                    "file may hold the same customer as a different id; say whether zeros matter "
+                    "(id_leading_zeros) when mapping"
+                ),
+            )
+        )
+    emails = [c for c in cells if "@" in c]
+    if emails and len(set(emails)) > len({e.lower() for e in emails}):
+        out.append(
+            Problem(
+                code="mixed_case_ids",
+                severity="warning",
+                column=column,
+                message=(
+                    f"{len(set(emails)) - len({e.lower() for e in emails}):,} e-mail ids also appear in "
+                    "another letter case; they are read as one customer (e-mails are lower-cased)"
+                ),
+            )
+        )
+    counts = Counter(c for c in cells if c.lower() not in _PLACEHOLDERS)
+    top = counts.most_common(2)
+    if top and n >= 50:
+        biggest, nxt = top[0][1], (top[1][1] if len(top) > 1 else 0)
+        if biggest >= HEAVY_SHARE * n and biggest >= 5 * max(nxt, 1):
+            out.append(
+                Problem(
+                    code="heavy_id",
+                    severity="warning",
+                    column=column,
+                    message=(
+                        f"one id is on {biggest:,} of {n:,} rows ({biggest / n:.0%}; the next is on "
+                        f"{nxt:,}): a stand-in for guests or unknown buyers would merge many people"
+                    ),
+                )
+            )
+    return out
+
+
+def _number_problems(column: str, cells: Sequence[str]) -> list[Problem]:
+    """Numbers written in a convention that a plain reading gets wrong."""
+    out: list[Problem] = []
+    point = comma = ambiguous = money = 0
+    for c in cells:
+        if _MONEY_MARK.search(c):
+            money += 1
+        if "," not in c and "." not in c:
+            continue
+        if _THREE_AFTER.match(c):
+            ambiguous += 1
+        elif _POINT_NUMBER.match(c) and not _COMMA_NUMBER.match(c):
+            point += 1
+        elif _COMMA_NUMBER.match(c) and not _POINT_NUMBER.match(c):
+            comma += 1
+    if ambiguous and not (point and not comma) and not (comma and not point):
+        out.append(
+            Problem(
+                code="ambiguous_separators",
+                severity="warning",
+                column=column,
+                message=(
+                    f"{ambiguous:,} numbers look like 2.550 or 1,234 (one separator, three digits) and "
+                    "nothing else in the column says whether it is a decimal point or a thousands "
+                    "separator; say which (decimal) when mapping"
+                ),
+            )
+        )
+    if comma and not point:
+        out.append(
+            Problem(
+                code="decimal_comma",
+                severity="info",
+                column=column,
+                message=f"{comma:,} numbers use a decimal comma (2,55); they are read that way",
+            )
+        )
+    if money:
+        out.append(
+            Problem(
+                code="currency_in_amounts",
+                severity="warning",
+                column=column,
+                message=(
+                    f"{money:,} amounts carry a currency sign or code (£2.55, 2.55 GBP); put the "
+                    "currency in its own column so amounts in different currencies are never added"
+                ),
+            )
+        )
+    return out
+
+
+def _currency_problems(column: str, cells: Sequence[str]) -> list[Problem]:
+    codes = Counter(c.strip().upper() for c in cells if re.fullmatch(r"[A-Za-z]{3}", c.strip()))
+    if len(codes) < 2:
+        return []
+    listed = ", ".join(f"{code} ({n:,} rows)" for code, n in codes.most_common(5))
+    return [
+        Problem(
+            code="mixed_currency",
+            severity="warning",
+            column=column,
+            message=(
+                f"amounts in {len(codes)} currencies: {listed}. They are never added together; give "
+                "the business currency and exchange rates when mapping (currency, currency_rates)"
+            ),
+        )
+    ]
+
+
+def _totals_problems(frame: pd.DataFrame, text_columns: Sequence[str]) -> list[Problem]:
+    """A totals line at the end of an export: a 'Total' label, or a number that sums all the others."""
+    out: list[Problem] = []
+    rows = len(frame)
+    if rows < 3:
+        return out
+    for column in text_columns:
+        labels = frame[column].astype("string").str.strip().str.lower()
+        hits = int(labels.isin(_TOTAL_WORDS).sum())
+        if hits:
+            out.append(
+                Problem(
+                    code="totals_row",
+                    severity="warning",
+                    column=column,
+                    message=(
+                        f"{hits:,} rows are labelled as a total (Total, Sum, Subtotal); a totals line "
+                        "counted as a row doubles the money. Remove it before loading"
+                    ),
+                )
+            )
+            return out
+    for raw in frame.columns:
+        values = _numeric(frame[raw])
+        known = values.dropna()
+        if len(known) < 3:
+            continue
+        last = float(known.iloc[-1])
+        rest = float(known.iloc[:-1].sum())
+        if last != 0 and abs(last - rest) <= 0.005 * abs(last) and abs(last) > known.iloc[:-1].abs().max():
+            out.append(
+                Problem(
+                    code="totals_row",
+                    severity="warning",
+                    column=str(raw),
+                    message=(
+                        "the last row's value equals the sum of all the others: a totals line counted "
+                        "as a row doubles the money. Remove it before loading"
+                    ),
+                )
+            )
+            return out
+    return out
+
+
+def _sentinel_problems(column: str, series: pd.Series[Any]) -> list[Problem]:
+    """A number standing for 'unknown' or 'never' (999, -1, 118): far from every other value, and common."""
+    values = _numeric(series).dropna()
+    n = len(values)
+    if n < 50 or len(values) < len(_cells(series)):
+        return []
+    counts = values.value_counts()
+    if len(counts) < 3:
+        return []
+    for v, top in ((float(values.max()), True), (float(values.min()), False)):
+        if v == 0:
+            continue
+        others = values[values != v]
+        nxt = float(others.max()) if top else float(others.min())
+        spread = float(others.max() - others.min()) or 1.0
+        rows = int(counts[v])
+        far = abs(v - nxt) >= 0.1 * spread and abs(v - nxt) >= 1
+        common = rows >= max(5, SENTINEL_MIN_SHARE * n, SENTINEL_RATIO * int(counts.get(nxt, 1)))
+        if far and common:
+            shown = int(v) if v.is_integer() else v
+            return [
+                Problem(
+                    code="sentinel_value",
+                    severity="warning",
+                    column=column,
+                    message=(
+                        f"{shown} is on {rows:,} rows ({rows / n:.0%}) and far from every other value "
+                        f"({_fmt(float(others.min()))} to {_fmt(float(others.max()))}): it is probably a "
+                        "code for 'unknown' or 'never', not a number; treat it as missing"
+                    ),
+                )
+            ]
+    return []
+
+
+def _fmt(x: float) -> str:
+    return str(int(x)) if x.is_integer() else f"{x:g}"
+
+
 # --- the profiler ---------------------------------------------------------------------------------
 
 
@@ -382,6 +654,28 @@ def _looks_like_dates(column: str, cells: Sequence[str]) -> bool:
     return sum(1 for c in sample if _DATE_SHAPE.fullmatch(c)) / len(sample) >= DATE_MIN_SHARE
 
 
+_SLASH_DATE: Final = re.compile(r"^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})(?:[ T].*)?$")
+_PLACEHOLDER_DAYS: Final = frozenset({(1900, 1, 1), (1970, 1, 1), (1899, 12, 30), (1899, 12, 31)})
+
+
+def _day_month_counts(cells: Sequence[str]) -> tuple[int, int, int, int]:
+    """(ambiguous, day-first only, month-first only, two-digit years) over d/m/y-shaped cells."""
+    ambiguous = day_first = month_first = two_digit = 0
+    for text in cells:
+        match = _SLASH_DATE.match(text)
+        if match is None:
+            continue
+        a, b, year = int(match.group(1)), int(match.group(2)), match.group(3)
+        two_digit += len(year) == 2
+        if a > 12 and 1 <= b <= 12:
+            day_first += 1
+        elif b > 12 and 1 <= a <= 12:
+            month_first += 1
+        elif 1 <= a <= 12 and 1 <= b <= 12 and a != b:
+            ambiguous += 1
+    return ambiguous, day_first, month_first, two_digit
+
+
 def _date_check(column: str, series: pd.Series[Any], snapshot: datetime | None) -> DateColumn:
     present = series.dropna()
     present = present[present.astype(str).str.strip() != ""]
@@ -391,6 +685,12 @@ def _date_check(column: str, series: pd.Series[Any], snapshot: datetime | None) 
     future = 0
     if snapshot is not None and len(ok):
         future = int((ok > pd.Timestamp(snapshot)).sum())
+    placeholder = 0
+    if len(ok):
+        midnight = (ok.dt.hour == 0) & (ok.dt.minute == 0) & (ok.dt.second == 0)
+        days = list(zip(ok.dt.year, ok.dt.month, ok.dt.day, strict=True))
+        placeholder = int(sum(1 for d, m in zip(days, midnight, strict=True) if m and d in _PLACEHOLDER_DAYS))
+    ambiguous, day_first, month_first, two_digit = _day_month_counts(_cells(present))
     return DateColumn(
         column=column,
         non_empty=len(present),
@@ -399,7 +699,65 @@ def _date_check(column: str, series: pd.Series[Any], snapshot: datetime | None) 
         future_dated=future,
         earliest=ok.min().to_pydatetime() if len(ok) else None,
         latest=ok.max().to_pydatetime() if len(ok) else None,
+        ambiguous_day_month=ambiguous,
+        day_first_evidence=day_first,
+        month_first_evidence=month_first,
+        placeholder_dates=placeholder,
+        two_digit_years=two_digit,
     )
+
+
+def _date_problems(d: DateColumn) -> list[Problem]:
+    """Plain-words problems for one date column's day/month order, placeholders and short years."""
+    out: list[Problem] = []
+    if d.ambiguous_day_month:
+        if d.day_first_evidence and not d.month_first_evidence:
+            settled = f"{d.day_first_evidence:,} others can only be day first (01/12 = 1 December)"
+        elif d.month_first_evidence and not d.day_first_evidence:
+            settled = f"{d.month_first_evidence:,} others can only be month first (01/12 = 12 January)"
+        elif d.day_first_evidence and d.month_first_evidence:
+            settled = (
+                f"the file mixes both orders ({d.day_first_evidence:,} only day first, "
+                f"{d.month_first_evidence:,} only month first)"
+            )
+        else:
+            settled = "nothing in the column settles which"
+        out.append(
+            Problem(
+                code="ambiguous_day_month",
+                severity="warning",
+                column=d.column,
+                message=(
+                    f"{d.ambiguous_day_month:,} dates such as 03/04 read as two different days, day "
+                    f"first or month first; {settled}. Say which (date_order) when mapping"
+                ),
+            )
+        )
+    if d.placeholder_dates:
+        out.append(
+            Problem(
+                code="placeholder_dates",
+                severity="warning",
+                column=d.column,
+                message=(
+                    f"{d.placeholder_dates:,} values are placeholder dates (1900-01-01, 1970-01-01 at "
+                    "midnight), written when the real date was missing; they are not real times"
+                ),
+            )
+        )
+    if d.two_digit_years:
+        out.append(
+            Problem(
+                code="two_digit_years",
+                severity="warning",
+                column=d.column,
+                message=(
+                    f"{d.two_digit_years:,} dates have a two-digit year, which can be read in the wrong "
+                    "century (68 as 2068); export four-digit years or check the century"
+                ),
+            )
+        )
+    return out
 
 
 def _key_check(frame: pd.DataFrame, primary_key: str | None) -> KeyCheck:
@@ -428,6 +786,10 @@ def _key_check(frame: pd.DataFrame, primary_key: str | None) -> KeyCheck:
     )
 
 
+_TIMING_HINT: Final = re.compile(
+    r"(^|_)(duration|call_?length|call_?time|talk_?time|time_?on_?call|status|final_?status)($|_)"
+)
+"""Names of things measured during or after the contact (how long the call lasted, how it ended)."""
 _LEAK_HINT: Final = re.compile(
     r"(^|_)(churn(ed)?|converted|conversion|outcome|label|target|refund(ed)?|cancel(l?ed)?|result|y)($|_)"
 )
@@ -443,10 +805,21 @@ def _binary(series: pd.Series[Any]) -> pd.Series[float]:
     return out
 
 
-def _leak_check(frame: pd.DataFrame, target: str | None, date_columns: Sequence[str]) -> LeakCheck:
+def _leak_check(
+    frame: pd.DataFrame,
+    target: str | None,
+    date_columns: Sequence[str],
+    known_after: Sequence[str] = (),
+) -> LeakCheck:
     """Columns that may already contain the outcome: near-perfect correlation or purity with it."""
     if target is None:
-        return LeakCheck(checked=False, target=None, note="No target column given, so no leak check ran.")
+        told = tuple(
+            LeakSuspect(column=c, reason="you said it is recorded after the outcome", score=1.0)
+            for c in known_after
+        )
+        return LeakCheck(
+            checked=False, target=None, suspects=told, note="No target column given, so no leak check ran."
+        )
     y = _binary(frame[target])
     known = y.notna()
     if known.sum() < 10 or y[known].nunique() < 2:
@@ -460,6 +833,11 @@ def _leak_check(frame: pd.DataFrame, target: str | None, date_columns: Sequence[
     for raw in frame.columns:
         column = str(raw)
         if column == target or column in date_columns:
+            continue
+        if column in known_after:
+            suspects.append(
+                LeakSuspect(column=column, reason="you said it is recorded after the outcome", score=1.0)
+            )
             continue
         x = frame[column]
         numeric = _numeric(x)
@@ -500,6 +878,17 @@ def _leak_check(frame: pd.DataFrame, target: str | None, date_columns: Sequence[
             suspects.append(
                 LeakSuspect(column=column, reason="its name suggests it records the outcome", score=0.0)
             )
+        elif _TIMING_HINT.search(_norm(column)):
+            suspects.append(
+                LeakSuspect(
+                    column=column,
+                    reason=(
+                        "its name suggests it is measured during or after the contact (how long it "
+                        "lasted, how it ended); use it only if it is known before you decide"
+                    ),
+                    score=0.0,
+                )
+            )
     return LeakCheck(
         checked=True,
         target=target,
@@ -519,11 +908,13 @@ def profile_frame(
     target: str | None = None,
     date_columns: Sequence[str] | None = None,
     use_v1: bool = True,
+    known_after: Sequence[str] = (),
 ) -> ProfileReport:
     """Profile a table read as text (`read_csv_bytes`); see the module docstring for the rules.
 
     `snapshot` is the moment the data is meant to describe: a date after it is "future-dated". It
-    is passed in, never read from the clock. Unknown column names raise ValueError.
+    is passed in, never read from the clock. `known_after` names columns recorded after the outcome
+    (a call's duration, a final status): each is a leak suspect. Unknown column names raise ValueError.
     """
     for name, given in (("primary_key", primary_key), ("target", target)):
         if given is not None and given not in frame.columns:
@@ -531,6 +922,9 @@ def profile_frame(
     for given in date_columns or ():
         if given not in frame.columns:
             raise ValueError(f"date column {given!r} is not a column of the file")
+    for given in known_after:
+        if given not in frame.columns:
+            raise ValueError(f"known_after column {given!r} is not a column of the file")
 
     problems: list[Problem] = []
     rows = len(frame)
@@ -582,6 +976,17 @@ def profile_frame(
             )
         )
 
+    if frame.attrs.get("decoded_as") == "latin-1":
+        problems.append(
+            Problem(
+                code="not_utf8",
+                severity="warning",
+                message=(
+                    "the file is not UTF-8, so it was read as Latin-1; letters outside Western European "
+                    "alphabets (Cyrillic, Greek, ...) come out garbled. Save it as UTF-8"
+                ),
+            )
+        )
     if rows < MIN_ROWS:
         problems.append(
             Problem(code="few_rows", severity="warning", message=f"{rows:,} rows; at least {MIN_ROWS:,} help")
@@ -612,6 +1017,26 @@ def profile_frame(
             )
         )
 
+    id_columns = [c for c in dict.fromkeys([key.column] if key.column else []) if c not in dates]
+    id_columns += [
+        str(c) for c in frame.columns if _ID_HEADER.search(_norm(str(c))) and str(c) not in id_columns
+    ]
+    id_columns = [c for c in id_columns if c not in dates]
+    for column in id_columns:
+        problems.extend(_id_problems(column, _cells(frame[column])))
+    problems.extend(_totals_problems(frame, id_columns))
+    for raw in frame.columns:
+        column = str(raw)
+        if column in dates or column in id_columns:
+            continue
+        cells = _cells(frame[raw])
+        if _CURRENCY_HEADER.search(_norm(column)):
+            problems.extend(_currency_problems(column, cells))
+            continue
+        if cells and sum(1 for c in cells if _NUMBERISH.match(c)) >= 0.8 * len(cells):
+            problems.extend(_number_problems(column, cells))
+            problems.extend(_sentinel_problems(column, frame[raw]))
+
     checks = tuple(_date_check(c, frame[c], snapshot) for c in dates)
     for d in checks:
         if d.unparseable:
@@ -632,6 +1057,7 @@ def profile_frame(
                     message=f"{d.future_dated:,} values fall after the snapshot",
                 )
             )
+        problems.extend(_date_problems(d))
     if not dates:
         problems.append(Problem(code="no_date_column", severity="warning", message="no column holds dates"))
     temporal = TemporalIntegrity(
@@ -640,7 +1066,7 @@ def profile_frame(
         date_columns=checks,
     )
 
-    leak = _leak_check(frame, target, dates)
+    leak = _leak_check(frame, target, dates, known_after)
     for s in leak.suspects:
         problems.append(
             Problem(
@@ -706,20 +1132,114 @@ def _v1_enrichment(frame: pd.DataFrame, found: Sequence[PiiFinding]) -> dict[str
 # --- uploads --------------------------------------------------------------------------------------
 
 
-def read_csv_bytes(data: bytes, *, delimiter: str = ",") -> pd.DataFrame:
-    """A CSV read entirely as text (ids keep their leading zeros), common blanks read as missing."""
+MAX_EXPANDED_BYTES: Final[int] = 10 * MAX_UPLOAD_BYTES
+"""A gzipped upload is unpacked up to this size; a bigger one is refused (a compression bomb)."""
+
+
+def _unwrap(data: bytes) -> tuple[str, str]:
+    """The upload as text, and the encoding it was read in; refuses formats that are not CSV by name."""
+    head = data[:8]
+    if head.startswith(b"\x1f\x8b"):
+        try:
+            unpacker = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            data = unpacker.decompress(data, MAX_EXPANDED_BYTES)
+        except zlib.error as exc:
+            raise ValueError(f"the file is gzip-compressed but cannot be unpacked: {exc}") from exc
+        if unpacker.unconsumed_tail:
+            raise ValueError(
+                f"the gzipped file unpacks to more than {MAX_EXPANDED_BYTES // 2**20} MB; send a smaller one"
+            )
+        head = data[:8]
+    if head.startswith(b"PK\x03\x04") or head.startswith(b"\xd0\xcf\x11\xe0"):
+        raise ValueError(
+            "this is an Excel workbook (or a zip file), not a CSV: save every sheet as CSV and upload "
+            "each one (opening it with pandas' read_excel default reads only the first sheet)"
+        )
+    if head.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16"), "utf-16"
     try:
-        text = data.decode("utf-8-sig")
+        text, encoding = data.decode("utf-8-sig"), "utf-8"
     except UnicodeDecodeError:
-        text = data.decode("latin-1")
+        text, encoding = data.decode("latin-1"), "latin-1"
+    first = text.lstrip()[:1]
+    if first in ("{", "["):
+        raise ValueError(
+            "this looks like JSON (one record per line), not a CSV: export it as CSV, with nested "
+            "fields as their own columns"
+        )
+    return text, encoding
+
+
+def _header(text: str, delimiter: str) -> list[str]:
+    first = next(csv.reader(io.StringIO(text), delimiter=delimiter), [])
+    return [h.strip("\ufeff") for h in first]
+
+
+def _swallowed_rows(frame: pd.DataFrame, delimiter: str) -> tuple[int, int] | None:
+    """(row, lines) of a text cell that holds whole CSV lines: a stray quote ran on until a later one.
+
+    A line counts as a swallowed row only when it splits into exactly as many fields as the file
+    has columns, and most of the cell's later lines do: a multi-line comment with a few commas in
+    it (a product review) is ordinary text, not a broken file."""
+    width = len(frame.columns)
+    least = 1 if width >= 3 else 2
+    for raw in frame.columns:
+        series = frame[raw]
+        multi = series[series.astype("string").str.contains("\n", regex=False, na=False)]
+        for label, cell in multi.items():
+            lines = [line for line in str(cell).splitlines()[1:] if line.strip()]
+            rowlike = sum(1 for line in lines if len(_header(line, delimiter)) == width)
+            if rowlike >= least and 2 * rowlike >= len(lines):
+                position = frame.index.get_loc(label)
+                return int(position) if isinstance(position, int) else 0, rowlike
+    return None
+
+
+def read_csv_bytes(data: bytes, *, delimiter: str = ",") -> pd.DataFrame:
+    """A CSV read entirely as text (ids keep their leading zeros), common blanks read as missing.
+
+    Refuses, in plain words, what would otherwise be read wrong without a sound: a workbook, JSON, a
+    file whose delimiter is not the one given (one column comes back), two columns with the same
+    header, and a stray quote that swallows whole rows into one cell. Gzip and UTF-16 (Excel's
+    "Unicode text") are read. A file that is not UTF-8 is read as Latin-1 and says so in
+    `frame.attrs["decoded_as"]`.
+    """
+    text, encoding = _unwrap(data)
     if not text.strip():
         raise ValueError("the file is empty")
+    header = _header(text, delimiter)
+    if len(header) == 1:
+        for other, name in ((";", "semicolons"), ("\t", "tabs"), ("|", "bars")):
+            if other != delimiter and other in header[0]:
+                raise ValueError(
+                    f"only one column was found and its header holds {name}: the file seems to separate "
+                    f"columns with {other!r}; send delimiter={other!r}"
+                )
+    repeated = [name for name, n in Counter(header).items() if n > 1 and name.strip()]
+    if repeated:
+        places = ", ".join(
+            f"{name!r} (columns {', '.join(str(i + 1) for i, h in enumerate(header) if h == name)})"
+            for name in repeated
+        )
+        raise ValueError(
+            f"two columns have the same header: {places}; rename one so a mapping knows which to read"
+        )
     try:
-        return pd.read_csv(
+        frame = pd.read_csv(
             io.StringIO(text), dtype=str, keep_default_na=False, na_values=_NA_VALUES, sep=delimiter
         )
     except (pd.errors.ParserError, pd.errors.EmptyDataError, ValueError) as exc:
         raise ValueError(f"cannot read the file as CSV: {exc}") from exc
+    swallowed = _swallowed_rows(frame, delimiter)
+    if swallowed is not None:
+        row, lines = swallowed
+        raise ValueError(
+            f"a quote in data row {row + 1:,} opens a text that runs over {lines:,} more lines that look "
+            "like whole rows, so they were read as one cell and would vanish; fix the stray quote "
+            f"(near line {row + 2:,} of the file)"
+        )
+    frame.attrs["decoded_as"] = encoding
+    return frame
 
 
 async def _body(request: Request) -> bytes:
@@ -792,6 +1312,10 @@ _SNAPSHOT: Final = TypeAdapter(AwareDatetime)
                             "date_columns": {"type": "string", "description": "Comma-separated"},
                             "delimiter": {"type": "string", "default": ","},
                             "use_v1": {"type": "boolean", "default": True},
+                            "known_after": {
+                                "type": "string",
+                                "description": "Comma-separated columns recorded after the outcome",
+                            },
                         },
                     }
                 },
@@ -822,6 +1346,7 @@ async def post_profile(request: Request) -> ProfileReport:
             target=fields.get("target") or None,
             date_columns=date_columns,
             use_v1=_flag(fields.get("use_v1"), True),
+            known_after=[c.strip() for c in (fields.get("known_after") or "").split(",") if c.strip()],
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -841,6 +1366,16 @@ async def post_profile(request: Request) -> ProfileReport:
                             "mapping": {"type": "string", "description": "An EventMapping as JSON"},
                             "source": {"type": "string", "default": "csv"},
                             "delimiter": {"type": "string", "default": ","},
+                            "ask": {
+                                "type": "boolean",
+                                "default": True,
+                                "description": "Refuse with plain questions (422) instead of guessing",
+                            },
+                            "snapshot": {
+                                "type": "string",
+                                "format": "date-time",
+                                "description": "Latest plausible time; default the upload's moment",
+                            },
                         },
                     }
                 }
@@ -857,9 +1392,30 @@ async def post_map_events(request: Request) -> MapEventsResponse:
         mapping = EventMapping.model_validate(json.loads(fields["mapping"]))
     except (json.JSONDecodeError, ValidationError) as exc:
         raise HTTPException(422, f"the mapping is not a valid EventMapping: {exc}") from exc
+    if mapping.not_after is None:
+        # Nothing can have happened after the upload (or the snapshot the caller names): a later
+        # time is a misread date, such as a two-digit year put in the wrong century.
+        latest = _upload_time()
+        if fields.get("snapshot"):
+            try:
+                latest = _SNAPSHOT.validate_python(fields["snapshot"])
+            except ValidationError as exc:
+                raise HTTPException(422, "snapshot must be an ISO 8601 time with a zone offset") from exc
+        mapping = mapping.model_copy(update={"not_after": latest})
+    ask = _flag(fields.get("ask"), True)
     try:
         frame = read_csv_bytes(data, delimiter=fields.get("delimiter") or ",")
-        events, problems = await run_in_threadpool(map_frame, frame, mapping, fields.get("source") or "csv")
+        inspection = await run_in_threadpool(inspect_frame, frame, mapping)
+        if ask and inspection.questions:
+            raise MappingQuestionsError(inspection.questions)
+        # Already inspected: map without asking again (the same questions, so nothing is skipped).
+        events, problems = await run_in_threadpool(
+            lambda: map_frame(frame, mapping, fields.get("source") or "csv")
+        )
+    except MappingQuestionsError as exc:
+        raise HTTPException(
+            422, {"message": str(exc), "questions": [q.model_dump() for q in exc.questions]}
+        ) from exc
     except ValueError as exc:  # MappingError is one too
         raise HTTPException(422, str(exc)) from exc
     return MapEventsResponse(
@@ -868,4 +1424,10 @@ async def post_map_events(request: Request) -> MapEventsResponse:
         events=tuple(events),
         problems=tuple(problems),
         problem_counts=problem_counts(problems),
+        inferred=inspection.inferred,
     )
+
+
+def _upload_time() -> datetime:
+    """The moment of the upload: the API's edge reads the clock once, and passes it in as `not_after`."""
+    return datetime.now(UTC)

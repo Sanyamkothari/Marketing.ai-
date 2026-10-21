@@ -25,7 +25,8 @@ Pure and deterministic: no clock reads, no randomness, no I/O.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import lru_cache
 from zoneinfo import ZoneInfo
@@ -40,6 +41,9 @@ OFFER_PRIOR = 0.3
 
 OFFER_PSEUDO_COUNT = 3.0
 """How many purchases' worth of weight the prior carries."""
+
+VIP_MIN_BUYERS = 50
+"""Buyers the shop needs before its own VIP bars replace the fixed defaults."""
 
 _SEEN_TYPES = frozenset(
     {EventType.SIGNUP, EventType.VISIT, EventType.VIEW, EventType.CART, EventType.PURCHASE}
@@ -60,8 +64,14 @@ class SegmentRules:
 
     Recency comes first on purpose: a big spender who has gone quiet is someone to win back, not
     someone to treat as a loyal regular. The bounds are strict ("more than 90 days"), so a customer
-    whose last order was exactly 90 days ago is still active. The revenue bar is in the business's
-    own currency; pass different rules for a business whose orders are far larger or smaller.
+    whose last order was exactly 90 days ago is still active.
+
+    The VIP bars are the shop's own, not fixed amounts: `fitted(states)` puts the revenue bar at the
+    top `vip_share` of its buyers' revenue and the purchase bar at their median number of purchases
+    (at least 2, at most `vip_min_purchases`), so a VIP is a VIP in roubles, yen or dollars, and in a
+    shop where people buy weekly or yearly. A flat 500 made 88.5% of X5's rouble clients VIP. Until
+    the rules are fitted (fewer than `VIP_MIN_BUYERS` buyers, or no states yet) the fixed defaults
+    below apply.
     """
 
     lapsing_after: timedelta = timedelta(days=90)
@@ -69,10 +79,35 @@ class SegmentRules:
     vip_min_purchases: int = 5
     vip_min_revenue: float = 500.0
     new_max_purchases: int = 1
+    vip_share: float = 0.1
+    """The share of the shop's buyers (by revenue) the fitted revenue bar keeps above it."""
 
     def __post_init__(self) -> None:
         if self.lapsed_after < self.lapsing_after:
             raise ValueError("lapsed_after must be at least lapsing_after")
+        if not 0.0 < self.vip_share < 1.0:
+            raise ValueError("vip_share is a share, between 0 and 1")
+
+    def fitted(self, states: Iterable[CustomerState]) -> SegmentRules:
+        """These rules with the VIP bars set from the shop's own buyers (see the class docstring);
+        unchanged when fewer than `VIP_MIN_BUYERS` customers have bought."""
+        revenue: list[float] = []
+        purchases: list[int] = []
+        for st in states:
+            if st.purchases > 0:
+                revenue.append(st.revenue)
+                purchases.append(st.purchases)
+        if len(revenue) < VIP_MIN_BUYERS:
+            return self
+        revenue.sort()
+        purchases.sort()
+        bar = revenue[min(len(revenue) - 1, int(len(revenue) * (1.0 - self.vip_share)))]
+        median = purchases[len(purchases) // 2]
+        return replace(
+            self,
+            vip_min_revenue=max(bar, 0.0),
+            vip_min_purchases=min(max(2, median), self.vip_min_purchases),
+        )
 
     def label(self, state: CustomerState, now: datetime) -> str:
         if state.purchases <= 0 or state.last_purchase_at is None:
@@ -148,8 +183,20 @@ class StateFolder:
         if offer_pseudo_count <= 0:
             raise ValueError("offer_pseudo_count must be positive")
         self.segments = segments or SegmentRules()
+        self._base_segments = self.segments
+        self._fit_vip = segments is None
+        """Only the default rules follow the shop's own buyers: bars passed in are the operator's."""
         self.offer_prior = offer_prior
         self.offer_pseudo_count = offer_pseudo_count
+
+    def fit_segments(self, states: Iterable[CustomerState]) -> SegmentRules:
+        """Set the VIP bars from the shop's own customers (`SegmentRules.fitted`), always starting
+        from the rules this folder was built with. Labels change at each state's next `refresh`.
+        The runtime calls it after every full rebuild. Rules passed to the folder explicitly are
+        kept as given (someone chose those bars). Returns the rules now in use."""
+        if self._fit_vip:
+            self.segments = self._base_segments.fitted(states)
+        return self.segments
 
     # --- the protocol -------------------------------------------------------------------------
 

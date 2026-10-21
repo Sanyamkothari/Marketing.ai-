@@ -53,25 +53,29 @@ def test_bank_dates_and_kdd_yymm_helpers() -> None:
     assert len(events) == 1 and problem_counts(problems) == {"bad_timestamp": 1}
 
 
-def test_finding_reexport_and_placeholder_ids_are_silent() -> None:
+def test_finding_reexport_and_placeholder_ids_are_fixed() -> None:
+    """Was a finding (D2, I2): positional ids dropped a re-export's new rows and doubled old ones, and
+    placeholder ids became customers. Fixed by the real-data fix wave (content ids, placeholder ids)."""
     m = EventMapping(customer_id="c", timestamp="t", event_type="purchase", value_column="v")
     old = pd.DataFrame({"c": ["a", "b", "c"], "t": ["2024-01-01T10:00:00"] * 3, "v": ["1", "2", "3"]})
     new = pd.DataFrame({"c": ["d"], "t": ["2024-01-08T10:00:00"], "v": ["40"]})
     store = InMemoryEventStore()
     store.append(map_frame(old, m, "orders.csv")[0])
-    # This week's export lists the new order first; no row_key, so ids are row positions.
+    # This week's export lists the new order first; no row_key, so ids come from each row's content.
     reexport = pd.concat([new, old], ignore_index=True)
     events, problems = map_frame(reexport, m, "orders.csv")
     assert not problems
     store.append(events)
     kept = sorted((e.customer_id, e.value) for e in store.scan())
-    assert ("d", 40.0) not in kept  # the new order is dropped as a repeat of row 0...
-    assert kept.count(("c", 3.0)) == 2  # ...and the last old order is counted twice
+    assert ("d", 40.0) in kept  # the new order is kept...
+    assert kept.count(("c", 3.0)) == 1  # ...and the old one is counted once
 
     guests = pd.DataFrame({"c": ["0", "0", "NULL", ""], "t": ["2024-01-01T10:00:00"] * 4, "v": ["5"] * 4})
     events, problems = map_frame(guests, m, "pos.csv")
-    assert [e.customer_id for e in events] == ["0", "0", "NULL"]  # two guests merged into customer "0"
-    assert problem_counts(problems) == {"missing_customer": 1}  # only the blank cell is caught
+    assert events == []  # no guest becomes a customer
+    counts = problem_counts(problems)
+    assert counts.get("placeholder_customer", 0) + counts.get("missing_customer", 0) == 4
+    assert counts.get("placeholder_customer", 0) >= 3
 
 
 def test_warm_start_weights_logged_sends_by_their_estimated_probability() -> None:

@@ -79,19 +79,26 @@ def map_file(
     *,
     sheet: str | None = None,
     work_dir: Path | None = None,
+    ask: bool = False,
 ) -> DoctorMapped:
     """Read `path` through v1's intake, then map it to events with `mapping`.
 
     The mapping names columns as they are *after* intake; `DoctorRead.renamed` says which changed.
-    Id-like columns the mapping names are read as text, so a leading zero is never lost.
+    Id-like columns the mapping names are read as text, so a leading zero is never lost. With `ask`,
+    anything the file leaves ambiguous (naive times with no zone, the day/month order, repeated
+    lines, leading zeros, separators, currencies) raises `autonomy.data.mapping.MappingQuestionsError`
+    with plain questions instead of being read one way; the Data Doctor's route asks by default.
     """
-    text = tuple(
-        c
-        for c in (mapping.customer_id, mapping.decision_id_column, mapping.item_column, *mapping.row_key)
-        if c is not None
+    named = (
+        mapping.customer_id,
+        mapping.decision_id_column,
+        mapping.item_column,
+        mapping.currency_source(),
+        *mapping.row_key,
     )
+    text = tuple(dict.fromkeys(c for c in named if c is not None))
     read = read_with_intake(path, text_columns=text, sheet=sheet, work_dir=work_dir)
-    events, problems = map_frame(read.frame, mapping, source)
+    events, problems = map_frame(read.frame, mapping, source, ask=ask)
     return DoctorMapped(events, problems, read.notes)
 
 

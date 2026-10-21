@@ -26,8 +26,12 @@ and the operator endpoint call it by hand. Each tick does, in order:
 6. **Nightly**, once a day at `nightly_hour`: each goal's policy gets `nightly(decisions,
    events_by_customer, now)` with its own goal's decisions, if it has the hook (the fast learning
    loop). A policy built in this process (the first tick after a start, or a materially new brief)
-   first replays `replay_lookback` of the decision log and events through the same hook, so what
-   it learned survives restarts. When `lift_guards` is set, the negative-lift breaker
+   that has not decided yet is first handed every customer's whole imported history through the
+   same hook (`feed_history`, a slice of `history_batch` customers per call, so memory stays
+   bounded), which is what its warm start learns from; then it replays `replay_lookback` of the
+   decision log and events, so what it learned survives restarts. A policy with
+   `prepare_day(states, ctx)` gets it once a day before its first decision of the day, with every
+   customer's state (its segments, organic rates and, on the first day, the warm start). When `lift_guards` is set, the negative-lift breaker
    (`autonomy.channels.breakers.negative_lift`) then reads each acting goal's proof over closed
    outcome windows and pauses a goal that is confidently losing money against the holdout.
 7. **Weekly**, once a week, when an analyst and a strategist are configured: the Orchestrator's
@@ -92,6 +96,7 @@ the same tick, and the contact caps in `decide()` read the SENDs every goal made
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 from collections import Counter, defaultdict
@@ -337,6 +342,11 @@ class RuntimeConfig:
     process owns them); True always does."""
     replay_lookback: timedelta = timedelta(days=30)
     """How much of the decision log a newly built policy replays through `nightly()`."""
+    feed_history: bool = True
+    """Hand a newly built policy that has not decided yet every customer's whole history (all
+    imported events, not only customers already decided on, not only `replay_lookback`)."""
+    history_batch: int = 2_000
+    """Customers per `nightly()` call while that history is streamed in."""
     plan_days: int = 30
     """A goal with no end date has its budget paced evenly over this many days from its start."""
     holdout_share: float | None = None
@@ -425,6 +435,10 @@ class TickReport:
     weekly: list[WeeklyOutcome] = field(default_factory=list)
     replayed_goals: list[str] = field(default_factory=list)
     """Goals whose policy was built this tick and replayed the decision log to relearn."""
+    history_fed_goals: list[str] = field(default_factory=list)
+    """Goals whose new policy was handed the whole imported history this tick (its warm start)."""
+    prepared_goals: list[str] = field(default_factory=list)
+    """Goals whose policy ran `prepare_day` this tick (once a day, before deciding)."""
     halted_goals: list[str] = field(default_factory=list)
     """Goals that did not act this tick because their mandate is missing, inactive or unsigned."""
     mandate_blocked: list[str] = field(default_factory=list)
@@ -1019,6 +1033,10 @@ class AutonomyRuntime:
         """goal_id -> (spend, budget left, when) at the last good read of the spend source."""
         self._ledger_read_at: datetime | None = None
         """When a process that has not ticked last read the log into its spend ledger (`send_gate`)."""
+        self._prepared: dict[str, tuple[object, date]] = {}
+        """goal_id -> (the policy object, local day) of its last `prepare_day`. The object itself,
+        not its `id()`: a rebuilt policy can be allocated at a freed one's address, and would then
+        skip its first day's preparation (its warm start)."""
 
     # --- the API's helpers ---------------------------------------------------------------------
 
@@ -1243,6 +1261,12 @@ class AutonomyRuntime:
             return []
         if ledger is not None and rebuilt is not None:
             ledger.adopt(rebuilt)
+        fit = getattr(self.folder, "fit_segments", None)
+        if callable(fit):
+            # Thresholds such as the VIP bar follow the shop's own customers and currency; every
+            # state picks them up at its next refresh.
+            with contextlib.suppress(Exception):  # a labelling refinement: the default bars still work
+                fit(self.states.scan())
         if recording.newest_ingest is not None:
             self._newest_ingest = recording.newest_ingest
         self._check_stale(now, report)
@@ -1581,6 +1605,10 @@ class AutonomyRuntime:
             if not may_act:
                 report.halted_goals.append(gid)
                 continue  # not even decided: a decision today would block deciding again once it stands
+            if self._prepare_due(run, day.day):
+                if everyone is None:
+                    everyone = [self.folder.refresh(s, now) for s in self.states.scan()]
+                self._prepare(run, everyone, now, day.day, report)
             candidates: list[_Candidate] = []
             for e in triggers:
                 did = _decision_id(gid, e.customer_id, Trigger.EVENT, e.event_id)
@@ -1617,6 +1645,46 @@ class AutonomyRuntime:
             self._act(run, made, contacted_this_tick, now, report, mandate=mandate)
         if lapse_due:
             self.cursor.lapse_checked_at = now
+
+    def _prepare_due(self, run: _Running, day: date) -> bool:
+        """Whether the goal's policy has `prepare_day` and has not run it today (a rebuilt policy
+        runs it again)."""
+        if not callable(getattr(run.policy, "prepare_day", None)):
+            return False
+        last = self._prepared.get(run.goal.goal_id)
+        return last is None or last[0] is not run.policy or last[1] != day
+
+    def _prepare(
+        self, run: _Running, everyone: Sequence[CustomerState], now: datetime, day: date, report: TickReport
+    ) -> None:
+        """Once a day, before the goal's first decision: `prepare_day` with every customer's state
+        (the agent fits its segments and organic rates, and on its first day learns from the history
+        it was handed). A failure is an alert; the policy still decides."""
+        gid = run.goal.goal_id
+        self._prepared[gid] = (run.policy, day)
+        prepare = getattr(run.policy, "prepare_day", None)
+        if not callable(prepare):
+            return
+        ctx = DecisionContext(
+            now=now,
+            briefs=(run.brief,),
+            content=tuple(run.content),
+            seed=_seed(self.config.seed, gid, now),
+            policy_version=run.policy.version,
+        )
+        try:
+            prepare(everyone, ctx)
+        except Exception as err:  # preparing failing must never stop deciding
+            self._alert(
+                report,
+                code="prepare.error",
+                key=f"{gid}:{day.isoformat()}",
+                severity="warning",
+                goal_id=gid,
+                message=f"The daily preparation failed ({type(err).__name__}); decisions use what was learned before.",
+            )
+        else:
+            report.prepared_goals.append(gid)
 
     def _decide_goal(
         self,
@@ -2332,6 +2400,72 @@ class AutonomyRuntime:
                 continue
             self._apply_breakers(result, {gid: run.goal}, report)
 
+    def _feed_history(self, built: Sequence[_Running], now: datetime, report: TickReport) -> None:
+        """Hand each new policy that has not decided yet (`needs_history`) every customer's whole
+        imported history, streamed: `history_batch` customers' events per `nightly([], ...)` call.
+
+        This is what the agent's warm start learns from (past campaigns' sends, clicks and
+        probabilities, their control groups, every purchase). `_replay` alone hands over only the
+        customers the goal has decided on in `replay_lookback`, so a fresh deployment with years of
+        orders and campaigns in its store started blind. Each customer's events come in one call
+        (the learners count each customer's timeline once), and the policy keeps only a compact
+        digest of them until its first decision. A policy that raises is alerted and left out of the
+        rest of the feed; the others go on."""
+        if not self.config.feed_history:
+            return
+        learners = [
+            r
+            for r in built
+            if getattr(r.policy, "needs_history", False) and callable(getattr(r.policy, "nightly", None))
+        ]
+        if not learners:
+            return
+        day = now.astimezone(self._tz).date().isoformat()
+        try:
+            customer_ids = sorted({s.customer_id for s in self.states.scan()})
+        except Exception as err:
+            self._alert(
+                report,
+                code="history.error",
+                key=f"states:{day}",
+                severity="warning",
+                message=f"The history could not be read ({type(err).__name__}); new policies start from priors.",
+            )
+            return
+        size = max(self.config.history_batch, 1)
+        failed: set[str] = set()
+        for start in range(0, len(customer_ids), size):
+            live = [r for r in learners if r.goal.goal_id not in failed]
+            if not live:
+                break
+            chunk: dict[str, list[Event]] = {}
+            for cid in customer_ids[start : start + size]:
+                events = [e for e in self.events.for_customer(cid) if e.ts <= now]
+                if events:
+                    chunk[cid] = events
+            if not chunk:
+                continue
+            for run in live:
+                nightly = getattr(run.policy, "nightly", None)
+                if not callable(nightly):
+                    continue
+                try:
+                    nightly([], chunk, now)
+                except Exception as err:  # learning failing must never stop deciding
+                    failed.add(run.goal.goal_id)
+                    self._alert(
+                        report,
+                        code="history.error",
+                        key=f"{run.goal.goal_id}:{day}",
+                        severity="warning",
+                        goal_id=run.goal.goal_id,
+                        message=(
+                            f"Learning from the history failed ({type(err).__name__}); this goal starts "
+                            "from what it learned before the failure."
+                        ),
+                    )
+        report.history_fed_goals.extend(r.goal.goal_id for r in learners if r.goal.goal_id not in failed)
+
     def _replay(self, built: Sequence[_Running], now: datetime, report: TickReport) -> None:
         """Relearn what new policies lost: replay the decision log and events through `nightly()`.
 
@@ -2520,6 +2654,7 @@ class AutonomyRuntime:
             if fresh:
                 built.append(run)
         if built:
+            self._feed_history(built, now, report)
             self._replay(built, now, report)
         return out
 

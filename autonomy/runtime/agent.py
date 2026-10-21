@@ -10,6 +10,10 @@ How a message is valued (see `ClickResponseModel`):
     uplift = lift_per_click(segment) x click_rate(segment, action) x personal(customer, action) x fatigue(week)
     net    = uplift x value - offer cost x (organic chance of buying + uplift) - channel cost
 
+On a channel that logs no clicks (SMS, direct mail, coupons: `NO_CLICK_MIN_SENDS` past messages and
+not one click) the unit is the message itself: `uplift = lift_per_send(segment) x personal x
+fatigue`, read from purchases.
+
 * **Click rates** per behaviour segment (new, lapsed, light / medium / heavy buyer, see `Segmenter`)
   and action (`channel|offer|theme`) arrive within hours and tell actions apart far sooner than
   week-long purchase windows can. Each send counts with the customer's own factor as its exposure,
@@ -22,7 +26,13 @@ How a message is valued (see `ClickResponseModel`):
   mostly themselves. Someone who never clicks after a dozen messages counts for much less.
 * **Lift per click** (`LiftPerClick`) puts clicks on the scale of money: the agent group's extra
   purchases over the holdout, per click, with each customer's pre-period purchase rate as a CUPED
-  covariate, per segment and shrunk towards the business-wide figure (`shrink_to_pool`).
+  covariate, per segment and shrunk towards the business-wide figure (`shrink_to_pool`). Before the
+  agent has a holdout of its own, a past randomised campaign in the history sets it
+  (`_calibrate`, `autonomy.learning.calibration`): what its recipients bought beyond the customers
+  it left out at random, per click it drew. On real e-mail data that is a few hundredths of a
+  purchase per click, not the prior's quarter (Hillstrom: 0.014), and valuing messages at the
+  prior made the agent expect 10x what an e-mail made. Without such a campaign, history's clicks set
+  the scale only part way (`HISTORY_CLICK_TRUST`).
 * **Organic chance** (`OrganicRate`): the customer's own purchase rate, shrunk to their segment's.
   It is what makes a discount expensive for someone who would have bought anyway.
 * **Value** (`ShrunkValueModel`): one order's margin, the customer's own average shrunk towards
@@ -37,7 +47,9 @@ What it does around the auction:
 * **History.** Sends, deliveries and clicks handed over before the first decision are the client's
   past campaigns (`autonomy.learning.observations.logged_sends`). They warm-start the click rates
   (weighted by the inverse of each send's `logged_probability`), each customer's own record and
-  their reading hours, so day 1 is not blind (`_warm_start`).
+  their reading hours, so day 1 is not blind (`_warm_start`), and a randomised one calibrates what
+  a message is worth (above). The history may come in slices of customers (the runtime streams it,
+  `needs_history`): messages are kept whole, purchases and consent in a compact `HistoryDigest`.
 * **Send hour.** A click that comes hours after the message shows when the person reads; their
   own reading hour is used once known. A customer with quick clicks only gets the best allowed
   hour of `ReadingHourModel`'s posterior mean (their clicks credit the hours we sent at, shrunk to
@@ -116,11 +128,12 @@ from autonomy.contracts import (
     Format,
     GoalKind,
     Group,
+    Objective,
     Reward,
     StopMetric,
 )
 from autonomy.decide import rules
-from autonomy.decide.bidders import AssetOf, GoalBidder, ItemLookup
+from autonomy.decide.bidders import AssetOf, GoalBidder, ItemLookup, contact_harm_of
 from autonomy.decide.models import (
     ANY,
     Beta,
@@ -139,7 +152,16 @@ from autonomy.decide.policy import SWEEP, AutonomousPolicy, seeded_rng
 from autonomy.decide.timing import LATE_CLICK, ReadingHourModel, zone_named
 from autonomy.interfaces import Bidder, Policy
 from autonomy.learning import ModelBundle, build_bundle, learn_from_rewards, update_models
+from autonomy.learning.calibration import (
+    MIN_ARM,
+    HistoryDigest,
+    combine,
+    difference,
+    randomised_arms,
+    with_prior,
+)
 from autonomy.learning.observations import LoggedSend, ipw_weights, logged_sends, weighted_rate
+from autonomy.uplift import UpliftWarmStart, warm_start_uplift
 
 AGENT_VERSION = "autonomy-agent-v1"
 
@@ -211,6 +233,24 @@ delivered send on its channel at most this long before it (they come within hour
 _EVENT_MEMORY_EXTRA = timedelta(days=9)
 """Events are kept for the learning window plus this: the week of sends before a send (fatigue)
 plus a day for sends timed after their decision."""
+
+
+_HISTORY_KEEP = frozenset(
+    {
+        EventType.SEND,
+        EventType.DELIVER,
+        EventType.CLICK,
+        EventType.FAIL,
+        EventType.BOUNCE,
+        EventType.BLOCK,
+        EventType.UNSUBSCRIBE,
+        EventType.COMPLAINT,
+    }
+)
+"""History events kept whole until the warm start (past campaigns' messages and what followed them);
+purchases, consent and first sightings go to the compact `HistoryDigest` instead."""
+MIN_SEGMENT_ARM = 50
+"""Customers a segment needs on each side of a past campaign before its own difference is measured."""
 
 
 def _poisson_tail(hits: float, expected: float) -> float:
@@ -411,6 +451,22 @@ LIFT_PER_CLICK_PRIOR = (0.25, 0.25)
 quarter. Weak on purpose: the agent-vs-holdout comparison takes over within weeks."""
 LIFT_PER_CLICK_STRENGTH = 20.0
 """The prior above is worth this many clicks."""
+LIFT_PER_SEND_PRIOR = (
+    LIFT_PER_CLICK_PRIOR[0] * CLICK_PRIOR.mean,
+    LIFT_PER_CLICK_PRIOR[1] * CLICK_PRIOR.mean,
+)
+"""On a channel that logs no clicks (SMS, direct mail, coupons), extra purchases per delivered
+message before purchases say otherwise: what the two priors above imply for a message whose clicks
+we cannot see (a quarter purchase per click x 5% clicks = 1.25%, give or take as much)."""
+NO_CLICK_MIN_SENDS = 200
+"""Delivered past messages a channel needs, all without a click, before it is taken to log no clicks:
+its value is then read from purchases (lift per message), not from clicks it can never show."""
+HISTORY_CLICK_TRUST = 0.5
+"""Without a randomised control in the history, how far the history's click rate is trusted to set
+the scale of uplift: the lift per click is pulled towards what keeps the prior's uplift per message,
+by `(prior click rate / history click rate) ** (1 - trust)` when clicks ran above the prior (a click
+is often a visit by someone who would have bought anyway; only a control shows how often). 0.5 meets
+halfway on the log scale; the agent's own holdout then takes over."""
 ORGANIC_PRIOR_DAYS = 90.0
 """A customer's own purchase rate is shrunk towards their segment's, worth this many days."""
 PERSONAL_REFIT_DAYS = 7
@@ -429,6 +485,11 @@ FATIGUE_STRENGTH = 5.0
 def _with_pool(segment: str | None) -> tuple[str, ...]:
     """The keys an observation counts under: the business-wide pool, and the segment if known."""
     return (ANY,) if segment is None or segment == ANY else (ANY, segment)
+
+
+def _channel_value(action_key: str) -> str:
+    """The channel part of an action key (`channel|offer|theme[|format]`)."""
+    return action_key.split("|", 1)[0]
 
 
 def _bucket(contacts_7d: int) -> int:
@@ -505,6 +566,14 @@ class ClickResponseModel(BetaResponseModel):
         self._rates: dict[tuple[str, str], Beta] = {}
         self._fatigue: dict[int, list[float]] = {}  # contacts this week (capped) -> [clicks, expected]
         self._hours: dict[tuple[str, int], list[float]] = {}  # (segment or ANY, local send hour) -> same
+        self.no_click: set[str] = set()
+        """Channels (their values) that log no clicks: their uplift is lift per message, not per click."""
+        self.send_lift: tuple[float, float] = LIFT_PER_SEND_PRIOR
+        """Extra purchases per delivered message on a channel that logs no clicks (set by the agent)."""
+        self.send_lift_by_segment: dict[str, tuple[float, float]] = {}
+        self.action_scale: dict[str, tuple[float, float]] = {}
+        """Action key -> (mean, sd) of how much more or less it lifts per unit than the pool, as a
+        past randomised campaign showed (1 for an action never measured)."""
 
     # -- learning from clicks --
 
@@ -552,6 +621,7 @@ class ClickResponseModel(BetaResponseModel):
         local_hour: int | None = None,
     ) -> None:
         del offer_id
+        self.no_click.discard(_channel_value(action_key))
         self._fatigue.setdefault(_bucket(contacts_7d), [0.0, 0.0])[0] += 1.0
         if local_hour is not None:
             for seg in _with_pool(segment):
@@ -569,8 +639,10 @@ class ClickResponseModel(BetaResponseModel):
         effective sample size: the past campaigns targeted some people more than others, and the
         weights undo that so the rate is the segment's, not the targeted few's. Each customer's own
         record takes their sends unweighted (their response to what they got is what it is), with the
-        segment rate as the expected clicks, as for the agent's own sends.
+        segment rate as the expected clicks, as for the agent's own sends. Sends on a channel that
+        logs no clicks (`no_click`) are left out: they say nothing about clicks.
         """
+        sends = [r for r in sends if self.counts_clicks(r[2])]
         cells: dict[tuple[str, str], tuple[list[bool], list[float]]] = {}
         for _cid, segment, key, clicked, weight in sends:
             for seg in _with_pool(segment):
@@ -639,6 +711,23 @@ class ClickResponseModel(BetaResponseModel):
     def lift_for(self, segment: str | None) -> tuple[float, float]:
         return self.lift_by_segment.get(segment or ANY, self.lift)
 
+    def counts_clicks(self, action_key: str) -> bool:
+        """Whether this action's channel logs clicks (else its uplift is per message)."""
+        return _channel_value(action_key) not in self.no_click
+
+    def _unit(self, segment: str | None, action_key: str) -> tuple[float, float, float, float]:
+        """(lift per unit, its sd, units per message, their variance) for this action: per click on a
+        channel with clicks, per message (one unit, known exactly) on one without."""
+        r, r_sd = self.action_scale.get(action_key, (1.0, 0.0))
+        if self.counts_clicks(action_key):
+            k, k_sd = self.lift_for(segment)
+            rate = self.click_rate(segment or ANY, action_key)
+            base, base_var = rate.mean, rate.var
+        else:
+            k, k_sd = self.send_lift_by_segment.get(segment or ANY, self.send_lift)
+            base, base_var = 1.0, 0.0
+        return k * r, math.hypot(k_sd * r, k * r_sd), base, base_var
+
     def _parts(self, state: CustomerState, action_key: str) -> tuple[Beta, float, float, float]:
         """(click rate, personal x fatigue mean, its variance, the variance of the taste part alone)."""
         rate = self.click_rate(state.segment or ANY, action_key)
@@ -649,10 +738,10 @@ class ClickResponseModel(BetaResponseModel):
         return rate, f, f_var, rho * rho * taste_var
 
     def predict(self, state: CustomerState, action_key: str) -> tuple[float, float]:
-        rate, f, f_var, _taste_var = self._parts(state, action_key)
-        k, k_sd = self.lift_for(state.segment)
-        mean = k * rate.mean * f
-        var = (k_sd * rate.mean * f) ** 2 + k * k * (rate.var * f * f + rate.mean**2 * f_var)
+        _rate, f, f_var, _taste_var = self._parts(state, action_key)
+        k, k_sd, base, base_var = self._unit(state.segment, action_key)
+        mean = k * base * f
+        var = (k_sd * base * f) ** 2 + k * k * (base_var * f * f + base**2 * f_var)
         return mean, math.sqrt(var)
 
     def option_std(self, state: CustomerState, action_key: str) -> float:
@@ -666,11 +755,21 @@ class ClickResponseModel(BetaResponseModel):
         whatever they are sent. Exploration happens where the data is shared: the segment's click
         rate per action.
         """
-        rate, f, _f_var, _taste_var = self._parts(state, action_key)
-        return self.lift_for(state.segment)[0] * math.sqrt(rate.var) * f
+        _rate, f, _f_var, _taste_var = self._parts(state, action_key)
+        k, k_sd, _base, base_var = self._unit(state.segment, action_key)
+        if not self.counts_clicks(action_key):
+            # No click rate to explore: what is being learned per action is its lift per message.
+            return k_sd * f
+        return k * math.sqrt(base_var) * f
 
     def treated_rate(self, state: CustomerState, action_key: str) -> float:
         return min(1.0, max(self.organic(state), 0.0) + max(self.predict(state, action_key)[0], 0.0))
+
+
+CLICK = "click"
+SEND = "send"
+"""The two response units the lift is measured per: a click, or (on a channel that logs no clicks,
+such as SMS) a delivered message."""
 
 
 @dataclass
@@ -682,7 +781,8 @@ class LiftPerClick:
     purchases (a put-off customer buys less). Dividing by the agent group's clicks turns it into the
     scale of `ClickResponseModel`. A click only counts in full once a week has passed since its
     message (before that, part of the purchases it leads to have not happened yet). The estimate is
-    shrunk towards `LIFT_PER_CLICK_PRIOR`.
+    shrunk towards `prior`: `LIFT_PER_CLICK_PRIOR`, or what a past randomised campaign measured
+    (`AgentPolicy._calibrate`).
 
     Two things make it much less noisy on a small holdout:
 
@@ -692,7 +792,14 @@ class LiftPerClick:
       its variance that is just "some people buy more than others".
     * **Per segment, shrunk.** `by_segment` measures the same ratio inside each segment (the one a
       customer had when they joined) and pulls each towards the business-wide figure by as much as
-      the segments' spread beyond their own noise allows (`shrink_to_pool`).
+      the segments' spread beyond their own noise allows (`shrink_to_pool`). A segment the agent
+      has not measured yet keeps the ratio to the business figure a past campaign showed
+      (`history_ratio`).
+
+    **Two units.** On a channel that logs no clicks the unit is a delivered message (`kind=SEND`,
+    prior `send_prior`): "extra purchases per message". When the agent uses both kinds of channel,
+    each kind is credited with its `share` of the extra purchases (the agent passes each kind's share
+    of the uplift its sends were expected to bring), so one difference is not counted twice.
     """
 
     prior: tuple[float, float] = LIFT_PER_CLICK_PRIOR
@@ -708,6 +815,12 @@ class LiftPerClick:
     """Customer -> their segment when they joined."""
     clicks_by: dict[str, list[datetime]] = field(default_factory=dict)
     """Segment -> send times of the agent group's clicked messages."""
+    send_prior: tuple[float, float] = (0.0, 0.0)
+    """Prior of extra purchases per delivered message on channels without clicks (set by the agent)."""
+    send_times: list[datetime] = field(default_factory=list)
+    sends_by: dict[str, list[datetime]] = field(default_factory=dict)
+    history_ratio: dict[str, dict[str, float]] = field(default_factory=dict)
+    """Kind -> segment -> that segment's lift over the business-wide lift, as a past campaign showed."""
 
     def member(
         self,
@@ -732,19 +845,27 @@ class LiftPerClick:
         if self.start is not None and at >= self.start and customer_id in self.group:
             self.purchases[customer_id] = self.purchases.get(customer_id, 0) + 1
 
-    def click(self, sent_at: datetime, customer_id: str | None = None) -> None:
-        self.click_times.append(sent_at)
+    def click(self, sent_at: datetime, customer_id: str | None = None, *, kind: str = CLICK) -> None:
+        """One response unit: a clicked message (`CLICK`), or a delivered one without clicks (`SEND`)."""
+        times, by = self._units(kind)
+        times.append(sent_at)
         if customer_id is not None:
             seg = self.segment.get(customer_id)
             if seg is not None:
-                self.clicks_by.setdefault(seg, []).append(sent_at)
+                by.setdefault(seg, []).append(sent_at)
+
+    def _units(self, kind: str) -> tuple[list[datetime], dict[str, list[datetime]]]:
+        return (self.send_times, self.sends_by) if kind == SEND else (self.click_times, self.clicks_by)
+
+    def _prior(self, kind: str) -> tuple[float, float]:
+        return self.send_prior if kind == SEND else self.prior
 
     def _matured(self, times: Iterable[datetime], now: datetime) -> float:
         return sum(min(1.0, max((now - t).total_seconds(), 0.0) / 86_400.0 / self.effect_days) for t in times)
 
-    def _extra(self, members: Sequence[str]) -> tuple[float, float] | None:
-        """(extra purchases in the agent group, its standard error), CUPED-adjusted; None if a group
-        has fewer than two customers."""
+    def _extra(self, members: Sequence[str], share: float = 1.0) -> tuple[float, float] | None:
+        """(extra purchases in the agent group credited to this unit, its standard error),
+        CUPED-adjusted; None if a group has fewer than two customers."""
         groups = [self.group[c] for c in members]
         n_a = sum(1 for g in groups if g is Group.AGENT)
         n_h = sum(1 for g in groups if g is Group.HOLDOUT)
@@ -758,7 +879,8 @@ class LiftPerClick:
         ma, mh = sum(a) / n_a, sum(h) / n_h
         va = sum((v - ma) ** 2 for v in a) / (n_a - 1)
         vh = sum((v - mh) ** 2 for v in h) / (n_h - 1)
-        return (ma - mh) * n_a, math.sqrt(va / n_a + vh / n_h) * n_a
+        share = min(max(share, 0.0), 1.0)
+        return (ma - mh) * n_a * share, math.sqrt(va / n_a + vh / n_h) * n_a * share
 
     def _ratio(self, extra: tuple[float, float], clicks: float) -> tuple[float, float]:
         k0, sd0 = self.prior
@@ -766,9 +888,9 @@ class LiftPerClick:
         k = max((k0 * self.strength + extra[0]) / den, 0.0)
         return k, math.sqrt((sd0 * self.strength) ** 2 + extra[1] ** 2) / den
 
-    def evidence(self, now: datetime) -> float:
-        """Matured clicks behind the comparison so far (how much it has had to go on)."""
-        return self._matured(self.click_times, now)
+    def evidence(self, now: datetime, *, kind: str = CLICK) -> float:
+        """Matured units behind the comparison so far (how much it has had to go on)."""
+        return self._matured(self._units(kind)[0], now)
 
     def estimate(self, now: datetime) -> tuple[float, float]:
         clicks = self._matured(self.click_times, now)
@@ -777,45 +899,54 @@ class LiftPerClick:
             return self.prior
         return self._ratio(extra, clicks)
 
-    def posterior(self, now: datetime) -> tuple[float, float]:
-        """Extra purchases per click, combining the prior and the measurement by their precision.
+    def posterior(self, now: datetime, *, kind: str = CLICK, share: float = 1.0) -> tuple[float, float]:
+        """Extra purchases per unit, combining the prior and the measurement by their precision.
 
         `estimate` weighs the measurement by its clicks, however noisy the purchase comparison
         behind them still is; on a holdout of a hundred customers that lets one lucky week swing
-        every bid. Here the measured ratio (CUPED-adjusted extra purchases / matured clicks) counts
+        every bid. Here the measured ratio (CUPED-adjusted extra purchases / matured units) counts
         by 1 / its variance against the prior's 1 / sd^2, so it takes over as the comparison
-        tightens, not merely as clicks pile up."""
-        k0, sd0 = self.prior
-        clicks = self._matured(self.click_times, now)
-        extra = self._extra(sorted(self.group))
-        if extra is None or clicks <= 0:
-            return self.prior
-        k_hat, se = extra[0] / clicks, extra[1] / clicks
+        tightens, not merely as units pile up."""
+        k0, sd0 = self._prior(kind)
+        units = self._matured(self._units(kind)[0], now)
+        extra = self._extra(sorted(self.group), share) if units > 0 else None
+        if extra is None:
+            return k0, sd0
+        k_hat, se = extra[0] / units, extra[1] / units
         if se <= 0:
             return max(k_hat, 0.0), 0.0
+        if sd0 <= 0:
+            return k0, sd0
         w0, w = 1.0 / (sd0 * sd0), 1.0 / (se * se)
         return max((k0 * w0 + k_hat * w) / (w0 + w), 0.0), math.sqrt(1.0 / (w0 + w))
 
-    def by_segment(self, now: datetime) -> dict[str, tuple[float, float]]:
-        """Extra purchases per click per segment, each shrunk towards the business-wide posterior."""
-        pooled = self.posterior(now)
+    def by_segment(
+        self, now: datetime, *, kind: str = CLICK, share: float = 1.0
+    ) -> dict[str, tuple[float, float]]:
+        """Extra purchases per unit per segment, each shrunk towards the business-wide posterior;
+        segments the agent has not measured keep a past campaign's ratio to the business figure."""
+        pooled = self.posterior(now, kind=kind, share=share)
+        out = {seg: (pooled[0] * r, pooled[1] * r) for seg, r in self.history_ratio.get(kind, {}).items()}
         raw: dict[str, tuple[float, float]] = {}
         members: dict[str, list[str]] = {}
         for cid in sorted(self.group):
             seg = self.segment.get(cid)
             if seg is not None:
                 members.setdefault(seg, []).append(cid)
+        by = self._units(kind)[1]
         for seg, cids in members.items():
-            clicks = self._matured(self.clicks_by.get(seg, ()), now)
-            extra = self._extra(cids)
-            if extra is None or clicks < 1.0:
+            units = self._matured(by.get(seg, ()), now)
+            extra = self._extra(cids, share) if units >= 1.0 else None
+            if extra is None:
                 continue
             # no prior here: the pool is the prior, and shrink_to_pool decides how far to trust this
-            raw[seg] = (extra[0] / clicks, extra[1] / clicks)
-        if not raw:
-            return {}
-        shrunk = shrink_to_pool(raw, pooled[0])
-        return {seg: (max(k, 0.0), math.sqrt(sd * sd + pooled[1] ** 2)) for seg, (k, sd) in shrunk.items()}
+            raw[seg] = (extra[0] / units, extra[1] / units)
+        if raw:
+            shrunk = shrink_to_pool(raw, pooled[0])
+            out.update(
+                {seg: (max(k, 0.0), math.sqrt(sd * sd + pooled[1] ** 2)) for seg, (k, sd) in shrunk.items()}
+            )
+        return out
 
 
 @dataclass
@@ -1350,6 +1481,7 @@ class AgentPolicy:
         reading_hour_model: bool = True,
         restraint: bool = True,
         weekly_budget: bool = True,
+        currency: str = "$",
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
@@ -1380,7 +1512,7 @@ class AgentPolicy:
         self.restraint = restraint
         self._weak_lift: dict[str, bool] = {}
         """Segment (or ANY) -> whether the evidence that messages create lift there is weak tonight."""
-        self.lift = LiftPerClick(effect_days=float(learn_horizon_days))
+        self.lift = LiftPerClick(effect_days=float(learn_horizon_days), send_prior=LIFT_PER_SEND_PRIOR)
         self.organic = OrganicRate(self.segmenter, days=float(learn_horizon_days))
         if isinstance(bundle.response, ClickResponseModel):
             bundle.response.organic = self.organic
@@ -1392,6 +1524,7 @@ class AgentPolicy:
             exploration_floor,
             baseline_policy,
             mc_draws=mc_draws,
+            currency=currency,
             version=version,
             plausible_z=PLAUSIBLE_Z,
             min_gap=MIN_GAP,
@@ -1434,6 +1567,21 @@ class AgentPolicy:
         call than its send is still matched to it."""
         self.history_used = 0
         """How many logged history sends the warm start learned from."""
+        self.digest = HistoryDigest()
+        """Purchases, consent and first sightings from the history, kept compactly until the warm
+        start (and dropped after it)."""
+        self._history_holdout: dict[str, datetime] = {}
+        """Customer -> when, for a past campaign's holdout handed over as decisions before the first
+        decision (an explicit control group)."""
+        self.calibration: dict[str, object] = {}
+        self.uplift: UpliftWarmStart | None = None
+        """What the warm start learned about who a message moves (`autonomy.uplift`): the fitted
+        per-customer model, attached to the response model so every bidder blends it into its bids,
+        or None and its `notes` saying why not. None until the warm start."""
+        """What the warm start measured on past randomised campaigns (for explanations and tests)."""
+        self._expected_by_kind: dict[str, float] = {CLICK: 0.0, SEND: 0.0}
+        """Uplift the agent's own sends were expected to bring, per response unit: each kind's share
+        of the holdout difference."""
         self._refit_at: datetime | None = None
         self._live: tuple[Brief, ...] | None = None
         self._content_ref: object = None
@@ -1553,6 +1701,16 @@ class AgentPolicy:
 
     def segment(self, state: CustomerState, now: datetime) -> str:
         return self.segmenter.label(state, now)
+
+    def use_baseline(self, policy: Policy | None) -> None:
+        """The rule that decides for the baseline group (None leaves that group alone)."""
+        self.policy.baseline_policy = policy
+
+    @property
+    def needs_history(self) -> bool:
+        """True until the first decision: what `nightly` gets until then is the client's history,
+        which the warm start learns from (the runtime streams it all in, `_feed_history`)."""
+        return not self._decided
 
     def prepare_day(self, states: Sequence[CustomerState], ctx: DecisionContext) -> None:
         """Once a day before the sweep (optional): fit the frequency segments and the segments'
@@ -1805,32 +1963,224 @@ class AgentPolicy:
         (`_warm_hazard`). Segments are today's (as of the first decision): decisions in the history
         were not ours, so the segment each was made in is unknown, and a customer without a state
         here is pooled.
+
+        A channel with `NO_CLICK_MIN_SENDS` delivered past messages and not one click logs no clicks
+        (SMS, direct mail): its value is read per message from purchases, not from clicks. Then
+        `_calibrate` measures what past randomised campaigns were really worth and sets the lift per
+        click (and per message) from that. The contact-harm model, which gathered evidence while the
+        history streamed in, is fitted once here.
         """
         history = {cid: list(evs.values()) for cid, evs in self._history.items()}
         self._history = {}
         self._decided = True
-        sends = [s for s in logged_sends(history, self.content_by_id, exclude=self._sends) if s.delivered]
-        if not sends:
-            return
-        weights = ipw_weights([s.propensity for s in sends])
-        self._warm_hazard(history, sends, weights)
+        harm = contact_harm_of(self.bundle.response)
+        if harm is not None and harm.evidence:
+            harm.refit()
+        every = logged_sends(history, self.content_by_id, exclude=self._sends)
+        sends = [s for s in every if s.delivered]
+        model = self.bundle.response
+        if sends:
+            weights = ipw_weights([s.propensity for s in sends])
+            self._warm_hazard(history, sends, weights)
+            if isinstance(model, ClickResponseModel):
+                segment = {cid: self.segment(st, now) for cid, st in states.items()}
+                delivered: dict[str, int] = {}
+                clicked: set[str] = set()
+                for s in sends:
+                    delivered[s.channel.value] = delivered.get(s.channel.value, 0) + 1
+                    if s.clicked:
+                        clicked.add(s.channel.value)
+                model.no_click.update(
+                    ch for ch, n in delivered.items() if n >= NO_CLICK_MIN_SENDS and ch not in clicked
+                )
+                records = [
+                    (s.customer_id, segment.get(s.customer_id), s.action_key(), s.clicked, w)
+                    for s, w in zip(sends, weights, strict=True)
+                ]
+                self.history_used += model.warm_start(records)
+                for s in sends:
+                    if s.click_at is None or s.click_at - s.sent_at < LATE_CLICK:
+                        continue
+                    st = states.get(s.customer_id)
+                    tz = st.timezone if st is not None else self._timezones.get(s.customer_id, "UTC")
+                    self.reading.observe(
+                        s.customer_id, s.click_at.astimezone(zone_named(tz)).hour, segment.get(s.customer_id)
+                    )
+                self._calibrate(states, now, every, segment, records)
+                if SEND in self.calibration:
+                    # Messages on channels without clicks taught the lift per message instead.
+                    self.history_used += sum(1 for s in sends if not model.counts_clicks(s.action_key()))
+        if every:
+            # Who a message moves: fitted on the latest closed past campaign with the customers'
+            # features (`CustomerState.preferences`) and attached to the response model, so every
+            # bidder sharing it blends the per-customer score into its bids. No usable campaign, no
+            # model: bids are unchanged (the notes say why).
+            self.uplift = warm_start_uplift(
+                model,
+                states,
+                self.digest.as_events(history),
+                self.content_by_id,
+                now,
+                horizon_days=float(self.learn_horizon_days),
+                decisions=list(self._log.values()),
+                exclude=self._sends,
+            )
+        self.digest = HistoryDigest()
+        self._history_holdout = {}
+
+    def _objective(self, channel: Channel) -> Objective:
+        for brief in self.briefs.values():
+            if channel in brief.envelope.channels:
+                return brief.objective
+        return Objective.GROSS_PROFIT
+
+    def _proof_window(self) -> timedelta:
+        days = [b.horizon_days for b in self.briefs.values()]
+        return timedelta(days=max(days) if days else 14)
+
+    def _calibrate(
+        self,
+        states: Mapping[str, CustomerState],
+        now: datetime,
+        sends: Sequence[LoggedSend],
+        segment: Mapping[str, str],
+        records: Sequence[tuple[str, str | None, str, bool, float]],
+    ) -> None:
+        """Set the lift per click (and per message, on channels without clicks) from what past
+        randomised campaigns were really worth (`autonomy.learning.calibration`).
+
+        For each arm of a campaign with a randomised control: the extra money per recipient over the
+        control (CUPED-adjusted, over the brief's proof window), divided by what the model, at one
+        purchase per unit, predicts per recipient (their segment's click rate x their value; their
+        value alone on a channel without clicks). That is the lift per unit the campaign showed, with
+        its standard error. The arms are pooled by their precision and combined with the prior
+        (`LIFT_PER_CLICK_PRIOR`, `LIFT_PER_SEND_PRIOR`) by precision too, so a big campaign sets the
+        scale and a small one only nudges it. Arms and segments that differ beyond their noise keep
+        part of their own figure (`shrink_to_pool`): an e-mail that draws visits but few extra
+        purchases is valued below one that turns its visits into sales.
+
+        Without a randomised control, nothing in the history shows what a click is worth; the
+        history's click rate is then trusted to set the scale only part way (`HISTORY_CLICK_TRUST`).
+        """
         model = self.bundle.response
         if not isinstance(model, ClickResponseModel):
             return
-        segment = {cid: self.segment(st, now) for cid, st in states.items()}
-        records = [
-            (s.customer_id, segment.get(s.customer_id), s.action_key(), s.clicked, w)
-            for s, w in zip(sends, weights, strict=True)
-        ]
-        self.history_used += model.warm_start(records)
-        for s in sends:
-            if s.click_at is None or s.click_at - s.sent_at < LATE_CLICK:
+        arms, notes = randomised_arms(
+            sends,
+            self.digest,
+            window=self._proof_window(),
+            now=now,
+            holdout=self._history_holdout or None,
+        )
+        measured: dict[str, list[tuple[str, float, float]]] = {CLICK: [], SEND: []}
+        by_segment: dict[str, dict[str, list[tuple[float, float]]]] = {CLICK: {}, SEND: {}}
+        report: list[dict[str, object]] = []
+        for arm in arms:
+            kind = CLICK if model.counts_clicks(arm.action_key) else SEND
+            objective = self._objective(arm.channel)
+            margin_rate = None if objective is Objective.REVENUE else self.value._fallback_margin()
+            t0, t1 = arm.start.timestamp(), arm.end.timestamp()
+            treated = [c for c in arm.treated if c in states]
+            if len(treated) < MIN_ARM:
                 continue
-            st = states.get(s.customer_id)
-            tz = st.timezone if st is not None else self._timezones.get(s.customer_id, "UTC")
-            self.reading.observe(
-                s.customer_id, s.click_at.astimezone(zone_named(tz)).hour, segment.get(s.customer_id)
+            pred: dict[str, float] = {}
+            for c in treated:
+                seg = segment.get(c)
+                base = 1.0 if kind == SEND else model.click_rate(seg or ANY, arm.action_key).mean
+                pred[c] = base * self.value.value_if_converted(states[c], objective)
+            y = {c: self.digest.money(c, t0, t1, margin_rate) for c in (*treated, *arm.control)}
+            x = {c: self.digest.rate_before(c, t0) for c in (*treated, *arm.control)}
+            p_bar = sum(pred.values()) / len(pred)
+            diff = difference(
+                [y[c] for c in treated],
+                [y[c] for c in arm.control],
+                [x[c] for c in treated],
+                [x[c] for c in arm.control],
             )
+            if diff is None or p_bar <= 0:
+                continue
+            k, se = diff.effect / p_bar, diff.se / p_bar
+            measured[kind].append((arm.action_key, k, se))
+            report.append(
+                {
+                    "campaign": arm.campaign,
+                    "action": arm.action_key,
+                    "unit": kind,
+                    "treated": len(treated),
+                    "control": len(arm.control),
+                    "extra_money_per_recipient": diff.effect,
+                    "se": diff.se,
+                    "predicted_per_unit": p_bar,
+                    "lift_per_unit": k,
+                    "lift_se": se,
+                }
+            )
+            control_by: dict[str, list[str]] = {}
+            for c in arm.control:
+                seg = segment.get(c)
+                if seg is not None:
+                    control_by.setdefault(seg, []).append(c)
+            treated_by: dict[str, list[str]] = {}
+            for c in treated:
+                seg = segment.get(c)
+                if seg is not None:
+                    treated_by.setdefault(seg, []).append(c)
+            for seg, ts in sorted(treated_by.items()):
+                cs = control_by.get(seg, [])
+                if len(ts) < MIN_SEGMENT_ARM or len(cs) < MIN_SEGMENT_ARM:
+                    continue
+                d = difference([y[c] for c in ts], [y[c] for c in cs], [x[c] for c in ts], [x[c] for c in cs])
+                p_seg = sum(pred[c] for c in ts) / len(ts)
+                if d is not None and p_seg > 0:
+                    by_segment[kind].setdefault(seg, []).append((d.effect / p_seg, d.se / p_seg))
+        result: dict[str, object] = {"arms": report, "not_used": notes}
+        for kind, rows in measured.items():
+            pooled = combine((k, se) for _key, k, se in rows)
+            if pooled is None:
+                continue
+            prior = LIFT_PER_CLICK_PRIOR if kind == CLICK else LIFT_PER_SEND_PRIOR
+            post = with_prior(prior, pooled)
+            ratios: dict[str, float] = {}
+            if pooled[0] > 0:
+                per_key: dict[str, tuple[float, float]] = {}
+                for key in sorted({key for key, _k, _se in rows}):
+                    found = combine((k, se) for kk, k, se in rows if kk == key)
+                    if found is not None:
+                        per_key[key] = found
+                for key, (m, sd) in shrink_to_pool(per_key, pooled[0]).items():
+                    model.action_scale[key] = (max(m, 0.0) / pooled[0], sd / pooled[0])
+                segs = {
+                    seg: found
+                    for seg, vals in by_segment[kind].items()
+                    if (found := combine(vals)) is not None
+                }
+                if segs:
+                    ratios = {
+                        seg: max(m, 0.0) / pooled[0]
+                        for seg, (m, _sd) in shrink_to_pool(segs, pooled[0]).items()
+                    }
+            self.lift.history_ratio[kind] = ratios
+            by_seg = {seg: (post[0] * r, post[1] * r) for seg, r in ratios.items()}
+            if kind == CLICK:
+                self.lift.prior = post
+                model.lift, model.lift_by_segment = post, by_seg
+            else:
+                self.lift.send_prior = post
+                model.send_lift, model.send_lift_by_segment = post, by_seg
+            result[kind] = {"measured": pooled, "posterior": post, "segments": ratios}
+        if not measured[CLICK]:
+            # No control: the history's clicks set the scale of uplift only part way.
+            clicks = [(r[3], r[4]) for r in records if model.counts_clicks(r[2])]
+            if clicks:
+                rate, _n = weighted_rate([c for c, _w in clicks], [w for _c, w in clicks])
+                prior_rate = model.click_prior.mean
+                if rate > prior_rate > 0:
+                    factor = (prior_rate / rate) ** (1.0 - HISTORY_CLICK_TRUST)
+                    k0, sd0 = self.lift.prior
+                    self.lift.prior = (k0 * factor, sd0 * factor)
+                    model.lift = self.lift.prior
+                    result["no_control"] = {"history_click_rate": rate, "factor": factor}
+        self.calibration = result
 
     def _warm_hazard(
         self, history: Mapping[str, Sequence[Event]], sends: Sequence[LoggedSend], weights: Sequence[float]
@@ -1983,15 +2333,26 @@ class AgentPolicy:
         whole log: decisions and events are kept by id, so nothing is counted twice. Returns plain
         sentences for anything the breaker paused tonight (also kept in `alerts`).
         """
+        decisions = list(decisions)
         for d in decisions:
             self._keep(d)
-        if not self._decided and events_by_customer:
+        if not self._decided:
             # Before the first decision everything handed over is history: past campaigns' sends
             # and clicks are learned from at the first decision (they need segments, see _warm_start).
+            # Only their messages are kept whole; purchases and consent go to the compact digest, so
+            # the history can be streamed in, a slice of customers per call.
+            for d in decisions:
+                if d.kind is DecisionKind.NOTHING and d.group is Group.HOLDOUT:
+                    self._history_holdout.setdefault(d.customer_id, d.made_at)
             for cid, events in events_by_customer.items():
-                kept = self._history.setdefault(cid, {})
+                kept: dict[str, Event] | None = None
                 for e in events:
-                    if e.ts <= now:
+                    if e.ts > now:
+                        continue
+                    self.digest.add(e)
+                    if e.type in _HISTORY_KEEP:
+                        if kept is None:
+                            kept = self._history.setdefault(cid, {})
                         kept.setdefault(e.event_id, e)
         forgotten = self._forgotten_before
         for cid, events in events_by_customer.items():
@@ -2003,7 +2364,13 @@ class AgentPolicy:
                 self._seen_events.add(e.event_id)
                 self._events.setdefault(cid, []).append(e)
                 self._observe(e)
-        if self.segmenter.data_start is None:
+        if not self._decided and self.digest.data_start is not None:
+            # The business's records begin at its first purchase on file across the whole history,
+            # however many calls it came in.
+            first = datetime.fromtimestamp(self.digest.data_start, UTC)
+            if self.segmenter.data_start is None or first < self.segmenter.data_start:
+                self.segmenter.data_start = first
+        elif self.segmenter.data_start is None:
             purchases = [
                 e.ts for evs in events_by_customer.values() for e in evs if e.type is EventType.PURCHASE
             ]
@@ -2031,11 +2398,21 @@ class AgentPolicy:
                 # since the agent's first decision is the honest organic baseline.
                 harm_holdout=sorted(c for c, g in self.lift.group.items() if g is Group.HOLDOUT),
                 harm_split_at=self.lift.start,
+                harm_data_start=self.segmenter.data_start,
+                # While the history streams in, the harm model gathers evidence; it is fitted once at
+                # the warm start, not once per slice.
+                refit_harm=self._decided,
             )
         model = self.bundle.response
         if isinstance(model, ClickResponseModel):
-            model.lift = self.lift.posterior(now)
-            model.lift_by_segment = self.lift.by_segment(now)
+            expected = self._expected_by_kind
+            total = expected[CLICK] + expected[SEND]
+            click_share = expected[CLICK] / total if total > 0 else 1.0
+            send_share = expected[SEND] / total if total > 0 else 1.0
+            model.lift = self.lift.posterior(now, share=click_share)
+            model.lift_by_segment = self.lift.by_segment(now, share=click_share)
+            model.send_lift = self.lift.posterior(now, kind=SEND, share=send_share)
+            model.send_lift_by_segment = self.lift.by_segment(now, kind=SEND, share=send_share)
             if self._refit_at is None or now - self._refit_at >= timedelta(days=PERSONAL_REFIT_DAYS):
                 model.people.refit()
                 self._refit_at = now
@@ -2077,15 +2454,19 @@ class AgentPolicy:
         if d.kind is DecisionKind.ACT and d.action is not None:
             self._log[d.decision_id] = d
             if d.group is Group.AGENT:
+                new = d.decision_id not in self._sends
                 self._sends[d.decision_id] = (d.action.goal_id, d.action.channel, d.action.send_at)
                 item = self.content_by_id.get(d.action.content_id or "")
                 if item is not None:
                     seg = self._decision_segment.get(d.decision_id)
-                    self._send_keys[d.decision_id] = (
-                        seg,
-                        key_of(d.action.channel, d.action.offer_id, item.theme.value, item.format),
-                        d.action.offer_id,
-                    )
+                    key = key_of(d.action.channel, d.action.offer_id, item.theme.value, item.format)
+                    self._send_keys[d.decision_id] = (seg, key, d.action.offer_id)
+                    model = self.bundle.response
+                    if new and isinstance(model, ClickResponseModel):
+                        chosen = next((b for b in d.bids if b.action == d.action), None)
+                        if chosen is not None:
+                            kind = CLICK if model.counts_clicks(key) else SEND
+                            self._expected_by_kind[kind] += max(chosen.uplift, 0.0)
         elif d.group is Group.HOLDOUT:
             self._log[d.decision_id] = d
 
@@ -2121,7 +2502,11 @@ class AgentPolicy:
                     e.customer_id, send_at, self._timezones.get(e.customer_id, "UTC"), seg
                 )
             if keyed is not None and isinstance(model, ClickResponseModel):
-                model.observe_send(e.customer_id, keyed[0], keyed[1], keyed[2], before, local)
+                if model.counts_clicks(keyed[1]):
+                    model.observe_send(e.customer_id, keyed[0], keyed[1], keyed[2], before, local)
+                else:
+                    # No clicks on this channel: the delivered message is the unit its lift is per.
+                    self.lift.click(send_at, e.customer_id, kind=SEND)
         elif e.type in (EventType.UNSUBSCRIBE, EventType.COMPLAINT):
             # One lost contact per message, however many events it caused; complaints apart too.
             contacts = self._send_contacts.get(
@@ -2197,6 +2582,7 @@ def build_agent_policy(
     reading_hour_model: bool = True,
     restraint: bool = True,
     weekly_budget: bool = True,
+    currency: str = "$",
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -2215,7 +2601,8 @@ def build_agent_policy(
     lift is unproven) and `weekly_budget` (each customer's own weekly rhythm). `pacing` (slow a
     channel before a stop rule trips, `autonomy.decide.pacing`) is off by default: on the Gym it
     changed nothing where no stop rule is near and kept the breaker from stopping a complaint storm.
-    See docs/v2/CONTACT_LESS.md.
+    See docs/v2/CONTACT_LESS.md. `currency` is how money is written in each decision's reason (the
+    shop's own: "₽", "EUR "...).
     """
     if bundle is None:
         fresh = build_bundle()
@@ -2238,4 +2625,5 @@ def build_agent_policy(
         reading_hour_model=reading_hour_model,
         restraint=restraint,
         weekly_budget=weekly_budget,
+        currency=currency,
     )

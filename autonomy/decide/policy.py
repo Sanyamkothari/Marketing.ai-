@@ -213,6 +213,29 @@ def _unique(codes: Sequence[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(c for c in codes if c))
 
 
+def unreachable(state: CustomerState, ctx: DecisionContext) -> list[str]:
+    """Why no brief's channel can reach this customer, when none can: per channel the briefs allow,
+    the reach rule it fails (`unsubscribed`, `no_consent`, `no_address`, the order `check_bid` uses).
+
+    Bidders offer nothing on a channel the customer cannot be reached on, so without this a customer
+    who never gave consent was "left alone: no active goal has anything to offer", with an empty
+    `blocked_by`; now the decision says it is consent. Empty when some allowed channel is open."""
+    codes: list[str] = []
+    for brief in ctx.briefs:
+        for channel in brief.envelope.channels:
+            for check in (
+                rules.unsubscribed(state, channel),
+                rules.consent(state, channel),
+                rules.contactable(state, channel),
+            ):
+                if not check.allowed:
+                    codes.append(check.code)
+                    break
+            else:
+                return []
+    return codes
+
+
 class AutonomousPolicy:
     """`Policy` for the agent group, coded only against `Bidder` and the decision contracts.
 
@@ -336,6 +359,8 @@ class AutonomousPolicy:
                 survivors.append(bid)
             else:
                 blocked.append(check.code)
+        if not offered:
+            blocked.extend(unreachable(state, ctx))
         market = self.auction(state, ctx, survivors, blocked)
         survivors, options, cost = market.survivors, market.options, market.cost
         means = [0.0] + [b.expected_net - cost(b) for b in options]  # option 0 is "do nothing"
