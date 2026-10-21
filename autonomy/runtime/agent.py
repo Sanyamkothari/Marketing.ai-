@@ -165,6 +165,12 @@ from autonomy.uplift import UpliftWarmStart, warm_start_uplift
 
 AGENT_VERSION = "autonomy-agent-v1"
 
+PolicyChooser = Callable[[CustomerState, DecisionContext, Decision], Decision]
+"""The hook `AgentPolicy.use_chooser` takes: `(state, ctx, the agent's own decision) -> the decision to
+use`. Called for agent-group customers only, after the agent has decided. `autonomy.scientist.chooser`
+is the one implementation (Shadow first: it logs what the selected policy would do and returns the
+agent's decision unchanged)."""
+
 DEFAULT_LEARN_HORIZON_DAYS = 7
 """Days after a send in which a purchase counts as its outcome, for learning. A week, not the
 brief's two-week proof window: the agent contacts a customer up to twice a week, and a two-week
@@ -1505,6 +1511,8 @@ class AgentPolicy:
         self.reading = ReadingHours()
         self.breaker = Breaker()
         self.alerts: list[str] = []
+        self.chooser: PolicyChooser | None = None
+        """Set by `use_chooser`; None (the default) leaves every decision exactly as the agent made it."""
         self.value = ShrunkValueModel(base=bundle.value)
         self.contact_price = ContactPrice(self._click_fatigue, self._weekly_cap)
         self.pacer: Pacer | None = Pacer(step_aside=True) if pacing else None
@@ -1699,6 +1707,37 @@ class AgentPolicy:
 
     # --- deciding -------------------------------------------------------------------------------
 
+    def use_chooser(self, chooser: PolicyChooser | None) -> None:
+        """Let `chooser` see each agent-group decision after the agent made it, and replace it (None
+        removes the hook). The holdout and baseline groups never reach it. A chooser that raises is
+        ignored for that customer: the agent's decision stands and `alerts` says so."""
+        self.chooser = chooser
+
+    def _chosen(
+        self, state: CustomerState, ctx: DecisionContext, decision: Decision, segment: str
+    ) -> Decision:
+        chooser = self.chooser
+        if chooser is None:
+            return decision
+        try:
+            # The chooser sees the sends already scheduled for this customer (all but the agent's own
+            # decision, which it is about to replace), so the weekly cap holds across repeated decisions.
+            seen = self.policy.with_pending(state, ctx.now, ignore=decision.decision_id)
+            chosen = chooser(seen, ctx, decision)
+        except Exception as err:  # the agent's decision stands; a person is told
+            self.alerts.append(
+                f"policy chooser failed for {state.customer_id}: {err}; the agent's decision stands"
+            )
+            return decision
+        if chosen is not decision:
+            # The agent's own send is not going out: it must not count as pending towards the cap.
+            if decision.action is not None:
+                withdrawn = decision.model_copy(update={"kind": DecisionKind.NOTHING, "action": None})
+                self.policy._remember(withdrawn)
+            self.policy._remember(chosen)
+            self._decision_segment[chosen.decision_id] = segment
+        return chosen
+
     def segment(self, state: CustomerState, now: datetime) -> str:
         return self.segmenter.label(state, now)
 
@@ -1810,7 +1849,7 @@ class AgentPolicy:
             update["active_hours"] = ()
         decision = self.policy.decide(state.model_copy(update=update), eff, trigger=trigger)
         self._decision_segment[decision.decision_id] = seg
-        return decision
+        return self._chosen(state, eff, decision, seg)
 
     # --- explaining ------------------------------------------------------------------------------
 

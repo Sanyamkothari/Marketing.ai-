@@ -64,9 +64,17 @@ from scripts.v2_realbench.common import (
     split_by_hash,
     splitmix64,
 )
+from scripts.v2_realbench.sealed import SEALED_DATASETS  # adapters exist; run.py needs --sealed-final
 
 DATASETS = ("hillstrom", "x5", "criteo", "megafon")
-SIZES: dict[str, int] = {"hillstrom": 64_000, "x5": 100_000, "criteo": 300_000, "megafon": 200_000}
+SIZES: dict[str, int] = {
+    "hillstrom": 64_000,
+    "x5": 100_000,
+    "criteo": 300_000,
+    "megafon": 200_000,
+    "lenta": 200_000,
+    "starbucks": 126_184,
+}
 SAMPLE_SALT = "autonomy-realbench-v1:sample"
 VALUE_OF_CONVERSION = 20.0  # the agent's default: order value 50 x margin 0.4
 ORDER_VALUE = 50.0
@@ -504,7 +512,14 @@ def _feature_rct(
     candidates: tuple[tuple[str, ...], ...],
     notes: tuple[str, ...],
     sizes: dict[str, Any],
+    *,
+    value: float = VALUE_OF_CONVERSION,
+    cost_override: float | None = None,
+    categorical: tuple[str, ...] = (),
 ) -> BenchData:
+    """A feature-only RCT as bench data. `value` is the margin of a conversion and `cost_override` the
+    contact cost when the dataset states them (the defaults are the agent's own and the train
+    break-even cost, which is what Criteo and MegaFon use)."""
     goal = f"goal_{name}"
     t0 = FEATURE_T0
     signup = t0 - timedelta(days=200)
@@ -512,7 +527,8 @@ def _feature_rct(
     train, _ = split_by_hash(ids, salt=SPLIT_SALT)
     c_tr, a_tr = conversion[train], arm[train]
     ate = float(c_tr[a_tr == 1].mean() - c_tr[a_tr == 0].mean())
-    cost = max(VALUE_OF_CONVERSION * ate, 0.001)
+    cost = max(value * ate, 0.001) if cost_override is None else cost_override
+    order_value = value * ORDER_VALUE / VALUE_OF_CONVERSION
     info = {
         str(c): (int(a), float(v), bool(k))
         for c, a, v, k in zip(
@@ -586,8 +602,8 @@ def _feature_rct(
                         type=EventType.PURCHASE,
                         ts=t0 + WINDOW_PURCHASE_AFTER,
                         source=name,
-                        value=ORDER_VALUE,
-                        margin=VALUE_OF_CONVERSION,
+                        value=order_value,
+                        margin=value,
                     )
                 )
             out[c] = evs
@@ -605,7 +621,7 @@ def _feature_rct(
         pre_events=pre_events,
         campaign_events=campaign_events,
     )
-    numeric = tuple(str(c) for c in feats.columns)
+    numeric = tuple(str(c) for c in feats.columns if str(c) not in categorical)
     return BenchData(
         name=name,
         customer_ids=ids,
@@ -614,15 +630,19 @@ def _feature_rct(
         arm_names=("control", "treated"),
         features=feats.reset_index(drop=True),
         numeric=numeric,
-        categorical=(),
+        categorical=categorical,
         conversion=conversion.astype(np.float64),
-        margin_value=VALUE_OF_CONVERSION * conversion.astype(np.float64),
+        margin_value=value * conversion.astype(np.float64),
         arm_cost=(0.0, cost),
-        conversion_value=np.full(len(ids), VALUE_OF_CONVERSION),
+        conversion_value=np.full(len(ids), value),
         segment_candidates=candidates,
         economics=(
-            f"profit = {VALUE_OF_CONVERSION:g} x conversion - {cost:.5f} per contact "
-            f"(break-even cost on train: {VALUE_OF_CONVERSION:g} x train effect {ate:+.5f})"
+            f"profit = {value:g} x conversion - {cost:.5f} per contact "
+            + (
+                f"(break-even cost on train: {value:g} x train effect {ate:+.5f})"
+                if cost_override is None
+                else "(the dataset's own stated cost)"
+            )
         ),
         agent=agent,
         notes=(
@@ -723,8 +743,132 @@ def megafon(data_dir: Path, timings: Timings, *, limit: int | None = None) -> Be
     )
 
 
+# --- sealed datasets (adapters only: run.py needs --sealed-final to call them) --------------------
+
+LENTA_CANDIDATES: tuple[tuple[str, ...], ...] = (
+    ("age",),
+    ("gender",),
+    ("main_format",),
+    ("children",),
+    ("months_from_register",),
+    ("promo_share_15d",),
+    ("age", "gender"),
+)
+LENTA_CATEGORICAL = ("gender", "main_format")
+LENTA_OUTCOMES = ("response_att", "response_sms", "response_viber")
+"""Lenta's response columns. `response_att` is the conversion; the other two are responses to a
+particular channel and are never features."""
+STARBUCKS_VALUE = 10.0
+STARBUCKS_COST = 0.15
+"""The exercise's own economics: a purchase is worth $10 and each promotion costs $0.15."""
+STARBUCKS_CANDIDATES: tuple[tuple[str, ...], ...] = (
+    ("V1",),
+    ("V2",),
+    ("V3",),
+    ("V4",),
+    ("V5",),
+    ("V6",),
+    ("V7",),
+    ("V4", "V5"),
+)
+
+
+def lenta_frame(path: Path, n_rows: int) -> pd.DataFrame:
+    """A fixed sample of Lenta rows (the `n_rows` smallest hashes of the row number), all columns."""
+    frame = pd.read_csv(path)
+    ids = np.array([f"ln{i}" for i in range(len(frame))], dtype=object)
+    keep = np.sort(pick_by_hash(ids, min(n_rows, len(frame)), salt=SAMPLE_SALT + ":lenta"))
+    out = frame.iloc[keep].reset_index(drop=True)
+    out.insert(0, "customer_id", ids[keep])
+    return out
+
+
+def lenta_from_frame(frame: pd.DataFrame, *, fixed: bool) -> BenchData:
+    """Lenta uplift (a grocery retailer's SMS / Viber campaign, test vs control) as bench data.
+
+    Treatment = `group == "test"`, conversion = `response_att`. The data has no amounts, so a
+    conversion is worth the agent's default 20 and the cost is the break-even cost on TRAIN, as for
+    MegaFon and Criteo. The treated share is estimated from the data (a constant design probability;
+    no outcome is involved)."""
+    ids = frame["customer_id"].astype(str).to_numpy().astype(object)
+    arm = (frame["group"].astype(str) == "test").to_numpy().astype(np.int64)
+    p_treated = float(arm.mean())
+    feats = frame.drop(columns=["customer_id", "group", *LENTA_OUTCOMES], errors="ignore").copy()
+    for col in LENTA_CATEGORICAL:
+        if col in feats.columns:
+            feats[col] = feats[col].astype(str)
+    numeric_cols = [c for c in feats.columns if c not in LENTA_CATEGORICAL]
+    feats[numeric_cols] = feats[numeric_cols].astype(np.float64)
+    candidates = tuple(c for c in LENTA_CANDIDATES if all(x in feats.columns for x in c))
+    return _feature_rct(
+        "lenta",
+        ids,
+        arm,
+        p_treated,
+        feats,
+        frame["response_att"].to_numpy(dtype=np.float64),
+        None,
+        candidates,
+        (
+            "SMS / Viber campaign of a grocery retailer; treated = group test (the share is estimated "
+            "from the data); no click-like signal; response_sms and response_viber are not features",
+        ),
+        {"rows_in_file": 687_029, "rows": len(ids), "fixed": fixed, "treated_share": p_treated},
+        categorical=tuple(c for c in LENTA_CATEGORICAL if c in feats.columns),
+    )
+
+
+def lenta(data_dir: Path, timings: Timings, *, limit: int | None = None) -> BenchData:
+    n_rows = limit or SIZES["lenta"]
+    with timings.step("lenta: read and pick a fixed sample"):
+        frame = lenta_frame(data_dir / "lenta" / "lenta_dataset.csv.gz", n_rows)
+    return lenta_from_frame(frame, fixed=limit is None)
+
+
+def starbucks_frame(root: Path, limit: int | None = None) -> pd.DataFrame:
+    """The experiment's training and test files as one table (both are randomised, 50/50)."""
+    parts = []
+    for tag, fname in (("tr", "training.csv"), ("te", "Test.csv")):
+        part = pd.read_csv(root / fname)
+        part.insert(0, "customer_id", [f"sb{tag}{i:06d}" for i in range(len(part))])
+        parts.append(part)
+    frame = pd.concat(parts, ignore_index=True)
+    return frame.iloc[:limit].copy() if limit else frame
+
+
+def starbucks_from_frame(frame: pd.DataFrame, *, fixed: bool) -> BenchData:
+    """The Starbucks promotion experiment (a promotion to half the customers, 50/50) as bench data,
+    with the exercise's own economics: $10 per purchase, $0.15 per promotion."""
+    ids = frame["customer_id"].astype(str).to_numpy().astype(object)
+    arm = (frame["Promotion"].astype(str) == "Yes").to_numpy().astype(np.int64)
+    feats = frame[[c for c in frame.columns if c.startswith("V")]].astype(np.float64)
+    return _feature_rct(
+        "starbucks",
+        ids,
+        arm,
+        0.5,
+        feats,
+        frame["purchase"].to_numpy(dtype=np.float64),
+        None,
+        STARBUCKS_CANDIDATES,
+        (
+            "Udacity Starbucks promotion experiment, training and test files pooled; anonymised V1-V7",
+            "the exercise's economics: a purchase is worth $10, a promotion costs $0.15",
+        ),
+        {"rows_in_files": 126_184, "rows": len(ids), "fixed": fixed},
+        value=STARBUCKS_VALUE,
+        cost_override=STARBUCKS_COST,
+    )
+
+
+def starbucks(data_dir: Path, timings: Timings, *, limit: int | None = None) -> BenchData:
+    with timings.step("starbucks: read the two files"):
+        frame = starbucks_frame(data_dir / "starbucks_promo", limit)
+    return starbucks_from_frame(frame, fixed=limit is None)
+
+
 def load(name: str, data_dir: Path, timings: Timings, *, limit: int | None = None) -> BenchData:
-    """The bench adapter for `name` (one of `DATASETS`)."""
+    """The bench adapter for `name` (one of `DATASETS`, or a sealed one; `run.py` guards the latter)."""
     if name == "hillstrom":
         with timings.step("hillstrom: read, add customer ids, map rows (repo loader)"):
             return hillstrom(data_dir, limit=limit)
@@ -734,4 +878,8 @@ def load(name: str, data_dir: Path, timings: Timings, *, limit: int | None = Non
         return criteo(data_dir, timings, limit=limit)
     if name == "megafon":
         return megafon(data_dir, timings, limit=limit)
-    raise ValueError(f"unknown dataset {name!r}; choose from {', '.join(DATASETS)}")
+    if name == "lenta":
+        return lenta(data_dir, timings, limit=limit)
+    if name == "starbucks":
+        return starbucks(data_dir, timings, limit=limit)
+    raise ValueError(f"unknown dataset {name!r}; choose from {', '.join([*DATASETS, *SEALED_DATASETS])}")

@@ -15,9 +15,23 @@ Run from the repo root (the datasets live outside the repo, never in it):
 python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out.json
 python -m scripts.v2_realbench.run --dataset hillstrom --data-dir /home/user/datasets --json hillstrom.json
 python -m scripts.v2_realbench.run --dataset {hillstrom,x5,criteo,megafon,all} --data-dir DIR --json FILE
+python -m scripts.v2_realbench.run --dataset {hillstrom,x5,criteo,megafon} --policy scientist --data-dir DIR --json FILE
+python -m scripts.v2_realbench.run --dataset {hillstrom,x5,criteo,megafon} --policy scientist --ai-answers ANSWERS.json --json FILE
 python -m scripts.v2_realbench.run --render out.json        # the markdown tables of a saved report
 python -m scripts.v2_realbench.fetch --data-dir DIR          # download the four datasets, checksummed
+python -m scripts.v2_realbench.sealed --data-dir DIR         # load check of the two SEALED datasets (see Sealed runs)
+python -m scripts.v2_realbench.targets [--base-dir OUT]      # validate / judge docs/v2/TARGETS.json
+python -m scripts.v2_realbench.gym_fit --data-dir DIR [--check|--literal]   # the Gym's real-calibrated fits
 ```
+
+`--policy scientist` scores the policy the Scientist selects on TRAIN from its typed menu instead of the agent
+alone, and `--ai-answers` adds the AI roles' loop (recorded Sonnet answers, a prompt without an answer is
+saved and the run exits 3); see [SCIENTIST.md](SCIENTIST.md). The agent bench (`--policy agent`, the default)
+is the scoreboard of record and is unchanged.
+
+`--dataset lenta` and `--dataset starbucks` are SEALED: the run refuses them unless `--sealed-final` is
+passed, they are never part of `--dataset all`, and each sealed run is recorded in
+[Sealed runs](#sealed-runs) before the data is read.
 
 Options: `--seeds` (agent decisions per test customer, fixed at 4), `--limit N` (fewer customers, for
 a smoke run only: the report then says `"fixed_sizes": false` and is not comparable),
@@ -130,8 +144,34 @@ On each dataset, on the profit reward:
 4. **Calibration within 2x** on Hillstrom and Criteo: `calibration.ratio` between 0.5 and 2 (about
    10x today).
 
-The intervals are 95% normal intervals, one per comparison, NOT corrected for the many comparisons
-on the scoreboard: a result that only just excludes zero is suggestive, not proven.
+The intervals above are 95% normal intervals, one per comparison, NOT corrected for the many
+comparisons on the scoreboard: a result that only just excludes zero is suggestive, not proven. The
+report now also carries the corrected version (see
+[Multiple comparisons](#multiple-comparisons-holm-bonferroni)), and the targets are restated as
+pre-registered, machine-checkable claims in [TARGETS.json](TARGETS.json) (below).
+
+### Pre-registered claims (`docs/v2/TARGETS.json`)
+
+`TARGETS.json` is a list of claims, each `{id, claim, command, threshold, passes}` with `passes: null`
+until the command has been run and the threshold judged (`python -m scripts.v2_realbench.targets
+--base-dir OUT [--write]` does that mechanically; the only claims set by hand are the two whose threshold
+is the text "exit status 0", after their command exited 0). It was written before anything was run for it; a
+test pins the SHA-256 of every claim's id, claim, command and threshold, so only `passes` can change. On
+21 Oct 2026 24 of the 52 were judged (16 pass, 8 fail; the other 28, Gym stage claims at the CI size, were not
+run): see [SCIENTIST.md](SCIENTIST.md#targets-met-and-missed). It covers:
+
+* the real bench, per dev dataset: **non-inferior** to the best simple policy (the Holm-Bonferroni-
+  corrected lower bound of agent minus best simple policy is above minus 2% of that policy's DR value;
+  the 2% is `NON_INFERIORITY_SHARE` in `common.py`, fixed here and not tuned); **beats it where
+  features carry signal** (the T-learner beats the best simple policy; MegaFon is that case, so its
+  claim is `== true`, the others `!= false` because they are vacuous without signal); **calibration
+  within 2x** on all four (the old target asked for it on two);
+* the Gym, per scenario and stage (`verdict.stage_reached >= k` at the CI size, 3,000 x 3), with
+  the kinds of GYM_BAR.md: Stages 1-3 where messages can make money, Stages 1-2 for `null_effect`
+  and `complaint_storm`; `smoke` is a test fixture and has no claim;
+* the sealed check: non-inferiority and calibration on `lenta` and `starbucks`, from one run each;
+* that the real-calibrated Gym scenarios still hold the numbers fitted on the TRAIN halves
+  (`gym_fit --check`), and that this step's tests pass.
 
 ## BEFORE: the current code (commit `f55c57b3`)
 
@@ -361,6 +401,64 @@ Agent: decisions {'nothing': 528201, 'act': 71711}, warm start used 127683 logge
 
 Agent: decisions {'nothing': 215502, 'act': 184054}, warm start used 50308 logged sends from 100,111 train customers (270,975 events), 0.697 ms per decision, 4 seeds. Verdict: {'ties_or_beats_best_simple': True, 'beats_best_simple': True, 'not_worse_than_send_to_all': True, 'ties_or_beats_best_simple_on_test': True, 'calibration_within_2x': True, 'calibration_expected_inside_measured_ci': False, 'intervals': '95% normal, paired, NOT corrected for multiple comparisons: suggestive'}.
 
+## Multiple comparisons (Holm-Bonferroni)
+
+The scoreboard makes many comparisons on one set of customers (the agent against every other policy,
+on every dataset), so a 95% interval that only just excludes zero is expected by chance somewhere. The
+report (`add_multiplicity` in `common.py`, called by `run.py` after every dataset) now holds, for each
+"agent minus policy" paired DR difference, both the **raw** and the **corrected** statistics:
+
+* the raw 95% interval and its two-sided normal p-value (from the interval's own standard error);
+* the **Holm** step-down adjusted p-value (sort ascending, multiply the i-th smallest by m - i, take the
+  running maximum, cap at 1; it controls the chance of any false rejection at 5% whatever the
+  dependence between comparisons, and they share customers, so they are dependent);
+* a **Bonferroni-widened interval** at level 1 - 0.05/m, which is simultaneously valid for all m and is
+  the conservative companion of Holm's test (Holm rejects at least as often; an exact Holm-consistent
+  interval is not used);
+* whether the difference is significant raw and after Holm.
+
+Two families are reported. `datasets.<d>.multiplicity` holds a dataset's own comparisons; the report's
+`multiplicity` holds every comparison of every dataset in the run, and it is the one the corrected
+verdicts use (`datasets.<d>.verdict_corrected`: `non_inferior_to_best_simple`,
+`beats_best_simple_where_signal`, `calibration_within_2x`). A single-dataset run therefore has a smaller
+family than a full run, so the full command is the one of record. `render` prints both tables.
+
+Applied offline to the saved report of the AFTER run (`after_final.json`, the fix wave's full run on
+`f55c57b3` plus the uncommitted fix wave; no new agent run, the family is its 17 comparisons, so the
+corrected interval has level 0.9971):
+
+| Comparison | Raw diff [95% CI] | Raw p | Holm p | Corrected interval | Significant (raw / Holm) |
+|---|---:|---:|---:|---:|---|
+| hillstrom: agent minus send to none | +0.3446 [+0.1628, +0.5265] | 0.0002 | 0.0022 | +0.3446 [+0.0687, +0.6206] | yes / yes |
+| hillstrom: agent minus send to all: Mens E-Mail | -0.0253 [-0.0476, -0.0030] | 0.0265 | 0.2650 | -0.0253 [-0.0592, +0.0086] | yes / no |
+| hillstrom: agent minus send to all: Womens E-Mail | +0.1828 [-0.0102, +0.3759] | 0.0635 | 0.5077 | +0.1828 [-0.1101, +0.4758] | no / no |
+| hillstrom: agent minus segment rule | +0.0273 [-0.1090, +0.1635] | 0.6949 | 1.0000 | +0.0273 [-0.1794, +0.2339] | no / no |
+| hillstrom: agent minus T-learner | +0.0300 [-0.0827, +0.1427] | 0.6016 | 1.0000 | +0.0300 [-0.1410, +0.2010] | no / no |
+| x5: agent minus send to none | +1.6441 [+0.1696, +3.1185] | 0.0289 | 0.2650 | +1.6441 [-0.5931, +3.8812] | yes / no |
+| x5: agent minus send to all: SMS | +0.1284 [-0.2479, +0.5047] | 0.5036 | 1.0000 | +0.1284 [-0.4425, +0.6993] | no / no |
+| x5: agent minus segment rule | -0.1026 [-0.5541, +0.3490] | 0.6562 | 1.0000 | -0.1026 [-0.7876, +0.5825] | no / no |
+| x5: agent minus T-learner | -0.3962 [-1.0842, +0.2919] | 0.2591 | 1.0000 | -0.3962 [-1.4401, +0.6478] | no / no |
+| criteo: agent minus send to none | +0.0250 [+0.0148, +0.0353] | 1.8e-06 | 2.3e-05 | +0.0250 [+0.0095, +0.0406] | yes / yes |
+| criteo: agent minus send to all: treated | +0.0209 [+0.0167, +0.0252] | 2.8e-22 | 3.9e-21 | +0.0209 [+0.0145, +0.0274] | yes / yes |
+| criteo: agent minus segment rule (f8) | +0.0018 [-0.0012, +0.0048] | 0.2466 | 1.0000 | +0.0018 [-0.0028, +0.0064] | no / no |
+| criteo: agent minus T-learner | +0.0250 [+0.0148, +0.0353] | 1.8e-06 | 2.3e-05 | +0.0250 [+0.0095, +0.0406] | yes / yes |
+| megafon: agent minus send to none | +0.5634 [+0.4953, +0.6316] | 4.3e-59 | 6.9e-58 | +0.5634 [+0.4601, +0.6668] | yes / yes |
+| megafon: agent minus send to all: treated | +0.6028 [+0.5312, +0.6743] | 2.9e-61 | 4.9e-60 | +0.6028 [+0.4942, +0.7113] | yes / yes |
+| megafon: agent minus segment rule (X_5) | +0.4627 [+0.3946, +0.5308] | 1.7e-40 | 2.6e-39 | +0.4627 [+0.3594, +0.5660] | yes / yes |
+| megafon: agent minus T-learner | -0.0130 [-0.0429, +0.0169] | 0.3942 | 1.0000 | -0.0130 [-0.0583, +0.0323] | no / no |
+
+What the correction changes. Two comparisons that were significant raw stop being so: Hillstrom's
+loss to send-all men's (raw p 0.027, Holm 0.27, so "the agent loses to the best simple policy there" is
+not proven) and X5's gain over sending nothing (raw p 0.029, Holm 0.27, so "SMS targeting beats silence
+on X5" is not proven either). What survives is large: Hillstrom's gain over sending nothing, Criteo's
+gains over sending nothing, over sending to all and over the T-learner (which contacts nobody there), and
+MegaFon's gains over every policy except the T-learner, which the agent ties. Against the
+pre-registered claims the same report gives (tolerance 2% of the best simple policy's DR value):
+non-inferior on X5 (corrected low -0.79 against a tolerance of 1.45) and MegaFon (+0.36, and it beats it,
+as the signal claim asks), not non-inferior on Hillstrom (-0.059 against 0.0135) or Criteo (-0.0028
+against 0.0010); calibration within 2x on Hillstrom, X5 and MegaFon but not Criteo (0.48x). These are the
+AFTER numbers re-judged by the new rule, not a new run.
+
 ## CI: the scoreboard workflow
 
 ### Downloading the data
@@ -399,3 +497,82 @@ runner was checked from this environment only.
 
 Licences: Hillstrom free for research use (MineThatData 2008); Criteo CC BY-NC-SA 4.0; the X5 and
 MegaFon mirrors state no licence (scikit-uplift S3 copies of the ods.ai contest files).
+
+## Sealed runs
+
+Two public randomised campaigns are kept **sealed**: the Lenta uplift dataset (`lenta`) and the Udacity
+Starbucks promotion experiment (`starbucks`, folder `starbucks_promo`). Nothing is fitted, tuned or
+chosen on them. They are for one final check that what we found on the four dev datasets was not luck.
+
+* **Before the final check** only a load check is allowed (`python -m scripts.v2_realbench.sealed`): row
+  counts, column names and the treatment share. It reads the header and the treatment column of each
+  file, never an outcome column. On 21 Oct 2026: Lenta 687,029 rows, 195 columns, treatment share 0.7509
+  (`group == test`); Starbucks 126,184 rows (84,534 in `training.csv`, 41,650 in `Test.csv`), 10 columns
+  each, treatment share 0.5002 (`Promotion == Yes`: 0.5011 and 0.4982 by file).
+* **Adapters exist** (`adapters.py`: `lenta`, `starbucks`; tested only on inline fixtures with the real
+  files' column names). Lenta: a fixed 200,000-row sample (smallest hash of the row number), treated =
+  `group == test`, conversion = `response_att`, `response_sms` and `response_viber` never features, no
+  amounts, so a conversion is worth the agent's default 20 and the cost is the break-even cost on train
+  (as for MegaFon and Criteo); the treated share is estimated from the data. Starbucks: both files pooled,
+  50/50, and the exercise's own economics (a purchase is worth $10, a promotion costs $0.15).
+* **The seal is a flag.** `run.py --dataset lenta|starbucks` exits 2 and reads nothing unless
+  `--sealed-final` is passed, which also refuses `--limit`, `--seeds` other than 4 and `--no-features`
+  (a sealed run is the scoreboard of record, not a smoke run). The run appends a row below to this
+  table BEFORE reading the data, so a crashed run still counts as opened. The sealed claims in
+  `TARGETS.json` are judged on that one run and are never re-run after a change to get a better number.
+* **Not pristine, and why that matters.** Earlier family-A work (before sealing was decided) already ran
+  agent code on both files: `docs/v2/real_data/A-randomised.md` has `lenta` and `starbucks` sections, and
+  `/home/user/datasets/_results/` holds `a_lenta.*` and `a_starbucks.*`. Their numbers were not used for
+  any choice in this step and these files were not opened, but anyone who read them has seen outcomes of
+  these data; the final check is a check of the *current* code and settings, fixed here, not a claim of
+  never-seen data.
+
+| Date (UTC) | Git sha | Dataset | Command |
+|---|---|---|---|
+| 2026-10-21 16:32:02 | cecbf4d8af54 (dirty) | lenta | `python -m scripts.v2_realbench.run --dataset lenta --data-dir /home/user/datasets --sealed-final --json /tmp/claude-0/-home-user/c7787998-074f-51f3-9065-71bef613b34b/scratchpad/final/out/sealed_lenta.json --quiet` |
+| 2026-10-21 16:40:33 | cecbf4d8af54 (dirty) | lenta | `python -m scripts.v2_realbench.run --dataset lenta --policy scientist --data-dir /home/user/datasets --sealed-final --json /tmp/claude-0/-home-user/c7787998-074f-51f3-9065-71bef613b34b/scratchpad/final/out/sealed_lenta_scientist.json --quiet` |
+| 2026-10-21 16:53:48 | cecbf4d8af54 (dirty) | starbucks | `python -m scripts.v2_realbench.run --dataset starbucks --data-dir /home/user/datasets --sealed-final --json /tmp/claude-0/-home-user/c7787998-074f-51f3-9065-71bef613b34b/scratchpad/final/out/sealed_starbucks.json --quiet` |
+| 2026-10-21 16:56:53 | cecbf4d8af54 (dirty) | starbucks | `python -m scripts.v2_realbench.run --dataset starbucks --policy scientist --data-dir /home/user/datasets --sealed-final --json /tmp/claude-0/-home-user/c7787998-074f-51f3-9065-71bef613b34b/scratchpad/final/out/sealed_starbucks_scientist.json --quiet` |
+
+The four rows are the four sealed runs of this step: the agent and the Scientist (`--policy scientist`, the fixed
+candidate list; the AI roles were not run on sealed data) on each dataset, each opened once and never repeated.
+`cecbf4d8af54 (dirty)` is the parent commit plus the uncommitted working tree that was then committed as the commit
+that carries these rows (`autonomy/` and `scripts/` were not edited between the first sealed run and that commit).
+The reports are `sealed_lenta.json`, `sealed_lenta_scientist.json`, `sealed_starbucks.json` and
+`sealed_starbucks_scientist.json` of the run, kept in the session scratchpad, not in the repo.
+
+### Sealed result (21 Oct 2026, one run each, nothing tuned afterwards)
+
+| Dataset | Policy | What it did | Value (DR) | Contacted | Minus best simple [95% CI] | Corrected low vs tolerance | Non-inferior | Calibration within 2x |
+|---|---|---|---:|---:|---:|---|---|---|
+| lenta | agent | learning agent | 2.0838 | 5.1% | +0.0060 [-0.0781, +0.0901] vs send to all | -0.1012 vs 0.0416 | **no** | **no ratio**: measured gain per contact is not above 0 (expected -0.0400, measured -0.0369 [-0.2462, +0.1723]) |
+| lenta | Scientist | kept the safe default, send nothing (segment rule +0.0503, Holm p 0.214; uplift model +0.0001; agent -0.0023) | 2.0857 | 0.0% | +0.0079 [-0.0802, +0.0959] vs send to all | -0.1078 vs 0.0416 | **no** | not applicable (contacts nobody) |
+| starbucks | agent | learning agent | 0.0839 | 31.8% | -0.0018 [-0.0081, +0.0045] vs the V4+V5 segment rule | -0.0098 vs 0.0017 | **no** | **yes**, 0.86x (0.0382 expected vs 0.0446 [0.0099, 0.0793]) |
+| starbucks | Scientist | kept the safe default, send nothing (segment rule +0.0132, Holm p 0.252; uplift model +0.0083; agent +0.0079) | 0.0697 | 0.0% | -0.0160 [-0.0287, -0.0033] vs the V4+V5 segment rule | -0.0327 vs 0.0017 | **no** | not applicable (contacts nobody) |
+
+Corrected = Bonferroni-widened over the run's own comparisons (4 for the agent, 5 for the Scientist, so the level is
+0.9875 and 0.99), the family of a single-dataset run. The four pre-registered sealed claims of
+[TARGETS.json](TARGETS.json) are therefore: `sealed.lenta.non_inferior` FAIL, `sealed.lenta.calibration` FAIL (the
+rule asks for `within_2x == true`; the report says it cannot be computed because the agent's measured gain per
+contact is not above zero), `sealed.starbucks.non_inferior` FAIL, `sealed.starbucks.calibration` PASS.
+
+What this says, in plain words:
+
+* **Lenta has no measurable profit effect at the bench's break-even cost.** Sending to everyone, to nobody, to 5.1% (the
+  agent) and to 45% (the T-learner) are all within +/-0.03 of 2.08 per customer, and the best simple policy chosen on
+  train (send to all, 2.0574 against 2.0574 for send-to-none: a tie to the fourth decimal) differs from send-to-none by
+  -0.0079 [-0.0959, +0.0802]. The pre-registered rule needs the corrected interval of "policy minus best simple" to stay
+  above minus 2% of 2.08 = 0.042, and at this sample size that interval's corrected half-width is about 0.11, so a
+  policy that merely ties the best simple one cannot pass. Both policies fail the rule there; neither is measurably
+  worse (the points are +0.006 and +0.008).
+* **Starbucks has signal, and the agent finds most of it.** The agent earns 0.0839 against the best segment rule's
+  0.0857 and sending to all loses 0.057 per customer (the exercise's promotion costs more than it brings on average);
+  the agent beats send-to-all by +0.0710 [+0.0592, +0.0828] and its calibration is within 2x. It fails the 2% rule
+  because the tolerance there is 0.0017 and the corrected interval's half-width is about 0.008.
+* **The Scientist's safe default cost it on Starbucks.** Its held-out half of TRAIN had 31,494 customers, the segment
+  rule gained +0.0132 there (raw p 0.084, Holm 0.252), so no candidate was proven and it kept sending nothing. On TEST that
+  is 0.0160 per customer below the segment rule and 0.0142 below the agent (raw intervals exclude zero). This is the
+  rule working as written: it does not act on a gain it cannot prove, and a shop this size cannot prove +0.013 with half
+  of its customers. It is the price of "held-out evidence decides" at 60,000 customers.
+* **Not pristine.** Earlier family-A work had already run agent code on both files (see above); this is a check of the
+  current code and settings, not of never-seen data.

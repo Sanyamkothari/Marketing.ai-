@@ -493,7 +493,9 @@ class GymWorld:
 
             # Clicks: mostly from the people the message moves, timed by their best hour.
             roll = rolls[k]
-            if roll[0] < click_probability(lift, annoyed[k], days):
+            if roll[0] < click_probability(
+                lift, annoyed[k], days, floor=spec.click_floor, slope=spec.click_per_extra_purchase
+            ):
                 delay = click_delay(roll[1], hour_factor[k], best_hour[k], local_hour[k])
                 self._outbound(d, ch, EventType.CLICK, sent + delay, {})
 
@@ -660,12 +662,20 @@ class GymWorld:
         )
 
 
-def click_probability(lift_per_day: float, annoyed: bool, effect_days: int) -> float:
-    """Chance a delivered message gets a click: mostly from the people it moves; an annoyed sleeping
-    dog almost never clicks."""
+def click_probability(
+    lift_per_day: float,
+    annoyed: bool,
+    effect_days: int,
+    *,
+    floor: float = CLICK_FLOOR,
+    slope: float = CLICK_PER_EXTRA_PURCHASE,
+) -> float:
+    """Chance a delivered message gets a click: `floor` from anyone, plus `slope` per extra purchase
+    it causes (mostly the people it moves); an annoyed sleeping dog almost never clicks. The defaults
+    are the Gym's original constants; a scenario can set both (`ScenarioSpec.click_floor`)."""
     if annoyed:
-        return SLEEPING_DOG_CLICK
-    return min(CLICK_CEILING, CLICK_FLOOR + CLICK_PER_EXTRA_PURCHASE * lift_per_day * effect_days)
+        return SLEEPING_DOG_CLICK if floor > 0 else 0.0
+    return min(CLICK_CEILING, floor + slope * lift_per_day * effect_days)
 
 
 def click_delay(roll: float, hour_factor: float, best_hour: int, local_hour: float) -> timedelta:
@@ -861,7 +871,9 @@ class _PastMarketing:
                 ),
                 (EventType.DELIVER, sent + DELIVERY_DELAY, {}),
             ]
-            if roll[3] < click_probability(lift, annoyed, days):
+            if roll[3] < click_probability(
+                lift, annoyed, days, floor=spec.click_floor, slope=spec.click_per_extra_purchase
+            ):
                 best = int(t.best_hour[i])
                 delay = click_delay(roll[4], hf, best, float(HISTORY_SEND_HOUR))
                 sent_events.append((EventType.CLICK, sent + delay, {}))

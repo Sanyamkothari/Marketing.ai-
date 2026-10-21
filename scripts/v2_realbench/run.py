@@ -4,6 +4,12 @@
     python -m scripts.v2_realbench.run --dataset hillstrom --data-dir /home/user/datasets --json h.json
     python -m scripts.v2_realbench.run --dataset hillstrom --limit 6000 --json quick.json   # smoke only
     python -m scripts.v2_realbench.run --render out.json          # the markdown tables of a report
+    python -m scripts.v2_realbench.run --dataset hillstrom --policy scientist ...   # the Scientist's pick
+    python -m scripts.v2_realbench.run --dataset lenta --sealed-final ...   # SEALED: once, at the end
+
+The sealed datasets (lenta, starbucks) are refused unless `--sealed-final` is passed, are never part of
+`--dataset all`, and each sealed run is recorded (date, git sha) in docs/v2/REAL_BENCH.md before the
+data is read. See scripts/v2_realbench/sealed.py.
 
 Run from the repo root. For each dataset: the bench adapter (scripts/v2_realbench/adapters.py) turns
 the file into Autonomy's inputs, the split is by customer id hash (fixed salt), the agent is built
@@ -28,8 +34,18 @@ from typing import Any
 
 import numpy as np
 
+from autonomy.agents.llm_exchange import AnswerPending, RecordingLLM
 from scripts.v2_realbench.adapters import DATASETS, SIZES, load
-from scripts.v2_realbench.common import BENCH_VERSION, Timings, evaluate_dataset, peak_rss_mb
+from scripts.v2_realbench.ai_loop import AiSetup, CountingReplay
+from scripts.v2_realbench.common import (
+    BENCH_VERSION,
+    Timings,
+    add_multiplicity,
+    evaluate_dataset,
+    peak_rss_mb,
+)
+from scripts.v2_realbench.scientist import evaluate_scientist, render_scientist
+from scripts.v2_realbench.sealed import DEFAULT_LOG, SEALED_DATASETS, record_sealed_run, refusal
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -121,14 +137,90 @@ def render(report: Mapping[str, Any]) -> str:
             f"from {a['history_customers']:,} train customers ({a['history_events']:,} events), "
             f"{a['ms_per_decision']} ms per decision, {a['seeds']} seeds. Verdict: {b['verdict']}."
         )
+    if report.get("multiplicity", {}).get("comparisons"):
+        lines += ["", render_multiplicity(report)]
+    return "\n".join(lines)
+
+
+def _p(x: float) -> str:
+    return f"{x:.4f}" if x >= 1e-3 else f"{x:.1e}"
+
+
+def render_multiplicity(report: Mapping[str, Any]) -> str:
+    """The Holm-Bonferroni table: every comparison with its raw and corrected interval and p."""
+    mult = report["multiplicity"]
+    lines = [
+        f"### Multiple comparisons ({mult['m']} in the family: {mult['family']})",
+        "",
+        f"{mult['method']}, alpha {mult['alpha']}. The corrected interval is at level "
+        f"1 - alpha/m = {1 - mult['alpha'] / mult['m']:.4f}.",
+        "",
+        "| Comparison | Raw diff [95% CI] | Raw p | Holm p | Corrected interval | Significant (raw / Holm) |",
+        "|---|---:|---:|---:|---:|---|",
+    ]
+    for key, c in mult["comparisons"].items():
+        raw, cor = c["raw"], c["corrected"]
+        lines.append(
+            f"| {key} | {_fmt(raw, 4)} | {_p(raw['p'])} | {_p(c['holm_p'])} | {_fmt(cor, 4)} | "
+            f"{'yes' if c['significant_raw'] else 'no'} / {'yes' if c['significant_holm'] else 'no'} |"
+        )
+    lines += [
+        "",
+        "| Dataset | Best simple policy | Corrected low vs best | Tolerance | Non-inferior | Beats it where features carry signal | Calibration within 2x |",
+        "|---|---|---:|---:|---|---|---|",
+    ]
+    for name, b in report["datasets"].items():
+        v = b.get("verdict_corrected")
+        if not v:
+            continue
+        sig = v["beats_best_simple_where_signal"]
+        lines.append(
+            f"| {name} | {v['best_simple']} | {v['corrected_low_vs_best']:+.4g} | {v['tolerance']:.4g} | "
+            f"{'yes' if v['non_inferior_to_best_simple'] else 'no'} | "
+            f"{'n/a (no signal shown)' if sig is None else ('yes' if sig else 'no')} | {v['calibration_within_2x']} |"
+        )
     return "\n".join(lines)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Autonomy's real-data scoreboard (randomised campaigns).")
-    ap.add_argument("--dataset", choices=[*DATASETS, "all"], default="all")
+    ap.add_argument("--dataset", choices=[*DATASETS, *SEALED_DATASETS, "all"], default="all")
+    ap.add_argument(
+        "--sealed-final",
+        action="store_true",
+        help="open a SEALED dataset (lenta, starbucks): once, at the end; recorded in the Sealed runs table",
+    )
+    ap.add_argument(
+        "--sealed-log",
+        type=Path,
+        default=DEFAULT_LOG,
+        help="the document whose 'Sealed runs' table records it",
+    )
     ap.add_argument("--data-dir", type=Path, default=Path("/home/user/datasets"))
     ap.add_argument("--json", type=Path, help="write the report here")
+    ap.add_argument(
+        "--policy",
+        choices=("agent", "scientist"),
+        default="agent",
+        help="agent: score the learning agent (the scoreboard of record); scientist: the policy the "
+        "Scientist selects on TRAIN from the fixed menu (autonomy/scientist), scored on TEST",
+    )
+    ap.add_argument(
+        "--ai-answers",
+        type=Path,
+        help="scientist runs only: JSON {prompt id: answer} of recorded Sonnet answers; adds the AI loop "
+        "(Data Doctor, Proposer, Judge) to the Scientist and scores its pick on the same TEST",
+    )
+    ap.add_argument(
+        "--ai-record",
+        type=Path,
+        help="where a prompt with no recorded answer is saved (exit 3); default: next to --json",
+    )
+    ap.add_argument(
+        "--no-scientist-agent",
+        action="store_true",
+        help="scientist runs only: leave the learning agent out of the candidate list (faster)",
+    )
     ap.add_argument("--seeds", type=int, default=4, help="agent decisions per test customer (fixed: 4)")
     ap.add_argument("--limit", type=int, default=0, help="smoke runs only: fewer customers (not comparable)")
     ap.add_argument(
@@ -143,15 +235,67 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if args.render:
-        print(render(json.loads(args.render.read_text())))
+        saved = json.loads(args.render.read_text())
+        print(
+            render_scientist(saved)
+            if saved.get("settings", {}).get("policy") == "scientist"
+            else render(saved)
+        )
         return 0
+    why = refusal(args.dataset, args.sealed_final)  # before anything is read
+    if why is not None:
+        print(why, file=sys.stderr)
+        return 2
+    if args.sealed_final and (args.limit or args.seeds != 4 or args.no_features):
+        print(
+            "refusing: a sealed run uses the fixed sizes, 4 seeds and the features, like every "
+            "scoreboard run (no --limit, --seeds or --no-features). Nothing was read.",
+            file=sys.stderr,
+        )
+        return 2
+    if args.ai_answers and args.policy != "scientist":
+        print("refusing: --ai-answers belongs to --policy scientist. Nothing was read.", file=sys.stderr)
+        return 2
+    if args.ai_answers and args.dataset in SEALED_DATASETS:
+        print(
+            "refusing: the AI roles are graded on the dev datasets only; a sealed run scores the fixed "
+            "candidate list. Nothing was read.",
+            file=sys.stderr,
+        )
+        return 2
     names = list(DATASETS) if args.dataset == "all" else [args.dataset]
+    answers: dict[str, Any] | None = None
+    recorder = RecordingLLM()
+    pending: list[str] = []
+    if args.ai_answers:  # a bad answers file is refused before any data is read
+        try:
+            loaded = json.loads(args.ai_answers.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if not isinstance(loaded, dict):
+            print(
+                f"error: {args.ai_answers}: expected a JSON object of {{prompt id: answer}}", file=sys.stderr
+            )
+            return 2
+        answers = loaded
+    if args.json:  # the report's folder must exist before a run of many minutes (or a sealed one) starts
+        args.json.parent.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
+    command = " ".join(["python -m scripts.v2_realbench.run", *(argv if argv is not None else sys.argv[1:])])
+    if args.sealed_final:  # recorded BEFORE the data is read: a crashed run still opened the seal
+        row = record_sealed_run(
+            args.sealed_log,
+            dataset=args.dataset,
+            git_sha=_git("rev-parse", "HEAD"),
+            dirty=bool(_git("status", "--porcelain", "--", "autonomy", "scripts")),
+            command=command,
+            now=datetime.now(UTC),
+        )
+        print(f"sealed run recorded in {args.sealed_log}: {row}", flush=True)
     report: dict[str, Any] = {
         "bench_version": BENCH_VERSION,
-        "command": " ".join(
-            ["python -m scripts.v2_realbench.run", *(argv if argv is not None else sys.argv[1:])]
-        ),
+        "command": command,
         "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "git": {
             "commit": _git("rev-parse", "HEAD"),
@@ -167,6 +311,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "sizes": SIZES,
             "with_decision_log": args.with_decision_log,
             "features_attached": not args.no_features,
+            "sealed_final": args.sealed_final,
+            "policy": args.policy,
         },
         "datasets": {},
     }
@@ -176,22 +322,43 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"\n===== {name} =====", flush=True)
         try:
             data = load(name, args.data_dir, timings, limit=args.limit or None)
-            block = evaluate_dataset(
-                data,
-                seeds=args.seeds,
-                timings=timings,
-                with_decision_log=args.with_decision_log,
-                attach_features=not args.no_features,
-            )
+            if args.policy == "scientist":
+                ai = None if answers is None else AiSetup(CountingReplay(answers, fallback=recorder))
+                block = evaluate_scientist(
+                    data, seeds=args.seeds, timings=timings, with_agent=not args.no_scientist_agent, ai=ai
+                )
+            else:
+                block = evaluate_dataset(
+                    data,
+                    seeds=args.seeds,
+                    timings=timings,
+                    with_decision_log=args.with_decision_log,
+                    attach_features=not args.no_features,
+                )
             del data
         except MemoryError as err:  # keep the other datasets' numbers
             block = {"error": f"MemoryError: {err}"}
+        except AnswerPending as exc:  # no recorded answer for this prompt: saved, never guessed
+            pending.append(exc.prompt_id)
+            block = {
+                "error": f"waiting for an answer to prompt {exc.prompt_id}",
+                "pending_prompt": exc.prompt_id,
+            }
         block["seconds"] = round(time.perf_counter() - t0, 1)
         block["peak_rss_mb"] = round(peak_rss_mb(), 1)
         block["timings"] = timings.rows
         report["datasets"][name] = block
+        if args.policy == "agent":
+            add_multiplicity(report)  # raw and Holm-corrected, over the datasets finished so far
         gc.collect()
-        if "error" not in block:
+        if "error" not in block and args.policy == "scientist":
+            print(
+                f"{name}: picked {block['picked']['run']} ({block['picked']['outcome']}); vs best simple "
+                f"({block['best_simple']['name']}) {_fmt(block['best_simple']['scientist_minus_best_simple'])}; "
+                f"verdict {block['verdict']}",
+                flush=True,
+            )
+        elif "error" not in block:
             v = block["verdict"]
             print(
                 f"{name}: agent DR {block['agent']['value']['dr']['point']:.4f}, contacts "
@@ -207,7 +374,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.json:
         args.json.write_text(json.dumps(report, indent=1, default=_default))
         print(f"\nreport written to {args.json}")
-    print("\n" + render(report))
+    print("\n" + (render_scientist(report) if args.policy == "scientist" else render(report)))
+    if pending:
+        record = args.ai_record or (
+            args.json.with_suffix(".prompts.json") if args.json else Path("prompts.json")
+        )
+        recorder.save(record)
+        print(
+            f"{len(recorder.records)} prompt(s) saved to {record}: answer them into the --ai-answers "
+            f"file ({{id: answer}}) and run again",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 

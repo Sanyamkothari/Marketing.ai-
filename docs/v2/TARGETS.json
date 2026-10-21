@@ -1,0 +1,366 @@
+[
+  {
+    "id": "bench.hillstrom.non_inferior",
+    "claim": "On hillstrom, the agent is as good as the best simple policy (send to none / send to all / segment rule, chosen on train): the Holm-Bonferroni-corrected lower bound of (agent minus best simple policy), on test, is above minus 2% of that policy's DR value. The family is every agent-versus-policy comparison of all four dev datasets.",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.hillstrom.verdict_corrected.non_inferior_to_best_simple == true",
+    "passes": false
+  },
+  {
+    "id": "bench.x5.non_inferior",
+    "claim": "On x5, the agent is as good as the best simple policy (send to none / send to all / segment rule, chosen on train): the Holm-Bonferroni-corrected lower bound of (agent minus best simple policy), on test, is above minus 2% of that policy's DR value. The family is every agent-versus-policy comparison of all four dev datasets.",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.x5.verdict_corrected.non_inferior_to_best_simple == true",
+    "passes": true
+  },
+  {
+    "id": "bench.criteo.non_inferior",
+    "claim": "On criteo, the agent is as good as the best simple policy (send to none / send to all / segment rule, chosen on train): the Holm-Bonferroni-corrected lower bound of (agent minus best simple policy), on test, is above minus 2% of that policy's DR value. The family is every agent-versus-policy comparison of all four dev datasets.",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.criteo.verdict_corrected.non_inferior_to_best_simple == true",
+    "passes": false
+  },
+  {
+    "id": "bench.megafon.non_inferior",
+    "claim": "On megafon, the agent is as good as the best simple policy (send to none / send to all / segment rule, chosen on train): the Holm-Bonferroni-corrected lower bound of (agent minus best simple policy), on test, is above minus 2% of that policy's DR value. The family is every agent-versus-policy comparison of all four dev datasets.",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.megafon.verdict_corrected.non_inferior_to_best_simple == true",
+    "passes": true
+  },
+  {
+    "id": "bench.hillstrom.beats_where_signal",
+    "claim": "On hillstrom, if customer features carry signal (the T-learner beats the best simple policy) the agent beats the best simple policy (corrected lower bound above 0). Vacuous, and recorded as null in the report, where no signal is shown.",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.hillstrom.verdict_corrected.beats_best_simple_where_signal != false",
+    "passes": true
+  },
+  {
+    "id": "bench.x5.beats_where_signal",
+    "claim": "On x5, if customer features carry signal (the T-learner beats the best simple policy) the agent beats the best simple policy (corrected lower bound above 0). Vacuous, and recorded as null in the report, where no signal is shown.",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.x5.verdict_corrected.beats_best_simple_where_signal != false",
+    "passes": true
+  },
+  {
+    "id": "bench.criteo.beats_where_signal",
+    "claim": "On criteo, if customer features carry signal (the T-learner beats the best simple policy) the agent beats the best simple policy (corrected lower bound above 0). Vacuous, and recorded as null in the report, where no signal is shown.",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.criteo.verdict_corrected.beats_best_simple_where_signal != false",
+    "passes": true
+  },
+  {
+    "id": "bench.megafon.beats_best_simple",
+    "claim": "On megafon, where customer features carry signal (the T-learner beats the best simple policy), the agent beats the best simple policy: the corrected lower bound of (agent minus best simple policy) is above 0.",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.megafon.verdict_corrected.beats_best_simple_where_signal == true",
+    "passes": true
+  },
+  {
+    "id": "bench.hillstrom.calibration",
+    "claim": "On hillstrom, the agent's expected net value per contact is within 2x of the doubly-robust measured value per contacted customer (ratio between 0.5 and 2).",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.hillstrom.calibration.within_2x == true",
+    "passes": true
+  },
+  {
+    "id": "bench.x5.calibration",
+    "claim": "On x5, the agent's expected net value per contact is within 2x of the doubly-robust measured value per contacted customer (ratio between 0.5 and 2).",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.x5.calibration.within_2x == true",
+    "passes": true
+  },
+  {
+    "id": "bench.criteo.calibration",
+    "claim": "On criteo, the agent's expected net value per contact is within 2x of the doubly-robust measured value per contacted customer (ratio between 0.5 and 2).",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.criteo.calibration.within_2x == true",
+    "passes": false
+  },
+  {
+    "id": "bench.megafon.calibration",
+    "claim": "On megafon, the agent's expected net value per contact is within 2x of the doubly-robust measured value per contacted customer (ratio between 0.5 and 2).",
+    "command": "python -m scripts.v2_realbench.run --dataset all --data-dir /home/user/datasets --json out/real_bench.json --quiet",
+    "threshold": "out/real_bench.json :: datasets.megafon.calibration.within_2x == true",
+    "passes": true
+  },
+  {
+    "id": "sealed.lenta.non_inferior",
+    "claim": "SEALED check, run once at the end and never repeated after a code change: on lenta the agent is as good as the best simple policy (corrected lower bound of the difference above minus 2% of that policy's DR value; the family is this dataset's own comparisons).",
+    "command": "python -m scripts.v2_realbench.run --dataset lenta --data-dir /home/user/datasets --sealed-final --json out/sealed_lenta.json --quiet",
+    "threshold": "out/sealed_lenta.json :: datasets.lenta.verdict_corrected.non_inferior_to_best_simple == true",
+    "passes": false
+  },
+  {
+    "id": "sealed.lenta.calibration",
+    "claim": "SEALED check: on lenta the agent's expected net per contact is within 2x of the measured value per contacted customer.",
+    "command": "python -m scripts.v2_realbench.run --dataset lenta --data-dir /home/user/datasets --sealed-final --json out/sealed_lenta.json --quiet",
+    "threshold": "out/sealed_lenta.json :: datasets.lenta.calibration.within_2x == true",
+    "passes": false
+  },
+  {
+    "id": "sealed.starbucks.non_inferior",
+    "claim": "SEALED check, run once at the end and never repeated after a code change: on starbucks the agent is as good as the best simple policy (corrected lower bound of the difference above minus 2% of that policy's DR value; the family is this dataset's own comparisons).",
+    "command": "python -m scripts.v2_realbench.run --dataset starbucks --data-dir /home/user/datasets --sealed-final --json out/sealed_starbucks.json --quiet",
+    "threshold": "out/sealed_starbucks.json :: datasets.starbucks.verdict_corrected.non_inferior_to_best_simple == true",
+    "passes": false
+  },
+  {
+    "id": "sealed.starbucks.calibration",
+    "claim": "SEALED check: on starbucks the agent's expected net per contact is within 2x of the measured value per contacted customer.",
+    "command": "python -m scripts.v2_realbench.run --dataset starbucks --data-dir /home/user/datasets --sealed-final --json out/sealed_starbucks.json --quiet",
+    "threshold": "out/sealed_starbucks.json :: datasets.starbucks.calibration.within_2x == true",
+    "passes": true
+  },
+  {
+    "id": "gym.baseline_shop.stage1",
+    "claim": "On the Gym scenario baseline_shop (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario baseline_shop --policy agent --seeds 3 --customers 3000 --report-json out/gym/baseline_shop.json",
+    "threshold": "out/gym/baseline_shop.json :: verdict.stage_reached >= 1",
+    "passes": null
+  },
+  {
+    "id": "gym.baseline_shop.stage2",
+    "claim": "On the Gym scenario baseline_shop (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
+    "command": "python -m autonomy.gym.run --scenario baseline_shop --policy agent --seeds 3 --customers 3000 --report-json out/gym/baseline_shop.json",
+    "threshold": "out/gym/baseline_shop.json :: verdict.stage_reached >= 2",
+    "passes": null
+  },
+  {
+    "id": "gym.baseline_shop.stage3",
+    "claim": "On the Gym scenario baseline_shop (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
+    "command": "python -m autonomy.gym.run --scenario baseline_shop --policy agent --seeds 3 --customers 3000 --report-json out/gym/baseline_shop.json",
+    "threshold": "out/gym/baseline_shop.json :: verdict.stage_reached >= 3",
+    "passes": null
+  },
+  {
+    "id": "gym.sleeping_dogs_15.stage1",
+    "claim": "On the Gym scenario sleeping_dogs_15 (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario sleeping_dogs_15 --policy agent --seeds 3 --customers 3000 --report-json out/gym/sleeping_dogs_15.json",
+    "threshold": "out/gym/sleeping_dogs_15.json :: verdict.stage_reached >= 1",
+    "passes": null
+  },
+  {
+    "id": "gym.sleeping_dogs_15.stage2",
+    "claim": "On the Gym scenario sleeping_dogs_15 (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
+    "command": "python -m autonomy.gym.run --scenario sleeping_dogs_15 --policy agent --seeds 3 --customers 3000 --report-json out/gym/sleeping_dogs_15.json",
+    "threshold": "out/gym/sleeping_dogs_15.json :: verdict.stage_reached >= 2",
+    "passes": null
+  },
+  {
+    "id": "gym.sleeping_dogs_15.stage3",
+    "claim": "On the Gym scenario sleeping_dogs_15 (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
+    "command": "python -m autonomy.gym.run --scenario sleeping_dogs_15 --policy agent --seeds 3 --customers 3000 --report-json out/gym/sleeping_dogs_15.json",
+    "threshold": "out/gym/sleeping_dogs_15.json :: verdict.stage_reached >= 3",
+    "passes": null
+  },
+  {
+    "id": "gym.sleeping_dogs_hidden.stage1",
+    "claim": "On the Gym scenario sleeping_dogs_hidden (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario sleeping_dogs_hidden --policy agent --seeds 3 --customers 3000 --report-json out/gym/sleeping_dogs_hidden.json",
+    "threshold": "out/gym/sleeping_dogs_hidden.json :: verdict.stage_reached >= 1",
+    "passes": null
+  },
+  {
+    "id": "gym.sleeping_dogs_hidden.stage2",
+    "claim": "On the Gym scenario sleeping_dogs_hidden (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
+    "command": "python -m autonomy.gym.run --scenario sleeping_dogs_hidden --policy agent --seeds 3 --customers 3000 --report-json out/gym/sleeping_dogs_hidden.json",
+    "threshold": "out/gym/sleeping_dogs_hidden.json :: verdict.stage_reached >= 2",
+    "passes": null
+  },
+  {
+    "id": "gym.sleeping_dogs_hidden.stage3",
+    "claim": "On the Gym scenario sleeping_dogs_hidden (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
+    "command": "python -m autonomy.gym.run --scenario sleeping_dogs_hidden --policy agent --seeds 3 --customers 3000 --report-json out/gym/sleeping_dogs_hidden.json",
+    "threshold": "out/gym/sleeping_dogs_hidden.json :: verdict.stage_reached >= 3",
+    "passes": null
+  },
+  {
+    "id": "gym.discount_cannibalisation.stage1",
+    "claim": "On the Gym scenario discount_cannibalisation (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario discount_cannibalisation --policy agent --seeds 3 --customers 3000 --report-json out/gym/discount_cannibalisation.json",
+    "threshold": "out/gym/discount_cannibalisation.json :: verdict.stage_reached >= 1",
+    "passes": null
+  },
+  {
+    "id": "gym.discount_cannibalisation.stage2",
+    "claim": "On the Gym scenario discount_cannibalisation (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
+    "command": "python -m autonomy.gym.run --scenario discount_cannibalisation --policy agent --seeds 3 --customers 3000 --report-json out/gym/discount_cannibalisation.json",
+    "threshold": "out/gym/discount_cannibalisation.json :: verdict.stage_reached >= 2",
+    "passes": null
+  },
+  {
+    "id": "gym.discount_cannibalisation.stage3",
+    "claim": "On the Gym scenario discount_cannibalisation (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
+    "command": "python -m autonomy.gym.run --scenario discount_cannibalisation --policy agent --seeds 3 --customers 3000 --report-json out/gym/discount_cannibalisation.json",
+    "threshold": "out/gym/discount_cannibalisation.json :: verdict.stage_reached >= 3",
+    "passes": null
+  },
+  {
+    "id": "gym.whatsapp_fatigue.stage1",
+    "claim": "On the Gym scenario whatsapp_fatigue (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario whatsapp_fatigue --policy agent --seeds 3 --customers 3000 --report-json out/gym/whatsapp_fatigue.json",
+    "threshold": "out/gym/whatsapp_fatigue.json :: verdict.stage_reached >= 1",
+    "passes": null
+  },
+  {
+    "id": "gym.whatsapp_fatigue.stage2",
+    "claim": "On the Gym scenario whatsapp_fatigue (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
+    "command": "python -m autonomy.gym.run --scenario whatsapp_fatigue --policy agent --seeds 3 --customers 3000 --report-json out/gym/whatsapp_fatigue.json",
+    "threshold": "out/gym/whatsapp_fatigue.json :: verdict.stage_reached >= 2",
+    "passes": null
+  },
+  {
+    "id": "gym.whatsapp_fatigue.stage3",
+    "claim": "On the Gym scenario whatsapp_fatigue (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
+    "command": "python -m autonomy.gym.run --scenario whatsapp_fatigue --policy agent --seeds 3 --customers 3000 --report-json out/gym/whatsapp_fatigue.json",
+    "threshold": "out/gym/whatsapp_fatigue.json :: verdict.stage_reached >= 3",
+    "passes": null
+  },
+  {
+    "id": "gym.send_time_matters.stage1",
+    "claim": "On the Gym scenario send_time_matters (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario send_time_matters --policy agent --seeds 3 --customers 3000 --report-json out/gym/send_time_matters.json",
+    "threshold": "out/gym/send_time_matters.json :: verdict.stage_reached >= 1",
+    "passes": null
+  },
+  {
+    "id": "gym.send_time_matters.stage2",
+    "claim": "On the Gym scenario send_time_matters (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
+    "command": "python -m autonomy.gym.run --scenario send_time_matters --policy agent --seeds 3 --customers 3000 --report-json out/gym/send_time_matters.json",
+    "threshold": "out/gym/send_time_matters.json :: verdict.stage_reached >= 2",
+    "passes": null
+  },
+  {
+    "id": "gym.send_time_matters.stage3",
+    "claim": "On the Gym scenario send_time_matters (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
+    "command": "python -m autonomy.gym.run --scenario send_time_matters --policy agent --seeds 3 --customers 3000 --report-json out/gym/send_time_matters.json",
+    "threshold": "out/gym/send_time_matters.json :: verdict.stage_reached >= 3",
+    "passes": null
+  },
+  {
+    "id": "gym.drift_midway.stage1",
+    "claim": "On the Gym scenario drift_midway (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario drift_midway --policy agent --seeds 3 --customers 3000 --report-json out/gym/drift_midway.json",
+    "threshold": "out/gym/drift_midway.json :: verdict.stage_reached >= 1",
+    "passes": null
+  },
+  {
+    "id": "gym.drift_midway.stage2",
+    "claim": "On the Gym scenario drift_midway (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
+    "command": "python -m autonomy.gym.run --scenario drift_midway --policy agent --seeds 3 --customers 3000 --report-json out/gym/drift_midway.json",
+    "threshold": "out/gym/drift_midway.json :: verdict.stage_reached >= 2",
+    "passes": null
+  },
+  {
+    "id": "gym.drift_midway.stage3",
+    "claim": "On the Gym scenario drift_midway (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
+    "command": "python -m autonomy.gym.run --scenario drift_midway --policy agent --seeds 3 --customers 3000 --report-json out/gym/drift_midway.json",
+    "threshold": "out/gym/drift_midway.json :: verdict.stage_reached >= 3",
+    "passes": null
+  },
+  {
+    "id": "gym.small_business.stage1",
+    "claim": "On the Gym scenario small_business (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario small_business --policy agent --seeds 3 --customers 3000 --report-json out/gym/small_business.json",
+    "threshold": "out/gym/small_business.json :: verdict.stage_reached >= 1",
+    "passes": null
+  },
+  {
+    "id": "gym.small_business.stage2",
+    "claim": "On the Gym scenario small_business (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
+    "command": "python -m autonomy.gym.run --scenario small_business --policy agent --seeds 3 --customers 3000 --report-json out/gym/small_business.json",
+    "threshold": "out/gym/small_business.json :: verdict.stage_reached >= 2",
+    "passes": null
+  },
+  {
+    "id": "gym.small_business.stage3",
+    "claim": "On the Gym scenario small_business (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
+    "command": "python -m autonomy.gym.run --scenario small_business --policy agent --seeds 3 --customers 3000 --report-json out/gym/small_business.json",
+    "threshold": "out/gym/small_business.json :: verdict.stage_reached >= 3",
+    "passes": null
+  },
+  {
+    "id": "gym.null_effect.stage1",
+    "claim": "On the Gym scenario null_effect (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario null_effect --policy agent --seeds 3 --customers 3000 --report-json out/gym/null_effect.json",
+    "threshold": "out/gym/null_effect.json :: verdict.stage_reached >= 1",
+    "passes": null
+  },
+  {
+    "id": "gym.null_effect.stage2",
+    "claim": "On the Gym scenario null_effect (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all). Stage 3 is not judged in this scenario kind, so the bar ends at Stage 2.",
+    "command": "python -m autonomy.gym.run --scenario null_effect --policy agent --seeds 3 --customers 3000 --report-json out/gym/null_effect.json",
+    "threshold": "out/gym/null_effect.json :: verdict.stage_reached >= 2",
+    "passes": null
+  },
+  {
+    "id": "gym.complaint_storm.stage1",
+    "claim": "On the Gym scenario complaint_storm (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario complaint_storm --policy agent --seeds 3 --customers 3000 --report-json out/gym/complaint_storm.json",
+    "threshold": "out/gym/complaint_storm.json :: verdict.stage_reached >= 1",
+    "passes": null
+  },
+  {
+    "id": "gym.complaint_storm.stage2",
+    "claim": "On the Gym scenario complaint_storm (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all). Stage 3 is not judged in this scenario kind, so the bar ends at Stage 2.",
+    "command": "python -m autonomy.gym.run --scenario complaint_storm --policy agent --seeds 3 --customers 3000 --report-json out/gym/complaint_storm.json",
+    "threshold": "out/gym/complaint_storm.json :: verdict.stage_reached >= 2",
+    "passes": null
+  },
+  {
+    "id": "gym.real_email_like.stage1",
+    "claim": "On the Gym scenario real_email_like (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario real_email_like --policy agent --seeds 3 --customers 3000 --report-json out/gym/real_email_like.json",
+    "threshold": "out/gym/real_email_like.json :: verdict.stage_reached >= 1",
+    "passes": true
+  },
+  {
+    "id": "gym.real_email_like.stage2",
+    "claim": "On the Gym scenario real_email_like (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
+    "command": "python -m autonomy.gym.run --scenario real_email_like --policy agent --seeds 3 --customers 3000 --report-json out/gym/real_email_like.json",
+    "threshold": "out/gym/real_email_like.json :: verdict.stage_reached >= 2",
+    "passes": true
+  },
+  {
+    "id": "gym.real_email_like.stage3",
+    "claim": "On the Gym scenario real_email_like (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
+    "command": "python -m autonomy.gym.run --scenario real_email_like --policy agent --seeds 3 --customers 3000 --report-json out/gym/real_email_like.json",
+    "threshold": "out/gym/real_email_like.json :: verdict.stage_reached >= 3",
+    "passes": true
+  },
+  {
+    "id": "gym.real_sms_like.stage1",
+    "claim": "On the Gym scenario real_sms_like (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario real_sms_like --policy agent --seeds 3 --customers 3000 --report-json out/gym/real_sms_like.json",
+    "threshold": "out/gym/real_sms_like.json :: verdict.stage_reached >= 1",
+    "passes": true
+  },
+  {
+    "id": "gym.real_sms_like.stage2",
+    "claim": "On the Gym scenario real_sms_like (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
+    "command": "python -m autonomy.gym.run --scenario real_sms_like --policy agent --seeds 3 --customers 3000 --report-json out/gym/real_sms_like.json",
+    "threshold": "out/gym/real_sms_like.json :: verdict.stage_reached >= 2",
+    "passes": false
+  },
+  {
+    "id": "gym.real_sms_like.stage3",
+    "claim": "On the Gym scenario real_sms_like (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
+    "command": "python -m autonomy.gym.run --scenario real_sms_like --policy agent --seeds 3 --customers 3000 --report-json out/gym/real_sms_like.json",
+    "threshold": "out/gym/real_sms_like.json :: verdict.stage_reached >= 3",
+    "passes": false
+  },
+  {
+    "id": "gym.fit.reproducible",
+    "claim": "The numbers planted in real_email_like and real_sms_like are the ones fitted on the dev datasets' TRAIN halves: refitting gives the stored values to 5 significant digits.",
+    "command": "python -m scripts.v2_realbench.gym_fit --data-dir /home/user/datasets --check",
+    "threshold": "exit status 0 (both lines read 'matches autonomy/gym/scenarios.py')",
+    "passes": true
+  },
+  {
+    "id": "tests.testing_fixes",
+    "claim": "The tests of this step pass on Python 3.11.",
+    "command": "timeout 300 /tmp/claude-0/py311/bin/python -m pytest tests/v2/scientist/test_testing_*.py -q -p no:cacheprovider",
+    "threshold": "exit status 0",
+    "passes": true
+  }
+]

@@ -18,6 +18,9 @@ Realism knobs added in wave 3a, each with the real-world behaviour it stands for
   messages, come in through direct visits, and now and then unsubscribe from a channel. The signal
   sets how long before day 0 the annoyance began, so how much of the history shows it (0 = none: the
   old coin flip, invisible before the first contact).
+* `click_floor`, `click_per_extra_purchase`: how clicks relate to the purchases a message causes.
+  Added in the real-calibration task with the Gym's original values as defaults (0.02 and 3.0), so
+  every earlier scenario is unchanged; the real-calibrated scenarios set them from data.
 * `history_sends_per_week`: a real client hands over months of past campaigns with their clicks and
   purchases, so an agent can learn before day 1. The past campaigns follow a documented, randomised
   logging policy and every past send carries `attrs["logged_probability"]`. The bare spec keeps the
@@ -148,6 +151,25 @@ class ScenarioSpec(Contract):
     )
     sleeping_dog_unsubscribe_multiplier: float = Field(
         default=3.0, ge=0, description="Sleeping dogs unsubscribe this many times as often once annoyed"
+    )
+    click_floor: float = Field(
+        default=0.02,
+        ge=0,
+        le=1,
+        description=(
+            "Chance a delivered message is clicked by someone it does not move (the click rate of the "
+            "channel with no effect at all). The default is the Gym's original 0.02; a real-calibrated "
+            "scenario sets it from a control group's click-like rate"
+        ),
+    )
+    click_per_extra_purchase: float = Field(
+        default=3.0,
+        ge=0,
+        description=(
+            "Click chance added per expected extra purchase a contact causes (the link between clicks "
+            "and money). The default is the Gym's original 3.0; 0 means clicks say nothing about "
+            "purchases (a channel that logs no clicks)"
+        ),
     )
     history_sends_per_week: float = Field(
         default=0.0,

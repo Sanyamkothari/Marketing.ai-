@@ -39,12 +39,14 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import math
 import resource
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from statistics import NormalDist
 from typing import Any
 
 import numpy as np
@@ -67,6 +69,7 @@ from autonomy.data.folder import StateFolder
 from autonomy.data.rebuild import rebuild_states
 from autonomy.fakes.stores import InMemoryEventStore, InMemoryStateStore
 from autonomy.proof import ope
+from autonomy.proof.estimate import Z_95
 from autonomy.proof.replay import LoggedBandit, fit_segment_policy
 from autonomy.proof.replay import evaluate as harness_evaluate
 from autonomy.proof.replay.harness import SegmentPolicy, per_action_mean_model
@@ -716,7 +719,152 @@ def verdict(
         "ties_or_beats_best_simple_on_test": bool(vs_test_best["high"] >= 0.0),
         "calibration_within_2x": calib.get("within_2x"),
         "calibration_expected_inside_measured_ci": calib.get("expected_inside_measured_ci"),
-        "intervals": "95% normal, paired, NOT corrected for multiple comparisons: suggestive",
+        "intervals": "95% normal, paired, NOT corrected for multiple comparisons: suggestive "
+        "(Holm-Bonferroni corrected versions: report.multiplicity and datasets.<d>.verdict_corrected)",
+    }
+
+
+# --- many comparisons, one family: Holm-Bonferroni ----------------------------------------------------
+
+ALPHA = 0.05
+NON_INFERIORITY_SHARE = 0.02
+"""Pre-registered tolerance: the agent may be this share of the best simple policy's value (DR, in
+the dataset's own profit units) worse and still count as "as good as" it. Fixed before the sealed
+check; see docs/v2/TARGETS.json."""
+
+
+def normal_two_sided_p(z: float) -> float:
+    """P(|Z| >= |z|) for a standard normal."""
+    return math.erfc(abs(z) / math.sqrt(2.0))
+
+
+def holm_adjust(p_values: Sequence[float]) -> list[float]:
+    """Holm's step-down adjusted p-values, in the input order.
+
+    Sort ascending, multiply the i-th smallest (0-based) by m - i, take the running maximum so the
+    adjusted values never decrease, cap at 1. Rejecting every hypothesis whose adjusted p is below
+    alpha controls the chance of any false rejection at alpha, with no assumption on how the
+    comparisons depend on each other (they share customers, so they do depend)."""
+    m = len(p_values)
+    order = sorted(range(m), key=lambda i: p_values[i])
+    adjusted = [0.0] * m
+    running = 0.0
+    for rank, i in enumerate(order):
+        running = max(running, min(1.0, (m - rank) * p_values[i]))
+        adjusted[i] = running
+    return adjusted
+
+
+def bonferroni_interval(est: Mapping[str, float], m: int, alpha: float = ALPHA) -> dict[str, float]:
+    """The interval of `est` widened to level 1 - alpha/m, from its own standard error.
+
+    `est` has point / low / high at the usual 95%. Simultaneously valid for all m comparisons; it is
+    the interval that goes with a Bonferroni test and is conservative for Holm's (which rejects at
+    least as often)."""
+    se = (est["high"] - est["low"]) / (2.0 * Z_95)
+    z = NormalDist().inv_cdf(1.0 - alpha / (2.0 * m))
+    return {
+        "point": est["point"],
+        "low": est["point"] - z * se,
+        "high": est["point"] + z * se,
+        "level": 1.0 - alpha / m,
+    }
+
+
+def multiplicity(comparisons: Mapping[str, Mapping[str, float]], alpha: float = ALPHA) -> dict[str, Any]:
+    """Raw and corrected statistics for one family of comparisons (each a paired difference with a
+    95% interval: `point`, `low`, `high`).
+
+    Per comparison: the raw interval and two-sided normal p, the Holm adjusted p, the Bonferroni-
+    widened interval (level 1 - alpha/m), and whether it is significant raw and after Holm."""
+    keys = list(comparisons)
+    m = len(keys)
+    out: dict[str, Any] = {
+        "method": "Holm-Bonferroni (adjusted p) with Bonferroni-widened intervals",
+        "alpha": alpha,
+        "m": m,
+        "comparisons": {},
+    }
+    if m == 0:
+        return out
+    stats: list[tuple[float, float]] = []
+    for k in keys:
+        e = comparisons[k]
+        se = (e["high"] - e["low"]) / (2.0 * Z_95)
+        zero_width = 1.0 if e["point"] == 0 else 0.0
+        p = normal_two_sided_p(e["point"] / se) if se > 0 else zero_width
+        stats.append((se, p))
+    adj = holm_adjust([p for _, p in stats])
+    for k, (se, p), ap in zip(keys, stats, adj, strict=True):
+        e = comparisons[k]
+        out["comparisons"][k] = {
+            "raw": {"point": e["point"], "low": e["low"], "high": e["high"], "se": se, "p": p},
+            "holm_p": ap,
+            "corrected": bonferroni_interval(e, m, alpha),
+            "significant_raw": bool(p < alpha),
+            "significant_holm": bool(ap < alpha),
+        }
+    return out
+
+
+def agent_comparisons(block: Mapping[str, Any]) -> dict[str, dict[str, float]]:
+    """'Agent minus P' (paired DR difference) for every policy P on one dataset's scoreboard."""
+    return {
+        f"agent minus {name}": dict(p["agent_minus_this"])
+        for name, p in block["policies"].items()
+        if name != "AGENT"
+    }
+
+
+def add_multiplicity(report: dict[str, Any], alpha: float = ALPHA) -> None:
+    """Add the multiple-comparison tables to a report, in place.
+
+    Two families, both reported: each dataset's own comparisons (`datasets.<d>.multiplicity`) and all
+    comparisons of every dataset in the report (`multiplicity`, the family the corrected verdicts
+    use). Then `datasets.<d>.verdict_corrected`: the pre-registered targets judged on the
+    report-wide corrected intervals (see docs/v2/TARGETS.json)."""
+    blocks = {n: b for n, b in report["datasets"].items() if "error" not in b}
+    family: dict[str, Mapping[str, float]] = {}
+    for name, b in blocks.items():
+        own = agent_comparisons(b)
+        b["multiplicity"] = multiplicity(own, alpha)
+        for key, est in own.items():
+            family[f"{name}: {key}"] = est
+    report["multiplicity"] = {
+        **multiplicity(family, alpha),
+        "family": "every 'agent minus policy' comparison of every dataset in this report",
+    }
+    comps = report["multiplicity"]["comparisons"]
+    for name, b in blocks.items():
+        b["verdict_corrected"] = corrected_verdict(b, comps, name)
+
+
+def corrected_verdict(block: Mapping[str, Any], family: Mapping[str, Any], name: str) -> dict[str, Any]:
+    """The pre-registered bench targets for one dataset, on the report-wide corrected intervals.
+
+    * `non_inferior_to_best_simple`: the corrected lower bound of (agent - best simple policy) is
+      above minus `NON_INFERIORITY_SHARE` of the best simple policy's DR value.
+    * `beats_best_simple_where_signal`: where the T-learner beats the best simple policy (features
+      carry signal: its raw lower bound is above 0), the corrected lower bound of (agent - best) is
+      above 0. None where no signal is shown (not applicable).
+    * `calibration_within_2x`: the agent's expected net per contact is within 2x of the DR-measured
+      value (None if it contacted nobody or the measured value is not positive)."""
+    best = block["best_simple"]["name"]
+    comp = family[f"{name}: agent minus {best}"]
+    best_value = float(block["policies"][best]["dr"]["point"])
+    tolerance = NON_INFERIORITY_SHARE * abs(best_value)
+    low = float(comp["corrected"]["low"])
+    signal = bool(block["feature_signal"]["t_learner_minus_best_simple"]["low"] > 0.0)
+    return {
+        "best_simple": best,
+        "tolerance": tolerance,
+        "tolerance_rule": f"{NON_INFERIORITY_SHARE:.0%} of the best simple policy's DR value ({best_value:.6g})",
+        "corrected_low_vs_best": low,
+        "holm_p_vs_best": comp["holm_p"],
+        "non_inferior_to_best_simple": bool(low > -tolerance),
+        "features_carry_signal": signal,
+        "beats_best_simple_where_signal": (bool(low > 0.0) if signal else None),
+        "calibration_within_2x": block["calibration"].get("within_2x"),
     }
 
 
