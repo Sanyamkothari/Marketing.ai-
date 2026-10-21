@@ -34,7 +34,7 @@ jobs:
       matrix:
         dataset: [hillstrom, x5, criteo, megafon]
     env:
-      DATA_DIR: ${{ github.workspace }}/../realbench-data
+      DATA_DIR: ${{ github.workspace }}/.realbench-data   # inside the workspace: actions/cache rejects ".." paths
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
