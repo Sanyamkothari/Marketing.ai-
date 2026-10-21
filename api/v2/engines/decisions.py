@@ -70,6 +70,7 @@ BASELINE_GROUP = "baseline_group"
 BELOW_ATTENTION_PRICE = "below_attention_price"
 OUTBID = "outbid"
 LOST_DRAW = "lost_draw"
+NOT_WORTH_TESTING = "not_worth_testing"
 
 _RULE_SENTENCE: dict[str, str] = {
     rules.HOLDOUT: "In the holdout group, which is never contacted: it is how value is proven.",
@@ -384,6 +385,40 @@ def suppressed_actions(
                 bid=net,
             )
         )
+    # Options the bidders' pruning left out (an offer without evidence that this customer needs it,
+    # a person messages seem to put off, an option that cannot plausibly be the best): listed too,
+    # so every option in the envelope is accounted for.
+    seen = {_key(b.action) for b in offered}
+    for bidder in agent.policy.bidders:
+        quote = getattr(bidder, "quote", None)
+        if quote is None:
+            continue
+        for bid in quote(seg_state, ctx, prune=False):
+            k = _key(bid.action)
+            if k == winner or k in seen:
+                continue
+            seen.add(k)
+            timed = agent.policy._timed(bid, seg_state, ctx)
+            check = rules.check_bid(timed, seg_state, ctx)
+            if check.allowed and not gap.allowed:
+                check = gap
+            if not check.allowed:
+                out.append(_rule_entry(timed.goal_id, check.code, timed))
+                continue
+            lost.append(
+                SuppressedAction(
+                    goal_id=bid.goal_id,
+                    channel=bid.action.channel,
+                    offer_id=bid.action.offer_id,
+                    content_id=bid.action.content_id,
+                    reason_code=NOT_WORTH_TESTING,
+                    plain_reason=(
+                        f"Expected to add {money(bid.expected_net)}, but the evidence says it cannot "
+                        "beat the best option for this customer, so it was not put to the auction."
+                    ),
+                    bid=bid.expected_net,
+                )
+            )
     lost.sort(key=lambda s: -(s.bid or 0.0))
     return out + lost
 

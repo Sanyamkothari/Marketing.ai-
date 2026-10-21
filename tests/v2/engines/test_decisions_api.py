@@ -89,8 +89,10 @@ def test_lapsed_contactable_customer_gets_an_action_with_probability() -> None:
     assert {"goal_id": "goal_winback", "channel": "whatsapp"}.items() <= next(
         s for s in suppressed if s["reason_code"] == "no_consent"
     ).items()
-    # 10% off costs more than it adds, so it cannot beat the price of another message.
-    assert "below_attention_price" in codes
+    # 10% off costs more than it adds: it either cannot beat the price of another message or the
+    # offer gate leaves it out before the auction; either way it is listed with its reason.
+    assert {"below_attention_price", "not_worth_testing"} & codes
+    assert any(s["offer_id"] not in (None, "none") for s in suppressed)
     # The winner is never listed as suppressed.
     assert all(
         (s["channel"], s["offer_id"], s["content_id"]) != (win["channel"], win["offer_id"], win["content_id"])
@@ -220,7 +222,7 @@ def test_rule_codes_on_suppressed_bids_match_the_decisions_blocked_by() -> None:
         _lapsed().model_copy(update={"last_contact_at": NOW - timedelta(hours=1)}),
     ):
         out = _client().post("/v2/engines/decisions/evaluate", json=_body(state)).json()
-        auction = {"below_attention_price", "outbid", "lost_draw"}
+        auction = {"below_attention_price", "outbid", "lost_draw", "not_worth_testing"}
         rule_codes = {
             s["reason_code"]
             for s in out["suppressed_actions"]
