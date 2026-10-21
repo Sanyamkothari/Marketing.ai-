@@ -226,6 +226,22 @@ def pick_index(decision: JudgeDecision, ids: tuple[str, ...]) -> int | None:
     return ids.index(decision.final_pick)
 
 
+def deployable_index(decision: JudgeDecision, ids: tuple[str, ...], selection: Selection) -> int | None:
+    """The Judge's pick, but only if the selection rule (`autonomy.scientist.select`) also finds that
+    candidate eligible; otherwise None (keep the safe default).
+
+    The Judge's rule (`evidence_rule_pick`) is a second copy of the selection rule over the evidence
+    table. The two agree whenever a candidate is eligible (the best Bonferroni lower bound above zero is
+    the best among the Holm-eligible), but the table does not carry `select`'s "not enough data" outcome
+    or its "too good to be true" block (gain above the held-out margin), so on its own it could deploy a
+    candidate `select` refused. This guard means the AI loop can only ever deploy `select`'s own choice
+    or the safe default, never anything the rule refused."""
+    idx = pick_index(decision, ids)
+    if idx is None or idx >= len(selection.verdicts) or not selection.verdicts[idx].eligible:
+        return None
+    return idx
+
+
 def validation_summary(
     ai: AiPlan, decision: JudgeDecision | None, calls: list[tuple[str, str]]
 ) -> dict[str, Any]:

@@ -41,8 +41,11 @@ sealed runs are in [../REAL_BENCH.md](../REAL_BENCH.md).
 ## Honest limits
 
 * The Judge's rule is implemented twice (`scientist_roles.evidence_rule_pick`, `select.select`); they agree on every
-  selection seen here.
-* Five of the fifteen recorded AI answers were written by the grading agent (Sonnet 5.5), not by independent sub-agents.
+  selection seen here. Review fix: the bench deploys the Judge's pick only when `select` also finds it eligible
+  (`ai_loop.deployable_index`), because the Judge's table does not carry `select`'s "not enough data" outcome or its
+  "too good to be true" block; the AI loop can now only deploy `select`'s choice or the safe default.
+* Five of the fifteen recorded AI answers were first written by the grading agent. Review: all five were re-answered
+  by fresh tool-less Sonnet sessions and Hillstrom and Criteo re-run; every deployed policy is unchanged (SCIENTIST.md).
 * The Scientist's evidence uses half of TRAIN as the held-out part, so it cannot prove gains of about 1% of the value at
   60,000 customers (Starbucks); that is a property of the written rule, not tuned.
 * The AI roles were not run on the sealed data, and the Doctor's recommendations are advisory: nothing feeds them into

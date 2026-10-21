@@ -15,8 +15,10 @@ with `op` one of `==`, `!=`, `>=`, `<=`, `>`, `<` and the literal `true`, `false
 number. The report file is relative to `--base-dir`. A claim whose report file is missing stays
 `null` (not run); a path missing from an existing report is a FAIL (the report did not measure it).
 
-The claims were written before the numbers they judge (the first time the file was committed, nothing
-had been run), and the tolerance in the bench claims is fixed here, not tuned.
+The claims were written before the runs that judge them, and the tolerance in the bench claims is fixed
+here, not tuned. Git cannot show that order (the file was first committed with its results), and the
+dev datasets' agent numbers were known before the claims were written; the sealed and the new Gym
+scenarios' claims are the strictly pre-registered ones.
 """
 
 from __future__ import annotations

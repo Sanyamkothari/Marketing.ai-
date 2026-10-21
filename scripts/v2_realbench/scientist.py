@@ -174,7 +174,7 @@ def evaluate_scientist(
             ai_selection = run_scientist(train_campaign, ai_candidates)
         with timings.step("ai: Judge (recorded answer)"):
             ai_table, ai_decision = ai_loop.judge(ai, plan, ai_selection)
-        idx = ai_loop.pick_index(ai_decision, plan.ids)
+        idx = ai_loop.deployable_index(ai_decision, plan.ids, ai_selection)
         ai_run = ai_selection.default.policy() if idx is None else ai_candidates[idx]
     with timings.step("scientist: refit the selected policy on all of TRAIN, decide for TEST"):
         agent_pi: FloatArray | None = None
@@ -268,6 +268,11 @@ def evaluate_scientist(
             "judge_vetoed": None if ai_decision is None else ai_decision.vetoed_by,
             "select_rule_outcome": ai_selection.outcome,
             "select_rule_chosen": ai_selection.chosen_label,
+            "guard_kept_default_over_judge": bool(
+                ai_decision is not None
+                and ai_loop.pick_index(ai_decision, plan.ids) is not None
+                and ai_loop.deployable_index(ai_decision, plan.ids, ai_selection) is None
+            ),
             "select_rule_agrees_with_judge": bool(
                 ai_decision is not None
                 and (

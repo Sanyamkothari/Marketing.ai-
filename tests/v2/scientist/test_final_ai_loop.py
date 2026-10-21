@@ -301,3 +301,36 @@ def test_the_cli_saves_the_prompt_it_waits_for_and_finishes_when_it_is_answered(
     assert main(base) == 0
     block = json.loads(report.read_text())["datasets"]["hillstrom"]
     assert block["ai"]["judge"]["source"] == "model" and "pending_prompt" not in block
+
+
+def test_the_ai_loop_never_deploys_a_candidate_the_selection_rule_refused() -> None:
+    """Review fix: the Judge's rule is a second copy of `select`; the table it reads does not carry
+    `select`'s "not enough data" outcome or its "too good to be true" block, so the deployed pick is
+    guarded by `select`'s own eligibility (the Judge's pick when eligible there, else the safe default)."""
+    from types import SimpleNamespace
+    from typing import cast
+
+    from autonomy.agents.scientist_roles import JudgeDecision, JudgeReport
+    from autonomy.scientist import Selection
+
+    ids = ("c1_send_to_all", "c2_segment_rule")
+    report = JudgeReport(pick="c2_segment_rule", explanation="The rule's pick stands.")
+    decision = JudgeDecision("c2_segment_rule", "c2_segment_rule", report, "model", None, ())
+    refused = cast(
+        Selection, SimpleNamespace(verdicts=(SimpleNamespace(eligible=True), SimpleNamespace(eligible=False)))
+    )
+    agreed = cast(
+        Selection, SimpleNamespace(verdicts=(SimpleNamespace(eligible=False), SimpleNamespace(eligible=True)))
+    )
+    assert ai_loop.pick_index(decision, ids) == 1
+    assert ai_loop.deployable_index(decision, ids, refused) is None
+    assert ai_loop.deployable_index(decision, ids, agreed) == 1
+    keep = JudgeDecision(
+        SAFE_DEFAULT_ID,
+        SAFE_DEFAULT_ID,
+        report.model_copy(update={"pick": SAFE_DEFAULT_ID}),
+        "model",
+        None,
+        (),
+    )
+    assert ai_loop.deployable_index(keep, ids, agreed) is None

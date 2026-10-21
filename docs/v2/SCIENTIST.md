@@ -84,6 +84,19 @@ profile. They are not independent of the grader and the grader had seen the dev-
 evidence in their prompts is TRAIN-only. All fifteen are in `answers_ai.json` of the run (scratchpad); the first
 ten answered prompts whose ids reproduced exactly when this step rebuilt the profiles (checked).
 
+**Independent re-answers (senior review, 21 Oct 2026).** The five grader-written answers were replaced by fresh,
+tool-less Sonnet sessions (`claude -p --model sonnet --tools ""`, one session per prompt, each given only the
+recorded system prompt and user message), and the AI loop was re-run on Hillstrom and Criteo with them
+(`answers_ai_independent.json` and `ai_independent/` in the run's scratchpad folder). Nothing that is deployed changed.
+Hillstrom: the independent Proposer suggested three candidates (send-all men's, send-all women's, the agent) instead
+of two; none had a corrected lower bound above zero (women's +0.104, low -0.114, Holm p 0.47), the Judge kept the
+current set-up, deployed policy unchanged (send to all: Mens E-Mail). Criteo: the same two kinds as before (exploration
+floors 0.05 / 0.10 instead of 0.01); the Judge picked the learning agent, as the rule did; deployed policy unchanged.
+Both answers were accepted by code first time. The no-control stress Doctor: accepted, `click_trust: ignore`,
+`enough_data: false`, `no_control_group` and `tiny_sample` flagged (it added `novelty`, `leakage` and
+`multiple_comparisons` and left out `proxy_metric`). The tables below are the original run; the independent run
+gives the same rows.
+
 ### Checks on the four dev datasets
 
 | Dataset | Outcome the Doctor recommended | Clicks | Enough data (Doctor) | Doctor answer | Proposal accepted | Candidates | Judge pick | Evidence rule pick | Judge answer |
@@ -235,7 +248,7 @@ customer a week) and stays at Stage 1 on `real_sms_like` (Stage 2 fails: $630, $
 
 ## Targets, met and missed
 
-The 52 claims of [TARGETS.json](TARGETS.json) were written before anything was run for them. Judged now: 24 (22 by
+The 52 claims of [TARGETS.json](TARGETS.json) were written before this step ran anything for them. Two caveats (review): the file was first committed together with its results (git cannot show the order), and the four dev datasets' agent numbers were already known from the fix wave, so only the sealed and the two new Gym scenarios' claims are pre-registered in the strict sense; and the 2% non-inferiority tolerance is smaller than the corrected interval's half-width on Criteo, Lenta and Starbucks, so there a policy that ties the best simple one cannot pass. Judged now: 24 (22 by
 `python -m scripts.v2_realbench.targets --base-dir OUT --write` from the reports of this step, 2 whose threshold is "exit
 status 0" and whose commands I ran and recorded by hand: both exited 0). 16 pass, 8 fail, 28 are still `null`.
 
@@ -298,9 +311,8 @@ data and four on the dev data, as found; none was re-run.
   never promoted because the Gym's histories prove nothing.
 * **The Gym needs a history with a randomised control** (known propensities for the control rows) so the promotion path can
   be seen end to end, and `.github/workflows/gym.yml` does not list `real_email_like` and `real_sms_like` yet.
-* **Independent answers.** Five of the fifteen recorded answers were written by the grading agent; rerun the Proposer and
-  Judge for Hillstrom and Criteo with independent Sonnet sub-agents (prompts are in the run's `ai/` folder and the prompt
-  ids are stable) to make the AI comparison clean.
+* **Independent answers.** Done in review: the five grader-written answers were re-answered by fresh Sonnet sessions and
+  Hillstrom and Criteo re-run; no deployed policy changed (see "Who wrote the answers").
 * **Judge strictness.** The X5 Judge was right and was still replaced because it quoted a profile number; allowing
   numbers from the profile as well as the evidence would keep more explanations, and weakens nothing about the pick.
 * **Not run on sealed data:** the AI roles (their prompts would need the sealed outcomes before the single sealed read).
