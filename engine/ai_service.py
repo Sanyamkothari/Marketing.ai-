@@ -89,6 +89,7 @@ __all__ = [
     "PROVIDERS",
     "SLOTS",
     "SLOT_LABELS",
+    "TEST_MAX_TOKENS",
     "TEST_PROMPT",
     "AiNotConnectedError",
     "AiServiceError",
@@ -136,6 +137,12 @@ def store_key(slot: str) -> str:
 
 KEY_ENV_VAR: Final[str] = ENV_VARS["connections_key"]
 TEST_PROMPT: Final[str] = "Reply with the single word: ready"
+TEST_MAX_TOKENS: Final[int] = int(LlmConfig.model_fields["data_agent_max_output_tokens"].default)
+"""The answer allowance of a connection test: the one a Guided setup / Data Doctor step is given.
+
+Read from the config field rather than restated, so the test and the real calls cannot drift apart. The
+prompt still asks for one word; the allowance is a ceiling, not a cost.
+"""
 _MAX_FIELD: Final[int] = 200
 _MAX_KEY: Final[int] = 512
 _MAX_URL: Final[int] = 512
@@ -1165,15 +1172,33 @@ def _problem_text(exc: LLMError, info: ProviderInfo) -> tuple[str, str | None]:
     return exc.message, None
 
 
+def _empty_answer_text(info: ProviderInfo) -> tuple[str, str]:
+    """Our sentence for a service that was reached and answered with no text at all."""
+    return (
+        f"{info.label} answered with no text, so Marketing AI could not use it.",
+        "Choose another model (use 'Load models from this service'), then test again.",
+    )
+
+
 def run_test(
     candidate: Candidate,
     api_key: str | None,
     *,
     profile: str | None = None,
     timeout_s: int = 20,
+    max_tokens: int = TEST_MAX_TOKENS,
     transport: httpx.BaseTransport | None = None,
 ) -> TestOutcome:
-    """One tiny completion (16 tokens). A failed call is `ok: false` with a plain fix, never an exception."""
+    """One completion with the answer allowance real data-agent calls get. A failed call, and an empty
+    answer, are `ok: false` with a plain fix, never an exception.
+
+    The test must ask what the work asks. A model that reasons before it replies can spend a small
+    allowance on thinking and return nothing; that service is reachable but cannot do the job, and
+    reporting it as connected only moves the failure to the first Guided setup or Data Doctor turn. So
+    `max_tokens` defaults to :data:`TEST_MAX_TOKENS` (`generative.llm.data_agent_max_output_tokens`'s
+    default) and an answer with no text fails the test. The prompt still asks for one word, so a model
+    that answers at once costs a few tokens: the allowance is a ceiling, not a cost.
+    """
     info = candidate.provider
     if info.needs_key and not api_key:
         return TestOutcome(
@@ -1196,17 +1221,16 @@ def run_test(
     )
     began = time.monotonic()
     try:
-        client.complete(TEST_PROMPT, model_id=candidate.model, max_tokens=16, temperature=0.0)
+        client.complete(TEST_PROMPT, model_id=candidate.model, max_tokens=max_tokens, temperature=0.0)
         latency = int((time.monotonic() - began) * 1000)
-        message = f"Connected. {info.label} answered with {candidate.model}."
     except LLMError as exc:
         latency = int((time.monotonic() - began) * 1000)
-        if exc.code == "LLM_REFUSED":  # reached and answered, with no text in 16 tokens
-            message = f"Connected. {info.label} answered, but with no text in the short test."
-        else:
-            log_failure(_LOGGER, "ai_service.test", exc, level=logging.DEBUG)
-            text, fix = _problem_text(exc, info)
-            return TestOutcome(ok=False, message=text, fix=fix, latency_ms=latency, model=candidate.model)
+        log_failure(_LOGGER, "ai_service.test", exc, level=logging.DEBUG)
+        # An HTTP client that knows why (`out_of_room`: the whole allowance went on thinking) says so
+        # in its own sentence; a bare LLM_REFUSED is an answer with nothing in it.
+        refused_empty = exc.code == "LLM_REFUSED" and not isinstance(exc, LLMHttpError)
+        text, fix = _empty_answer_text(info) if refused_empty else _problem_text(exc, info)
+        return TestOutcome(ok=False, message=text, fix=fix, latency_ms=latency, model=candidate.model)
     except Exception as exc:  # a bug or an SDK error must not become a stack trace with a key in it
         log_failure(_LOGGER, "ai_service.test", exc)
         return TestOutcome(
@@ -1217,7 +1241,7 @@ def run_test(
         )
     return TestOutcome(
         ok=True,
-        message=message,
+        message=f"Connected. {info.label} answered with {candidate.model}.",
         latency_ms=latency,
         model=candidate.model,
         embeddings_note=_embeddings_note(client, candidate),
