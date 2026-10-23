@@ -40,6 +40,11 @@ the session's own `agent.max_llm_calls_per_session` stops a runaway chat. Each r
 `TurnLog` - calls, actions, refusals and the rule that replaced it - and no content: an action name
 that is not a known tool, `propose_setting` or `reply` is logged as `unknown`, never verbatim.
 
+When the AI service does not answer, the turn ends with `blocked_by="unavailable"` and says why twice: the codes
+(`ai_failure_codes`: the exception's own, and for the HTTP clients `LLM_` and the kind, such as `LLM_KEY_EXPIRED`) join
+`TurnLog.error_codes`, and the reply adds the client's own fixed sentence and fix (`unavailable_reply`). Nothing the
+service wrote is kept: the sentences are `engine.llm_http.PROBLEMS`, chosen by the kind.
+
 An *Ask your data* session (`AgentSession.explore`, Plan I DEC-1250/1251) runs the same turn read-only:
 no setting is listed, the state block is one fixed sentence, and `propose_setting` is refused with
 `AGENT_EXPLORE_READ_ONLY` like any other refused action.
@@ -99,6 +104,7 @@ from engine.generative.errors import GenerativeError
 from engine.generative.guardrails import CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, render
 from engine.llm import LLMError
+from engine.llm_http import LLMHttpError
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -110,7 +116,9 @@ __all__ = [
     "PROPOSE_TOOL",
     "STEP_TOOL",
     "TurnResult",
+    "ai_failure_codes",
     "chat_turn",
+    "unavailable_reply",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -193,6 +201,35 @@ UNAVAILABLE: Final[str] = (
 OUT_OF_BUDGET: Final[str] = (
     "This setup has used all its questions to the AI service. The suggestions on the screen still work."
 )
+
+
+def ai_failure_codes(exc: LLMError | GenerativeError) -> tuple[str, ...]:
+    """The codes that say why a call to the AI service failed: for `TurnLog.error_codes` and the Doctor's chat.
+
+    The exception's own `code` first (`LLM_UNAVAILABLE`, `LLM_REFUSED`, `BUDGET_EXCEEDED`), then - for a failure of
+    the HTTP clients (:class:`engine.llm_http.LLMHttpError`) - `LLM_` and the upper-cased kind (`LLM_KEY_EXPIRED`,
+    `LLM_OUT_OF_ROOM`, `LLM_RATE_LIMITED`). The second is what tells an expired key from an unreachable server, which
+    share `LLM_UNAVAILABLE`; when it repeats the first (`LLM_TOO_LONG`) it is not listed twice. Both are written in
+    this repository, never taken from anything the service answered (`engine.llm_http`, rule 2).
+    """
+    codes = [exc.code]
+    if isinstance(exc, LLMHttpError):
+        codes.append(f"LLM_{exc.kind.upper()}")
+    return tuple(dict.fromkeys(codes))
+
+
+def unavailable_reply(exc: LLMError | GenerativeError) -> str:
+    """What a person reads when the AI service did not answer: :data:`UNAVAILABLE`, then why when we can say it.
+
+    A failure of the HTTP clients carries a sentence and a fix that `engine.llm_http.PROBLEMS` holds ("The AI service
+    says the key has expired. Create a new key ..."), so they are added. No other failure adds its own words: an
+    `LLMError` may be raised by any client with any text (the Bedrock one names the AWS profile it was given) and a
+    `GenerativeError` fills a template with names from the data, so for those the reply stays the lead alone and the
+    reason is the code in the turn's log.
+    """
+    if isinstance(exc, LLMHttpError):
+        return f"{UNAVAILABLE} {exc.message} {exc.fix}"
+    return UNAVAILABLE
 
 
 @dataclass(frozen=True)
@@ -506,8 +543,13 @@ def chat_turn(
                 sent.append(item)
         try:
             completion = meter.complete(rendered, GenerativePurpose.DATA_AGENT)
-        except (LLMError, GenerativeError):
-            return finish(UNAVAILABLE, blocked_by="unavailable")
+        except (LLMError, GenerativeError) as exc:
+            # Why, as codes in the turn's log and, when the client has its own fixed sentence, in the reply.
+            # `blocked_by` stays `unavailable`: the Doctor's `chat_turn` tool reports it and callers key on it.
+            codes = ai_failure_codes(exc)
+            errors.extend(codes)
+            _LOGGER.warning("agent chat: the AI call failed (%s)", ", ".join(codes))
+            return finish(unavailable_reply(exc), blocked_by="unavailable")
         calls += 1
         try:
             action = _parse(completion.text)

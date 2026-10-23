@@ -528,6 +528,20 @@ class CaseChatEntry(StrictBase):
         exclude_if=lambda value: value is None,
         description="An answer it suggests to an open question; the person's click answers it, nothing else does.",
     )
+    blocked_by: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Why the AI did not write this reply itself: `no_consent`, `budget`, `unavailable` (the AI "
+        "service did not answer), `prompt_too_large`, the code of a refusal it met twice, or `failed` (a step of the "
+        "turn broke); left out when it did.",
+    )
+    error_codes: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="For an AI service that did not answer, the codes that say why, in order: `LLM_UNAVAILABLE`, then "
+        "the kind its client found (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...). Codes written by us, never the "
+        "service's own words.",
+    )
 
 
 class CaseEvidenceRef(StrictBase):

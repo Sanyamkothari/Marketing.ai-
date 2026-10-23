@@ -102,6 +102,11 @@ class ChatTurn:
     tools: tuple[str, ...] = ()
     sent: tuple[dict[str, Any], ...] = ()
     blocked_by: str | None = None
+    """Why the model's own answer is missing: `unavailable` (the AI service did not answer, or the case's spending
+    ran out), `prompt_too_large`, the code of a refusal it met twice, or `failed`; None when it replied."""
+    error_codes: tuple[str, ...] = ()
+    """Why the AI service did not answer, when it did not: `LLM_UNAVAILABLE`, then the kind the HTTP client found
+    (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...), or `BUDGET_EXCEEDED` (`engine.agent.loop.ai_failure_codes`)."""
 
 
 @dataclass
@@ -268,6 +273,8 @@ class _Chat(_Review):
         from engine.agent.egress import MAX_SENT_ITEMS, STATE_TOOL, scrub, sent_item
 
         turn, strikes, reply, blocked = self.turn, 0, "", None
+        why: tuple[str, ...] = ()  # the codes and the sentence of an AI service that did not answer
+        lead = UNAVAILABLE
         text = self._text(
             None, scrub(message[:MAX_MESSAGE_CHARS])
         )  # names of any file, as the state shows them
@@ -295,7 +302,7 @@ class _Chat(_Review):
             try:
                 answer = self._complete(prompt, variables)
             except _NoAnswerError as stop:
-                blocked = stop.reason
+                blocked, why, lead = stop.reason, stop.codes, stop.reply
                 break
             try:
                 action = _plain_or_action(answer)
@@ -318,11 +325,7 @@ class _Chat(_Review):
         chosen = self.chosen
         withdrawn = [i for i in dict.fromkeys([*chosen.withdrawn, *chosen.replaces]) if i not in made]
         if not reply:
-            reply = (
-                UNAVAILABLE
-                if blocked == "unavailable"
-                else (OUT_OF_STEPS if blocked is None else NOTHING_SAID)
-            )
+            reply = lead if blocked == "unavailable" else (OUT_OF_STEPS if blocked is None else NOTHING_SAID)
         return ChatTurn(
             reply=reply,
             items=tuple(items),
@@ -335,6 +338,7 @@ class _Chat(_Review):
             tools=tuple(dict.fromkeys(chosen.used)),
             sent=tuple(s.model_dump(mode="json") for s in turn.sent[:MAX_SENT_ITEMS]),
             blocked_by=blocked,
+            error_codes=why,
         )
 
     def _reply(self, action: dict[str, Any]) -> str:
@@ -678,6 +682,12 @@ def doctor_converse(
 
     The AI is asked only when the client has allowed it and the case has spending left (`AiGuard.ask`); otherwise the
     reply says so and the visit goes on with its rules. A turn is `data_doctor.ai_limits.max_chat_steps` actions at most.
+
+    The result says why the AI did not answer, when it did not (`ConverseResult.blocked_by`, `error_codes`): `no_consent`
+    and `budget` for the two replies above, which ask nothing; and for a turn the AI service failed, `unavailable` with
+    the codes of the failure (`LLM_UNAVAILABLE`, `LLM_KEY_EXPIRED` ...), or `budget` with `BUDGET_EXCEEDED` when the
+    case's spending ran out between two calls. The reply then also tells the person the cause when the HTTP client has
+    a fixed sentence for it.
     """
 
     def converse(case: Case, message: str, files: tuple[LoadedFile, ...]) -> ConverseResult:
@@ -687,7 +697,9 @@ def doctor_converse(
         allowed = meter.ask(case)
         if allowed != "ok":
             return ConverseResult(
-                reply=AI_NO_CONSENT_REPLY if allowed == "no_consent" else AI_LIMIT_REPLY, ai=False
+                reply=AI_NO_CONSENT_REPLY if allowed == "no_consent" else AI_LIMIT_REPLY,
+                ai=False,
+                blocked_by="no_consent" if allowed == "no_consent" else "budget",
             )
         if not files:
             return ConverseResult(reply="Add a file first, and I will look at it with you.", ai=False)
@@ -709,6 +721,8 @@ def doctor_converse(
         spent = done.blocked_by == "unavailable" and meter.spent()
         return ConverseResult(
             reply=AI_LIMIT_REPLY if spent else done.reply,
+            blocked_by="budget" if spent else done.blocked_by,
+            error_codes=done.error_codes,
             items=done.items,
             evidence=done.evidence,
             sent=done.sent,

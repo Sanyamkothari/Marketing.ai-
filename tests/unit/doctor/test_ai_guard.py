@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from engine.access.roles import Principal, Role
+from engine.agent.loop import UNAVAILABLE
 from engine.agent.tools import AgentContext
 from engine.config import BudgetConfig, LlmConfig, RunMode, load_use_case
 from engine.doctor import visit
@@ -27,11 +28,12 @@ from engine.doctor.diagnose import LoadedFile
 from engine.generative.contracts import GenerativePurpose
 from engine.generative.prompts import load_prompt, render
 from engine.llm import LLMCompletion
-from engine.llm_http import LLMHttpError
+from engine.llm_http import PROBLEMS, LLMHttpError
 from engine.storage import LocalStorage
 from tests.fixtures.doctor_eval.chat_model import ChatScript
 from tests.unit.agent.egress_canary import guardrails
 from tests.unit.doctor import visit_support as vs
+from tests.unit.doctor.chat_support import Down
 from tests.unit.doctor.visit_support import ANALYST, CLIENT, GOAL_A, open_case
 
 EMAIL = "ravi.kumar@example.com"
@@ -86,6 +88,7 @@ def test_no_consent_means_no_call(storage: LocalStorage) -> None:
     result = _converse(_guard(client, consent=False))(case, "Hello", _files())
     assert not client.calls, "the AI was not asked"
     assert result.reply == AI_NO_CONSENT_REPLY and result.ai is False
+    assert (result.blocked_by, result.error_codes) == ("no_consent", ())
 
 
 def test_consent_is_kept_once_with_who_and_when(storage: LocalStorage) -> None:
@@ -104,6 +107,7 @@ def test_a_spent_case_makes_no_further_call_and_says_so(storage: LocalStorage, u
     result = _converse(_guard(client, calls=3, tokens=1_000))(case, "Hello", _files())
     assert not client.calls
     assert result.reply == AI_LIMIT_REPLY and result.ai is False
+    assert (result.blocked_by, result.error_codes) == ("budget", ())
 
 
 def test_the_limit_stops_a_turn_between_calls_and_the_visit_goes_on(storage: LocalStorage) -> None:
@@ -113,6 +117,18 @@ def test_the_limit_stops_a_turn_between_calls_and_the_visit_goes_on(storage: Loc
     assert len([c for c in client.calls if c.kind == "complete"]) == 1, "the second call was refused"
     assert result.reply == AI_LIMIT_REPLY
     assert result.model_calls == 1 and result.tokens > 0, "what the turn used is counted on the case"
+    assert (result.blocked_by, result.error_codes) == ("budget", ("BUDGET_EXCEEDED",))
+
+
+def test_an_ai_service_that_fails_says_why_in_the_result(storage: LocalStorage) -> None:
+    sentence, fix = PROBLEMS["out_of_room"]
+    case = open_case(storage, vs.world())
+    result = _converse(_guard(Down(LLMHttpError("out_of_room"))))(case, "Hello", _files())
+    assert result.ai is True and (result.model_calls, result.tokens) == (0, 0)
+    assert result.reply == f"{UNAVAILABLE} {sentence} {fix}"
+    assert (result.blocked_by, result.error_codes) == ("unavailable", ("LLM_REFUSED", "LLM_OUT_OF_ROOM"))
+    answered = _converse(_guard(ChatScript({})))(case, "Hello", _files())
+    assert (answered.blocked_by, answered.error_codes) == (None, ())
 
 
 def test_every_file_goes_through_its_own_gate(storage: LocalStorage) -> None:

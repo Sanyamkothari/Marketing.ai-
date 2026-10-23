@@ -238,6 +238,14 @@ class MessageCard(StrictBase):
     tools: tuple[str, ...] = ()
     suggestion: MessageSuggestion | None = None
     sent: tuple[dict[str, JsonValue], ...] = Field(default=(), description="What the AI looked at.")
+    blocked_by: str | None = Field(
+        default=None,
+        description="Why the AI did not write this reply itself (`CaseChatEntry.blocked_by`); null when it did.",
+    )
+    error_codes: tuple[str, ...] = Field(
+        default=(),
+        description="For an AI service that did not answer, the codes that say why (`CaseChatEntry.error_codes`).",
+    )
 
 
 class ReadyStop(StrictBase):
@@ -690,6 +698,8 @@ def _message(case: Case, entry: Any, *, live: bool = False) -> MessageCard:
         tools=tuple(getattr(entry, "tools", ()) or ()),
         suggestion=suggestion,
         sent=tuple(entry.sent),
+        blocked_by=getattr(entry, "blocked_by", None),
+        error_codes=tuple(getattr(entry, "error_codes", ()) or ()),
     )
 
 
