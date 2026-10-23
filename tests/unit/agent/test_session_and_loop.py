@@ -11,11 +11,12 @@ import pytest
 from engine.agent.contracts import ProposalKind, ProposalState, SessionStatus
 from engine.agent.loop import FALLBACK, OUT_OF_BUDGET, UNAVAILABLE, chat_turn
 from engine.agent.session import SessionError, accept_recommended, answer, decide, roles_of, start_session
-from engine.config import load_use_case
+from engine.config import LlmConfig, load_use_case
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.llm import LLMCompletion, LLMError
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.fixtures.make_data import GenerationSpec, generate
+from tests.unit.agent.egress_canary import ToolingClient, meter_for
 from tests.unit.agent.helpers import context_for
 
 
@@ -119,6 +120,16 @@ def test_one_malformed_reply_is_corrected_and_two_end_the_turn(started: tuple[An
         ctx, session, "hi", meter=ScriptedMeter(["not json", "still not"]), guardrails=_guardrails()
     )
     assert (bad.reply.text, bad.blocked_by) == (FALLBACK, "AGENT_REPLY_MALFORMED")
+
+
+def test_every_step_of_the_chat_is_asked_with_the_data_agents_allowance(started: tuple[Any, Any]) -> None:
+    """A model that reasons first needs room to write after it; the step is not given the paragraph's 800."""
+    ctx, session = started
+    client = ToolingClient([{"action": "describe_outcome", "args": {"column": "converted_30d"}}])
+    result = chat_turn(ctx, session, "hi", meter=meter_for(client), guardrails=_guardrails())
+    asked = [call.max_tokens for call in client.calls if call.kind == "complete"]
+    assert len(asked) == result.llm_calls >= 2, "the turn looked, then replied"
+    assert set(asked) == {LlmConfig().data_agent_max_output_tokens}
 
 
 def test_a_tool_that_writes_or_does_not_exist_is_refused(started: tuple[Any, Any]) -> None:

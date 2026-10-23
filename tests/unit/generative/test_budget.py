@@ -19,6 +19,13 @@ so what `budget_usd` reports must be null there too, and the call ceiling must b
 the run. What the cost ceiling promises is asserted for exactly what it is: a run stops at the first
 call after its spending reached the ceiling, which can leave it over.
 
+The output allowance belongs to the purpose of the call: the data agent reasons before it replies and is
+given its own, larger allowance, and every other purpose - generating and judging alike - the ordinary one. It
+is asserted on what the client was actually sent, since "which number does the meter think it sends" is not
+the question, and the cost ceiling is asserted to stay a test on what was spent rather than a projection of
+what a bigger allowance might cost. A call that ran out of its allowance before writing anything was billed for
+all of it, so it is counted, from the tokens the provider reported; a failure that billed nothing is not.
+
 The cache is checked for the three things a cache has to get right: a hit is a hit and not a call,
 a different prompt or a different model or a different temperature is a miss, and a failure to read
 or write is survivable - a cache that raised would turn a working run into a failed one.
@@ -32,6 +39,7 @@ import pytest
 
 from engine.config import BudgetConfig, LlmBackend, LlmConfig
 from engine.generative.budget import (
+    DATA_AGENT_PURPOSES,
     TOKENS_PER_PRICE_UNIT,
     Meter,
     ModelPrice,
@@ -42,7 +50,8 @@ from engine.generative.cache import CompletionCache, NullCache, cache_key
 from engine.generative.contracts import PRICE_UNKNOWN, GenerativePurpose, LlmUsageReport
 from engine.generative.errors import GenerativeError
 from engine.generative.prompts import RenderedPrompt, load_prompt, render
-from engine.llm import FakeLLMClient, FakeLLMMode, LLMCompletion
+from engine.llm import FakeLLMClient, FakeLLMMode, LLMCompletion, LLMError
+from engine.llm_http import LLMHttpError
 
 PURPOSE = GenerativePurpose.JUDGE_TOXICITY
 PRICED = PriceTable(prices={"fake": ModelPrice(input_per_1m=3.0, output_per_1m=15.0)}, as_of="a-date")
@@ -329,6 +338,159 @@ def test_usage_lists_models_and_purposes_in_a_stable_order() -> None:
     subject.judge(rendered("two"), GenerativePurpose.JUDGE_TOXICITY)
     purposes = [entry.purpose.value for entry in subject.usage().by_purpose]
     assert purposes == sorted(purposes)
+
+
+# ---------------------------------------------------------------------------
+# The output allowance
+# ---------------------------------------------------------------------------
+ORDINARY_ALLOWANCE = 300
+DATA_AGENT_ALLOWANCE = 3000
+DATA_AGENT_FAMILY = (
+    GenerativePurpose.DATA_AGENT,
+    GenerativePurpose.DATA_AGENT_ASSIST,
+    GenerativePurpose.DOCTOR_AGENT,
+    GenerativePurpose.DOCTOR_CHAT,
+)
+"""Guided setup's two purposes and the Data Doctor's two, written out so a change to the set is a visible one."""
+ALLOWANCES = LlmConfig(
+    max_output_tokens=ORDINARY_ALLOWANCE, data_agent_max_output_tokens=DATA_AGENT_ALLOWANCE
+)
+
+
+def allowance_meter(*, prices: PriceTable | None = None, cost: float = 2.0) -> tuple[Meter, FakeLLMClient]:
+    """A meter whose two allowances differ, over the client that records what it was sent."""
+    client = FakeLLMClient(mode=FakeLLMMode.GROUNDED)
+    subject = Meter(
+        client,
+        job_id="r_20260922_abcdef01",
+        llm=ALLOWANCES,
+        budget=BudgetConfig(max_calls_per_run=500, max_cost_usd_per_run=cost, cache=False),
+        prices=prices,
+    )
+    return subject, client
+
+
+def sent_allowances(client: FakeLLMClient) -> list[int | None]:
+    return [call.max_tokens for call in client.calls if call.kind == "complete"]
+
+
+@pytest.mark.parametrize("purpose", DATA_AGENT_FAMILY)
+def test_the_data_agent_is_sent_its_own_output_allowance(purpose: GenerativePurpose) -> None:
+    """A model that reasons first spends 800 tokens on thinking and writes nothing: the agent gets more."""
+    subject, client = allowance_meter()
+    subject.complete(rendered(), purpose)
+    assert sent_allowances(client) == [DATA_AGENT_ALLOWANCE]
+    assert subject.output_allowance(purpose) == DATA_AGENT_ALLOWANCE
+
+
+@pytest.mark.parametrize("purpose", [p for p in GenerativePurpose if p not in DATA_AGENT_FAMILY])
+def test_every_other_purpose_is_sent_the_ordinary_output_allowance(purpose: GenerativePurpose) -> None:
+    subject, client = allowance_meter()
+    subject.complete(rendered(), purpose)
+    assert sent_allowances(client) == [ORDINARY_ALLOWANCE]
+
+
+def test_the_data_agent_purposes_are_exactly_the_four_that_reason_first() -> None:
+    assert frozenset(DATA_AGENT_FAMILY) == DATA_AGENT_PURPOSES
+
+
+def test_judging_follows_the_same_rule_as_generating() -> None:
+    """`judge` shares `_call`, so no road to the client can bypass the allowance."""
+    subject, client = allowance_meter()
+    subject.judge(rendered("judged"), PURPOSE)
+    subject.judge(rendered("a second opinion"), GenerativePurpose.DATA_AGENT_ASSIST)
+    assert sent_allowances(client) == [ORDINARY_ALLOWANCE, DATA_AGENT_ALLOWANCE]
+
+
+def test_the_shipped_allowances_are_the_defaults_of_the_configuration() -> None:
+    client = FakeLLMClient(mode=FakeLLMMode.GROUNDED)
+    subject = Meter(client, job_id="r_1", llm=LlmConfig(), budget=BudgetConfig(cache=False))
+    subject.complete(rendered(), GenerativePurpose.DATA_AGENT)
+    subject.complete(rendered("another"), GenerativePurpose.ASSISTANT_ANSWER)
+    assert sent_allowances(client) == [
+        LlmConfig().data_agent_max_output_tokens,
+        LlmConfig().max_output_tokens,
+    ]
+    assert LlmConfig().data_agent_max_output_tokens > LlmConfig().max_output_tokens
+
+
+def test_a_larger_allowance_is_not_a_projection_the_cost_ceiling_still_tests_what_was_spent() -> None:
+    """The data agent's 3000 tokens would cost far more than this ceiling if projected; nothing is projected.
+
+    The first call is made because nothing has been spent, and the next is refused because something has -
+    the same promise the ordinary allowance has always had (DEC-227).
+    """
+    prices = PriceTable(prices={"fake": ModelPrice(input_per_1m=0.0, output_per_1m=1_000_000.0)})
+    assert prices.prices["fake"].cost(0, DATA_AGENT_ALLOWANCE) > 1.0
+    subject, client = allowance_meter(prices=prices, cost=1.0)
+    subject.complete(rendered("one"), GenerativePurpose.DATA_AGENT)
+    assert sent_allowances(client) == [DATA_AGENT_ALLOWANCE]
+    assert subject.cost_so_far is not None and subject.cost_so_far >= 1.0
+    with pytest.raises(GenerativeError):
+        subject.complete(rendered("two"), GenerativePurpose.DATA_AGENT)
+    assert len(client.calls) == 1
+
+
+class NoRoomClient(FakeLLMClient):
+    """A client whose every answer is stopped by the token ceiling before a word is written.
+
+    The provider billed for the whole allowance it was sent (`max_tokens`) and said so, which is what
+    the HTTP clients put on the `out_of_room` failure they raise.
+    """
+
+    def complete(
+        self, prompt: str, *, model_id: str | None = None, max_tokens: int = 512, **_: object
+    ) -> LLMCompletion:
+        del prompt
+        raise LLMHttpError("out_of_room", model_id=model_id, input_tokens=40, output_tokens=max_tokens)
+
+
+class UnavailableClient(FakeLLMClient):
+    """A client that cannot be reached: nothing was billed, and nothing is reported."""
+
+    def complete(self, prompt: str, **_: object) -> LLMCompletion:
+        del prompt
+        raise LLMError("LLM_UNAVAILABLE", "The model could not be reached.")
+
+
+def failing_meter(client: FakeLLMClient, *, calls: int = 500, prices: PriceTable | None = None) -> Meter:
+    return Meter(
+        client,
+        job_id="r_20260922_abcdef01",
+        llm=ALLOWANCES,
+        budget=BudgetConfig(max_calls_per_run=calls, max_cost_usd_per_run=2.0, cache=False),
+        prices=prices,
+    )
+
+
+def test_a_call_that_ran_out_of_room_was_billed_and_is_counted() -> None:
+    """Its whole allowance was spent on thinking: left uncounted, no ceiling would stop a person trying again."""
+    subject = failing_meter(NoRoomClient(), prices=PRICED)
+    with pytest.raises(LLMHttpError) as error:
+        subject.complete(rendered(), GenerativePurpose.DATA_AGENT)
+    assert error.value.kind == "out_of_room", "the failure still reaches the caller unchanged"
+    assert subject.calls == 1
+    totals = subject.totals()
+    assert (totals.input_tokens, totals.output_tokens) == (40, DATA_AGENT_ALLOWANCE)
+    assert subject.cost_so_far == PRICED.prices["fake"].cost(40, DATA_AGENT_ALLOWANCE) > 0
+    usage = subject.usage()
+    assert [(p.purpose, p.calls) for p in usage.by_purpose] == [(GenerativePurpose.DATA_AGENT, 1)]
+
+
+def test_calls_that_ran_out_of_room_reach_the_call_ceiling_like_any_other() -> None:
+    subject = failing_meter(NoRoomClient(), calls=2)
+    for text in ("one", "two"):
+        with pytest.raises(LLMHttpError):
+            subject.complete(rendered(text), GenerativePurpose.ASSISTANT_ANSWER)
+    with pytest.raises(GenerativeError):
+        subject.complete(rendered("three"), GenerativePurpose.ASSISTANT_ANSWER)
+
+
+def test_a_failure_that_billed_nothing_is_not_a_call() -> None:
+    subject = failing_meter(UnavailableClient())
+    with pytest.raises(LLMError):
+        subject.complete(rendered(), GenerativePurpose.DATA_AGENT)
+    assert subject.calls == 0 and subject.totals().output_tokens == 0
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -23,6 +24,10 @@ from engine.doctor.ai_guard import (
 from engine.doctor.case import Case, CaseCounters
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.diagnose import LoadedFile
+from engine.generative.contracts import GenerativePurpose
+from engine.generative.prompts import load_prompt, render
+from engine.llm import LLMCompletion
+from engine.llm_http import LLMHttpError
 from engine.storage import LocalStorage
 from tests.fixtures.doctor_eval.chat_model import ChatScript
 from tests.unit.agent.egress_canary import guardrails
@@ -38,11 +43,18 @@ def storage(tmp_path: Path) -> LocalStorage:
     return LocalStorage(tmp_path / "data")
 
 
-def _guard(client: ChatScript, *, calls: int = 60, tokens: int = 600_000, consent: bool = True) -> AiGuard:
+def _guard(
+    client: ChatScript,
+    *,
+    calls: int = 60,
+    tokens: int = 600_000,
+    consent: bool = True,
+    llm: LlmConfig | None = None,
+) -> AiGuard:
     return AiGuard(
         client,
         job_id="test",
-        llm=LlmConfig(),
+        llm=llm if llm is not None else LlmConfig(),
         budget=BudgetConfig(cache=False, max_calls_per_run=100_000, max_cost_usd_per_run=1_000.0),
         limits=AiLimitsConfig(max_calls_per_case=calls, max_tokens_per_case=tokens),
         consented=lambda _client: consent,
@@ -149,3 +161,67 @@ def test_a_case_may_spend_enough_for_a_conversation_and_a_message_takes_a_few_st
         8,
     )
     assert _guard(ChatScript({})).chat_steps == 8
+
+
+ALLOWANCES = LlmConfig(max_output_tokens=300, data_agent_max_output_tokens=3000)
+
+
+def test_a_doctor_turn_asks_the_model_with_the_data_agents_allowance(storage: LocalStorage) -> None:
+    """The chat reasons before it replies; an allowance sized for a paragraph left it nothing to write with."""
+    client = ChatScript({"missing": [{"action": "describe_missing", "file": "F1", "args": {}}]})
+    case = open_case(storage, vs.world())
+    result = _converse(_guard(client, llm=ALLOWANCES))(case, "What is missing?", _files())
+    sent = {call.max_tokens for call in client.calls if call.kind == "complete"}
+    assert client.asked >= 2 and result.ai, "the turn made more than one call"
+    assert sent == {3000}, "every one of them was given the data agent's allowance"
+
+
+@pytest.mark.parametrize(
+    ("purpose", "allowance"),
+    [
+        (GenerativePurpose.DOCTOR_CHAT, 3000),
+        (GenerativePurpose.DOCTOR_AGENT, 3000),
+        (GenerativePurpose.DATA_AGENT, 3000),
+        (GenerativePurpose.DATA_AGENT_ASSIST, 3000),
+        (GenerativePurpose.DATA_EXPLAIN, 300),
+        (GenerativePurpose.ASSISTANT_ANSWER, 300),
+    ],
+)
+def test_the_guard_sends_a_calls_own_allowance_like_any_meter(
+    purpose: GenerativePurpose, allowance: int
+) -> None:
+    client = ChatScript({})
+    _guard(client, llm=ALLOWANCES).complete(
+        render(load_prompt("judge_toxicity"), {"generated": "x"}), purpose
+    )
+    assert [call.max_tokens for call in client.calls] == [allowance]
+
+
+class _NoRoom(ChatScript):
+    """The chat's model, stopped by the token ceiling in its thinking on every turn, and billed for it."""
+
+    def complete(self, prompt: str, **kwargs: Any) -> LLMCompletion:
+        super().complete(prompt, **kwargs)  # recorded in `calls`, like any other
+        raise LLMHttpError(
+            "out_of_room", model_id=kwargs.get("model_id"), input_tokens=40, output_tokens=3000
+        )
+
+
+def test_a_turn_that_ran_out_of_room_is_counted_on_the_case_so_trying_again_has_a_limit(
+    storage: LocalStorage,
+) -> None:
+    client = _NoRoom({})
+    case = open_case(storage, vs.world())
+    guard = _guard(client, tokens=6_000, llm=ALLOWANCES)
+    first = _converse(guard)(case, "Hello", _files())
+    assert (first.model_calls, first.tokens) == (
+        1,
+        3040,
+    ), "the turn's one call was billed for its whole allowance"
+    case = case.model_copy(update={"counters": CaseCounters(model_calls=1, tokens=3040)})
+    second = _converse(guard)(case, "Hello again", _files())
+    assert (second.model_calls, second.tokens) == (1, 3040)
+    case = case.model_copy(update={"counters": CaseCounters(model_calls=2, tokens=6080)})
+    third = _converse(guard)(case, "And again", _files())
+    assert third.reply == AI_LIMIT_REPLY and not third.ai, "the case's limit now stops the retries"
+    assert client.asked == 2

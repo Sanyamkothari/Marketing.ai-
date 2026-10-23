@@ -103,7 +103,8 @@ PROBLEMS: Final[dict[str, tuple[str, str]]] = {
     ),
     "out_of_room": (
         "The model used its whole answer allowance before writing anything.",
-        "Models that reason first need more room: raise generative.llm.data_agent_max_output_tokens, "
+        "Models that reason first need more room: raise generative.llm.max_output_tokens "
+        "(generative.llm.data_agent_max_output_tokens for Guided setup and the Data Doctor), "
         "or choose a model without extended reasoning.",
     ),
     "rate_limited": (
@@ -222,7 +223,8 @@ class LLMHttpError(LLMError):
 
     `kind` says why (see :data:`PROBLEMS`); `status` is the HTTP status when there was one;
     `rejected` names the request parameters a 400 said it would not take (names only), which is how a
-    client adapts once to a model with different rules.
+    client adapts once to a model with different rules. `input_tokens` and `output_tokens` are set for
+    `out_of_room` alone: the one failure that was billed, in whole, for what the answer reported.
     """
 
     def __init__(
@@ -232,9 +234,17 @@ class LLMHttpError(LLMError):
         status: int | None = None,
         model_id: str | None = None,
         rejected: tuple[str, ...] = (),
+        input_tokens: int = 0,
+        output_tokens: int = 0,
     ) -> None:
         message, fix = PROBLEMS[kind]
-        super().__init__(_CODES.get(kind, "LLM_UNAVAILABLE"), message, model_id=model_id)
+        super().__init__(
+            _CODES.get(kind, "LLM_UNAVAILABLE"),
+            message,
+            model_id=model_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
         self.kind: Problem = kind
         self.fix = fix
         self.status = status
@@ -473,6 +483,27 @@ def _int(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
+def _empty_answer(out_of_room: bool, model_id: str, input_tokens: int, output_tokens: int) -> LLMError:
+    """The failure of an answer with no text in it, in one of two kinds that look alike and are not.
+
+    A model that reasons before it replies can spend its whole allowance on the reasoning and be
+    stopped by the token ceiling with nothing written (`out_of_room`: the provider's own stop reason
+    says so, `length` or `max_tokens`). The fix is more room, which is not what an empty answer by
+    any other road needs. Both are `LLM_REFUSED`, so a caller that already treats an empty answer as
+    no answer needs no change; only the sentence a person reads differs. Nothing the provider wrote
+    is read for this: the stop reason is a closed word, not its prose.
+
+    The out-of-room answer was billed for the allowance it spent, and the provider's own `usage` says
+    how much, so those two numbers - and nothing else of the response - go on the error for the meter
+    to count (see `engine.generative.budget`).
+    """
+    if out_of_room:
+        return LLMHttpError(
+            "out_of_room", model_id=model_id, input_tokens=input_tokens, output_tokens=output_tokens
+        )
+    return LLMError("LLM_REFUSED", "The model returned nothing to read.", model_id=model_id)
+
+
 # ---------------------------------------------------------------------------
 # OpenAI chat protocol
 # ---------------------------------------------------------------------------
@@ -558,15 +589,16 @@ class OpenAICompatibleClient(_HttpClient):
         if isinstance(content, list):  # some servers answer in typed parts
             content = "".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
         text = content if isinstance(content, str) else ""
-        if not text.strip():
-            raise LLMError("LLM_REFUSED", "The model returned nothing to read.", model_id=chosen)
         usage = data.get("usage") if isinstance(data, dict) else None
         usage = usage if isinstance(usage, dict) else {}
+        input_tokens, output_tokens = _int(usage.get("prompt_tokens")), _int(usage.get("completion_tokens"))
+        if not text.strip():
+            raise _empty_answer(choice.get("finish_reason") == "length", chosen, input_tokens, output_tokens)
         return LLMCompletion(
             text=text,
             model_id=chosen,
-            input_tokens=_int(usage.get("prompt_tokens")),
-            output_tokens=_int(usage.get("completion_tokens")),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             cost_estimate_usd=None,
             stop_reason=str(choice.get("finish_reason") or ""),
         )
@@ -652,15 +684,16 @@ class AnthropicClient(_HttpClient):
             )
         except (KeyError, TypeError, AttributeError):
             raise LLMHttpError("bad_response", model_id=chosen) from None
-        if not text.strip():
-            raise LLMError("LLM_REFUSED", "The model returned nothing to read.", model_id=chosen)
         usage = data.get("usage") if isinstance(data, dict) else None
         usage = usage if isinstance(usage, dict) else {}
+        input_tokens, output_tokens = _int(usage.get("input_tokens")), _int(usage.get("output_tokens"))
+        if not text.strip():
+            raise _empty_answer(data.get("stop_reason") == "max_tokens", chosen, input_tokens, output_tokens)
         return LLMCompletion(
             text=text,
             model_id=chosen,
-            input_tokens=_int(usage.get("input_tokens")),
-            output_tokens=_int(usage.get("output_tokens")),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             cost_estimate_usd=None,
             stop_reason=str(data.get("stop_reason") or ""),
         )

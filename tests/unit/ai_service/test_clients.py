@@ -533,6 +533,108 @@ def test_unreadable_answers_are_bad_responses() -> None:
     assert caught.value.kind == "bad_response"
 
 
+# --- an answer with no text: out of room, or just empty ---------------------------------------------
+NOTHING_TO_READ = "The model returned nothing to read."
+
+
+def _openai_without_text(finish_reason: str | None) -> Reply:
+    """What a model that reasons first sends when it is stopped in its thinking: an empty `content`."""
+    choice: dict[str, object] = {
+        "message": {"role": "assistant", "content": "", "reasoning_content": f"thinking about {PROMPT}"}
+    }
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    return Reply(200, {"choices": [choice], "usage": {"prompt_tokens": 40, "completion_tokens": 800}})
+
+
+def _anthropic_without_text(stop_reason: str) -> Reply:
+    return Reply(
+        200,
+        {
+            "content": [{"type": "thinking", "thinking": f"thinking about {PROMPT}"}],
+            "stop_reason": stop_reason,
+            "usage": {"input_tokens": 40, "output_tokens": 800},
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("make", "reply"),
+    [(_openai, _openai_without_text("length")), (_anthropic, _anthropic_without_text("max_tokens"))],
+)
+def test_an_answer_stopped_by_the_token_ceiling_before_any_text_is_out_of_room(
+    make: object, reply: Reply
+) -> None:
+    with serve(lambda _: reply) as server:
+        client = make(server.url)  # type: ignore[operator]
+        with pytest.raises(LLMError) as caught:
+            client.complete(PROMPT, max_tokens=800)
+    exc = caught.value
+    assert isinstance(exc, LLMHttpError)
+    assert (exc.kind, exc.code, exc.model_id) == ("out_of_room", "LLM_REFUSED", client.model_id)
+    assert (exc.message, exc.fix) == PROBLEMS["out_of_room"]
+    for text in (str(exc), exc.message, exc.fix, repr(exc)):
+        assert PROMPT not in text and KEY not in text
+    assert len(server.requests) == 1, "asking again with the same allowance would change nothing"
+
+
+def test_the_out_of_room_fix_names_the_allowance_of_every_purpose() -> None:
+    """Any purpose can run out of room, and each is sent one of two settings: the fix names both."""
+    _message, fix = PROBLEMS["out_of_room"]
+    assert "generative.llm.max_output_tokens" in fix
+    assert "generative.llm.data_agent_max_output_tokens" in fix
+
+
+@pytest.mark.parametrize(
+    ("make", "reply"),
+    [(_openai, _openai_without_text("length")), (_anthropic, _anthropic_without_text("max_tokens"))],
+)
+def test_an_out_of_room_failure_carries_the_tokens_the_provider_billed_and_nothing_it_wrote(
+    make: object, reply: Reply
+) -> None:
+    """The whole allowance was spent, so the call is counted from the numbers the answer reports."""
+    with serve(lambda _: reply) as server, pytest.raises(LLMError) as caught:
+        make(server.url).complete(PROMPT, max_tokens=800)  # type: ignore[operator]
+    exc = caught.value
+    assert (exc.input_tokens, exc.output_tokens) == (40, 800)
+    assert not any(PROMPT in str(value) for value in vars(exc).values())
+
+
+def test_an_out_of_room_answer_that_reports_no_usage_is_billed_as_zero_not_guessed() -> None:
+    reply = Reply(200, {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]})
+    with serve(lambda _: reply) as server, pytest.raises(LLMError) as caught:
+        _openai(server.url).complete(PROMPT, max_tokens=800)
+    assert (caught.value.input_tokens, caught.value.output_tokens) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    ("make", "reply"),
+    [
+        (_openai, _openai_without_text("stop")),
+        (_openai, _openai_without_text("content_filter")),
+        (_openai, _openai_without_text(None)),
+        (_anthropic, _anthropic_without_text("end_turn")),
+        (_anthropic, _anthropic_without_text("refusal")),
+    ],
+)
+def test_an_empty_answer_that_stopped_for_any_other_reason_is_still_nothing_to_read(
+    make: object, reply: Reply
+) -> None:
+    with serve(lambda _: reply) as server, pytest.raises(LLMError) as caught:
+        make(server.url).complete(PROMPT, max_tokens=800)  # type: ignore[operator]
+    exc = caught.value
+    assert not isinstance(exc, LLMHttpError)
+    assert (exc.code, exc.message) == ("LLM_REFUSED", NOTHING_TO_READ)
+    assert PROMPT not in str(exc)
+
+
+def test_text_written_before_the_token_ceiling_is_still_returned_as_cut_off() -> None:
+    reply = Reply(200, {"choices": [{"message": {"content": "half an ans"}, "finish_reason": "length"}]})
+    with serve(lambda _: reply) as server:
+        result = _openai(server.url).complete("hi")
+    assert (result.text, result.stop_reason) == ("half an ans", "length")
+
+
 # --- an error inside a 200 (OpenRouter and others; DEC-1269) ---------------------------------------
 def _answering(
     body: object,

@@ -11,7 +11,10 @@ through, in this order, and the order is the point:
    usage record that says why.
 3. **The call is made and tallied** - tokens, latency, and cost when the price table knows the
    model. When it does not, the cost is `None` and a `PRICE_UNKNOWN` warning names the model
-   (DEC-208). `None` is not `0.0`: a zero is a measurement and there was none.
+   (DEC-208). `None` is not `0.0`: a zero is a measurement and there was none. A call that fails is
+   not tallied, since nothing came back to count - except one that spent its whole allowance before
+   writing anything: the provider billed for it and its answer reports the tokens, so it is counted
+   from those numbers and every ceiling, the case's included, sees the retries a person makes.
 
 The call ceiling is exact and the cost ceiling is not, and the difference is worth stating rather
 than glossing. A call is a call before it is made, so `max_calls_per_run` is never exceeded. What a
@@ -19,8 +22,16 @@ call will *cost* is known only once it comes back, since the output tokens are t
 choose, so the cost test can only ask whether the run has already reached its ceiling: a job stops
 at the first call after its spending got there, and the call that carried it there may have carried
 it over. The ceiling bounds how far a job goes on, not its final total. Projecting a call's cost
-from `max_output_tokens` and refusing on the projection would bound the total - with a number
+from its output allowance and refusing on the projection would bound the total - with a number
 nobody measured, which is the one thing this package will not put in front of anyone (DEC-227).
+
+**The output allowance belongs to the purpose of the call, not to the job.** Most purposes write a
+paragraph and get `max_output_tokens`. The data agent - Guided setup's helper and its second
+opinions, and the Data Doctor's agent and chat - reasons before it replies, and a model that
+reasons spends an allowance sized for a paragraph on thinking and returns no text at all, so those
+purposes get `data_agent_max_output_tokens` (`DATA_AGENT_PURPOSES`, `Meter.output_allowance`). The
+allowance is chosen in one place, from the purpose of the call being made, so nothing that has to
+know how many tokens a call may write can be handed the other purpose's number.
 
 The cost ceiling can only bind on what can be priced, and it binds on nothing the moment one call
 cannot be. `budget_usd` is therefore `None` unless every call so far was priced: a run that reports
@@ -55,11 +66,12 @@ from engine.generative.contracts import (
 )
 from engine.generative.errors import BUDGET_EXCEEDED, generative_error
 from engine.generative.prompts import RenderedPrompt
-from engine.llm import APPROX_CHARS_PER_TOKEN, LLMClient, LLMCompletion
+from engine.llm import APPROX_CHARS_PER_TOKEN, LLMClient, LLMCompletion, LLMError
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
 __all__ = [
+    "DATA_AGENT_PURPOSES",
     "PRICES_FILENAME",
     "TOKENS_PER_PRICE_UNIT",
     "Meter",
@@ -73,6 +85,20 @@ _LOGGER = get_logger(__name__)
 PRICES_FILENAME: Final[str] = "llm_prices.yaml"
 TOKENS_PER_PRICE_UNIT: Final[int] = 1_000_000
 """Prices are quoted per million tokens, which is how every provider quotes them."""
+
+DATA_AGENT_PURPOSES: Final[frozenset[GenerativePurpose]] = frozenset(
+    {
+        GenerativePurpose.DATA_AGENT,
+        GenerativePurpose.DATA_AGENT_ASSIST,
+        GenerativePurpose.DOCTOR_AGENT,
+        GenerativePurpose.DOCTOR_CHAT,
+    }
+)
+"""The purposes that reason before they reply, and so are given `data_agent_max_output_tokens`.
+
+Guided setup calls with `DATA_AGENT` and `DATA_AGENT_ASSIST`; the Data Doctor's review and chat call
+with `DOCTOR_AGENT` and `DOCTOR_CHAT`. Every other purpose writes a short text and gets
+`max_output_tokens`."""
 
 _CALLS_LIMIT: Final[str] = "call"
 _COST_LIMIT: Final[str] = "cost"
@@ -237,6 +263,17 @@ class Meter:
         """
         return str(self._llm.backend.value)
 
+    def output_allowance(self, purpose: GenerativePurpose) -> int:
+        """The most output tokens one call for `purpose` may write: the data agent's own allowance
+        for the purposes in `DATA_AGENT_PURPOSES`, `max_output_tokens` for every other.
+
+        It is a ceiling on what the model may write, thinking included, and is what a call sends as
+        `max_tokens`; it is not a measurement of what any call used.
+        """
+        if purpose in DATA_AGENT_PURPOSES:
+            return self._llm.data_agent_max_output_tokens
+        return self._llm.max_output_tokens
+
     def complete(self, rendered: RenderedPrompt, purpose: GenerativePurpose) -> LLMCompletion:
         """Answer `rendered` with the generating model, from the cache when it can.
 
@@ -268,13 +305,20 @@ class Meter:
             self._cache_hits += 1
             return cached
         self._check_budget()
-        completion = self._client.complete(
-            rendered.user,
-            system=rendered.system,
-            model_id=model_id,
-            max_tokens=self._llm.max_output_tokens,
-            temperature=self._llm.temperature,
-        )
+        try:
+            completion = self._client.complete(
+                rendered.user,
+                system=rendered.system,
+                model_id=model_id,
+                max_tokens=self.output_allowance(purpose),
+                temperature=self._llm.temperature,
+            )
+        except LLMError as exc:
+            # Only an `out_of_room` failure carries tokens: it was billed in whole, and the numbers are
+            # the provider's own. Any other failure billed nothing that was reported, so it is no call.
+            if exc.input_tokens or exc.output_tokens:
+                self._record(purpose, model_id, exc.input_tokens, exc.output_tokens)
+            raise
         self._record(purpose, completion.model_id, completion.input_tokens, completion.output_tokens)
         # Only a completion that came back is stored: caching a failure would make a transient one
         # permanent.

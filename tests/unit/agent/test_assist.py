@@ -18,6 +18,7 @@ from engine.agent.assist import GENERIC_WHY, LEAK_REVIEW_TOOL, MAX_LEAK_QUESTION
 from engine.agent.contracts import AgentSession, ProposalKind, ProposalState, RecipeStepKind, ToolResult
 from engine.agent.session import accept_recommended, answer, start_session
 from engine.agent.tools import AgentContext
+from engine.config import LlmConfig
 from engine.llm import LLMError
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.unit.agent.assist_client import AssistClient
@@ -91,6 +92,15 @@ def test_rerank_puts_the_buttons_in_the_models_order_and_records_it() -> None:
         "churn_flg",
     ]
     assert out.llm_calls == session.llm_calls + result.llm_calls
+
+
+def test_the_second_opinions_are_asked_with_the_data_agents_allowance() -> None:
+    """Rerank and the leak reviewer reason before they reply, as the chat does (`data_agent_max_output_tokens`)."""
+    ctx, session = _started()
+    _, client, result = _assist(ctx, session, AssistClient(orders=[], columns=[]))
+    asked = [call.max_tokens for call in client.calls if call.kind == "complete"]
+    assert asked and len(asked) == result.llm_calls
+    assert set(asked) == {LlmConfig().data_agent_max_output_tokens}
 
 
 def test_rerank_never_adds_a_column_the_rules_did_not_list() -> None:
