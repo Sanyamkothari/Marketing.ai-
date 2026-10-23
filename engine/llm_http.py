@@ -59,6 +59,11 @@ _EMBED_BATCH: Final[int] = 64
 
 Problem = Literal[
     "key_rejected",
+    "key_expired",
+    "key_disabled",
+    "no_model_access",
+    "out_of_credit",
+    "out_of_room",
     "rate_limited",
     "server_error",
     "unreachable",
@@ -76,6 +81,27 @@ PROBLEMS: Final[dict[str, tuple[str, str]]] = {
     "key_rejected": (
         "The AI service rejected the key.",
         "Check that the key is active and belongs to this service, then enter it again.",
+    ),
+    "key_expired": (
+        "The AI service says the key has expired.",
+        "Create a new key with the service, then enter it again.",
+    ),
+    "key_disabled": (
+        "The AI service says the key was revoked or turned off.",
+        "Turn the key back on with the service, or create a new one and enter it again.",
+    ),
+    "no_model_access": (
+        "The AI service accepted the key but does not let it use this model.",
+        "Choose a model the key may use, or ask the service to give the key access to this one.",
+    ),
+    "out_of_credit": (
+        "The AI service says the account has no credit or quota left.",
+        "Add credit or raise the quota with the service, then try again.",
+    ),
+    "out_of_room": (
+        "The model used its whole answer allowance before writing anything.",
+        "Models that reason first need more room: raise generative.llm.data_agent_max_output_tokens, "
+        "or choose a model without extended reasoning.",
     ),
     "rate_limited": (
         "The AI service says there were too many requests.",
@@ -129,6 +155,7 @@ _CODES: Final[dict[str, str]] = {
     "bad_request": "LLM_INVALID_REQUEST",
     "not_found": "LLM_INVALID_REQUEST",
     "no_embeddings": "LLM_INVALID_REQUEST",
+    "out_of_room": "LLM_REFUSED",  # an empty answer, as callers already treat one; the kind says why
 }
 """Everything else is LLM_UNAVAILABLE ("try again or fix the connection")."""
 

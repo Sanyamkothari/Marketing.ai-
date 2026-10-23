@@ -695,6 +695,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `embedding_model_id` | string | no |  |
 | `temperature` | number | no |  |
 | `max_output_tokens` | integer | no |  |
+| `data_agent_max_output_tokens` | integer | no |  |
 | `timeout_s` | integer | no |  |
 | `max_retries` | integer | no |  |
 
@@ -2057,6 +2058,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `generative.llm.embedding_model_id` | str; used by the index build and by every question |
 | `generative.llm.temperature` | float 0..1; low, because every flow wants the same answer twice |
 | `generative.llm.max_output_tokens` | int 1..8192 |
+| `generative.llm.data_agent_max_output_tokens` | int 1..32768; the answer allowance of one Guided setup / Data Doctor step, which reasons before it replies |
 | `generative.llm.timeout_s` | int 1..600 |
 | `generative.llm.max_retries` | int 0..5; transport retries, not regenerations |
 | `generative.budget` | non-UI; what one run is allowed to spend (plan §6) |
