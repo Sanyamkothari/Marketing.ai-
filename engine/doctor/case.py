@@ -1464,6 +1464,10 @@ def case_from_session(
             text=message.text,
             at=message.created_at,
             sent=tuple(item.model_dump(mode="json") for item in message.sent),
+            # Why the helper did not write its own reply, as the live Doctor chat records it; a message with
+            # no turn (a person's, or one written before turns were logged) has nothing to say.
+            blocked_by=message.turn.blocked_by if message.turn is not None else None,
+            error_codes=message.turn.error_codes if message.turn is not None else (),
         )
         for message in session.transcript
     )

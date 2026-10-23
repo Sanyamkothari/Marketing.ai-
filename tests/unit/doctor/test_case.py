@@ -511,6 +511,33 @@ def test_a_guided_session_opens_as_a_read_only_case() -> None:
     assert Case.model_validate_json(case.model_dump_json()) == case
 
 
+def test_a_guided_session_reply_that_the_ai_did_not_write_says_why_in_the_case_chat() -> None:
+    """The read-only case shows the Guided-setup chat as the live Doctor chat does: with why the AI was silent."""
+    document = _session().model_dump(mode="json")
+    document["transcript"] = [
+        {"role": "user", "text": "Which column matters?", "created_at": T0.isoformat()},
+        {
+            "role": "agent",
+            "text": "The AI service is not answering right now.",
+            "turn": {
+                "llm_calls": 0,
+                "error_codes": ["LLM_UNAVAILABLE", "LLM_KEY_EXPIRED"],
+                "blocked_by": "unavailable",
+            },
+            "created_at": T0.isoformat(),
+        },
+        {"role": "agent", "text": "Done.", "turn": {"llm_calls": 1}, "created_at": T0.isoformat()},
+    ]
+    session = AgentSession.model_validate(document)
+    chat = case_from_session(session).chat
+    assert [(entry.blocked_by, entry.error_codes) for entry in chat] == [
+        (None, ()),  # a person's message has no turn
+        ("unavailable", ("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED")),
+        (None, ()),  # a turn the AI answered
+    ]
+    assert Case.model_validate_json(case_from_session(session).model_dump_json()).chat == chat
+
+
 def test_a_diagnosis_opens_as_the_same_read_only_case_for_the_same_files() -> None:
     diagnosis = {
         "files": [
