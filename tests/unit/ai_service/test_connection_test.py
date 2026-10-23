@@ -16,7 +16,9 @@ from engine.ai_service import (
     PROVIDERS,
     TEST_MAX_TOKENS,
     TEST_PROMPT,
+    TEST_TIMEOUT_S,
     Candidate,
+    build_service_client,
     run_test,
 )
 from engine.config import LlmConfig
@@ -109,6 +111,29 @@ def test_bedrock_gets_the_allowance_too(monkeypatch: pytest.MonkeyPatch) -> None
     assert stub.asked[0]["max_tokens"] == TEST_MAX_TOKENS and stub.asked[0]["prompt"] == TEST_PROMPT
 
 
+def test_the_default_wait_is_the_one_real_calls_get_read_from_the_config() -> None:
+    assert TEST_TIMEOUT_S == LlmConfig.model_fields["timeout_s"].default == LlmConfig().timeout_s
+
+
+def test_the_test_waits_as_long_as_a_real_call_so_a_slow_thinker_is_not_a_false_red(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The answer allowance went from 16 to thousands of tokens; the whole generation counts against the
+    client's read timeout, so a model that thinks for half a minute must get the 60 s real calls get."""
+    waited: list[int] = []
+
+    def spy(info: Any, **kwargs: Any) -> Any:
+        waited.append(kwargs["timeout_s"])
+        return build_service_client(info, **kwargs)
+
+    monkeypatch.setattr("engine.ai_service.build_service_client", spy)
+    with serve(lambda _: chat_reply("ready")) as server:
+        assert run_test(_openai(server.url), KEY).ok is True
+        assert run_test(_openai(server.url), KEY, timeout_s=5).ok is True
+    assert waited == [LlmConfig().timeout_s, 5]
+    assert waited[0] > 20, "20 s was the budget of a 16-token test"
+
+
 # --- a real answer -------------------------------------------------------------------------------
 def test_a_normal_answer_is_connected() -> None:
     with serve(lambda _: chat_reply("ready")) as server:
@@ -156,18 +181,36 @@ def test_an_empty_answer_has_our_sentence_never_the_providers_words_or_the_clien
 
 # --- ran out of room -----------------------------------------------------------------------------
 @pytest.mark.parametrize("provider", ["openai", "anthropic", "openai_compatible"])
-def test_running_out_of_room_gets_its_own_sentence_and_fix_not_the_empty_answer_one(
+def test_running_out_of_room_gets_its_own_sentence_and_a_fix_that_fits_the_test(
     monkeypatch: pytest.MonkeyPatch, provider: str
 ) -> None:
-    """The kind shares LLM_REFUSED with an empty answer, so the code alone must not pick the sentence."""
+    """The kind shares LLM_REFUSED with an empty answer, so the code alone must not pick the sentence.
+
+    The fix is the test's own: the test sends the default allowance whatever a use case file says, so the
+    client's "raise generative.llm.data_agent_max_output_tokens" would send the operator round in a loop.
+    """
     error = LLMHttpError("out_of_room", model_id="m-1")
     assert error.code == "LLM_REFUSED"
     _stubbed(monkeypatch, error)
     outcome = run_test(_candidate(provider), KEY)
-    message, fix = PROBLEMS["out_of_room"]
-    assert (outcome.ok, outcome.message, outcome.fix) == (False, message, fix)
+    assert outcome.ok is False and outcome.message == PROBLEMS["out_of_room"][0]
     assert "answered with no text" not in outcome.message
+    assert outcome.fix is not None and outcome.fix != PROBLEMS["out_of_room"][1]
+    assert "without extended reasoning" in outcome.fix
+    assert f"{TEST_MAX_TOKENS} tokens" in outcome.fix
+    assert (
+        "not to this test" in outcome.fix
+    ), "a larger setting for a use case must not be promised to help here"
     assert outcome.model == "m-1" and isinstance(outcome.latency_ms, int)
+
+
+def test_the_out_of_room_fix_names_the_allowance_the_test_actually_used(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _stubbed(monkeypatch, LLMHttpError("out_of_room", model_id="m-1"))
+    outcome = run_test(_candidate("openai"), KEY, max_tokens=777)
+    assert stub.asked[0]["max_tokens"] == 777
+    assert outcome.fix is not None and "777 tokens" in outcome.fix and "4096" not in outcome.fix
 
 
 # --- the rest of what the test says is unchanged -------------------------------------------------

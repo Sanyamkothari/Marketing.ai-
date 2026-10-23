@@ -176,9 +176,11 @@ service is Analyst. See `docs/API.md` for the bodies.
 The AI service: `GET /ai-service` (both slots and the six providers), then per slot (`product` or
 `deliverable`; any other name is 404) `PUT /ai-service/{slot}` (saves; no network call; a blank `api_key`
 keeps the saved key for the same provider and address), `POST /ai-service/{slot}/test` (one completion
-with the answer allowance real Guided setup and Data Doctor calls get - the default of
-`generative.llm.data_agent_max_output_tokens`, 4096 - though the prompt asks for one word; a failed call,
-or an answer with no text, is `200` with `ok: false` and a plain `fix`), `POST /ai-service/{slot}/models`
+with the answer allowance and the wait real Guided setup and Data Doctor calls get - the defaults of
+`generative.llm.data_agent_max_output_tokens`, 4096, and `generative.llm.timeout_s`, 60 seconds; a value a
+use case file sets applies to that use case's calls, not to the test - though the prompt asks for one word;
+a failed call, or an answer with no text, is `200` with `ok: false` and a plain `fix`),
+`POST /ai-service/{slot}/models`
 (the service's model names, at most 200; on failure an empty list and a `note`) and
 `DELETE /ai-service/{slot}`. Reads are Viewer; the rest is Analyst. These routes read their own body
 (16 KiB at most), so a validation error names fields and never repeats a value, and every response is

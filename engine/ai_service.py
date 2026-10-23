@@ -91,6 +91,7 @@ __all__ = [
     "SLOT_LABELS",
     "TEST_MAX_TOKENS",
     "TEST_PROMPT",
+    "TEST_TIMEOUT_S",
     "AiNotConnectedError",
     "AiServiceError",
     "AiServiceRecord",
@@ -142,6 +143,13 @@ TEST_MAX_TOKENS: Final[int] = int(LlmConfig.model_fields["data_agent_max_output_
 
 Read from the config field rather than restated, so the test and the real calls cannot drift apart. The
 prompt still asks for one word; the allowance is a ceiling, not a cost.
+"""
+TEST_TIMEOUT_S: Final[int] = int(LlmConfig.model_fields["timeout_s"].default)
+"""How long a connection test waits: what a real call waits, for the same reason as the allowance.
+
+A completion is not streamed, so the whole generation counts against the client's read timeout. With room
+to think, a slow model (a local one on a CPU) can take far longer than the 20 seconds a 16-token test
+needed, and would fail the test while the real calls, given a minute, succeed.
 """
 _MAX_FIELD: Final[int] = 200
 _MAX_KEY: Final[int] = 512
@@ -1180,12 +1188,27 @@ def _empty_answer_text(info: ProviderInfo) -> tuple[str, str]:
     )
 
 
+def _out_of_room_fix(max_tokens: int) -> str:
+    """The fix for a test whose model spent its whole allowance thinking.
+
+    Not the client's own fix, which says to raise `generative.llm.data_agent_max_output_tokens`: that
+    setting belongs to a use case file, and this test serves every use case, so it always sends the
+    default. Raising it would help real calls and leave this test red, sending the operator round in a
+    loop. The sentence says what the test used and where the setting does apply.
+    """
+    return (
+        "Choose a model without extended reasoning. This test gives the answer "
+        f"{max_tokens} tokens, the default of generative.llm.data_agent_max_output_tokens; a larger "
+        "value set for one use case applies to that use case's calls, not to this test."
+    )
+
+
 def run_test(
     candidate: Candidate,
     api_key: str | None,
     *,
     profile: str | None = None,
-    timeout_s: int = 20,
+    timeout_s: int = TEST_TIMEOUT_S,
     max_tokens: int = TEST_MAX_TOKENS,
     transport: httpx.BaseTransport | None = None,
 ) -> TestOutcome:
@@ -1197,7 +1220,9 @@ def run_test(
     reporting it as connected only moves the failure to the first Guided setup or Data Doctor turn. So
     `max_tokens` defaults to :data:`TEST_MAX_TOKENS` (`generative.llm.data_agent_max_output_tokens`'s
     default) and an answer with no text fails the test. The prompt still asks for one word, so a model
-    that answers at once costs a few tokens: the allowance is a ceiling, not a cost.
+    that answers at once costs a few tokens: the allowance is a ceiling, not a cost. `timeout_s` defaults to
+    :data:`TEST_TIMEOUT_S` for the same reason: a model with room to think is slower than one cut off at 16
+    tokens. A service that hangs now holds one of the route's four test slots for that long.
     """
     info = candidate.provider
     if info.needs_key and not api_key:
@@ -1230,6 +1255,8 @@ def run_test(
         # in its own sentence; a bare LLM_REFUSED is an answer with nothing in it.
         refused_empty = exc.code == "LLM_REFUSED" and not isinstance(exc, LLMHttpError)
         text, fix = _empty_answer_text(info) if refused_empty else _problem_text(exc, info)
+        if isinstance(exc, LLMHttpError) and exc.kind == "out_of_room":
+            fix = _out_of_room_fix(max_tokens)
         return TestOutcome(ok=False, message=text, fix=fix, latency_ms=latency, model=candidate.model)
     except Exception as exc:  # a bug or an SDK error must not become a stack trace with a key in it
         log_failure(_LOGGER, "ai_service.test", exc)
