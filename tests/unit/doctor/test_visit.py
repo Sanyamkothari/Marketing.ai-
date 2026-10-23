@@ -487,6 +487,30 @@ def test_a_visit_resumed_in_converse_is_answered_by_the_ai_service(
     assert chats[-1].details["ai"] is True
 
 
+def test_why_the_ai_did_not_answer_is_kept_in_the_reply_and_the_timeline(
+    storage: LocalStorage, world: World
+) -> None:
+    case = _generic(storage, world)
+
+    def down(case: Case, message: str, files: tuple[LoadedFile, ...]) -> visit.ConverseResult:
+        return visit.ConverseResult(
+            reply="The AI service is not answering right now.",
+            blocked_by="unavailable",
+            error_codes=("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED"),
+        )
+
+    asked = visit.chat(
+        CLIENT, case.case_id, "What is in this file?", _deps(storage, world, converse=down),
+        expected_version=case.version, actor=ANALYST, op_id="chat-1",
+    )  # fmt: skip
+    entry = asked.chat[-1]
+    assert (entry.blocked_by, entry.error_codes) == ("unavailable", ("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED"))
+    chats = [e for e in CaseStore(storage).timeline(CLIENT, case.case_id) if e.kind is TimelineKind.CHAT]
+    assert chats[-1].details["blocked_by"] == "unavailable"
+    assert chats[-1].details["error_codes"] == "LLM_UNAVAILABLE,LLM_KEY_EXPIRED"
+    assert chats[-1].details["ai"] is True
+
+
 def test_a_lazy_converse_port_connects_only_when_a_chat_turn_runs(
     storage: LocalStorage, world: World
 ) -> None:

@@ -509,7 +509,9 @@ class TurnLog(StrictBase):
     llm_calls: Annotated[int, Field(ge=0, description="Model calls the turn made.")]
     tools: tuple[str, ...] = Field(default=(), description="Actions the model took, in order.")
     error_codes: tuple[str, ...] = Field(
-        default=(), description="Codes of actions the engine refused, in order."
+        default=(),
+        description="Codes of actions the engine refused, in order; and, when the AI service did not answer, why: "
+        "`LLM_UNAVAILABLE`, then the kind its client found (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...).",
     )
     blocked_by: str | None = Field(
         default=None,

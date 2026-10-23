@@ -392,7 +392,10 @@ reply, 200 for a reason). A failing reply is replaced by "I could not answer tha
 checked." plus the next open decision; a failing reason by "You asked for this change.". Each reply
 stores a `TurnLog` (`llm_calls`, `tools`, `error_codes`, `blocked_by`) and no content: `tools` holds
 only known action names (a read tool, `propose_setting`, `reply`); any other name the model writes is
-logged as `unknown`.
+logged as `unknown`. When the AI service does not answer, `blocked_by` is `unavailable` and `error_codes` says
+why: the exception's own code, then for an HTTP service `LLM_` and the kind (`LLM_UNAVAILABLE`, `LLM_KEY_EXPIRED`;
+`LLM_REFUSED`, `LLM_OUT_OF_ROOM`). The reply adds that kind's fixed sentence and fix from `engine.llm_http.PROBLEMS`;
+a failure of any other kind adds no words of its own, and nothing the service wrote is ever kept or shown.
 
 ### 7.4 Untrusted file content (prompt injection)
 

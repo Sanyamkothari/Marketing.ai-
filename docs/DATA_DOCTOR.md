@@ -739,7 +739,11 @@ the person), `configs/prompts/data_doctor_chat.v1.md`. A reply in `case.chat` (`
 `item_ids` (its changes in `case.items`: `accepted` with `decided_by: agent:data-doctor` is applied for the person,
 `pending` waits for their tick), `withdrawn` (its own earlier changes it took back), `tools` (what it did, in order) and
 `suggestion` (`question_id`, `option_id`, `label`: an answer for the person to click); each is left out of the JSON
-while empty. A typed change by the AI carries what its trial on the first 1,000 rows counted in `payload.tried`
+while empty. When the AI did not write the reply, `blocked_by` says why (`no_consent`, `budget`, `unavailable`,
+`prompt_too_large`) and, for an AI service that did not answer, `error_codes` says what failed (`LLM_UNAVAILABLE`, then
+`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...: codes written here, never the service's words); the reply names the cause in
+the HTTP client's own fixed sentence, and the `chat.message` timeline event carries both (the codes joined by commas).
+A typed change by the AI carries what its trial on the first 1,000 rows counted in `payload.tried`
 (`rows`, `changed`, `failed`). The chat's quick questions are `CHAT_ASK` (non-blocking, the model's own options) and
 "what counts as a yes" is `Q24` (a note for the analyst, not blocking). Tests: `tests/unit/doctor/test_doctor_chat.py` (the owner's example
 conversation, with the turn-keyed scripted model `tests/fixtures/doctor_eval/chat_model.py`),

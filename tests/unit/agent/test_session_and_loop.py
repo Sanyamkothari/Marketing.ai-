@@ -9,11 +9,20 @@ from typing import Any
 import pytest
 
 from engine.agent.contracts import ProposalKind, ProposalState, SessionStatus
-from engine.agent.loop import FALLBACK, OUT_OF_BUDGET, UNAVAILABLE, chat_turn
+from engine.agent.loop import (
+    FALLBACK,
+    OUT_OF_BUDGET,
+    UNAVAILABLE,
+    ai_failure_codes,
+    chat_turn,
+    unavailable_reply,
+)
 from engine.agent.session import SessionError, accept_recommended, answer, decide, roles_of, start_session
 from engine.config import load_use_case
+from engine.generative.errors import BUDGET_EXCEEDED, GenerativeError, generative_error
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.llm import LLMCompletion, LLMError
+from engine.llm_http import PROBLEMS, LLMHttpError, Problem
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.unit.agent.helpers import context_for
@@ -173,6 +182,58 @@ def test_the_service_being_down_or_the_budget_spent_is_said_plainly(started: tup
     )
     out = chat_turn(ctx, spent, "x", meter=ScriptedMeter([]), guardrails=_guardrails())
     assert (out.reply.text, out.llm_calls) == (OUT_OF_BUDGET, 0)
+
+
+def _down(started: tuple[Any, Any], failure: Exception) -> Any:
+    ctx, session = started
+    return chat_turn(ctx, session, "x", meter=ScriptedMeter([failure]), guardrails=_guardrails())
+
+
+@pytest.mark.parametrize(
+    ("kind", "codes"),
+    [
+        ("key_expired", ("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED")),
+        ("key_rejected", ("LLM_UNAVAILABLE", "LLM_KEY_REJECTED")),
+        ("no_model_access", ("LLM_UNAVAILABLE", "LLM_NO_MODEL_ACCESS")),
+        ("out_of_credit", ("LLM_UNAVAILABLE", "LLM_OUT_OF_CREDIT")),
+        ("out_of_room", ("LLM_REFUSED", "LLM_OUT_OF_ROOM")),
+        ("bad_request", ("LLM_INVALID_REQUEST", "LLM_BAD_REQUEST")),
+        ("too_long", ("LLM_TOO_LONG",)),  # the kind repeats the code: listed once
+    ],
+)
+def test_a_failed_call_to_an_http_service_records_why_and_says_it(
+    started: tuple[Any, Any], kind: Problem, codes: tuple[str, ...]
+) -> None:
+    down = _down(started, LLMHttpError(kind))
+    sentence, fix = PROBLEMS[kind]
+    assert down.reply.turn.error_codes == codes
+    assert down.blocked_by == "unavailable" == down.reply.turn.blocked_by, "what callers key on is unchanged"
+    assert down.reply.text == f"{UNAVAILABLE} {sentence} {fix}"
+    assert (down.llm_calls, down.proposals, down.tool_results) == (0, (), ())
+
+
+def test_a_failed_call_that_is_not_an_http_one_records_its_code_and_adds_no_words_of_its_own(
+    started: tuple[Any, Any],
+) -> None:
+    # What a client that built its message from a provider's answer would carry.
+    quoted = "the prompt said: customer 4455 asked about sk-live-123"
+    plain = _down(started, LLMError("LLM_UNAVAILABLE", quoted))
+    assert plain.reply.turn.error_codes == ("LLM_UNAVAILABLE",)
+    assert (plain.reply.text, plain.blocked_by) == (UNAVAILABLE, "unavailable")
+    spent = _down(started, generative_error(BUDGET_EXCEEDED, limit="calls", calls=30))
+    assert spent.reply.turn.error_codes == (BUDGET_EXCEEDED,)
+    assert (spent.reply.text, spent.blocked_by) == (UNAVAILABLE, "unavailable")
+    for turn in (plain, spent):
+        assert "4455" not in repr(turn) and "sk-live" not in repr(turn)
+
+
+def test_the_failure_codes_and_reply_come_from_the_exception_s_type_and_kind_alone() -> None:
+    error = LLMHttpError("key_expired", status=401)
+    assert ai_failure_codes(error) == ("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED")
+    assert ai_failure_codes(GenerativeError("BUDGET_EXCEEDED", "any words")) == ("BUDGET_EXCEEDED",)
+    assert unavailable_reply(error).startswith(UNAVAILABLE)
+    assert unavailable_reply(LLMError("LLM_REFUSED", "any words")) == UNAVAILABLE
+    assert unavailable_reply(GenerativeError("BUDGET_EXCEEDED", "any words")) == UNAVAILABLE
 
 
 def test_a_turn_stops_after_the_step_limit(started: tuple[Any, Any]) -> None:

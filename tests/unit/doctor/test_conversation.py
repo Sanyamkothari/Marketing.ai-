@@ -467,6 +467,25 @@ def test_the_conversation_is_built_from_the_case_alone(storage: LocalStorage, wo
         c for c in build_conversation(plain, screen.view, screen.timeline) if isinstance(c, MessageCard)
     ]
     assert message.item_ids == () and message.suggestion is None and message.text == "why?"
+    assert message.blocked_by is None and message.error_codes == ()
+
+
+def test_a_reply_the_ai_did_not_write_says_why_on_its_card(storage: LocalStorage, world: World) -> None:
+    screen = scenario("approve_class", storage, world)
+    down = CaseChatEntry(
+        role="agent",
+        text="The AI service is not answering right now.",
+        at=screen.case.updated_at,
+        blocked_by="unavailable",
+        error_codes=("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED"),
+    )
+    (message,) = [
+        c
+        for c in build_conversation(_chat(screen.case, down), screen.view, screen.timeline)
+        if isinstance(c, MessageCard)
+    ]
+    assert message.blocked_by == "unavailable"
+    assert message.error_codes == ("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED")
 
 
 def _applied_removal(case: Case, state: ProposalState = ProposalState.ACCEPTED) -> CaseItem:

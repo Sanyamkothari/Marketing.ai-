@@ -58,11 +58,14 @@ from engine.agent.grounding import evidence_numbers, grounded_numbers
 from engine.agent.loop import (
     MAX_PROMPT_CHARS,
     STEP_TEXT_KEYS,
+    UNAVAILABLE,
     _Checker,
     _limit_searches,
     _parse,
     _propose_step,
     _record,
+    ai_failure_codes,
+    unavailable_reply,
 )
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import for_prompt
@@ -131,11 +134,19 @@ def lazy_review(build: Callable[[], DetectorPort | None]) -> DetectorPort:
 
 
 class _NoAnswerError(Exception):
-    """The model cannot be asked now: `reason` is `prompt_too_large` or `unavailable` (no service, or no money)."""
+    """The model cannot be asked now: `reason` is `prompt_too_large` or `unavailable` (no service, or no money).
 
-    def __init__(self, reason: str) -> None:
+    For `unavailable`, `failure` is what the AI service raised: `codes` say why (`LLM_UNAVAILABLE`, then
+    `LLM_KEY_EXPIRED` ...; see `engine.agent.loop.ai_failure_codes`) and `reply` is what the person reads (the
+    lead sentence, and the HTTP client's own fixed sentence and fix when it has one). Neither holds a word the
+    service wrote.
+    """
+
+    def __init__(self, reason: str, failure: LLMError | GenerativeError | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.codes: tuple[str, ...] = () if failure is None else ai_failure_codes(failure)
+        self.reply: str = UNAVAILABLE if failure is None else unavailable_reply(failure)
 
 
 @dataclass
@@ -359,7 +370,9 @@ class _Review:
         try:
             return self.meter.complete(rendered, self.purpose).text
         except (LLMError, GenerativeError) as exc:
-            raise _NoAnswerError("unavailable") from exc
+            failed = _NoAnswerError("unavailable", exc)
+            _LOG.warning("%s: the AI call failed (%s)", self.purpose.value, ", ".join(failed.codes))
+            raise failed from exc
 
     def run(self) -> Detected:
         from engine.doctor.visit import Detected

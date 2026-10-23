@@ -248,6 +248,13 @@ class ConverseResult:
     tokens: int = 0
     ai: bool = True
     """False: no AI service answered (the reply is :data:`AI_NEEDED_REPLY`); the timeline records which."""
+    blocked_by: str | None = None
+    """Why the AI's own answer is missing, when it is: `no_consent` and `budget` (the two replies that ask nothing),
+    `unavailable` (the AI service did not answer), `prompt_too_large`, or the code of a refusal it met twice. None when
+    it answered, and when the reply is :data:`AI_NEEDED_REPLY` (no AI service is connected: `ai` says so)."""
+    error_codes: tuple[str, ...] = ()
+    """For an AI service that did not answer, the codes that say why, in order: `LLM_UNAVAILABLE`, then the kind the
+    HTTP client found (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...); written here, never the service's own words."""
 
 
 class ConversePort(Protocol):
@@ -1156,20 +1163,27 @@ def _converse(run: _Run, case: Case) -> _Step:
         withdrawn=tuple(back),
         tools=result.tools,
         suggestion=suggestion,
+        blocked_by=result.blocked_by,
+        error_codes=result.error_codes,
     )
     step.updates["chat"] = (*case.chat, entry)
-    step.events.append(
-        EventDraft(
-            kind=TimelineKind.CHAT,
-            details={
-                "role": "agent",
-                "ai": result.ai,
-                "proposals": len(fresh),
-                "applied": sum(1 for i in placed if i.state is ProposalState.ACCEPTED),
-                "withdrawn": len(back),
-            },
-        )
+    chat_event = EventDraft(
+        kind=TimelineKind.CHAT,
+        details={
+            "role": "agent",
+            "ai": result.ai,
+            "proposals": len(fresh),
+            "applied": sum(1 for i in placed if i.state is ProposalState.ACCEPTED),
+            "withdrawn": len(back),
+        },
     )
+    # Why the AI did not answer, when it did not, so the timeline tells an expired key from a spent case. A detail is
+    # one value, so the codes are joined by commas; both are left out while empty, as in the chat entry.
+    if result.blocked_by:
+        chat_event.details["blocked_by"] = result.blocked_by
+    if result.error_codes:
+        chat_event.details["error_codes"] = ",".join(result.error_codes)
+    step.events.append(chat_event)
     return step
 
 

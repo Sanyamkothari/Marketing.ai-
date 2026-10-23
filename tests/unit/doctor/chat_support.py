@@ -82,6 +82,17 @@ def monthly_world() -> World:
     return world
 
 
+class Down(ChatScript):
+    """A connected AI service whose every call fails with `error` (an expired key, an empty answer ...)."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__({})
+        self.error = error
+
+    def complete(self, *args: Any, **kwargs: Any) -> Any:
+        raise self.error
+
+
 def guard_for(client: ChatScript, *, consent: bool = True, limits: AiLimitsConfig | None = None) -> AiGuard:
     return AiGuard(
         client,

@@ -647,6 +647,24 @@ def test_a_chat_entry_written_before_the_agent_changed_the_plan_reads_and_dumps_
     assert json.loads(entry.model_dump_json()) == old, "the new fields are left out of a dump while unset"
 
 
+def test_a_chat_entry_says_why_the_ai_did_not_answer_and_only_then() -> None:
+    entry = CaseChatEntry(
+        role="agent",
+        text="The AI service is not answering right now.",
+        at=T0,
+        blocked_by="unavailable",
+        error_codes=("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED"),
+    )
+    dumped = json.loads(entry.model_dump_json())
+    assert (dumped["blocked_by"], dumped["error_codes"]) == (
+        "unavailable",
+        ["LLM_UNAVAILABLE", "LLM_KEY_EXPIRED"],
+    )
+    assert CaseChatEntry.model_validate_json(entry.model_dump_json()) == entry
+    answered = json.loads(CaseChatEntry(role="agent", text="Done.", at=T0).model_dump_json())
+    assert "blocked_by" not in answered and "error_codes" not in answered
+
+
 def test_a_chat_entry_carries_what_the_agent_did_in_its_reply() -> None:
     entry = CaseChatEntry(
         role="agent",

@@ -20,10 +20,12 @@ from api.main import create_app
 from api.routes import case_visit
 from engine import ai_service
 from engine.access.roles import Role
+from engine.agent.loop import UNAVAILABLE
 from engine.doctor import case as doctor_case
 from engine.doctor.goal_brief import load_goal_brief
 from engine.doctor.visit import AI_NEEDED_REPLY
 from engine.llm import FakeLLMClient, FakeLLMMode
+from engine.llm_http import PROBLEMS, LLMHttpError
 from tests.fixtures.doctor_eval.chat_model import ChatScript
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.integration.production.access_support import bearer, local_app, make_user
@@ -175,6 +177,36 @@ def test_a_chat_whose_process_died_during_the_ai_call_is_answered_by_the_ai_on_r
     assert case["chat"][-1]["text"] != AI_NEEDED_REPLY, "the AI service answered, not 'none is connected'"
     assert any(c.calls for c in built[asked:]), "the resumed visit asked the AI service"
     assert case["state"] in {"ask", "approve"} and case["counters"]["model_calls"] >= 1
+
+
+class _KeyExpired(FakeLLMClient):
+    """A connected AI service whose key has expired: every call fails the way the HTTP client reports it."""
+
+    def complete(self, *args: Any, **kwargs: Any) -> Any:
+        raise LLMHttpError("key_expired", status=401)
+
+
+def test_a_chat_the_ai_service_could_not_answer_says_why_in_the_response_and_the_timeline(
+    unified: None, config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ai_service, "build_client", lambda *_a, **_k: _KeyExpired(mode=FakeLLMMode.GROUNDED))
+    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as client:
+        case = client.post("/cases", json={"upload_ids": [_upload(client)]}).json()
+        case = _answer_open(client, client.post(f"/cases/{case['case_id']}/visit", json={}).json())
+        case_id = case["case_id"]
+        assert client.post(f"/cases/{case_id}/ai-consent", json={}).status_code == 200
+        chatted = client.post(f"/cases/{case_id}/chat", json={"version": case["version"], "message": "Hello"})
+        assert chatted.status_code == 200, chatted.text
+        reply = chatted.json()["chat"][-1]
+        sentence, fix = PROBLEMS["key_expired"]
+        assert reply["text"] == f"{UNAVAILABLE} {sentence} {fix}"
+        assert reply["blocked_by"] == "unavailable"
+        assert reply["error_codes"] == ["LLM_UNAVAILABLE", "LLM_KEY_EXPIRED"]
+        events = client.get(f"/cases/{case_id}/timeline").json()["events"]
+        (event,) = [e for e in events if e["kind"] == "chat.message" and e["details"].get("role") == "agent"]
+        assert event["details"]["blocked_by"] == "unavailable"
+        assert event["details"]["error_codes"] == "LLM_UNAVAILABLE,LLM_KEY_EXPIRED"
+        assert event["details"]["ai"] is True
 
 
 def test_the_chat_through_the_api_applies_a_filter_for_the_person_who_can_undo_it(

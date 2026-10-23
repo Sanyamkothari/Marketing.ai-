@@ -48,7 +48,7 @@ from engine.agent.contracts import (
 from engine.agent.egress import EGRESS_LATE_MASK, MAX_SENT_ITEMS, Egress, assert_clean, scrub, sent_item
 from engine.agent.grounding import evidence_numbers, grounded_numbers
 from engine.agent.headers import HeaderCandidate, reorder_within
-from engine.agent.loop import FALLBACK, OUT_OF_BUDGET, UNAVAILABLE, _Checker
+from engine.agent.loop import FALLBACK, OUT_OF_BUDGET, UNAVAILABLE, _Checker, ai_failure_codes
 from engine.agent.session import roles_of, with_summary
 from engine.agent.tools import AgentContext
 from engine.agent.untrusted import display_name, for_prompt, resolve_column
@@ -424,7 +424,11 @@ def assist_session(
         sent.append(sent_item(gate, tool, {}, payload, extra_text_keys=_RESULT_TEXT))
         try:
             completion = meter.complete(rendered, GenerativePurpose.DATA_AGENT_ASSIST)
-        except (LLMError, GenerativeError):
+        except (LLMError, GenerativeError) as exc:
+            # Why, as the chat turn records it: `LLM_UNAVAILABLE`, then `LLM_KEY_EXPIRED` and the like.
+            codes = ai_failure_codes(exc)
+            errors.extend(codes)
+            _LOGGER.warning("agent assist: the AI call failed (%s)", ", ".join(codes))
             blocked = "unavailable"
             return None
         calls += 1

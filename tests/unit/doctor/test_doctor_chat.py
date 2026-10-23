@@ -16,16 +16,20 @@ from pathlib import Path
 import pytest
 
 from engine.agent.contracts import ProposalSource, ProposalState
+from engine.agent.loop import UNAVAILABLE
 from engine.doctor import registry as doctor_registry
 from engine.doctor import visit
 from engine.doctor.case import Case, TimelineKind, VisitState
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.visit import AGENT, AI_NEEDED_REPLY
+from engine.generative.errors import BUDGET_EXCEEDED
+from engine.llm import LLMError
+from engine.llm_http import PROBLEMS, LLMHttpError
 from engine.storage import LocalStorage
 from tests.fixtures.doctor_eval.chat_model import ChatScript, Seen
 from tests.unit.doctor import chat_support as cs
 from tests.unit.doctor import visit_support as vs
-from tests.unit.doctor.chat_support import Talk, ai_items
+from tests.unit.doctor.chat_support import Down, Talk, ai_items
 from tests.unit.doctor.visit_support import ANALYST, World
 
 SALE = "a sale only counts if the order was over 500"
@@ -772,6 +776,46 @@ def test_the_spending_limit_stops_a_turn_between_calls_and_says_so(
     assert client.asked == 1
     assert "used up what this case may spend" in talk.reply.text
     assert talk.case.counters.model_calls == 1
+    assert (talk.reply.blocked_by, talk.reply.error_codes) == ("budget", (BUDGET_EXCEEDED,))
+
+
+def test_an_ai_service_that_fails_is_told_with_why_in_the_reply_the_entry_and_the_timeline(
+    storage: LocalStorage, world: World
+) -> None:
+    sentence, fix = PROBLEMS["key_expired"]
+    talk = Talk(storage, world, Down(LLMHttpError("key_expired")))
+    talk.say("look at the orders")
+    reply = talk.reply
+    assert reply.text == f"{UNAVAILABLE} {sentence} {fix}", "the lead, then the client's own fixed words"
+    assert (reply.blocked_by, reply.error_codes) == ("unavailable", ("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED"))
+    (chat,) = [e for e in talk.timeline() if e.kind is TimelineKind.CHAT and e.details["role"] == "agent"]
+    assert chat.details["ai"] is True, "an AI service was asked; it did not answer"
+    assert chat.details["blocked_by"] == "unavailable"
+    assert chat.details["error_codes"] == "LLM_UNAVAILABLE,LLM_KEY_EXPIRED"
+    assert talk.case.state is not VisitState.CONVERSE, "the visit goes on with its rules"
+
+
+def test_an_ai_service_whose_failure_has_no_fixed_words_of_ours_adds_none_to_the_reply(
+    storage: LocalStorage, world: World
+) -> None:
+    quoted = "the prompt said customer 4455 asked about sk-live-123"
+    talk = Talk(storage, world, Down(LLMError("LLM_REFUSED", quoted)))
+    talk.say("look at the orders")
+    reply = talk.reply
+    assert reply.text == UNAVAILABLE
+    assert (reply.blocked_by, reply.error_codes) == ("unavailable", ("LLM_REFUSED",))
+    stored = reply.model_dump_json() + "".join(e.model_dump_json() for e in talk.timeline())
+    assert "4455" not in stored and "sk-live" not in stored
+
+
+def test_a_chat_the_ai_answered_names_no_cause(storage: LocalStorage, world: World) -> None:
+    talk = Talk(storage, world, ChatScript({"look": [reply("Nothing to report.")]}))
+    talk.say("look")
+    assert (talk.reply.blocked_by, talk.reply.error_codes) == (None, ())
+    dumped = json.loads(talk.reply.model_dump_json())
+    assert "blocked_by" not in dumped and "error_codes" not in dumped, "left out of the JSON while unset"
+    (chat,) = [e for e in talk.timeline() if e.kind is TimelineKind.CHAT and e.details["role"] == "agent"]
+    assert "blocked_by" not in chat.details and "error_codes" not in chat.details
 
 
 def test_no_consent_means_no_call(storage: LocalStorage, world: World) -> None:
@@ -779,6 +823,7 @@ def test_no_consent_means_no_call(storage: LocalStorage, world: World) -> None:
     talk = Talk(storage, world, client, consent=False)
     talk.say("look")
     assert client.asked == 0 and "has not been allowed to read this client's data" in talk.reply.text
+    assert (talk.reply.blocked_by, talk.reply.error_codes) == ("no_consent", ())
 
 
 # ---------------------------------------------------------------------------

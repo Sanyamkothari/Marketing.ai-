@@ -19,6 +19,7 @@ from engine.agent.contracts import AgentSession, ProposalKind, ProposalState, Re
 from engine.agent.session import accept_recommended, answer, start_session
 from engine.agent.tools import AgentContext
 from engine.llm import LLMError
+from engine.llm_http import LLMHttpError
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.unit.agent.assist_client import AssistClient
 from tests.unit.agent.egress_canary import (
@@ -270,6 +271,26 @@ def test_an_ai_service_that_does_not_answer_leaves_the_session_exactly_as_it_was
 
     out, _, result = _assist(ctx, session, Down())
     assert out == session and result.blocked_by == "unavailable" and result.llm_calls == 0
+
+
+def test_a_second_opinion_that_stops_half_way_records_why_in_the_message() -> None:
+    ctx, session = _started()
+
+    class DownAfterTheFirst(AssistClient):
+        def complete(self, *args: Any, **kwargs: Any) -> Any:
+            if self.calls:
+                raise LLMHttpError("key_expired")
+            return super().complete(*args, **kwargs)
+
+    out, _, result = _assist(
+        ctx,
+        session,
+        DownAfterTheFirst(orders=[{"kind": "outcome", "columns": ["kharida_flag", "churn_flg"]}]),
+    )
+    message = out.transcript[-1]
+    assert result.blocked_by == "unavailable" and result.llm_calls == 1
+    assert message.turn is not None and message.turn.blocked_by == "unavailable"
+    assert message.turn.error_codes == ("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED")
 
 
 def test_a_session_out_of_calls_makes_none() -> None:
