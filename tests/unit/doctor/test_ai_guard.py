@@ -199,7 +199,7 @@ def test_a_doctor_turn_asks_the_model_with_the_data_agents_allowance(storage: Lo
         (GenerativePurpose.DOCTOR_AGENT, 3000),
         (GenerativePurpose.DATA_AGENT, 3000),
         (GenerativePurpose.DATA_AGENT_ASSIST, 3000),
-        (GenerativePurpose.DATA_EXPLAIN, 300),
+        (GenerativePurpose.DATA_EXPLAIN, 3000),
         (GenerativePurpose.ASSISTANT_ANSWER, 300),
     ],
 )

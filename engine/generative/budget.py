@@ -13,8 +13,9 @@ through, in this order, and the order is the point:
    model. When it does not, the cost is `None` and a `PRICE_UNKNOWN` warning names the model
    (DEC-208). `None` is not `0.0`: a zero is a measurement and there was none. A call that fails is
    not tallied, since nothing came back to count - except one that spent its whole allowance before
-   writing anything: the provider billed for it and its answer reports the tokens, so it is counted
-   from those numbers and every ceiling, the case's included, sees the retries a person makes.
+   writing anything (`out_of_room`): the provider billed for it, so it is counted - from the tokens its
+   answer reports, or as a call of none when it reports no usage - and every ceiling, the case's
+   included, sees the retries a person makes.
 
 The call ceiling is exact and the cost ceiling is not, and the difference is worth stating rather
 than glossing. A call is a call before it is made, so `max_calls_per_run` is never exceeded. What a
@@ -27,9 +28,9 @@ nobody measured, which is the one thing this package will not put in front of an
 
 **The output allowance belongs to the purpose of the call, not to the job.** Most purposes write a
 paragraph and get `max_output_tokens`. The data agent - Guided setup's helper and its second
-opinions, and the Data Doctor's agent and chat - reasons before it replies, and a model that
-reasons spends an allowance sized for a paragraph on thinking and returns no text at all, so those
-purposes get `data_agent_max_output_tokens` (`DATA_AGENT_PURPOSES`, `Meter.output_allowance`). The
+opinions, and the Data Doctor's agent, chat and explain narrator - reasons before it replies, and a
+model that reasons spends an allowance sized for a paragraph on thinking and returns no text at all,
+so those purposes get `data_agent_max_output_tokens` (`DATA_AGENT_PURPOSES`, `Meter.output_allowance`). The
 allowance is chosen in one place, from the purpose of the call being made, so nothing that has to
 know how many tokens a call may write can be handed the other purpose's number.
 
@@ -67,6 +68,7 @@ from engine.generative.contracts import (
 from engine.generative.errors import BUDGET_EXCEEDED, generative_error
 from engine.generative.prompts import RenderedPrompt
 from engine.llm import APPROX_CHARS_PER_TOKEN, LLMClient, LLMCompletion, LLMError
+from engine.llm_http import LLMHttpError
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -92,13 +94,16 @@ DATA_AGENT_PURPOSES: Final[frozenset[GenerativePurpose]] = frozenset(
         GenerativePurpose.DATA_AGENT_ASSIST,
         GenerativePurpose.DOCTOR_AGENT,
         GenerativePurpose.DOCTOR_CHAT,
+        GenerativePurpose.DATA_EXPLAIN,
     }
 )
 """The purposes that reason before they reply, and so are given `data_agent_max_output_tokens`.
 
-Guided setup calls with `DATA_AGENT` and `DATA_AGENT_ASSIST`; the Data Doctor's review and chat call
-with `DOCTOR_AGENT` and `DOCTOR_CHAT`. Every other purpose writes a short text and gets
-`max_output_tokens`."""
+Guided setup calls with `DATA_AGENT` and `DATA_AGENT_ASSIST`; the Data Doctor's review, chat and
+explain narrator call with `DOCTOR_AGENT`, `DOCTOR_CHAT` and `DATA_EXPLAIN`. The narrator writes a short
+structured text, but it runs on the same model as the rest of the Data Doctor: a model that reasons
+spends the ordinary allowance on thinking there too, and `explain` quietly falls back to the rules' narrative. Every
+other purpose writes a short text and gets `max_output_tokens`."""
 
 _CALLS_LIMIT: Final[str] = "call"
 _COST_LIMIT: Final[str] = "cost"
@@ -314,9 +319,11 @@ class Meter:
                 temperature=self._llm.temperature,
             )
         except LLMError as exc:
-            # Only an `out_of_room` failure carries tokens: it was billed in whole, and the numbers are
-            # the provider's own. Any other failure billed nothing that was reported, so it is no call.
-            if exc.input_tokens or exc.output_tokens:
+            # Only an `out_of_room` failure is a call: the provider billed it in whole. The kind decides,
+            # not the numbers - a service that omits `usage` still billed it, and is counted with the
+            # tokens it reported (0 when it reported none). Any other failure billed nothing that was
+            # reported, so it is no call.
+            if isinstance(exc, LLMHttpError) and exc.kind == "out_of_room":
                 self._record(purpose, model_id, exc.input_tokens, exc.output_tokens)
             raise
         self._record(purpose, completion.model_id, completion.input_tokens, completion.output_tokens)

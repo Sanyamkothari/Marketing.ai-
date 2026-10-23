@@ -350,8 +350,9 @@ DATA_AGENT_FAMILY = (
     GenerativePurpose.DATA_AGENT_ASSIST,
     GenerativePurpose.DOCTOR_AGENT,
     GenerativePurpose.DOCTOR_CHAT,
+    GenerativePurpose.DATA_EXPLAIN,
 )
-"""Guided setup's two purposes and the Data Doctor's two, written out so a change to the set is a visible one."""
+"""Guided setup's two purposes and the Data Doctor's three, written out so a change to the set is a visible one."""
 ALLOWANCES = LlmConfig(
     max_output_tokens=ORDINARY_ALLOWANCE, data_agent_max_output_tokens=DATA_AGENT_ALLOWANCE
 )
@@ -390,7 +391,7 @@ def test_every_other_purpose_is_sent_the_ordinary_output_allowance(purpose: Gene
     assert sent_allowances(client) == [ORDINARY_ALLOWANCE]
 
 
-def test_the_data_agent_purposes_are_exactly_the_four_that_reason_first() -> None:
+def test_the_data_agent_purposes_are_exactly_the_five_that_reason_first() -> None:
     assert frozenset(DATA_AGENT_FAMILY) == DATA_AGENT_PURPOSES
 
 
@@ -445,6 +446,14 @@ class NoRoomClient(FakeLLMClient):
         raise LLMHttpError("out_of_room", model_id=model_id, input_tokens=40, output_tokens=max_tokens)
 
 
+class NoRoomNoUsageClient(FakeLLMClient):
+    """The same stop, from a provider whose answer carries no `usage`: the error reports no tokens."""
+
+    def complete(self, prompt: str, *, model_id: str | None = None, **_: object) -> LLMCompletion:
+        del prompt
+        raise LLMHttpError("out_of_room", model_id=model_id)
+
+
 class UnavailableClient(FakeLLMClient):
     """A client that cannot be reached: nothing was billed, and nothing is reported."""
 
@@ -484,6 +493,23 @@ def test_calls_that_ran_out_of_room_reach_the_call_ceiling_like_any_other() -> N
             subject.complete(rendered(text), GenerativePurpose.ASSISTANT_ANSWER)
     with pytest.raises(GenerativeError):
         subject.complete(rendered("three"), GenerativePurpose.ASSISTANT_ANSWER)
+
+
+def test_a_call_that_ran_out_of_room_is_counted_even_when_the_provider_reported_no_usage() -> None:
+    """The kind decides whether it was billed, not the numbers: a provider that omits `usage` still billed it.
+
+    Left to its tokens, every such retry would be free to the call ceilings - the case's included.
+    """
+    subject = failing_meter(NoRoomNoUsageClient(), calls=2, prices=PRICED)
+    for text in ("one", "two"):
+        with pytest.raises(LLMHttpError) as error:
+            subject.complete(rendered(text), GenerativePurpose.DATA_AGENT)
+        assert error.value.kind == "out_of_room"
+    assert subject.calls == 2
+    totals = subject.totals()
+    assert (totals.input_tokens, totals.output_tokens) == (0, 0)
+    with pytest.raises(GenerativeError):
+        subject.complete(rendered("three"), GenerativePurpose.DATA_AGENT)
 
 
 def test_a_failure_that_billed_nothing_is_not_a_call() -> None:
