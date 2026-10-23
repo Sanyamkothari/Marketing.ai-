@@ -11,9 +11,10 @@ listing read their body themselves, like `/connections` and `/connection/aws`: F
 repeats the offending input, which for these routes would put a key into the response, devtools and any
 proxy log. Their errors name fields only, and the body is capped at 16 KiB.
 
-**Every network call runs off the event loop, a few at a time.** A test or a listing talks to someone
-else's server with timeouts of up to twenty seconds; at most four run at once and the rest are told
-`429 AI_BUSY` straight away. Every response is `Cache-Control: no-store`.
+**Every network call runs off the event loop, a few at a time.** A test waits as long as a real call does
+(`generative.llm.timeout_s`, a minute as shipped: a model given room to think is slow) and a listing twenty
+seconds; at most four run at once and the rest are told `429 AI_BUSY` straight away, so a hung service holds
+a slot for up to that minute. Every response is `Cache-Control: no-store`.
 
 Access (single-user today, but the policies stay): reading is Viewer, everything that changes a slot or
 talks to the service is Analyst. A test that fails is `200` with `ok: false` and a plain fix, because
@@ -61,6 +62,7 @@ from engine.ai_service import (
     candidate_from,
     key_for,
     list_models,
+    probe_limits,
     resolve_client,
     run_test,
     save_service,
@@ -201,7 +203,17 @@ async def test_ai_service(
             key = key_for(store, record, candidate)
         except AiServiceError as exc:  # the saved key cannot be read: an answer, not a fault
             return TestOutcome(ok=False, message=exc.message, fix=exc.fix, model=candidate.model)
-        outcome = _bounded(lambda: run_test(candidate, key, profile=profile_in_force()))
+        limits = probe_limits(slot, root)
+        outcome = _bounded(
+            lambda: run_test(
+                candidate,
+                key,
+                profile=profile_in_force(),
+                max_tokens=limits.max_tokens,
+                timeout_s=limits.timeout_s,
+                setting=limits.setting,
+            )
+        )
         if testing_saved and active is not None:
             owner_record, owner = active
             store.record_test(

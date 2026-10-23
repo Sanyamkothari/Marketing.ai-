@@ -8,6 +8,9 @@ text is `ok: false` - with our own sentence, never the provider's words.
 
 from __future__ import annotations
 
+import re
+import shutil
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -18,10 +21,12 @@ from engine.ai_service import (
     TEST_PROMPT,
     TEST_TIMEOUT_S,
     Candidate,
+    ProbeLimits,
     build_service_client,
+    probe_limits,
     run_test,
 )
-from engine.config import LlmConfig
+from engine.config import DEFAULT_CONFIG_ROOT, LlmConfig
 from engine.llm import LLMError
 from engine.llm_http import PROBLEMS, LLMHttpError
 from tests.unit.ai_service.server import Reply, Sent, chat_reply, message_reply, serve
@@ -186,20 +191,19 @@ def test_running_out_of_room_gets_its_own_sentence_and_a_fix_that_fits_the_test(
 ) -> None:
     """The kind shares LLM_REFUSED with an empty answer, so the code alone must not pick the sentence.
 
-    The fix is the test's own: the test sends the default allowance whatever a use case file says, so the
-    client's "raise generative.llm.data_agent_max_output_tokens" would send the operator round in a loop.
+    The fix is the test's own: the client's "raise generative.llm.data_agent_max_output_tokens" does not say
+    that a value set in one use case's file never reaches this test, which would send the operator round in a loop.
     """
     error = LLMHttpError("out_of_room", model_id="m-1")
     assert error.code == "LLM_REFUSED"
     _stubbed(monkeypatch, error)
-    outcome = run_test(_candidate(provider), KEY)
+    outcome = run_test(_candidate(provider), KEY, setting="generative.llm.data_agent_max_output_tokens")
     assert outcome.ok is False and outcome.message == PROBLEMS["out_of_room"][0]
     assert "answered with no text" not in outcome.message
     assert outcome.fix is not None and outcome.fix != PROBLEMS["out_of_room"][1]
     assert "without extended reasoning" in outcome.fix
-    assert (
-        f"{TEST_MAX_TOKENS} tokens, the default of generative.llm.data_agent_max_output_tokens" in outcome.fix
-    )
+    assert "raise generative.llm.data_agent_max_output_tokens in the defaults of engine.yaml" in outcome.fix
+    assert f"{TEST_MAX_TOKENS} tokens" in outcome.fix
     assert (
         "not to this test" in outcome.fix
     ), "a larger setting for a use case must not be promised to help here"
@@ -213,7 +217,51 @@ def test_the_out_of_room_fix_names_the_allowance_the_test_actually_used(
     outcome = run_test(_candidate("openai"), KEY, max_tokens=777)
     assert stub.asked[0]["max_tokens"] == 777
     assert outcome.fix is not None and "777 tokens" in outcome.fix and "4096" not in outcome.fix
-    assert "default of" not in outcome.fix, "777 is nobody's configured default, so it must not be called one"
+    assert "generative.llm" not in outcome.fix, "777 is nobody's configuration, so no setting may be named"
+    named = run_test(_candidate("openai"), KEY, max_tokens=777, setting="generative.llm.max_output_tokens")
+    assert named.fix is not None and "raise generative.llm.max_output_tokens" in named.fix
+    assert "777 tokens" in named.fix
+
+
+# --- what the route sends: the slot's setting, read from engine.yaml --------------------------------
+def test_each_slot_is_tested_with_the_allowance_its_calls_get() -> None:
+    product, deliverable = probe_limits("product"), probe_limits("deliverable")
+    assert product.max_tokens == TEST_MAX_TOKENS == LlmConfig().data_agent_max_output_tokens
+    assert product.setting == "generative.llm.data_agent_max_output_tokens"
+    assert deliverable.max_tokens == LlmConfig().max_output_tokens < product.max_tokens
+    assert deliverable.setting == "generative.llm.max_output_tokens"
+    assert product.timeout_s == deliverable.timeout_s == TEST_TIMEOUT_S
+
+
+def _engine_yaml(root: Path, *, data_agent: int, ordinary: int, timeout: int) -> Path:
+    shutil.copytree(DEFAULT_CONFIG_ROOT, root)
+    path = root / "engine.yaml"
+    text = path.read_text(encoding="utf-8")
+    for field, value in (
+        ("data_agent_max_output_tokens", data_agent),
+        ("max_output_tokens", ordinary),
+        ("timeout_s", timeout),
+    ):
+        text, changed = re.subn(rf"(\n\s+{field}: )\d+", rf"\g<1>{value}", text, count=1)
+        assert changed == 1, f"engine.yaml no longer spells {field} the way this test edits it"
+    path.write_text(text, encoding="utf-8")
+    return root
+
+
+def test_an_operator_s_engine_yaml_changes_what_the_test_sends_and_waits(tmp_path: Path) -> None:
+    root = _engine_yaml(tmp_path / "configs", data_agent=9000, ordinary=1234, timeout=75)
+    assert probe_limits("product", root) == ProbeLimits(
+        9000, 75, "generative.llm.data_agent_max_output_tokens"
+    )
+    assert probe_limits("deliverable", root) == ProbeLimits(1234, 75, "generative.llm.max_output_tokens")
+
+
+def test_an_engine_yaml_that_cannot_be_read_leaves_the_shipped_values(tmp_path: Path) -> None:
+    (tmp_path / "engine.yaml").write_text("schema_version: 99\n", encoding="utf-8")
+    assert probe_limits("product", tmp_path) == ProbeLimits(
+        TEST_MAX_TOKENS, TEST_TIMEOUT_S, "generative.llm.data_agent_max_output_tokens"
+    )
+    assert probe_limits("deliverable", tmp_path).max_tokens == LlmConfig().max_output_tokens
 
 
 # --- the rest of what the test says is unchanged -------------------------------------------------

@@ -65,7 +65,7 @@ import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, ConfigDict, Field
 
-from engine.config import LlmBackend, LlmConfig, config_root, load_yaml
+from engine.config import LlmBackend, LlmConfig, config_root, load_engine_config, load_yaml
 from engine.connections.base import ConnectorError
 from engine.connections.store import connections_key, key_fingerprint
 from engine.llm import (
@@ -104,6 +104,7 @@ __all__ = [
     "KeywordEmbeddingClient",
     "LastTest",
     "ModelList",
+    "ProbeLimits",
     "ProviderInfo",
     "ResolvedAi",
     "ServiceInput",
@@ -116,6 +117,7 @@ __all__ = [
     "key_for",
     "key_store_problem",
     "list_models",
+    "probe_limits",
     "provider_infos",
     "resolve_client",
     "run_test",
@@ -140,18 +142,30 @@ def store_key(slot: str) -> str:
 KEY_ENV_VAR: Final[str] = ENV_VARS["connections_key"]
 TEST_PROMPT: Final[str] = "Reply with the single word: ready"
 TEST_MAX_TOKENS: Final[int] = int(LlmConfig.model_fields["data_agent_max_output_tokens"].default)
-"""The answer allowance of a connection test: the one a Guided setup / Data Doctor step is given.
+"""The answer allowance of a Product AI connection test when nothing says otherwise: the config field's default.
 
-Read from the config field rather than restated, so the test and the real calls cannot drift apart. The
-prompt still asks for one word; the allowance is a ceiling, not a cost.
+Read from the config field rather than restated. What the route actually sends is :func:`probe_limits`, which
+follows `engine.yaml` (and the slot), so an operator's change there reaches the test and the real calls together;
+this is what it falls back to when `engine.yaml` cannot be read, and :func:`run_test`'s default. The prompt
+still asks for one word; the allowance is a ceiling, not a cost.
 """
 TEST_TIMEOUT_S: Final[int] = int(LlmConfig.model_fields["timeout_s"].default)
-"""How long a connection test waits: what a real call waits, for the same reason as the allowance.
+"""How long a connection test waits when nothing says otherwise: what a real call waits, for the same reason.
 
 A completion is not streamed, so the whole generation counts against the client's read timeout. With room
 to think, a slow model (a local one on a CPU) can take far longer than the 20 seconds a 16-token test
 needed, and would fail the test while the real calls, given a minute, succeed.
 """
+SLOT_ALLOWANCES: Final[dict[str, str]] = {
+    "product": "data_agent_max_output_tokens",
+    "deliverable": "max_output_tokens",
+}
+"""The `generative.llm` setting that holds the answer allowance of the calls each slot serves.
+
+Product AI serves Guided setup, the Data Doctor and the campaign planner, which reason before they reply and
+are given the larger data-agent allowance (`engine.generative.budget.DATA_AGENT_PURPOSES`). Deliverable AI
+serves the assistant, root-cause summaries, copy and the judges, which write a paragraph and get the ordinary
+one. A test that sent the other slot's allowance would certify a model for calls it cannot make."""
 _MAX_FIELD: Final[int] = 200
 _MAX_KEY: Final[int] = 512
 _MAX_URL: Final[int] = 512
@@ -1189,25 +1203,55 @@ def _empty_answer_text(info: ProviderInfo) -> tuple[str, str]:
     )
 
 
-def _out_of_room_fix(max_tokens: int) -> str:
+def _out_of_room_fix(max_tokens: int, setting: str | None) -> str:
     """The fix for a test whose model spent its whole allowance thinking.
 
-    Not the client's own fix, which says to raise `generative.llm.data_agent_max_output_tokens`: that
-    setting belongs to a use case file, and this test serves every use case, so it always sends the
-    default. Raising it would help real calls and leave this test red, sending the operator round in a
-    loop. The sentence says what the test used and where the setting does apply. Only the default is
-    named as that setting's: a caller that passed another allowance (`run_test(max_tokens=...)`) used a
-    number that is nobody's configuration, and saying otherwise would be wrong.
+    Not the client's own fix, which says to raise the setting without saying where: a value set in one use
+    case's own file applies to that use case's calls and never reaches this test, which serves every use case
+    and follows `engine.yaml`'s defaults. So the sentence says what the test sent and, when that number is
+    a setting's (`setting`, from :func:`probe_limits`), which one: raising it in the defaults helps the test and
+    the calls together. A caller that passed another number (`run_test(max_tokens=...)`) used one that is
+    nobody's configuration, and naming a setting for it would be wrong.
     """
-    default_clause = (
-        ", the default of generative.llm.data_agent_max_output_tokens"
-        if max_tokens == TEST_MAX_TOKENS
-        else ""
-    )
+    gave = f"This test gave the answer {max_tokens} tokens"
+    if setting is None:
+        return f"Choose a model without extended reasoning. {gave}."
     return (
-        "Choose a model without extended reasoning. This test gives the answer "
-        f"{max_tokens} tokens{default_clause}; a larger value set for one use case applies to that "
+        f"Choose a model without extended reasoning, or raise {setting} in the defaults of engine.yaml. "
+        f"{gave}, that setting's value; a larger value set in one use case's own file applies to that "
         "use case's calls, not to this test."
+    )
+
+
+@dataclass(frozen=True)
+class ProbeLimits:
+    """What a connection test of one slot sends and waits, and the setting its allowance comes from."""
+
+    max_tokens: int
+    timeout_s: int
+    setting: str
+    """Dotted name of the setting `max_tokens` is the value of (`generative.llm.data_agent_max_output_tokens`)."""
+
+
+def probe_limits(slot: str, root: Path | None = None) -> ProbeLimits:
+    """The allowance and the wait of a connection test of `slot`: what its real calls get, from `engine.yaml`.
+
+    The real calls are metered with a use case's `generative.llm`, which is `engine.yaml`'s defaults with
+    the use case's own overrides on top. The test serves every use case, so it takes the defaults: an
+    operator who changes `defaults.generative.llm.data_agent_max_output_tokens` for a model that needs more
+    room changes the test with it, instead of watching it fail at the old number (or pass at one the work
+    no longer gets). The slot picks the setting (:data:`SLOT_ALLOWANCES`). When `engine.yaml` cannot be
+    read, the config fields' own defaults stand in - the values it ships with.
+    """
+    field = SLOT_ALLOWANCES.get(slot, SLOT_ALLOWANCES["product"])
+    llm = LlmConfig()
+    try:
+        block = (load_engine_config(root).defaults.get("generative") or {}).get("llm") or {}
+        llm = LlmConfig.model_validate(block)
+    except Exception as exc:  # a broken file is reported where it is loaded; the test still has an answer
+        log_failure(_LOGGER, "ai_service.probe_limits", exc, level=logging.DEBUG)
+    return ProbeLimits(
+        max_tokens=int(getattr(llm, field)), timeout_s=llm.timeout_s, setting=f"generative.llm.{field}"
     )
 
 
@@ -1218,19 +1262,22 @@ def run_test(
     profile: str | None = None,
     timeout_s: int = TEST_TIMEOUT_S,
     max_tokens: int = TEST_MAX_TOKENS,
+    setting: str | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> TestOutcome:
-    """One completion with the answer allowance real data-agent calls get. A failed call, and an empty
-    answer, are `ok: false` with a plain fix, never an exception.
+    """One completion with the answer allowance real calls get. A failed call, and an empty answer, are
+    `ok: false` with a plain fix, never an exception.
 
     The test must ask what the work asks. A model that reasons before it replies can spend a small
     allowance on thinking and return nothing; that service is reachable but cannot do the job, and
-    reporting it as connected only moves the failure to the first Guided setup or Data Doctor turn. So
-    `max_tokens` defaults to :data:`TEST_MAX_TOKENS` (`generative.llm.data_agent_max_output_tokens`'s
-    default) and an answer with no text fails the test. The prompt still asks for one word, so a model
-    that answers at once costs a few tokens: the allowance is a ceiling, not a cost. `timeout_s` defaults to
-    :data:`TEST_TIMEOUT_S` for the same reason: a model with room to think is slower than one cut off at 16
-    tokens. A service that hangs now holds one of the route's four test slots for that long.
+    reporting it as connected only moves the failure to the first Guided setup or Data Doctor turn, or to
+    the first root-cause summary. So the route passes what :func:`probe_limits` says for the slot, and an
+    answer with no text fails the test. `max_tokens` and `timeout_s` default to :data:`TEST_MAX_TOKENS` and
+    :data:`TEST_TIMEOUT_S`, Product AI's values as shipped; `setting` names where `max_tokens` is set, for the
+    fix of an out-of-room model (None: the number is nobody's configuration). The prompt still asks for one
+    word, so a model that answers at once costs a few tokens: the allowance is a ceiling, not a cost. The
+    wait is a real call's for the same reason: a model with room to think is slower than one cut off at 16
+    tokens, and a service that hangs holds one of the route's four test slots for that long.
     """
     info = candidate.provider
     if info.needs_key and not api_key:
@@ -1264,7 +1311,7 @@ def run_test(
         refused_empty = exc.code == "LLM_REFUSED" and not isinstance(exc, LLMHttpError)
         text, fix = _empty_answer_text(info) if refused_empty else _problem_text(exc, info)
         if isinstance(exc, LLMHttpError) and exc.kind == "out_of_room":
-            fix = _out_of_room_fix(max_tokens)
+            fix = _out_of_room_fix(max_tokens, setting)
         return TestOutcome(ok=False, message=text, fix=fix, latency_ms=latency, model=candidate.model)
     except Exception as exc:  # a bug or an SDK error must not become a stack trace with a key in it
         log_failure(_LOGGER, "ai_service.test", exc)

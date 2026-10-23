@@ -28,9 +28,9 @@ nobody measured, which is the one thing this package will not put in front of an
 
 **The output allowance belongs to the purpose of the call, not to the job.** Most purposes write a
 paragraph and get `max_output_tokens`. The data agent - Guided setup's helper and its second
-opinions, and the Data Doctor's agent, chat and explain narrator - reasons before it replies, and a
-model that reasons spends an allowance sized for a paragraph on thinking and returns no text at all,
-so those purposes get `data_agent_max_output_tokens` (`DATA_AGENT_PURPOSES`, `Meter.output_allowance`). The
+opinions, the Data Doctor's agent, chat and explain narrator, and the campaign planner - reasons before it
+replies, and a model that reasons spends an allowance sized for a paragraph on thinking and returns no text
+at all, so those purposes get `data_agent_max_output_tokens` (`DATA_AGENT_PURPOSES`, `Meter.output_allowance`). The
 allowance is chosen in one place, from the purpose of the call being made, so nothing that has to
 know how many tokens a call may write can be handed the other purpose's number.
 
@@ -95,15 +95,20 @@ DATA_AGENT_PURPOSES: Final[frozenset[GenerativePurpose]] = frozenset(
         GenerativePurpose.DOCTOR_AGENT,
         GenerativePurpose.DOCTOR_CHAT,
         GenerativePurpose.DATA_EXPLAIN,
+        GenerativePurpose.AGENT_PLANNER,
+        GenerativePurpose.AGENT_NARRATIVE,
     }
 )
-"""The purposes that reason before they reply, and so are given `data_agent_max_output_tokens`.
+"""The purposes that run on the Product AI slot, and so are given `data_agent_max_output_tokens`.
 
 Guided setup calls with `DATA_AGENT` and `DATA_AGENT_ASSIST`; the Data Doctor's review, chat and
-explain narrator call with `DOCTOR_AGENT`, `DOCTOR_CHAT` and `DATA_EXPLAIN`. The narrator writes a short
-structured text, but it runs on the same model as the rest of the Data Doctor: a model that reasons
-spends the ordinary allowance on thinking there too, and `explain` quietly falls back to the rules' narrative. Every
-other purpose writes a short text and gets `max_output_tokens`."""
+explain narrator call with `DOCTOR_AGENT`, `DOCTOR_CHAT` and `DATA_EXPLAIN`; the campaign planner reads a
+goal with `AGENT_PLANNER` and writes its narrative with `AGENT_NARRATIVE`. The narrator and the planner
+write a short structured text, but they run on the same model as the rest of the slot: a model that reasons
+spends the ordinary allowance on thinking there too, and they quietly fall back (to the rules' narrative,
+to "use the form instead"). It is also what the slot's connection test sends (`engine.ai_service.probe_limits`),
+so the test certifies a model for every call the slot serves. Every purpose of the Deliverable AI slot
+writes a paragraph and gets `max_output_tokens`, which is what its test sends."""
 
 _CALLS_LIMIT: Final[str] = "call"
 _COST_LIMIT: Final[str] = "cost"

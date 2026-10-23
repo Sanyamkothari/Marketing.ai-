@@ -103,9 +103,9 @@ def _app(config_root: Path, data_dir: Path) -> TestClient:
     return TestClient(create_app(config_root=config_root, data_dir=data_dir, settings=settings))
 
 
-def _connect(client: TestClient, url: str, *, model: str = "local-m") -> None:
+def _connect(client: TestClient, url: str, *, model: str = "local-m", slot: str = "product") -> None:
     saved = client.put(
-        "/ai-service/product",
+        f"/ai-service/{slot}",
         json={"provider": "openai_compatible", "model": model, "base_url": url + "/v1", "api_key": KEY},
     )
     assert saved.status_code == 200, saved.text
@@ -320,3 +320,50 @@ def test_the_connection_test_of_a_reasoning_model_passes_because_it_asks_with_ro
     assert TEST_MAX_TOKENS == DEFAULT_ALLOWANCE and [_allowance_sent(r) for r in server.requests] == [
         TEST_MAX_TOKENS
     ]
+
+
+def test_the_connection_test_follows_the_allowance_an_operator_sets_in_engine_yaml(
+    config_root: Path, data_dir: Path, tmp_path: Path
+) -> None:
+    """The test sends what the real calls get, and the real calls get what `engine.yaml` says - not the field's default.
+
+    Without `probe_limits` (the test reading `LlmConfig`'s field default) the raised file still tests at 4096 and
+    the lowered one at 4096 too: the first row would pass either way, the second would say "Connected" while every
+    Doctor turn fails, and the fix would name a number that is not the one in the file.
+    """
+    raised = _configs(tmp_path / "raised", config_root, allowance=8192)
+    with serve(_reasoning_model) as server, _app(raised, data_dir / "raised") as client:
+        _connect(client, server.url)
+        body = client.post("/ai-service/product/test").json()
+    assert body["ok"] is True and [_allowance_sent(r) for r in server.requests] == [8192]
+
+    lowered = _configs(tmp_path / "lowered", config_root, allowance=THINKING_TOKENS)
+    with serve(_reasoning_model) as server, _app(lowered, data_dir / "lowered") as client:
+        _connect(client, server.url)
+        failed = client.post("/ai-service/product/test").json()
+    assert failed["ok"] is False and failed["message"] == PROBLEMS["out_of_room"][0]
+    assert [_allowance_sent(r) for r in server.requests] == [THINKING_TOKENS]
+    assert f"{THINKING_TOKENS} tokens" in failed["fix"] and "4096" not in failed["fix"]
+    assert "raise generative.llm.data_agent_max_output_tokens in the defaults of engine.yaml" in failed["fix"]
+
+
+def test_the_deliverable_slot_is_tested_with_the_paragraph_allowance_its_calls_get(
+    config_root: Path, data_dir: Path
+) -> None:
+    """Root-cause summaries, copy and the assistant are asked with `max_output_tokens`, so that is what the test sends.
+
+    Without the slot choosing the setting, a model that reasons passes the Deliverable AI test at 4096 and then
+    answers nothing for the first summary at 800; here the same service passes as Product AI and fails as
+    Deliverable AI, and the fix names the setting that applies to the latter.
+    """
+    ordinary = LlmConfig().max_output_tokens
+    with serve(_reasoning_model) as server, _app(config_root, data_dir) as client:
+        _connect(client, server.url, slot="product")
+        _connect(client, server.url, slot="deliverable")
+        product = client.post("/ai-service/product/test").json()
+        deliverable = client.post("/ai-service/deliverable/test").json()
+    assert product["ok"] is True and deliverable["ok"] is False
+    assert [_allowance_sent(r) for r in server.requests] == [DEFAULT_ALLOWANCE, ordinary]
+    assert deliverable["message"] == PROBLEMS["out_of_room"][0]
+    assert "raise generative.llm.max_output_tokens in the defaults of engine.yaml" in deliverable["fix"]
+    assert f"{ordinary} tokens" in deliverable["fix"]

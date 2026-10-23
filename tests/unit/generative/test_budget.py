@@ -351,8 +351,11 @@ DATA_AGENT_FAMILY = (
     GenerativePurpose.DOCTOR_AGENT,
     GenerativePurpose.DOCTOR_CHAT,
     GenerativePurpose.DATA_EXPLAIN,
+    GenerativePurpose.AGENT_PLANNER,
+    GenerativePurpose.AGENT_NARRATIVE,
 )
-"""Guided setup's two purposes and the Data Doctor's three, written out so a change to the set is a visible one."""
+"""Guided setup's two purposes, the Data Doctor's three and the campaign planner's two - every purpose of the
+Product AI slot, whose connection test sends this allowance - written out so a change to the set is a visible one."""
 ALLOWANCES = LlmConfig(
     max_output_tokens=ORDINARY_ALLOWANCE, data_agent_max_output_tokens=DATA_AGENT_ALLOWANCE
 )
@@ -391,7 +394,7 @@ def test_every_other_purpose_is_sent_the_ordinary_output_allowance(purpose: Gene
     assert sent_allowances(client) == [ORDINARY_ALLOWANCE]
 
 
-def test_the_data_agent_purposes_are_exactly_the_five_that_reason_first() -> None:
+def test_the_data_agent_purposes_are_exactly_the_seven_that_run_on_the_product_slot() -> None:
     assert frozenset(DATA_AGENT_FAMILY) == DATA_AGENT_PURPOSES
 
 

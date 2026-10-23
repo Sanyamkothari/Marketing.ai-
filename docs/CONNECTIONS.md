@@ -176,10 +176,15 @@ service is Analyst. See `docs/API.md` for the bodies.
 The AI service: `GET /ai-service` (both slots and the six providers), then per slot (`product` or
 `deliverable`; any other name is 404) `PUT /ai-service/{slot}` (saves; no network call; a blank `api_key`
 keeps the saved key for the same provider and address), `POST /ai-service/{slot}/test` (one completion
-with the answer allowance and the wait real Guided setup and Data Doctor calls get - the defaults of
-`generative.llm.data_agent_max_output_tokens`, 4096, and `generative.llm.timeout_s`, 60 seconds; a value a
-use case file sets applies to that use case's calls, not to the test - though the prompt asks for one word;
-a failed call, or an answer with no text, is `200` with `ok: false` and a plain `fix`),
+with the answer allowance and the wait that slot's real calls get, read from the defaults of `engine.yaml`:
+for `product` - Guided setup, the Data Doctor and the campaign planner - `generative.llm.data_agent_max_output_tokens`,
+4096 as shipped; for `deliverable` - the document assistant, root-cause summaries, copy and the judges -
+`generative.llm.max_output_tokens`, 800; and for both `generative.llm.timeout_s`, 60 seconds. A value a use
+case file sets applies to that use case's calls, not to the test. The prompt asks for one word, so the
+allowance is a ceiling, not a cost; but a local server whose context window is shorter than the prompt plus
+the allowance refuses the request, and the test then says "refused the request": lower the allowance or start
+the server with a longer context. A failed call, or an answer with no text, is `200` with `ok: false` and a
+plain `fix`),
 `POST /ai-service/{slot}/models`
 (the service's model names, at most 200; on failure an empty list and a `note`) and
 `DELETE /ai-service/{slot}`. Reads are Viewer; the rest is Analyst. These routes read their own body
