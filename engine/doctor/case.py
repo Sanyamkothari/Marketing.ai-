@@ -1465,9 +1465,11 @@ def case_from_session(
             at=message.created_at,
             sent=tuple(item.model_dump(mode="json") for item in message.sent),
             # Why the helper did not write its own reply, as the live Doctor chat records it; a message with
-            # no turn (a person's, or one written before turns were logged) has nothing to say.
+            # no turn (a person's, or one written before turns were logged) has nothing to say. Of the turn's
+            # codes only the AI service's failure is the cause: the engine's refusals of an action the model
+            # asked for are not, in a turn it went on to answer.
             blocked_by=message.turn.blocked_by if message.turn is not None else None,
-            error_codes=message.turn.error_codes if message.turn is not None else (),
+            error_codes=message.turn.ai_failure_codes() if message.turn is not None else (),
         )
         for message in session.transcript
     )

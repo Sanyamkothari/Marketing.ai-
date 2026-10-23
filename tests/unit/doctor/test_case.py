@@ -527,6 +527,22 @@ def test_a_guided_session_reply_that_the_ai_did_not_write_says_why_in_the_case_c
             "created_at": T0.isoformat(),
         },
         {"role": "agent", "text": "Done.", "turn": {"llm_calls": 1}, "created_at": T0.isoformat()},
+        {  # the model named a tool that does not exist, was refused, and then answered
+            "role": "agent",
+            "text": "Here is what I found.",
+            "turn": {"llm_calls": 2, "error_codes": ["AGENT_TOOL_UNKNOWN"]},
+            "created_at": T0.isoformat(),
+        },
+        {  # a refusal first, then the AI service failed: only the failure is the cause
+            "role": "agent",
+            "text": "The AI service is not answering right now.",
+            "turn": {
+                "llm_calls": 1,
+                "error_codes": ["AGENT_TOOL_UNKNOWN", "LLM_UNAVAILABLE", "LLM_OUT_OF_ROOM"],
+                "blocked_by": "unavailable",
+            },
+            "created_at": T0.isoformat(),
+        },
     ]
     session = AgentSession.model_validate(document)
     chat = case_from_session(session).chat
@@ -534,6 +550,8 @@ def test_a_guided_session_reply_that_the_ai_did_not_write_says_why_in_the_case_c
         (None, ()),  # a person's message has no turn
         ("unavailable", ("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED")),
         (None, ()),  # a turn the AI answered
+        (None, ()),  # an answered turn that met a refusal: not "the AI did not answer"
+        ("unavailable", ("LLM_UNAVAILABLE", "LLM_OUT_OF_ROOM")),
     ]
     assert Case.model_validate_json(case_from_session(session).model_dump_json()).chat == chat
 

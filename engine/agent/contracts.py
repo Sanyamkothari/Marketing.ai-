@@ -518,6 +518,15 @@ class TurnLog(StrictBase):
         description="Why the model's reply was replaced by a plain sentence (a rule, `budget`, …); null when kept.",
     )
 
+    def ai_failure_codes(self) -> tuple[str, ...]:
+        """The codes of `error_codes` that say the AI service did not answer (`LLM_*`, `BUDGET_EXCEEDED`).
+
+        `error_codes` also holds the engine's refusals of what the model asked for (`AGENT_TOOL_UNKNOWN` ...) in a
+        turn the model went on to answer; a reader that wants only the cause of a missing answer (the case's chat,
+        which shows it beside the reply) takes these and leaves those out.
+        """
+        return tuple(code for code in self.error_codes if code.startswith(("LLM_", "BUDGET_EXCEEDED")))
+
 
 class SentItem(StrictBase):
     """One tool result as it was put in a prompt to the AI service: what left, not what was found.
