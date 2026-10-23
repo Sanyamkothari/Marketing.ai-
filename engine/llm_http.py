@@ -407,7 +407,8 @@ def _embedded_error(payload: Any, raw: bytes, model_id: str | None) -> LLMHttpEr
     a success, that is "no choices" and the misleading "answered in a form Marketing AI cannot
     read". It is classified exactly as the same status would be in the HTTP status line - a 401 is a
     refused key (and why, when the error says so), a 429 is retried unless the credit is gone, a 400 is
-    a refused request - so one table decides every case, and `raw` goes to it so the words count too.
+    a refused request unless it says the balance is too low (:data:`_REFUSALS`) - so one table decides
+    every case, and `raw` goes to it so the words count too.
     An error without a numeric HTTP-style `code` is the service saying it failed without saying how,
     which is a problem on its side. `"error": null`, which some services send beside a real answer,
     is not an error. As everywhere here, nothing the service wrote is quoted.
