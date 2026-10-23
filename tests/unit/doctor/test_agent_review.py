@@ -411,6 +411,25 @@ def test_a_review_the_ai_service_did_not_answer_says_why_and_is_tried_again(
     ], "its own words this time"
 
 
+def test_a_review_that_fails_the_same_way_again_is_not_told_twice_in_the_chat(
+    world: World, storage: LocalStorage
+) -> None:
+    """The cause was said last; saying it again would only repeat it. The timeline still records each try."""
+    client = _Down([], LLMHttpError("key_expired", status=401))
+    port = _review(_guard(client))
+    case = _answer_key(storage, world, _opened(storage, world, port), port)
+    [told] = case.chat
+    q = next(q for q in case.questions if q.code == "KEY_AMBIGUOUS")
+    again = visit.answer(
+        CLIENT, case.case_id, q.question_id, option(q, "account_no"), _deps(storage, world, port),
+        expected_version=case.version, actor=ANALYST,
+    )  # fmt: skip
+    assert client.asked == 2, "the review was tried again"
+    assert again.chat == (told,), "and failed the same way, which the chat had said"
+    tries = [e for e in CaseStore(storage).timeline(CLIENT, case.case_id) if e.details.get("review")]
+    assert len(tries) == 2
+
+
 def test_a_review_that_got_some_answers_before_the_service_failed_stays_done(
     world: World, storage: LocalStorage
 ) -> None:

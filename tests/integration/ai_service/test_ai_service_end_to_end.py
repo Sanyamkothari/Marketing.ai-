@@ -143,9 +143,16 @@ def _chat(client: TestClient, case: dict[str, Any], message: str = "Hello") -> d
     return dict(response.json())
 
 
-def _agent_events(client: TestClient, case_id: str) -> list[dict[str, Any]]:
+def _agent_events(client: TestClient, case_id: str, *, review: bool = False) -> list[dict[str, Any]]:
+    """The agent's `chat.message` events: the chat's own, or (`review`) the AI review's."""
     events = client.get(f"/cases/{case_id}/timeline").json()["events"]
-    return [e for e in events if e["kind"] == "chat.message" and e["details"].get("role") == "agent"]
+    return [
+        e
+        for e in events
+        if e["kind"] == "chat.message"
+        and e["details"].get("role") == "agent"
+        and bool(e["details"].get("review")) is review
+    ]
 
 
 class _Log(logging.Handler):
@@ -227,6 +234,11 @@ def test_with_the_allowance_set_to_the_old_800_the_same_turn_fails_and_says_why_
         (event,) = _agent_events(client, case["case_id"])
         assert event["details"]["blocked_by"] == "unavailable"
         assert "LLM_OUT_OF_ROOM" in event["details"]["error_codes"].split(",")
+        # The review, which runs once the client has said yes, ran out of room the same way: its try is on the
+        # timeline too, and the chat, which had said it, does not say it twice.
+        (tried,) = _agent_events(client, case["case_id"], review=True)
+        assert tried["details"]["error_codes"] == event["details"]["error_codes"]
+        assert [m["role"] for m in chatted["chat"]] == ["user", "agent"]
     # The fix it printed names the setting; setting it is all it takes.
     assert "generative.llm.data_agent_max_output_tokens" in fix
     roomy = _configs(tmp_path / "raised", config_root, allowance=DEFAULT_ALLOWANCE)
@@ -264,6 +276,10 @@ def test_an_expired_key_is_told_apart_from_an_unreachable_service_and_the_provid
         (event,) = _agent_events(client, case["case_id"])
         assert event["details"]["blocked_by"] == "unavailable"
         assert event["details"]["error_codes"] == "LLM_UNAVAILABLE,LLM_KEY_EXPIRED"
+        (tried,) = _agent_events(client, case["case_id"], review=True)
+        assert (
+            tried["details"]["error_codes"] == "LLM_UNAVAILABLE,LLM_KEY_EXPIRED"
+        ), "the review's try, by our codes"
         everything = "\n".join(
             [
                 str(chatted),

@@ -2077,14 +2077,18 @@ def _review(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> bool
         _add_request(step, request)
     _settle_asks(run, case, step, found.asks)
     if found.blocked_by:
-        entry = CaseChatEntry(
-            role="agent",
-            text=found.reply,
-            at=run.deps.clock(),
-            blocked_by=found.blocked_by,
-            error_codes=found.error_codes,
-        )
-        step.updates["chat"] = (*case.chat, entry)
+        last = case.chat[-1] if case.chat else None
+        if last is None or last.role != "agent" or last.error_codes != found.error_codes:
+            # Said once: a chat turn that just failed the same way (the review follows it when the person has only
+            # now said yes to the AI) has told the person already, and the timeline still records the review.
+            entry = CaseChatEntry(
+                role="agent",
+                text=found.reply,
+                at=run.deps.clock(),
+                blocked_by=found.blocked_by,
+                error_codes=found.error_codes,
+            )
+            step.updates["chat"] = (*case.chat, entry)
         event = EventDraft(
             kind=TimelineKind.CHAT,
             details={"role": "agent", "ai": True, "proposals": 0, "review": True},

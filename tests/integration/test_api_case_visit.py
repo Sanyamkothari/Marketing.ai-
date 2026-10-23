@@ -203,10 +203,16 @@ def test_a_chat_the_ai_service_could_not_answer_says_why_in_the_response_and_the
         assert reply["blocked_by"] == "unavailable"
         assert reply["error_codes"] == ["LLM_UNAVAILABLE", "LLM_KEY_EXPIRED"]
         events = client.get(f"/cases/{case_id}/timeline").json()["events"]
-        (event,) = [e for e in events if e["kind"] == "chat.message" and e["details"].get("role") == "agent"]
+        agent = [e for e in events if e["kind"] == "chat.message" and e["details"].get("role") == "agent"]
+        (event,) = [e for e in agent if not e["details"].get("review")]
         assert event["details"]["blocked_by"] == "unavailable"
         assert event["details"]["error_codes"] == "LLM_UNAVAILABLE,LLM_KEY_EXPIRED"
         assert event["details"]["ai"] is True
+        # The review that followed the person's yes failed the same way: the timeline records it, and the chat,
+        # which had told the person already, does not say it twice.
+        (review,) = [e for e in agent if e["details"].get("review")]
+        assert review["details"]["error_codes"] == "LLM_UNAVAILABLE,LLM_KEY_EXPIRED"
+        assert [m["role"] for m in chatted.json()["chat"]] == ["user", "agent"]
 
 
 def test_the_chat_through_the_api_applies_a_filter_for_the_person_who_can_undo_it(

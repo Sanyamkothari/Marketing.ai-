@@ -142,8 +142,9 @@ PROBLEMS: Final[dict[str, tuple[str, str]]] = {
     ),
     "bad_request": (
         "The AI service refused the request.",
-        "Check the model name; some models are not made for chat or need other settings, and a model with a "
-        "short context cannot take the answer allowance (generative.llm.data_agent_max_output_tokens).",
+        "Check the model name; some models are not made for chat or need other settings, and a model whose "
+        "answer limit or context is shorter than the answer allowance refuses it: lower "
+        "generative.llm.data_agent_max_output_tokens.",
     ),
     "too_long": (
         "The request was too long for this model.",
