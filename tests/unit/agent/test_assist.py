@@ -303,6 +303,22 @@ def test_a_second_opinion_that_stops_half_way_records_why_in_the_message() -> No
     assert message.turn.error_codes == ("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED")
 
 
+def test_a_second_opinion_the_provider_billed_and_could_not_use_is_counted_as_a_call() -> None:
+    ctx, session = _started()
+
+    class SpentItThinking(AssistClient):
+        def complete(self, *args: Any, **kwargs: Any) -> Any:
+            raise LLMHttpError("out_of_room", input_tokens=40, output_tokens=4096)
+
+    meter = meter_for(SpentItThinking())
+    result = assist_session(ctx, session, meter=meter, guardrails=guardrails())
+    assert (result.blocked_by, result.llm_calls) == ("unavailable", 1)
+    assert result.session.llm_calls == session.llm_calls + 1 == meter.calls
+    message = result.session.transcript[-1]
+    assert message.turn is not None and message.turn.llm_calls == 1
+    assert message.turn.error_codes == ("LLM_REFUSED", "LLM_OUT_OF_ROOM")
+
+
 def test_a_session_out_of_calls_makes_none() -> None:
     ctx, session = _started()
     spent = session.model_copy(update={"llm_calls": ctx.config.agent.max_llm_calls_per_session})

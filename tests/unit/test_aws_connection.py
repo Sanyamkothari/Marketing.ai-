@@ -631,7 +631,6 @@ class _Failing:
 LAPSED = [
     pytest.param(_client_error("ExpiredTokenException", PRIVATE), id="expired-token"),
     pytest.param(_client_error("ExpiredToken", PRIVATE), id="expired-token-sts"),
-    pytest.param(_client_error("RequestExpired", PRIVATE), id="request-expired"),
     pytest.param(boto.TokenRetrievalError(provider="sso", error_msg=PRIVATE), id="sso-token"),
     pytest.param(boto.UnauthorizedSSOTokenError(), id="sso-unauthorized"),
 ]
@@ -658,10 +657,13 @@ def test_an_expired_sign_in_is_its_own_error_with_its_own_sentence(error: BaseEx
     [
         _client_error("AccessDeniedException", PRIVATE),
         _client_error("ThrottlingException", PRIVATE),
+        _client_error(
+            "RequestExpired", PRIVATE
+        ),  # this computer's clock is out; signing in again changes nothing
         boto.NoCredentialsError(),
         RuntimeError(PRIVATE),
     ],
-    ids=["access-denied", "throttled", "no-credentials", "other"],
+    ids=["access-denied", "throttled", "clock-skew", "no-credentials", "other"],
 )
 def test_any_other_failure_is_still_the_plain_could_not_be_reached(error: BaseException) -> None:
     client = BedrockLLMClient(region="ap-south-1", client=_Failing(error))

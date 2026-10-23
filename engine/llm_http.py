@@ -251,6 +251,13 @@ class LLMHttpError(LLMError):
         self.rejected = rejected
         self.retry_after: float | None = None
 
+    @property
+    def billed(self) -> bool:
+        """True when the provider billed the call that failed: only `out_of_room`, which spent its allowance writing
+        nothing. Every other failure returned nothing that was reported, so it is no call (`engine.generative.budget`).
+        """
+        return self.kind == "out_of_room"
+
 
 class _HttpClient:
     """What both protocols share: a bounded, redirect-free, retrying JSON round trip."""

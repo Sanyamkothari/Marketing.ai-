@@ -323,7 +323,7 @@ class Meter:
             # not the numbers - a service that omits `usage` still billed it, and is counted with the
             # tokens it reported (0 when it reported none). Any other failure billed nothing that was
             # reported, so it is no call.
-            if isinstance(exc, LLMHttpError) and exc.kind == "out_of_room":
+            if isinstance(exc, LLMHttpError) and exc.billed:
                 self._record(purpose, model_id, exc.input_tokens, exc.output_tokens)
             raise
         self._record(purpose, completion.model_id, completion.input_tokens, completion.output_tokens)

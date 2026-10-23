@@ -23,7 +23,7 @@ from engine.doctor.case import Case, CaseChatEntry, TimelineKind, VisitState
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.visit import AGENT, AI_NEEDED_REPLY
 from engine.generative.errors import BUDGET_EXCEEDED
-from engine.llm import LLMError
+from engine.llm import AwsSignInExpiredError, LLMError
 from engine.llm_http import PROBLEMS, LLMHttpError
 from engine.storage import LocalStorage
 from tests.fixtures.doctor_eval.chat_model import ChatScript, Seen
@@ -795,17 +795,33 @@ def test_an_ai_service_that_fails_is_told_with_why_in_the_reply_the_entry_and_th
     assert talk.case.state is not VisitState.CONVERSE, "the visit goes on with its rules"
 
 
+def test_a_lapsed_aws_sign_in_is_told_with_its_own_sentence_and_code(
+    storage: LocalStorage, world: World
+) -> None:
+    error = AwsSignInExpiredError()
+    talk = Talk(storage, world, Down(error))
+    talk.say("look at the orders")
+    reply = talk.reply
+    assert reply.text == f"{UNAVAILABLE} {error.message} {error.fix}"
+    assert (reply.blocked_by, reply.error_codes) == (
+        "unavailable",
+        ("LLM_UNAVAILABLE", "LLM_AWS_SIGN_IN_EXPIRED"),
+    )
+    (chat,) = [e for e in talk.timeline() if e.kind is TimelineKind.CHAT and e.details["role"] == "agent"]
+    assert chat.details["error_codes"] == "LLM_UNAVAILABLE,LLM_AWS_SIGN_IN_EXPIRED"
+
+
 def test_an_ai_service_whose_failure_has_no_fixed_words_of_ours_adds_none_to_the_reply(
     storage: LocalStorage, world: World
 ) -> None:
-    quoted = "the prompt said customer 4455 asked about sk-live-123"
+    quoted = "the prompt said customer zq-private asked about sk-live-123"
     talk = Talk(storage, world, Down(LLMError("LLM_REFUSED", quoted)))
     talk.say("look at the orders")
     reply = talk.reply
     assert reply.text == UNAVAILABLE
     assert (reply.blocked_by, reply.error_codes) == ("unavailable", ("LLM_REFUSED",))
     stored = reply.model_dump_json() + "".join(e.model_dump_json() for e in talk.timeline())
-    assert "4455" not in stored and "sk-live" not in stored
+    assert "zq-private" not in stored and "sk-live" not in stored
 
 
 def test_a_step_that_breaks_is_named_failed_and_every_cause_the_chat_can_give_is_documented(

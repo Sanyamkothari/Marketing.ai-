@@ -43,7 +43,9 @@ that is not a known tool, `propose_setting` or `reply` is logged as `unknown`, n
 When the AI service does not answer, the turn ends with `blocked_by="unavailable"` and says why twice: the codes
 (`ai_failure_codes`: the exception's own, and for the HTTP clients `LLM_` and the kind, such as `LLM_KEY_EXPIRED`) join
 `TurnLog.error_codes`, and the reply adds the client's own fixed sentence and fix (`unavailable_reply`). Nothing the
-service wrote is kept: the sentences are `engine.llm_http.PROBLEMS`, chosen by the kind.
+service wrote is kept: the sentences are `engine.llm_http.PROBLEMS` (or, for a lapsed AWS sign-in, the ones of
+`engine.llm.AwsSignInExpiredError`), chosen by the kind. A call the provider billed and then could not use (a model that
+spent its whole allowance thinking) still counts as a call of the turn (`billed_call`), as the meter counts it.
 
 An *Ask your data* session (`AgentSession.explore`, Plan I DEC-1250/1251) runs the same turn read-only:
 no setting is listed, the state block is one fixed sentence, and `propose_setting` is refused with
@@ -103,7 +105,7 @@ from engine.generative.contracts import GenerativePurpose
 from engine.generative.errors import GenerativeError
 from engine.generative.guardrails import CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, render
-from engine.llm import LLMError
+from engine.llm import AwsSignInExpiredError, LLMError
 from engine.llm_http import LLMHttpError
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -117,6 +119,7 @@ __all__ = [
     "STEP_TOOL",
     "TurnResult",
     "ai_failure_codes",
+    "billed_call",
     "chat_turn",
     "unavailable_reply",
 ]
@@ -206,14 +209,16 @@ OUT_OF_BUDGET: Final[str] = (
 def ai_failure_codes(exc: LLMError | GenerativeError) -> tuple[str, ...]:
     """The codes that say why a call to the AI service failed: for `TurnLog.error_codes` and the Doctor's chat.
 
-    The exception's own `code` first (`LLM_UNAVAILABLE`, `LLM_REFUSED`, `BUDGET_EXCEEDED`), then - for a failure of
-    the HTTP clients (:class:`engine.llm_http.LLMHttpError`) - `LLM_` and the upper-cased kind (`LLM_KEY_EXPIRED`,
-    `LLM_OUT_OF_ROOM`, `LLM_RATE_LIMITED`). The second is what tells an expired key from an unreachable server, which
-    share `LLM_UNAVAILABLE`; when it repeats the first (`LLM_TOO_LONG`) it is not listed twice. Both are written in
-    this repository, never taken from anything the service answered (`engine.llm_http`, rule 2).
+    The exception's own `code` first (`LLM_UNAVAILABLE`, `LLM_REFUSED`, `BUDGET_EXCEEDED`), then - for a failure that
+    knows its cause: the HTTP clients' (:class:`engine.llm_http.LLMHttpError`) and Bedrock's lapsed sign-in
+    (:class:`engine.llm.AwsSignInExpiredError`) - `LLM_` and the upper-cased kind (`LLM_KEY_EXPIRED`,
+    `LLM_OUT_OF_ROOM`, `LLM_RATE_LIMITED`, `LLM_AWS_SIGN_IN_EXPIRED`). The second is what tells an expired key from an
+    unreachable server, which share `LLM_UNAVAILABLE`; when it repeats the first (`LLM_TOO_LONG`) it is not listed
+    twice. Both are written in this repository, never taken from anything the service answered (`engine.llm_http`,
+    rule 2).
     """
     codes = [exc.code]
-    if isinstance(exc, LLMHttpError):
+    if isinstance(exc, LLMHttpError | AwsSignInExpiredError):
         codes.append(f"LLM_{exc.kind.upper()}")
     return tuple(dict.fromkeys(codes))
 
@@ -222,14 +227,25 @@ def unavailable_reply(exc: LLMError | GenerativeError) -> str:
     """What a person reads when the AI service did not answer: :data:`UNAVAILABLE`, then why when we can say it.
 
     A failure of the HTTP clients carries a sentence and a fix that `engine.llm_http.PROBLEMS` holds ("The AI service
-    says the key has expired. Create a new key ..."), so they are added. No other failure adds its own words: an
+    says the key has expired. Create a new key ..."), and a lapsed AWS sign-in has its own fixed pair
+    (:class:`engine.llm.AwsSignInExpiredError`), so those are added. No other failure adds its own words: an
     `LLMError` may be raised by any client with any text (the Bedrock one names the AWS profile it was given) and a
     `GenerativeError` fills a template with names from the data, so for those the reply stays the lead alone and the
     reason is the code in the turn's log.
     """
-    if isinstance(exc, LLMHttpError):
+    if isinstance(exc, LLMHttpError | AwsSignInExpiredError):
         return f"{UNAVAILABLE} {exc.message} {exc.fix}"
     return UNAVAILABLE
+
+
+def billed_call(exc: LLMError | GenerativeError) -> int:
+    """1 for a failed call the provider billed anyway (`LLMHttpError.billed`), else 0: what to add to a turn's calls.
+
+    The meter has already counted it (`engine.generative.budget.Meter.complete`); the turn's own count, which is
+    what `agent.max_llm_calls_per_session` and the case's counters are made of, must agree, or a person who retries
+    a model that cannot answer is never stopped by the session's ceiling.
+    """
+    return int(isinstance(exc, LLMHttpError) and exc.billed)
 
 
 @dataclass(frozen=True)
@@ -548,6 +564,7 @@ def chat_turn(
             # `blocked_by` stays `unavailable`: the Doctor's `chat_turn` tool reports it and callers key on it.
             codes = ai_failure_codes(exc)
             errors.extend(codes)
+            calls += billed_call(exc)
             _LOGGER.warning("agent chat: the AI call failed (%s)", ", ".join(codes))
             return finish(unavailable_reply(exc), blocked_by="unavailable")
         calls += 1

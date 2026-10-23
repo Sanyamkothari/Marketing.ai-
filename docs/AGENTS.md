@@ -394,8 +394,10 @@ stores a `TurnLog` (`llm_calls`, `tools`, `error_codes`, `blocked_by`) and no co
 only known action names (a read tool, `propose_setting`, `reply`); any other name the model writes is
 logged as `unknown`. When the AI service does not answer, `blocked_by` is `unavailable` and `error_codes` says
 why: the exception's own code, then for an HTTP service `LLM_` and the kind (`LLM_UNAVAILABLE`, `LLM_KEY_EXPIRED`;
-`LLM_REFUSED`, `LLM_OUT_OF_ROOM`). The reply adds that kind's fixed sentence and fix from `engine.llm_http.PROBLEMS`;
-a failure of any other kind adds no words of its own, and nothing the service wrote is ever kept or shown.
+`LLM_REFUSED`, `LLM_OUT_OF_ROOM`), and `LLM_AWS_SIGN_IN_EXPIRED` for an Amazon Bedrock sign-in that has lapsed. The
+reply adds that kind's fixed sentence and fix from `engine.llm_http.PROBLEMS` (the lapsed sign-in has its own pair);
+a failure of any other kind adds no words of its own, and nothing the service wrote is ever kept or shown. A call
+the provider billed and then could not use (`LLM_OUT_OF_ROOM`) counts in `llm_calls`, as the meter counts it.
 
 ### 7.4 Untrusted file content (prompt injection)
 

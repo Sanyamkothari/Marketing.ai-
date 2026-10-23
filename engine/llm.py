@@ -42,7 +42,7 @@ import threading
 from collections import Counter
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -143,6 +143,9 @@ class AwsSignInExpiredError(LLMError):
     (`engine.llm_http.PROBLEMS`). `fix` is read like `LLMHttpError.fix` (`engine.ai_service`, the generative
     routes). The cause is decided by botocore's exception type and AWS's error *code*, never by its message.
     """
+
+    kind: ClassVar[str] = "aws_sign_in_expired"
+    """Says why, as `LLMHttpError.kind` does: the chats list it as `LLM_AWS_SIGN_IN_EXPIRED` beside `LLM_UNAVAILABLE`."""
 
     def __init__(self, *, model_id: str | None = None) -> None:
         super().__init__("LLM_UNAVAILABLE", "The AWS sign-in has expired.", model_id=model_id)

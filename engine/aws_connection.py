@@ -265,8 +265,10 @@ FAILURES: Final[Mapping[str, tuple[str, str]]] = {
 """Code -> (message, hint). The only text a failed check ever returns (see the module docstring)."""
 
 _EXPIRED_CODES: Final[frozenset[str]] = frozenset(
-    {"ExpiredToken", "ExpiredTokenException", "RequestExpired", "TokenRefreshRequired"}
+    {"ExpiredToken", "ExpiredTokenException", "TokenRefreshRequired"}
 )
+"""The codes that say a sign-in ran out. Not `RequestExpired`: AWS sends that when the request's timestamp is
+more than fifteen minutes from its own clock, so this computer's clock is wrong and signing in again would not help."""
 _INVALID_CODES: Final[frozenset[str]] = frozenset(
     {
         "InvalidClientTokenId",

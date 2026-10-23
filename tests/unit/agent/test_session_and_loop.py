@@ -21,7 +21,7 @@ from engine.agent.session import SessionError, accept_recommended, answer, decid
 from engine.config import LlmConfig, load_use_case
 from engine.generative.errors import BUDGET_EXCEEDED, GenerativeError, generative_error
 from engine.generative.guardrails import Guardrails, load_policy
-from engine.llm import LLMCompletion, LLMError
+from engine.llm import AwsSignInExpiredError, LLMCompletion, LLMError
 from engine.llm_http import PROBLEMS, LLMHttpError, Problem
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.fixtures.make_data import GenerationSpec, generate
@@ -220,14 +220,42 @@ def test_a_failed_call_to_an_http_service_records_why_and_says_it(
     assert down.reply.turn.error_codes == codes
     assert down.blocked_by == "unavailable" == down.reply.turn.blocked_by, "what callers key on is unchanged"
     assert down.reply.text == f"{UNAVAILABLE} {sentence} {fix}"
-    assert (down.llm_calls, down.proposals, down.tool_results) == (0, (), ())
+    billed = int(kind == "out_of_room")  # the one failure the provider billed in whole
+    assert (down.llm_calls, down.proposals, down.tool_results) == (billed, (), ())
+    assert down.reply.turn.llm_calls == billed
+
+
+def test_a_lapsed_aws_sign_in_is_told_like_an_expired_key(started: tuple[Any, Any]) -> None:
+    error = AwsSignInExpiredError()
+    down = _down(started, error)
+    assert down.reply.turn.error_codes == ("LLM_UNAVAILABLE", "LLM_AWS_SIGN_IN_EXPIRED")
+    assert down.reply.text == f"{UNAVAILABLE} {error.message} {error.fix}"
+    assert (down.blocked_by, down.llm_calls) == ("unavailable", 0)
+    plain = _down(started, LLMError("LLM_UNAVAILABLE", "The model could not be reached."))
+    assert (plain.reply.turn.error_codes, plain.reply.text) == (("LLM_UNAVAILABLE",), UNAVAILABLE)
+
+
+def test_a_call_billed_and_then_unusable_counts_so_the_session_ceiling_sees_a_retry(
+    started: tuple[Any, Any],
+) -> None:
+    """A model that spends its allowance thinking is billed each time; the session must not call that free."""
+    ctx, session = started
+    ceiling = ctx.config.agent.max_llm_calls_per_session
+    for _ in range(ceiling):
+        turn = chat_turn(
+            ctx, session, "x", meter=ScriptedMeter([LLMHttpError("out_of_room")]), guardrails=_guardrails()
+        )
+        assert (turn.llm_calls, turn.reply.turn.llm_calls, turn.blocked_by) == (1, 1, "unavailable")
+        session = session.model_copy(update={"llm_calls": session.llm_calls + turn.llm_calls})
+    spent = chat_turn(ctx, session, "x", meter=ScriptedMeter([]), guardrails=_guardrails())
+    assert (spent.reply.text, spent.blocked_by, spent.llm_calls) == (OUT_OF_BUDGET, "budget", 0)
 
 
 def test_a_failed_call_that_is_not_an_http_one_records_its_code_and_adds_no_words_of_its_own(
     started: tuple[Any, Any],
 ) -> None:
     # What a client that built its message from a provider's answer would carry.
-    quoted = "the prompt said: customer 4455 asked about sk-live-123"
+    quoted = "the prompt said: customer zq-private asked about sk-live-123"
     plain = _down(started, LLMError("LLM_UNAVAILABLE", quoted))
     assert plain.reply.turn.error_codes == ("LLM_UNAVAILABLE",)
     assert (plain.reply.text, plain.blocked_by) == (UNAVAILABLE, "unavailable")
@@ -235,7 +263,7 @@ def test_a_failed_call_that_is_not_an_http_one_records_its_code_and_adds_no_word
     assert spent.reply.turn.error_codes == (BUDGET_EXCEEDED,)
     assert (spent.reply.text, spent.blocked_by) == (UNAVAILABLE, "unavailable")
     for turn in (plain, spent):
-        assert "4455" not in repr(turn) and "sk-live" not in repr(turn)
+        assert "zq-private" not in repr(turn) and "sk-live" not in repr(turn)
 
 
 def test_the_failure_codes_and_reply_come_from_the_exception_s_type_and_kind_alone() -> None:
