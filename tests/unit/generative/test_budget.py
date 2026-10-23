@@ -23,7 +23,8 @@ The output allowance belongs to the purpose of the call: the data agent reasons 
 given its own, larger allowance, and every other purpose - generating and judging alike - the ordinary one. It
 is asserted on what the client was actually sent, since "which number does the meter think it sends" is not
 the question, and the cost ceiling is asserted to stay a test on what was spent rather than a projection of
-what a bigger allowance might cost.
+what a bigger allowance might cost. A call that ran out of its allowance before writing anything was billed for
+all of it, so it is counted, from the tokens the provider reported; a failure that billed nothing is not.
 
 The cache is checked for the three things a cache has to get right: a hit is a hit and not a call,
 a different prompt or a different model or a different temperature is a miss, and a failure to read
@@ -49,7 +50,8 @@ from engine.generative.cache import CompletionCache, NullCache, cache_key
 from engine.generative.contracts import PRICE_UNKNOWN, GenerativePurpose, LlmUsageReport
 from engine.generative.errors import GenerativeError
 from engine.generative.prompts import RenderedPrompt, load_prompt, render
-from engine.llm import FakeLLMClient, FakeLLMMode, LLMCompletion
+from engine.llm import FakeLLMClient, FakeLLMMode, LLMCompletion, LLMError
+from engine.llm_http import LLMHttpError
 
 PURPOSE = GenerativePurpose.JUDGE_TOXICITY
 PRICED = PriceTable(prices={"fake": ModelPrice(input_per_1m=3.0, output_per_1m=15.0)}, as_of="a-date")
@@ -427,6 +429,68 @@ def test_a_larger_allowance_is_not_a_projection_the_cost_ceiling_still_tests_wha
     with pytest.raises(GenerativeError):
         subject.complete(rendered("two"), GenerativePurpose.DATA_AGENT)
     assert len(client.calls) == 1
+
+
+class NoRoomClient(FakeLLMClient):
+    """A client whose every answer is stopped by the token ceiling before a word is written.
+
+    The provider billed for the whole allowance it was sent (`max_tokens`) and said so, which is what
+    the HTTP clients put on the `out_of_room` failure they raise.
+    """
+
+    def complete(
+        self, prompt: str, *, model_id: str | None = None, max_tokens: int = 512, **_: object
+    ) -> LLMCompletion:
+        del prompt
+        raise LLMHttpError("out_of_room", model_id=model_id, input_tokens=40, output_tokens=max_tokens)
+
+
+class UnavailableClient(FakeLLMClient):
+    """A client that cannot be reached: nothing was billed, and nothing is reported."""
+
+    def complete(self, prompt: str, **_: object) -> LLMCompletion:
+        del prompt
+        raise LLMError("LLM_UNAVAILABLE", "The model could not be reached.")
+
+
+def failing_meter(client: FakeLLMClient, *, calls: int = 500, prices: PriceTable | None = None) -> Meter:
+    return Meter(
+        client,
+        job_id="r_20260922_abcdef01",
+        llm=ALLOWANCES,
+        budget=BudgetConfig(max_calls_per_run=calls, max_cost_usd_per_run=2.0, cache=False),
+        prices=prices,
+    )
+
+
+def test_a_call_that_ran_out_of_room_was_billed_and_is_counted() -> None:
+    """Its whole allowance was spent on thinking: left uncounted, no ceiling would stop a person trying again."""
+    subject = failing_meter(NoRoomClient(), prices=PRICED)
+    with pytest.raises(LLMHttpError) as error:
+        subject.complete(rendered(), GenerativePurpose.DATA_AGENT)
+    assert error.value.kind == "out_of_room", "the failure still reaches the caller unchanged"
+    assert subject.calls == 1
+    totals = subject.totals()
+    assert (totals.input_tokens, totals.output_tokens) == (40, DATA_AGENT_ALLOWANCE)
+    assert subject.cost_so_far == PRICED.prices["fake"].cost(40, DATA_AGENT_ALLOWANCE) > 0
+    usage = subject.usage()
+    assert [(p.purpose, p.calls) for p in usage.by_purpose] == [(GenerativePurpose.DATA_AGENT, 1)]
+
+
+def test_calls_that_ran_out_of_room_reach_the_call_ceiling_like_any_other() -> None:
+    subject = failing_meter(NoRoomClient(), calls=2)
+    for text in ("one", "two"):
+        with pytest.raises(LLMHttpError):
+            subject.complete(rendered(text), GenerativePurpose.ASSISTANT_ANSWER)
+    with pytest.raises(GenerativeError):
+        subject.complete(rendered("three"), GenerativePurpose.ASSISTANT_ANSWER)
+
+
+def test_a_failure_that_billed_nothing_is_not_a_call() -> None:
+    subject = failing_meter(UnavailableClient())
+    with pytest.raises(LLMError):
+        subject.complete(rendered(), GenerativePurpose.DATA_AGENT)
+    assert subject.calls == 0 and subject.totals().output_tokens == 0
 
 
 # ---------------------------------------------------------------------------

@@ -110,13 +110,28 @@ class LLMError(Exception):
     `code` is one of LLM_UNAVAILABLE | LLM_REFUSED | LLM_TOO_LONG | LLM_INVALID_REQUEST, so a
     caller can tell "try again" from "this prompt will never work" without parsing a message - or,
     for the local embedding model, LOCAL_EMBEDDINGS_NOT_INSTALLED | LOCAL_EMBEDDINGS_UNAVAILABLE.
+
+    `input_tokens` and `output_tokens` are what the provider reported for a call it billed and then
+    could not use - an answer that spent its whole allowance before writing anything - so the meter
+    can count it; 0 when nothing was billed or nothing was reported. Numbers only: a provider's
+    words never ride on an error.
     """
 
-    def __init__(self, code: str, message: str, *, model_id: str | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        model_id: str | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.model_id = model_id
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
 
 class LLMCompletion(BaseModel):
@@ -1051,21 +1066,24 @@ class BedrockLLMClient:
             raise LLMError("LLM_UNAVAILABLE", "The model could not be reached.", model_id=chosen) from exc
         blocks = response.get("output", {}).get("message", {}).get("content", [])
         text = "".join(str(block.get("text", "")) for block in blocks)
+        usage = response.get("usage", {})
+        input_tokens, output_tokens = int(usage.get("inputTokens", 0)), int(usage.get("outputTokens", 0))
         if not text.strip():
             if response.get("stopReason") == "max_tokens":
-                # The model spent its whole allowance before writing anything. It is raised as the
-                # HTTP clients raise it, so one sentence and one fix serve every provider; the import
-                # is here because `engine.llm_http` imports this module.
+                # The model spent its whole allowance before writing anything, and was billed for it.
+                # It is raised as the HTTP clients raise it, so one sentence and one fix serve every
+                # provider; the import is here because `engine.llm_http` imports this module.
                 from engine.llm_http import LLMHttpError
 
-                raise LLMHttpError("out_of_room", model_id=chosen)
+                raise LLMHttpError(
+                    "out_of_room", model_id=chosen, input_tokens=input_tokens, output_tokens=output_tokens
+                )
             raise LLMError("LLM_REFUSED", "The model returned nothing to read.", model_id=chosen)
-        usage = response.get("usage", {})
         return LLMCompletion(
             text=text,
             model_id=chosen,
-            input_tokens=int(usage.get("inputTokens", 0)),
-            output_tokens=int(usage.get("outputTokens", 0)),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             cost_estimate_usd=None,
             stop_reason=str(response.get("stopReason", "")),
         )

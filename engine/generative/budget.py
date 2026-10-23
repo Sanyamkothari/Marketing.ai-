@@ -11,7 +11,10 @@ through, in this order, and the order is the point:
    usage record that says why.
 3. **The call is made and tallied** - tokens, latency, and cost when the price table knows the
    model. When it does not, the cost is `None` and a `PRICE_UNKNOWN` warning names the model
-   (DEC-208). `None` is not `0.0`: a zero is a measurement and there was none.
+   (DEC-208). `None` is not `0.0`: a zero is a measurement and there was none. A call that fails is
+   not tallied, since nothing came back to count - except one that spent its whole allowance before
+   writing anything: the provider billed for it and its answer reports the tokens, so it is counted
+   from those numbers and every ceiling, the case's included, sees the retries a person makes.
 
 The call ceiling is exact and the cost ceiling is not, and the difference is worth stating rather
 than glossing. A call is a call before it is made, so `max_calls_per_run` is never exceeded. What a
@@ -63,7 +66,7 @@ from engine.generative.contracts import (
 )
 from engine.generative.errors import BUDGET_EXCEEDED, generative_error
 from engine.generative.prompts import RenderedPrompt
-from engine.llm import APPROX_CHARS_PER_TOKEN, LLMClient, LLMCompletion
+from engine.llm import APPROX_CHARS_PER_TOKEN, LLMClient, LLMCompletion, LLMError
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -302,13 +305,20 @@ class Meter:
             self._cache_hits += 1
             return cached
         self._check_budget()
-        completion = self._client.complete(
-            rendered.user,
-            system=rendered.system,
-            model_id=model_id,
-            max_tokens=self.output_allowance(purpose),
-            temperature=self._llm.temperature,
-        )
+        try:
+            completion = self._client.complete(
+                rendered.user,
+                system=rendered.system,
+                model_id=model_id,
+                max_tokens=self.output_allowance(purpose),
+                temperature=self._llm.temperature,
+            )
+        except LLMError as exc:
+            # Only an `out_of_room` failure carries tokens: it was billed in whole, and the numbers are
+            # the provider's own. Any other failure billed nothing that was reported, so it is no call.
+            if exc.input_tokens or exc.output_tokens:
+                self._record(purpose, model_id, exc.input_tokens, exc.output_tokens)
+            raise
         self._record(purpose, completion.model_id, completion.input_tokens, completion.output_tokens)
         # Only a completion that came back is stored: caching a failure would make a transient one
         # permanent.

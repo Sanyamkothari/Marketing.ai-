@@ -409,6 +409,7 @@ def test_a_bedrock_answer_stopped_by_the_token_ceiling_before_any_text_is_out_of
     assert isinstance(error.value, LLMHttpError) and error.value.kind == "out_of_room"
     assert (error.value.message, error.value.fix) == PROBLEMS["out_of_room"]
     assert (error.value.code, error.value.model_id) == ("LLM_REFUSED", MODEL)
+    assert (error.value.input_tokens, error.value.output_tokens) == (40, 10), "what was billed is kept"
 
 
 def test_an_empty_bedrock_answer_that_ended_normally_is_still_nothing_to_read() -> None:

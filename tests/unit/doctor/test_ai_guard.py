@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,6 +26,8 @@ from engine.doctor.config import AiLimitsConfig
 from engine.doctor.diagnose import LoadedFile
 from engine.generative.contracts import GenerativePurpose
 from engine.generative.prompts import load_prompt, render
+from engine.llm import LLMCompletion
+from engine.llm_http import LLMHttpError
 from engine.storage import LocalStorage
 from tests.fixtures.doctor_eval.chat_model import ChatScript
 from tests.unit.agent.egress_canary import guardrails
@@ -192,3 +195,33 @@ def test_the_guard_sends_a_calls_own_allowance_like_any_meter(
         render(load_prompt("judge_toxicity"), {"generated": "x"}), purpose
     )
     assert [call.max_tokens for call in client.calls] == [allowance]
+
+
+class _NoRoom(ChatScript):
+    """The chat's model, stopped by the token ceiling in its thinking on every turn, and billed for it."""
+
+    def complete(self, prompt: str, **kwargs: Any) -> LLMCompletion:
+        super().complete(prompt, **kwargs)  # recorded in `calls`, like any other
+        raise LLMHttpError(
+            "out_of_room", model_id=kwargs.get("model_id"), input_tokens=40, output_tokens=3000
+        )
+
+
+def test_a_turn_that_ran_out_of_room_is_counted_on_the_case_so_trying_again_has_a_limit(
+    storage: LocalStorage,
+) -> None:
+    client = _NoRoom({})
+    case = open_case(storage, vs.world())
+    guard = _guard(client, tokens=6_000, llm=ALLOWANCES)
+    first = _converse(guard)(case, "Hello", _files())
+    assert (first.model_calls, first.tokens) == (
+        1,
+        3040,
+    ), "the turn's one call was billed for its whole allowance"
+    case = case.model_copy(update={"counters": CaseCounters(model_calls=1, tokens=3040)})
+    second = _converse(guard)(case, "Hello again", _files())
+    assert (second.model_calls, second.tokens) == (1, 3040)
+    case = case.model_copy(update={"counters": CaseCounters(model_calls=2, tokens=6080)})
+    third = _converse(guard)(case, "And again", _files())
+    assert third.reply == AI_LIMIT_REPLY and not third.ai, "the case's limit now stops the retries"
+    assert client.asked == 2

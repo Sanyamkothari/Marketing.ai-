@@ -340,6 +340,35 @@ def test_an_answer_stopped_by_the_token_ceiling_before_any_text_is_out_of_room(
     assert len(server.requests) == 1, "asking again with the same allowance would change nothing"
 
 
+def test_the_out_of_room_fix_names_the_allowance_of_every_purpose() -> None:
+    """Any purpose can run out of room, and each is sent one of two settings: the fix names both."""
+    _message, fix = PROBLEMS["out_of_room"]
+    assert "generative.llm.max_output_tokens" in fix
+    assert "generative.llm.data_agent_max_output_tokens" in fix
+
+
+@pytest.mark.parametrize(
+    ("make", "reply"),
+    [(_openai, _openai_without_text("length")), (_anthropic, _anthropic_without_text("max_tokens"))],
+)
+def test_an_out_of_room_failure_carries_the_tokens_the_provider_billed_and_nothing_it_wrote(
+    make: object, reply: Reply
+) -> None:
+    """The whole allowance was spent, so the call is counted from the numbers the answer reports."""
+    with serve(lambda _: reply) as server, pytest.raises(LLMError) as caught:
+        make(server.url).complete(PROMPT, max_tokens=800)  # type: ignore[operator]
+    exc = caught.value
+    assert (exc.input_tokens, exc.output_tokens) == (40, 800)
+    assert not any(PROMPT in str(value) for value in vars(exc).values())
+
+
+def test_an_out_of_room_answer_that_reports_no_usage_is_billed_as_zero_not_guessed() -> None:
+    reply = Reply(200, {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]})
+    with serve(lambda _: reply) as server, pytest.raises(LLMError) as caught:
+        _openai(server.url).complete(PROMPT, max_tokens=800)
+    assert (caught.value.input_tokens, caught.value.output_tokens) == (0, 0)
+
+
 @pytest.mark.parametrize(
     ("make", "reply"),
     [
