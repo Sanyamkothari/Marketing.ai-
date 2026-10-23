@@ -71,6 +71,7 @@ from engine.connections.store import connections_key, key_fingerprint
 from engine.llm import (
     KEYWORD_HASH_MODEL_ID,
     LOCAL_EMBEDDING_MODEL_ID,
+    AwsSignInExpiredError,
     LLMClient,
     LLMCompletion,
     LLMError,
@@ -1158,7 +1159,7 @@ class ModelList(BaseModel):
 
 
 def _problem_text(exc: LLMError, info: ProviderInfo) -> tuple[str, str | None]:
-    if isinstance(exc, LLMHttpError):
+    if isinstance(exc, LLMHttpError | AwsSignInExpiredError):
         return exc.message, exc.fix
     if info.protocol == "bedrock":
         return "Amazon Bedrock could not answer.", BEDROCK_FIX

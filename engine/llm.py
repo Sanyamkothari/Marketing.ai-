@@ -67,6 +67,7 @@ __all__ = [
     "LOCAL_EMBEDDINGS_UNAVAILABLE",
     "LOCAL_EMBEDDING_DIMENSIONS",
     "LOCAL_EMBEDDING_MODEL_ID",
+    "AwsSignInExpiredError",
     "BedrockLLMClient",
     "FakeLLMClient",
     "FakeLLMMode",
@@ -117,6 +118,20 @@ class LLMError(Exception):
         self.code = code
         self.message = message
         self.model_id = model_id
+
+
+class AwsSignInExpiredError(LLMError):
+    """Amazon Bedrock refused a call because the AWS sign-in ran out: a lapsed SSO session, or temporary keys.
+
+    Still `LLM_UNAVAILABLE`, as every failure to get an answer from Bedrock is; it is a class of its own so
+    the person reads what to do instead of "could not be reached", the way an AI service's expired key does
+    (`engine.llm_http.PROBLEMS`). `fix` is read like `LLMHttpError.fix` (`engine.ai_service`, the generative
+    routes). The cause is decided by botocore's exception type and AWS's error *code*, never by its message.
+    """
+
+    def __init__(self, *, model_id: str | None = None) -> None:
+        super().__init__("LLM_UNAVAILABLE", "The AWS sign-in has expired.", model_id=model_id)
+        self.fix = "Sign in to AWS again (Connections → AWS shows how), then try again."
 
 
 class LLMCompletion(BaseModel):
@@ -953,6 +968,17 @@ def _first_sentence(text: str) -> str:
     return parts[0].strip() if parts and parts[0].strip() else collapsed[:200]
 
 
+def _bedrock_failure(exc: BaseException, message: str, model_id: str) -> LLMError:
+    """The `LLMError` for a failed Bedrock call: the sign-in sentence when it lapsed, else `message`."""
+    from engine.aws_connection import (
+        classify_failure,
+    )  # lazy: this module is imported everywhere; that one reads settings
+
+    if classify_failure(exc) in {"CREDENTIALS_EXPIRED", "SSO_LOGIN_REQUIRED"}:
+        return AwsSignInExpiredError(model_id=model_id)
+    return LLMError("LLM_UNAVAILABLE", message, model_id=model_id)
+
+
 class BedrockLLMClient:
     """`LLMClient` over the Bedrock Converse and embedding APIs.
 
@@ -1045,10 +1071,10 @@ class BedrockLLMClient:
                 messages=[{"role": "user", "content": [{"text": prompt}]}],
                 inferenceConfig={"temperature": temperature, "maxTokens": max_tokens},
             )
-        except Exception as exc:  # every boto3 ClientError means the same thing here: no answer
+        except Exception as exc:  # every boto3 ClientError means no answer; an expired sign-in says so
             # `log_failure`, never `logger.exception`: the provider's message quotes the prompt.
             log_failure(_LOGGER, "llm.converse", exc)
-            raise LLMError("LLM_UNAVAILABLE", "The model could not be reached.", model_id=chosen) from exc
+            raise _bedrock_failure(exc, "The model could not be reached.", chosen) from exc
         blocks = response.get("output", {}).get("message", {}).get("content", [])
         text = "".join(str(block.get("text", "")) for block in blocks)
         if not text.strip():
@@ -1078,9 +1104,7 @@ class BedrockLLMClient:
                 payload = json.loads(response["body"].read())
             except Exception as exc:
                 log_failure(_LOGGER, "llm.embed", exc)
-                raise LLMError(
-                    "LLM_UNAVAILABLE", "The embedding model could not be reached.", model_id=chosen
-                ) from exc
+                raise _bedrock_failure(exc, "The embedding model could not be reached.", chosen) from exc
             embedding = payload.get("embedding")
             if not embedding:
                 raise LLMError("LLM_REFUSED", "The model returned no vector.", model_id=chosen)
