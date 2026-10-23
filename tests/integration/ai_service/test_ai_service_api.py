@@ -19,6 +19,7 @@ from pydantic import SecretStr
 from api.access_policy import policy_for
 from api.main import create_app
 from engine.access.roles import Role
+from engine.config import LlmConfig
 from engine.settings import Settings
 from tests.unit.ai_service.server import FakeService, Reply, chat_reply, serve
 
@@ -262,7 +263,7 @@ def test_saving_is_refused_when_the_operator_has_not_set_the_encryption_key(
 
 
 # --- testing -----------------------------------------------------------------------------------
-def test_test_makes_one_tiny_completion_and_stores_the_result(api: _Recorder) -> None:
+def test_test_makes_one_completion_with_the_real_allowance_and_stores_the_result(api: _Recorder) -> None:
     with serve(lambda _: chat_reply("ready")) as server:
         api.put("/ai-service/product", _openai_body(server))
         result = api.post("/ai-service/product/test")
@@ -273,9 +274,28 @@ def test_test_makes_one_tiny_completion_and_stores_the_result(api: _Recorder) ->
     assert body["embeddings_note"] == "Document assistant will match by keywords."
     sent = server.requests[0].body
     assert sent["messages"][-1] == {"role": "user", "content": "Reply with the single word: ready"}
-    assert sent["max_tokens"] == 16 and sent["temperature"] == 0.0 and len(server.requests) == 1
+    assert sent["max_tokens"] == LlmConfig().data_agent_max_output_tokens
+    assert sent["temperature"] == 0.0 and len(server.requests) == 1
     saved = api.get("/ai-service").json()["slots"]["product"]["last_test"]
     assert saved["ok"] is True and saved["message"] == body["message"] and saved["tested_at"]
+    api.assert_no_key()
+
+
+def test_an_answer_with_no_text_is_a_failed_test_that_is_stored_with_its_latency(api: _Recorder) -> None:
+    with serve(lambda _: chat_reply("")) as server:
+        api.put("/ai-service/product", _openai_body(server))
+        result = api.post("/ai-service/product/test")
+    body = result.json()
+    assert result.status_code == 200 and body["ok"] is False
+    assert body["message"] == "Other / local answered with no text, so Marketing AI could not use it."
+    assert (
+        "another model" in body["fix"] and body["model"] == "local-m" and isinstance(body["latency_ms"], int)
+    )
+    assert "Connected" not in result.text
+    saved = api.get("/ai-service").json()["slots"]["product"]
+    assert saved["last_test"]["ok"] is False and saved["last_test"]["message"] == body["message"]
+    assert saved["last_test"]["fix"] == body["fix"] and saved["last_test"]["latency_ms"] == body["latency_ms"]
+    assert saved["connected"] is True  # a failed test is shown, it does not disconnect
     api.assert_no_key()
 
 
@@ -504,7 +524,7 @@ def test_a_test_of_a_saved_bedrock_calls_converse_in_its_region(
     body = api.post("/ai-service/product/test").json()
     assert body["ok"] is True and body["embeddings_note"] == "Document assistant will match by keywords."
     assert calls[0]["session"]["region_name"] == "us-east-1" and calls[1]["modelId"] == "b-model"
-    assert calls[1]["inferenceConfig"]["maxTokens"] == 16
+    assert calls[1]["inferenceConfig"]["maxTokens"] == LlmConfig().data_agent_max_output_tokens
 
 
 def test_a_failing_bedrock_test_has_a_plain_aws_fix(api: _Recorder, monkeypatch: pytest.MonkeyPatch) -> None:
