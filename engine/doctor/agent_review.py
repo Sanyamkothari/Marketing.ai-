@@ -378,10 +378,11 @@ class _Review:
         from engine.doctor.visit import Detected
 
         turn, strikes, summary = self.turn, 0, ""
+        failed: _NoAnswerError | None = None  # why the first call got no answer
         prompt = load_prompt(PROMPT, self.config_root)
         tools = self._tools()
         goal = self.brief.goal_name if self.brief is not None else "see what these tables can be used for"
-        for _ in range(self.max_steps + 1):
+        for step in range(self.max_steps + 1):
             variables = {
                 "goal": goal,
                 "tools": tools,
@@ -393,7 +394,9 @@ class _Review:
             }
             try:
                 text = self._complete(prompt, variables)
-            except _NoAnswerError:
+            except _NoAnswerError as stop:
+                if stop.reason == "unavailable" and step == 0:
+                    failed = stop  # no review happened at all: the visit says why, and asks again later
                 break  # unavailable or out of money: what was made so far stands, the rules go on
             try:
                 action = _parse(text)
@@ -422,6 +425,9 @@ class _Review:
                 _summary(len(items), questions, len(turn.doubts)) if items or questions or turn.doubts else ""
             ),
             sent=tuple(s.model_dump(mode="json") for s in turn.sent[:MAX_SENT_ITEMS]),
+            blocked_by=None if failed is None else failed.reason,
+            error_codes=() if failed is None else failed.codes,
+            reply="" if failed is None else failed.reply,
         )
 
     def _act(self, action: dict[str, Any]) -> None:

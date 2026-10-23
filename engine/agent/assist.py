@@ -48,7 +48,15 @@ from engine.agent.contracts import (
 from engine.agent.egress import EGRESS_LATE_MASK, MAX_SENT_ITEMS, Egress, assert_clean, scrub, sent_item
 from engine.agent.grounding import evidence_numbers, grounded_numbers
 from engine.agent.headers import HeaderCandidate, reorder_within
-from engine.agent.loop import FALLBACK, OUT_OF_BUDGET, UNAVAILABLE, _Checker, ai_failure_codes, billed_call
+from engine.agent.loop import (
+    FALLBACK,
+    OUT_OF_BUDGET,
+    UNAVAILABLE,
+    _Checker,
+    ai_failure_codes,
+    billed_call,
+    unavailable_reply,
+)
 from engine.agent.session import roles_of, with_summary
 from engine.agent.tools import AgentContext
 from engine.agent.untrusted import display_name, for_prompt, resolve_column
@@ -374,8 +382,11 @@ def assist_session(
 ) -> AssistResult:
     """Ask the AI service for the two second opinions and fold them into `session`.
 
-    Never raises for a model's mistake: a reply that is not what was asked for changes nothing. An AI
-    service that does not answer, or a session out of calls, stops here with the session as it was.
+    Never raises for a model's mistake: a reply that is not what was asked for changes nothing. A session out of
+    calls stops here with the session as it was. An AI service that does not answer also stops here, but says so:
+    the session gets one agent message with the codes that say why (as the chat records a turn that failed) and
+    the failure's fixed sentence and fix, so a person who pressed the button learns that the key has expired, or that
+    the model ran out of room, instead of seeing nothing happen. Nothing else in the session changes.
     """
     agent = ctx.config.agent
     remaining = agent.max_llm_calls_per_session - session.llm_calls
@@ -407,9 +418,11 @@ def assist_session(
     new_questions: list[Question] = []
     reordered: list[str] = []
     blocked: str | None = None
+    # What the person reads when the AI service did not answer: the lead, and why when the failure can say it.
+    unanswered = UNAVAILABLE
 
     def ask(task: str, value: Mapping[str, Any], tool: str) -> dict[str, Any] | None:
-        nonlocal calls, blocked
+        nonlocal calls, blocked, unanswered
         if calls >= remaining:
             blocked = "budget"
             return None
@@ -430,7 +443,7 @@ def assist_session(
             errors.extend(codes)
             calls += billed_call(exc)
             _LOGGER.warning("agent assist: the AI call failed (%s)", ", ".join(codes))
-            blocked = "unavailable"
+            blocked, unanswered = "unavailable", unavailable_reply(exc)
             return None
         calls += 1
         actions.append(tool)
@@ -482,7 +495,7 @@ def assist_session(
                     for i, (column, why) in enumerate(found, start=1)
                 ]
     if not results and blocked is not None:
-        text = {"budget": OUT_OF_BUDGET, "unavailable": UNAVAILABLE}.get(blocked, FALLBACK)
+        text = {"budget": OUT_OF_BUDGET, "unavailable": unanswered}.get(blocked, FALLBACK)
     else:
         text = _summary(reordered, new_questions)
     message = ChatMessage(
@@ -493,7 +506,7 @@ def assist_session(
         sent=tuple(sent[:MAX_SENT_ITEMS]),
         created_at=clock(),
     )
-    if calls == 0 and not results:
+    if calls == 0 and not results and blocked != "unavailable":
         return AssistResult(session, 0, (), 0, blocked)
     updated = session.model_copy(
         update={

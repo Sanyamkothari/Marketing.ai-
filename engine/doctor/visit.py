@@ -345,6 +345,12 @@ class Detected:
     summary: str = ""
     sent: tuple[dict[str, JsonValue], ...] = ()
     """The review's plain-language summary for the chat, and what it sent to the AI service."""
+    blocked_by: str | None = None
+    error_codes: tuple[str, ...] = ()
+    reply: str = ""
+    """Set when the AI service did not answer the review's first call (`blocked_by` is `unavailable`): the codes that
+    say why (as `ConverseResult.error_codes`) and the sentence the person reads (`ConverseResult.reply`). The review
+    did not happen, so TREAT does not remember it and asks again when it runs next."""
 
 
 class DetectorPort(Protocol):
@@ -1179,14 +1185,19 @@ def _converse(run: _Run, case: Case) -> _Step:
             "withdrawn": len(back),
         },
     )
-    # Why the AI did not answer, when it did not, so the timeline tells an expired key from a spent case. A detail is
-    # one value, so the codes are joined by commas; both are left out while empty, as in the chat entry.
-    if result.blocked_by:
-        chat_event.details["blocked_by"] = result.blocked_by
-    if result.error_codes:
-        chat_event.details["error_codes"] = ",".join(result.error_codes)
+    _say_why(chat_event, result.blocked_by, result.error_codes)
     step.events.append(chat_event)
     return step
+
+
+def _say_why(event: EventDraft, blocked_by: str | None, error_codes: Sequence[str]) -> None:
+    """Add to a `chat.message` event why the AI did not answer, when it did not, so the timeline tells an expired key
+    from a spent case. A detail is one value, so the codes are joined by commas; both are left out while empty, as in
+    the chat entry."""
+    if blocked_by:
+        event.details["blocked_by"] = blocked_by
+    if error_codes:
+        event.details["error_codes"] = ",".join(error_codes)
 
 
 def _decided_as(item: CaseItem, state: ProposalState, now: datetime) -> CaseItem:
@@ -2038,7 +2049,10 @@ def _detect(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> None
 def _review(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> bool:
     """The AI review (`deps.agent`), after the rules, the detectors and the standing answers, and only when
     nothing blocking is open or has just been asked. Its questions go through the same protocol; its items land
-    pending, `check`, whatever the port returns. True when it made a call, so TREAT remembers it."""
+    pending, `check`, whatever the port returns. True when it made a call that was answered, so TREAT remembers it:
+    a review whose first call the AI service did not answer (an expired key, a model that ran out of room) did not
+    happen, and is tried again the next time TREAT runs. What it spent still counts, and the chat and the timeline
+    say why it did not happen."""
     agent = run.deps.agent
     if agent is None or open_blocking(case):
         return False
@@ -2062,6 +2076,22 @@ def _review(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> bool
     for request in found.requests:
         _add_request(step, request)
     _settle_asks(run, case, step, found.asks)
+    if found.blocked_by:
+        entry = CaseChatEntry(
+            role="agent",
+            text=found.reply,
+            at=run.deps.clock(),
+            blocked_by=found.blocked_by,
+            error_codes=found.error_codes,
+        )
+        step.updates["chat"] = (*case.chat, entry)
+        event = EventDraft(
+            kind=TimelineKind.CHAT,
+            details={"role": "agent", "ai": True, "proposals": 0, "review": True},
+        )
+        _say_why(event, found.blocked_by, found.error_codes)
+        step.events.append(event)
+        return False
     if found.model_calls and found.summary:
         entry = CaseChatEntry(role="agent", text=found.summary, at=run.deps.clock(), sent=found.sent)
         step.updates["chat"] = (*case.chat, entry)

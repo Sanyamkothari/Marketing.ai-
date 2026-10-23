@@ -16,11 +16,12 @@ import pytest
 from engine.agent.advisor import ROLE_PRIMARY_KEY, ROLE_TARGET
 from engine.agent.assist import GENERIC_WHY, LEAK_REVIEW_TOOL, MAX_LEAK_QUESTIONS, RERANK_TOOL, assist_session
 from engine.agent.contracts import AgentSession, ProposalKind, ProposalState, RecipeStepKind, ToolResult
+from engine.agent.loop import UNAVAILABLE
 from engine.agent.session import accept_recommended, answer, start_session
 from engine.agent.tools import AgentContext
 from engine.config import LlmConfig
 from engine.llm import LLMError
-from engine.llm_http import LLMHttpError
+from engine.llm_http import PROBLEMS, LLMHttpError
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.unit.agent.assist_client import AssistClient
 from tests.unit.agent.egress_canary import (
@@ -272,7 +273,7 @@ def test_a_sentence_with_a_number_the_session_holds_is_kept() -> None:
     assert f"{rows} rows" in text or GENERIC_WHY in text  # grounded in the profile it was shown, or replaced
 
 
-def test_an_ai_service_that_does_not_answer_leaves_the_session_exactly_as_it_was() -> None:
+def test_an_ai_service_that_does_not_answer_changes_only_what_it_says_about_it() -> None:
     ctx, session = _started()
 
     class Down(AssistClient):
@@ -280,7 +281,50 @@ def test_an_ai_service_that_does_not_answer_leaves_the_session_exactly_as_it_was
             raise LLMError("LLM_UNAVAILABLE", "down")
 
     out, _, result = _assist(ctx, session, Down())
-    assert out == session and result.blocked_by == "unavailable" and result.llm_calls == 0
+    assert result.blocked_by == "unavailable" and result.llm_calls == 0 and out.llm_calls == session.llm_calls
+    assert (out.questions, out.proposals, out.tool_results) == (
+        session.questions,
+        session.proposals,
+        session.tool_results,
+    ), "nothing was decided, asked or recorded"
+    [message] = out.transcript[len(session.transcript) :]
+    assert message.text == UNAVAILABLE, "an error that knows no cause adds no words of its own"
+    assert message.turn is not None and message.turn.llm_calls == 0
+    assert (message.turn.blocked_by, message.turn.error_codes) == ("unavailable", ("LLM_UNAVAILABLE",))
+
+
+@pytest.mark.parametrize(
+    ("error", "codes"),
+    [
+        (LLMHttpError("key_expired", status=401), ("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED")),
+        (LLMHttpError("out_of_credit", status=402), ("LLM_UNAVAILABLE", "LLM_OUT_OF_CREDIT")),
+        (LLMHttpError("unreachable"), ("LLM_UNAVAILABLE", "LLM_UNREACHABLE")),
+        (
+            LLMHttpError("out_of_room", input_tokens=40, output_tokens=4096),
+            ("LLM_REFUSED", "LLM_OUT_OF_ROOM"),
+        ),
+    ],
+    ids=["expired-key", "no-credit", "unreachable", "out-of-room-billed"],
+)
+def test_a_second_opinion_the_ai_service_did_not_answer_tells_the_person_why(
+    error: LLMHttpError, codes: tuple[str, ...]
+) -> None:
+    """Pressing the button must not look like nothing happened: the cause is a message in the session."""
+    ctx, session = _started()
+
+    class Down(AssistClient):
+        def complete(self, *args: Any, **kwargs: Any) -> Any:
+            raise error
+
+    out, _, result = _assist(ctx, session, Down())
+    [message] = out.transcript[len(session.transcript) :]
+    sentence, fix = PROBLEMS[error.kind]
+    assert message.text == f"{UNAVAILABLE} {sentence} {fix}"
+    assert message.turn is not None and (message.turn.blocked_by, message.turn.error_codes) == (
+        "unavailable",
+        codes,
+    )
+    assert result.blocked_by == "unavailable" and result.llm_calls == int(error.billed)
 
 
 def test_a_second_opinion_that_stops_half_way_records_why_in_the_message() -> None:

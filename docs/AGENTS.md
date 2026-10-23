@@ -918,6 +918,12 @@ is recorded under "What the AI looked at". They are given names and counts only,
   adds a `drop_column` step only when the person presses it; its sentence reaches the screen
   only if it holds no personal data, no number the session does not hold and passes the guardrails (otherwise a fixed
   sentence is shown). The reviewer adds questions only: it never replaces the rule-based check and never ticks.
+- **When the AI service does not answer.** A session out of calls comes back as it was. An AI service that fails
+  (an expired key, no credit left, a model that ran out of room, an unreachable address) comes back with one agent
+  message in the transcript, the way a chat turn that failed is recorded: the lead sentence and the HTTP client's own
+  fixed sentence and fix (`engine.agent.loop.unavailable_reply`), and a `TurnLog` with `blocked_by: unavailable` and
+  the `error_codes` (`LLM_UNAVAILABLE`, `LLM_KEY_EXPIRED` ...). Nothing else in the session changes, so the person who
+  pressed the button sees why nothing was added.
 
 ### 13.5 Accuracy of the rules alone
 
@@ -1385,6 +1391,12 @@ deterministic rules by a reviewed change. Nothing changes a rule by itself.
   The AI may mark a doubt `meaning: true` (what a column means); it then also opens one blocking question
   (`DOUBT_MEANING`, nothing recommended, no effect on data) that counts toward the review's 3 blocking questions, so
   approval waits for the person's answer.
+- A review whose first call the AI service did not answer (an expired key, a model that ran out of room) did not
+  happen. `Detected.blocked_by` is `unavailable` with the failure's `error_codes` and fixed sentence, TREAT does not
+  record the review as done (`visit.done["agent"]`), so the next TREAT that runs asks again, and what the provider
+  billed (`LLM_OUT_OF_ROOM`) still counts on the case. The case chat gets an entry with that sentence, `blocked_by` and
+  `error_codes`, and the `chat.message` event (`review: true`) carries both. A review that was answered at least once
+  and then lost the service keeps what it made, is recorded as done, and leaves a log line only.
 - The plan's `AI_STEP_CHANGE_TOO_LARGE` is `AI_STEP_CHANGES_TOO_MANY`, the code M238 shipped (DEC-1808 (g)).
 - An approval whose ledger entry was written but whose case write then failed leaves that entry in the chain until
   the approval is retried (the retry reuses it); one never retried stays as a signed record of an approval the case

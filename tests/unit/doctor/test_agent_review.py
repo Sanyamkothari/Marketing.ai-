@@ -6,7 +6,9 @@ What the owner's rules ask of it, held in code:
 * a 4th blocking question is dropped; a query that keeps failing its own checks is retried twice, then shown with a
   stop finding;
 * no client yes, no spending left, or a blocking question still open: no call to the AI at all;
-* it runs once - an answer or a resume does not pay for another.
+* it runs once - an answer or a resume does not pay for another;
+* a review whose first call the AI service did not answer did not happen: the chat and the timeline say why, what
+  was spent still counts, and the review is tried again when TREAT next runs.
 """
 
 from __future__ import annotations
@@ -23,15 +25,17 @@ import pytest
 
 from engine.access.roles import Principal, Role
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
+from engine.agent.loop import UNAVAILABLE
 from engine.agent.tools import AgentContext
 from engine.config import BudgetConfig, LlmConfig, RunMode, load_use_case
 from engine.doctor import visit
 from engine.doctor.agent_review import MAX_BLOCKING, agent_review, lazy_review
 from engine.doctor.ai_guard import AiGuard
-from engine.doctor.case import Case, CaseStore, VisitState
+from engine.doctor.case import Case, CaseStore, TimelineKind, VisitState
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.diagnose import LoadedFile
-from engine.llm import FakeLLMClient, FakeLLMMode
+from engine.llm import FakeLLMClient, FakeLLMMode, LLMCompletion
+from engine.llm_http import PROBLEMS, LLMHttpError
 from engine.storage import LocalStorage
 from tests.unit.agent.egress_canary import guardrails
 from tests.unit.doctor import visit_support as vs
@@ -347,6 +351,86 @@ def test_the_review_waits_for_the_blocking_question_then_runs_once(
     again = visit.resume(CLIENT, case.case_id, _deps(storage, world, port), actor=ANALYST)
     assert client.asked == asked, "a resume does not pay for another review"
     assert again.version >= case.version
+
+
+class _Down(Script):
+    """A model that fails its first call while `broken`, as `error`, and is billed for it when the error says so."""
+
+    def __init__(self, actions: Iterable[dict[str, Any]], error: LLMHttpError) -> None:
+        super().__init__(actions)
+        self.error = error
+        self.broken = True
+
+    def complete(self, prompt: str, **kwargs: Any) -> LLMCompletion:
+        if self.broken:
+            super().complete(prompt, **kwargs)  # recorded in `calls`, like any other
+            raise self.error
+        return super().complete(prompt, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("error", "kind", "calls"),
+    [
+        (LLMHttpError("out_of_room", input_tokens=40, output_tokens=4096), "out_of_room", 1),
+        (LLMHttpError("key_expired", status=401), "key_expired", 0),
+    ],
+    ids=["out-of-room-is-billed", "expired-key-is-not"],
+)
+def test_a_review_the_ai_service_did_not_answer_says_why_and_is_tried_again(
+    world: World, storage: LocalStorage, error: LLMHttpError, kind: str, calls: int
+) -> None:
+    client = _Down([], error)
+    port = _review(_guard(client))
+    case = _answer_key(storage, world, _opened(storage, world, port), port)
+    assert client.asked == 1, "the review's first call was made and not answered"
+    assert case.counters.model_calls == calls, "a call the provider billed counts, one it did not does not"
+    assert "agent" not in (
+        case.visit.done if case.visit else {}
+    ), "the review did not happen: it is not remembered"
+    [entry] = case.chat
+    sentence, fix = PROBLEMS[kind]
+    assert entry.role == "agent" and entry.text == f"{UNAVAILABLE} {sentence} {fix}"
+    code = "LLM_REFUSED" if kind == "out_of_room" else "LLM_UNAVAILABLE"
+    assert (entry.blocked_by, entry.error_codes) == ("unavailable", (code, f"LLM_{kind.upper()}"))
+    [event] = [e for e in CaseStore(storage).timeline(CLIENT, case.case_id) if e.kind is TimelineKind.CHAT]
+    assert event.details["review"] is True and event.details["blocked_by"] == "unavailable"
+    assert event.details["error_codes"] == f"{code},LLM_{kind.upper()}"
+    for text in (entry.text, str(event.details)):
+        assert "4096" not in text and "401" not in text, "only our sentences and codes"
+
+    # The service answers again; the next time TREAT runs (a changed answer), the review is made.
+    client.broken = False
+    q = next(q for q in case.questions if q.code == "KEY_AMBIGUOUS")
+    again = visit.answer(
+        CLIENT, case.case_id, q.question_id, option(q, "account_no"), _deps(storage, world, port),
+        expected_version=case.version, actor=ANALYST,
+    )  # fmt: skip
+    assert client.asked == 2 and "agent" in (again.visit.done if again.visit else {})
+    assert [(c.text, c.blocked_by) for c in again.chat[-1:]] == [
+        ("I am done.", None)
+    ], "its own words this time"
+
+
+def test_a_review_that_got_some_answers_before_the_service_failed_stays_done(
+    world: World, storage: LocalStorage
+) -> None:
+    """Partial work stands as it always did; only a review that never got an answer is asked for again."""
+
+    class _DiesSecond(Script):
+        replied = 0
+
+        def complete(self, prompt: str, **kwargs: Any) -> LLMCompletion:
+            if self.replied:
+                raise LLMHttpError("key_expired", status=401)
+            self.replied += 1
+            return super().complete(prompt, **kwargs)
+
+    client = _DiesSecond([{"action": "get_profile", "file": "F1", "args": {}}])
+    port = _review(_guard(client))
+    case = _answer_key(storage, world, _opened(storage, world, port), port)
+    assert client.replied == 1 and client.asked == 1, "the second call failed"
+    assert "agent" in (case.visit.done if case.visit else {}), "one reply was enough for it to have happened"
+    assert not case.chat, "and it found nothing to say"
 
 
 def _dirty(world: World) -> World:
