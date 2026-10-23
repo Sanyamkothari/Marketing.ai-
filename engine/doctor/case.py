@@ -532,7 +532,8 @@ class CaseChatEntry(StrictBase):
         default=None,
         exclude_if=lambda value: value is None,
         description="Why the AI did not write this reply itself: `no_consent`, `budget`, `unavailable` (the AI "
-        "service did not answer), `prompt_too_large`, or the code of a refusal it met twice; left out when it did.",
+        "service did not answer), `prompt_too_large`, the code of a refusal it met twice, or `failed` (a step of the "
+        "turn broke); left out when it did.",
     )
     error_codes: tuple[str, ...] = Field(
         default=(),

@@ -250,8 +250,9 @@ class ConverseResult:
     """False: no AI service answered (the reply is :data:`AI_NEEDED_REPLY`); the timeline records which."""
     blocked_by: str | None = None
     """Why the AI's own answer is missing, when it is: `no_consent` and `budget` (the two replies that ask nothing),
-    `unavailable` (the AI service did not answer), `prompt_too_large`, or the code of a refusal it met twice. None when
-    it answered, and when the reply is :data:`AI_NEEDED_REPLY` (no AI service is connected: `ai` says so)."""
+    `unavailable` (the AI service did not answer), `prompt_too_large`, the code of a refusal it met twice, or `failed`
+    (a step of the turn broke). None when it answered, and when the reply is :data:`AI_NEEDED_REPLY` (no AI service is
+    connected: `ai` says so)."""
     error_codes: tuple[str, ...] = ()
     """For an AI service that did not answer, the codes that say why, in order: `LLM_UNAVAILABLE`, then the kind the
     HTTP client found (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...); written here, never the service's own words."""

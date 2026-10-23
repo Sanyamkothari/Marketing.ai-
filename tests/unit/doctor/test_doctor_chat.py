@@ -17,9 +17,9 @@ import pytest
 
 from engine.agent.contracts import ProposalSource, ProposalState
 from engine.agent.loop import UNAVAILABLE
+from engine.doctor import agent_chat, visit
 from engine.doctor import registry as doctor_registry
-from engine.doctor import visit
-from engine.doctor.case import Case, TimelineKind, VisitState
+from engine.doctor.case import Case, CaseChatEntry, TimelineKind, VisitState
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.visit import AGENT, AI_NEEDED_REPLY
 from engine.generative.errors import BUDGET_EXCEEDED
@@ -806,6 +806,24 @@ def test_an_ai_service_whose_failure_has_no_fixed_words_of_ours_adds_none_to_the
     assert (reply.blocked_by, reply.error_codes) == ("unavailable", ("LLM_REFUSED",))
     stored = reply.model_dump_json() + "".join(e.model_dump_json() for e in talk.timeline())
     assert "4455" not in stored and "sk-live" not in stored
+
+
+def test_a_step_that_breaks_is_named_failed_and_every_cause_the_chat_can_give_is_documented(
+    storage: LocalStorage, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(self: object, action: dict[str, object]) -> None:
+        raise RuntimeError("an odd action nobody planned for")
+
+    monkeypatch.setattr(agent_chat._Chat, "_act", broken)
+    talk = Talk(storage, world, ChatScript({"look": [look("describe_missing")]}))
+    talk.say("look")
+    assert (talk.reply.blocked_by, talk.reply.error_codes) == ("failed", ())
+    (chat,) = [e for e in talk.timeline() if e.kind is TimelineKind.CHAT and e.details["role"] == "agent"]
+    assert chat.details["blocked_by"] == "failed" and "error_codes" not in chat.details
+    said = CaseChatEntry.model_fields["blocked_by"].description or ""
+    assert "failed" in said, "a consumer that reads the field's description finds this cause there"
+    for cause in ("no_consent", "budget", "unavailable", "prompt_too_large"):
+        assert cause in said, cause
 
 
 def test_a_chat_the_ai_answered_names_no_cause(storage: LocalStorage, world: World) -> None:
