@@ -987,13 +987,48 @@ def _first_sentence(text: str) -> str:
 
 
 def _bedrock_failure(exc: BaseException, message: str, model_id: str) -> LLMError:
-    """The `LLMError` for a failed Bedrock call: the sign-in sentence when it lapsed, else `message`."""
+    """The `LLMError` for a failed Bedrock call: the sign-in sentence when it lapsed, the request-refused sentence
+    when Bedrock found the request itself wrong, else `message`.
+
+    Bedrock answers `ValidationException` for a request it will not take: a model that is not made for Converse, a
+    setting the model does not know, and an answer allowance past the model's own ceiling (Llama 3 stops at 2048
+    tokens, Cohere Command R at 4000). The allowance that Product AI sends is the data agent's, larger than the
+    one it sent before, so a deployment that worked can start to fail here; the sentence of the HTTP clients'
+    `bad_request` names that setting, and "could not be reached" would point at the network. Decided by AWS's
+    error *code*, as :func:`engine.aws_connection.classify_failure` does, never by its message, which quotes the
+    prompt.
+    """
     # lazy: this module is imported everywhere; that one reads settings
     from engine.aws_connection import classify_failure
 
     if classify_failure(exc) in {"CREDENTIALS_EXPIRED", "SSO_LOGIN_REQUIRED"}:
         return AwsSignInExpiredError(model_id=model_id)
+    response = getattr(exc, "response", None)
+    code = response.get("Error", {}).get("Code") if isinstance(response, dict) else None
+    if code == "ValidationException":
+        # lazy: `engine.llm_http` imports this module
+        from engine.llm_http import LLMHttpError
+
+        return LLMHttpError("bad_request", model_id=model_id)
     return LLMError("LLM_UNAVAILABLE", message, model_id=model_id)
+
+
+def _do_not_resend_a_timed_out_converse(caught_exception: BaseException | None = None, **_: Any) -> None:
+    """boto3's `needs-retry` hook for Converse: a read timeout ends the call instead of being asked again.
+
+    boto3's standard retry mode retries every `HTTPClientError`, and a `ReadTimeoutError` is one, so a
+    Converse call that waited `timeout_s` for a slow model was sent twice more, three billed generations and
+    three waits for one failure. A hook cannot veto a retry by what it returns (any answer but `None` means
+    "retry after this many seconds"), but an exception raised from it leaves boto3's loop at once. This one is
+    registered first, so it runs before the standard handler; throttling, 5xx and a refused connection, which
+    the service did not start work for, still go on to it. Embeddings (`InvokeModel`) are not hooked: an
+    embedding is cheap, and asking again is the right answer to a stalled one.
+    """
+    # lazy: boto3 is imported on the first call, not with this module
+    from botocore.exceptions import ReadTimeoutError
+
+    if isinstance(caught_exception, ReadTimeoutError):
+        raise caught_exception
 
 
 class BedrockLLMClient:
@@ -1004,9 +1039,12 @@ class BedrockLLMClient:
     nothing but remember its arguments. boto3 is not imported until the first call.
 
     Retries are boto3's own, configured from `generative.llm.max_retries`, because a retry loop
-    written here would be a second and worse one. A failure is an `LLMError` whose message names no
-    value: a provider's own message routinely quotes the prompt that upset it, and a prompt is
-    built from the customer's documents (plan section 13.7).
+    written here would be a second and worse one. They stop short of one case, the rule the HTTP clients
+    keep (`engine.llm_http`, rule 4): a Converse call that reached Bedrock and then hit its read timeout is
+    not sent again, because the model is likely still writing the answer and billing it, and a second call
+    would start a second generation (:func:`_do_not_resend_a_timed_out_converse`). A failure is an `LLMError`
+    whose message names no value: a provider's own message routinely quotes the prompt that upset it, and a
+    prompt is built from the customer's documents (plan section 13.7).
     """
 
     def __init__(
@@ -1054,7 +1092,7 @@ class BedrockLLMClient:
                     "LLM_UNAVAILABLE",
                     f"There is no AWS profile named {self._profile!r} on the machine running Marketing AI.",
                 ) from exc
-            self._client = session.client(
+            client = session.client(
                 BEDROCK_SERVICE,
                 config=Config(
                     read_timeout=self._timeout_s,
@@ -1062,6 +1100,10 @@ class BedrockLLMClient:
                     retries={"max_attempts": self._max_retries + 1, "mode": "standard"},
                 ),
             )
+            client.meta.events.register_first(
+                f"needs-retry.{BEDROCK_SERVICE}.Converse", _do_not_resend_a_timed_out_converse
+            )
+            self._client = client
         return self._client
 
     def complete(

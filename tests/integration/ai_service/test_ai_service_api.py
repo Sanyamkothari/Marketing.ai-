@@ -10,6 +10,7 @@ import json
 import socket
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -504,6 +505,9 @@ def test_a_test_of_a_saved_bedrock_calls_converse_in_its_region(
     calls: list[dict[str, Any]] = []
 
     class _Runtime:
+        # what a client is given after it is built: the hook that keeps a timed-out Converse from being resent
+        meta = SimpleNamespace(events=SimpleNamespace(register_first=lambda *_a, **_k: None))
+
         def converse(self, **kw: Any) -> dict[str, Any]:
             calls.append(kw)
             return {
@@ -531,6 +535,8 @@ def test_a_failing_bedrock_test_has_a_plain_aws_fix(api: _Recorder, monkeypatch:
     import boto3
 
     class _Runtime:
+        meta = SimpleNamespace(events=SimpleNamespace(register_first=lambda *_a, **_k: None))
+
         def converse(self, **_: Any) -> dict[str, Any]:
             raise RuntimeError("AccessDenied: arn:aws:iam::123456789012:role/x")
 

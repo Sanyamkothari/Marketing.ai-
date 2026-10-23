@@ -25,8 +25,11 @@ Four rules are enforced here rather than hoped for in the caller.
    is gone is that same case (`out_of_credit`, not `rate_limited`): waiting does not add credit. A POST
    that was sent and then waited for in vain (a read timeout) is not sent again: a completion is not
    streamed, so the service is likely still generating the answer, and billing it, and a second request
-   would start a second generation that the same wait would time out on. Only a timeout before the request
-   got through (connecting) is asked again.
+   would start a second generation that the same wait would time out on. A router or gateway that gave up
+   waiting for the model (408, 504, 524) tells the same story from the far side and is treated the same.
+   Only a timeout before the request got through (connecting) is asked again, and an embeddings request,
+   which is cheap and repeatable, is asked again after either: a model that was still loading is ready by
+   the second try.
 
 The address itself is checked before a client is built (`engine.ai_service.check_base_url`): this
 module talks to whatever address it is given.
@@ -103,7 +106,8 @@ PROBLEMS: Final[dict[str, tuple[str, str]]] = {
     ),
     "out_of_credit": (
         "The AI service says the account has no credit or quota left.",
-        "Add credit or raise the quota with the service, then try again.",
+        "Add credit or raise the quota with the service, then try again. Some services also refuse a request "
+        "that asks for more than the balance covers: a lower generative.llm.data_agent_max_output_tokens helps then.",
     ),
     "out_of_room": (
         "The model used its whole answer allowance before writing anything.",
@@ -250,9 +254,10 @@ class LLMHttpError(LLMError):
 
     `kind` says why (see :data:`PROBLEMS`); `status` is the HTTP status when there was one;
     `rejected` names the request parameters a 400 said it would not take (names only), which is how a
-    client adapts once to a model with different rules. `sent` is True for a `timeout` that came after the
-    request reached the service (a read timeout): the service may still be working on it, so it is not asked again. `input_tokens` and `output_tokens` are set for
-    `out_of_room` alone: the one failure that was billed, in whole, for what the answer reported.
+    client adapts once to a model with different rules. `sent` is True for a `timeout` of a POST that came after
+    the request reached the service (a read timeout, or a gateway's 408, 504 or 524): the service may still be
+    working on it, so it is not asked again. `input_tokens` and `output_tokens` are set for `out_of_room` alone:
+    the one failure that was billed, in whole, for what the answer reported.
     """
 
     def __init__(
@@ -337,7 +342,10 @@ class _HttpClient:
         *,
         model_id: str | None = None,
         params: dict[str, str] | None = None,
+        repeatable: bool = False,
     ) -> Any:
+        """One round trip, asked again for a transient failure. `repeatable`: the request starts no work that
+        a second one would double (embeddings), so it is asked again after a timeout that got through too."""
         attempts = self._max_retries + 1
         for attempt in range(attempts):
             try:
@@ -346,8 +354,8 @@ class _HttpClient:
                 # Asking again changes nothing for a refused key, a missing model permission or an empty
                 # account, so those kinds (and every 4xx but an ordinary 429) fail at once; nor does it for
                 # a request that got through and was not answered in time (`LLMHttpError.sent`).
-                retryable = (
-                    exc.kind in {"rate_limited", "server_error", "timeout", "unreachable"} and not exc.sent
+                retryable = exc.kind in {"rate_limited", "server_error", "timeout", "unreachable"} and (
+                    repeatable or not exc.sent
                 )
                 if not retryable or attempt + 1 >= attempts:
                     raise
@@ -403,6 +411,10 @@ class _HttpClient:
             error = embedded
         else:
             error = _classify(status, raw, model_id)
+        if error.kind == "timeout" and method == "POST":
+            # A gateway that gave up waiting for the model (408, 504, 524) says what our own read timeout does:
+            # the request got through and the model may still be writing the answer.
+            error.sent = True
         error.retry_after = retry_after
         raise error
 
@@ -475,7 +487,7 @@ def _classify(status: int, raw: bytes, model_id: str | None) -> LLMHttpError:
     and a refused key when it says so in Gemini's whole phrases, else it names the request parameters it
     would not take.
     """
-    lowered = raw[:_BODY_WINDOW].decode("utf-8", errors="ignore").lower()
+    lowered = _error_words(raw)
     kind: Problem
     if status == 402:
         kind = "out_of_credit"
@@ -485,7 +497,7 @@ def _classify(status: int, raw: bytes, model_id: str | None) -> LLMHttpError:
         kind = _spot_refusal(status, lowered) or "rate_limited"
     elif status == 400:
         kind = _spot_refusal(status, lowered) or "bad_request"
-    elif status == 408:
+    elif status in (408, 504, 524):  # the service, or the gateway before it, did not answer in time
         kind = "timeout"
     elif status == 404:
         kind = "not_found"
@@ -501,6 +513,18 @@ def _classify(status: int, raw: bytes, model_id: str | None) -> LLMHttpError:
     if kind == "bad_request":
         rejected = tuple(name for name in _REJECTABLE if name in lowered)
     return LLMHttpError(kind, status=status, model_id=model_id, rejected=rejected)
+
+
+def _error_words(raw: bytes) -> str:
+    """The start of an error body in lowercase, up to the `metadata` an error may carry.
+
+    A 403 can quote the prompt too: OpenRouter's moderation refusal puts up to 100 characters of the flagged input
+    in `metadata.flagged_input`, and a marketing file is full of "credit" and "expired". Those words belong to the
+    customer's data, not to the key, so the reading stops where the metadata starts. The error's own `code` and
+    `message` come before it in every body seen, and Google's `ErrorInfo` puts its `reason` before its metadata.
+    """
+    text = raw[:_BODY_WINDOW].decode("utf-8", errors="ignore").lower()
+    return text.split('"metadata"', 1)[0]
 
 
 def _spot_refusal(status: int, lowered: str) -> Problem | None:
@@ -654,7 +678,9 @@ class OpenAICompatibleClient(_HttpClient):
         vectors: list[tuple[float, ...]] = []
         for start in range(0, len(texts), _EMBED_BATCH):
             batch = list(texts[start : start + _EMBED_BATCH])
-            data = self._request("POST", "embeddings", {"model": chosen, "input": batch}, model_id=chosen)
+            data = self._request(
+                "POST", "embeddings", {"model": chosen, "input": batch}, model_id=chosen, repeatable=True
+            )
             try:
                 rows = sorted(data["data"], key=lambda row: row.get("index", 0))
                 got = [tuple(float(x) for x in row["embedding"]) for row in rows]

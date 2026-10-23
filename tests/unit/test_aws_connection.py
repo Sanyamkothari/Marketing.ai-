@@ -24,11 +24,21 @@ built with, and the default chain is `None` - the behaviour before a profile cou
 
 **A lapsed sign-in says so when the model is called.** An expired token or SSO session is not "the model
 could not be reached": it is its own error with its own sentence, in the AI-service test too.
+
+**A refused request says so, and a timed-out call is not sent again.** Bedrock's `ValidationException` is
+the request the model will not take (an answer allowance past its ceiling is one), so it is the HTTP
+clients' "refused the request" with its fix, never "could not be reached"; and a Converse call that waited
+out its read timeout is not resent, because the model may still be writing, and billing, the first answer.
 """
 
 from __future__ import annotations
 
+import os
+import socket
 import stat
+import threading
+import time
+import types
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +68,7 @@ from engine.aws_connection import (
 )
 from engine.config import LlmBackend, LlmConfig
 from engine.llm import AwsSignInExpiredError, BedrockLLMClient, FakeLLMClient, LLMError, build_client
+from engine.llm_http import LLMHttpError
 from engine.settings import Settings
 
 ACCOUNT = "123456789012"
@@ -545,7 +556,9 @@ def _capture_sessions(monkeypatch: pytest.MonkeyPatch, raise_for: str | None = N
 
         def client(self, name: str, config: Any = None) -> object:
             built[-1]["service"] = name
-            return object()
+            # what the client is given after it is built: the hook that keeps a timed-out Converse from being resent
+            hooks = types.SimpleNamespace(register_first=lambda *_a, **_k: None)
+            return types.SimpleNamespace(meta=types.SimpleNamespace(events=hooks))
 
     monkeypatch.setattr(boto3, "Session", _BotoSession)
     return built
@@ -707,3 +720,83 @@ def test_the_connection_test_tells_an_expired_sign_in_apart(
     assert outcome.ok is False and outcome.message == message
     assert outcome.fix is not None and fix in outcome.fix
     assert "private document" not in outcome.model_dump_json()
+
+
+# ---------------------------------------------------------------------------
+# A refused request says so, and a timed-out call is not sent again
+# ---------------------------------------------------------------------------
+def test_a_request_bedrock_will_not_take_is_a_refused_request_that_names_the_allowance() -> None:
+    """The error code decides, never the message, which here quotes the prompt."""
+    error = _client_error("ValidationException", f"maxTokens must be at most 2048. {PRIVATE}")
+    client = BedrockLLMClient(region="ap-south-1", client=_Failing(error))
+    for call in (
+        lambda: client.complete("u", model_id="m", max_tokens=4096),
+        lambda: client.embed(["x"], model_id="e"),
+    ):
+        with pytest.raises(LLMHttpError) as raised:
+            call()
+        exc = raised.value
+        assert (exc.code, exc.kind, exc.billed) == ("LLM_INVALID_REQUEST", "bad_request", False)
+        assert "generative.llm.data_agent_max_output_tokens" in exc.fix
+        for text in (str(exc), exc.message, exc.fix, repr(exc)):
+            assert "private document" not in text and "2048" not in text
+
+
+def test_the_connection_test_names_the_allowance_when_bedrock_refuses_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = _client_error("ValidationException", PRIVATE)
+    monkeypatch.setattr(
+        "engine.ai_service.build_service_client",
+        lambda *_a, **_k: BedrockLLMClient(region="ap-south-1", client=_Failing(error)),
+    )
+    outcome = run_test(_bedrock_candidate(), None)
+    assert outcome.ok is False and outcome.message == "The AI service refused the request."
+    assert outcome.fix is not None and "generative.llm.data_agent_max_output_tokens" in outcome.fix
+    assert "private document" not in outcome.model_dump_json()
+
+
+def test_a_converse_call_that_waited_out_its_read_timeout_is_not_sent_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """boto3's standard retries resend a read timeout; for Converse the model is likely still writing the answer.
+
+    A real client against a local server that takes the request and never answers: with `max_retries=2` boto3
+    would make three attempts, and a billed generation each.
+    """
+    for name, value in {
+        "AWS_ACCESS_KEY_ID": "test",
+        "AWS_SECRET_ACCESS_KEY": "test",
+        "AWS_CONFIG_FILE": os.devnull,
+        "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
+        "AWS_EC2_METADATA_DISABLED": "true",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(8)
+    monkeypatch.setenv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", f"http://127.0.0.1:{server.getsockname()[1]}")
+    reached: list[socket.socket] = []
+
+    def accept() -> None:
+        while True:
+            try:
+                connection, _address = server.accept()
+            except OSError:  # the test closed the server
+                return
+            reached.append(connection)  # held open: the request is taken and never answered
+
+    threading.Thread(target=accept, daemon=True).start()
+    client = BedrockLLMClient(region="us-east-1", model_id="m", timeout_s=1, max_retries=2)
+    began = time.monotonic()
+    try:
+        with pytest.raises(LLMError) as raised:
+            client.complete("hello")
+    finally:
+        server.close()
+        for connection in reached:
+            connection.close()
+    assert (raised.value.code, raised.value.message) == ("LLM_UNAVAILABLE", "The model could not be reached.")
+    assert len(reached) == 1, "one request reached the service, and it was not asked again"
+    assert time.monotonic() - began < 2.9, "one wait, not three"

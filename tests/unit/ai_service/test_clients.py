@@ -494,6 +494,49 @@ def test_a_429_with_no_credit_is_not_asked_again_while_an_ordinary_429_still_is(
     assert (caught.value.kind, len(server.requests)) == (kind, asked)
 
 
+def _moderation_refusal(message: str, flagged: str) -> dict[str, object]:
+    """OpenRouter's 403 for an input its moderation flagged: the reason, then up to 100 characters of the input."""
+    return {
+        "error": {
+            "code": 403,
+            "message": message,
+            "metadata": {"reasons": ["violence"], "flagged_input": flagged, "provider_name": "Moderation"},
+        }
+    }
+
+
+@pytest.mark.parametrize("make", [_openai, _anthropic])
+@pytest.mark.parametrize(
+    ("message", "flagged", "kind"),
+    [
+        # the customer's words are not the key's: a flagged input that mentions money or an expiry is still a refusal
+        (
+            "Your chosen model requires moderation and your input was flagged",
+            "credit card expired",
+            "key_rejected",
+        ),
+        ("Input flagged by moderation", "billing: account suspended and revoked", "key_rejected"),
+        # the error's own words come first and still count
+        ("The API key has expired", "an ordinary sentence", "key_expired"),
+        ("Insufficient credits", "an ordinary sentence", "out_of_credit"),
+    ],
+)
+def test_what_an_error_quotes_of_the_request_is_not_read_as_a_reason(
+    make: object, message: str, flagged: str, kind: str
+) -> None:
+    with serve(lambda _: Reply(403, _moderation_refusal(message, flagged))) as server:
+        client = make(server.url, max_retries=0)  # type: ignore[operator]
+        with pytest.raises(LLMHttpError) as caught:
+            client.complete(PROMPT)
+    assert caught.value.kind == kind
+
+
+def test_a_request_the_balance_cannot_cover_points_at_the_allowance_as_well_as_at_credit() -> None:
+    """OpenRouter's 402 reads "requires more credits, or fewer max_tokens": adding credit is not the only cure."""
+    _, fix = PROBLEMS["out_of_credit"]
+    assert "credit" in fix and "generative.llm.data_agent_max_output_tokens" in fix
+
+
 def test_only_the_start_of_a_body_is_read_and_a_bad_byte_is_skipped() -> None:
     def refused(raw: bytes) -> str:
         with serve(lambda _: Reply(401, raw=raw)) as server, pytest.raises(LLMHttpError) as caught:
@@ -805,6 +848,51 @@ def test_a_listing_that_times_out_is_still_asked_again_since_asking_costs_nothin
         client.list_models()
     assert (caught.value.kind, caught.value.sent) == ("timeout", False)
     assert seen == ["GET"] * 3
+
+
+@pytest.mark.parametrize("status", [408, 504, 524])
+@pytest.mark.parametrize("make", [_openai, _anthropic])
+def test_a_gateway_that_gave_up_waiting_for_a_completion_is_a_timeout_and_is_not_sent_again(
+    make: object, status: int
+) -> None:
+    """504 and 524 (a router or Cloudflare in front of a slow model) and 408 say what a read timeout says."""
+    with serve(lambda _: Reply(status, LEAKY)) as server:
+        client = make(server.url, max_retries=2)  # type: ignore[operator]
+        with pytest.raises(LLMHttpError) as caught:
+            client.complete(PROMPT, max_tokens=4096)
+    _assert_only_our_words(caught.value, "timeout", client)
+    assert (caught.value.status, caught.value.sent) == (status, True)
+    assert (
+        len(server.requests) == 1
+    ), "the model may still be writing the answer; a second request starts another"
+
+
+@pytest.mark.parametrize("status", [502, 503])
+def test_a_gateway_with_nothing_behind_it_is_still_asked_again(status: int) -> None:
+    with serve(lambda _: Reply(status, LEAKY)) as server, pytest.raises(LLMHttpError) as caught:
+        _openai(server.url, max_retries=2).complete(PROMPT)
+    assert (caught.value.kind, caught.value.sent) == ("server_error", False)
+    assert len(server.requests) == 3
+
+
+def test_a_listing_that_a_gateway_gave_up_on_is_still_asked_again() -> None:
+    with serve(lambda _: Reply(504, LEAKY)) as server, pytest.raises(LLMHttpError) as caught:
+        _openai(server.url, max_retries=2).list_models()
+    assert (caught.value.kind, caught.value.sent) == ("timeout", False)
+    assert len(server.requests) == 3
+
+
+def test_an_embedding_that_timed_out_is_asked_again_since_a_second_one_costs_nothing_but_a_repeat() -> None:
+    """A model that was still loading on the first try is ready on the second; no generation is doubled."""
+    seen: list[str] = []
+    client, _ = _either(_timing_out(httpx.ReadTimeout, seen))
+    with pytest.raises(LLMHttpError) as caught:
+        client.embed(["hi"], model_id="e")
+    assert (caught.value.kind, caught.value.sent) == ("timeout", True)
+    assert seen == ["POST"] * 3
+    with serve(lambda _: Reply(504, LEAKY)) as server, pytest.raises(LLMHttpError):
+        _openai(server.url, max_retries=2).embed(["hi"], model_id="e")
+    assert len(server.requests) == 3
 
 
 def test_a_certificate_problem_is_named_as_one() -> None:
