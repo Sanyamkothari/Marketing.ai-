@@ -397,6 +397,21 @@ def _int(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
+def _empty_answer(out_of_room: bool, model_id: str) -> LLMError:
+    """The failure of an answer with no text in it, in one of two kinds that look alike and are not.
+
+    A model that reasons before it replies can spend its whole allowance on the reasoning and be
+    stopped by the token ceiling with nothing written (`out_of_room`: the provider's own stop reason
+    says so, `length` or `max_tokens`). The fix is more room, which is not what an empty answer by
+    any other road needs. Both are `LLM_REFUSED`, so a caller that already treats an empty answer as
+    no answer needs no change; only the sentence a person reads differs. Nothing the provider wrote
+    is read for this: the stop reason is a closed word, not its prose.
+    """
+    if out_of_room:
+        return LLMHttpError("out_of_room", model_id=model_id)
+    return LLMError("LLM_REFUSED", "The model returned nothing to read.", model_id=model_id)
+
+
 # ---------------------------------------------------------------------------
 # OpenAI chat protocol
 # ---------------------------------------------------------------------------
@@ -483,7 +498,7 @@ class OpenAICompatibleClient(_HttpClient):
             content = "".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
         text = content if isinstance(content, str) else ""
         if not text.strip():
-            raise LLMError("LLM_REFUSED", "The model returned nothing to read.", model_id=chosen)
+            raise _empty_answer(choice.get("finish_reason") == "length", chosen)
         usage = data.get("usage") if isinstance(data, dict) else None
         usage = usage if isinstance(usage, dict) else {}
         return LLMCompletion(
@@ -577,7 +592,7 @@ class AnthropicClient(_HttpClient):
         except (KeyError, TypeError, AttributeError):
             raise LLMHttpError("bad_response", model_id=chosen) from None
         if not text.strip():
-            raise LLMError("LLM_REFUSED", "The model returned nothing to read.", model_id=chosen)
+            raise _empty_answer(data.get("stop_reason") == "max_tokens", chosen)
         usage = data.get("usage") if isinstance(data, dict) else None
         usage = usage if isinstance(usage, dict) else {}
         return LLMCompletion(

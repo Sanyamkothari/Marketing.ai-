@@ -43,6 +43,7 @@ from engine.llm import (
     build_client,
     estimate_tokens,
 )
+from engine.llm_http import PROBLEMS, LLMHttpError
 from tests.fixtures.make_docs import DOCUMENT_STEMS, generate_complaints, plain_text, source_text
 
 MODEL = "a-model-id"
@@ -389,6 +390,38 @@ def test_an_empty_bedrock_answer_is_its_own_code() -> None:
     with pytest.raises(LLMError) as error:
         client.complete("u", system="s", model_id=MODEL, max_tokens=10)
     assert error.value.code == "LLM_REFUSED"
+
+
+def test_a_bedrock_answer_stopped_by_the_token_ceiling_before_any_text_is_out_of_room() -> None:
+    """A model that reasons first can spend its whole allowance thinking: more room, not a refusal, is the fix."""
+
+    class _Thinking:
+        def converse(self, **kwargs: object) -> dict[str, object]:
+            return {
+                "output": {"message": {"content": [{"reasoningContent": {"reasoningText": {"text": "hm"}}}]}},
+                "usage": {"inputTokens": 40, "outputTokens": 10},
+                "stopReason": "max_tokens",
+            }
+
+    client = BedrockLLMClient(region="ap-south-1", client=_Thinking())
+    with pytest.raises(LLMError) as error:
+        client.complete("u", system="s", model_id=MODEL, max_tokens=10)
+    assert isinstance(error.value, LLMHttpError) and error.value.kind == "out_of_room"
+    assert (error.value.message, error.value.fix) == PROBLEMS["out_of_room"]
+    assert (error.value.code, error.value.model_id) == ("LLM_REFUSED", MODEL)
+
+
+def test_an_empty_bedrock_answer_that_ended_normally_is_still_nothing_to_read() -> None:
+    class _Ended:
+        def converse(self, **kwargs: object) -> dict[str, object]:
+            return {"output": {"message": {"content": [{"text": ""}]}}, "usage": {}, "stopReason": "end_turn"}
+
+    with pytest.raises(LLMError) as error:
+        BedrockLLMClient(region="ap-south-1", client=_Ended()).complete(
+            "u", system="s", model_id=MODEL, max_tokens=10
+        )
+    assert not isinstance(error.value, LLMHttpError)
+    assert (error.value.code, error.value.message) == ("LLM_REFUSED", "The model returned nothing to read.")
 
 
 def test_bedrock_reads_the_usage_the_provider_reported() -> None:

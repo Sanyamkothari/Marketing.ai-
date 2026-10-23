@@ -1052,6 +1052,13 @@ class BedrockLLMClient:
         blocks = response.get("output", {}).get("message", {}).get("content", [])
         text = "".join(str(block.get("text", "")) for block in blocks)
         if not text.strip():
+            if response.get("stopReason") == "max_tokens":
+                # The model spent its whole allowance before writing anything. It is raised as the
+                # HTTP clients raise it, so one sentence and one fix serve every provider; the import
+                # is here because `engine.llm_http` imports this module.
+                from engine.llm_http import LLMHttpError
+
+                raise LLMHttpError("out_of_room", model_id=chosen)
             raise LLMError("LLM_REFUSED", "The model returned nothing to read.", model_id=chosen)
         usage = response.get("usage", {})
         return LLMCompletion(

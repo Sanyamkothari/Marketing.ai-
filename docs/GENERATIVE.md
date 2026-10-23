@@ -493,7 +493,7 @@ The cost ceiling's promise is also narrower than "not a cent over", and worth st
 will cost is known only once it comes back - the output tokens are the model's to choose. So a run
 stops at the first call after its spending reached the ceiling, and the call that took it there may
 have taken it past. The ceiling bounds how much further a job goes, not its final total. Projecting
-a call's cost from `max_output_tokens` and refusing on the projection would bound the total, at the
+a call's cost from its output allowance and refusing on the projection would bound the total, at the
 price of refusing real work on the strength of a number nobody measured - which is the trade plan
 section 13.3 settles the same way everywhere else in this package (DEC-227).
 
