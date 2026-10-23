@@ -274,6 +274,8 @@ REFUSED_FOR: list[tuple[int, str, str]] = [
     (401, "Your API key was deactivated", "key_disabled"),
     (403, "API key is disabled", "key_disabled"),
     (403, "Consumer 'api_key:x' has been suspended.", "key_disabled"),
+    (403, "Your API key has been disabled by an administrator", "key_disabled"),
+    (401, "The account has been disabled", "key_disabled"),
     (403, "Project `proj_1` does not have access to model `m-1`", "no_model_access"),
     (403, "You are not allowed to sample from this model", "no_model_access"),
     (403, "Your API key does not have permission to use the specified resource.", "no_model_access"),
@@ -288,6 +290,11 @@ REFUSED_FOR: list[tuple[int, str, str]] = [
     (429, "Your credit balance is too low", "out_of_credit"),
     # Anthropic words its empty account as a 400, which is not a refused key but is the same cure
     (400, "Your credit balance is too low to access the Anthropic API.", "out_of_credit"),
+    # Google's Gemini words a bad key as a 400 (INVALID_ARGUMENT), not a 401: by whole phrases, live-checked
+    (400, "API key expired. Please renew the API key.", "key_expired"),
+    (400, "API key not valid. Please pass a valid API key.", "key_rejected"),
+    (400, "Please pass a valid API key", "key_rejected"),  # its OpenAI-compatible address
+    (400, "reason: API_KEY_INVALID", "key_rejected"),
     # precedence: credit, then expired, then disabled, then access
     (401, "credit has expired", "out_of_credit"),
     (403, "Account suspended: insufficient_quota", "out_of_credit"),
@@ -303,8 +310,21 @@ REFUSED_FOR: list[tuple[int, str, str]] = [
     (429, "permission denied", "rate_limited"),
     (400, "credit balance is high enough", "bad_request"),
     (400, "credit expired", "bad_request"),
+    (400, "the key expired yesterday", "bad_request"),  # on a 400 only the whole phrases count
+    (400, "the api key is wrong", "bad_request"),
+    (400, "api key expired and credit balance is too low", "out_of_credit"),
     (404, "key expired", "not_found"),
     (500, "billing is disabled", "server_error"),
+    # "disabled" alone says nothing about the key: a new key would fail the same way, so it stays a refused key
+    (
+        403,
+        "Generative Language API has not been used in project 123 before or it is disabled. "
+        "Enable it by visiting https://console.developers.google.com/apis/api/x/overview?project=123 then retry. "
+        "reason: SERVICE_DISABLED",
+        "key_rejected",
+    ),
+    (403, "Public access is disabled. Please configure private endpoint.", "key_rejected"),
+    (403, "This feature is disabled for your plan", "key_rejected"),
     # without a word, the answer is what the status alone said before
     (401, "Incorrect API key provided", "key_rejected"),
     (401, "invalid x-api-key", "key_rejected"),
@@ -736,6 +756,55 @@ def test_a_timeout_is_a_timeout() -> None:
     with pytest.raises(LLMHttpError) as caught:
         client.complete("hi")
     assert caught.value.kind == "timeout"
+
+
+def _timing_out(error: type[httpx.TimeoutException], seen: list[str]) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.method)
+        raise error("slow", request=request)
+
+    return httpx.MockTransport(handler)
+
+
+def _either(transport: httpx.MockTransport) -> list[OpenAICompatibleClient | AnthropicClient]:
+    arguments: dict[str, object] = {
+        "base_url": "https://x.example/v1",
+        "model_id": "m",
+        "max_retries": 2,
+        "backoff_s": 0.0,
+        "transport": transport,
+    }
+    return [OpenAICompatibleClient(**arguments), AnthropicClient(**arguments)]  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("which", [0, 1], ids=["openai", "anthropic"])
+def test_a_completion_that_was_sent_and_not_answered_in_time_is_not_sent_again(which: int) -> None:
+    """The service is probably still generating (and billing) it; a second request would only start another."""
+    seen: list[str] = []
+    client = _either(_timing_out(httpx.ReadTimeout, seen))[which]
+    with pytest.raises(LLMHttpError) as caught:
+        client.complete("hi", max_tokens=4096)
+    assert (caught.value.kind, caught.value.sent) == ("timeout", True)
+    assert seen == ["POST"]
+
+
+@pytest.mark.parametrize("which", [0, 1], ids=["openai", "anthropic"])
+def test_a_request_that_never_got_through_is_asked_again(which: int) -> None:
+    seen: list[str] = []
+    client = _either(_timing_out(httpx.ConnectTimeout, seen))[which]
+    with pytest.raises(LLMHttpError) as caught:
+        client.complete("hi")
+    assert (caught.value.kind, caught.value.sent) == ("timeout", False)
+    assert seen == ["POST"] * 3
+
+
+def test_a_listing_that_times_out_is_still_asked_again_since_asking_costs_nothing() -> None:
+    seen: list[str] = []
+    client, _ = _either(_timing_out(httpx.ReadTimeout, seen))
+    with pytest.raises(LLMHttpError) as caught:
+        client.list_models()
+    assert (caught.value.kind, caught.value.sent) == ("timeout", False)
+    assert seen == ["GET"] * 3
 
 
 def test_a_certificate_problem_is_named_as_one() -> None:

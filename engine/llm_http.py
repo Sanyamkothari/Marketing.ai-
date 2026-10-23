@@ -22,7 +22,11 @@ Four rules are enforced here rather than hoped for in the caller.
 4. **Retries are bounded and honest.** `max_retries` more attempts for a timeout, a refused connection,
    429 and 5xx, with a short back-off (a `Retry-After` is honoured up to ten seconds); 4xx other than
    429 is never retried, because asking again does not change the answer. A 429 that says the credit
-   is gone is that same case (`out_of_credit`, not `rate_limited`): waiting does not add credit.
+   is gone is that same case (`out_of_credit`, not `rate_limited`): waiting does not add credit. A POST
+   that was sent and then waited for in vain (a read timeout) is not sent again: a completion is not
+   streamed, so the service is likely still generating the answer, and billing it, and a second request
+   would start a second generation that the same wait would time out on. Only a timeout before the request
+   got through (connecting) is asked again.
 
 The address itself is checked before a client is built (`engine.ai_service.check_base_url`): this
 module talks to whatever address it is given.
@@ -104,7 +108,7 @@ PROBLEMS: Final[dict[str, tuple[str, str]]] = {
     "out_of_room": (
         "The model used its whole answer allowance before writing anything.",
         "Models that reason first need more room: raise generative.llm.max_output_tokens "
-        "(generative.llm.data_agent_max_output_tokens for Guided setup and the Data Doctor), "
+        "(generative.llm.data_agent_max_output_tokens for Guided setup, the Data Doctor and the campaign planner), "
         "or choose a model without extended reasoning.",
     ),
     "rate_limited": (
@@ -133,7 +137,8 @@ PROBLEMS: Final[dict[str, tuple[str, str]]] = {
     ),
     "bad_request": (
         "The AI service refused the request.",
-        "Check the model name; some models are not made for chat or need other settings.",
+        "Check the model name; some models are not made for chat or need other settings, and a model with a "
+        "short context cannot take the answer allowance (generative.llm.data_agent_max_output_tokens).",
     ),
     "too_long": (
         "The request was too long for this model.",
@@ -173,7 +178,23 @@ _REFUSALS: Final[tuple[tuple[Problem, frozenset[int], tuple[str, ...]], ...]] = 
     ("out_of_credit", frozenset({401, 403}), ("billing", "quota exceeded")),
     ("out_of_credit", frozenset({400}), ("credit balance is too low",)),
     ("key_expired", frozenset({401, 403}), ("expired",)),
-    ("key_disabled", frozenset({401, 403}), ("revoked", "disabled", "deactivated", "suspended")),
+    ("key_expired", frozenset({400}), ("api key expired",)),
+    ("key_rejected", frozenset({400}), ("pass a valid api key", "api key not valid", "api_key_invalid")),
+    (
+        "key_disabled",
+        frozenset({401, 403}),
+        (
+            "revoked",
+            "deactivated",
+            "suspended",
+            "key disabled",
+            "key is disabled",
+            "key was disabled",
+            "key has been disabled",
+            "account is disabled",
+            "account has been disabled",
+        ),
+    ),
     (
         "no_model_access",
         frozenset({403}),
@@ -205,8 +226,14 @@ can fix by paying to the one they fix by asking.
    - On a 400 only "credit balance is too low" counts. It is how Anthropic reports an empty account, a
      request error to them and not an authentication one, and a 400 body can quote the prompt, so
      nothing broader than that whole phrase is safe.
-2. *expired* next. An expired key is often called "invalid" or "disabled" too, and a new key is its fix.
-3. *revoked, disabled, deactivated, suspended* next: the key existed and was switched off.
+2. *expired* next. An expired key is often called "invalid" or "disabled" too, and a new key is its fix. Google's
+   Gemini answers a bad key with a 400 (`INVALID_ARGUMENT`), not a 401, so a 400 is also checked for its whole
+   phrases: "api key expired" is `key_expired`, and "pass a valid api key" (its OpenAI-compatible address) or
+   "api key not valid" (its own) is `key_rejected`. Phrases only, for the reason above.
+3. *revoked, deactivated, suspended, and the key or account named as disabled* next: the key existed and was
+   switched off. "Disabled" alone does not count: Google's 403 for an API that was never turned on in the project
+   ("... has not been used in project 1 before or it is disabled") and Azure's "Public access is disabled" say
+   nothing about the key, and a new key would fail the same way, so those stay `key_rejected`.
 4. *the access phrases* last, and only for a 403. They are phrases, not the bare word "permission":
    Anthropic's body for every 403 names `permission_error` (even "Request not allowed", which is a
    country or organisation refusal), and a web server in front of a wrong address says "You don't have
@@ -223,7 +250,8 @@ class LLMHttpError(LLMError):
 
     `kind` says why (see :data:`PROBLEMS`); `status` is the HTTP status when there was one;
     `rejected` names the request parameters a 400 said it would not take (names only), which is how a
-    client adapts once to a model with different rules. `input_tokens` and `output_tokens` are set for
+    client adapts once to a model with different rules. `sent` is True for a `timeout` that came after the
+    request reached the service (a read timeout): the service may still be working on it, so it is not asked again. `input_tokens` and `output_tokens` are set for
     `out_of_room` alone: the one failure that was billed, in whole, for what the answer reported.
     """
 
@@ -236,6 +264,7 @@ class LLMHttpError(LLMError):
         rejected: tuple[str, ...] = (),
         input_tokens: int = 0,
         output_tokens: int = 0,
+        sent: bool = False,
     ) -> None:
         message, fix = PROBLEMS[kind]
         super().__init__(
@@ -249,6 +278,7 @@ class LLMHttpError(LLMError):
         self.fix = fix
         self.status = status
         self.rejected = rejected
+        self.sent = sent
         self.retry_after: float | None = None
 
     @property
@@ -314,8 +344,11 @@ class _HttpClient:
                 return self._send(method, path, body, model_id=model_id, params=params)
             except LLMHttpError as exc:
                 # Asking again changes nothing for a refused key, a missing model permission or an empty
-                # account, so those kinds (and every 4xx but an ordinary 429) fail at once.
-                retryable = exc.kind in {"rate_limited", "server_error", "timeout", "unreachable"}
+                # account, so those kinds (and every 4xx but an ordinary 429) fail at once; nor does it for
+                # a request that got through and was not answered in time (`LLMHttpError.sent`).
+                retryable = (
+                    exc.kind in {"rate_limited", "server_error", "timeout", "unreachable"} and not exc.sent
+                )
                 if not retryable or attempt + 1 >= attempts:
                     raise
                 time.sleep(self._delay(attempt, exc))
@@ -348,7 +381,9 @@ class _HttpClient:
                 retry_after = _retry_after(response.headers.get("retry-after"))
         except httpx.TimeoutException as exc:
             log_failure(_LOGGER, "llm_http.request", exc, level=logging.DEBUG)
-            raise LLMHttpError("timeout", model_id=model_id) from None
+            # A POST that got through and was not answered in time may still be running (and billed) over there.
+            reached = method == "POST" and not isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout)
+            raise LLMHttpError("timeout", model_id=model_id, sent=reached) from None
         except httpx.HTTPError as exc:
             # Never `exc_info`, never the message: a URL or a TLS detail is not worth a key's risk.
             log_failure(_LOGGER, "llm_http.request", exc, level=logging.DEBUG)
@@ -436,8 +471,9 @@ def _classify(status: int, raw: bytes, model_id: str | None) -> LLMHttpError:
 
     The status class decides, and for the few statuses where the reason matters the start of the body
     refines it: a refused key (401, 403) or a throttle (429) is checked against :data:`_REFUSALS`, a 402
-    is `out_of_credit` whatever it says, and a 400 is `out_of_credit` only when it says the balance is too
-    low, else it names the request parameters it would not take.
+    is `out_of_credit` whatever it says, and a 400 is `out_of_credit` when it says the balance is too low
+    and a refused key when it says so in Gemini's whole phrases, else it names the request parameters it
+    would not take.
     """
     lowered = raw[:_BODY_WINDOW].decode("utf-8", errors="ignore").lower()
     kind: Problem
