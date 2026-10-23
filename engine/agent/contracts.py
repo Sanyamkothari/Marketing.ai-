@@ -511,7 +511,8 @@ class TurnLog(StrictBase):
     error_codes: tuple[str, ...] = Field(
         default=(),
         description="Codes of actions the engine refused, in order; and, when the AI service did not answer, why: "
-        "`LLM_UNAVAILABLE`, then the kind its client found (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...).",
+        "the failure's own code (`LLM_UNAVAILABLE`; `LLM_REFUSED` for a model that ran out of room; "
+        "`BUDGET_EXCEEDED`), then the kind its client found (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...).",
     )
     blocked_by: str | None = Field(
         default=None,

@@ -228,6 +228,22 @@ class _NoRoom(ChatScript):
         )
 
 
+def test_a_call_that_ran_out_of_room_and_used_up_the_limit_still_says_it_ran_out_of_room(
+    storage: LocalStorage,
+) -> None:
+    """The billed call takes the case to its limit, but the model never wrote anything: that is the cause."""
+    sentence, fix = PROBLEMS["out_of_room"]
+    case = open_case(storage, vs.world())
+    guard = _guard(_NoRoom({}), tokens=3_000, llm=ALLOWANCES)
+    result = _converse(guard)(case, "Hello", _files())
+    assert guard.spent(), "the one failed call used up the case's tokens"
+    assert result.reply == f"{UNAVAILABLE} {sentence} {fix}"
+    assert (result.blocked_by, result.error_codes) == ("unavailable", ("LLM_REFUSED", "LLM_OUT_OF_ROOM"))
+    case = case.model_copy(update={"counters": CaseCounters(model_calls=1, tokens=3040)})
+    again = _converse(guard)(case, "Hello again", _files())
+    assert again.reply == AI_LIMIT_REPLY and (again.blocked_by, again.error_codes) == ("budget", ())
+
+
 def test_a_turn_that_ran_out_of_room_is_counted_on_the_case_so_trying_again_has_a_limit(
     storage: LocalStorage,
 ) -> None:

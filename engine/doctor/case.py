@@ -538,9 +538,9 @@ class CaseChatEntry(StrictBase):
     error_codes: tuple[str, ...] = Field(
         default=(),
         exclude_if=lambda value: not value,
-        description="For an AI service that did not answer, the codes that say why, in order: `LLM_UNAVAILABLE`, then "
-        "the kind its client found (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...). Codes written by us, never the "
-        "service's own words.",
+        description="For an AI service that did not answer, the codes that say why, in order: the failure's own code "
+        "(`LLM_UNAVAILABLE`; `LLM_REFUSED` for a model that ran out of room; `BUDGET_EXCEEDED`), then the kind its "
+        "client found (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...). Codes written by us, never the service's own words.",
     )
 
 

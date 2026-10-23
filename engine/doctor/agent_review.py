@@ -136,7 +136,7 @@ def lazy_review(build: Callable[[], DetectorPort | None]) -> DetectorPort:
 class _NoAnswerError(Exception):
     """The model cannot be asked now: `reason` is `prompt_too_large` or `unavailable` (no service, or no money).
 
-    For `unavailable`, `failure` is what the AI service raised: `codes` say why (`LLM_UNAVAILABLE`, then
+    For `unavailable`, `failure` is what the AI service raised: `codes` say why (the failure's own code, then
     `LLM_KEY_EXPIRED` ...; see `engine.agent.loop.ai_failure_codes`) and `reply` is what the person reads (the
     lead sentence, and the HTTP client's own fixed sentence and fix when it has one). Neither holds a word the
     service wrote.

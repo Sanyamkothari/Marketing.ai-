@@ -39,6 +39,7 @@ from engine.doctor.protocol import DONT_KNOW, Ask, AskOption, question_id_of
 from engine.doctor.questions import catalogue_lines
 from engine.doctor.visit_contracts import OptionEffect
 from engine.generative.contracts import GenerativePurpose
+from engine.generative.errors import BUDGET_EXCEEDED
 from engine.generative.prompts import load_prompt
 from engine.storage import StorageError
 from engine.utils.logging import get_logger
@@ -105,8 +106,9 @@ class ChatTurn:
     """Why the model's own answer is missing: `unavailable` (the AI service did not answer, or the case's spending
     ran out), `prompt_too_large`, the code of a refusal it met twice, or `failed`; None when it replied."""
     error_codes: tuple[str, ...] = ()
-    """Why the AI service did not answer, when it did not: `LLM_UNAVAILABLE`, then the kind the HTTP client found
-    (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...), or `BUDGET_EXCEEDED` (`engine.agent.loop.ai_failure_codes`)."""
+    """Why the AI service did not answer, when it did not: the failure's own code (`LLM_UNAVAILABLE`; `LLM_REFUSED`
+    for a model that ran out of room; `BUDGET_EXCEEDED`), then the kind the HTTP client found (`LLM_KEY_EXPIRED`,
+    `LLM_OUT_OF_ROOM` ...): `engine.agent.loop.ai_failure_codes`."""
 
 
 @dataclass
@@ -718,7 +720,10 @@ def doctor_converse(
             storage=storage,
         )
         done = chat.talk(message)
-        spent = done.blocked_by == "unavailable" and meter.spent()
+        # The case's limit speaks only when it is what stopped the turn (`BUDGET_EXCEEDED`: a call refused before it
+        # was made). A call that failed and was billed anyway (the model ran out of room) can take the case to its
+        # limit too, but then the reason is the failure's, and the limit is told on the next turn (`ask`).
+        spent = done.blocked_by == "unavailable" and BUDGET_EXCEEDED in done.error_codes and meter.spent()
         return ConverseResult(
             reply=AI_LIMIT_REPLY if spent else done.reply,
             blocked_by="budget" if spent else done.blocked_by,

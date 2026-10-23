@@ -254,8 +254,9 @@ class ConverseResult:
     (a step of the turn broke). None when it answered, and when the reply is :data:`AI_NEEDED_REPLY` (no AI service is
     connected: `ai` says so)."""
     error_codes: tuple[str, ...] = ()
-    """For an AI service that did not answer, the codes that say why, in order: `LLM_UNAVAILABLE`, then the kind the
-    HTTP client found (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...); written here, never the service's own words."""
+    """For an AI service that did not answer, the codes that say why, in order: the failure's own code (`LLM_UNAVAILABLE`;
+    `LLM_REFUSED` for a model that ran out of room; `BUDGET_EXCEEDED`), then the kind the HTTP client found
+    (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...); written here, never the service's own words."""
 
 
 class ConversePort(Protocol):
