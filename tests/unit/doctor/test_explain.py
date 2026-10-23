@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -34,7 +35,9 @@ from engine.doctor.registry import (
     Exposure,
     data_registry,
 )
+from engine.generative.errors import BUDGET_EXCEEDED, generative_error
 from engine.llm import FakeLLMClient, FakeLLMMode
+from engine.llm_http import LLMHttpError
 from tests.unit.agent.egress_canary import EMAIL, HARD_SECRETS, NAME, canary_context, leaks, meter_for
 from tests.unit.agent.helpers import context_for
 
@@ -298,3 +301,35 @@ def test_meter_narrator_renders_the_data_explain_prompt() -> None:
     narrate(ExplainRequest(facts=({"ref": "f1", "type": "count", "about": "rows"},)))
     (call,) = [c for c in client.calls if c.kind == "complete"]
     assert '"ref": "f1"' in call.prompt and "rate_by_group" in call.system
+
+
+class _FailingMeter:
+    """A meter whose every call raises `error`."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def complete(self, rendered: Any, purpose: Any) -> Any:
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    ("error", "logged"),
+    [
+        (LLMHttpError("key_expired", status=401), "LLM_UNAVAILABLE, LLM_KEY_EXPIRED"),
+        (LLMHttpError("out_of_room"), "LLM_REFUSED, LLM_OUT_OF_ROOM"),
+        (generative_error(BUDGET_EXCEEDED, limit="calls", calls=30), "BUDGET_EXCEEDED"),
+        (RuntimeError("the prompt said zq-private"), "RuntimeError"),
+    ],
+    ids=["expired-key", "out-of-room", "spent", "bug"],
+)
+def test_a_narrator_the_ai_service_failed_is_no_answer_and_the_log_says_why_without_the_words(
+    caplog: pytest.LogCaptureFixture, error: Exception, logged: str
+) -> None:
+    """The rules' narrative is shown either way; the log is how an operator learns why it always is."""
+    narrate = meter_narrator(_FailingMeter(error))
+    with caplog.at_level(logging.WARNING, logger="engine.doctor.explain"):
+        assert narrate(ExplainRequest(facts=({"ref": "f1", "type": "count", "about": "rows"},))) is None
+    (line,) = [r.getMessage() for r in caplog.records if r.name == "engine.doctor.explain"]
+    assert line.startswith("data_explain: ") and logged in line
+    assert "zq-private" not in caplog.text

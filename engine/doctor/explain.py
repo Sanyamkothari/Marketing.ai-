@@ -48,6 +48,9 @@ from engine.agentic.claims import (
     RenderedSentence,
 )
 from engine.config import StrictBase
+from engine.generative.errors import GenerativeError
+from engine.llm import LLMError
+from engine.utils.logging import get_logger
 
 __all__ = [
     "DATA_SLOTS",
@@ -66,6 +69,8 @@ __all__ = [
     "verify_data_narrative",
     "verify_data_sentence",
 ]
+
+_LOG = get_logger(__name__)
 
 MAX_FACTS: Final[int] = 60
 """Facts an explanation reads at most, in the order the evidence was named (the prompt stays small)."""
@@ -495,13 +500,24 @@ def meter_narrator(meter: Any, config_root: Path | None = None) -> Narrator:
     from engine.generative.prompts import load_prompt, render
 
     def narrate(request: ExplainRequest) -> str | None:
+        # lazy: the agent loop is a heavy import and this module is read by the registry
+        from engine.agent.loop import ai_failure_codes
+
         prompt = render(
             load_prompt("data_explain", config_root),
             {"facts": json.dumps(list(request.facts), sort_keys=True, ensure_ascii=False)},
         )
         try:
             return str(meter.complete(prompt, GenerativePurpose.DATA_EXPLAIN).text)
-        except Exception:  # an LLM or budget error: the rules' narrative is written instead
+        except (LLMError, GenerativeError) as exc:
+            # An AI service or budget error: the rules' narrative is written instead. Said in the log, by our
+            # codes, so an operator can tell why every explanation is the rules' (an expired key, a spent case).
+            _LOG.warning("data_explain: the AI call failed (%s)", ", ".join(ai_failure_codes(exc)))
+            return None
+        except (
+            Exception
+        ) as exc:  # a bug in the meter or the client: the same fallback, and the class is named
+            _LOG.warning("data_explain: the AI call broke (%s)", type(exc).__name__)
             return None
 
     return narrate
