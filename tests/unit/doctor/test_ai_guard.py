@@ -124,7 +124,12 @@ def test_an_ai_service_that_fails_says_why_in_the_result(storage: LocalStorage) 
     sentence, fix = PROBLEMS["out_of_room"]
     case = open_case(storage, vs.world())
     result = _converse(_guard(Down(LLMHttpError("out_of_room"))))(case, "Hello", _files())
-    assert result.ai is True and (result.model_calls, result.tokens) == (0, 0)
+    assert result.ai is True
+    counted = (result.model_calls, result.tokens)
+    assert counted == (
+        1,
+        0,
+    ), "billed whatever the provider reported: one call, and no tokens it did not report"
     assert result.reply == f"{UNAVAILABLE} {sentence} {fix}"
     assert (result.blocked_by, result.error_codes) == ("unavailable", ("LLM_REFUSED", "LLM_OUT_OF_ROOM"))
     answered = _converse(_guard(ChatScript({})))(case, "Hello", _files())

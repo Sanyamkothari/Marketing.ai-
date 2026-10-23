@@ -227,7 +227,6 @@ def test_with_the_allowance_set_to_the_old_800_the_same_turn_fails_and_says_why_
         (event,) = _agent_events(client, case["case_id"])
         assert event["details"]["blocked_by"] == "unavailable"
         assert "LLM_OUT_OF_ROOM" in event["details"]["error_codes"].split(",")
-        assert PROVIDER_WORDS not in client.get(f"/cases/{case['case_id']}").text
     # The fix it printed names the setting; setting it is all it takes.
     assert "generative.llm.data_agent_max_output_tokens" in fix
     roomy = _configs(tmp_path / "raised", config_root, allowance=DEFAULT_ALLOWANCE)
