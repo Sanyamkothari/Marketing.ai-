@@ -168,20 +168,24 @@ _BODY_WINDOW: Final[int] = 4096
 """How much of a response body is ever looked at for a keyword: the start, where an error says why."""
 
 _REFUSALS: Final[tuple[tuple[Problem, frozenset[int], tuple[str, ...]], ...]] = (
-    (
-        "out_of_credit",
-        frozenset({401, 403, 429}),
-        ("insufficient_quota", "credit", "billing", "quota exceeded"),
-    ),
+    ("out_of_credit", frozenset({401, 403, 429}), ("insufficient_quota", "credit")),
+    ("out_of_credit", frozenset({401, 403}), ("billing", "quota exceeded")),
+    ("out_of_credit", frozenset({400}), ("credit balance is too low",)),
     ("key_expired", frozenset({401, 403}), ("expired",)),
     ("key_disabled", frozenset({401, 403}), ("revoked", "disabled", "deactivated", "suspended")),
     (
         "no_model_access",
         frozenset({403}),
-        ("permission", "not allowed", "does not have access", "access to model"),
+        (
+            "does not have permission",
+            "permission to use",
+            "not allowed to",
+            "does not have access",
+            "access to model",
+        ),
     ),
 )
-"""Why a 401, 403 or 429 was refused: (kind, the statuses it applies to, the words that give it away).
+"""Why a 400, 401, 403 or 429 was refused: (kind, the statuses it applies to, the words that give it away).
 
 The same technique as :data:`_REJECTABLE` - a lowercase substring test on the start of the body against a
 closed list - and the same promise: the words choose one of OUR sentences and are then forgotten. The
@@ -189,11 +193,24 @@ first row whose words appear wins, so the order is the precedence, and it goes f
 can fix by paying to the one they fix by asking.
 
 1. *credit* first. A provider that has run out of credit often words it as "disabled", "suspended" or
-   "permission denied"; adding credit is the real fix, and the money words are the most specific.
+   "permission denied"; adding credit is the real fix, and the money words are the most specific. They
+   are split by status because the same words mean different things:
+
+   - On a 429 only `insufficient_quota` and `credit` count. "Billing" and "quota exceeded" turn up in
+     ordinary per-minute throttles too (OpenAI's points at its billing page, Gemini's says quota exceeded
+     and gives a retry delay); waiting fixes those, so they stay `rate_limited` and are asked again
+     rather than sending a person to add credit they do not need.
+   - On a 401 or 403 "billing" and "quota exceeded" count as well: a refused key has no waiting to do.
+   - On a 400 only "credit balance is too low" counts. It is how Anthropic reports an empty account, a
+     request error to them and not an authentication one, and a 400 body can quote the prompt, so
+     nothing broader than that whole phrase is safe.
 2. *expired* next. An expired key is often called "invalid" or "disabled" too, and a new key is its fix.
 3. *revoked, disabled, deactivated, suspended* next: the key existed and was switched off.
-4. *permission, not allowed, access* last, and only for a 403. "Permission" is the broadest word and
-   turns up inside the messages of every other kind, so it may only decide when none of them matched.
+4. *the access phrases* last, and only for a 403. They are phrases, not the bare word "permission":
+   Anthropic's body for every 403 names `permission_error` (even "Request not allowed", which is a
+   country or organisation refusal), and a web server in front of a wrong address says "You don't have
+   permission to access this resource". Neither says anything about the model, so neither may claim the
+   key was accepted; a 403 with no phrase stays `key_rejected`.
 
 A 402 is `out_of_credit` whatever it says (see :func:`_classify`). A bare 401 or 403 stays
 `key_rejected`, and a 429 with none of these words stays `rate_limited` and is retried.
@@ -401,7 +418,8 @@ def _classify(status: int, raw: bytes, model_id: str | None) -> LLMHttpError:
 
     The status class decides, and for the few statuses where the reason matters the start of the body
     refines it: a refused key (401, 403) or a throttle (429) is checked against :data:`_REFUSALS`, a 402
-    is `out_of_credit` whatever it says, and a 400 names the request parameters it would not take.
+    is `out_of_credit` whatever it says, and a 400 is `out_of_credit` only when it says the balance is too
+    low, else it names the request parameters it would not take.
     """
     lowered = raw[:_BODY_WINDOW].decode("utf-8", errors="ignore").lower()
     kind: Problem
@@ -411,6 +429,8 @@ def _classify(status: int, raw: bytes, model_id: str | None) -> LLMHttpError:
         kind = _spot_refusal(status, lowered) or "key_rejected"
     elif status == 429:
         kind = _spot_refusal(status, lowered) or "rate_limited"
+    elif status == 400:
+        kind = _spot_refusal(status, lowered) or "bad_request"
     elif status == 408:
         kind = "timeout"
     elif status == 404:

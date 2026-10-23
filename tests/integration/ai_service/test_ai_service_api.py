@@ -320,7 +320,7 @@ def test_a_rejected_key_is_ok_false_with_a_plain_fix_not_an_http_error(api: _Rec
         (403, "this key was revoked", "revoked or turned off"),
         (403, "Project does not have access to model m", "does not let it use this model"),
         (402, "payment required", "no credit or quota left"),
-        (429, "You exceeded your current quota, check your plan and billing details", "no credit or quota"),
+        (429, "insufficient_quota: you exceeded your current quota, check your plan", "no credit or quota"),
     ],
 )
 def test_a_refused_key_says_why_in_the_test_result(

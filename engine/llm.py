@@ -970,9 +970,8 @@ def _first_sentence(text: str) -> str:
 
 def _bedrock_failure(exc: BaseException, message: str, model_id: str) -> LLMError:
     """The `LLMError` for a failed Bedrock call: the sign-in sentence when it lapsed, else `message`."""
-    from engine.aws_connection import (
-        classify_failure,
-    )  # lazy: this module is imported everywhere; that one reads settings
+    # lazy: this module is imported everywhere; that one reads settings
+    from engine.aws_connection import classify_failure
 
     if classify_failure(exc) in {"CREDENTIALS_EXPIRED", "SSO_LOGIN_REQUIRED"}:
         return AwsSignInExpiredError(model_id=model_id)
