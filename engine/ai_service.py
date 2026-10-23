@@ -1195,12 +1195,19 @@ def _out_of_room_fix(max_tokens: int) -> str:
     Not the client's own fix, which says to raise `generative.llm.data_agent_max_output_tokens`: that
     setting belongs to a use case file, and this test serves every use case, so it always sends the
     default. Raising it would help real calls and leave this test red, sending the operator round in a
-    loop. The sentence says what the test used and where the setting does apply.
+    loop. The sentence says what the test used and where the setting does apply. Only the default is
+    named as that setting's: a caller that passed another allowance (`run_test(max_tokens=...)`) used a
+    number that is nobody's configuration, and saying otherwise would be wrong.
     """
+    default_clause = (
+        ", the default of generative.llm.data_agent_max_output_tokens"
+        if max_tokens == TEST_MAX_TOKENS
+        else ""
+    )
     return (
         "Choose a model without extended reasoning. This test gives the answer "
-        f"{max_tokens} tokens, the default of generative.llm.data_agent_max_output_tokens; a larger "
-        "value set for one use case applies to that use case's calls, not to this test."
+        f"{max_tokens} tokens{default_clause}; a larger value set for one use case applies to that "
+        "use case's calls, not to this test."
     )
 
 

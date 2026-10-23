@@ -197,7 +197,9 @@ def test_running_out_of_room_gets_its_own_sentence_and_a_fix_that_fits_the_test(
     assert "answered with no text" not in outcome.message
     assert outcome.fix is not None and outcome.fix != PROBLEMS["out_of_room"][1]
     assert "without extended reasoning" in outcome.fix
-    assert f"{TEST_MAX_TOKENS} tokens" in outcome.fix
+    assert (
+        f"{TEST_MAX_TOKENS} tokens, the default of generative.llm.data_agent_max_output_tokens" in outcome.fix
+    )
     assert (
         "not to this test" in outcome.fix
     ), "a larger setting for a use case must not be promised to help here"
@@ -211,6 +213,7 @@ def test_the_out_of_room_fix_names_the_allowance_the_test_actually_used(
     outcome = run_test(_candidate("openai"), KEY, max_tokens=777)
     assert stub.asked[0]["max_tokens"] == 777
     assert outcome.fix is not None and "777 tokens" in outcome.fix and "4096" not in outcome.fix
+    assert "default of" not in outcome.fix, "777 is nobody's configured default, so it must not be called one"
 
 
 # --- the rest of what the test says is unchanged -------------------------------------------------
