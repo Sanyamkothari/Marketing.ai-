@@ -7,6 +7,8 @@ key - reaches the exception.
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pytest
 
@@ -226,6 +228,7 @@ LEAKY = {"error": {"message": f"Invalid key {KEY} for prompt: {PROMPT}"}}
     [
         (401, "key_rejected", "LLM_UNAVAILABLE"),
         (403, "key_rejected", "LLM_UNAVAILABLE"),
+        (402, "out_of_credit", "LLM_UNAVAILABLE"),
         (404, "not_found", "LLM_INVALID_REQUEST"),
         (400, "bad_request", "LLM_INVALID_REQUEST"),
         (413, "too_long", "LLM_TOO_LONG"),
@@ -252,6 +255,241 @@ def test_errors_are_classified_and_never_quote_the_provider(
 def test_a_rejected_key_says_so_in_plain_words() -> None:
     assert "rejected the key" in PROBLEMS["key_rejected"][0]
     assert "enter it again" in PROBLEMS["key_rejected"][1]
+
+
+# --- why a key was refused --------------------------------------------------------------------------
+MARKER = "zz-provider-words"
+"""Stands for whatever a provider says that we must not repeat; the keyword is in the same sentence."""
+
+RETRIED = {"rate_limited", "server_error"}
+"""The kinds that are asked for again; every other failure is final on the first answer."""
+
+# (status, what the provider says, the kind that must come out). Real services word these differently;
+# the rows are the phrasings the keyword lists are for, then the precedence, then the cases where a
+# word must NOT count (another status), then the plain refusals that stay what they were.
+REFUSED_FOR: list[tuple[int, str, str]] = [
+    (401, "API key expired. Please renew the API key.", "key_expired"),
+    (403, "The API key has EXPIRED", "key_expired"),
+    (401, "This API key has been revoked.", "key_disabled"),
+    (401, "Your API key was deactivated", "key_disabled"),
+    (403, "API key is disabled", "key_disabled"),
+    (403, "Consumer 'api_key:x' has been suspended.", "key_disabled"),
+    (403, "Project `proj_1` does not have access to model `m-1`", "no_model_access"),
+    (403, "You are not allowed to sample from this model", "no_model_access"),
+    (403, "Your API key does not have permission to use the specified resource.", "no_model_access"),
+    (403, "The caller does not have permission", "no_model_access"),
+    (403, "This key has no access to model m-1", "no_model_access"),
+    (401, "insufficient_quota", "out_of_credit"),
+    (403, "Your account has no credit left", "out_of_credit"),
+    (401, "Quota exceeded for this project", "out_of_credit"),
+    (403, "Please check your plan and billing details", "out_of_credit"),
+    (429, "You exceeded your current quota. type: insufficient_quota", "out_of_credit"),
+    (429, "insufficient_quota", "out_of_credit"),
+    (429, "Your credit balance is too low", "out_of_credit"),
+    # Anthropic words its empty account as a 400, which is not a refused key but is the same cure
+    (400, "Your credit balance is too low to access the Anthropic API.", "out_of_credit"),
+    # precedence: credit, then expired, then disabled, then access
+    (401, "credit has expired", "out_of_credit"),
+    (403, "Account suspended: insufficient_quota", "out_of_credit"),
+    (403, "billing problem, permission denied", "out_of_credit"),
+    (401, "key expired and then revoked", "key_expired"),
+    (403, "key expired: permission denied", "key_expired"),
+    (403, "key disabled, permission denied", "key_disabled"),
+    # a word counts only on the statuses it is listed for
+    (401, "no permission for this", "key_rejected"),
+    (401, "does not have access to model m-1", "key_rejected"),
+    (429, "key expired", "rate_limited"),
+    (429, "key disabled", "rate_limited"),
+    (429, "permission denied", "rate_limited"),
+    (400, "credit balance is high enough", "bad_request"),
+    (400, "credit expired", "bad_request"),
+    (404, "key expired", "not_found"),
+    (500, "billing is disabled", "server_error"),
+    # without a word, the answer is what the status alone said before
+    (401, "Incorrect API key provided", "key_rejected"),
+    (401, "invalid x-api-key", "key_rejected"),
+    (403, "Forbidden", "key_rejected"),
+    (403, "Request not allowed", "key_rejected"),  # Anthropic, from a country or organisation it refuses
+    (
+        403,
+        "<h1>Forbidden</h1>You don't have permission to access this resource.",
+        "key_rejected",
+    ),  # a web server
+    (429, "Rate limit reached for requests", "rate_limited"),
+    # A throttle that mentions money is still a throttle: waiting works, and "add credit" would be a false lead.
+    (
+        429,
+        "Rate limit reached for gpt-4 on requests per min (RPM): Limit 3, Used 3. Please try again in 20s. "
+        "Add a payment method at https://platform.openai.com/account/billing",
+        "rate_limited",
+    ),
+    (
+        429,
+        "You exceeded your current quota, please check your plan and billing details. retryDelay 37s",
+        "rate_limited",
+    ),
+    (429, "Quota exceeded for metric: free_tier_requests, limit: 15. Please retry in 20s", "rate_limited"),
+]
+
+
+_ANTHROPIC_ERROR_TYPE = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    402: "billing_error",
+    403: "permission_error",
+    429: "rate_limit_error",
+}
+"""The `error.type` Anthropic puts in the body of each status; a keyword list must not trip over these."""
+
+
+def _refusal_body(text: str, *, anthropic: bool = False, status: int = 401) -> dict[str, object]:
+    """A provider's refusal that says `text` and, like a real one, quotes the key and the prompt."""
+    message = f"{text} {MARKER} key={KEY} prompt={PROMPT}"
+    if anthropic:
+        kind = _ANTHROPIC_ERROR_TYPE.get(status, "api_error")
+        return {"type": "error", "error": {"type": kind, "message": message}}
+    return {"error": {"message": message}}
+
+
+_CODE = {"bad_request": "LLM_INVALID_REQUEST", "not_found": "LLM_INVALID_REQUEST"}
+
+
+def _assert_only_our_words(exc: LLMHttpError, kind: str, *clients: object) -> None:
+    """The exception carries the fixed sentences for `kind` and nothing the provider wrote."""
+    assert exc.kind == kind and exc.code == _CODE.get(kind, "LLM_UNAVAILABLE")
+    assert (exc.message, exc.fix) == PROBLEMS[kind]
+    for text in (
+        str(exc),
+        exc.message,
+        exc.fix,
+        repr(exc),
+        repr(exc.args),
+        repr(vars(exc)),
+        *map(repr, clients),
+    ):
+        assert MARKER not in text and KEY not in text and PROMPT not in text
+    assert exc.__cause__ is None and exc.__context__ is None
+
+
+@pytest.mark.parametrize(("status", "said", "kind"), REFUSED_FOR)
+@pytest.mark.parametrize("make", [_openai, _anthropic])
+def test_a_refused_key_or_throttle_says_why_and_no_provider_word_gets_out(
+    make: object, status: int, said: str, kind: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    body = _refusal_body(said, anthropic=make is _anthropic, status=status)
+    with serve(lambda _: Reply(status, body)) as server:
+        client = make(server.url, max_retries=2)  # type: ignore[operator]
+        with pytest.raises(LLMHttpError) as caught:
+            client.complete(PROMPT)
+    assert caught.value.status == status
+    _assert_only_our_words(caught.value, kind, client)
+    assert len(server.requests) == (3 if kind in RETRIED else 1)
+    assert MARKER not in caplog.text and KEY not in caplog.text
+
+
+@pytest.mark.parametrize(("status", "said", "kind"), REFUSED_FOR)
+@pytest.mark.parametrize("make", [OpenAICompatibleClient, AnthropicClient])
+def test_the_same_reasons_are_found_in_an_error_inside_a_200(
+    make: type[OpenAICompatibleClient] | type[AnthropicClient], status: int, said: str, kind: str
+) -> None:
+    seen: list[int] = []
+    body = {"error": {"code": status, "message": f"{said} {MARKER} key={KEY} prompt={PROMPT}"}}
+    client = _answering(body, seen, make=make)
+    with pytest.raises(LLMHttpError) as caught:
+        client.complete(PROMPT)
+    assert caught.value.status == status
+    _assert_only_our_words(caught.value, kind, client)
+    assert len(seen) == (3 if kind in RETRIED else 1)
+
+
+@pytest.mark.parametrize("make", [OpenAICompatibleClient, AnthropicClient])
+def test_a_refusal_inside_a_200_fails_a_model_list_with_the_reason(
+    make: type[OpenAICompatibleClient] | type[AnthropicClient],
+) -> None:
+    with pytest.raises(LLMHttpError) as listing:
+        _answering({"error": {"code": 403, "message": "key expired"}}, make=make).list_models()
+    assert listing.value.kind == "key_expired"
+    with pytest.raises(LLMHttpError) as embedding:  # the Anthropic client has none and never asks
+        _answering({"error": {"code": 402}}, make=make).embed(["hi"])
+    assert embedding.value.kind == ("out_of_credit" if make is OpenAICompatibleClient else "no_embeddings")
+
+
+@pytest.mark.parametrize("status", [401, 403])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        lambda status: Reply(status, {}),
+        lambda status: Reply(status, raw=b""),
+        lambda status: Reply(status, raw=b"<html><body>Forbidden</body></html>"),
+        lambda status: Reply(status, LEAKY),
+        lambda status: Reply(status, _refusal_body("invalid_api_key")),
+        # Anthropic's own shape: every 403 body names `permission_error`, which says nothing about a model
+        lambda status: Reply(status, _refusal_body("Request not allowed", anthropic=True, status=status)),
+    ],
+    ids=["empty-object", "empty-body", "html", "leaky", "invalid-key", "anthropic-shape"],
+)
+@pytest.mark.parametrize("make", [_openai, _anthropic])
+def test_a_bare_401_or_403_stays_a_rejected_key(make: object, status: int, reply: object) -> None:
+    with serve(lambda _: reply(status)) as server:  # type: ignore[operator]
+        client = make(server.url, max_retries=2)  # type: ignore[operator]
+        with pytest.raises(LLMHttpError) as caught:
+            client.complete(PROMPT)
+    _assert_only_our_words(caught.value, "key_rejected", client)
+    assert len(server.requests) == 1
+
+
+@pytest.mark.parametrize("said", ["", "anything at all", "key expired", "rate limit"])
+@pytest.mark.parametrize("make", [_openai, _anthropic])
+def test_a_402_is_out_of_credit_whatever_it_says(make: object, said: str) -> None:
+    with serve(lambda _: Reply(402, _refusal_body(said, anthropic=make is _anthropic, status=402))) as server:
+        client = make(server.url, max_retries=2)  # type: ignore[operator]
+        with pytest.raises(LLMHttpError) as caught:
+            client.complete(PROMPT)
+    _assert_only_our_words(caught.value, "out_of_credit", client)
+    assert caught.value.status == 402 and len(server.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("said", "kind", "asked"),
+    [
+        ("Rate limit reached for requests, slow down", "rate_limited", 3),
+        (
+            "Rate limit reached on requests per min. Add a payment method: platform.openai.com/account/billing",
+            "rate_limited",
+            3,
+        ),
+        ("insufficient_quota", "out_of_credit", 1),
+    ],
+)
+@pytest.mark.parametrize("make", [_openai, _anthropic])
+def test_a_429_with_no_credit_is_not_asked_again_while_an_ordinary_429_still_is(
+    make: object, said: str, kind: str, asked: int
+) -> None:
+    reply = Reply(
+        429, _refusal_body(said, anthropic=make is _anthropic, status=429), headers={"retry-after": "0"}
+    )
+    with serve(lambda _: reply) as server, pytest.raises(LLMHttpError) as caught:
+        make(server.url, max_retries=2).complete("hi")  # type: ignore[operator]
+    assert (caught.value.kind, len(server.requests)) == (kind, asked)
+
+
+def test_only_the_start_of_a_body_is_read_and_a_bad_byte_is_skipped() -> None:
+    def refused(raw: bytes) -> str:
+        with serve(lambda _: Reply(401, raw=raw)) as server, pytest.raises(LLMHttpError) as caught:
+            _openai(server.url, max_retries=0).complete("hi")
+        return caught.value.kind
+
+    assert refused(b" " * 3000 + b"key EXPIRED") == "key_expired"
+    assert refused(b" " * 5000 + b"key expired") == "key_rejected"  # past the first 4096 bytes
+    assert refused(b"\xff\xfe key expired \xc3") == "key_expired"  # not UTF-8 at all
+
+
+def test_the_new_kinds_say_what_to_do_in_plain_words() -> None:
+    for kind in ("key_expired", "key_disabled", "no_model_access", "out_of_credit"):
+        message, fix = PROBLEMS[kind]
+        assert message.startswith("The AI service") and message.endswith(".") and fix.endswith(".")
+        assert not LLMHttpError(kind).retry_after and LLMHttpError(kind).code == "LLM_UNAVAILABLE"
 
 
 @pytest.mark.parametrize(("status", "expected"), [(429, 3), (500, 3), (401, 1), (404, 1), (400, 1)])
@@ -296,7 +534,12 @@ def test_unreadable_answers_are_bad_responses() -> None:
 
 
 # --- an error inside a 200 (OpenRouter and others; DEC-1269) ---------------------------------------
-def _answering(body: object, seen: list[int] | None = None) -> OpenAICompatibleClient:
+def _answering(
+    body: object,
+    seen: list[int] | None = None,
+    *,
+    make: type[OpenAICompatibleClient] | type[AnthropicClient] = OpenAICompatibleClient,
+) -> OpenAICompatibleClient | AnthropicClient:
     """A client whose every request gets `200 OK` with `body`, through a fake transport."""
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -304,7 +547,7 @@ def _answering(body: object, seen: list[int] | None = None) -> OpenAICompatibleC
             seen.append(1)
         return httpx.Response(200, json=body)
 
-    return OpenAICompatibleClient(
+    return make(
         base_url="https://gateway.example.test/v1",
         api_key=KEY,
         model_id="m-1",
@@ -323,7 +566,7 @@ def _answering(body: object, seen: list[int] | None = None) -> OpenAICompatibleC
         (429, "rate_limited", 3),
         (401, "key_rejected", 1),
         (403, "key_rejected", 1),
-        (402, "bad_request", 1),
+        (402, "out_of_credit", 1),
         (400, "bad_request", 1),
         (404, "not_found", 1),
     ],

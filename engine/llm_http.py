@@ -13,13 +13,16 @@ Four rules are enforced here rather than hoped for in the caller.
 2. **A provider's words never reach a person or a log.** A provider's error body routinely quotes the
    prompt that upset it, and a prompt is built from a customer's rows. Every failure becomes an
    :class:`LLMHttpError` whose message is one of the sentences in :data:`PROBLEMS` - chosen by the
-   status class, not by anything the server said. The body is read only to spot which request
-   parameter the server refused (`temperature`, `max_tokens`), and only that fact is kept.
+   status class, not by anything the server said. The body is read only to be keyword-spotted against
+   closed lists of our own: which request parameter the server refused (`temperature`, `max_tokens`),
+   and, for a refused key or a throttle, whether it says the key expired, was turned off, may not use
+   this model or has no credit left (:data:`_REFUSALS`). Only the fact is kept, never the words.
 3. **No redirect is ever followed.** A redirect could carry the bearer token to another host; a 3xx is
    a failure that says the address is wrong.
 4. **Retries are bounded and honest.** `max_retries` more attempts for a timeout, a refused connection,
    429 and 5xx, with a short back-off (a `Retry-After` is honoured up to ten seconds); 4xx other than
-   429 is never retried, because asking again does not change the answer.
+   429 is never retried, because asking again does not change the answer. A 429 that says the credit
+   is gone is that same case (`out_of_credit`, not `rate_limited`): waiting does not add credit.
 
 The address itself is checked before a client is built (`engine.ai_service.check_base_url`): this
 module talks to whatever address it is given.
@@ -161,6 +164,58 @@ _CODES: Final[dict[str, str]] = {
 
 _REJECTABLE: Final[tuple[str, ...]] = ("temperature", "max_completion_tokens", "max_tokens")
 
+_BODY_WINDOW: Final[int] = 4096
+"""How much of a response body is ever looked at for a keyword: the start, where an error says why."""
+
+_REFUSALS: Final[tuple[tuple[Problem, frozenset[int], tuple[str, ...]], ...]] = (
+    ("out_of_credit", frozenset({401, 403, 429}), ("insufficient_quota", "credit")),
+    ("out_of_credit", frozenset({401, 403}), ("billing", "quota exceeded")),
+    ("out_of_credit", frozenset({400}), ("credit balance is too low",)),
+    ("key_expired", frozenset({401, 403}), ("expired",)),
+    ("key_disabled", frozenset({401, 403}), ("revoked", "disabled", "deactivated", "suspended")),
+    (
+        "no_model_access",
+        frozenset({403}),
+        (
+            "does not have permission",
+            "permission to use",
+            "not allowed to",
+            "does not have access",
+            "access to model",
+        ),
+    ),
+)
+"""Why a 400, 401, 403 or 429 was refused: (kind, the statuses it applies to, the words that give it away).
+
+The same technique as :data:`_REJECTABLE` - a lowercase substring test on the start of the body against a
+closed list - and the same promise: the words choose one of OUR sentences and are then forgotten. The
+first row whose words appear wins, so the order is the precedence, and it goes from the cause a person
+can fix by paying to the one they fix by asking.
+
+1. *credit* first. A provider that has run out of credit often words it as "disabled", "suspended" or
+   "permission denied"; adding credit is the real fix, and the money words are the most specific. They
+   are split by status because the same words mean different things:
+
+   - On a 429 only `insufficient_quota` and `credit` count. "Billing" and "quota exceeded" turn up in
+     ordinary per-minute throttles too (OpenAI's points at its billing page, Gemini's says quota exceeded
+     and gives a retry delay); waiting fixes those, so they stay `rate_limited` and are asked again
+     rather than sending a person to add credit they do not need.
+   - On a 401 or 403 "billing" and "quota exceeded" count as well: a refused key has no waiting to do.
+   - On a 400 only "credit balance is too low" counts. It is how Anthropic reports an empty account, a
+     request error to them and not an authentication one, and a 400 body can quote the prompt, so
+     nothing broader than that whole phrase is safe.
+2. *expired* next. An expired key is often called "invalid" or "disabled" too, and a new key is its fix.
+3. *revoked, disabled, deactivated, suspended* next: the key existed and was switched off.
+4. *the access phrases* last, and only for a 403. They are phrases, not the bare word "permission":
+   Anthropic's body for every 403 names `permission_error` (even "Request not allowed", which is a
+   country or organisation refusal), and a web server in front of a wrong address says "You don't have
+   permission to access this resource". Neither says anything about the model, so neither may claim the
+   key was accepted; a 403 with no phrase stays `key_rejected`.
+
+A 402 is `out_of_credit` whatever it says (see :func:`_classify`). A bare 401 or 403 stays
+`key_rejected`, and a 429 with none of these words stays `rate_limited` and is retried.
+"""
+
 
 class LLMHttpError(LLMError):
     """An HTTP call to an AI service failed. `message` is fixed text; `fix` says what to do.
@@ -241,6 +296,8 @@ class _HttpClient:
             try:
                 return self._send(method, path, body, model_id=model_id, params=params)
             except LLMHttpError as exc:
+                # Asking again changes nothing for a refused key, a missing model permission or an empty
+                # account, so those kinds (and every 4xx but an ordinary 429) fail at once.
                 retryable = exc.kind in {"rate_limited", "server_error", "timeout", "unreachable"}
                 if not retryable or attempt + 1 >= attempts:
                     raise
@@ -339,7 +396,8 @@ def _embedded_error(payload: Any, raw: bytes, model_id: str | None) -> LLMHttpEr
     `{"error": {"code": 502, "message": ...}}` when the model behind them failed (DEC-1269). Read as
     a success, that is "no choices" and the misleading "answered in a form Marketing AI cannot
     read". It is classified exactly as the same status would be in the HTTP status line - a 401 is a
-    rejected key, a 429 is retried, a 400 is a refused request - so one table decides every case.
+    refused key (and why, when the error says so), a 429 is retried unless the credit is gone, a 400 is
+    a refused request - so one table decides every case, and `raw` goes to it so the words count too.
     An error without a numeric HTTP-style `code` is the service saying it failed without saying how,
     which is a problem on its side. `"error": null`, which some services send beside a real answer,
     is not an error. As everywhere here, nothing the service wrote is quoted.
@@ -356,12 +414,23 @@ def _embedded_error(payload: Any, raw: bytes, model_id: str | None) -> LLMHttpEr
 
 
 def _classify(status: int, raw: bytes, model_id: str | None) -> LLMHttpError:
-    """The failure a non-2xx status means. Only the *names* of refused parameters are read from the body."""
+    """The failure a non-2xx status means. The body is only keyword-spotted, never quoted or kept.
+
+    The status class decides, and for the few statuses where the reason matters the start of the body
+    refines it: a refused key (401, 403) or a throttle (429) is checked against :data:`_REFUSALS`, a 402
+    is `out_of_credit` whatever it says, and a 400 is `out_of_credit` only when it says the balance is too
+    low, else it names the request parameters it would not take.
+    """
+    lowered = raw[:_BODY_WINDOW].decode("utf-8", errors="ignore").lower()
     kind: Problem
-    if status in (401, 403):
-        kind = "key_rejected"
+    if status == 402:
+        kind = "out_of_credit"
+    elif status in (401, 403):
+        kind = _spot_refusal(status, lowered) or "key_rejected"
     elif status == 429:
-        kind = "rate_limited"
+        kind = _spot_refusal(status, lowered) or "rate_limited"
+    elif status == 400:
+        kind = _spot_refusal(status, lowered) or "bad_request"
     elif status == 408:
         kind = "timeout"
     elif status == 404:
@@ -376,9 +445,16 @@ def _classify(status: int, raw: bytes, model_id: str | None) -> LLMHttpError:
         kind = "bad_request"
     rejected: tuple[str, ...] = ()
     if kind == "bad_request":
-        lowered = raw[:4096].decode("utf-8", errors="ignore").lower()
         rejected = tuple(name for name in _REJECTABLE if name in lowered)
     return LLMHttpError(kind, status=status, model_id=model_id, rejected=rejected)
+
+
+def _spot_refusal(status: int, lowered: str) -> Problem | None:
+    """The first :data:`_REFUSALS` kind that applies to `status` and whose words `lowered` contains."""
+    for kind, statuses, words in _REFUSALS:
+        if status in statuses and any(word in lowered for word in words):
+            return kind
+    return None
 
 
 def _model_ids(payload: Any) -> list[str]:

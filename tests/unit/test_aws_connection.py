@@ -21,6 +21,9 @@ not have chosen sees the account masked and no ARN at all.
 
 **The choice reaches Bedrock.** A profile passed to `build_client` is the profile boto3's session is
 built with, and the default chain is `None` - the behaviour before a profile could be chosen at all.
+
+**A lapsed sign-in says so when the model is called.** An expired token or SSO session is not "the model
+could not be reached": it is its own error with its own sentence, in the AI-service test too.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ import pytest
 from botocore import exceptions as boto
 from pydantic import ValidationError
 
+from engine.ai_service import BEDROCK_FIX, PROVIDERS, Candidate, run_test
 from engine.aws_connection import (
     FAILURES,
     AwsConnection,
@@ -53,7 +57,7 @@ from engine.aws_connection import (
     valid_region,
 )
 from engine.config import LlmBackend, LlmConfig
-from engine.llm import BedrockLLMClient, FakeLLMClient, LLMError, build_client
+from engine.llm import AwsSignInExpiredError, BedrockLLMClient, FakeLLMClient, LLMError, build_client
 from engine.settings import Settings
 
 ACCOUNT = "123456789012"
@@ -603,3 +607,101 @@ def test_a_masked_caller_is_not_told_the_profile_name_in_the_failure_either() ->
         session_factory=session.factory,
     )
     assert "team-prod" not in report.model_dump_json()
+
+
+# ---------------------------------------------------------------------------
+# A lapsed sign-in says so when the model is called
+# ---------------------------------------------------------------------------
+PRIVATE = "the prompt said: a customer's private document"
+
+
+class _Failing:
+    """A `bedrock-runtime` client whose every call raises `error`."""
+
+    def __init__(self, error: BaseException) -> None:
+        self._error = error
+
+    def converse(self, **kwargs: object) -> object:
+        raise self._error
+
+    def invoke_model(self, **kwargs: object) -> object:
+        raise self._error
+
+
+LAPSED = [
+    pytest.param(_client_error("ExpiredTokenException", PRIVATE), id="expired-token"),
+    pytest.param(_client_error("ExpiredToken", PRIVATE), id="expired-token-sts"),
+    pytest.param(_client_error("RequestExpired", PRIVATE), id="request-expired"),
+    pytest.param(boto.TokenRetrievalError(provider="sso", error_msg=PRIVATE), id="sso-token"),
+    pytest.param(boto.UnauthorizedSSOTokenError(), id="sso-unauthorized"),
+]
+
+
+@pytest.mark.parametrize("error", LAPSED)
+def test_an_expired_sign_in_is_its_own_error_with_its_own_sentence(error: BaseException) -> None:
+    client = BedrockLLMClient(region="ap-south-1", client=_Failing(error))
+    for call in (
+        lambda: client.complete("u", model_id="m", max_tokens=5),
+        lambda: client.embed(["x"], model_id="e"),
+    ):
+        with pytest.raises(AwsSignInExpiredError) as raised:
+            call()
+        exc = raised.value
+        assert (exc.code, exc.message) == ("LLM_UNAVAILABLE", "The AWS sign-in has expired.")
+        assert "Sign in to AWS again" in exc.fix and isinstance(exc, LLMError)
+        for text in (str(exc), exc.message, exc.fix, repr(exc)):
+            assert "private document" not in text
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _client_error("AccessDeniedException", PRIVATE),
+        _client_error("ThrottlingException", PRIVATE),
+        boto.NoCredentialsError(),
+        RuntimeError(PRIVATE),
+    ],
+    ids=["access-denied", "throttled", "no-credentials", "other"],
+)
+def test_any_other_failure_is_still_the_plain_could_not_be_reached(error: BaseException) -> None:
+    client = BedrockLLMClient(region="ap-south-1", client=_Failing(error))
+    with pytest.raises(LLMError) as raised:
+        client.complete("u", model_id="m", max_tokens=5)
+    assert not isinstance(raised.value, AwsSignInExpiredError)
+    assert (raised.value.code, raised.value.message) == ("LLM_UNAVAILABLE", "The model could not be reached.")
+
+
+def _bedrock_candidate() -> Candidate:
+    return Candidate(
+        provider=PROVIDERS["bedrock"],
+        model="m",
+        embedding_model="",
+        base_url="",
+        region="ap-south-1",
+        api_key=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "message", "fix"),
+    [
+        (
+            _client_error("ExpiredTokenException", PRIVATE),
+            "The AWS sign-in has expired.",
+            "Sign in to AWS again",
+        ),
+        (_client_error("AccessDeniedException", PRIVATE), "Amazon Bedrock could not answer.", BEDROCK_FIX),
+    ],
+    ids=["expired", "other"],
+)
+def test_the_connection_test_tells_an_expired_sign_in_apart(
+    monkeypatch: pytest.MonkeyPatch, error: BaseException, message: str, fix: str
+) -> None:
+    monkeypatch.setattr(
+        "engine.ai_service.build_service_client",
+        lambda *_a, **_k: BedrockLLMClient(region="ap-south-1", client=_Failing(error)),
+    )
+    outcome = run_test(_bedrock_candidate(), None)
+    assert outcome.ok is False and outcome.message == message
+    assert outcome.fix is not None and fix in outcome.fix
+    assert "private document" not in outcome.model_dump_json()
