@@ -12,7 +12,7 @@ Contract schema version: 1.
 | DELETE | `/ai-service/{slot}` | Disconnect one slot: removes its saved record and key; the state after (it may inherit or fall back) | AiServiceState |
 | PUT | `/ai-service/{slot}` | Connect one slot; the key is encrypted and never returned. Makes no network call | AiServiceState |
 | POST | `/ai-service/{slot}/models` | The model names a service lists (at most 200); on failure an empty list and a note | ModelList |
-| POST | `/ai-service/{slot}/test` | One tiny completion against a slot, or against the settings in the body; a failure is ok: false | TestOutcome |
+| POST | `/ai-service/{slot}/test` | One completion with a slot's real answer allowance, for the slot or the settings in the body; a failure is ok: false | TestOutcome |
 | GET | `/approvals` | Challengers waiting for an Approver, with the head-to-head and who may decide | ApprovalListResponse |
 | GET | `/audit/events` | Read the audit log | AuditEventPage |
 | GET | `/audit/events.csv` | Download the audit log as CSV | - |
@@ -2058,7 +2058,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `generative.llm.embedding_model_id` | str; used by the index build and by every question |
 | `generative.llm.temperature` | float 0..1; low, because every flow wants the same answer twice |
 | `generative.llm.max_output_tokens` | int 1..8192 |
-| `generative.llm.data_agent_max_output_tokens` | int 1..32768; the answer allowance of one Guided setup / Data Doctor step, which reasons before it replies; a slow model may also need timeout_s raised |
+| `generative.llm.data_agent_max_output_tokens` | int 1..32768; the answer allowance of one Product AI call (a Guided setup or Data Doctor step, the explain narrator, the campaign planner), which may reason before it replies; a slow model may also need timeout_s raised |
 | `generative.llm.timeout_s` | int 1..600 |
 | `generative.llm.max_retries` | int 0..5; transport retries, not regenerations |
 | `generative.budget` | non-UI; what one run is allowed to spend (plan §6) |

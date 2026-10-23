@@ -96,7 +96,7 @@ export const getAiService = () => call("/ai-service");
 /** Save a slot: `{ provider, api_key?, model, embedding_model?, base_url?, region? }`; a blank key keeps the saved one. */
 export const putAiService = (slot, body) => call(slotPath(slot), { method: "PUT", body });
 
-/** Test one tiny completion; no body tests what is saved. `{ ok, message, fix, latency_ms, model, embeddings_note }`. */
+/** Test one completion, given the answer allowance and the wait the slot's real calls get; no body tests what is saved. `{ ok, message, fix, latency_ms, model, embeddings_note }`. */
 export const testAiService = (slot, body) => call(slotPath(slot, "/test"), { method: "POST", body });
 
 /** `{ models: [str], note }`: the models the service lists for this key; a failure is an empty list and a note. */

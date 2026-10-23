@@ -514,9 +514,8 @@ def meter_narrator(meter: Any, config_root: Path | None = None) -> Narrator:
             # codes, so an operator can tell why every explanation is the rules' (an expired key, a spent case).
             _LOG.warning("data_explain: the AI call failed (%s)", ", ".join(ai_failure_codes(exc)))
             return None
-        except (
-            Exception
-        ) as exc:  # a bug in the meter or the client: the same fallback, and the class is named
+        except Exception as exc:
+            # A bug in the meter or the client: the same fallback, and the class is named.
             _LOG.warning("data_explain: the AI call broke (%s)", type(exc).__name__)
             return None
 

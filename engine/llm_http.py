@@ -129,7 +129,8 @@ PROBLEMS: Final[dict[str, tuple[str, str]]] = {
     ),
     "timeout": (
         "The AI service did not answer in time.",
-        "Try again; if it keeps happening, check the service's status or use a smaller model.",
+        "Try again; if it keeps happening, check the service's status, use a smaller model, or give a slow one "
+        "more time with generative.llm.timeout_s.",
     ),
     "tls": (
         "Marketing AI could not make a secure connection to the AI service.",

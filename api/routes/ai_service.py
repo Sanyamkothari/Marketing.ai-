@@ -178,7 +178,7 @@ async def save_ai_service(
     "/ai-service/{slot}/test",
     response_model=TestOutcome,
     responses=_ERRORS,
-    summary="One tiny completion against a slot, or against the settings in the body; a failure is ok: false",
+    summary="One completion with a slot's real answer allowance, for the slot or the settings in the body; a failure is ok: false",
     openapi_extra=_request_body(ServiceInput),
 )
 async def test_ai_service(
