@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
     from engine.config import RoleCatalogue, UseCaseConfig
     from engine.contracts import DatasetProfile
+    from engine.onboarding.specs import KeyCandidate
     from engine.stages.ingest import ColumnStats
 
 __all__ = ["ADVISE_ROWS", "LoadedFile", "Offer", "diagnose_file", "outcome_columns", "readiness"]
@@ -84,6 +85,26 @@ class Offer:
     stage: str
 
 
+ID_MAX_BLANK_SHARE: Final[float] = 0.5
+"""A column named like an ID names the rows even with blanks (guest checkouts), up to half of them."""
+
+
+def _id_column(candidates: Sequence[KeyCandidate]) -> KeyCandidate | None:
+    """The column that says who each row is: the first one named like an ID, else the best-ranked column.
+
+    `key_candidates` ranks a fully filled column first (plan section 6.1, for telling a customer list from an
+    event table), so `spend_12m` would beat a `CustomerID` with 3% blanks and `InvoiceNo` a `CustomerID` with
+    25%. The file's ID is read by name first, as long as most rows have one.
+    """
+    from engine.onboarding.sources import _ID_LIKE_NAME
+
+    named = next(
+        (c for c in candidates if _ID_LIKE_NAME.search(c.column) and c.null_rate <= ID_MAX_BLANK_SHARE),
+        None,
+    )
+    return named or (candidates[0] if candidates else None)
+
+
 def diagnose_file(loaded: LoadedFile, config: UseCaseConfig, roles: RoleCatalogue) -> FileDiagnosis:
     """What one file is and how healthy it looks; `config` is read for its catalogue only."""
     from engine.agent.formats import find_format_issues
@@ -103,7 +124,7 @@ def diagnose_file(loaded: LoadedFile, config: UseCaseConfig, roles: RoleCatalogu
     # Any real signal names the file; only the detector's own fallback (a guess with no signal) does not.
     kind = best.role if best is not None and best.confidence >= KIND_MIN_CONFIDENCE else None
     spec = roles.roles.get(kind) if kind is not None else None
-    key = source.key_candidates[0] if source.key_candidates else None
+    key = _id_column(source.key_candidates)
     personal = [column.name for column in profile.columns if column.pii_kinds]
     text_columns = [
         str(name)
