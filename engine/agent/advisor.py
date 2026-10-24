@@ -406,13 +406,19 @@ def _choose_primary_key(
         )
         return best, None
     hinted = [str(c) for c in builder.ctx.frame.columns if str(c).casefold() in hints]
+    # A hint written `customer_id` also names the header `CustomerID` or `Customer ID`: the same name spelt
+    # another way. Such a column is only ever a "check", and an exact spelling still comes first.
+    loose = {_name_key(h) for h in hints}
+    spelt = [str(c) for c in builder.ctx.frame.columns if str(c) not in hinted and _name_key(str(c)) in loose]
+    exact = bool(hinted)
+    hinted = [*hinted, *spelt]
     if hinted and reshape and _repeats(builder, hinted[0]):
         _role(
             builder,
             ROLE_PRIMARY_KEY,
             hinted[0],
             profile.evidence_id,
-            AgentConfidence.SURE,
+            AgentConfidence.SURE if exact else AgentConfidence.CHECK,
             _COMBINED_KEY_REASON,
         )
         return hinted[0], None
@@ -422,6 +428,23 @@ def _choose_primary_key(
         if reason is not None:
             return None, reason
     return None, _no_key_stop(builder)
+
+
+_CODE_WORDS: Final[frozenset[str]] = frozenset(
+    {"id", "no", "nr", "num", "number", "code", "key", "sku", "ref", "reference"}
+)
+"""Last words of a header naming codes written in digits, never quantities (`amount_paid` ends in `paid`)."""
+
+
+def _looks_like_code(name: str) -> bool:
+    """`InvoiceNo`, `StockCode`, `order_id`, `account_number`: an identifier, even when every value is digits."""
+    words = re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", name)
+    return bool(words) and words[-1].casefold() in _CODE_WORDS
+
+
+def _name_key(name: str) -> str:
+    """A header with case, spaces and punctuation taken out: `CustomerID`, `customer_id` and `Customer ID` meet."""
+    return re.sub(r"[^0-9a-z]", "", name.casefold())
 
 
 def _repeating_key_stop(builder: _Builder, key: str) -> str | None:
@@ -832,6 +855,10 @@ def _format_proposals(
         if "merge" in params:
             params["merge"] = merge_from_pairs(params["merge"])  # the tool lists pairs; the step keeps a dict
         if kind == "number_as_text":
+            if _looks_like_code(column):
+                # An invoice number or a stock code is a label written in digits: `C536379` (a cancellation) would not
+                # read, and the model would add the rest up. It stays text.
+                continue
             if non_empty and failed / non_empty * 100.0 > limit:
                 bad = _examples(issue, "failed_examples")
                 builder.ask(
