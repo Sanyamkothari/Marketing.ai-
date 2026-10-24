@@ -511,7 +511,7 @@ def _choose_target(
         return None, (
             f"No column says whether {definition.lower()}. The model learns from past rows where the answer "
             f"is known, so the file needs that column (this use case calls it '{display_name(configured)}'), with two values "
-            "such as 1 and 0." + _label_draft(builder)
+            "such as 1 and 0." + _label_draft(builder, primary_key)
         )
     lead = next(iter(read.values()), None)
     others = list(read.values())[1:]
@@ -549,7 +549,7 @@ def _choose_target(
     return None, None
 
 
-def _label_draft(builder: _Builder) -> str:
+def _label_draft(builder: _Builder, primary_key: str | None = None) -> str:
     """Drafts of an outcome for a file that has none: a question with example customers, and a sentence.
 
     Only when the file has a date of a customer's last activity (`draft_outcome_labels`). The question is
@@ -559,6 +559,9 @@ def _label_draft(builder: _Builder) -> str:
     """
     if not header_help_on(builder.ctx):
         return ""  # Plan K off: no draft, and the stop reason is what it was before M142 (DEC-1409 (f))
+    if primary_key is not None and _repeats(builder, primary_key):
+        # The drafts count rows as customers; on an order log that is invoice lines ("432,638 of 541,909"), so none.
+        return ""
     trial = _call_tool(builder.ctx, "draft_outcome_labels", None, evidence_id=f"{builder.prefix}e0")
     found = _rows(trial, "drafts")
     if not found:

@@ -85,3 +85,13 @@ def test_invoice_numbers_and_stock_codes_are_never_turned_into_numbers() -> None
 )
 def test_a_code_is_named_by_the_last_word_of_its_header(name: str, code: bool) -> None:
     assert _looks_like_code(name) is code
+
+
+def test_an_order_log_gets_no_outcome_draft_that_counts_invoice_lines_as_customers() -> None:
+    from tests.unit.agent.helpers import header_help_context
+
+    log = _order_log()
+    advice = advise(header_help_context(log, "retail-win-back"))
+    assert advice.stop_reason is not None and "No column says whether" in advice.stop_reason
+    assert f"of {len(log):,} customers" not in advice.stop_reason
+    assert not any("Which window do you mean" in q.text for q in advice.questions)
