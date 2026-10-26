@@ -752,10 +752,12 @@ def test_an_answer_in_plain_sentences_is_a_reply_and_is_checked_like_one(
 
 
 def test_two_bad_replies_end_the_turn_with_a_plain_sentence(storage: LocalStorage, world: World) -> None:
-    client = ChatScript({"nonsense": [{"action": "dance"}, {"action": "sing"}, reply("never reached")]})
+    client = ChatScript({"nonsense": [{"action": "dance"}, {"action": "sing"}, {"action": "hum"}]})
     talk = Talk(storage, world, client)
     talk.say("nonsense")
-    assert talk.reply.text == "I could not answer that from what I have checked."
+    assert (
+        talk.reply.text == "I could not answer that from what I have checked."
+    ), "the last word was no reply too"
     assert talk.case.state in (VisitState.ASK, VisitState.APPROVE), "the visit goes on"
 
 
@@ -763,7 +765,9 @@ def test_a_turn_takes_at_most_the_configured_number_of_steps(storage: LocalStora
     client = ChatScript({"look at everything": [look("describe_missing")] * 20})
     talk = Talk(storage, world, client, limits=AiLimitsConfig(max_chat_steps=2))
     talk.say("look at everything")
-    assert client.asked == 3, "two actions and the call that had to be the reply"
+    assert (
+        client.asked == 4
+    ), "two actions, the call that had to be the reply, and the last word (not a reply)"
     assert "more steps than I may take" in talk.reply.text and talk.reply.tools == ("describe_missing",)
 
 
@@ -942,3 +946,146 @@ def test_the_conversation_is_masked_with_every_files_gate_not_only_the_first(sto
     assert "column_" in json.dumps(
         client.seen[-1].history
     ), "the alias of the third file's column, not the name"
+
+
+# ---------------------------------------------------------------------------
+# Several suggestions in one turn, and the last word
+# ---------------------------------------------------------------------------
+def _ask_sale(file: str = "orders.csv") -> dict[str, object]:
+    return {
+        "action": "ask",
+        "file": "F1",
+        "args": {
+            "question": "Q24",
+            "values": {"file": file},
+            "choices": ["An order over 500 is a sale", "Any order is a sale"],
+        },
+    }
+
+
+def _suggest(option: str) -> object:
+    return lambda seen: {
+        "action": "suggest_answer",
+        "args": {"question_id": seen.last("question_id"), "option_id": option},
+    }
+
+
+def test_two_suggestions_for_two_questions_in_one_turn_are_both_recorded(
+    storage: LocalStorage, world: World
+) -> None:
+    client = ChatScript(
+        {
+            "two things": [
+                look("describe_numbers", "order_amount"),
+                _ask_sale(),
+                _suggest("c0"),
+                {
+                    "action": "ask",
+                    "file": "F1",
+                    "args": {
+                        "question": "Q17",
+                        "values": {"file": "orders.csv"},
+                        "choices": ["Every order has an amount", "Some orders have none"],
+                    },
+                },
+                _suggest("c1"),
+                reply("Two answers to check."),
+            ]
+        }
+    )
+    talk = Talk(storage, world, client)
+    talk.say("two things, a sale is over 500")
+    assert len(talk.reply.suggestions) == 2
+    assert talk.reply.suggestion == talk.reply.suggestions[0]
+    assert {s.option_id for s in talk.reply.suggestions} == {"c0", "c1"}
+    assert not [r for r in client.seen[-1].results if r.get("error")], "no limit of one"
+    assert client.asked == 6, "the reply was the AI's own: no extra call"
+
+
+def test_a_second_suggestion_for_the_same_question_replaces_the_first(
+    storage: LocalStorage, world: World
+) -> None:
+    client = ChatScript(
+        {
+            "again": [
+                look("describe_numbers", "order_amount"),
+                _ask_sale(),
+                _suggest("c0"),
+                _suggest("c1"),
+                reply("Changed my mind."),
+            ]
+        }
+    )
+    talk = Talk(storage, world, client)
+    talk.say("again, a sale is over 500")
+    assert [s.option_id for s in talk.reply.suggestions] == ["c1"]
+
+
+LAST_WORD = "Here is what happened: I ran out of steps before I could finish."
+
+
+def last_word_seen(client: ChatScript) -> Seen:
+    return client.seen[-1]
+
+
+def test_a_turn_that_runs_out_of_steps_gets_one_last_call_and_its_reply_is_used(
+    storage: LocalStorage, world: World
+) -> None:
+    client = ChatScript({"look at everything": [look("describe_missing")] * 3 + [reply(LAST_WORD)]})
+    talk = Talk(storage, world, client, limits=AiLimitsConfig(max_chat_steps=2))
+    talk.say("look at everything")
+    # two actions, the call that had to be the reply (a third look), then the last word
+    assert client.asked == 4
+    told = [r for r in last_word_seen(client).results if "turn_ending" in r]
+    assert told and "reply" in told[0]["now"]
+    assert talk.reply.text == LAST_WORD
+    assert talk.reply.blocked_by is None
+
+
+def test_an_invalid_last_word_falls_back_to_the_fixed_sentence(storage: LocalStorage, world: World) -> None:
+    client = ChatScript({"look at everything": [look("describe_missing")] * 5})
+    talk = Talk(storage, world, client, limits=AiLimitsConfig(max_chat_steps=2))
+    talk.say("look at everything")
+    assert client.asked == 4
+    assert "more steps than I may take" in talk.reply.text
+
+
+def test_a_number_nobody_looked_up_in_the_last_word_falls_back(storage: LocalStorage, world: World) -> None:
+    client = ChatScript({"look at everything": [look("describe_missing")] * 3 + [reply("I saw 9,999 gaps.")]})
+    talk = Talk(storage, world, client, limits=AiLimitsConfig(max_chat_steps=2))
+    talk.say("look at everything")
+    assert "more steps than I may take" in talk.reply.text
+
+
+def test_two_refusals_end_the_turn_and_the_ai_gets_the_last_word(storage: LocalStorage, world: World) -> None:
+    client = ChatScript(
+        {"nonsense": [{"action": "dance"}, {"action": "sing"}, reply("Sorry, I could not do that.")]}
+    )
+    talk = Talk(storage, world, client)
+    talk.say("nonsense")
+    assert talk.reply.text == "Sorry, I could not do that."
+    assert client.asked == 3
+
+
+def test_no_last_word_when_the_ai_service_is_the_reason(storage: LocalStorage, world: World) -> None:
+    client = Down(LLMHttpError("key_expired"))
+    talk = Talk(storage, world, client)
+    talk.say("look")
+    assert talk.reply.blocked_by == "unavailable"
+    assert (
+        len([c for c in client.calls if c.kind == "complete"]) == 0
+    ), "a failing service is asked once, not twice"
+
+
+def test_no_last_word_when_the_case_spending_ran_out(storage: LocalStorage, world: World) -> None:
+    client = ChatScript({"look": [look("describe_missing")] * 5})
+    talk = Talk(storage, world, client, limits=AiLimitsConfig(max_calls_per_case=1))
+    talk.say("look")
+    assert client.asked == 1 and talk.reply.blocked_by == "budget"
+
+
+def test_no_last_word_without_consent(storage: LocalStorage, world: World) -> None:
+    client = ChatScript({"look": [reply("never")]})
+    talk = Talk(storage, world, client, consent=False)
+    talk.say("look")
+    assert client.asked == 0 and talk.reply.blocked_by == "no_consent"

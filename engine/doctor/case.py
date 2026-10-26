@@ -528,6 +528,11 @@ class CaseChatEntry(StrictBase):
         exclude_if=lambda value: value is None,
         description="An answer it suggests to an open question; the person's click answers it, nothing else does.",
     )
+    suggestions: tuple[ChatSuggestion, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="Every answer it suggests, one per open question; `suggestion` is the first of them.",
+    )
     blocked_by: str | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
