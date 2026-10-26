@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
 from engine.config import ColumnType, RunMode, StandardType, get_roles
 from engine.contracts import RunState, Severity
+from engine.onboarding.audience import apply_audience
 from engine.onboarding.datasets import DatasetError, build_manifest
 from engine.onboarding.features import (
     SNAPSHOT_VIEW,
@@ -1175,6 +1176,22 @@ def build_dataset(
                 ),
             )
 
+        if spec.audience is not None and spec.audience.role not in mapped_roles:
+            return _stop(
+                status,
+                registry,
+                _report(
+                    dataset_id=dataset_id,
+                    checks=[*checks, _audience_role_missing(spec.audience.role)],
+                    tables=tables,
+                    snapshots=(),
+                    features=(),
+                    frame=None,
+                    duration_s=perf_counter() - started,
+                    features_sql_path=None,
+                ),
+            )
+
         # --- snapshots ------------------------------------------------------
         began = perf_counter()
         status.start("snapshots")
@@ -1196,10 +1213,26 @@ def build_dataset(
         signup = SIGNUP_COLUMN if SIGNUP_COLUMN in entities.columns else None
         snapshots = build_snapshot_frame(entities, dates, signup_column=signup)
         con.register(SNAPSHOT_VIEW, snapshots)
+        audience_note = ""
+        if (
+            spec.audience is not None
+        ):  # who the dataset is for, at train and score time alike (v3 phase 0, B5)
+            everyone = len(snapshots)
+            snapshots = apply_audience(
+                con,
+                snapshots,
+                spec.audience.role,
+                spec.audience.no_event_days,
+                inclusive=spec.snapshot_spec.inclusive_snapshot_time,
+            )
+            audience_note = (
+                f" {len(snapshots):,} of {everyone:,} are in the audience (an event in {spec.audience.role}, "
+                f"the last one {spec.audience.no_event_days} or more days before the snapshot)."
+            )
         _cancelled(cancel)
         status.finish(
             "snapshots",
-            detail=f"{len(dates)} snapshot date(s), {len(snapshots):,} rows to build.",
+            detail=f"{len(dates)} snapshot date(s), {len(snapshots):,} rows to build.{audience_note}",
             seconds=perf_counter() - began,
         )
 
@@ -1405,6 +1438,20 @@ def build_dataset(
         raise
     finally:
         con.close()
+
+
+def _audience_role_missing(role: str) -> OnboardingCheck:
+    """The audience reads a table that was not mapped, so no row can be kept or dropped by it."""
+    return OnboardingCheck(
+        code="LABEL_ROLE_MISSING",
+        severity=Severity.ERROR,
+        message=(
+            f"The audience (who the table is built for) is read from the {role} table, which has not been "
+            "mapped, so no row can be kept or left out."
+        ),
+        suggestion=f"Upload the {role} table and map its columns, or build without the audience.",
+        details={"role": role, "audience": True},
+    )
 
 
 def _stop(status: _StatusWriter, registry: DatasetRegistry, report: BuildReport) -> BuildReport:

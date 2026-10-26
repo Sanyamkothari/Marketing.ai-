@@ -41,6 +41,7 @@ __all__ = [
     "OrderLogError",
     "RollUpCounts",
     "RolledUp",
+    "audience_words",
     "find_log_columns",
     "key_codes",
     "list_matches_log",
@@ -54,6 +55,17 @@ RETURNS_ROLE: Final[str] = "returns"
 
 EVENT_TIME: Final[str] = "event_time"
 """The date column of each rolled-up table, mapped to the standard `event_time`."""
+
+
+def audience_words(role: str, no_event_days: int, *, rows: str) -> str:
+    """The lapsed audience (B5) as the build and outcome sentences say it. `rows` is what a shopper who counts has:
+    "a row" in the build sentence, "a place in the count" in the outcome sentence."""
+    event = "order" if role == ORDERS_ROLE else f"event in {role}"
+    return (
+        f"Only shoppers who have lapsed count: a shopper has {rows} at a month-end when they have an {event} "
+        f"on or before it and none in the {no_event_days} days up to and including it; every other shopper is left "
+        "out of that month-end."
+    )
 
 
 def key_codes(series: pd.Series[Any]) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.object_]]:

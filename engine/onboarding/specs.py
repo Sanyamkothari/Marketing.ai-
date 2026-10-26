@@ -551,7 +551,9 @@ class AudienceSpec(Artefact):
     recipe."""
 
     role: str = Field(min_length=1, description="The event table whose recency decides.")
-    no_event_days: int = Field(ge=1, le=3650, description="No event in `role` in this many days up to the snapshot.")
+    no_event_days: int = Field(
+        ge=1, le=3650, description="No event in `role` in this many days up to the snapshot."
+    )
 
 
 class OnboardingSpec(Artefact):

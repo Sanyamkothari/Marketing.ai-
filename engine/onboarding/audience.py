@@ -36,7 +36,9 @@ _ROLE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 def compile_audience_query(role: str, no_event_days: int, *, inclusive: bool) -> str:
     """The query naming the `(entity_key, snapshot_date)` rows of `snapshots` that are in the audience."""
     if _ROLE.match(role) is None or no_event_days < 1:
-        raise ValueError("The audience names a table by a plain name and a whole number of days of at least 1.")
+        raise ValueError(
+            "The audience names a table by a plain name and a whole number of days of at least 1."
+        )
     sql = (
         "SELECT s.entity_key, s.snapshot_date\n"
         f'FROM "{SNAPSHOT_VIEW}" s\n'

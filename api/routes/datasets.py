@@ -96,6 +96,7 @@ from engine.onboarding.datasets import (
 from engine.onboarding.replay import ReplayedSource, UnmatchedSource, plan_replay, replayed_spec
 from engine.onboarding.sources import FileSourceReader, SourceReader
 from engine.onboarding.specs import (
+    AudienceSpec,
     BuildReport,
     BuildStage,
     BuildStatus,
@@ -181,6 +182,7 @@ class OnboardingSpecCreateRequest(StrictBase):
     feature_spec: FeatureSpec
     label_spec: LabelSpec | None = None
     snapshot_spec: SnapshotSpec
+    audience: AudienceSpec | None = None
 
 
 class OnboardingSpecCreateResponse(StrictBase):
@@ -963,6 +965,7 @@ def build_onboarding_spec(spec_id: str, client_id: str, body: OnboardingSpecCrea
             feature_spec=body.feature_spec,
             label_spec=body.label_spec,
             snapshot_spec=body.snapshot_spec,
+            audience=body.audience,
             created_at=utc_now(),
         )
     except ValidationError as exc:

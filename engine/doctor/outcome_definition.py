@@ -51,12 +51,14 @@ from engine.agent.contracts import Question, QuestionOption
 from engine.agent.key_steps import KeyRule
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import StrictBase
-from engine.onboarding.specs import LabelSpec
+from engine.doctor.order_roll_up import audience_words
+from engine.onboarding.specs import AudienceSpec, LabelSpec
 
 if TYPE_CHECKING:
     from engine.access.roles import Principal
     from engine.config import RoleCatalogue, UseCaseConfig
     from engine.doctor.case import Case, CaseStore
+    from engine.doctor.config import AudienceConfig
     from engine.doctor.outcomes import DerivedEntity, KeyRulePair, OutcomeCatalogue, OutcomeFile
 
 __all__ = [
@@ -223,6 +225,12 @@ class OutcomeDefinition(StrictBase):
     )
     event_key_rule: KeyRule | None = Field(
         default=None, description="Events: how the event file's IDs are written then (`normalise_key`)."
+    )
+    audience: AudienceSpec | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Events: who the outcome is counted for, the lapsed audience (v3 phase 0, B5). Part of the "
+        "meaning, so of the hash; left out while unset, so every earlier definition keeps its hash.",
     )
 
     @model_validator(mode="after")
@@ -727,9 +735,14 @@ def _counted(
     excluded_tables: Mapping[str, pd.DataFrame],
     inclusive: bool,
     signup: pd.Series[Any] | None = None,
+    audience: AudienceSpec | None = None,
 ) -> OutcomeCounts | None:
     """`build_labels` on month-end snapshots near the data's end (M157's `_measure`, with the tables an exclusion
-    reads registered too); the latest month-end whose window is over. None when there is none."""
+    reads registered too); the latest month-end whose window is over. None when there is none.
+
+    With an `audience` the snapshot rows are cut to it first, by the builder's own filter (`apply_audience`), so the
+    counts are those of the rows the built dataset will have. The audience reads the label's table or one an
+    exclusion registers; any other is refused."""
     import duckdb
 
     from engine.doctor.outcomes import LOOK_BACK_SLACK_DAYS
@@ -770,6 +783,17 @@ def _counted(
         con.register(role, table)
         for other, frame in excluded_tables.items():
             con.register(other, frame)
+        if audience is not None:
+            if audience.role != role and audience.role not in excluded_tables:
+                raise OutcomeError(
+                    "OUTCOME_CANNOT_MEASURE",
+                    f"The audience is read from '{audience.role}', which this outcome does not read.",
+                )
+            from engine.onboarding.audience import apply_audience
+
+            snapshots = apply_audience(
+                con, snapshots, audience.role, audience.no_event_days, inclusive=inclusive
+            )
         result = build_labels(
             con,
             spec,
@@ -832,6 +856,7 @@ def event_sentence(
     rules_note: str | None,
     unreadable: int = 0,
     not_numbers: int = 0,
+    audience: AudienceSpec | None = None,
 ) -> str:
     """The sentence an event definition is approved with: what *yes* means, the window and its grace, which date
     each file is read on, who is left out, every row that counts for nothing (a date that cannot be read, a
@@ -873,6 +898,8 @@ def event_sentence(
             )
     if rules_note:
         text += f" {rules_note}"
+    if audience is not None:
+        text += " " + audience_words(audience.role, audience.no_event_days, rows="a place in the count")
     text += f" Month-ends whose window is not over by {data_end:%d %b %Y} are left out"
     if counts is not None and counts.not_over:
         text += f" ({counts.not_over} month-end{'s' if counts.not_over != 1 else ''})"
@@ -947,6 +974,7 @@ def propose_event_outcome(
     operator: Operator | None = None,
     threshold: float | None = None,
     derived_entity: DerivedEntity | None = None,
+    audience: AudienceConfig | None = None,
 ) -> EventOutcomeProposal:
     """`define_outcome`'s rules: the outcome from an event file, measured by the builder's `build_labels`.
 
@@ -955,7 +983,8 @@ def propose_event_outcome(
     file, its date column and the window are the caller's, and so is the date each file that leaves customers out
     is read on (`exclude_date_columns`, by upload id); when one is not given and more than one is possible, it is a
     blocking question and no definition is proposed. Rows whose date cannot be read and threshold values that are not numbers are counted in the
-    sentence the person approves. Every count is the label builder's, through the ID rules M157's offer uses.
+    sentence the person approves. `audience` (the use case's, B5) cuts the counted rows to the lapsed shoppers; it is
+    part of the definition (so of its hash) and of the sentence. Every count is the label builder's, through the ID rules M157's offer uses.
     """
     from engine.agent.key_steps import KeyColumn
     from engine.doctor.outcomes import _entity_file, _key_text, _label_name, event_word
@@ -1159,6 +1188,9 @@ def propose_event_outcome(
     )
     word = event_word(diagnosis.file_name, chosen.role, catalogue)
     noun = config.entity or "customer"
+    audience_spec = (
+        None if audience is None else AudienceSpec(role=audience.role, no_event_days=audience.no_event_days)
+    )
     rules_note: str | None = None
     if chosen.rules is not None:
         rules_note = (
@@ -1190,6 +1222,7 @@ def propose_event_outcome(
             censoring="leave_out",
             entity_key_rule=entity_rule,
             event_key_rule=chosen.rules.event if chosen.rules is not None else None,
+            audience=audience_spec,
         )
 
     def measured(definition: OutcomeDefinition) -> OutcomeCounts | None:
@@ -1204,6 +1237,7 @@ def propose_event_outcome(
             excluded_tables=excluded_tables,
             inclusive=inclusive,
             signup=None if derived_entity is None else derived_entity.signup_by_key(),
+            audience=audience_spec,
         )
 
     choices = tuple(WindowChoice(days=window, counts=measured(definition_for(window))) for window in windows)
@@ -1237,6 +1271,7 @@ def propose_event_outcome(
         rules_note=rules_note,
         unreadable=unreadable,
         not_numbers=not_numbers,
+        audience=audience_spec,
     )
     return EventOutcomeProposal(
         entity_file_name=entity.diagnosis.file_name,
