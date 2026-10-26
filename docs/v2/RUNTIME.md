@@ -164,7 +164,7 @@ command prints `cannot start the worker: ...` and exits with status 2.
 The main settings (`AUTONOMY_<NAME>`): `DATABASE_URL`, `TIMEZONE`, `SWEEP_HOUR` (10), `NIGHTLY_HOUR`
 (2), `WEEKLY_WEEKDAY` (0, Monday), `WEEKLY_HOUR` (7), `TICK_EVERY_MINUTES` (5), `SEED`, `SPLIT_SALT`,
 `HOLDOUT_SHARE` and `BASELINE_SHARE` (0.10 each), `PLAN_DAYS` (30), `LATE_WINDOW_HOURS` (48),
-`TRIGGER_WINDOW_HOURS` (24), `BATCH_MAX_AGE_HOURS` (72), `SWEEP_BATCH` (5,000), plus each channel's settings (SES,
+`TRIGGER_WINDOW_HOURS` (24), `BATCH_MAX_AGE_HOURS` (72), `SWEEP_BATCH` (5,000), `REPORT_DECISIONS` (1,000), plus each channel's settings (SES,
 WhatsApp, the client's webhook or CSV export). Secrets are never in settings: `*_REF` names the
 environment variable that holds each one.
 
