@@ -351,7 +351,7 @@ def brief_from_config(
     from engine.doctor.outcomes import load_outcome_catalogue
     from engine.doctor.readiness import use_case_type
 
-    template = load_outcome_catalogue(config_root(root)).templates.get(config.id)
+    template = load_outcome_catalogue(config_root(root)).template_for(config)
     window: int | None = (
         config.uplift.outcome_window_days if config.problem_type is ProblemType.UPLIFT else None
     )

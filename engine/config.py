@@ -25,13 +25,17 @@ from pydantic import (
     RootModel,
     ValidationError,
     ValidationInfo,
+    field_serializer,
     field_validator,
     model_validator,
 )
 
 from engine.agent.config import AgentConfig  # Plan G (DEC-1003); imports nothing from engine
 from engine.decide.spec import ChannelMap  # Plan J M99 (DEC-1309); imports nothing from engine
-from engine.doctor.config import DataDoctorConfig  # Plan O M230 (DEC-1800 (c)); imports nothing from engine
+from engine.doctor.config import (  # Plan O M230 (DEC-1800 (c)); imports nothing from engine
+    AudienceConfig,
+    DataDoctorConfig,
+)
 from engine.holdout.spec import (  # Plan J M92 (DEC-1302); imports nothing from engine
     ExploreFraction,
     HoldoutConfig,
@@ -1362,6 +1366,21 @@ class UseCaseConfig(_Base):
     standard_schema: StandardSchemaConfig = Field(default_factory=lambda: StandardSchemaConfig())
     suggested_features: tuple[FeatureDef, ...] = ()
     label: LabelDefinition | None = None
+    # --- v3 phase 0 (the Data Doctor's order-log path) ---------------------------------------------
+    # Four in-place declarations, for Phase 2's reason (`_Base` forbids unknown keys). All are optional,
+    # read only by the order-log path behind `data_doctor.order_log`, and left out of a dump while unset,
+    # so no other use case's document, run_config.json or hash moves (the one that declares them gains
+    # them in its dump, DEC-1822 (o)). `audience` is who the outcome is measured for (B5 applies it to the
+    # snapshot rows); `built_split` is the split a dataset built from an order log uses (month-end rows,
+    # several snapshot dates), kept apart from `split` because the shipped one-snapshot sample of the same
+    # use case has one `snapshot_date` and cannot be split by time; `order_log_label` and
+    # `order_log_features` are the label and the named features of such a dataset, kept apart from `label`
+    # and `suggested_features` because every onboarding, pilot and measurement path reads those whatever
+    # the switch says.
+    audience: AudienceConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+    built_split: SplitConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+    order_log_label: LabelDefinition | None = Field(default=None, exclude_if=lambda value: value is None)
+    order_log_features: tuple[FeatureDef, ...] = Field(default=(), exclude_if=lambda value: not value)
     onboarding: OnboardingConfig = Field(default_factory=lambda: OnboardingConfig())
     # --- Phase 3b (uplift) ---------------------------------------------------------------------
     # The one declaration Phase 3b adds above its block, for Phase 2's reason: `_Base` forbids
@@ -3813,6 +3832,16 @@ class RoleSpec(_Base):
     optional_columns: tuple[str, ...] = ()
     typical_columns: tuple[StandardColumn, ...] = ()
     name_tokens: tuple[str, ...] = ()
+    internal: bool = Field(
+        default=False,
+        exclude_if=lambda value: value is False,
+        description=(
+            "True for a table the Data Doctor's order-log path builds from a log, never one a client uploads: "
+            "role detection never proposes it and the role lists (`names`, `event_roles`, the standard-schema "
+            "response) leave it out, so nothing a person sees moves. A plan, a mapping or a feature may still "
+            "name it."
+        ),
+    )
 
     @property
     def is_event(self) -> bool:
@@ -3859,13 +3888,17 @@ class RoleCatalogue(_Base):
         """The single role whose kind is `entity`."""
         return next(name for name, spec in self.roles.items() if spec.kind is RoleKind.ENTITY)
 
+    @field_serializer("roles")
+    def _public_roles(self, roles: dict[str, RoleSpec]) -> dict[str, RoleSpec]:
+        return {name: spec for name, spec in roles.items() if not spec.internal}
+
     @property
     def event_roles(self) -> tuple[str, ...]:
-        return tuple(sorted(name for name, spec in self.roles.items() if spec.is_event))
+        return tuple(sorted(name for name, spec in self.roles.items() if spec.is_event and not spec.internal))
 
     @property
     def names(self) -> tuple[str, ...]:
-        return tuple(sorted(self.roles))
+        return tuple(sorted(name for name, spec in self.roles.items() if not spec.internal))
 
     def get(self, role: str) -> RoleSpec | None:
         return self.roles.get(role)

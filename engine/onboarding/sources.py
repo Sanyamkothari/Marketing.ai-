@@ -334,7 +334,7 @@ def detect_roles(profile: SourceProfile, roles: RoleCatalogue) -> tuple[RoleCand
     scored = [
         candidate
         for role_name, role in roles.roles.items()
-        if (candidate := _score_role(profile, role_name, role)) is not None
+        if not role.internal and (candidate := _score_role(profile, role_name, role)) is not None
     ]
     scored.sort(
         key=lambda candidate: (-candidate.confidence, candidate.role != "other_event", candidate.role)

@@ -380,6 +380,7 @@ defaults:
   # ---- PLAN-O (Data Doctor) — append only below this line ----
   data_doctor:                          # Plan O (DEC-1800). The one Data Doctor agent; not overridable per run
     unified: false                      # bool; true = Guided setup and the Doctor page are one Data Doctor. Off until M249's parity checklist is met; while off nothing changes
+    order_log: false                    # bool; true = a raw order log (one row per order line) can be turned into a shopper-by-month-end table (v3 phase 0, docs/plans/DATA_DOCTOR_EVENT_LOG_PATH.md). Needs `unified`; separate so M249's parity checklist is untouched; while off nothing changes
     ai_limits:                          # the most the Doctor's AI may use on one case; when used up the Doctor carries on with its rules alone
       max_tokens_per_case: 2000000      # int >= 1; tokens read plus written
       max_calls_per_case: 200           # int >= 1; calls to the AI service

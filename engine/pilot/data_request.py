@@ -423,7 +423,9 @@ def build_data_request(use_case_ids: tuple[str, ...] | None = None, root: Path |
             outcome = wording.outcomes.get(config.id) or wording.plain(_lower_first(config.label.description))
             want(config.label.role, "required", config.name, f"the outcome is worked out from it ({outcome})")
         for feature in config.suggested_features:
-            if feature.role in roles.roles and roles.roles[feature.role].kind is RoleKind.EVENT:
+            spec = roles.roles.get(feature.role)
+            # An internal role (`order_lines`, `returns`) is built by the order-log path from one log: never asked for.
+            if spec is not None and spec.kind is RoleKind.EVENT and not spec.internal:
                 want(
                     feature.role, "recommended", config.name, wording.plain(_lower_first(feature.description))
                 )

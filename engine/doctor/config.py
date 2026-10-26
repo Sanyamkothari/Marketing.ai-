@@ -19,11 +19,11 @@ it out of a dump while it holds only defaults, so a run's `run_config.json` is u
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
-__all__ = ["AiLimitsConfig", "DataDoctorConfig", "TimeSettingsConfig"]
+__all__ = ["AiLimitsConfig", "AudienceConfig", "DataDoctorConfig", "TimeSettingsConfig"]
 
 _SETTINGS: Final[ConfigDict] = ConfigDict(
     extra="forbid",
@@ -87,6 +87,24 @@ class AiLimitsConfig(BaseModel):
     )
 
 
+class AudienceConfig(BaseModel):
+    """`audience:` on a use case (v3 phase 0, B1): who the outcome is measured for, among all the customers.
+
+    `{role: orders, no_event_days: 90}` keeps, at each snapshot, only customers with no event in `role` in the
+    `no_event_days` days up to and including the snapshot: the lapsed audience of a win-back. It looks only at
+    events on or before the snapshot, so it can never see the future. This model only declares it; the filter
+    on the snapshot rows is B5's. Like a label, it is never agent-editable: an agent that may choose who counts
+    can make any score go up without improving anything."""
+
+    model_config = _SETTINGS
+
+    role: str = Field(min_length=1, description="The event table (an onboarding role) whose recency decides.")
+    no_event_days: Annotated[int, Field(ge=1, le=3650)] = Field(
+        description="A customer counts only with no event in `role` in this many days up to the snapshot."
+    )
+    agent_editable: Literal[False] = False
+
+
 class DataDoctorConfig(BaseModel):
     """`data_doctor:` in a use case: Plan O's one Data Doctor agent: the switch (M230) and the workspace currency (M242)."""
 
@@ -97,6 +115,16 @@ class DataDoctorConfig(BaseModel):
         description=(
             "Plan O (DEC-1800): when true, Guided setup and the Doctor page are the one Data Doctor agent. Off "
             "until the parity checklist is met (M249); while off, nothing changes."
+        ),
+    )
+    order_log: StrictBool = Field(
+        default=False,
+        exclude_if=lambda value: value is False,
+        description=(
+            "The order-log path (docs/plans/DATA_DOCTOR_EVENT_LOG_PATH.md, v3 phase 0): when true, a raw order log "
+            "(one row per order line) can be turned into a shopper-by-month-end table the outcome is built on. "
+            "Separate from `unified` so the parity checklist of `unified` is untouched; needs `unified`. Off by "
+            "default; while off every existing output is unchanged, and the key is left out of a dump."
         ),
     )
     workspace_currency: str = Field(

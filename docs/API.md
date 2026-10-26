@@ -380,6 +380,10 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `standard_schema` | StandardSchemaConfig | no | The one-row-per-entity shape a use case wants, in *our* names (plan section 4.2). |
 | `suggested_features` | list[FeatureDef] | no |  |
 | `label` | LabelDefinition \| null | no |  |
+| `audience` | AudienceConfig \| null | no |  |
+| `built_split` | SplitConfig \| null | no |  |
+| `order_log_label` | LabelDefinition \| null | no |  |
+| `order_log_features` | list[FeatureDef] | no |  |
 | `onboarding` | OnboardingConfig | no | `engine.yaml:defaults.onboarding` - every onboarding default, per use case (plan section 5.3). |
 | `uplift` | UpliftConfig | no | `uplift:` in a use case. Inert unless `problem_type` is `uplift`.  The data limits, the randomness check and anything about the treatment assignment are **not** agent-editable: an agent that could loosen them could make a targeted campaign look causal. |
 | `agent` | AgentConfig | no | `agent:` in a use case: the Guided-setup helper for that use case. |
@@ -580,6 +584,16 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `grace_days` | integer \| null | no |  |
 | `exclude_roles` | list[string] | no |  |
 
+#### AudienceConfig
+
+`audience:` on a use case (v3 phase 0, B1): who the outcome is measured for, among all the customers.  `{role: orders, no_event_days: 90}` keeps, at each snapshot, only customers with no event in `role` in the `no_event_days` days up to and including the snapshot: the lapsed audience of a win-back. It looks only at events on or before the snapshot, so it can never see the future. This model only declares it; the filter on the snapshot rows is B5's. Like a label, it is never agent-editable: an agent that may choose who counts can make any score go up without improving anything.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `role` | string | yes | The event table (an onboarding role) whose recency decides. |
+| `no_event_days` | integer | yes | A customer counts only with no event in `role` in this many days up to the snapshot. |
+| `agent_editable` | false | no |  |
+
 #### OnboardingConfig
 
 `engine.yaml:defaults.onboarding` - every onboarding default, per use case (plan section 5.3).
@@ -643,6 +657,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `unified` | boolean | no | Plan O (DEC-1800): when true, Guided setup and the Doctor page are the one Data Doctor agent. Off until the parity checklist is met (M249); while off, nothing changes. |
+| `order_log` | boolean | no | The order-log path (docs/plans/DATA_DOCTOR_EVENT_LOG_PATH.md, v3 phase 0): when true, a raw order log (one row per order line) can be turned into a shopper-by-month-end table the outcome is built on. Separate from `unified` so the parity checklist of `unified` is untouched; needs `unified`. Off by default; while off every existing output is unchanged, and the key is left out of a dump. |
 | `workspace_currency` | string | no | Plan O M242 (DEC-1812): the currency this workspace's reports use, as a code (INR, USD, EUR). A client's confirmed locale profile overrides it for that client. Read only while `unified` is on; INR, the default, is left out of a dump so nothing moves. |
 | `time_settings` | TimeSettingsConfig | no | Plan O M244 (DEC-1814): the training budget's diminishing-returns step and the ratios of its three choices. Read only while `unified` is on; the defaults are left out of a dump so nothing moves. |
 | `ai_limits` | AiLimitsConfig | no | The most tokens and calls the Doctor's AI may use on one case. Read only while `unified` is on; the defaults are left out of a dump so nothing moves. |
@@ -2186,6 +2201,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `agent.always_hide_columns` | list[str]; columns (case-insensitive) whose values the chat model never sees, whatever the profile says |
 | `data_doctor` | Plan O (DEC-1800). The one Data Doctor agent; not overridable per run |
 | `data_doctor.unified` | bool; true = Guided setup and the Doctor page are one Data Doctor. Off until M249's parity checklist is met; while off nothing changes |
+| `data_doctor.order_log` | bool; true = a raw order log (one row per order line) can be turned into a shopper-by-month-end table (v3 phase 0, docs/plans/DATA_DOCTOR_EVENT_LOG_PATH.md). Needs `unified`; separate so M249's parity checklist is untouched; while off nothing changes |
 | `data_doctor.ai_limits` | the most the Doctor's AI may use on one case; when used up the Doctor carries on with its rules alone |
 | `data_doctor.ai_limits.max_tokens_per_case` | int >= 1; tokens read plus written |
 | `data_doctor.ai_limits.max_calls_per_case` | int >= 1; calls to the AI service |
