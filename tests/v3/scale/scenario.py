@@ -2,21 +2,24 @@
 
 Three goals at the three autonomy levels (shadow, approve, autopilot), customers who differ in
 consent, history and cart activity, a policy that sometimes passes, sometimes raises, and a mandate
-with a daily cap on the autopilot goal. The same scenario runs with any `sweep_batch`; the
-fingerprint covers the tick reports, the decision log, the sends, the held batches, the alerts, the
-stored states and what the policy was handed, so two runs that match here made the same decisions.
+with a daily cap on the autopilot goal. The goals run in id order (approve, auto, shadow), so the
+shadow goal's `prepare_day` and sweep come after the autopilot goal has sent. The same scenario runs
+with any `sweep_batch`; the fingerprint covers the tick reports, the decision log, the sends, the held
+batches, the alerts, the stored states and every state `prepare_day` and `decide` were handed (a
+digest of each in full), so two runs that match here made the same decisions on the same inputs.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from autonomy.channels.dispatcher import Dispatcher
+from autonomy.channels.gateway import DispatchGateway, Provider
 from autonomy.contracts import (
     AudienceFilter,
     AutonomyLevel,
@@ -62,14 +65,24 @@ def _bucket(cid: str) -> int:
     return int(hashlib.sha256(cid.encode()).hexdigest()[:8], 16) % 10
 
 
+def _digest(states: Iterable[CustomerState]) -> str:
+    """A hash of the states in full, in order."""
+    h = hashlib.sha256()
+    for st in states:
+        h.update(json.dumps(st.model_dump(mode="json"), sort_keys=True).encode())
+    return h.hexdigest()[:16]
+
+
 class MixedPolicy(ContactEveryonePolicy):
-    """Contacts most customers, passes on some, raises for a few; remembers `prepare_day`'s input."""
+    """Contacts most customers, passes on some, raises for a few; remembers what it was handed."""
 
     def __init__(self, name: str) -> None:
         self.name = name
         self.version = f"mixed-{name}-v1"
         self.prepared: list[dict[str, Any]] = []
         self.decided = 0
+        self.inputs: list[tuple[str, str]] = []
+        """(customer id, digest of the state) for every `decide` call, in order."""
 
     def prepare_day(self, states: Sequence[CustomerState], ctx: DecisionContext) -> None:
         ids = [s.customer_id for s in states]
@@ -80,12 +93,17 @@ class MixedPolicy(ContactEveryonePolicy):
                 "last": ids[-1:],
                 "sorted": ids == sorted(ids),
                 "purchases": sum(s.purchases for s in states),
+                "contacts": sum(len(s.recent_contacts) for s in states),
+                "contacted": sum(1 for s in states if s.last_contact_at is not None),
+                "contacts_7d": sum(s.contacts_7d for s in states),
+                "digest": _digest(states),
                 "again": [s.customer_id for s in states][:3],
             }
         )
 
     def decide(self, state: CustomerState, ctx: DecisionContext) -> Decision:
         self.decided += 1
+        self.inputs.append((state.customer_id, _digest([state])))
         b = _bucket(state.customer_id)
         if b == 0:
             raise RuntimeError("the policy fell over for this customer")
@@ -206,7 +224,10 @@ def build(
     sql: bool = False,
     report_decisions: Any = UNSET,
     seed_events: Sequence[Event] | None = None,
+    gateway: bool = False,
 ) -> Scenario:
+    """`gateway`: send through a `DispatchGateway` that refuses every fourth customer's address
+    (opted out), so the gateway's own results mix with the sends."""
     events = InMemoryEventStore()
     events.append(history(n) if seed_events is None else seed_events)
     workspace = InMemoryWorkspace()
@@ -238,9 +259,17 @@ def build(
         decisions, states = SqlDecisionLog(engine, batch_size=10), SqlStateStore(engine, batch_size=10)
     adapter = FakeChannelAdapter(Channel.EMAIL)
     queue = InMemoryJobQueue()
-    dispatcher = Dispatcher(
+    dispatcher: Dispatcher | None = Dispatcher(
         {Channel.EMAIL: adapter}, lambda cid, ch: f"{cid}@example.com", workspace, events, queue
     )
+    gw: DispatchGateway | None = None
+    if gateway:
+        gw = DispatchGateway({Channel.EMAIL: [Provider("fake", adapter)]}, queue=queue, events=events)
+        gw.suppressed.update(
+            (Channel.EMAIL, f"{cid}@example.com") for i, cid in enumerate(customers(n)) if i % 4 == 2
+        )
+        gw.attach_dispatcher(lambda cid, ch: f"{cid}@example.com", workspace, events)
+        dispatcher = None
     policies: dict[str, MixedPolicy] = {}
 
     def factory(briefs: Sequence[Any], content: Sequence[Any]) -> MixedPolicy:
@@ -270,6 +299,8 @@ def build(
         extra["state_enricher"] = enricher
     if groups:
         extra["assign_group"] = assign_group
+    if gw is not None:
+        extra["gateway"] = gw
     runtime = AutonomyRuntime(
         events=events,
         states=states,
@@ -334,6 +365,7 @@ def fingerprint(s: Scenario, reports: Sequence[TickReport]) -> dict[str, Any]:
             "states": [st.model_dump(mode="json") for st in s.states.scan()],
             "prepared": {gid: p.prepared for gid, p in sorted(s.policies.items())},
             "decided": {gid: p.decided for gid, p in sorted(s.policies.items())},
+            "decide_inputs": {gid: p.inputs for gid, p in sorted(s.policies.items())},
             "sent_messages": sorted(m.decision_id for m in s.adapter.sent),
             "cursor": s.runtime.cursor.model_dump(mode="json"),
         }

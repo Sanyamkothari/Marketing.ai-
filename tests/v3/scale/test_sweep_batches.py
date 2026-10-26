@@ -10,7 +10,9 @@ from typing import Any
 
 import pytest
 
+from autonomy.channels.dispatcher import Dispatcher
 from autonomy.contracts import (
+    AudienceFilter,
     AutonomyLevel,
     Channel,
     CustomerState,
@@ -22,14 +24,18 @@ from autonomy.contracts import (
 )
 from autonomy.fakes import (
     ContactEveryonePolicy,
+    FakeChannelAdapter,
+    InMemoryDecisionLog,
     InMemoryEventStore,
     InMemoryStateStore,
     InMemoryWorkspace,
     SimpleStateFolder,
 )
 from autonomy.fakes.samples import sample_brief, sample_content, sample_goal
+from autonomy.runtime import service
 from autonomy.runtime.service import AutonomyRuntime, RuntimeConfig
-from autonomy.runtime.settings import RuntimeSettings
+from autonomy.runtime.settings import RuntimeSettings, build_runtime
+from autonomy.store import memory_engine
 from tests.v3.scale import scenario as sc
 
 SMALL = 60
@@ -60,7 +66,128 @@ def test_any_batch_size_gives_the_same_ticks_decisions_sends_and_alerts(
         assert whole["report_mandate_blocked"][0], "the mandate should stop some sends"
     for size in (1, 7, 25):
         assert run(sweep_batch=size, one_contact=one_contact, mandate_kind=mandate_kind) == whole, size
-    assert run(one_contact=one_contact, mandate_kind=mandate_kind) == whole  # the default, 5,000
+    # The default (5,000) is one batch at this size: this checks that leaving the setting out works.
+    assert run(one_contact=one_contact, mandate_kind=mandate_kind) == whole
+
+
+def test_a_later_goal_prepares_and_sweeps_on_the_population_as_the_tick_first_read_it() -> None:
+    """The goals run approve, auto, shadow: the shadow goal's `prepare_day` and sweep come after the
+    autopilot goal has sent, and still see the customers as they were before those sends."""
+    for one_contact in (True, False):
+        whole = run(sweep_batch=None, one_contact=one_contact)
+        assert whole["summaries"][0]["sent"] > 0
+        first_day = {gid: p[0] for gid, p in whole["prepared"].items()}
+        # Nobody had been contacted before the first sweep, whichever goal prepared after the sends.
+        assert all(p["contacts"] == p["contacted"] == p["contacts_7d"] == 0 for p in first_day.values())
+        assert len({p["digest"] for p in first_day.values()}) == 1
+        assert run(sweep_batch=3, one_contact=one_contact) == whole
+
+
+def test_with_a_send_time_gateway_only_the_order_of_the_dispatch_results_follows_the_batch() -> None:
+    """The gateway lists its own refusals of a call before that call's sends, so batched calls
+    interleave them (docs/v3/SCALE.md). Everything else, and the results themselves, are the same."""
+    whole = run(sweep_batch=None, gateway=True)
+    assert any(r[3] == "opted_out" for r in whole["report_dispatch"][0]), "the gateway should refuse some"
+    assert whole["summaries"][0]["sent"] > 0
+    assert any(a["code"] == "dispatch.refused" for a in whole["summaries"][0]["alerts"])
+    for size in (1, 7):
+        batched = run(sweep_batch=size, gateway=True)
+        assert [sorted(r) for r in batched.pop("report_dispatch")] == [
+            sorted(r) for r in whole["report_dispatch"]
+        ]
+        assert batched == {k: v for k, v in whole.items() if k != "report_dispatch"}, size
+
+
+def test_a_send_before_the_tick_first_reads_the_population_is_seen_by_the_later_sweep() -> None:
+    """The old sweep read the population the first time a goal needed it. A send made earlier in the
+    tick (an event trigger of a goal with no sweep due) was in that read, so a later goal's audience
+    is matched on the state after it."""
+    start = sc.T0 - timedelta(days=1)
+    events = InMemoryEventStore()
+    events.append(
+        [
+            Event(
+                event_id=f"consent_{cid}",
+                customer_id=cid,
+                type=EventType.CONSENT_GRANTED,
+                ts=sc.T0 - timedelta(days=30),
+                source="test",
+                channel=Channel.EMAIL,
+            )
+            for cid in ("a", "x")
+        ]
+        + [
+            Event(
+                event_id="buy_a",
+                customer_id="a",
+                type=EventType.PURCHASE,
+                ts=sc.T0 - timedelta(days=10),
+                source="test",
+                value=30.0,
+            )
+        ]
+    )
+    workspace = InMemoryWorkspace()
+
+    def put(gid: str, level: AutonomyLevel, status: GoalStatus, *filters: AudienceFilter) -> None:
+        workspace.put_goal(sample_goal(start, gid).model_copy(update={"autonomy": level, "status": status}))
+        brief = sample_brief(start, gid)
+        audience = brief.audience.model_copy(update={"filters": filters})
+        workspace.put_brief(brief.model_copy(update={"audience": audience}))
+        if level is AutonomyLevel.AUTOPILOT:  # the sample content ids are the same for every goal
+            workspace.put_content(sample_content(start, gid))
+
+    bought = AudienceFilter(field="purchases", op="gte", value=1)
+    put("goal_a", AutonomyLevel.AUTOPILOT, GoalStatus.ACTIVE, bought)
+    put(
+        "goal_b",
+        AutonomyLevel.SHADOW,
+        GoalStatus.PAUSED,
+        bought,
+        AudienceFilter(field="contacts_7d", op="lte", value=0),
+    )
+    adapter = FakeChannelAdapter(Channel.EMAIL)
+    runtime = AutonomyRuntime(
+        events=events,
+        states=InMemoryStateStore(),
+        decisions=InMemoryDecisionLog(),
+        workspace=workspace,
+        folder=SimpleStateFolder(),
+        policy_factory=lambda briefs, content: ContactEveryonePolicy(),
+        dispatcher=Dispatcher(
+            {Channel.EMAIL: adapter}, lambda cid, ch: f"{cid}@example.com", workspace, events
+        ),
+        config=RuntimeConfig(one_contact_per_tick=False, sweep_batch=1),
+    )
+    runtime.tick(sc.SWEEP)  # goal_a sweeps and sends to a; x has not bought
+    events.append(
+        [
+            Event(
+                event_id="buy_x",
+                customer_id="x",
+                type=EventType.PURCHASE,
+                ts=sc.SWEEP + timedelta(minutes=1),
+                source="test",
+                value=30.0,
+            ),
+            Event(
+                event_id="cart_x",
+                customer_id="x",
+                type=EventType.CART,
+                ts=sc.SWEEP + timedelta(minutes=1),
+                source="test",
+                item_id="sku1",
+            ),
+        ]
+    )
+    paused = next(g for g in workspace.goals() if g.goal_id == "goal_b")
+    workspace.put_goal(paused.model_copy(update={"status": GoalStatus.ACTIVE}))
+    report = runtime.tick(sc.SWEEP + timedelta(minutes=2))
+    # goal_a reached x on the purchase before goal_b's first sweep read anyone, so goal_b's audience
+    # (no contact this week) leaves x out, as it leaves out a, whom goal_a reached in the first tick.
+    assert [m.customer_id for m in adapter.sent] == ["a", "x"]
+    assert report.swept_goals == ["goal_b"]
+    assert [d.customer_id for d in report.decisions] == ["x"]
 
 
 def test_assigning_groups_to_every_state_gives_the_same_result_in_batches() -> None:
@@ -87,6 +214,12 @@ def test_the_batch_size_is_a_setting_and_is_checked() -> None:
         RuntimeConfig(report_decisions=-1)
     with pytest.raises(ValueError):
         RuntimeSettings.from_env({"AUTONOMY_SWEEP_BATCH": "0"})
+    # A built runtime (the worker) keeps a bounded few of a tick's decisions; a runtime made in
+    # code keeps them all unless told otherwise.
+    assert RuntimeSettings().report_decisions == 1_000 and RuntimeConfig().report_decisions is None
+    assert RuntimeSettings.from_env({"AUTONOMY_REPORT_DECISIONS": "50"}).report_decisions == 50
+    with pytest.raises(ValueError):
+        RuntimeSettings.from_env({"AUTONOMY_REPORT_DECISIONS": "-1"})
 
 
 def test_the_scenario_covers_every_part_of_the_sweep() -> None:
@@ -109,6 +242,27 @@ def test_the_enricher_and_the_policy_see_one_batch_at_a_time() -> None:
     whole = sc.build(SMALL, sweep_batch=None, enrich=True)
     whole.runtime.tick(sc.SWEEP)
     assert sum(s.enriched_calls) == sum(whole.enriched_calls)
+
+
+def test_a_pass_of_many_batches_scans_the_event_window_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Above `ENRICH_PER_CUSTOMER_MAX` a batch's recent events come from a scan of the lookback window.
+    Only a pass's first batch scans; the later ones read per customer, with the same result."""
+    monkeypatch.setattr(service, "ENRICH_PER_CUSTOMER_MAX", 2)
+    whole = run(sweep_batch=None, enrich=True)
+    s = sc.build(SMALL, sweep_batch=5, enrich=True)
+    window_scans = 0
+    scan = s.events.scan
+
+    def counting_scan(*, since: datetime | None = None, until: datetime | None = None) -> Iterator[Event]:
+        nonlocal window_scans
+        if since is not None and until is not None and until - since == s.runtime.config.enrich_lookback:
+            window_scans += 1
+        return scan(since=since, until=until)
+
+    s.events.scan = counting_scan  # type: ignore[method-assign]
+    assert sc.fingerprint(s, sc.play(s)) == whole
+    assert len(s.enriched_calls) > 3 * 4, "many batches"
+    assert 0 < window_scans <= 3 * 4, window_scans  # at most one per goal per tick
 
 
 def test_prepare_day_gets_the_whole_population_without_the_runtime_holding_it() -> None:
@@ -197,14 +351,14 @@ class _CountingLog:
         return []
 
 
-def _shadow_sweep(n: int, batch: int | None) -> tuple[int, int]:
+def _shadow_sweep(n: int, batch: int | None, report_decisions: int | None = 0) -> tuple[int, int]:
     """(bytes the sweep peaked at above where it started, bytes still held when it ended) for `n` customers.
 
     What is still held is the day's decided-set (`_Day`), about half a KB per decision: the one
     thing the sweep keeps per customer. The rest of the peak is the batch in flight.
 
     One goal in shadow, the states already folded (a first tick before the sweep hour), a log that
-    keeps nothing, and a report that keeps no decisions."""
+    keeps nothing, and a report that keeps `report_decisions` decisions (None: all, as before)."""
     t0 = datetime(2026, 3, 2, 8, 0, tzinfo=UTC)
     events = InMemoryEventStore()
     rows: list[Event] = []
@@ -249,7 +403,7 @@ def _shadow_sweep(n: int, batch: int | None) -> tuple[int, int]:
         workspace=workspace,
         folder=SimpleStateFolder(),
         policy_factory=lambda briefs, content: policy,
-        config=RuntimeConfig(sweep_batch=batch, report_decisions=0),
+        config=RuntimeConfig(sweep_batch=batch, report_decisions=report_decisions),
     )
     runtime.tick(t0)  # folds every event into a state; before the sweep hour, so it decides nothing
     assert log.n == 0
@@ -283,3 +437,29 @@ def test_the_sweeps_peak_memory_follows_the_batch_not_the_customer_count() -> No
     assert big_kept < 1_000 * 20_000, big_kept  # the decided-set: under 1 KB a customer
     assert big < whole / 4, (big, whole)
     assert big < 40 * 1024 * 1024, big
+
+
+@pytest.mark.slow
+def test_a_worker_built_from_the_default_settings_holds_a_fraction_of_the_old_sweep() -> None:
+    """The deployed defaults (batches of 5,000, a report of 1,000 decisions) against the old sweep
+    (the whole audience, every decision kept in the report) on 20,000 customers."""
+    settings = RuntimeSettings()
+    deployed, deployed_kept = _shadow_sweep(20_000, settings.sweep_batch, settings.report_decisions)
+    old, old_kept = _shadow_sweep(20_000, None, None)
+    assert deployed < old * 0.6, (deployed, old)  # 42 MB against 88 MB when measured
+    assert deployed_kept < old_kept / 3, (deployed_kept, old_kept)  # 12 MB against 49 MB
+
+
+def test_a_runtime_built_from_settings_keeps_a_bounded_report() -> None:
+    runtime = build_runtime(
+        RuntimeSettings(database_url="sqlite://", report_decisions=7, sweep_batch=3),
+        engine=memory_engine(),
+        policy_factory=lambda briefs, content: ContactEveryonePolicy(),
+    )
+    assert runtime.config.report_decisions == 7 and runtime.config.sweep_batch == 3
+    assert (
+        build_runtime(
+            RuntimeSettings(database_url="sqlite://"), engine=memory_engine()
+        ).config.report_decisions
+        == 1_000
+    )
