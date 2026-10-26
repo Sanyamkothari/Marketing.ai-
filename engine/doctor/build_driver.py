@@ -55,6 +55,17 @@ from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import AggFunction, FeatureDef, LabelDefinition, SnapshotDefinition, StrictBase
 from engine.doctor.contracts import Diagnosis, FileDiagnosis, FileStack
 from engine.doctor.join_files import APPROVE_DROP_SHARE
+from engine.doctor.order_roll_up import (
+    EVENT_TIME,
+    ORDER_LINES_ROLE,
+    ORDERS_ROLE,
+    RETURNS_ROLE,
+    LogColumns,
+    OrderLogError,
+    RolledUp,
+    list_matches_log,
+    roll_up,
+)
 from engine.doctor.stack_files import (
     ConflictRule,
     StackError,
@@ -77,6 +88,9 @@ __all__ = [
     "KeyMatchReceipt",
     "LeftOutFile",
     "ListKeys",
+    "MappedColumn",
+    "OrderLogInput",
+    "OrderLogPlan",
     "PlannedSource",
     "PreparedSources",
     "RoleProposer",
@@ -85,6 +99,7 @@ __all__ = [
     "build_record_key",
     "drive_builder",
     "mapping_columns",
+    "order_log_files",
     "plan_build",
     "prepare_sources",
     "replay_build",
@@ -140,6 +155,16 @@ class DiagnosisRoles:
 # ---------------------------------------------------------------------------
 # The plan
 # ---------------------------------------------------------------------------
+class MappedColumn(StrictBase):
+    """A column of a rolled-up source that is mapped under its own name (the order-log path's `order_value`,
+    `quantity`, `signup_date`, ...), beside `entity_key` and `event_time`."""
+
+    column: str
+    cast: str | None = Field(
+        default=None, description="A `ColumnTransform` type to cast to, or null to keep it."
+    )
+
+
 class PlannedSource(StrictBase):
     """One builder source: one file, or several files stacked into one."""
 
@@ -167,6 +192,11 @@ class PlannedSource(StrictBase):
         default=None,
         description="`rows_dropped` / `rows`, rounded to 4 places; over 2% needs the person's yes.",
     )
+    mapped: tuple[MappedColumn, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="Order-log path: the other columns the mapping carries, under their own names.",
+    )
 
 
 class LeftOutFile(StrictBase):
@@ -174,6 +204,79 @@ class LeftOutFile(StrictBase):
     file_name: str
     code: str
     summary: str
+
+
+_COUNT_FIELDS: Final[tuple[str, ...]] = (
+    "lines",
+    "lines_without_shopper",
+    "lines_without_order",
+    "lines_unreadable_date",
+    "lines_unreadable_quantity",
+    "order_lines",
+    "return_lines",
+    "zero_lines",
+    "orders",
+    "return_orders",
+    "cancelled_return_orders",
+    "return_lines_without_c",
+    "two_timestamp_orders",
+    "shoppers",
+    "shoppers_without_orders",
+    "unpriced_lines",
+)
+"""The roll-up's counts (`RollUpCounts`) a plan keeps, so its hash covers what was approved."""
+
+
+class OrderLogPlan(StrictBase):
+    """What a plan built from one raw order log carries beyond a plan from several files (v3 phase 0, B4).
+
+    The columns a person and the reading decided, and the counts the roll-up measured on the approved log, so the
+    plan hash covers the roll-up: a log that differs in any counted way is not the one that was approved. No ID and
+    no cell."""
+
+    upload_id: str
+    file_name: str
+    customer_column: str
+    order_column: str
+    date_column: str
+    quantity_column: str | None = None
+    price_column: str | None = None
+    product_column: str | None = None
+    country_column: str | None = None
+    lines: int
+    lines_without_shopper: int
+    lines_without_order: int
+    lines_unreadable_date: int
+    lines_unreadable_quantity: int
+    order_lines: int
+    return_lines: int
+    zero_lines: int
+    orders: int
+    return_orders: int
+    cancelled_return_orders: int
+    return_lines_without_c: int
+    two_timestamp_orders: int
+    shoppers: int
+    shoppers_without_orders: int
+    unpriced_lines: int
+    skipped_features: tuple[str, ...] = Field(
+        default=(), description="Suggested features left out because the log has no column they read."
+    )
+
+    def columns(self) -> LogColumns:
+        return LogColumns(
+            customer=self.customer_column,
+            order=self.order_column,
+            date=self.date_column,
+            quantity=self.quantity_column,
+            price=self.price_column,
+            product=self.product_column,
+            country=self.country_column,
+        )
+
+    def counts(self) -> dict[str, int]:
+        """The roll-up's counts, as `RollUpCounts` names them."""
+        return {name: int(getattr(self, name)) for name in _COUNT_FIELDS}
 
 
 class BuildPlan(StrictBase):
@@ -197,6 +300,14 @@ class BuildPlan(StrictBase):
     approval_sentence: str = Field(description="What the person agrees to, word for word.")
     blocking: tuple[str, ...] = Field(default=(), description="Codes that keep the plan from running.")
     summary: str
+    order_log: OrderLogPlan | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Set only for a plan built from one raw order log (`plan_build(order_log=...)`): the customer list is "
+            "derived from the log and the sources are its roll-up. Left out of a dump (and the hash) when unset."
+        ),
+    )
 
     @property
     def plan_hash(self) -> str:
@@ -332,8 +443,25 @@ def plan_build(
     snapshot_spec: SnapshotDefinition | None = None,
     roles: RoleProposer | None = None,
     stack_answers: Mapping[str, ConflictRule] | None = None,
+    order_log: OrderLogInput | None = None,
+    suggested: Sequence[FeatureDef] = (),
 ) -> BuildPlan:
-    """Propose how the diagnosed files become one built dataset (the `build_dataset` tool's rules)."""
+    """Propose how the diagnosed files become one built dataset (the `build_dataset` tool's rules).
+
+    With `order_log` (v3 phase 0, B4) the dataset is built from one raw order log instead: no file need be a customer
+    list, because the list is derived from the log's shopper column (the one a person chose) and the sources are the
+    log's roll-up. It is an explicit argument, never inferred, so without it nothing here changes. `suggested` are the
+    use case's own features; those that read a column the log does not have are left out and named."""
+    if order_log is not None:
+        return _plan_order_log(
+            diagnosis,
+            frames,
+            use_case=use_case,
+            label_spec=label_spec,
+            snapshot_spec=snapshot_spec,
+            order_log=order_log,
+            suggested=suggested,
+        )
     proposer: RoleProposer = roles or DiagnosisRoles(diagnosis)
     answers = dict(stack_answers or {})
     files = {item.upload_id: _named(item) for item in diagnosis.files if item.upload_id in frames}
@@ -536,6 +664,239 @@ def plan_build(
             + (f"; {len(left)} file{'' if len(left) == 1 else 's'} left out." if left else ".")
         ),
     )
+
+
+@dataclass(frozen=True)
+class OrderLogInput:
+    """The one raw order log a plan is built from, and the columns that play a part in it (v3 phase 0)."""
+
+    upload_id: str
+    columns: LogColumns
+
+
+def _feature_columns(feature: FeatureDef) -> set[str]:
+    found: set[str] = set()
+    for part in (feature, feature.of, feature.over):
+        if part is None:
+            continue
+        if part.column:
+            found.add(part.column)
+        if part.where is not None:
+            found.add(part.where.column)
+    return found
+
+
+def _sources_of(
+    rolled: RolledUp, upload_id: str, stem: str, name: str, customer: str
+) -> tuple[PlannedSource, ...]:
+    """The event sources of a roll-up (orders always; order lines and returns when there are some), each with the
+    columns it carries under their own names."""
+    out: list[PlannedSource] = []
+    for role, frame, reason in (
+        (ORDERS_ROLE, rolled.orders, "one row per order with a quantity above zero"),
+        (ORDER_LINES_ROLE, rolled.order_lines, "one row per line with a quantity above zero"),
+        (RETURNS_ROLE, rolled.returns, "one row per order number with a quantity below zero"),
+    ):
+        if role != ORDERS_ROLE and frame.empty:
+            continue
+        out.append(
+            PlannedSource(
+                source_name=f"{stem}.{role}.csv",
+                role=role,
+                role_reason=f"{reason}, rolled up from the lines of {name}",
+                upload_ids=(upload_id,),
+                key_column=customer,
+                date_column=EVENT_TIME,
+                mapped=tuple(
+                    MappedColumn(column=str(c)) for c in frame.columns if c not in {customer, EVENT_TIME}
+                ),
+            )
+        )
+    return tuple(out)
+
+
+def _order_log_sentence(
+    name: str, plan: OrderLogPlan, label_spec: LabelDefinition | None, skipped: Sequence[str]
+) -> str:
+    customer = plan.customer_column
+    parts = [
+        f"Build the table from {name}: one shopper for each different '{customer}' ({plan.shoppers:,}), with their "
+        f"orders, order lines and returns rolled up from {plan.lines:,} lines, using only what happened on or "
+        "before each month-end."
+    ]
+    if plan.lines_without_shopper:
+        parts.append(f"{plan.lines_without_shopper:,} lines with no '{customer}' are left out.")
+    left = plan.lines_without_order + plan.lines_unreadable_date + plan.lines_unreadable_quantity
+    if left:
+        parts.append(
+            f"{left:,} more lines are left out: {plan.lines_without_order:,} with no '{plan.order_column}', "
+            f"{plan.lines_unreadable_date:,} whose date cannot be read and {plan.lines_unreadable_quantity:,} whose "
+            "quantity is not a number."
+        )
+    if plan.return_lines:
+        parts.append(
+            f"{plan.return_lines:,} lines have a quantity below zero ({plan.return_orders:,} order numbers, "
+            f"{plan.cancelled_return_orders:,} of them starting with 'C'); they are counted as returns, not "
+            f"orders, and {plan.return_lines_without_c:,} of those lines are on numbers that do not start with 'C'."
+        )
+    if plan.zero_lines:
+        parts.append(f"{plan.zero_lines:,} lines with a quantity of zero count for nothing.")
+    if plan.unpriced_lines and plan.price_column:
+        parts.append(
+            f"{plan.unpriced_lines:,} order lines have a '{plan.price_column}' of zero or less and add nothing to spend."
+        )
+    if plan.shoppers_without_orders:
+        parts.append(f"{plan.shoppers_without_orders:,} shoppers have only returns and are in no month-end.")
+    parts.append("Description is not used.")
+    if skipped:
+        parts.append(f"Not built, the log has no column they read: {', '.join(skipped)}.")
+    if label_spec is not None:
+        parts.append(f"The outcome is '{label_spec.name}'.")
+    return " ".join(parts)
+
+
+def _plan_order_log(
+    diagnosis: Diagnosis,
+    frames: Mapping[str, pd.DataFrame],
+    *,
+    use_case: str,
+    label_spec: LabelDefinition | None,
+    snapshot_spec: SnapshotDefinition | None,
+    order_log: OrderLogInput,
+    suggested: Sequence[FeatureDef],
+) -> BuildPlan:
+    log = frames.get(order_log.upload_id)
+    item = next((f for f in diagnosis.files if f.upload_id == order_log.upload_id), None)
+    if log is None or item is None:
+        raise BuildDriveError(
+            "BUILD_PLAN_INCOMPLETE", "The order log is not one of the files, so nothing is built from it."
+        )
+    item = _named(item)
+    columns = order_log.columns
+    try:
+        rolled = roll_up(log, columns)
+    except OrderLogError as exc:
+        raise BuildDriveError(exc.code, exc.message) from exc
+    if not list_matches_log(rolled.customers, log, columns.customer):
+        raise BuildDriveError(
+            "BUILD_PLAN_INCOMPLETE",
+            f"The customer list does not hold exactly the different '{columns.customer}' values of {item.file_name}.",
+        )
+    stem = item.file_name.rsplit(".", 1)[0] if "." in item.file_name else item.file_name
+    entity = PlannedSource(
+        source_name=f"{stem}.customers.csv",
+        role="entity",
+        role_reason=(
+            f"the different '{columns.customer}' values of {item.file_name}, the column a person named as the shopper"
+        ),
+        upload_ids=(order_log.upload_id,),
+        key_column=columns.customer,
+        mapped=(MappedColumn(column="signup_date", cast="date"),),
+    )
+    events = _sources_of(rolled, order_log.upload_id, stem, item.file_name, columns.customer)
+    sources = {source.role: set(rolled.tables()[source.role].columns) for source in events}
+    kept: list[FeatureDef] = []
+    skipped: list[str] = []
+    for feature in suggested:
+        available = sources.get(feature.role)
+        if available is None or _feature_columns(feature) - available:
+            skipped.append(feature.name)
+        else:
+            kept.append(feature)
+    features = tuple(kept) if suggested else _features([source.role for source in events])
+    counts = rolled.counts
+    spec = OrderLogPlan(
+        upload_id=order_log.upload_id,
+        file_name=item.file_name,
+        customer_column=columns.customer,
+        order_column=str(columns.order),
+        date_column=columns.date,
+        quantity_column=columns.quantity,
+        price_column=columns.price,
+        product_column=columns.product,
+        country_column=columns.country,
+        skipped_features=tuple(skipped),
+        **{name: getattr(counts, name) for name in _COUNT_FIELDS},
+    )
+    blocking: list[str] = []
+    if (
+        label_spec is not None
+        and label_spec.type.value.startswith("event")
+        and label_spec.role not in sources
+    ):
+        blocking.append("BUILD_PLAN_INCOMPLETE")
+    reasons: list[str] = []
+    if label_spec is not None:
+        reasons.append("BUILD_DEFINES_OUTCOME")
+    if counts.lines and counts.lines_without_shopper / counts.lines > APPROVE_DROP_SHARE:
+        reasons.append("JOIN_DROPS_ROWS")
+    left_out = tuple(
+        LeftOutFile(
+            upload_id=other.upload_id,
+            file_name=_named(other).file_name,
+            code="BUILD_FILE_LEFT_OUT",
+            summary=(
+                f"{_named(other).file_name} is left out: the dataset is built from the order log "
+                f"{item.file_name} alone."
+            ),
+        )
+        for other in diagnosis.files
+        if other.upload_id != order_log.upload_id and other.upload_id in frames
+    )
+    return BuildPlan(
+        use_case=use_case,
+        entity=entity,
+        events=events,
+        features=features,
+        label_spec=label_spec,
+        snapshot_spec=snapshot_spec or SnapshotDefinition(),
+        left_out=left_out,
+        approval_reasons=tuple(reasons),
+        approval_sentence=_order_log_sentence(item.file_name, spec, label_spec, skipped),
+        blocking=tuple(blocking),
+        summary=(
+            f"Build one table for {use_case} from {item.file_name}: {counts.shoppers:,} shoppers rolled up from "
+            f"{counts.lines:,} lines."
+        ),
+        order_log=spec,
+    )
+
+
+def order_log_files(
+    plan: BuildPlan, log: pd.DataFrame, *, strict: bool = True
+) -> dict[str, list[pd.DataFrame]]:
+    """The sources of an order-log plan, rolled up from the log by the plan's own columns.
+
+    `strict` (an approved run) refuses a log whose counts differ from the approved plan's: the plan hash covers the
+    roll-up, so a different log is a different plan. A replay (`strict=False`) is next month's whole log through the
+    frozen rules: the counts may change, the meaning may not."""
+    spec = plan.order_log
+    if spec is None:
+        raise BuildDriveError("BUILD_PLAN_INCOMPLETE", "This plan is not built from an order log.")
+    try:
+        rolled = roll_up(log, spec.columns())
+    except OrderLogError as exc:
+        raise BuildDriveError(exc.code, exc.message) from exc
+    if strict:
+        now = {name: int(getattr(rolled.counts, name)) for name in _COUNT_FIELDS}
+        approved = spec.counts()
+        if now != approved:
+            changed = sorted(name for name in now if now[name] != approved[name])
+            raise BuildDriveError(
+                "BUILD_PLAN_NOT_APPROVED",
+                f"{spec.file_name} is not the log that was approved ({', '.join(changed)} differ); plan again "
+                "and approve again.",
+            )
+    if not list_matches_log(rolled.customers, log, spec.customer_column):
+        raise BuildDriveError(
+            "BUILD_PLAN_INCOMPLETE",
+            f"The customer list does not hold exactly the different '{spec.customer_column}' values of {spec.file_name}.",
+        )
+    tables = rolled.tables()
+    files: dict[str, list[pd.DataFrame]] = {plan.entity.source_name: [rolled.customers]}
+    for source in plan.events:
+        files[source.source_name] = [tables[source.role]]
+    return files
 
 
 def _named(item: FileDiagnosis) -> FileDiagnosis:
@@ -839,6 +1200,8 @@ def _run_plan(
         required: dict[str, tuple[str, str | None]] = {"entity_key": (source.key_column, None)}
         if source.date_column is not None:
             required["event_time"] = (source.date_column, "date")
+        for extra in source.mapped:
+            required[extra.column] = (extra.column, extra.cast)
         columns = mapping_columns(list(suggestion.get("columns", ())), required)
         mapping_ids.append(
             port.save_mapping(
@@ -918,6 +1281,13 @@ def drive_builder(
             "The plan still has an open question or a missing part: "
             + ", ".join(plan.blocking or ("question",)),
         )
+    if plan.order_log is not None:
+        log = frames.get(plan.order_log.upload_id)
+        if log is None:
+            raise BuildDriveError("BUILD_REPLAY_FILES", f"Give the order log {plan.order_log.file_name}.")
+        return _run_plan(
+            plan, approval, order_log_files(plan, log, strict=True), port, mode=mode, build=build, clock=clock
+        )
     files = {
         source.source_name: [frames[upload_id] for upload_id in source.upload_ids]
         for source in (plan.entity, *plan.events)
@@ -941,6 +1311,24 @@ def replay_build(
     decided here, so nothing new is asked."""
     record.check()
     plan = record.plan
+    if (
+        plan.order_log is not None
+    ):  # the whole log again (B-8): re-uploading is idempotent and cannot double-count
+        logs = files.get(plan.order_log.file_name)
+        if not logs:
+            raise BuildDriveError(
+                "BUILD_REPLAY_FILES",
+                f"Give a file for each source the plan built: {plan.order_log.file_name} is missing.",
+            )
+        return _run_plan(
+            plan,
+            record.approval,
+            order_log_files(plan, logs[0], strict=False),
+            port,
+            mode=mode,
+            build=build,
+            clock=clock,
+        )
     missing = [
         source.source_name for source in (plan.entity, *plan.events) if not files.get(source.source_name)
     ]
