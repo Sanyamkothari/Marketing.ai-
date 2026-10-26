@@ -37,7 +37,7 @@ import pandas as pd
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import ProposalSource, RecipeStep, RecipeStepKind
 from engine.agent.recipe import run_recipe
-from engine.doctor.guards import NotMeasurableError, cell_change, infer_key, make_receipt
+from engine.doctor.guards import NotMeasurableError, cell_change, grouping_key, infer_key, make_receipt
 
 __all__ = [
     "CHANGE_SHARE_CODES",
@@ -165,6 +165,12 @@ def measure_step(
     )
     receipt = run.receipt.steps[0]
     if step.kind is RecipeStepKind.SQL_QUERY:
+        group = grouping_key(str(step.params.get("sql") or ""), frame, run.frame)
+        if group is not None and primary_key in (None, group):
+            # One row per group out of many rows: the change is in customers (who is gone), not in cells.
+            counted = make_receipt(1, step.kind.value, {"this": frame}, run.frame, key=group)
+            if counted.keys_in is not None:
+                return counted.keys_lost, counted.keys_in
         return cell_change(frame, run.frame, key=primary_key or infer_key(frame, run.frame))
     if step.kind in _RESHAPE_STEPS:
         counted = make_receipt(1, step.kind.value, {"this": frame}, run.frame, key=primary_key or step.column)

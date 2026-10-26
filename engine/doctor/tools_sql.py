@@ -209,7 +209,7 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         raise DataToolError(exc.code, exc.message, status=422) from exc
     first = next(iter(tried.values()))
     key = ctx.primary_key
-    receipt = make_receipt(1, RecipeStepKind.SQL_QUERY.value, tried, run.frame, key=key)
+    receipt = make_receipt(1, RecipeStepKind.SQL_QUERY.value, tried, run.frame, key=key, sql=given.sql)
     findings = receipt_findings(receipt) + plan_findings(build_ledger([receipt]))
     changed_cells: int | None
     compared_cells: int | None

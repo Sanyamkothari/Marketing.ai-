@@ -434,3 +434,56 @@ def test_a_prescription_learns_under_the_guards_and_hands_back_the_receipts() ->
     (run,) = sink
     assert run.receipts[0].keys_lost == 10 and run.ledger is not None and run.ledger.lost_pct == 10.0
     assert "PLAN_LOSES_TOO_MUCH" in codes(run, "stop")
+
+
+# ---------------------------------------------------------------------------
+# Combining rows into one per customer is not losing rows
+# ---------------------------------------------------------------------------
+def invoices(n: int = 1_000, customers_n: int = 100, blank: int = 270) -> pd.DataFrame:
+    ids = [float(i % customers_n) for i in range(n - blank)] + [float("nan")] * blank
+    return pd.DataFrame({"InvoiceNo": range(n), "CustomerID": ids, "Quantity": [2] * n})
+
+
+PER_CUSTOMER = (
+    "SELECT CustomerID, count(*) AS lines, sum(Quantity) AS units FROM t_this "
+    "WHERE CustomerID IS NOT NULL GROUP BY CustomerID"
+)
+
+
+def test_an_aggregation_with_blank_keys_combines_rows_and_loses_no_customers() -> None:
+    result = run_guarded(invoices(), [sql(PER_CUSTOMER)], primary_key=None, target=None, **RUN)
+    receipt = result.receipts[0]
+    assert (receipt.key, receipt.grouped_by) == ("CustomerID", "CustomerID")
+    assert (receipt.keys_in, receipt.keys_out, receipt.keys_lost) == (100, 100, 0)
+    assert "PLAN_LOSES_TOO_MUCH" not in codes(result) and codes(result, "stop") == []
+    (combined,) = [f for f in result.findings if f.code == "STEP_COMBINES_ROWS"]
+    assert combined.message == (
+        "Step 1 combined 1,000 rows into 100 customers (counted by CustomerID, the column it groups by); "
+        "0 customers lost; 270 rows with no CustomerID left out."
+    )
+    assert result.ledger is not None and (result.ledger.unit, result.ledger.lost_total) == ("customers", 0)
+
+
+def test_a_real_deletion_of_10_percent_of_customers_still_stops_when_the_query_groups() -> None:
+    query = PER_CUSTOMER.replace("IS NOT NULL", ">= 10")
+    result = run_guarded(invoices(), [sql(query)], primary_key=None, target=None, **RUN)
+    assert result.receipts[0].keys_lost == 10
+    assert "PLAN_LOSES_TOO_MUCH" in codes(result, "stop")
+
+
+def test_keys_unique_passes_for_a_group_by_step_with_no_confirmed_key() -> None:
+    result = run_guarded(
+        invoices(),
+        [sql(PER_CUSTOMER)],
+        primary_key=None,
+        target=None,
+        expectations={1: Expectations(keys_unique=True, max_keys_lost_pct=0.0)},
+        **RUN,
+    )
+    assert "EXPECTATION_FAILED" not in codes(result)
+
+
+def test_a_group_by_that_renames_the_column_is_not_guessed() -> None:
+    query = "SELECT CustomerID AS who, count(*) AS n FROM t_this GROUP BY CustomerID"
+    result = run_guarded(invoices(), [sql(query)], primary_key=None, target=None, **RUN)
+    assert result.receipts[0].grouped_by is None and result.receipts[0].keys_in is None

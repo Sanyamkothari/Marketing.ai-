@@ -51,6 +51,7 @@ __all__ = [
     "SqlStepParams",
     "check_sql",
     "future_rows_moved",
+    "group_by_column",
     "resolve_as_of_rule",
     "run_sql",
     "sql_params",
@@ -351,6 +352,46 @@ def check_sql(sql: str, tables: Collection[str], *, as_of: date | None = None) -
         )
     for node in _walk(tree):
         _check_node(node, allowed | ctes, as_of)
+
+
+def group_by_column(sql: str) -> str | None:
+    """The one column a query groups by, as DuckDB's own parser reads it, or none (no GROUP BY, more than one
+    group, or a group that is not a plain column). Returned under the name it has in the result: a column
+    renamed in the SELECT is given by its new name only when it is kept under its own name."""
+    import duckdb
+
+    con = _connect()
+    try:
+        tree = json.loads(con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
+    except (duckdb.Error, ValueError):
+        return None
+    finally:
+        con.close()
+    if tree.get("error"):
+        return None
+    try:
+        node = tree["statements"][0]["node"]
+        groups = node.get("group_expressions") or []
+        if node.get("type") != "SELECT_NODE" or len(groups) != 1:
+            return None
+        group = groups[0]
+        selected = node.get("select_list") or []
+        if group.get("type") == "VALUE_CONSTANT":  # GROUP BY 1: the first column of the SELECT
+            position = int(group["value"]["value"])
+            group = selected[position - 1]
+        if group.get("type") != "COLUMN_REF":
+            return None
+        column = str(group["column_names"][-1])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+    for item in selected:
+        if (
+            item.get("type") == "COLUMN_REF"
+            and item["column_names"][-1] == column
+            and item.get("alias") not in ("", column)
+        ):
+            return None  # kept under another name: the input and the result do not share it
+    return column
 
 
 def _fixed_date_refusal(shown: str) -> SqlStepError:
