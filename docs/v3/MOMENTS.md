@@ -238,8 +238,9 @@ purchases better than the daily sweep's ranking (the dataset is not here); anyth
 - **Price drops have no producer.** `price_drops` and `MomentBook.with_price_changes` work and are tested, but
   nothing builds `PriceChange`s from catalogue snapshots yet. Until the catalogue sync calls them and refreshes the
   agent's book, `price_drop` cannot fire in the product or the Gym.
-- **The runtime has no setting for moments.** `build_agent_policy(moments=...)` is the switch; the server's shop
-  settings must load a book (with the shop's `default_country`) and pass it.
+- **The runtime has no setting for moments alone.** `build_agent_policy(moments=...)` is the switch. `AUTONOMY_V3`
+  loads the shipped book for the agent with the shop's country as `default_country` when `AUTONOMY_COUNTRIES`
+  names exactly one ([`PRESET.md`](PRESET.md)).
 - **Explanations carry the reasons, the UI does not show them yet.** `BidExplanation.moment_reasons` is filled by
   `explain_bids`; `autonomy/runtime/demo.py` and the decision view do not read it.
 - `Bid.urgency` can now exceed 1 when moments are on (the contract only requires it to be 0 or more). The Gym smoke

@@ -14,13 +14,16 @@ shipped `configs/v3` book, no default country) and folds every policy's states w
 `StateFolder`, which keeps the carts, views and buying rhythms moments read. With the comparison it
 also runs the same agent with moments off on the same folder and seeds (`agent_no_moments`) and
 reports the difference under `moments` in the JSON: the moment-raised bids against the same agent's
-plain daily sweep.
+plain daily sweep. It takes `--policy agent` or `--policy agent_v3` (whose control is the preset with only
+its moments off).
 
 Policies are found by name in a registry. `agent` is Autonomy's own policy
 (`autonomy.runtime.agent.build_agent_policy`); `agent_lookalike` is the same agent with the look-alike
 response model on (docs/v3/LOOKALIKE.md); `agent_who` adds the profile and plan-v3 decision 1 to that
 (docs/v3/WHO.md); `agent_frequency` adds look-alike tiredness and 3-week contact plans to it
-(docs/v3/FREQUENCY.md). Another stream adds its own with
+(docs/v3/FREQUENCY.md); `agent_v3` is the agent with every v3 piece on together, the preset of
+docs/v3/PRESET.md (look-alike, who, frequency, moments, journeys, offer pricing, experiments wrapper with
+none running), for CI to compare with `agent`. Another stream adds its own with
 `register_policy("name", lambda world: MyPolicy(...))`; the factory gets the world so a fresh
 policy is built for every run (the oracle uses the world's truth; nothing else may).
 """
@@ -68,6 +71,7 @@ AGENT_NO_MOMENTS = "agent_no_moments"
 AGENT_LOOKALIKE = "agent_lookalike"
 AGENT_WHO = "agent_who"
 AGENT_FREQUENCY = "agent_frequency"
+AGENT_V3 = "agent_v3"
 
 
 def _nothing_factory(world: SimWorld) -> Policy:  # noqa: ARG001
@@ -150,6 +154,23 @@ def agent_frequency_factory(world: SimWorld) -> Policy:  # noqa: ARG001
     return build_agent_policy([default_brief()], default_content(), lookalike=True, frequency=True)
 
 
+def agent_v3_factory(world: SimWorld) -> Policy:  # noqa: ARG001
+    """The agent with every plan-v3 piece on (`build_agent_policy(v3=True)`, docs/v3/PRESET.md). For CI to
+    compare with `agent` on the same seeds. It learns only from what the agent observes, never from the world.
+    """
+    from autonomy.runtime.agent import build_agent_policy
+
+    return build_agent_policy([default_brief()], default_content(), v3=True)
+
+
+def v3_no_moments_agent_factory(world: SimWorld) -> Policy:  # noqa: ARG001
+    """`agent_v3_factory` with only the moments switched off: the control for `--moments --policy agent_v3`."""
+    from autonomy.runtime.agent import build_agent_policy
+    from autonomy.runtime.v3 import V3Preset
+
+    return build_agent_policy([default_brief()], default_content(), v3=V3Preset(moments=False))
+
+
 POLICIES: dict[str, PolicyFactory] = {
     EVERYONE: everyone_factory,
     RULE: rule_factory,
@@ -159,6 +180,7 @@ POLICIES: dict[str, PolicyFactory] = {
     AGENT_LOOKALIKE: agent_lookalike_factory,
     AGENT_WHO: agent_who_factory,
     AGENT_FREQUENCY: agent_frequency_factory,
+    AGENT_V3: agent_v3_factory,
     BEST_FIXED: best_fixed_factory,
     SEGMENT_ORACLE: segment_oracle_factory,
 }
@@ -269,7 +291,8 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
     parser.add_argument(
         "--moments",
         action="store_true",
-        help="Switch the agent's moments on, fold with the full StateFolder and compare with moments off",
+        help="Switch the agent's moments on, fold with the full StateFolder and compare with moments off "
+        "(--policy agent or agent_v3)",
     )
     parser.add_argument(
         "--report-json", type=Path, default=None, metavar="PATH", help="Write scorecards and verdicts as JSON"
@@ -297,9 +320,10 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
     if args.fixed_hour is not None:
         registry[BEST_FIXED] = fixed_hour_factory(args.fixed_hour)
     if args.moments:
-        if args.policy != AGENT:
-            parser.error("--moments is for --policy agent")
-        registry[AGENT] = moments_agent_factory
+        if args.policy not in (AGENT, AGENT_V3):
+            parser.error("--moments is for --policy agent or agent_v3")
+        if args.policy == AGENT:
+            registry[AGENT] = moments_agent_factory  # agent_v3 has its moments on already
     factory = registry[args.policy]
     folders = full_folder if args.moments else None
     seeds = list(range(args.first_seed, args.first_seed + args.seeds))
@@ -340,7 +364,9 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
         names = [args.policy, *REFERENCES]
         policies = {n: registry[n] for n in dict.fromkeys(names)}
         if args.moments:
-            policies[AGENT_NO_MOMENTS] = no_moments_agent_factory
+            policies[AGENT_NO_MOMENTS] = (
+                v3_no_moments_agent_factory if args.policy == AGENT_V3 else no_moments_agent_factory
+            )
         result = compare(spec, policies, seeds, world_factory=worlds, learn=learn, folder_factory=folders)
         for card in result.cards:
             if card.policy == args.policy:

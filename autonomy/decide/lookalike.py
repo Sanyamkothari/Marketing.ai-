@@ -924,6 +924,10 @@ class OutcomeBook:
         self._pending.setdefault(decision.decision_id, _Pending(decision, profile, key))
         return True
 
+    def forget(self, decision_id: str) -> None:
+        """Drop a kept decision that is being made again (the experiments' wrapper re-decides a moment)."""
+        self._pending.pop(decision_id, None)
+
     def close(self, now: datetime, timeline_of: Callable[[str], WindowLookup | None]) -> list[Outcome]:
         """The outcomes whose window has ended by `now`. Decisions of customers the lookup does not
         know stay until `max_age`."""

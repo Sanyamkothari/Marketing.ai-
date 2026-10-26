@@ -159,6 +159,13 @@ it on (default None: off, and the bidders are built exactly as before,
   day for every goal's price with that day's offer and channel spend
   (`test_safety_and_wiring.py::test_on_the_agent_charges_a_price_and_moves_it_each_day`).
 
+**After the plan's days (`OfferPricing.renew`, off by default).** A `BudgetPrice` is exhausted once its `days` have
+run, and an exhausted price reads the ceiling (1000), which stops every offer. A goal with no end date outlives its
+first 30 days, so offers would have stopped for good on day 31 with budget left. With `renew=True` the agent plans
+another `days` for what is left when the plan runs out and the budget has not (`BudgetPrice.extend`). The v3
+preset turns it on, and starts the price at 0 (`autonomy.runtime.v3.DEFAULT_OFFER_PRICING`; see
+[`PRESET.md`](PRESET.md)).
+
 ### What was measured
 
 All numbers below are from a scratch script that reuses the test helpers. It was run on this branch

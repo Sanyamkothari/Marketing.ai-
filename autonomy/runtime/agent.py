@@ -137,6 +137,7 @@ from autonomy.contracts import (
 from autonomy.decide import rules
 from autonomy.decide.bidders import AssetOf, GoalBidder, ItemLookup, contact_harm_of
 from autonomy.decide.frequency import FrequencyConfig, FrequencyPlanner, LookalikeHazard, lerp
+from autonomy.decide.journeys import JourneyConfig, JourneyRunner
 from autonomy.decide.lookalike import (
     LookalikeConfig,
     LookalikeResponseModel,
@@ -184,10 +185,13 @@ from autonomy.learning.observations import (
     timelines,
     weighted_rate,
 )
+from autonomy.runtime.v3 import V3Preset, resolve_v3
 from autonomy.uplift import UpliftWarmStart, warm_start_uplift
 
 if TYPE_CHECKING:
     from autonomy.decide.moments import MomentBook
+    from autonomy.experiments.book import ExperimentBook
+    from autonomy.experiments.policy import ExperimentPolicy
 
 AGENT_VERSION = "autonomy-agent-v1"
 
@@ -1575,6 +1579,40 @@ def _moment_reasons(
     return bidder.moment_reasons(state, now) if isinstance(bidder, GoalBidder) else ()
 
 
+def _later_step(decision: Decision | None) -> bool:
+    """Whether the decision sends a journey's later step (not its first message)."""
+    return (
+        decision is not None
+        and decision.kind is DecisionKind.ACT
+        and decision.action is not None
+        and decision.action.follow_up_step > 0
+    )
+
+
+class _Undecorated:
+    """The agent as the experiments' wrapper sees it: `decide` without the wrapper, everything else as the agent's."""
+
+    def __init__(self, agent: AgentPolicy) -> None:
+        self._agent = agent
+        self.version = agent.version
+
+    def decide(self, state: CustomerState, ctx: DecisionContext, *, trigger: str | None = None) -> Decision:
+        return self._agent._decide(state, ctx, trigger=trigger)
+
+    def retract_decision(self, decision_id: str) -> None:
+        """The wrapper is about to decide this moment again (same decision id): drop what the agent kept of
+        the first attempt that the second does not overwrite. The journey runner undoes it by itself
+        (`JourneyRunner.begin`), and the scheduled send is replaced under the same id."""
+        if self._agent.outcomes is not None:
+            self._agent.outcomes.forget(decision_id)
+        self._agent._tired_profiles.pop(decision_id, None)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._agent, name)
+
+
 class AgentPolicy:
     """Autonomy's policy for the agent group (implements `Policy`). Build it with `build_agent_policy`."""
 
@@ -1605,6 +1643,8 @@ class AgentPolicy:
         moments: MomentBook | Literal[False] | None = None,
         who: WhoBook | None = None,
         frequency: FrequencyConfig | None = None,
+        journeys: JourneyRunner | None = None,
+        experiments: ExperimentBook | None = None,
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
@@ -1701,7 +1741,21 @@ class AgentPolicy:
             budget_fn=self.contact_price.budget if weekly_budget else None,
             margin_fn=self._margin if restraint else None,
             plan_fn=self.planner.gate if self.planner is not None else None,
+            journeys=journeys,
         )
+        if journeys is not None and journeys.fade is None:
+            journeys.fade = self._urgency_fade  # a later step is priced at the urgency left on its day
+        if journeys is not None:
+            journeys.follow_rhythm = False  # the journey is the plan; the weekly rhythm would veto its steps
+        self._journeys_replayed = False
+        self.experiment_policy: ExperimentPolicy | None = None
+        """With a book (the v3 preset), the wrapper `decide` goes through: it runs the book's running
+        experiments on a random few and changes nothing while none runs (docs/v3/EXPERIMENTS.md)."""
+        if experiments is not None:
+            from autonomy.experiments.policy import ExperimentPolicy
+
+            busy = None if journeys is None else (lambda cid: journeys.active(cid) is not None)
+            self.experiment_policy = ExperimentPolicy(_Undecorated(self), experiments, busy=busy)
         for brief in briefs:
             self._install(brief)
         # what the nightly learner needs and decisions do not carry
@@ -1987,6 +2041,11 @@ class AgentPolicy:
         self._weak_lift = weak
 
     def decide(self, state: CustomerState, ctx: DecisionContext, *, trigger: str | None = None) -> Decision:
+        if self.experiment_policy is not None:  # the v3 preset: the experiments' wrapper, then `_decide`
+            return self.experiment_policy.decide(state, ctx, trigger=trigger)
+        return self._decide(state, ctx, trigger=trigger)
+
+    def _decide(self, state: CustomerState, ctx: DecisionContext, *, trigger: str | None = None) -> Decision:
         if not self._decided:
             self._warm_start({}, ctx.now)
         eff = self._effective(ctx)
@@ -2039,6 +2098,8 @@ class AgentPolicy:
         key: str | None = None
         action = decision.action
         if action is not None:
+            if action.follow_up_step > 0:  # a journey's later step: see `_keep`
+                return
             item = self.content_by_id.get(action.content_id or "")
             if item is None:
                 return
@@ -2131,8 +2192,7 @@ class AgentPolicy:
         ]
         if policy.journeys is not None:  # v3 journeys: the options decide() weighs, not the raw bids
             quoted = [b for b, kept in offered if kept]
-            prices = policy.journey_prices(view, quoted)
-            offered = [(b, True) for b in policy.journeys.expand(quoted, view, prices)] + [
+            offered = [(b, True) for b in policy.journey_options(quoted, view, eff)] + [
                 (b, False) for b, kept in offered if not kept
             ]
         allowed: list[Bid] = []
@@ -2621,7 +2681,11 @@ class AgentPolicy:
     # --- learning -------------------------------------------------------------------------------
 
     def learn(self, rewards: Sequence[Reward], decisions: Mapping[str, Decision]) -> None:
-        """Closed rewards (the `Policy` hook) into the shared models, skipping what is learned."""
+        """Closed rewards (the `Policy` hook) into the shared models, skipping what is learned.
+
+        A journey's later step is left out, as in `_keep`: it went to someone who did not buy after the step
+        before it, so it is not a fresh draw for the response models."""
+        rewards = [r for r in rewards if not _later_step(decisions.get(r.decision_id))]
         if not rewards:
             return
         learn_from_rewards(
@@ -2650,6 +2714,13 @@ class AgentPolicy:
             self._keep(d)
         if self.who is not None:
             self.who.ingest(events_by_customer, now)
+        journeys = self.policy.journeys
+        if journeys is not None and not self._decided and not self._journeys_replayed:
+            # A policy built after a restart or a brief change has no runs; the log has them (JOURNEYS.md).
+            running = [d for d in decisions if d.journey_id is not None or d.journey_ended is not None]
+            if running:
+                journeys.rebuild(running)
+                self._journeys_replayed = True
         if not self._decided:
             # Before the first decision everything handed over is history: past campaigns' sends
             # and clicks are learned from at the first decision (they need segments, see _warm_start).
@@ -2814,8 +2885,11 @@ class AgentPolicy:
         if self._priced_day == day:
             return
         self._priced_day = day
+        renew = self.offer_pricing is not None and self.offer_pricing.renew
         for goal, price in self.offer_prices.items():
             price.update(self._offer_spend.pop(goal, 0.0), other_spend=self._channel_spend.pop(goal, 0.0))
+            if renew and price.days_left == 0 and price.remaining > 0:
+                price.extend(self.offer_pricing.days if self.offer_pricing is not None else 1)
 
     def _segment_at(self, decisions: Iterable[Decision], now: datetime | None) -> Callable[[str], str | None]:
         """A customer -> segment lookup that gives, for the decisions closing now, the segment the
@@ -2841,11 +2915,16 @@ class AgentPolicy:
         if d.decision_id in self.bundle.learned_decisions:
             return
         if d.kind is DecisionKind.ACT and d.action is not None:
-            self._log[d.decision_id] = d
+            # A journey's later step is sent to someone who did not buy after the step before it, so it is
+            # not a fresh draw: the breaker, the tiredness curves and the pacer count it (it is a message),
+            # the response models and the look-alike outcomes do not learn from it as a treatment.
+            follow_up = d.action.follow_up_step > 0
+            if not follow_up:
+                self._log[d.decision_id] = d
             if d.group is Group.AGENT:
                 new = d.decision_id not in self._sends
                 self._sends[d.decision_id] = (d.action.goal_id, d.action.channel, d.action.send_at)
-                item = self.content_by_id.get(d.action.content_id or "")
+                item = None if follow_up else self.content_by_id.get(d.action.content_id or "")
                 if item is not None:
                     seg = self._decision_segment.get(d.decision_id)
                     key = key_of(d.action.channel, d.action.offer_id, item.theme.value, item.format)
@@ -3010,9 +3089,11 @@ def build_agent_policy(
     currency: str = "$",
     offer_pricing: OfferPricing | None = None,
     moments: MomentBook | Literal[False] | None = None,
-    lookalike: bool | LookalikeConfig = False,
-    who: bool | WhoConfig | WhoBook = False,
-    frequency: bool | FrequencyConfig = False,
+    lookalike: bool | LookalikeConfig | None = None,
+    who: bool | WhoConfig | WhoBook | None = None,
+    frequency: bool | FrequencyConfig | None = None,
+    journeys: bool | JourneyConfig | JourneyRunner | None = None,
+    v3: bool | V3Preset = False,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -3052,7 +3133,30 @@ def build_agent_policy(
     instead of messages (docs/v3/FREQUENCY.md): the tiredness models learn from look-alikes, and each
     customer's best 3-week contact plan decides whether today is a day to wait. Pass a
     `FrequencyConfig` to change its numbers or to switch one of its two parts off.
+
+    `journeys` (plan-v3 decision 4, off by default) lets the auction choose a short plan of messages
+    over several channels (docs/v3/JOURNEYS.md): True is the shipped `configs/v3/journeys.yaml`, or pass
+    a `JourneyConfig` or a `JourneyRunner`. Later steps are priced at the urgency left on their day.
+
+    `v3` (off by default, so every number above is unchanged) turns on every v3 piece together
+    (`autonomy.runtime.v3.V3Preset`, docs/v3/PRESET.md): look-alike, who, frequency, the shipped
+    moments, the shipped journeys, the budget price for offers and the experiments' wrapper with no
+    experiment running (`agent.experiment_policy.book`). Pass a `V3Preset` to switch a part off. A piece
+    also passed by name here wins over the preset's, False included (`journeys=False`, `moments=False`, a
+    `journeys=` runner...); `lookalike`, `who`, `frequency` and `journeys` default to None, "not given",
+    which is off without the preset. Offer pricing is switched off only with `V3Preset(offers=False)`.
     """
+    parts = resolve_v3(
+        v3,
+        lookalike=lookalike,
+        who=who,
+        frequency=frequency,
+        moments=moments,
+        journeys=journeys,
+        offer_pricing=offer_pricing,
+    )
+    lookalike, who, frequency = parts.lookalike, parts.who, parts.frequency
+    moments, offer_pricing = parts.moments, parts.offer_pricing
     book = (
         who
         if isinstance(who, WhoBook)
@@ -3098,4 +3202,6 @@ def build_agent_policy(
             if frequency
             else None
         ),
+        journeys=parts.journeys,
+        experiments=parts.experiments,
     )
