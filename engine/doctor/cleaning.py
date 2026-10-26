@@ -103,6 +103,7 @@ def _clean(
     frame = loaded.frame
     key = _decided(case, "key", upload_id)
     outcome = _decided(case, "outcome_column", upload_id)
+    held = _order_log_columns(case, loaded)
     items: list[CaseItem] = []
     asks: list[Ask] = []
 
@@ -122,7 +123,7 @@ def _clean(
             *propose_indian_numbers(frame, primary_key=key, target=outcome),
             *propose_indian_booleans(frame, primary_key=key, target=outcome),
         )
-        if proposal.column not in mixed
+        if proposal.column not in mixed and proposal.column not in held
     ]
     indian = [proposal for proposal in locale if proposal.step is not None]
     never = _never_ticked(config, root)
@@ -138,11 +139,28 @@ def _clean(
             step = _step_of(item)
             if step is None or step.column in mixed:
                 continue
+            if step.column in held and step.kind in _NUMBER_OR_YES_NO:
+                continue  # a customer or order number is a label written in digits, never read as a number
             if step.column in taken and step.kind in _NUMBER_OR_YES_NO:
                 continue
             items.append(item)
-        asks.extend(a for a in advice_asks if a.column not in mixed and a.column not in taken)
+        asks.extend(
+            a for a in advice_asks if a.column not in mixed and a.column not in taken and a.column not in held
+        )
     return items, asks
+
+
+def _order_log_columns(case: Case, loaded: LoadedFile) -> frozenset[str]:
+    """The columns of an order log that name a shopper or an order (v3 phase 0): the one a person chose as the
+    shopper and the file's order numbers. Empty unless the person has chosen one, so nothing moves otherwise.
+    No cleaning step turns these into numbers: `C536379` would blank, and a customer is a label, not a quantity.
+    """
+    chosen = _decided(case, "order_log_customer", loaded.upload_id)
+    if chosen is None:
+        return frozenset()
+    from engine.doctor.order_log import key_columns
+
+    return key_columns(loaded, chosen)
 
 
 def _never_ticked(config: UseCaseConfig | None, root: Path | None) -> frozenset[RecipeStepKind]:
