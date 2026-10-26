@@ -74,6 +74,8 @@ DOCTOR_REPLY_CHARS: Final[int] = 2000
 """The longest reply the Data Doctor chat accepts: room to explain a plan (a table, its numbers, what it needs from
 the person). Guided setup keeps the shorter `MAX_REPLY_CHARS`. The history shows a reply of this length whole."""
 STATE_ITEMS: Final[int] = 40
+MADE_COLUMNS: Final[int] = 20
+"""Columns of a query's table the model is shown."""
 STATE_QUESTIONS: Final[int] = 12
 STATE_DOUBTS: Final[int] = 5
 RELOADED_LOOKS: Final[int] = 6
@@ -198,6 +200,8 @@ class _Chat(_Review):
                 ProposalState.REJECTED: "left out",
             }[item.state]
             tried = item.payload.get("tried")
+            made = item.payload.get("columns")
+            step = item.payload.get("step")
             plan.append(
                 {
                     "id": f"c{number}",
@@ -206,6 +210,21 @@ class _Chat(_Review):
                     "state": shown,
                     **({"decided_by": decided} if decided else {}),
                     **({"tried_on_first_rows": tried} if isinstance(tried, dict) else {}),
+                    # A query's own table, so the model sees what it built (names only, through the file's gate).
+                    **(
+                        {
+                            "makes_table": {
+                                "name": self._text(item.upload_id, str(step.get("column", ""))[:SHORT]),
+                                "columns": [
+                                    self._text(item.upload_id, str(c)[:SHORT]) for c in made[:MADE_COLUMNS]
+                                ],
+                            }
+                        }
+                        if isinstance(made, list)
+                        and isinstance(step, dict)
+                        and step.get("kind") == "sql_query"
+                        else {}
+                    ),
                 }
             )
         asked: list[dict[str, Any]] = []

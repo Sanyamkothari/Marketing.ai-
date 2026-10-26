@@ -1778,6 +1778,8 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                     [str(c) for c in loaded.frame.columns], brief.outcome.synonyms, parts=True
                 )
             ]
+            if not likely:
+                likely = _prepared_outcomes(case, brief, files)
             if likely:
                 choices = [
                     (
@@ -1832,6 +1834,85 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
         table = current_upload(case, outcome[0])
         _time_rule(run, case, brief, table, step, now)
         _consent_rule(case, brief, table, step, files, now)
+
+
+_STEM: Final[int] = 5
+_STOP_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "the",
+        "and",
+        "that",
+        "after",
+        "before",
+        "with",
+        "from",
+        "this",
+        "day",
+        "days",
+        "date",
+        "snapshot",
+        "placed",
+    }
+)
+"""Words that say nothing about which column is the outcome (every window is in days, after a snapshot)."""
+
+
+def _stems(text: str) -> set[str]:
+    """The word-starts of a name or a sentence (`ordered_again_90d` and "placed another order in the 90 days" share
+    `order` and `90`): letters cut to five, numbers whole."""
+    words = re.findall(r"[a-z]+|\d+", text.lower())
+    return {w[:_STEM] for w in words if w not in _STOP_WORDS and (len(w) >= 3 or w.isdigit())}
+
+
+def _prepared_outcomes(
+    case: Case, brief: GoalBrief, files: Sequence[LoadedFile]
+) -> list[tuple[LoadedFile, str]]:
+    """The columns the case's own query steps (accepted, or proposed by the AI and not yet answered) make that read
+    as the goal's outcome: a column named like it or a synonym, or one whose name shares the outcome's words (the AI
+    names its columns freely; the step's description counts for a weaker name). Only candidates for the person's
+    question, never a decision. Each is a `(file, column)` pair; the file is the one the query reads."""
+    from engine.doctor.prescription import slot_name
+
+    named = {_norm(n) for n in (brief.outcome.column, *brief.outcome.synonyms) if n}
+    words = _stems(f"{brief.outcome.definition} {brief.outcome.column or ''}")
+    found: list[tuple[LoadedFile, str]] = []
+    for item in case.items:
+        step = item.payload.get("step")
+        columns = item.payload.get("columns")
+        if (
+            not isinstance(step, dict)
+            or step.get("kind") != "sql_query"
+            or not isinstance(columns, list)
+            or not (item.state is ProposalState.ACCEPTED or item.source is ProposalSource.AI)
+            or item.state is ProposalState.REJECTED
+        ):
+            continue
+        given = step.get("params")
+        params: dict[str, Any] = given if isinstance(given, dict) else {}
+        said = _stems(f"{step.get('reason') or ''} {params.get('description') or ''}")
+        inputs = params.get("inputs")
+        reads = [t for t in (inputs if isinstance(inputs, list) else []) if isinstance(t, str)]
+        origin = next(
+            (
+                lf
+                for lf in files
+                if (item.upload_id is not None and lf.upload_id == item.upload_id)
+                or (item.upload_id is None and slot_name(Path(lf.file_name or "").stem) in reads)
+            ),
+            files[0] if files and item.upload_id is None else None,
+        )
+        if origin is None:
+            continue
+        for column in (str(c) for c in columns):
+            mine = _stems(column)
+            if (
+                _norm(column) in named
+                or set(_named([column], [*named], parts=True))
+                or len(mine & words) >= 2
+                or (len(mine & words) >= 1 and len(said & words) >= 2)
+            ):
+                found.append((origin, column))
+    return found
 
 
 def _decided(case: Case, kind: str, goal_id: str) -> tuple[str, str] | None:

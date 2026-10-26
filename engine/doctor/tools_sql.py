@@ -147,6 +147,7 @@ class SqlStepProposal(StrictBase):
             "sentence": self.sentence,
             "receipt": self.receipt.model_dump(mode="json"),
             "findings": [f.model_dump(mode="json") for f in self.findings],
+            "columns": list(self.columns),  # names only: what the new table holds (the goal check reads them)
             "changed_cells": self.changed_cells,
             "compared_cells": self.compared_cells,
             "needs_yes": self.needs_yes,
