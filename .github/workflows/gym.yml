@@ -42,7 +42,7 @@ jobs:
           cache: pip
           cache-dependency-path: .github/workflows/v2.yml
       - name: Install the v2 core
-        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54"
+        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54" "pyyaml==6.0.3"
       - name: Gym scoreboard
         shell: bash   # bash -eo pipefail: a crash under tee must turn the job red
         run: |

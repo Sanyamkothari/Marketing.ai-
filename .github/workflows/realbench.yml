@@ -43,7 +43,7 @@ jobs:
           cache: pip
           cache-dependency-path: .github/workflows/realbench.yml
       - name: Install the light deps
-        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54"
+        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54" "pyyaml==6.0.3"
       # Only the raw downloads are cached (keyed on the checksums in fetch.py); the bench's own
       # derived caches (<data-dir>/_cache) are rebuilt every run so they always match the code.
       - name: Cache the dataset
@@ -99,7 +99,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install the light deps
-        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54"
+        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54" "pyyaml==6.0.3"
       - uses: actions/download-artifact@v4
         with:
           pattern: realbench-*
