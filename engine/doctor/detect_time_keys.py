@@ -413,7 +413,7 @@ def _tail_ask(check: Check, column: str, upload_id: str, rows: int) -> Ask:
         option_id="leave_out",
         kind="recipe_step",
         title=f"Use {keep} as the as-of date and leave out the {after:,} rows dated after it.",
-        payload={"upload_id": upload_id, "path": None, "value": None, "step": step},
+        payload={"upload_id": upload_id, "path": None, "value": None, "step": step, "as_of": keep},
     )
     return Ask(
         code="THIN_LAST_PERIOD",

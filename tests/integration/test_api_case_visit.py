@@ -384,3 +384,53 @@ def test_with_the_switch_off_there_is_no_visit_path(config_root: Path, tmp_path:
     assert not [path for path in paths if path.startswith(("/cases", "/goal-briefs"))]
     with TestClient(app) as client:
         assert client.get(f"/goal-briefs/{GOAL}").status_code == 404
+
+
+def test_an_answer_value_is_refused_where_the_option_takes_none(client: TestClient, data_dir: Path) -> None:
+    upload_id = _upload(client)
+    case = client.post("/cases", json={"upload_ids": [upload_id]}).json()
+    case = client.post(f"/cases/{case['case_id']}/visit", json={}).json()
+    open_ = next(q for q in case["questions"] if q["answer"] is None and q["options"])
+    response = client.post(
+        f"/cases/{case['case_id']}/answers",
+        json={
+            "version": case["version"],
+            "question_id": open_["question_id"],
+            "option_id": open_["options"][0]["option_id"],
+            "value": "2011-11-30",
+        },
+    )
+    assert response.status_code == 422 and _code(response) == "VISIT_ANSWER_VALUE_INVALID"
+
+
+def test_a_typed_date_is_accepted_over_http(client: TestClient, data_dir: Path) -> None:
+    from engine.doctor.protocol import _case_question, _with_dont_know
+    from engine.doctor.questions import build_ask
+    from engine.storage import LocalStorage
+
+    upload_id = _upload(client)
+    case = client.post("/cases", json={"upload_ids": [upload_id]}).json()
+    ask = build_ask("Q8", {"latest_date": "2011-12-09"}, rows=100)
+    q8 = _case_question(ask, "q8", _with_dont_know(ask)).model_copy(update={"code": "Q08_AS_OF"})
+    store = doctor_case.CaseStore(LocalStorage(data_dir))
+    store.update(
+        "default",
+        case["case_id"],
+        expected_version=case["version"],
+        actor="test",
+        change=lambda c: (c.model_copy(update={"questions": (*c.questions, q8)}), ()),
+    )
+    fresh = client.get(f"/cases/{case['case_id']}").json()
+    typed = next(o for o in q8.options if o.value_kind == "date")
+    response = client.post(
+        f"/cases/{case['case_id']}/answers",
+        json={
+            "version": fresh["version"],
+            "question_id": "q8",
+            "option_id": typed.option_id,
+            "value": "2011-11-30",
+        },
+    )
+    assert response.status_code == 200, response.text
+    answered = next(q for q in response.json()["questions"] if q["question_id"] == "q8")
+    assert answered["answer_value"] == "2011-11-30"

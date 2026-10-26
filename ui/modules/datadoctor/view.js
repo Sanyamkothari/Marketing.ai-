@@ -229,6 +229,12 @@ export function leftOutHtml(screen, { where = "head" } = {}) {
 
 // --- questions ------------------------------------------------------------------------------------------------
 
+/** The date a person types with an answer such as "I will type a date": the button beside it sends it. */
+function dateField(q, o, value, disabled) {
+  const label = `Date for: ${o.label}`;
+  return `<input type="date" class="dds-date" data-dds-value="${esc(o.option_id)}" data-dds-q="${esc(q.question_id)}" value="${esc(value || "")}" aria-label="${esc(label)}"${disabled ? " disabled" : ""}>`;
+}
+
 export function questionHtml(
   q,
   c,
@@ -251,7 +257,7 @@ export function questionHtml(
         kind: chosen ? "primary" : "secondary",
         attrs: `data-dds-answer="${esc(o.option_id)}" data-dds-q="${id}" aria-pressed="${chosen}"`,
         disabled: busy || chosen,
-      })}${effect ? `<span class="dds-effect">${effect}</span>` : ""}${o.safe ? `<span class="dds-effect">The safe choice</span>` : ""}</li>`;
+      })}${o.value_kind === "date" ? dateField(q, o, chosen ? q.answer_value : "", busy || chosen) : ""}${effect ? `<span class="dds-effect">${effect}</span>` : ""}${o.safe ? `<span class="dds-effect">The safe choice</span>` : ""}</li>`;
     })
     .join("");
   const dontKnow = dk

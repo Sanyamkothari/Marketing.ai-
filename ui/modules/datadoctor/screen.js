@@ -826,11 +826,18 @@ function bind(entry) {
       // "I don't know" first asks who would know; the safe choice is one click further, never a guess.
       openWho(entry, `q:${d.ddsQ}`, `[data-dds-who-pick]`);
     } else if (d.ddsAnswer && d.ddsQ) {
+      // An answer that asks for a typed date reads it from the field beside the button; without one it asks for it.
+      const field = target.closest("li")?.querySelector("input[data-dds-value]");
+      const typed = field ? field.value : "";
+      if (field && !typed) {
+        field.focus();
+        return;
+      }
       act(
         entry,
         "answer",
         async () => {
-          await answerQuestion(theCase(entry), d.ddsQ, d.ddsAnswer);
+          await answerQuestion(theCase(entry), d.ddsQ, d.ddsAnswer, typed);
           entry.state.changing.delete(d.ddsQ);
           entry.state.knowing.delete(`q:${d.ddsQ}`);
         },

@@ -83,6 +83,7 @@ PLAN_O_CODES: Final[frozenset[str]] = frozenset(
         # M235 (DEC-1805): the visit (`engine.doctor.visit`, `api/routes/case_visit.py`).
         "VISIT_NOT_WAITING",
         "VISIT_UNKNOWN_CHOICE",
+        "VISIT_ANSWER_VALUE_INVALID",
         # M236 (DEC-1806): route codes the wrapper tools now raise too (`engine.doctor.tools_wrappers`;
         # `engine.connections.limits`; AGENTIC_DISABLED is Plan K's).
         "AGENT_SESSION_APPLIED",

@@ -395,6 +395,11 @@ class CaseOption(StrictBase):
         exclude_if=lambda value: not value,
         description='Plan O M246: the safe choice (hide, leave as text, stop) an "I don\'t know" maps to.',
     )
+    value_kind: Literal["date", "number", "text"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="AI-first A1c: the answer needs a value typed with it (a date as YYYY-MM-DD, a number, or text).",
+    )
 
 
 class CaseQuestion(StrictBase):
@@ -411,6 +416,11 @@ class CaseQuestion(StrictBase):
     answer: str | None = Field(default=None, description="The chosen option id.")
     answered_by: str | None = Field(default=None, description="Who answered (user id).")
     answered_at: AwareDatetime | None = Field(default=None, description="When.")
+    answer_value: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="AI-first A1c: the value typed with the answer, when the chosen option asks for one.",
+    )
     goal_id: str | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -527,6 +537,11 @@ class CaseChatEntry(StrictBase):
         default=None,
         exclude_if=lambda value: value is None,
         description="An answer it suggests to an open question; the person's click answers it, nothing else does.",
+    )
+    suggestions: tuple[ChatSuggestion, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="Every answer it suggests, one per open question; `suggestion` is the first of them.",
     )
     blocked_by: str | None = Field(
         default=None,
