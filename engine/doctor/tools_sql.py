@@ -59,6 +59,8 @@ M_SQL_TOOLS: Final[tuple[str, ...]] = ("propose_sql_step",)
 DRY_RUN_ROWS: Final[int] = 100_000
 """A query is tried on at most this many rows of each file; a bigger file is said to be sampled."""
 MAX_COLUMNS_LISTED: Final[int] = 40
+MAX_COLUMNS_KEPT: Final[int] = 500
+"""Names kept for the goal check (the display above shows fewer): a wide table's outcome may come last."""
 
 
 class ProposeSqlStepArgs(BaseModel):
@@ -119,6 +121,13 @@ class SqlStepProposal(StrictBase):
     rows_out: int = Field(description="Rows the new table has.")
     columns_out: int
     columns: tuple[str, ...] = Field(description="Names of the new table's columns (the first ones).")
+    all_columns: tuple[str, ...] = Field(
+        default=(),
+        description="Names of the new table's columns, up to MAX_COLUMNS_KEPT (for the goal check).",
+    )
+    two_valued: tuple[str, ...] = Field(
+        default=(), description="Names of the columns with at most two values on the tried rows (names only)."
+    )
     sampled: bool = Field(description="True when it was tried on the first rows of a bigger file.")
     receipt: Receipt = Field(
         description="What the query did, counted by our code: customers kept, lost, repeated."
@@ -147,6 +156,10 @@ class SqlStepProposal(StrictBase):
             "sentence": self.sentence,
             "receipt": self.receipt.model_dump(mode="json"),
             "findings": [f.model_dump(mode="json") for f in self.findings],
+            "columns": list(
+                self.all_columns or self.columns
+            ),  # names only: what the new table holds (the goal check reads them)
+            "two_valued": list(self.two_valued),  # names only: which of them could be a yes/no outcome
             "changed_cells": self.changed_cells,
             "compared_cells": self.compared_cells,
             "needs_yes": self.needs_yes,
@@ -183,6 +196,18 @@ def _as_of_rule(
         raise SqlStepError("SQL_NOT_VALID", f"There is no column '{given.as_of_column}' in that file.")
     rule = AsOfRule(rule=given.as_of_rule, table=table, column=given.as_of_column)
     return resolve_as_of_rule(rule, frame[given.as_of_column]), rule.model_dump(mode="json")
+
+
+def _two_valued(frame: pd.DataFrame) -> tuple[str, ...]:
+    """Names of the columns holding at most two different values (blanks aside): the shape of a yes/no outcome."""
+    found: list[str] = []
+    for name in frame.columns:
+        try:
+            if frame[name].nunique(dropna=True) <= 2:
+                found.append(str(name))
+        except (TypeError, ValueError):  # unhashable cells or a repeated name: not a yes/no
+            continue
+    return tuple(found)
 
 
 def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal:
@@ -248,6 +273,8 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         rows_out=run.receipt.rows_out,
         columns_out=run.receipt.columns_out,
         columns=run.receipt.columns[:MAX_COLUMNS_LISTED],
+        all_columns=run.receipt.columns[:MAX_COLUMNS_KEPT],
+        two_valued=_two_valued(run.frame)[:MAX_COLUMNS_KEPT],
         sampled=sampled,
         receipt=receipt,
         changed_cells=changed_cells,

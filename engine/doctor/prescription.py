@@ -383,6 +383,44 @@ def prescription_hash(prescription: Prescription) -> str:
     )
 
 
+def query_makes(items: Sequence[CaseItem], column: str) -> bool:
+    """True when an accepted query step's table has `column`."""
+    for item in items:
+        made, step = item.payload.get("columns"), item.payload.get("step")
+        if (
+            item.state is ProposalState.ACCEPTED
+            and isinstance(made, list)
+            and isinstance(step, dict)
+            and step.get("kind") == "sql_query"
+            and column in made
+        ):
+            return True
+    return False
+
+
+def prepared_key(items: Sequence[CaseItem], target: str | None, key: str | None) -> str | None:
+    """The ID column a run reads when the outcome comes from an accepted query's table: the file's key where the
+    table keeps it, else the table's own ID-named column (a table of one row per customer has no invoice id).
+    """
+    from engine.doctor.visit import _ID_NAMED
+
+    for item in items:
+        made = item.payload.get("columns")
+        step = item.payload.get("step")
+        if (
+            target is not None
+            and isinstance(made, list)
+            and isinstance(step, dict)
+            and step.get("kind") == "sql_query"
+            and item.state is ProposalState.ACCEPTED
+            and target in made
+        ):
+            if key in made:
+                return key
+            return next((str(c) for c in made if _ID_NAMED.search(str(c).strip())), key)
+    return key
+
+
 def make_prescription(
     *,
     provenance: Provenance,
@@ -872,6 +910,7 @@ def prescription_from_case(
         first = upload_ids[0]
         key = next((keys[u] for u in upload_ids if u in keys), None)
         target = next((targets[u] for u in upload_ids if u in targets), None)
+        key = prepared_key(approved, target, key)
         recipe = _recipe(
             [s for u in upload_ids for s in steps_by_upload.get(u, [])],
             use_case_id=use_case_id,

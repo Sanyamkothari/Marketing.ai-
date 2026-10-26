@@ -154,6 +154,23 @@ def check_plan(
         frame = consistent_types(loaded.frame.head(SAMPLE_ROWS))
         columns = {str(c) for c in frame.columns}
         key = accepted_column(items, "key", loaded.upload_id, columns)
+        target = accepted_column(items, "outcome_column", loaded.upload_id, columns)
+        if target is None:  # the outcome may come from a query's table (one row per customer): its ID follows
+            from engine.doctor.prescription import prepared_key, query_makes
+
+            declared = next(
+                (
+                    str(i.payload["column"])
+                    for i in items
+                    if i.kind == "outcome_column"
+                    and i.state is ProposalState.ACCEPTED
+                    and i.upload_id in (loaded.upload_id, None)
+                    and isinstance(i.payload.get("column"), str)
+                ),
+                None,
+            )
+            if declared is not None and query_makes(items, declared):
+                target, key = declared, prepared_key(items, declared, key)
         agent = AgentConfig()
         levels = guard_levels(ordered)
         try:
@@ -161,7 +178,7 @@ def check_plan(
                 frame,
                 ordered,
                 primary_key=key,
-                target=accepted_column(items, "outcome_column", loaded.upload_id, columns),
+                target=target,
                 tables=tables,
                 upload_id=loaded.upload_id,
                 source_name=loaded.file_name or None,

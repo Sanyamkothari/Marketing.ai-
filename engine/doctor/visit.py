@@ -1034,6 +1034,10 @@ def _treat(run: _Run, case: Case) -> _Step:
         goal.goal_id if goal is not None else None,
         brief.brief_hash if brief is not None else None,
         answers,
+        # A decided outcome whose query the person left out is asked about again (the rules run once more).
+        goal is not None
+        and (decided := _decided(case, "outcome_column", goal.goal_id)) is not None
+        and _outcome_is_gone(case, run.files(case), decided),
     )
     visit = case.visit or CaseVisit()
     step = _Step(to=VisitState.PREVIEW)
@@ -1746,6 +1750,16 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
     files = run.files(case)
     # The outcome: the configured column where it is; otherwise one question over the files' likely columns.
     outcome = _decided(case, "outcome_column", goal)
+    if outcome is not None and _outcome_is_gone(case, files, outcome):
+        step.doubts.append(
+            CaseDoubt(
+                doubt_id=f"d.outcome_gone.{goal}"[:128],
+                because=f"the outcome “{outcome[1]}” is in no file and in no table the plan still makes",
+                would_do="ask again which column says it once the plan makes a table that has one",
+                if_not=f"{brief.goal_name} cannot be checked",
+            )
+        )
+        return
     if outcome is None:
         exact = [
             (loaded, column)
@@ -1778,6 +1792,8 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                     [str(c) for c in loaded.frame.columns], brief.outcome.synonyms, parts=True
                 )
             ]
+            if not likely:
+                likely = _prepared_outcomes(case, brief, files)
             if likely:
                 choices = [
                     (
@@ -1832,6 +1848,117 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
         table = current_upload(case, outcome[0])
         _time_rule(run, case, brief, table, step, now)
         _consent_rule(case, brief, table, step, files, now)
+
+
+_STEM: Final[int] = 5
+_STOP_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "the",
+        "and",
+        "that",
+        "after",
+        "before",
+        "with",
+        "from",
+        "this",
+        "day",
+        "days",
+        "date",
+        "snapshot",
+        "placed",
+    }
+)
+"""Words that say nothing about which column is the outcome (every window is in days, after a snapshot)."""
+
+
+def _stems(text: str) -> set[str]:
+    """The word-starts of a name or a sentence (`ordered_again_90d` and "placed another order in the 90 days" share
+    `order` and `90`): letters cut to five, numbers whole."""
+    words = re.findall(r"[a-z]+|\d+", text.lower())
+    return {w[:_STEM] for w in words if w not in _STOP_WORDS and (len(w) >= 3 or w.isdigit())}
+
+
+def _query_tables(
+    case: Case, files: Sequence[LoadedFile]
+) -> list[tuple[CaseItem, LoadedFile, dict[str, Any], list[str]]]:
+    """The query steps of the active goal's section that make a table (accepted, or proposed by the AI and not yet
+    answered): `(item, the file the query reads, the step, the names of the columns it makes)`. A step that runs
+    after the build, with no file of its own, is left out when there are several files: the prescription carries it
+    only for a single file."""
+    from engine.doctor.prescription import slot_name
+
+    found: list[tuple[CaseItem, LoadedFile, dict[str, Any], list[str]]] = []
+    for item in active_section(case)[0]:
+        step = item.payload.get("step")
+        columns = item.payload.get("columns")
+        if (
+            not isinstance(step, dict)
+            or step.get("kind") != "sql_query"
+            or not isinstance(columns, list)
+            or not (item.state is ProposalState.ACCEPTED or item.source is ProposalSource.AI)
+            or item.state is ProposalState.REJECTED
+            or (item.upload_id is None and len(files) > 1 and item.payload.get("stage") == "post_build")
+        ):
+            continue
+        given = step.get("params")
+        params: dict[str, Any] = given if isinstance(given, dict) else {}
+        inputs = params.get("inputs")
+        reads = [t for t in (inputs if isinstance(inputs, list) else []) if isinstance(t, str)]
+        origin = next(
+            (
+                lf
+                for lf in files
+                if (item.upload_id is not None and lf.upload_id == item.upload_id)
+                or (item.upload_id is None and slot_name(Path(lf.file_name or "").stem) in reads)
+            ),
+            files[0] if files and item.upload_id is None else None,
+        )
+        if origin is not None:
+            found.append((item, origin, step, [str(c) for c in columns]))
+    return found
+
+
+def _prepared_outcomes(
+    case: Case, brief: GoalBrief, files: Sequence[LoadedFile]
+) -> list[tuple[LoadedFile, str]]:
+    """The columns the case's own query steps make that read as the goal's outcome, best first: a column named like
+    it or a synonym, then one whose name shares two of the outcome's words, then one sharing one word while the
+    step's description shares two (the AI names its columns freely). Except for the first kind, the column must be
+    two-valued on the rows the step was tried on (a yes/no), so an order count or a date is never offered. Only
+    candidates for the person's question, never a decision. Each is a `(file, column)` pair."""
+    named = {_norm(n) for n in (brief.outcome.column, *brief.outcome.synonyms) if n}
+    words = _stems(f"{brief.outcome.definition} {brief.outcome.column or ''}")
+    ranked: list[tuple[int, int, LoadedFile, str]] = []
+    for item, origin, step, columns in _query_tables(case, files):
+        given = step.get("params")
+        params: dict[str, Any] = given if isinstance(given, dict) else {}
+        said = _stems(f"{step.get('reason') or ''} {params.get('description') or ''}")
+        binary = item.payload.get("two_valued")
+        for column in columns:
+            mine = _stems(column)
+            if _norm(column) in named or set(_named([column], [*named], parts=True)):
+                tier = 0
+            elif len(mine & words) >= 2:
+                tier = 1
+            elif len(mine & words) >= 1 and len(said & words) >= 2:
+                tier = 2
+            else:
+                continue
+            if tier and isinstance(binary, list) and column not in binary:
+                continue
+            ranked.append((tier, len(ranked), origin, column))
+    ranked.sort(key=lambda r: (r[0], r[1]))
+    return [(origin, column) for _t, _i, origin, column in ranked]
+
+
+def _outcome_is_gone(case: Case, files: Sequence[LoadedFile], decided: tuple[str, str]) -> bool:
+    """True when the decided outcome column is in no file and in no query step still in the plan (the person left
+    the step out, or the AI proposed it again with other names)."""
+    upload_id, column = decided
+    raw = next((lf for lf in files if lf.upload_id == upload_id), None)
+    if raw is None or column in {str(c) for c in raw.frame.columns}:
+        return False
+    return not any(column in made for _i, _o, _s, made in _query_tables(case, files))
 
 
 def _decided(case: Case, kind: str, goal_id: str) -> tuple[str, str] | None:
@@ -1966,8 +2093,6 @@ def readiness_verify(
         from engine.doctor.combine_run import current_upload
         from engine.doctor.readiness import check_readiness, inputs_for_upload, store_readiness
 
-        del files  # the stored upload is read the way POST /runs reads it
-
         if brief is None:
             return VerifyResult(verdict="no_goal", reason="No goal is chosen.")
         outcome = _decided(case, "outcome_column", brief.goal_id)
@@ -1975,12 +2100,20 @@ def readiness_verify(
             return VerifyResult(
                 verdict="not_ready", reason="VISIT_NO_OUTCOME: no file has the goal's outcome yet."
             )
+        if _outcome_is_gone(case, files, outcome):
+            return VerifyResult(
+                verdict="not_ready",
+                reason=f"Not ready: the outcome “{outcome[1]}” is in no file and in no table the plan makes.",
+            )
         # An approved join or stack gave its files' place to the table it made: that table is what a run reads.
         upload_id, column = current_upload(case, outcome[0]), outcome[1]
         key = _key_of(case, upload_id)
         if key is None:
             diagnosed = next((f for f in case.files if f.upload_id == upload_id), None)
             key = diagnosed.key_columns[0] if diagnosed is not None and diagnosed.key_columns else None
+        from engine.doctor.prescription import prepared_key
+
+        key = prepared_key(case.items, column, key)
         config = load_use_case(brief.goal_id, config_root)
         if prepare is not None:
             try:
