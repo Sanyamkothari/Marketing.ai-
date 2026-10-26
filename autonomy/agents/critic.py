@@ -381,7 +381,8 @@ def check_rules(
     if offer is None:
         problems.append(f"offer {item.offer_id!r} is not an approved offer")
     else:
-        allowed_percent = offer.amount if offer.kind is OfferKind.PERCENT_OFF else None
+        # A bundle's `amount` is its percent off the bundle (v3), so the same figure check applies.
+        allowed_percent = offer.amount if offer.kind in (OfferKind.PERCENT_OFF, OfferKind.BUNDLE) else None
         allowed_money = offer.amount if offer.kind is OfferKind.AMOUNT_OFF else None
         for raw in _PERCENT.findall(text):
             if allowed_percent is None or abs(_number(raw) - allowed_percent) > 1e-9:

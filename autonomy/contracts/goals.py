@@ -70,6 +70,8 @@ class OfferKind(StrEnum):
     GIFT = "gift"
     LOYALTY = "loyalty"
     CONTENT = "content"  # useful information, no incentive
+    BUNDLE = "bundle"  # a few items bought together at a discount (items from the co-purchase model)
+    EARLY_ACCESS = "early_access"  # first look at a launch or sale; costs a configured amount
 
 
 class OfferOption(Contract):
@@ -79,6 +81,62 @@ class OfferOption(Contract):
     amount: float = Field(default=0.0, ge=0, description="Percent for percent_off, money for amount_off")
     cost_per_redemption: float = Field(default=0.0, ge=0, description="Expected cost to the business if used")
     needs_approval: bool = False
+    # Cost-model inputs for the v3 offer kinds (autonomy.mandate.catalogue.offer_cost). All default to
+    # "not set"; an explicit `cost_per_redemption` above always wins over what they would derive.
+    # A field still at its default is left out of every dump, so an offer that does not use them
+    # serialises (and hashes: catalogue versions, stored briefs) exactly as it did in v2.
+    shipping_cost: float = Field(
+        default=0.0,
+        ge=0,
+        description="free_shipping: what shipping one order costs us",
+        exclude_if=lambda v: v == 0.0,
+    )
+    bundle_item_ids: tuple[str, ...] = Field(
+        default=(), description="bundle: the items sold together", exclude_if=lambda v: not v
+    )
+    bundle_discount: float = Field(
+        default=0.0, ge=0, description="bundle: money off the bundle", exclude_if=lambda v: v == 0.0
+    )
+    points: float = Field(
+        default=0.0, ge=0, description="loyalty: points granted per redemption", exclude_if=lambda v: v == 0.0
+    )
+    point_value: float = Field(
+        default=0.0,
+        ge=0,
+        description="loyalty: what one point is worth in money",
+        exclude_if=lambda v: v == 0.0,
+    )
+    redemption_rate: float = Field(
+        default=1.0,
+        ge=0,
+        le=1,
+        description="loyalty: share of granted points that are ever redeemed",
+        exclude_if=lambda v: v == 1.0,
+    )
+
+    @model_validator(mode="after")
+    def _price_from_cost_model(self) -> OfferOption:
+        # An offer priced only through the v3 fields states its cost in `cost_per_redemption` too,
+        # so every reader of that field (the budget ledger, the margin floor, the v2 bidder) sees
+        # it. v2 offers leave these fields at their defaults and are unchanged.
+        if self.cost_per_redemption == 0:
+            derived = self.model_cost()
+            if derived > 0:
+                object.__setattr__(self, "cost_per_redemption", derived)
+                self.__pydantic_fields_set__.add("cost_per_redemption")
+        return self
+
+    def model_cost(self) -> float:
+        """The cost of one redemption from the v3 cost-model fields alone: free shipping's
+        `shipping_cost`, a bundle's `bundle_discount`, loyalty's `points x point_value x
+        redemption_rate`; 0 for every other kind (they are priced by `cost_per_redemption`)."""
+        if self.kind is OfferKind.FREE_SHIPPING:
+            return self.shipping_cost
+        if self.kind is OfferKind.BUNDLE:
+            return self.bundle_discount
+        if self.kind is OfferKind.LOYALTY:
+            return self.points * self.point_value * self.redemption_rate
+        return 0.0
 
 
 NO_OFFER = OfferOption(offer_id="none", label="No offer", kind=OfferKind.NONE)

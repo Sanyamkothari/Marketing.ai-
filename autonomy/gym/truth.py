@@ -79,6 +79,18 @@ DEFAULT_START = datetime(2026, 1, 5, tzinfo=UTC)
 
 CHANNELS: tuple[Channel, ...] = tuple(Channel)
 OFFER_KINDS: tuple[OfferKind, ...] = tuple(OfferKind)
+_V2_OFFER_KINDS: tuple[OfferKind, ...] = (
+    OfferKind.NONE,
+    OfferKind.PERCENT_OFF,
+    OfferKind.AMOUNT_OFF,
+    OfferKind.FREE_SHIPPING,
+    OfferKind.GIFT,
+    OfferKind.LOYALTY,
+    OfferKind.CONTENT,
+)
+"""The kinds whose multipliers are drawn from the main stream, in the v2 order. Kinds added later
+(v3: bundle, early access) are drawn from a stream of their own, so old seeds plant the same
+customers whatever the enum holds."""
 THEMES: tuple[Theme, ...] = tuple(Theme)
 CATEGORIES: tuple[str, ...] = ("apparel", "home", "beauty", "outdoor", "electronics")
 _CH = {c: i for i, c in enumerate(CHANNELS)}
@@ -252,9 +264,19 @@ class PlantedTruth:
             )
 
         # Offer and theme multipliers on the uplift.
-        self.offer_mult = self._multipliers(
-            rng, _merge(DEFAULT_OFFER_UPLIFT, spec.offer_uplift), [k.value for k in OFFER_KINDS]
+        offer_table = _merge(DEFAULT_OFFER_UPLIFT, spec.offer_uplift)
+        drawn = self._multipliers(rng, offer_table, [k.value for k in _V2_OFFER_KINDS])
+        later = [k for k in OFFER_KINDS if k not in _V2_OFFER_KINDS]
+        late = (
+            self._multipliers(np.random.default_rng([seed, 8]), offer_table, [k.value for k in later])
+            if later
+            else np.ones((n, 0), dtype=np.float64)
         )
+        self.offer_mult = np.ones((n, len(OFFER_KINDS)), dtype=np.float64)
+        for j, k in enumerate(_V2_OFFER_KINDS):
+            self.offer_mult[:, _KIND[k]] = drawn[:, j]
+        for j, k in enumerate(later):
+            self.offer_mult[:, _KIND[k]] = late[:, j]
         self.offer_mult[:, _KIND[OfferKind.NONE]] = 1.0
         self.theme_mult = self._multipliers(
             rng, _merge(DEFAULT_THEME_UPLIFT, spec.theme_uplift), [t.value for t in THEMES]

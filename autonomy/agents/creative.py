@@ -116,6 +116,9 @@ OFFER_THEMES: dict[OfferKind, tuple[Theme, ...]] = {
     OfferKind.FREE_SHIPPING: (Theme.CONVENIENCE, Theme.SAVINGS),
     OfferKind.GIFT: (Theme.NOVELTY, Theme.LOYALTY),
     OfferKind.LOYALTY: (Theme.LOYALTY, Theme.PERSONAL),
+    # v3 offer kinds (docs/v3/OFFERS.md).
+    OfferKind.BUNDLE: (Theme.SAVINGS, Theme.CONVENIENCE),
+    OfferKind.EARLY_ACCESS: (Theme.NOVELTY, Theme.LOYALTY),
 }
 """Default themes per offer kind. A savings message with no offer would be a false promise."""
 
