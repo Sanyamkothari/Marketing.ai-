@@ -185,6 +185,19 @@ class BriefTemplate:
 
 
 _PRICE_OFFERS = frozenset({OfferKind.PERCENT_OFF, OfferKind.AMOUNT_OFF, OfferKind.FREE_SHIPPING})
+_V2_OFFER_KINDS = frozenset(
+    {
+        OfferKind.NONE,
+        OfferKind.PERCENT_OFF,
+        OfferKind.AMOUNT_OFF,
+        OfferKind.FREE_SHIPPING,
+        OfferKind.GIFT,
+        OfferKind.LOYALTY,
+        OfferKind.CONTENT,
+    }
+)
+"""Every kind v2 knew. The v3 kinds (bundle, early access) are not proposed by a template: a marketer
+adds them to an envelope by hand (docs/v3/OFFERS.md)."""
 
 TEMPLATES: dict[GoalKind, BriefTemplate] = {
     GoalKind.WIN_BACK: BriefTemplate(
@@ -195,7 +208,7 @@ TEMPLATES: dict[GoalKind, BriefTemplate] = {
         ),
         horizon_days=14,
         follow_ups=((3, "no_purchase"),),
-        offer_kinds=frozenset(OfferKind),
+        offer_kinds=_V2_OFFER_KINDS,
         note="Lapsed buyers get a reminder; offers only where they change behaviour.",
     ),
     GoalKind.REPEAT_PURCHASE: BriefTemplate(

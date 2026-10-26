@@ -132,6 +132,7 @@ _HISTORY_THEME: dict[OfferKind, Theme] = {
     OfferKind.PERCENT_OFF: Theme.SAVINGS,
     OfferKind.AMOUNT_OFF: Theme.SAVINGS,
     OfferKind.FREE_SHIPPING: Theme.CONVENIENCE,
+    OfferKind.BUNDLE: Theme.SAVINGS,  # v3
 }
 
 

@@ -72,10 +72,10 @@ ALL_CODES: tuple[str, ...] = (
 REACH_CODES: frozenset[str] = frozenset({CHANNEL_NOT_ALLOWED, UNSUBSCRIBED, NO_CONSENT, NO_ADDRESS})
 
 DISCOUNT_KINDS: frozenset[OfferKind] = frozenset(
-    {OfferKind.PERCENT_OFF, OfferKind.AMOUNT_OFF, OfferKind.FREE_SHIPPING}
+    {OfferKind.PERCENT_OFF, OfferKind.AMOUNT_OFF, OfferKind.FREE_SHIPPING, OfferKind.BUNDLE}
 )
 """Offers that lower what the customer pays. `no_discounts=true` rules these out; gifts, loyalty
-points and plain content are not discounts."""
+points, early access and plain content are not discounts. A bundle is money off a set of items."""
 
 _TRUE = frozenset({"true", "1", "yes", "y", "on"})
 
