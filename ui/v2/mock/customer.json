@@ -118,7 +118,14 @@
     },
     "segment": "lapsed_loyal",
     "features": {},
-    "features_as_of": null
+    "features_as_of": null,
+    "last_view_at": null,
+    "last_cart_at": null,
+    "viewed_items": {},
+    "usual_gap_days": null,
+    "purchase_gap_days": null,
+    "last_return_at": null,
+    "last_return_gap_days": null
   },
   "decisions": [
     {

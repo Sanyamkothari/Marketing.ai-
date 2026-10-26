@@ -70,6 +70,12 @@ offered only when its channel can carry its format (`autonomy.assets.support.sup
 media (`asset_url`); `asset_of(item)` names the approved asset behind it for `Action.asset_id`, and
 an action about one product never shows an asset of a different product.
 
+**Moments** (opt-in, plan-v3 decision 2). With a `MomentBook` (`GoalBidder(moments=book)`, or
+`use_moments(book)` for every bidder built afterwards) the goal's `Urgency` is multiplied by the
+factor of the customer's live moments (a cart left, a product viewed twice, a refill due, payday, a
+festival ...; `autonomy.decide.moments`), so a message is worth more for a few days and the raise
+fades with the moment. Without a book nothing changes: every v2 number is the same.
+
 The bidder returns every option, including losing and negative ones (unless `prune_z` is set): the
 attention auction, the attention price, "do nothing", the hard rules and exploration all happen
 downstream. It does not choose a send time; `Action.send_at` is `ctx.now` and the timing step
@@ -86,7 +92,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 import numpy as np
 import numpy.typing as npt
@@ -123,6 +129,9 @@ from autonomy.decide.models import (
     action_key,
 )
 from autonomy.uplift.score import UpliftScorer, blend, uplift_of
+
+if TYPE_CHECKING:
+    from autonomy.decide.moments import MomentBook
 
 DEFAULT_CHANNEL_COSTS: Mapping[Channel, float] = MappingProxyType(
     {
@@ -225,6 +234,19 @@ class Urgency:
             return 1.0
         # float(): typeshed types float ** float as Any (a negative base can give a complex).
         return max(self.floor, float(0.5 ** (max(days, 0.0) / self.half_life_days)))
+
+
+_default_moments: MomentBook | None = None
+"""The book every `GoalBidder` built without `moments=` uses; None (the default) means moments are off."""
+
+
+def use_moments(book: MomentBook | None) -> None:
+    """Switch moments on for every bidder built from now on (`None` switches them off again).
+
+    A bidder given `moments=` keeps its own book. Bidders already built are not changed.
+    """
+    global _default_moments
+    _default_moments = book
 
 
 def urgency_for(kind: GoalKind) -> Urgency | None:
@@ -1495,6 +1517,9 @@ class GoalBidder:
     group's that all the customer's options share). An option it does not score is priced by the
     response model alone, exactly as without it.
 
+    `moments` (None: `use_moments`' book, else off) raises the urgency while moments are live (see the
+    module docstring); `moment_reasons` says which, for the explanation.
+
     `bids()` remembers each customer's segment and each content item's labels for `learn()`;
     `quote()` prices the same options and remembers nothing (for explaining a decision).
     """
@@ -1523,6 +1548,7 @@ class GoalBidder:
         harm: ContactHarm | None = None,
         purchase_weighted: bool | None = None,
         uplift: UpliftScorer | None = None,
+        moments: MomentBook | None = None,
     ) -> None:
         if prune_z is not None and prune_z < 0:
             raise ValueError("prune_z must be >= 0")
@@ -1564,6 +1590,21 @@ class GoalBidder:
             c.content_id: (c.theme.value, c.format) for c in self._content or ()
         }
         self._segments: dict[str, str | None] = {}
+        self.moments = moments if moments is not None else _default_moments
+        """The moments that raise this goal's urgency, or None (off)."""
+        if self.moments is not None:
+            from autonomy.decide.moments import wrap_urgency  # moments.py imports this module
+
+            self.urgency = wrap_urgency(self.urgency, self.moments, kind=kind, refill=self.refill)
+
+    def moment_reasons(self, state: CustomerState, now: datetime) -> tuple[str, ...]:
+        """Plain sentences for the moments raising this goal's bids for this customer, strongest first
+        (empty when moments are off or none is live)."""
+        if self.moments is None:
+            return ()
+        from autonomy.decide.moments import skipped_for
+
+        return self.moments.reasons(state, now, skip=skipped_for(self.kind, self.refill))
 
     # -- products --
 

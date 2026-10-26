@@ -9,6 +9,11 @@ computes, for events folded in time order (the tests hold it to that). On top it
   online-retail loaders put `country` on every invoice and have no signup event;
 - `offer_sensitivity`: the share of purchases made with an offer (`attrs["offer_id"]`), shrunk toward
   a prior of 0.3 with a pseudo-count of 3, so one discounted order does not brand someone a deal hunter;
+- moments (plan-v3 decision 2): `last_view_at`, `last_cart_at`, a bounded record of products viewed and
+  not bought since (`viewed_items`, at most `MAX_VIEWED_ITEMS`), their usual gap between days of
+  activity and between purchases, and the latest return after a gap much longer than usual
+  (`last_return_at`). `autonomy.decide.moments` reads them. A purchase closes the cart and drops
+  the bought product from `viewed_items`;
 - `segment`: a plain RFM label (see `SegmentRules`), recomputed in `refresh()` because recency moves
   with the clock even when nothing happens.
 
@@ -31,7 +36,7 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
-from autonomy.contracts import Channel, ChannelStats, CustomerState, Event, EventType
+from autonomy.contracts import Channel, ChannelStats, CustomerState, Event, EventType, ItemViews
 
 CONTACT_MEMORY = timedelta(days=30)
 """How far back `recent_contacts` reaches; it feeds contacts_7d and contacts_30d."""
@@ -44,6 +49,19 @@ OFFER_PSEUDO_COUNT = 3.0
 
 VIP_MIN_BUYERS = 50
 """Buyers the shop needs before its own VIP bars replace the fixed defaults."""
+
+MAX_VIEWED_ITEMS = 8
+"""How many viewed-but-not-bought products a customer's state keeps; the least recently viewed go first."""
+
+GAP_SMOOTHING = 0.3
+"""Weight of the newest gap in the running averages `usual_gap_days` and `purchase_gap_days`."""
+
+RETURN_MIN_DAYS = 14.0
+RETURN_RATIO = 3.0
+"""A visit, view or cart counts as a return after a long absence when the gap before it is at least
+`RETURN_MIN_DAYS` and at least `RETURN_RATIO` times the customer's usual gap."""
+
+_RETURN_TYPES = frozenset({EventType.VISIT, EventType.VIEW, EventType.CART})
 
 _SEEN_TYPES = frozenset(
     {EventType.SIGNUP, EventType.VISIT, EventType.VIEW, EventType.CART, EventType.PURCHASE}
@@ -218,6 +236,7 @@ class StateFolder:
         if t in _SEEN_TYPES:
             upd["last_seen_at"] = _later(s.last_seen_at, event.ts)
             upd.update(self._profile(s, event))
+            upd.update(self._activity(s, event))
 
         if t is EventType.PURCHASE:
             upd.update(self._purchase(s, event))
@@ -319,6 +338,40 @@ class StateFolder:
             upd["top_categories"] = tuple(sorted(counts, key=lambda c: (-counts[c], c))[:3])
         return upd
 
+    def _activity(self, s: CustomerState, event: Event) -> dict[str, object]:
+        """Views, carts, gaps and returns from one of the customer's own events.
+
+        A gap is measured from the previous activity to this event and only when the event is the
+        newest, so a late webhook moves nothing. Gaps shorter than a day are one visit, not an
+        absence, and do not enter the usual gap.
+        """
+        upd: dict[str, object] = {}
+        t, ts = event.type, event.ts
+        if t is EventType.VIEW:
+            upd["last_view_at"] = _later(s.last_view_at, ts)
+            if event.item_id:
+                upd["viewed_items"] = _viewed(s.viewed_items, event.item_id, ts)
+        elif t is EventType.CART:
+            upd["last_cart_at"] = _later(s.last_cart_at, ts)
+        elif t is EventType.PURCHASE:
+            if event.item_id and event.item_id in s.viewed_items:
+                upd["viewed_items"] = {k: v for k, v in s.viewed_items.items() if k != event.item_id}
+            before = s.last_purchase_at
+            if before is not None and ts > before:
+                days = (ts - before).total_seconds() / 86_400.0
+                if days >= 1.0:
+                    upd["purchase_gap_days"] = _smoothed(s.purchase_gap_days, days)
+        previous = s.last_seen_at
+        if previous is not None and ts > previous:
+            days = (ts - previous).total_seconds() / 86_400.0
+            if days >= 1.0:
+                usual = s.usual_gap_days
+                if t in _RETURN_TYPES and days >= max(RETURN_MIN_DAYS, RETURN_RATIO * (usual or 0.0)):
+                    upd["last_return_at"] = _later(s.last_return_at, ts)
+                    upd["last_return_gap_days"] = days
+                upd["usual_gap_days"] = _smoothed(usual, days)
+        return upd
+
     def _profile(self, s: CustomerState, event: Event) -> dict[str, object]:
         """Timezone and country from the customer's own event. An unknown zone name is ignored, not stored.
 
@@ -340,6 +393,26 @@ class StateFolder:
                     old = s.hour_counts
                     upd.update(_hours([old[(h - shift) % 24] for h in range(24)]))
         return upd
+
+
+def _smoothed(old: float | None, new: float) -> float:
+    """A running average that starts at the first value and then leans `GAP_SMOOTHING` on the newest."""
+    return new if old is None else (1.0 - GAP_SMOOTHING) * old + GAP_SMOOTHING * new
+
+
+def _viewed(items: dict[str, ItemViews], item_id: str, ts: datetime) -> dict[str, ItemViews]:
+    """`items` with one more view of `item_id`, trimmed to `MAX_VIEWED_ITEMS` (least recently viewed out)."""
+    out = dict(items)
+    known = out.get(item_id)
+    out[item_id] = (
+        ItemViews(count=1, last_at=ts)
+        if known is None
+        else ItemViews(count=known.count + 1, last_at=_later(known.last_at, ts))
+    )
+    while len(out) > MAX_VIEWED_ITEMS:
+        oldest = min(out, key=lambda k: (out[k].last_at, out[k].count, k))
+        del out[oldest]
+    return out
 
 
 def _hours(counts: list[int]) -> dict[str, object]:

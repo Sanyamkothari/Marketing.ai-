@@ -4,7 +4,7 @@ A client's export is one row per thing that happened (an order line, a send, a s
 column names, date format and words for event types. `EventMapping` says which column is which, once,
 in data (it loads from YAML or JSON as easily as from Python), and `map_frame` applies it.
 
-Four rules shape `map_frame`:
+Five rules shape `map_frame`:
 
 - **Bad rows are collected, not fatal.** A real export always has a few rows with no customer, a date
   nobody can read or an amount of "N/A". Each becomes a `MappingProblem` that names the row, the column
@@ -24,6 +24,10 @@ Four rules shape `map_frame`:
   `inspect_frame` returns the same questions without raising. Without `ask` (programmatic callers
   that wrote their mapping for a known feed), two old defaults stay: naive times are read in
   `timezone` (UTC unless set) and exact repeated lines are kept, each as its own event.
+- **The time zone follows the customer.** A `timezone` other than UTC is put on every event the
+  customer made themselves (signup, visit, view, cart, purchase) as `attrs["timezone"]`, so the state
+  folder counts their engagement in local hours and the quiet hours apply in their own zone, not UTC
+  (REAL_DATA_RESULTS failure 10: CDNOW at 06:00 New York, telco at 02:00 Los Angeles).
 - **Event ids are stable.** An event's id is `stable_id("evt", source, <key>)`, so loading the same
   file twice yields the same ids and the append-only event store drops the repeats. The key is the
   `row_key` columns when given. Without them it is the event's **content** (customer, type, time,
@@ -1080,6 +1084,12 @@ def customer_key(cell: object) -> str | None:
 # ---------------------------------------------------------------------------
 # One row
 # ---------------------------------------------------------------------------
+_OWN_EVENTS: Final = frozenset(
+    {EventType.SIGNUP, EventType.VISIT, EventType.VIEW, EventType.CART, EventType.PURCHASE}
+)
+"""What the customer did themselves; only these say where the customer lives (see `StateFolder`)."""
+
+
 def _fields(
     record: Mapping[Hashable, Any], mapping: EventMapping, source: str, zone: tzinfo, plan: _Plan
 ) -> dict[str, Any]:
@@ -1102,6 +1112,11 @@ def _fields(
             )
     margin = _number(record, mapping.margin_column, plan.numbers.decimal, mapping.thousands, plan)
     attrs = _attrs(record, mapping)
+    if kind in _OWN_EVENTS and mapping.timezone != "UTC":
+        # The file's clock is the business's, and the customers are taken to live by it: the folder
+        # reads this to count engagement in their local hours and the quiet hours in their zone.
+        # A zone the mapping reads from a column or fixes in `fixed_attrs` wins.
+        attrs.setdefault("timezone", mapping.timezone)
     currency = _currency(record, mapping, plan)
     if currency is not None:
         code, rate = currency

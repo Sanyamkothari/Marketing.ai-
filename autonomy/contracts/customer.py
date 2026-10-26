@@ -29,6 +29,13 @@ class ChannelStats(Contract):
         return self.address_known and self.consent and not self.unsubscribed
 
 
+class ItemViews(Contract):
+    """How often one product was looked at, and when last (see `CustomerState.viewed_items`)."""
+
+    count: int = Field(default=1, ge=1)
+    last_at: AwareDatetime
+
+
 class CustomerState(Contract):
     customer_id: str
     as_of: AwareDatetime
@@ -72,6 +79,31 @@ class CustomerState(Contract):
     )
     features_as_of: AwareDatetime | None = Field(
         default=None, description="The instant the profile was built for; no event after it was read"
+    )
+
+    # Moments (plan-v3 decision 2): what the customer did lately that makes a message worth more.
+    last_view_at: AwareDatetime | None = Field(default=None, description="Their latest product view")
+    last_cart_at: AwareDatetime | None = Field(
+        default=None, description="Their latest add-to-cart; a later purchase closes the cart"
+    )
+    viewed_items: dict[str, ItemViews] = Field(
+        default_factory=dict,
+        description="Products viewed but not bought since: item id -> views and latest view; at most 8, "
+        "the least recently viewed dropped first",
+    )
+    usual_gap_days: float | None = Field(
+        default=None,
+        description="Their usual days away between two days of activity (a running average of gaps "
+        "of a day or more)",
+    )
+    purchase_gap_days: float | None = Field(
+        default=None, description="Their usual days between two purchases (a running average)"
+    )
+    last_return_at: AwareDatetime | None = Field(
+        default=None, description="Their latest visit, view or cart after a gap much longer than usual"
+    )
+    last_return_gap_days: float | None = Field(
+        default=None, description="How long the gap before last_return_at was, in days"
     )
 
     @field_validator("active_hours")
