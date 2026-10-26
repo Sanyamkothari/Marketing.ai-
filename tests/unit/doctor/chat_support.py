@@ -88,8 +88,10 @@ class Down(ChatScript):
     def __init__(self, error: Exception) -> None:
         super().__init__({})
         self.error = error
+        self.attempts = 0
 
     def complete(self, *args: Any, **kwargs: Any) -> Any:
+        self.attempts += 1
         raise self.error
 
 

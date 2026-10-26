@@ -334,10 +334,12 @@ class _Chat(_Review):
                 self._act(action)
             except AgentToolError as exc:
                 strikes += 1
+                # The message goes into the feedback even when this is the last strike: the last word reads it, so
+                # a reply refused for its number is not written again with the same number.
+                turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
                 if strikes >= STRIKES:
                     blocked = exc.code
                     break
-                turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
             except Exception as exc:  # a model's odd input must never cost a paid turn that nobody records
                 _LOG.warning("doctor chat step failed: %s", type(exc).__name__)
                 blocked = "failed"
@@ -348,6 +350,10 @@ class _Chat(_Review):
         withdrawn = [i for i in dict.fromkeys([*chosen.withdrawn, *chosen.replaces]) if i not in made]
         if not reply and blocked not in NO_LAST_WORD and not self._spent():
             reply = self._last_word(prompt, variables_for, blocked)
+            if reply:
+                blocked = (
+                    None  # the AI wrote this reply itself: nothing blocked it (the same as a guided session)
+                )
         if not reply:
             reply = lead if blocked == "unavailable" else (OUT_OF_STEPS if blocked is None else NOTHING_SAID)
         return ChatTurn(

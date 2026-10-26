@@ -1065,6 +1065,26 @@ def test_two_refusals_end_the_turn_and_the_ai_gets_the_last_word(storage: LocalS
     talk.say("nonsense")
     assert talk.reply.text == "Sorry, I could not do that."
     assert client.asked == 3
+    assert talk.reply.blocked_by is None, "the AI wrote this reply itself"
+
+
+def test_the_last_word_is_told_what_the_second_refusal_said(storage: LocalStorage, world: World) -> None:
+    client = ChatScript(
+        {
+            "numbers": [
+                reply("I found 9,999 gaps."),
+                reply("I found 9,999 gaps."),
+                reply("I could not state that number."),
+            ]
+        }
+    )
+    talk = Talk(storage, world, client)
+    talk.say("numbers")
+    assert talk.reply.text == "I could not state that number."
+    errors = [r for r in last_word_seen(client).results if r.get("error")]
+    assert len(errors) == 2 and all(
+        "message" in r for r in errors
+    ), "the second refusal's message is there too"
 
 
 def test_no_last_word_when_the_ai_service_is_the_reason(storage: LocalStorage, world: World) -> None:
@@ -1072,16 +1092,32 @@ def test_no_last_word_when_the_ai_service_is_the_reason(storage: LocalStorage, w
     talk = Talk(storage, world, client)
     talk.say("look")
     assert talk.reply.blocked_by == "unavailable"
-    assert (
-        len([c for c in client.calls if c.kind == "complete"]) == 0
-    ), "a failing service is asked once, not twice"
+    assert client.attempts == 1, "a failing service is asked once, not twice"
 
 
-def test_no_last_word_when_the_case_spending_ran_out(storage: LocalStorage, world: World) -> None:
+def test_no_last_word_when_the_case_spending_ran_out(
+    storage: LocalStorage, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tried: list[str | None] = []
+    monkeypatch.setattr(agent_chat._Chat, "_last_word", lambda self, *a: tried.append("x") or "never")
     client = ChatScript({"look": [look("describe_missing")] * 5})
     talk = Talk(storage, world, client, limits=AiLimitsConfig(max_calls_per_case=1))
     talk.say("look")
     assert client.asked == 1 and talk.reply.blocked_by == "budget"
+    assert not tried, "the last word is not even tried once the limit is reached"
+
+
+def test_no_last_word_when_the_steps_used_up_the_spending(
+    storage: LocalStorage, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tried: list[str] = []
+    monkeypatch.setattr(agent_chat._Chat, "_last_word", lambda self, *a: tried.append("x") or "never")
+    client = ChatScript({"look": [look("describe_missing")] * 5})
+    limits = AiLimitsConfig(max_chat_steps=2, max_calls_per_case=3)
+    talk = Talk(storage, world, client, limits=limits)
+    talk.say("look")
+    assert client.asked == 3 and not tried, "three calls spent the limit: no fourth for the last word"
+    assert "more steps than I may take" in talk.reply.text
 
 
 def test_no_last_word_without_consent(storage: LocalStorage, world: World) -> None:

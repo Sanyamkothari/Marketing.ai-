@@ -779,3 +779,30 @@ def test_only_the_newest_suggestion_for_a_question_offers_the_other_answers(
     first, second = [c for c in cards if isinstance(c, MessageCard)]
     assert first.suggestion is not None and first.suggestion.others == ()
     assert second.suggestion is not None and second.suggestion.others
+
+
+def test_a_later_reply_that_suggests_another_question_first_still_supersedes_the_older_suggestion(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("question", storage, world)
+    case = screen.case
+    open_qs = [q for q in case.questions if q.answer is None and len(q.options) >= 2]
+    first_q = next(q for q in open_qs if q.code == "UNKNOWN_BOOLEAN")
+    other_q = next(q for q in open_qs if q is not first_q)
+    at = case.updated_at + timedelta(minutes=5)
+    old = _reply_with_suggestion(case, first_q, at)
+    new = _reply_with_suggestion(case, other_q, at + timedelta(minutes=1), "Two answers.")
+    new.suggestion = SimpleNamespace(
+        question_id=other_q.question_id, option_id=other_q.options[0].option_id, label="Yes"
+    )
+    new.suggestions = (
+        new.suggestion,
+        SimpleNamespace(question_id=first_q.question_id, option_id="c1", label="No"),
+    )
+    cards = screen_view(storage, _chat(case, old, new), config_root=None).conversation
+    older, newer = [c for c in cards if isinstance(c, MessageCard)]
+    assert older.suggestion is not None and older.suggestion.others == (), "superseded: not offered as live"
+    assert newer.suggestion is not None and newer.suggestion.question_id == other_q.question_id
+    asked = {c.question_id for c in cards if isinstance(c, QuestionCard)}
+    assert first_q.question_id in asked, "its question card is back: no reply shows its live answer"
+    assert other_q.question_id not in asked
