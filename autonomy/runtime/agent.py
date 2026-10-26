@@ -163,6 +163,7 @@ from autonomy.decide.pacing import BudgetPrice, OfferPricing, Pacer
 from autonomy.decide.planner import basket_cost_fn
 from autonomy.decide.policy import SWEEP, AutonomousPolicy, seeded_rng
 from autonomy.decide.timing import LATE_CLICK, ReadingHourModel, zone_named
+from autonomy.decide.who import WhoBook, WhoConfig
 from autonomy.interfaces import Bidder, Policy
 from autonomy.learning import ModelBundle, build_bundle, learn_from_rewards, update_models
 from autonomy.learning.calibration import (
@@ -1580,6 +1581,7 @@ class AgentPolicy:
         currency: str = "$",
         offer_pricing: OfferPricing | None = None,
         moments: MomentBook | Literal[False] | None = None,
+        who: WhoBook | None = None,
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
@@ -1605,6 +1607,9 @@ class AgentPolicy:
         self.format_costs = dict(format_costs) if format_costs is not None else None
         self.moments: MomentBook | Literal[False] | None = moments
         """The bidders' moments (plan-v3 decision 2): a book, False for off, None for `use_moments`'."""
+        self.who = who
+        """Plan-v3 decision 1 (None: off): the slow models' scores, written to the state each decision
+        is made on, and the trait-pooled leave-alone (docs/v3/WHO.md)."""
         self.bundle = bundle
         self.costs = dict(costs) if costs is not None else None
         self.kinds: dict[str, GoalKind] = dict(kinds or {})
@@ -1743,6 +1748,7 @@ class AgentPolicy:
             format_costs=self.format_costs,
             **self._offer_pricing_hooks(brief),
             moments=self.moments,
+            who=self.who,
         )
 
     def _install(self, brief: Brief) -> None:
@@ -1954,6 +1960,9 @@ class AgentPolicy:
             self._decision_segment[decision.decision_id] = seg
             self._remember(seen, decision)
             return decision
+        if self.who is not None:  # plan-v3 decision 1: the slow models' scores for this customer
+            self.who.refresh(ctx.now, contact_harm_of(self.bundle.response))
+            update.update(self.who.prepare(state, ctx.now))
         hour = self._send_hour(state.customer_id, seg, eff, trigger)
         if hour is not None:
             update["active_hours"] = tuple(1.0 if h == hour else 0.0 for h in range(24))
@@ -2037,6 +2046,8 @@ class AgentPolicy:
             update["contacts_7d"] = self._contacts_at_send(state, eff, hour)
         elif state.active_hours:
             update["active_hours"] = ()
+        if self.who is not None:  # read-only: explaining stores nothing (`WhoBook.prepare`)
+            update.update(self.who.prepare(state, ctx.now, remember=False))
         view = state.model_copy(update=update)
 
         policy = self.policy
@@ -2586,6 +2597,8 @@ class AgentPolicy:
         decisions = list(decisions)
         for d in decisions:
             self._keep(d)
+        if self.who is not None:
+            self.who.ingest(events_by_customer, now)
         if not self._decided:
             # Before the first decision everything handed over is history: past campaigns' sends
             # and clicks are learned from at the first decision (they need segments, see _warm_start).
@@ -2911,6 +2924,7 @@ def build_agent_policy(
     offer_pricing: OfferPricing | None = None,
     moments: MomentBook | Literal[False] | None = None,
     lookalike: bool | LookalikeConfig = False,
+    who: bool | WhoConfig | WhoBook = False,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -2940,7 +2954,17 @@ def build_agent_policy(
     of the click model (`LookalikeClickModel`, docs/v3/LOOKALIKE.md); pass a `LookalikeConfig` to
     change its numbers. With a `bundle` given, its response model must already be a
     `LookalikeClickModel` (built with its own config; a `LookalikeConfig` here is then refused).
+
+    `who` (plan-v3 decision 1, off by default) switches on the leaving-risk and 90-day-value models
+    (their scores go to each decision's state once a held-out check passes), the bidders' use of them,
+    and the trait-pooled leave-alone (`autonomy.decide.who`, docs/v3/WHO.md). Pass a `WhoConfig` to
+    change its numbers or a `WhoBook` to share one.
     """
+    book = (
+        who
+        if isinstance(who, WhoBook)
+        else WhoBook(who if isinstance(who, WhoConfig) else None) if who else None
+    )
     if bundle is None:
         fresh = build_bundle()
         if not lookalike:
@@ -2975,4 +2999,5 @@ def build_agent_policy(
         currency=currency,
         offer_pricing=offer_pricing,
         moments=moments,
+        who=book,
     )

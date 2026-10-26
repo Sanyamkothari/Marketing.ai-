@@ -18,7 +18,8 @@ plain daily sweep.
 
 Policies are found by name in a registry. `agent` is Autonomy's own policy
 (`autonomy.runtime.agent.build_agent_policy`); `agent_lookalike` is the same agent with the look-alike
-response model on (docs/v3/LOOKALIKE.md). Another stream adds its own with
+response model on (docs/v3/LOOKALIKE.md); `agent_who` adds the profile and plan-v3 decision 1 to that
+(docs/v3/WHO.md). Another stream adds its own with
 `register_policy("name", lambda world: MyPolicy(...))`; the factory gets the world so a fresh
 policy is built for every run (the oracle uses the world's truth; nothing else may).
 """
@@ -64,6 +65,7 @@ AGENT = "agent"
 AGENT_NO_MOMENTS = "agent_no_moments"
 """The agent with moments switched off, run beside it under `--moments` (not a registered policy)."""
 AGENT_LOOKALIKE = "agent_lookalike"
+AGENT_WHO = "agent_who"
 
 
 def _nothing_factory(world: SimWorld) -> Policy:  # noqa: ARG001
@@ -128,6 +130,15 @@ def agent_lookalike_factory(world: SimWorld) -> Policy:  # noqa: ARG001
     return build_agent_policy([default_brief()], default_content(), lookalike=True)
 
 
+def agent_who_factory(world: SimWorld) -> Policy:  # noqa: ARG001
+    """The look-alike agent with the profile and plan-v3 decision 1 on: leaving risk and 90-day value
+    from the profile (each only after its held-out check passes), the bidders' use of them, and the
+    trait-pooled leave-alone (docs/v3/WHO.md). It learns only from the events it is handed."""
+    from autonomy.runtime.agent import build_agent_policy
+
+    return build_agent_policy([default_brief()], default_content(), lookalike=True, who=True)
+
+
 POLICIES: dict[str, PolicyFactory] = {
     EVERYONE: everyone_factory,
     RULE: rule_factory,
@@ -135,6 +146,7 @@ POLICIES: dict[str, PolicyFactory] = {
     NOTHING: _nothing_factory,
     AGENT: agent_factory,
     AGENT_LOOKALIKE: agent_lookalike_factory,
+    AGENT_WHO: agent_who_factory,
     BEST_FIXED: best_fixed_factory,
     SEGMENT_ORACLE: segment_oracle_factory,
 }
