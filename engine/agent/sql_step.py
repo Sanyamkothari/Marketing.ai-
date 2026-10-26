@@ -53,6 +53,7 @@ __all__ = [
     "future_rows_moved",
     "group_by_column",
     "resolve_as_of_rule",
+    "rows_aggregated",
     "run_sql",
     "sql_params",
     "table_alias",
@@ -392,6 +393,43 @@ def group_by_column(sql: str) -> str | None:
         ):
             return None  # kept under another name: the input and the result do not share it
     return column
+
+
+def rows_aggregated(sql: str, tables: Mapping[str, pd.DataFrame], *, as_of: date | None = None) -> int | None:
+    """How many rows a grouping query actually combines: the rows its FROM, JOIN and WHERE leave for the GROUP BY
+    to fold (rows a WHERE drops are not among them). None when the query does not group, or cannot be counted.
+    """
+    import duckdb
+
+    aliases = {name: table_alias(name) for name in tables}
+    con = _connect()
+    try:
+        tree = json.loads(con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
+        node = tree["statements"][0]["node"]
+        if tree.get("error") or node.get("type") != "SELECT_NODE" or not node.get("group_expressions"):
+            return None
+        star = json.loads(con.execute("SELECT json_serialize_sql('SELECT count(*) FROM x')").fetchone()[0])
+        node.update(
+            select_list=star["statements"][0]["node"]["select_list"],
+            group_expressions=[],
+            group_sets=[],
+            having=None,
+            qualify=None,
+            modifiers=[],
+            aggregate_handling="STANDARD_HANDLING",
+        )
+        counting = con.execute("SELECT json_deserialize_sql(?)", [json.dumps(tree)]).fetchone()[0]
+        for name, frame in tables.items():
+            con.register(aliases[name], frame)
+        _lock(con)
+        uses_as_of = "as_of" in set(_PARAMETER.findall(_blank(counting)))
+        if uses_as_of and as_of is None:
+            return None
+        return int(con.execute(counting, {"as_of": as_of} if uses_as_of else None).fetchone()[0])
+    except (duckdb.Error, ValueError, KeyError, IndexError, TypeError):
+        return None
+    finally:
+        con.close()
 
 
 def _fixed_date_refusal(shown: str) -> SqlStepError:

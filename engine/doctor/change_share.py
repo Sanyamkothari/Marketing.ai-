@@ -169,7 +169,9 @@ def measure_step(
         if group is not None and primary_key in (None, group):
             # One row per group out of many rows: the change is in customers (who is gone), not in cells.
             counted = make_receipt(1, step.kind.value, {"this": frame}, run.frame, key=group)
-            if counted.keys_in is not None:
+            # Only when rows were really folded: on an already-unique key a GROUP BY is a no-op that can hide a
+            # rewrite of every value, so the cells are compared instead.
+            if counted.keys_in is not None and counted.extra_rows_in > 0:
                 return counted.keys_lost, counted.keys_in
         return cell_change(frame, run.frame, key=primary_key or infer_key(frame, run.frame))
     if step.kind in _RESHAPE_STEPS:
