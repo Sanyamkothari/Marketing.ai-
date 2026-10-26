@@ -64,7 +64,9 @@ def test_a_view_without_a_product_sets_only_the_time() -> None:
 
 
 def test_viewed_items_are_bounded_and_the_oldest_go_first() -> None:
-    events = [ev(EventType.VIEW, T0 + timedelta(minutes=i), i, f"item{i}") for i in range(MAX_VIEWED_ITEMS + 3)]
+    events = [
+        ev(EventType.VIEW, T0 + timedelta(minutes=i), i, f"item{i}") for i in range(MAX_VIEWED_ITEMS + 3)
+    ]
     state = fold(events)
     assert len(state.viewed_items) == MAX_VIEWED_ITEMS
     assert "item0" not in state.viewed_items
@@ -148,6 +150,8 @@ def test_purchase_gap_is_a_running_average_of_days_between_purchases() -> None:
 
 
 def test_outbound_events_touch_none_of_it() -> None:
-    state = fold([ev(EventType.VIEW, T0, 1, "shoe"), ev(EventType.OPEN, T0 + timedelta(days=9), 2, channel="email")])
+    state = fold(
+        [ev(EventType.VIEW, T0, 1, "shoe"), ev(EventType.OPEN, T0 + timedelta(days=9), 2, channel="email")]
+    )
     assert state.usual_gap_days is None
     assert state.last_return_at is None
