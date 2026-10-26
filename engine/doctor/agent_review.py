@@ -785,7 +785,8 @@ def case_as_of(case: Case) -> str | None:
     """The as-of date the person decided for this case, as `YYYY-MM-DD`, or None (then a query names its own).
 
     The newest accepted item that carries one (leaving out an unfinished last period sets it), else the answer to
-    the as-of question (Q8) when the chosen option names a date ("The latest date in the file: 2011-12-09").
+    the as-of question (Q8): the date the person typed, else the one the chosen option names ("The latest date in
+    the file: 2011-12-09").
     """
     for item in reversed(case.items):
         given = item.payload.get("as_of")
@@ -794,6 +795,9 @@ def case_as_of(case: Case) -> str | None:
     for question in case.questions:
         if question.code != "Q08_AS_OF" or question.answer is None:
             continue
+        typed = getattr(question, "answer_value", None)
+        if isinstance(typed, str) and _ISO_DATE.fullmatch(typed):
+            return typed  # the date the person typed beats the one an option names
         chosen = next((o for o in question.options if o.option_id == question.answer), None)
         found = _ISO_DATE.search(chosen.label) if chosen is not None else None
         if found is not None:

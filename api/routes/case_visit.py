@@ -21,7 +21,8 @@ off - the default - none of these paths exists and docs/API.md is unchanged.
 Every change names the case `version` it was made against (`409 CASE_VERSION_CONFLICT` when it moved) and may carry
 an `op_id`: a retried request whose first attempt was written changes nothing. Refusals: `404 CASE_NOT_FOUND`,
 `404 USE_CASE_NOT_FOUND` (a goal that is not a use case), `409 VISIT_NOT_WAITING` (nothing waits for that now),
-`422 VISIT_UNKNOWN_CHOICE` (no such question, option or suggestion in the active section).
+`422 VISIT_UNKNOWN_CHOICE` (no such question, option or suggestion in the active section),
+`422 VISIT_ANSWER_VALUE_INVALID` (a typed value an option does not take, or one that is not of its kind).
 
 Plan O M246 (DEC-1816): `POST .../approval` may carry the `sentence` the person read (`409
 APPROVAL_SENTENCE_CHANGED` when it is no longer the one shown: nothing is recorded) and is refused while an
@@ -145,6 +146,12 @@ class GoalRequest(_Change):
 class AnswerRequest(_Change):
     question_id: str = Field(min_length=1, max_length=128)
     option_id: str = Field(min_length=1, max_length=64)
+    value: str | None = Field(
+        default=None,
+        max_length=200,
+        description="What the person typed with the answer, for an option that asks for one (`value_kind`): a date "
+        "as YYYY-MM-DD. Any other option refuses a value (`422 VISIT_ANSWER_VALUE_INVALID`).",
+    )
 
 
 class DecisionRequest(_Change):
@@ -204,6 +211,7 @@ def _error(exc: CaseError) -> Exception:
     status = {
         "CASE_NOT_FOUND": 404,
         "VISIT_UNKNOWN_CHOICE": 422,
+        "VISIT_ANSWER_VALUE_INVALID": 422,
         "STANDING_ANSWER_NOT_FOUND": 404,  # Plan O M246
         "TOOL_ROLE_REQUIRED": 403,
         "POLICY_ROLE_SEPARATION": 403,
@@ -560,6 +568,7 @@ def answer_question(
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
+            value=body.value,
         )
     except CaseError as exc:
         raise _error(exc) from exc

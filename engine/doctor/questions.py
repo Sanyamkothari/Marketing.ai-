@@ -18,7 +18,7 @@ from __future__ import annotations
 import string
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import JsonValue
 
@@ -64,6 +64,8 @@ class OptionSpec:
     effect: str = ""
     """What choosing it does, in a plain sentence (no counts: code measures those). Shown only where the option
     carries a step; a repeated option has none (its label is already a sentence)."""
+    value_kind: Literal["date", "number", "text"] | None = None
+    """Set when choosing it needs the person to type a value of this kind with the answer ("I will type a date")."""
 
 
 @dataclass(frozen=True)
@@ -223,7 +225,9 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
                     optional=True,
                     effect="The data is cut at the date counted back from the days-since column.",
                 ),
-                OptionSpec("I will type a date", effect="You type the date; nothing is cut until you do."),
+                OptionSpec(
+                    "I will type a date", effect="The data is cut at the date you type.", value_kind="date"
+                ),
             ),
             blocking=True,
             meaning_bearing=True,
@@ -630,6 +634,7 @@ def build_ask(
             rows_changed=rows_changed[index] if rows_changed else None,
             label_rate=label_rates[index] if label_rates else None,
             says=_says(shown[index], values, choice_says),
+            value_kind=shown[index][0].value_kind,
         )
         for index, label in enumerate(labels)
     ]

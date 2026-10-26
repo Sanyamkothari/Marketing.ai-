@@ -384,3 +384,20 @@ def test_with_the_switch_off_there_is_no_visit_path(config_root: Path, tmp_path:
     assert not [path for path in paths if path.startswith(("/cases", "/goal-briefs"))]
     with TestClient(app) as client:
         assert client.get(f"/goal-briefs/{GOAL}").status_code == 404
+
+
+def test_an_answer_value_is_refused_where_the_option_takes_none(client: TestClient, data_dir: Path) -> None:
+    upload_id = _upload(client)
+    case = client.post("/cases", json={"upload_ids": [upload_id]}).json()
+    case = client.post(f"/cases/{case['case_id']}/visit", json={}).json()
+    open_ = next(q for q in case["questions"] if q["answer"] is None and q["options"])
+    response = client.post(
+        f"/cases/{case['case_id']}/answers",
+        json={
+            "version": case["version"],
+            "question_id": open_["question_id"],
+            "option_id": open_["options"][0]["option_id"],
+            "value": "2011-11-30",
+        },
+    )
+    assert response.status_code == 422 and _code(response) == "VISIT_ANSWER_VALUE_INVALID"

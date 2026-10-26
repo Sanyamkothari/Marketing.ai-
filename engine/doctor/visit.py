@@ -54,10 +54,11 @@ Nothing here logs a value or a column name: counts, ids and codes only.
 from __future__ import annotations
 
 import functools
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
@@ -183,7 +184,9 @@ __all__ = [
 
 _LOG = get_logger(__name__)
 
-VISIT_CODES: Final[frozenset[str]] = frozenset({"VISIT_NOT_WAITING", "VISIT_UNKNOWN_CHOICE"})
+VISIT_CODES: Final[frozenset[str]] = frozenset(
+    {"VISIT_NOT_WAITING", "VISIT_UNKNOWN_CHOICE", "VISIT_ANSWER_VALUE_INVALID"}
+)
 """The codes this module raises (as `CaseError`); the integrator adds them to `PLAN_O_CODES` with help entries."""
 
 AI_NEEDED_REPLY: Final[str] = (
@@ -2424,8 +2427,13 @@ def answer(
     expected_version: int,
     actor: str,
     op_id: str | None = None,
+    value: str | None = None,
 ) -> Case:
-    """Answer a question with one of its options; the option's proposal is added, ticked by the person."""
+    """Answer a question with one of its options; the option's proposal is added, ticked by the person.
+
+    `value` is what the person typed with the answer (a date for "I will type a date"): an option that asks for
+    one needs it, in its kind; any other option refuses one (`VISIT_ANSWER_VALUE_INVALID`).
+    """
     run = _Run(deps, actor)
     now = deps.clock()
 
@@ -2433,8 +2441,10 @@ def answer(
         question = next((q for q in case.questions if q.question_id == question_id), None)
         if question is None or not _in_section(question.goal_id, case):
             raise _unknown("There is no such question open in this case.")
-        if option_id not in {option.option_id for option in question.options}:
+        chosen = next((o for o in question.options if o.option_id == option_id), None)
+        if chosen is None:
             raise _unknown("That is not one of the question's answers.")
+        typed = _typed_value(chosen.value_kind, value)
         effects = {e.option_id: e for e in (case.visit or CaseVisit()).offers.get(question_id, ())}
         effect = effects.get(option_id)
         replaced = f"{question_id}:{question.answer}" if question.answer is not None else None
@@ -2462,6 +2472,7 @@ def answer(
                 "answer": option_id,
                 "answered_by": actor,
                 "answered_at": now,
+                "answer_value": typed,
                 "assumed": False,  # Plan O M246: the person's answer replaces an assumption or a standing answer
                 "standing_answer_id": None,
             }
@@ -2474,6 +2485,7 @@ def answer(
                 item_id=question_id,
                 details={
                     "option": option_id,
+                    **({} if typed is None else {"value": typed}),
                     "changed": replaced is not None,
                     # Plan O M246: whether the answer changes the data; questions that never do are candidates
                     # for deciding without asking (the design §6.5).
@@ -2511,6 +2523,8 @@ def _remember_answer(
     from engine.doctor.standing import StandingAnswerStore, answer_id_for, may_stand, meaning_of
 
     option = next((o for o in question.options if o.option_id == question.answer), None)
+    if question.answer_value is not None:
+        return None  # a typed value belongs to this case alone: remembering the option would drop it
     if option is None or option.label == DONT_KNOW or (effect is None and option.effect_digest is not None):
         return None
     kind = None if effect is None else effect.kind
@@ -3068,6 +3082,36 @@ def chat(
         )
 
     return _person_step(run, client_id, case_id, expected_version, op_id, build)
+
+
+def _typed_value(kind: str | None, value: str | None) -> str | None:
+    """The value typed with an answer, checked against what its option asks for (None when it asks for none)."""
+    given = None if value is None else value.strip()
+    if kind is None:
+        if given:
+            raise CaseError("VISIT_ANSWER_VALUE_INVALID", "This answer does not take a typed value.")
+        return None
+    if not given:
+        raise CaseError("VISIT_ANSWER_VALUE_INVALID", f"This answer needs {_KIND_WORDS[kind]}.")
+    if kind == "date":
+        try:
+            parsed = date.fromisoformat(given)
+        except ValueError:
+            parsed = None
+        if parsed is None or parsed.isoformat() != given:
+            raise CaseError(
+                "VISIT_ANSWER_VALUE_INVALID", "Type the date as year-month-day, for example 2011-11-30."
+            )
+    elif kind == "number":
+        try:
+            if not math.isfinite(float(given)):
+                raise ValueError(given)
+        except ValueError:
+            raise CaseError("VISIT_ANSWER_VALUE_INVALID", "Type a number, for example 12.5.") from None
+    return given
+
+
+_KIND_WORDS: Final[dict[str, str]] = {"date": "a date", "number": "a number", "text": "some text"}
 
 
 def _unknown(message: str) -> CaseError:
