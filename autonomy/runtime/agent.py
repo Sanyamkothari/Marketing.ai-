@@ -1727,6 +1727,8 @@ class AgentPolicy:
         )
         if journeys is not None and journeys.fade is None:
             journeys.fade = self._urgency_fade  # a later step is priced at the urgency left on its day
+        if journeys is not None:
+            journeys.follow_rhythm = False  # the journey is the plan; the weekly rhythm would veto its steps
         self._journeys_replayed = False
         self.experiment_policy: ExperimentPolicy | None = None
         """With a book (the v3 preset), the wrapper `decide` goes through: it runs the book's running
@@ -1734,7 +1736,8 @@ class AgentPolicy:
         if experiments is not None:
             from autonomy.experiments.policy import ExperimentPolicy
 
-            self.experiment_policy = ExperimentPolicy(_Undecorated(self), experiments)
+            busy = None if journeys is None else (lambda cid: journeys.active(cid) is not None)
+            self.experiment_policy = ExperimentPolicy(_Undecorated(self), experiments, busy=busy)
         for brief in briefs:
             self._install(brief)
         # what the nightly learner needs and decisions do not carry
@@ -2077,6 +2080,8 @@ class AgentPolicy:
         key: str | None = None
         action = decision.action
         if action is not None:
+            if action.follow_up_step > 0:  # a journey's later step: see `_keep`
+                return
             item = self.content_by_id.get(action.content_id or "")
             if item is None:
                 return
@@ -2169,8 +2174,7 @@ class AgentPolicy:
         ]
         if policy.journeys is not None:  # v3 journeys: the options decide() weighs, not the raw bids
             quoted = [b for b, kept in offered if kept]
-            prices = policy.journey_prices(view, quoted)
-            offered = [(b, True) for b in policy.journeys.expand(quoted, view, prices, ctx.now)] + [
+            offered = [(b, True) for b in policy.journey_options(quoted, view, eff)] + [
                 (b, False) for b, kept in offered if not kept
             ]
         allowed: list[Bid] = []
@@ -2889,11 +2893,16 @@ class AgentPolicy:
         if d.decision_id in self.bundle.learned_decisions:
             return
         if d.kind is DecisionKind.ACT and d.action is not None:
-            self._log[d.decision_id] = d
+            # A journey's later step is sent to someone who did not buy after the step before it, so it is
+            # not a fresh draw: the breaker, the tiredness curves and the pacer count it (it is a message),
+            # the response models and the look-alike outcomes do not learn from it as a treatment.
+            follow_up = d.action.follow_up_step > 0
+            if not follow_up:
+                self._log[d.decision_id] = d
             if d.group is Group.AGENT:
                 new = d.decision_id not in self._sends
                 self._sends[d.decision_id] = (d.action.goal_id, d.action.channel, d.action.send_at)
-                item = self.content_by_id.get(d.action.content_id or "")
+                item = None if follow_up else self.content_by_id.get(d.action.content_id or "")
                 if item is not None:
                     seg = self._decision_segment.get(d.decision_id)
                     key = key_of(d.action.channel, d.action.offer_id, item.theme.value, item.format)

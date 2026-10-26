@@ -187,13 +187,14 @@ job comes due; without a queue the check runs when `dispatch` hands the message 
 
 ## Turning it on in the agent
 
-The factory has no flag yet (kept out to leave the agent's constructor alone while other streams
-edit it). After building the agent: `agent.policy.journeys = JourneyRunner(load_journeys())`.
-`AgentPolicy._install` replaces `agent.policy.bidders` but not `journeys`, so it survives brief
-changes. `explain_bids` ("why this, and why not that") then lists the journey options `decide`
-weighs; it does not show the mid-journey hold or a due step, which `decide` handles before the
-auction. No run of the real agent with journeys on is reported here (an earlier hand run's numbers
-were dropped because its script was not kept).
+`build_agent_policy(..., journeys=True)` (or a `JourneyConfig`, or a `JourneyRunner`) switches it on, and so does
+the v3 preset ([`PRESET.md`](PRESET.md)). `AgentPolicy._install` replaces `agent.policy.bidders` but not
+`journeys`, so it survives brief changes. `explain_bids` ("why this, and why not that") then lists the journey
+options `decide` weighs; it does not show the mid-journey hold or a due step, which `decide` handles before the
+auction. The agent sets `JourneyRunner.fade` so that a later step is priced at the urgency left on its day (a cart
+reminder halves daily, a moment closes), and a policy that is built again replays its runs from the decision log it
+is handed before its first decision (`nightly`). No run of the real agent with journeys on, alone, is reported
+here (an earlier hand run's numbers were dropped because its script was not kept).
 
 ## What was run, and what was not
 
@@ -225,10 +226,12 @@ measured.
 3. **Proof and learning.** The proof harness should credit a journey's outcome to its first
    decision with `journey_probability`, over `JourneyRun`'s window (`Journey.window_days(horizon)`:
    total waits plus the brief's horizon). Later steps' `probability` is 1.0 given the journey and
-   must not be used as an exploration probability. The response model learns step decisions as
-   ordinary sends of their channel. Journey-level reward and credit (plan-v3: the purchase within
-   the journey's window minus all its costs) is not wired into proof or learning yet; that is a
-   follow-up for the proof stream.
+   must not be used as an exploration probability. The agent no longer learns a later step as a
+   fresh treatment (the customer did not buy after the step before it, so their purchase rate is a
+   survivor's): the breaker, the tiredness curves and the pacer still count it as a message, the
+   response models and the look-alike outcomes do not (`AgentPolicy._keep`, PRESET.md). Journey-level
+   reward and credit (plan-v3: the purchase within the journey's window minus all its costs) is not
+   wired into proof or learning yet; that is a follow-up for the proof stream.
 4. **State is in memory** (like the policy's pending sends). `rebuild` restores it from the log,
    including runs that ended (`journey_ended`) and steps skipped by a rule (the hold's
    `blocked_by`). A purchase or unsubscribe is re-detected from the customer's state at the next

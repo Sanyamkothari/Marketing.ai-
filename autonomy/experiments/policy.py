@@ -47,13 +47,21 @@ the agent's evidence gate then still decides between them, so the default never 
 customer for whom a plain message is expected to do better. A channel default keeps the goal's content on
 that channel. With no promotion, and no running experiment, `decide` is exactly the inner policy's.
 
+**A journey in progress is not cut.** With `busy` (a customer id -> whether the inner policy has a journey
+running for them, the agent's `journeys.active`), a daily-sweep decision for a customer who is busy is the
+inner policy's, with the library whole and no tag: an arm that cut the library would end the journey at its
+next step (a channel arm leaves the later channel with nothing to offer), and a customer would be moved by the
+test in the middle of a plan the auction chose before it. They join the test, by the same hash, at their
+first sweep decision after the journey ends. Decisions prompted by an event (a cart, a reply) are not
+journey steps and are assigned as always (docs/v3/PRESET.md).
+
 Everything else (`learn`, `nightly`, `prepare_day`, `explain_bids`...) is the inner policy's.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from autonomy.contracts import (
@@ -69,6 +77,7 @@ from autonomy.contracts import (
     Reward,
 )
 from autonomy.decide.audience import matches
+from autonomy.decide.policy import SWEEP
 from autonomy.experiments.assign import Assignment, assign, holdout_experiments
 from autonomy.experiments.book import ExperimentBook
 from autonomy.experiments.model import HOLDOUT_BUCKET, Experiment, Promotion, tag_decision_version
@@ -118,14 +127,22 @@ def _other_goals(ctx: DecisionContext, goal_id: str) -> tuple[str, ...]:
 class ExperimentPolicy:
     """`Policy` that wraps another and runs the book's running experiments on a random few."""
 
-    def __init__(self, inner: Policy, book: ExperimentBook, *, apply_defaults: bool = True) -> None:
+    def __init__(
+        self,
+        inner: Policy,
+        book: ExperimentBook,
+        *,
+        apply_defaults: bool = True,
+        busy: Callable[[str], bool] | None = None,
+    ) -> None:
         self._inner = inner
         self.book = book
         self.apply_defaults = apply_defaults
+        self._busy = busy
         self.version = inner.version
         self.stats: Counter[str] = Counter()
         """Counts for checking a run: `assigned:<experiment>:<arm>`, `acted:<experiment>:<arm>`,
-        `outside_arm`, `defaulted`, `default_skipped`."""
+        `outside_arm`, `defaulted`, `default_skipped`, `journey_running`."""
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -150,6 +167,9 @@ class ExperimentPolicy:
                     }
                 )
             return decision
+        if trigger in (None, SWEEP) and self._busy is not None and self._busy(state.customer_id):
+            self.stats["journey_running"] += 1
+            return self._call(state, ctx, trigger)
         found = assign(running, state, ctx.now, ctx.briefs)
         if found is None:
             return self._call(state, self._with_defaults(state, ctx, defaults), trigger)

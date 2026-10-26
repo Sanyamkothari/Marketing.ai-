@@ -174,6 +174,13 @@ class Journey(Contract):
     def total_wait_days(self) -> float:
         return sum(s.wait_days for s in self.steps)
 
+    def most_in_a_week(self) -> int:
+        """The most messages the journey sends in any 7 days, if every step goes out."""
+        days = [0.0]
+        for step in self.steps[1:]:
+            days.append(days[-1] + step.wait_days)
+        return max(sum(1 for d in days[i:] if d - days[i] < 7.0) for i in range(len(days)))
+
     def window_days(self, horizon_days: int) -> float:
         """How long after the first message a purchase counts for the journey: the waits of all
         steps plus the brief's outcome window after the last one."""
@@ -366,6 +373,11 @@ class JourneyRunner:
         still there `days` later (a cart reminder halves every day, a moment closes), or None for a goal it
         does not know. Without it, or when it answers None, a later step is priced at today's urgency, as
         before. See `expand`."""
+        self.follow_rhythm = True
+        """Whether a later step must also fit the customer's weekly contact budget (`budget_fn`), as a first
+        message must. True keeps the runner's own behaviour. The agent sets it False: its weekly rhythm
+        is one message a week for most customers, which would hold every step that falls in the week of
+        the one before it until it expired, while the journey had been priced as if it went out (PRESET.md)."""
 
     # --- choosing: journeys as bids ---------------------------------------------------------------
 
@@ -636,6 +648,11 @@ class JourneyRunner:
 
     def _log(self, customer_id: str, journey_id: str, step: int, kind: str, code: str, at: datetime) -> None:
         self.history.append(JourneyEvent(customer_id, journey_id, step, kind, code, at))
+
+    def messages_in_a_week(self, journey_id: str) -> int:
+        """The most messages `journey_id` sends in any 7 days (0 for an id the config does not hold)."""
+        journey = self.config.get(journey_id)
+        return journey.most_in_a_week() if journey is not None else 0
 
     # --- running: one customer, one sweep ---------------------------------------------------------
 

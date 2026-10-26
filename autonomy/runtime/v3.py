@@ -95,10 +95,13 @@ def resolve_v3(
     preset = v3 if isinstance(v3, V3Preset) else V3Preset() if v3 else None
     if preset is None:
         return V3Parts(lookalike, who, frequency, moments, _runner(journeys), offer_pricing, None)
-    if moments is None and preset.moments:
-        from autonomy.decide.moments import MomentBook
+    if moments is None:  # the preset has a say either way: off is False, which beats `use_moments`' default
+        if preset.moments:
+            from autonomy.decide.moments import MomentBook
 
-        moments = MomentBook.load(default_country=preset.moments_country)
+            moments = MomentBook.load(default_country=preset.moments_country)
+        else:
+            moments = False
     if offer_pricing is None and preset.offers:
         offer_pricing = preset.offers if isinstance(preset.offers, OfferPricing) else DEFAULT_OFFER_PRICING
     experiments: ExperimentBook | None = None

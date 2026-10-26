@@ -143,8 +143,8 @@ planner sees.
 | `build_agent_policy(..., frequency=...)` | `False`: plain `HazardModel`s, no plan hook, every existing number unchanged | `True`, or a `FrequencyConfig(tolerance=ToleranceConfig(...), plans=PlanConfig(...))` |
 | Gym CLI `--policy` | `agent` | `agent_frequency` (look-alike response model on, plus both parts) |
 
-There is no `RuntimeSettings` switch yet: `api/v2/engines/decisions.py` and `build_runtime` build the agent without
-it. Say if the runtime should carry one.
+There is no `RuntimeSettings` switch for this piece alone. `AUTONOMY_V3` turns it on together with the other v3 pieces
+([`PRESET.md`](PRESET.md)); `api/v2/engines/decisions.py` builds its agent without it.
 
 The switch is pinned by `tests/v3/frequency/test_agent.py`: the default agent has plain `HazardModel`s and no hook;
 `frequency=False` gives decisions identical to no argument for 40 customers; tolerance alone, before any data, gives

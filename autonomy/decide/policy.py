@@ -388,7 +388,7 @@ class AutonomousPolicy:
             if math.isfinite(b.expected_net) and math.isfinite(b.uncertainty)
         ]
         if self.journeys is not None:
-            offered = self.journeys.expand(offered, state, self.journey_prices(state, offered), ctx.now)
+            offered = self.journey_options(offered, state, ctx)
         survivors: list[Bid] = []
         blocked: list[str] = []
         for bid in offered:
@@ -512,7 +512,7 @@ class AutonomousPolicy:
         market: Market | None = None
         if check.allowed:
             # The same market as a first message: a hold by pacing or the weekly budget waits.
-            market = self.auction(state, ctx, [bid], [], plan=False)
+            market = self.auction(state, ctx, [bid], [], plan=False, rhythm=runner.follow_rhythm)
             if market.held:
                 check = rules.RuleResult(False, market.held[0][1])
         if check.allowed and runner.late(turn, ctx.now):
@@ -565,6 +565,25 @@ class AutonomousPolicy:
         return draft.model_copy(
             update={"reason": f"{sentence} Part of {label}: {runner.describe(run.journey_id)}."}
         )
+
+    def journey_options(
+        self, offered: Sequence[Bid], state: CustomerState, ctx: DecisionContext
+    ) -> list[Bid]:
+        """The bids the auction weighs once journeys are on: `JourneyRunner.expand`, less any journey that
+        puts more messages in a 7-day span than the strictest weekly cap lets through (its later step could
+        never go out, and the customer would be held for nothing until it expired)."""
+        runner = self.journeys
+        if runner is None:
+            return list(offered)
+        options = runner.expand(offered, state, self.journey_prices(state, offered), ctx.now)
+        cap = rules.strictest_weekly_cap(ctx.briefs)
+        if cap is None:
+            return options
+        return [
+            b
+            for b in options
+            if b.action.journey_id is None or runner.messages_in_a_week(b.action.journey_id) <= cap
+        ]
 
     def journey_prices(self, state: CustomerState, bids: Sequence[Bid]) -> Callable[[Channel], float]:
         """The attention price of one more message on each channel, as the auction would price the
@@ -714,6 +733,7 @@ class AutonomousPolicy:
         *,
         observe: bool = True,
         plan: bool = True,
+        rhythm: bool = True,
     ) -> Market:
         """Price the bids that passed the hard rules and pick the ones the auction weighs.
 
@@ -724,7 +744,9 @@ class AutonomousPolicy:
         for what pacing or the budget held are appended to `blocked`. `observe=False` leaves the
         pacer's running reference alone, so an explanation changes nothing. `plan=False` skips the
         frequency plan's hold: a journey's later step follows its journey, not a new plan, and a
-        decision prompted by an event (a cart, a reply) is answered when it comes.
+        decision prompted by an event (a cart, a reply) is answered when it comes. `rhythm=False` skips
+        the weekly budget's hold (a journey's step, when `JourneyRunner.follow_rhythm` is off). The hard
+        weekly cap (`rules.check_bid`) and the attention price still apply to the step.
         """
         price = self._price(state)
         prices: dict[Channel, float] = {}
@@ -740,7 +762,7 @@ class AutonomousPolicy:
             held = [(b, rules.PACING) for b in survivors if id(b) not in kept]
         market = Market([], [], [], price, prices, extra)
         budget: int | None = None
-        if self.budget_fn is not None and bids:
+        if rhythm and self.budget_fn is not None and bids:
             budget = self.budget_fn(state, bids, market.cost)
             if budget is not None and state.contacts_7d >= max(budget, 1):
                 blocked.append(rules.WEEKLY_CAP)
