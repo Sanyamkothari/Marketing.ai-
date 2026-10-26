@@ -20,14 +20,14 @@ import hashlib
 import os
 import threading
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
-from autonomy.contracts import NO_OFFER, Action, Channel, Contract, OfferOption
+from autonomy.contracts import NO_OFFER, Action, Channel, Contract, OfferKind, OfferOption
 from autonomy.mandate.signing import GENESIS_HASH, canonical_bytes
 
 ChangeKind = Literal["offer", "channel", "template"]
@@ -408,3 +408,101 @@ def _diff_keyed(
             if fields:
                 changes.append(CatalogueChange(kind=kind, key=key, change="changed", fields=fields))
     return changes
+
+
+# --- offer cost models (v3) -----------------------------------------------------------------------
+
+
+def offer_cost(offer: OfferOption, basket_value: float | None = None) -> float:
+    """What one redemption of this offer costs the business, in the offer's own currency.
+
+    An explicit `cost_per_redemption` always wins: it is what the marketer configured, and every v2
+    envelope carries one. Without it the cost comes from the kind:
+
+    * percent off: `amount` percent of `basket_value` (0 when the basket is unknown);
+    * amount off: `amount`;
+    * free shipping: `shipping_cost`, what shipping one order costs us;
+    * bundle: `bundle_discount`, the money taken off the bundle;
+    * loyalty: `points x point_value x redemption_rate`, because points that are never redeemed cost
+      nothing;
+    * gift and early access: nothing but the configured `cost_per_redemption` (none set: 0);
+    * none and content: 0.
+    """
+    if offer.cost_per_redemption > 0:
+        return offer.cost_per_redemption
+    if offer.kind is OfferKind.PERCENT_OFF:
+        return offer.amount / 100.0 * basket_value if basket_value is not None and basket_value > 0 else 0.0
+    if offer.kind is OfferKind.AMOUNT_OFF:
+        return offer.amount
+    if offer.kind is OfferKind.FREE_SHIPPING:
+        return offer.shipping_cost
+    if offer.kind is OfferKind.BUNDLE:
+        return offer.bundle_discount
+    if offer.kind is OfferKind.LOYALTY:
+        return offer.points * offer.point_value * offer.redemption_rate
+    return 0.0
+
+
+def priced_offer(offer: OfferOption, basket_value: float | None = None) -> OfferOption:
+    """The same offer with `cost_per_redemption` filled in from `offer_cost`, for a catalogue version
+    or an envelope that should state each cost plainly."""
+    cost = offer_cost(offer, basket_value)
+    return (
+        offer if cost == offer.cost_per_redemption else offer.model_copy(update={"cost_per_redemption": cost})
+    )
+
+
+def catalogue_offer_cost(
+    version: CatalogueVersion, offer_id: str, basket_value: float | None = None
+) -> float:
+    """`offer_cost` of a catalogue offer; 0 for an id the version does not list (and for "none")."""
+    offer = version.offer(offer_id)
+    return 0.0 if offer is None else offer_cost(offer, basket_value)
+
+
+RelatedItems = Callable[[str, int], Sequence[tuple[str, float]]]
+"""(item id, how many) -> items bought with it, best first: `CoPurchaseModel.related` fits."""
+
+
+def bundle_offer(
+    offer_id: str,
+    label: str,
+    anchor_item_id: str,
+    *,
+    related: RelatedItems,
+    prices: Mapping[str, float],
+    percent_off: float,
+    size: int = 3,
+    needs_approval: bool = False,
+) -> OfferOption | None:
+    """A bundle of `anchor_item_id` plus the items most often bought with it, at `percent_off`.
+
+    `related` is the co-purchase recommender's `related`; `prices` maps item id to list price. Items
+    without a price are skipped (a discount on an unpriced item cannot be costed). The bundle's cost
+    is `percent_off` of the listed prices of the items it holds. None when the anchor has no price or
+    fewer than two priced items are found: one item is not a bundle.
+    """
+    if not 0 < percent_off <= 100 or size < 2:
+        raise ValueError("a bundle needs 0 < percent_off <= 100 and a size of at least 2")
+    anchor = prices.get(anchor_item_id)
+    if anchor is None or anchor <= 0:
+        return None
+    items = [anchor_item_id]
+    for item_id, _score in related(anchor_item_id, size * 3):
+        price = prices.get(item_id)
+        if item_id not in items and price is not None and price > 0:
+            items.append(item_id)
+        if len(items) == size:
+            break
+    if len(items) < 2:
+        return None
+    list_price = sum(prices[i] for i in items)
+    return OfferOption(
+        offer_id=offer_id,
+        label=label,
+        kind=OfferKind.BUNDLE,
+        amount=percent_off,
+        bundle_item_ids=tuple(items),
+        bundle_discount=round(list_price * percent_off / 100.0, 2),
+        needs_approval=needs_approval,
+    )
