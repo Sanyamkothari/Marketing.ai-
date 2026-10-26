@@ -180,6 +180,9 @@ process's resident memory (RSS) every 10 ms. Result:
 | Process RSS peak during the build | 198 MB | 196 MB |
 | Growth during the build | 55 MB | 53 MB |
 
+A second run, through the slow test (`pytest tests/v3/profile/test_scale.py -m slow`), gave 80.5 s, 1,242
+customers per second and +54 MB.
+
 Memory did not grow with the shop: twenty times the customers cost 2 MB more at the peak. A second check
 isolates the Python heap with `tracemalloc` (`test_memory_does_not_grow_with_the_number_of_customers`: batch
 and store page size 100, `build_profiles` over SQLite stores): the peak was 3.19 MB at 200 customers, 3.28 MB
