@@ -1,0 +1,46 @@
+# Channel journeys (plan-v3 decision 4). Read by autonomy/decide/journeys.py.
+#
+# A journey is an ordered list of steps. The first step goes at once. Each later step names a
+# channel, how many days it waits after the step before, and a condition (`when`):
+#   always       run it whatever happened (a purchase, a stop reply or an unsubscribe still ends the journey)
+#   no_purchase  run it while the customer has not bought
+#   not_opened   run it while the customer has not clicked or replied since the step before
+# A journey is one option in the daily auction, priced over the whole plan (autonomy/decide/journeys.py).
+# `value_bar` (in the shop's own currency, optional) offers the journey only to customers worth at least
+# that much if they buy; it is a starting value to replace per shop (JourneyConfig.with_value_bar).
+
+settings:
+  follow_up_uplift_factor: 0.5   # a later step is assumed to do half as much as a first message; untuned, to calibrate
+  never_open_after_sends: 5      # skip a channel after this many messages with no click or reply (0: never skip)
+  lookahead_hours: 24            # a step due within a day of the sweep goes out in this sweep
+  max_defer_days: 2              # a step held by a cap or a snooze waits this long, then the journey ends
+  hold_during_journey: true      # no new auction for a customer in the middle of a journey
+  require_positive_net: true     # a step whose fresh price no longer beats its cost is not sent
+
+journeys:
+  - id: A
+    name: Email only
+    steps:
+      - channel: email
+
+  - id: B
+    name: Email, then WhatsApp if no purchase
+    steps:
+      - channel: email
+      - channel: whatsapp
+        wait_days: 3
+        when: no_purchase
+
+  - id: C
+    name: WhatsApp now, high value only
+    value_bar: 50
+    steps:
+      - channel: whatsapp
+
+  - id: D
+    name: WhatsApp, then an email reminder
+    steps:
+      - channel: whatsapp
+      - channel: email
+        wait_days: 2
+        when: no_purchase

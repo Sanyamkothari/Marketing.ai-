@@ -55,6 +55,12 @@ Three more optional hooks let a caller make contacting dearer and rarer (all off
   rule); it stays among the options the exploration floor picks from, so learning goes on. The
   logged probability counts this exactly: `floor / n` for every option, plus `(1 - floor) x` its
   share of Thompson wins among the options that pass.
+
+One more optional hook is the v3 channel journeys (`journeys`, a `journeys.JourneyRunner`; off by
+default, and with it off nothing below changes). Each bid on a journey's first channel becomes one
+option per journey, priced over the whole plan, and the chosen journey's chance is logged on the
+decision (`journey_probability`). Later steps run before the auction in the daily sweep, are not
+drawn again and pass every hard rule at their own time. See `autonomy.decide.journeys`.
 """
 
 from __future__ import annotations
@@ -80,6 +86,15 @@ from autonomy.contracts import (
     stable_id,
 )
 from autonomy.decide import explain, rules
+from autonomy.decide.journeys import (
+    LEFT_AGENT_GROUP,
+    JourneyRun,
+    JourneyRunner,
+    TurnKind,
+    Verdict,
+    channel_name,
+    journey_probability,
+)
 from autonomy.decide.pacing import Pacer
 from autonomy.decide.timing import DEFAULT_HOUR, ReadingHourModel, choose_send_time
 from autonomy.interfaces import Bidder, Policy
@@ -279,6 +294,7 @@ class AutonomousPolicy:
         channel_price_fn: ChannelPrices | None = None,
         budget_fn: ContactBudget | None = None,
         margin_fn: RestraintMargin | None = None,
+        journeys: JourneyRunner | None = None,
     ) -> None:
         if exploration_floor is not None and not 0 <= exploration_floor <= 1:
             raise ValueError("exploration_floor is a probability")
@@ -301,12 +317,15 @@ class AutonomousPolicy:
         self.channel_price_fn = channel_price_fn
         self.budget_fn = budget_fn
         self.margin_fn = margin_fn
+        self.journeys = journeys
         # customer -> {decision_id: send_at} for ACT decisions whose SEND is not in the state yet
         self._scheduled: dict[str, dict[str, datetime]] = {}
 
     # --- decide -----------------------------------------------------------------------------------
 
     def decide(self, state: CustomerState, ctx: DecisionContext, *, trigger: str | None = None) -> Decision:
+        if self.journeys is not None and state.group is not Group.AGENT:
+            self.journeys.drop(state.customer_id, LEFT_AGENT_GROUP, ctx.now)
         if state.group is Group.BASELINE:
             if self.baseline_policy is not None:
                 return self.baseline_policy.decide(state, ctx)
@@ -333,6 +352,11 @@ class AutonomousPolicy:
             )
             gap = rules.too_soon(state, ctx.now, self.min_gap, upcoming)
         state = self.with_pending(state, ctx.now, ignore=decision_id)
+        if self.journeys is not None:
+            self.journeys.undo(state.customer_id, decision_id)
+            step = self._journey_turn(state, ctx, decision_id, trigger, gap)
+            if step is not None:
+                return step
         rng_key = state.customer_id if trigger in (None, SWEEP) else f"{state.customer_id}\x1f{trigger}"
         hour_scores: tuple[float, ...] | None = None
         if self.reading_hours is not None:
@@ -349,6 +373,8 @@ class AutonomousPolicy:
             for b in bidder.bids(state, ctx)
             if math.isfinite(b.expected_net) and math.isfinite(b.uncertainty)
         ]
+        if self.journeys is not None:
+            offered = self.journeys.expand(offered, state)
         survivors: list[Bid] = []
         blocked: list[str] = []
         for bid in offered:
@@ -381,6 +407,7 @@ class AutonomousPolicy:
             # What the best option had to beat: its own channel's price.
             best = survivors[0] if survivors else None
             paid = base_price = market.channel_price(best.action.channel) if best else market.price
+        journey_id = chosen.action.journey_id if chosen is not None else None
         draft = Decision(
             decision_id=decision_id,
             customer_id=state.customer_id,
@@ -395,6 +422,10 @@ class AutonomousPolicy:
             bids=tuple(survivors[:LOGGED_BIDS]),
             blocked_by=_unique(blocked),
             policy_version=self.version,
+            journey_id=journey_id,
+            journey_probability=(
+                journey_probability(options, pick.probabilities, journey_id) if journey_id else None
+            ),
         )
         sentence = explain.reason(
             draft,
@@ -411,8 +442,117 @@ class AutonomousPolicy:
             # options are best net first, so this says restraint held the best one out of the draw
             restrained=bool(market.eligible) and not market.eligible[0],
         )
+        if journey_id is not None and self.journeys is not None:
+            sentence = f"{sentence} Journey {journey_id}: {self.journeys.describe(journey_id)}."
         self._remember(draft)
         return draft.model_copy(update={"reason": sentence})
+
+    # --- journeys: the steps after the first ------------------------------------------------------
+
+    def _journey_turn(
+        self,
+        state: CustomerState,
+        ctx: DecisionContext,
+        decision_id: str,
+        trigger: str | None,
+        gap: rules.RuleResult,
+    ) -> Decision | None:
+        """The decision for a customer whose journey is in progress, or None to run the auction.
+
+        Only the daily sweep carries journeys on (a cart or a reply is decided on its own). A step
+        that is not due yet holds the customer (`hold_during_journey`). A due step is quoted afresh,
+        timed, and passed through every hard rule and the gap between messages; it is sent with
+        probability 1.0 (the journey was the draw) and the first step's `journey_probability`."""
+        runner = self.journeys
+        if runner is None or trigger not in (None, SWEEP):
+            return None
+        turn = runner.advance(state, ctx)
+        run, journey, step, due = turn.run, turn.journey, turn.step, turn.due_at
+        if run is None or journey is None or turn.kind in (TurnKind.NONE, TurnKind.STOPPED):
+            return None
+        label = f"Journey {run.journey_id}"
+        if turn.kind is TurnKind.WAIT:
+            if not runner.settings.hold_during_journey or step is None or due is None:
+                return None
+            where = channel_name(step.channel)
+            return self._journey_hold(
+                state,
+                ctx,
+                decision_id,
+                run,
+                f"Waiting: {label} sends its next message, by {where}, on {due:%d %b}.",
+            )
+        planned = runner.plan(turn, state, ctx, self.bidders)
+        if isinstance(planned, str):
+            return None
+        bid = self._timed(planned, state, ctx)
+        check = rules.check_bid(bid, state, ctx)
+        if check.allowed and not gap.allowed:
+            check = gap
+        if not check.allowed:
+            verdict = runner.blocked(turn, check.code, ctx.now)
+            if verdict is Verdict.STOP:
+                return None
+            what = "skips" if verdict is Verdict.SKIP else "holds"
+            why = explain.BLOCK_SENTENCE.get(check.code, check.code).removeprefix("Left alone: ")
+            return self._journey_hold(
+                state, ctx, decision_id, run, f"{label} {what} its next message: {why}", (check.code,)
+            )
+        draft = Decision(
+            decision_id=decision_id,
+            customer_id=state.customer_id,
+            made_at=ctx.now,
+            kind=DecisionKind.ACT,
+            action=bid.action,
+            group=state.group,
+            probability=1.0,
+            expected_net=bid.expected_net,
+            reason="-",
+            bids=(bid,),
+            policy_version=self.version,
+            journey_id=run.journey_id,
+            journey_probability=run.probability,
+        )
+        sentence = explain.reason(
+            draft,
+            [bid],
+            content={c.content_id: c for c in ctx.content},
+            offers={o.offer_id: o for b in ctx.briefs for o in b.envelope.offers},
+            contacts_7d=state.contacts_7d,
+            currency=self.currency,
+            base_price=0.0,
+            channels=state.channels,
+        )
+        self._remember(draft)
+        return draft.model_copy(
+            update={"reason": f"{sentence} Part of {label}: {runner.describe(run.journey_id)}."}
+        )
+
+    def _journey_hold(
+        self,
+        state: CustomerState,
+        ctx: DecisionContext,
+        decision_id: str,
+        run: JourneyRun,
+        reason: str,
+        blocked_by: tuple[str, ...] = (),
+    ) -> Decision:
+        """Leave a customer mid-journey alone for this sweep, saying which journey and why."""
+        decision = Decision(
+            decision_id=decision_id,
+            customer_id=state.customer_id,
+            made_at=ctx.now,
+            kind=DecisionKind.NOTHING,
+            group=state.group,
+            probability=1.0,
+            reason=reason,
+            blocked_by=blocked_by,
+            policy_version=self.version,
+            journey_id=run.journey_id,
+            journey_probability=run.probability,
+        )
+        self._remember(decision)
+        return decision
 
     def decision_id(self, customer_id: str, now: datetime, trigger: str | None = None) -> str:
         """The id of the decision for this customer, moment and trigger (None: the daily sweep)."""
@@ -455,6 +595,8 @@ class AutonomousPolicy:
     def forget_pending(self, decision_ids: Sequence[str]) -> None:
         """Drop scheduled sends that will never go out (rejected, cancelled), so they stop counting."""
         drop = set(decision_ids)
+        if self.journeys is not None:
+            self.journeys.forget(drop)
         for cid in list(self._scheduled):
             kept = {d: at for d, at in self._scheduled[cid].items() if d not in drop}
             if kept:
@@ -463,6 +605,8 @@ class AutonomousPolicy:
                 del self._scheduled[cid]
 
     def _remember(self, decision: Decision) -> None:
+        if self.journeys is not None:
+            self.journeys.record(decision)
         pending = self._scheduled.get(decision.customer_id)
         if decision.action is not None:
             self._scheduled.setdefault(decision.customer_id, {})[
