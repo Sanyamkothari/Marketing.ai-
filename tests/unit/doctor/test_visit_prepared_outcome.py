@@ -79,10 +79,15 @@ def _deps(storage: LocalStorage, w: World, items: tuple[Any, ...] = ()) -> Visit
     return deps_for(storage, w, converse=port)
 
 
-def _sql_item(w: World, columns: list[str], *, ticked: bool = False) -> Any:
+def _sql_item(
+    w: World, columns: list[str], *, ticked: bool = False, two_valued: list[str] | None = None
+) -> Any:
+    payload: dict[str, Any] = {"step": STEP, "stage": "post_build", "columns": columns}
+    if two_valued is not None:
+        payload["two_valued"] = two_valued
     return visit._item(
         "recipe_step",
-        {"step": STEP, "stage": "post_build", "columns": columns},
+        payload,
         title="One row per customer",
         upload_id=None,
         confidence=AgentConfidence.CHECK,
@@ -92,10 +97,11 @@ def _sql_item(w: World, columns: list[str], *, ticked: bool = False) -> Any:
     )
 
 
-def _asked(storage: LocalStorage, w: World, columns: list[str]) -> Case:
+def _asked(storage: LocalStorage, w: World, columns: list[str], two_valued: list[str] | None = None) -> Case:
     case = visit.resume(CLIENT, open_case(storage, w).case_id, _deps(storage, w), actor=ANALYST)
     case = visit.chat(
-        CLIENT, case.case_id, "Build me a training table.", _deps(storage, w, (_sql_item(w, columns),)),
+        CLIENT, case.case_id, "Build me a training table.",
+        _deps(storage, w, (_sql_item(w, columns, two_valued=two_valued),)),
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
     return visit.set_goal(
@@ -148,3 +154,62 @@ def test_readiness_runs_on_the_prepared_table_with_the_decided_column_as_the_tar
     result = visit.readiness_verify(storage, None, prepare)(case, brief, ())
     assert seen == [(FIRST, "ordered_again_90d")], "the run reads the prepared table with this target"
     assert "VISIT_NO_OUTCOME" not in result.reason
+
+
+WIDE = [
+    "customer_id", "n_orders", "first_order_date", "last_order_date", "avg_order_value", "orders_90d",
+    "total_spend", "ordered_again_90d",
+]  # fmt: skip
+
+
+def test_order_named_features_do_not_crowd_the_real_outcome_out_of_the_question(
+    storage: LocalStorage, world: World
+) -> None:
+    """The AI describes its table in the goal's words, so many columns share a word with the outcome; only the
+    two-valued ones can be a yes/no, and the question holds the real one."""
+    case = _asked(storage, world, WIDE, two_valued=["ordered_again_90d"])
+    q = question(case, "OUTCOME_COLUMN")
+    assert [o.label for o in q.options] == ["ordered_again_90d", "None of these"]
+
+
+def test_the_best_name_comes_first_when_several_two_valued_columns_read_alike(
+    storage: LocalStorage, world: World
+) -> None:
+    columns = [f"order_flag_{n}" for n in range(6)] + ["ordered_again_90d"]
+    case = _asked(storage, world, columns, two_valued=columns)
+    q = question(case, "OUTCOME_COLUMN")
+    assert (
+        q.options[0].label == "ordered_again_90d"
+    ), "a name that is the outcome's own is never cut by the five"
+    assert len(q.options) == 6
+
+
+def test_an_outcome_from_a_query_the_person_then_leaves_out_is_a_doubt_not_a_silent_failure(
+    storage: LocalStorage, world: World
+) -> None:
+    case = _asked(storage, world, ["customer_id", "ordered_again_90d"], two_valued=["ordered_again_90d"])
+    q = question(case, "OUTCOME_COLUMN")
+    case = visit.answer(
+        CLIENT, case.case_id, q.question_id, option(q, "ordered_again_90d"), _deps(storage, world),
+        expected_version=case.version, actor=ANALYST,
+    )  # fmt: skip
+    (made,) = (i for i in case.items if i.payload.get("columns"))
+    case = visit.decide(
+        CLIENT, case.case_id, made.item_id, False, _deps(storage, world),
+        expected_version=case.version, actor=ANALYST,
+    )  # fmt: skip
+    case = visit.chat(
+        CLIENT, case.case_id, "Anything else?", _deps(storage, world),
+        expected_version=case.version, actor=ANALYST,
+    )  # fmt: skip
+    assert any(d.doubt_id.startswith("d.outcome_gone") for d in case.doubts)
+
+
+def test_the_names_kept_for_the_goal_check_are_two_valued_ones_and_a_wide_table_keeps_its_last_columns() -> (
+    None
+):
+    from engine.doctor.tools_sql import MAX_COLUMNS_KEPT, MAX_COLUMNS_LISTED, _two_valued
+
+    frame = pd.DataFrame({"id": [1, 2, 3], "flag": [0, 1, 0], "spend": [1.0, 2.0, 3.5], "blank": [None] * 3})
+    assert _two_valued(frame) == ("flag", "blank")
+    assert MAX_COLUMNS_KEPT > MAX_COLUMNS_LISTED

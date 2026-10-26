@@ -434,3 +434,112 @@ def test_a_typed_date_is_accepted_over_http(client: TestClient, data_dir: Path) 
     assert response.status_code == 200, response.text
     answered = next(q for q in response.json()["questions"] if q["question_id"] == "q8")
     assert answered["answer_value"] == "2011-11-30"
+
+
+def test_an_invoice_log_with_an_ai_query_reaches_a_computed_readiness_verdict_on_the_prepared_table(
+    unified: None, config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The replay blocker end to end: an invoice log (key = invoice line), the AI's query makes one row per customer
+    with `ordered_again_90d`; the person says yes to the table and to the outcome; the readiness check is computed
+    on that table, with the customer id (not the invoice id) as its key."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(5)
+    customers = 900
+    lines = pd.DataFrame(
+        {
+            "invoice_id": [f"I{n}" for n in range(customers * 2)],
+            "customer_id": [f"C{n % customers}" for n in range(customers * 2)],
+            "invoice_date": ["2026-06-01"] * customers + ["2026-08-15"] * customers,
+            "amount": np.round(rng.gamma(2.0, 40.0, customers * 2), 2),
+        }
+    )
+    again = rng.random(customers) < 0.4
+    lines.loc[customers:, "invoice_date"] = np.where(
+        np.concatenate([again, again]), "2026-08-15", "2026-06-02"
+    )[customers:]
+    sql = (
+        "SELECT customer_id, ROUND(SUM(amount), 2) AS total_spend, "
+        "CASE WHEN MAX(invoice_date) > CAST($as_of AS VARCHAR) THEN 1 ELSE 0 END AS ordered_again_90d "
+        "FROM t_invoices GROUP BY customer_id"
+    )
+
+    buffer = io.StringIO()
+    lines.to_csv(buffer, index=False)
+    holder: dict[str, str] = {}
+
+    script_steps: list[Any] = [
+        lambda _seen: {
+            "action": "propose_sql",
+            "args": {
+                "description": "One row per customer with whether they ordered again in the 90 days after",
+                "sql": sql,
+                "output_name": "customer_training",
+                "files": ["F1"],
+                "as_of": "2026-08-01",
+                "expect": {"keys_unique": True, "max_keys_lost_pct": 0},
+            },
+        },
+        {"action": "reply", "text": "I built one row per customer."},
+    ]
+    script = ChatScript({"build": script_steps})
+    monkeypatch.setattr(ai_service, "build_client", lambda *_a, **_k: script)
+    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as client:
+        response = client.post(
+            "/uploads",
+            files={"file": ("invoices.csv", buffer.getvalue().encode(), "text/csv")},
+            data={"use_case": "retail-win-back", "mode": "train"},
+        )
+        assert response.status_code == 201, response.text
+        holder["upload_id"] = str(response.json()["upload_id"])
+        case = client.post("/cases", json={"upload_ids": [holder["upload_id"]]}).json()
+        case = _answer_open(client, client.post(f"/cases/{case['case_id']}/visit", json={}).json())
+        case_id = case["case_id"]
+        assert client.post(f"/cases/{case_id}/ai-consent", json={}).status_code == 200
+        chatted = client.post(
+            f"/cases/{case_id}/chat", json={"version": case["version"], "message": "build it"}
+        )
+        assert chatted.status_code == 200, chatted.text
+        case = chatted.json()
+        ai_items = [i for i in case["items"] if i["source"] == "ai"]
+        assert len(ai_items) == 1
+        made = ai_items[0]
+        assert made["payload"]["columns"] == ["customer_id", "total_spend", "ordered_again_90d"]
+        assert (
+            "ordered_again_90d" in made["payload"]["two_valued"]
+            and "total_spend" not in made["payload"]["two_valued"]
+        )
+        case = client.post(
+            f"/cases/{case_id}/goal",
+            json={"version": case["version"], "goal_id": "retail-win-back", "op_id": "g"},
+        ).json()
+        asked = next(q for q in case["questions"] if q["code"] == "OUTCOME_COLUMN" and q["answer"] is None)
+        labels = [o["label"] for o in asked["options"]]
+        assert labels == ["ordered_again_90d", "None of these"], labels
+        if made["state"] != "accepted":
+            case = client.post(
+                f"/cases/{case_id}/decisions",
+                json={"version": case["version"], "item_id": made["item_id"], "accept": True},
+            ).json()
+        case = client.post(
+            f"/cases/{case_id}/answers",
+            json={"version": case["version"], "question_id": asked["question_id"], "option_id": "c0"},
+        ).json()
+        case = _answer_open(client, case)
+        screen = client.get(f"/cases/{case_id}/screen").json()
+        ready = next(c for c in screen["view"]["conversation"] if c["type"] == "ready")
+        for yes in ready["confirmations"]:
+            confirmed = client.post(
+                f"/cases/{case_id}/confirmations",
+                json={"version": case["version"], "item_id": yes["item_id"], "sentence": yes["sentence"]},
+            )
+            assert confirmed.status_code == 200, confirmed.text
+            case = confirmed.json()
+        sentence = client.get(f"/cases/{case_id}/screen").json()["view"]["approval_sentence"]
+        approved = client.post(
+            f"/cases/{case_id}/approval", json={"version": case["version"], "sentence": sentence}
+        )
+        assert approved.status_code == 200, approved.text
+        readiness = approved.json()["readiness"]
+        assert readiness and readiness[-1]["goal_id"] == "retail-win-back" and readiness[-1]["verdict"]
