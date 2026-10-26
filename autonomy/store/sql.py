@@ -102,7 +102,10 @@ def insert_ignore(conn: Connection, table: Table, rows: Sequence[Row]) -> int:
     """Insert rows, silently skipping any whose primary key exists; return how many were new.
 
     One multi-row statement per chunk rather than `executemany`, because a single statement's
-    rowcount is reliable on every driver while an executemany's is not.
+    rowcount is reliable on every driver while an executemany's is not. Each statement asks
+    SQLAlchemy to `preserve_rowcount`: for an INSERT with no RETURNING it closes the cursor
+    before the caller reads `rowcount`, and psycopg 3 then reports -1 (sqlite3 and psycopg 2
+    keep the number), so the count has to be read while the cursor is still open.
     """
     if not rows:
         return 0
@@ -110,9 +113,11 @@ def insert_ignore(conn: Connection, table: Table, rows: Sequence[Row]) -> int:
     new = 0
     for chunk in _chunks(rows, _chunk_size(conn, table)):
         if dialect == "postgresql":
-            new += conn.execute(pg_insert(table).values(list(chunk)).on_conflict_do_nothing()).rowcount
+            pg = pg_insert(table).values(list(chunk)).on_conflict_do_nothing()
+            new += conn.execute(pg.execution_options(preserve_rowcount=True)).rowcount
         elif dialect == "sqlite":
-            new += conn.execute(insert(table).values(list(chunk)).prefix_with("OR IGNORE")).rowcount
+            lite = insert(table).values(list(chunk)).prefix_with("OR IGNORE")
+            new += conn.execute(lite.execution_options(preserve_rowcount=True)).rowcount
         else:
             keys = [c.name for c in table.primary_key.columns]
             for row in chunk:
