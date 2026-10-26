@@ -304,3 +304,104 @@ class Pacer:
         self._roll(now)
         scale = max(self.reference(channel), price, 0.0)
         return scale * pressure / (1.0 - pressure)
+
+
+# --- the budget price for offers (v3) -------------------------------------------------------------
+
+BUDGET_PRICE_GAIN = 0.5
+"""How hard one day's miss moves the price: the price is multiplied by `exp(gain x miss)`."""
+BUDGET_PRICE_FLOOR = 0.01
+"""Below this the budget is not binding and the price reads 0 (the offers that pay all fit)."""
+BUDGET_PRICE_CEILING = 1000.0
+"""What the price reads once the budget is spent: high enough that no offer is worth its cost."""
+BUDGET_PRICE_MAX_MISS = 3.0
+"""A day that spends more than this many times its target counts as this much over, no more."""
+
+
+class BudgetPrice:
+    """The price of one unit of offer money, moved day by day so spend keeps to the plan.
+
+    The planner (`autonomy.decide.planner`) fills the budget with the offers that earn the most extra
+    profit per unit of cost. The last pair that fits has a ratio of extra profit to cost, and the first
+    that does not fit has a smaller one: any ratio between them is the budget's shadow price (the
+    Lagrange multiplier). A bid that pays this price per unit of its offer cost (`GoalBidder`'s
+    `budget_price`) takes the offer exactly when its ratio is above the price, so each customer's
+    decision lands on the same side of the line as the plan, without seeing anyone else.
+
+    The best price is not known in advance (it depends on who turns up), so it is learned. Each day
+    `update` is told what was spent. The target for the day is what is left of the budget divided by
+    the days left, so a miss is made up over the days that remain. Spending above target raises the
+    price, below it lowers it, by a multiple that grows with the miss. `initial` is where it starts;
+    `planner.OfferPlan.price` on a sample of the audience is a good start.
+
+    Deterministic, with no clock: the caller says when a day ends. The object is callable and returns
+    the current price, so it can be handed to a bidder directly.
+    """
+
+    def __init__(
+        self,
+        budget: float,
+        days: int,
+        *,
+        initial: float = 0.5,
+        gain: float = BUDGET_PRICE_GAIN,
+        floor: float = BUDGET_PRICE_FLOOR,
+        ceiling: float = BUDGET_PRICE_CEILING,
+        max_miss: float = BUDGET_PRICE_MAX_MISS,
+    ) -> None:
+        if not math.isfinite(budget) or budget < 0 or days < 1:
+            raise ValueError("need a finite budget >= 0 and at least one day")
+        if gain <= 0 or not 0 < floor < ceiling or max_miss <= 0 or initial < 0:
+            raise ValueError("need gain > 0, 0 < floor < ceiling, max_miss > 0 and initial >= 0")
+        self.budget = budget
+        self.days = days
+        self.gain = gain
+        self.floor = floor
+        self.ceiling = ceiling
+        self.max_miss = max_miss
+        self._level = min(max(initial, floor), ceiling)
+        self._spent = 0.0
+        self._days_done = 0
+
+    @property
+    def spent(self) -> float:
+        return self._spent
+
+    @property
+    def remaining(self) -> float:
+        return max(self.budget - self._spent, 0.0)
+
+    @property
+    def days_left(self) -> int:
+        return max(self.days - self._days_done, 0)
+
+    @property
+    def exhausted(self) -> bool:
+        return self.remaining <= 0 or self.days_left <= 0
+
+    @property
+    def daily_target(self) -> float:
+        """What today should spend: the budget left over the days left; 0 when none is left."""
+        return 0.0 if self.exhausted else self.remaining / self.days_left
+
+    @property
+    def price(self) -> float:
+        """The price now: 0 when the budget is not binding, the ceiling when it is spent."""
+        if self.exhausted:
+            return self.ceiling
+        return 0.0 if self._level <= self.floor else self._level
+
+    def __call__(self) -> float:
+        return self.price
+
+    def update(self, spent_today: float) -> float:
+        """Close a day that spent `spent_today`, and return tomorrow's price."""
+        if not math.isfinite(spent_today) or spent_today < 0:
+            raise ValueError("spend cannot be negative or infinite")
+        target = self.daily_target
+        if target > 0:
+            miss = min(spent_today / target - 1.0, self.max_miss)
+            self._level = min(max(self._level * math.exp(self.gain * miss), self.floor), self.ceiling)
+        self._spent += spent_today
+        self._days_done += 1
+        return self.price

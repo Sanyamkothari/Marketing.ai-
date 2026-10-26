@@ -110,6 +110,7 @@ from autonomy.contracts import (
     Format,
     GoalKind,
     Group,
+    OfferOption,
     Reward,
 )
 from autonomy.decide import rules
@@ -1523,9 +1524,16 @@ class GoalBidder:
         harm: ContactHarm | None = None,
         purchase_weighted: bool | None = None,
         uplift: UpliftScorer | None = None,
+        offer_cost_fn: Callable[[OfferOption, CustomerState], float] | None = None,
+        budget_price: Callable[[], float] | None = None,
     ) -> None:
         if prune_z is not None and prune_z < 0:
             raise ValueError("prune_z must be >= 0")
+        # v3 offers (docs/v3/OFFERS.md), both off by default: `offer_cost_fn(offer, state)` is the
+        # cost of one redemption (None: the offer's `cost_per_redemption`, as in v2), and
+        # `budget_price()` the price of one unit of offer cost (None or 0: offers cost what they cost).
+        self.offer_cost_fn = offer_cost_fn
+        self.budget_price = budget_price
         self.harm = harm
         self.uplift = uplift
         self.response_model: ResponseModel = response_model or BetaResponseModel()
@@ -1637,6 +1645,7 @@ class GoalBidder:
         if harm is not None and self.purchase_weighted:
             loss = self._purchase_weighted_loss(state, harm, raw, references, organic, loss, remember)
         sensitivity = offer_sensitivity_factor(state)
+        shadow = max(self.budget_price(), 0.0) if self.budget_price is not None else 0.0
 
         out: list[Bid] = []
         reference_net: dict[tuple[Channel, Format], float] = {}
@@ -1667,7 +1676,12 @@ class GoalBidder:
                     uplift = min(plain * boost, 1.0) if plain > 0 else plain
                     std *= boost
                     p_redeem = 0.0
-                    if offer.cost_per_redemption:
+                    unit_cost = (
+                        offer.cost_per_redemption
+                        if self.offer_cost_fn is None
+                        else self.offer_cost_fn(offer, state)
+                    )
+                    if unit_cost:
                         # Everyone who buys while the offer is open redeems it, including those who
                         # would have bought anyway: organic chance plus what the message adds.
                         p_redeem = min(max(organic + max(plain, 0.0) - loss, 0.0), 1.0)
@@ -1675,9 +1689,11 @@ class GoalBidder:
                             # Everyone who refills while the offer is open redeems it.
                             p_redeem = min(1.0, max(p_redeem, p14) + (uplift - plain))
                     uplift -= loss
-                    offer_cost = offer.cost_per_redemption * p_redeem
+                    offer_cost = unit_cost * p_redeem
                     cost = channel_cost + self.format_costs.get(item.format, 0.0)
-                    net = urgency * (uplift * value - offer_cost - cost)
+                    # The budget price is charged on top of the cost, so an offer wins only when its
+                    # extra profit per unit of cost is above the price (autonomy.decide.planner).
+                    net = urgency * (uplift * value - offer_cost * (1.0 + shadow) - cost)
                     names = choice is not None and (self.names_product or needs_item(item))
                     action = Action(
                         goal_id=self.goal_id,
