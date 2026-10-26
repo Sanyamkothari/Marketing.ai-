@@ -22,7 +22,10 @@ and the operator endpoint call it by hand. Each tick does, in order:
    and after the sweep for customers who have just crossed a time threshold of the audience (a
    lapse). Customers already decided for the goal today are skipped. What happens next depends on
    the goal's autonomy level: SHADOW logs only; APPROVE logs and holds the ACT decisions in one
-   pending `Batch`; AUTOPILOT logs and dispatches.
+   pending `Batch`; AUTOPILOT logs and dispatches. A goal's audience is read from the state store
+   and decided `RuntimeConfig.sweep_batch` customers at a time, each batch recorded and sent or
+   held before the next is read, so the sweep's memory follows the batch, not the customer count
+   (`docs/v3/SCALE.md`).
 6. **Nightly**, once a day at `nightly_hour`: each goal's policy gets `nightly(decisions,
    events_by_customer, now)` with its own goal's decisions, if it has the hook (the fast learning
    loop). A policy built in this process (the first tick after a start, or a materially new brief)
@@ -1472,9 +1475,18 @@ class AutonomyRuntime:
             return
         rows: Iterable[CustomerState]
         if customer_ids is None:
-            rows = list(self.states.scan())
-        else:
-            rows = [s for s in (self.states.get(c) for c in sorted(customer_ids)) if s is not None]
+            # Every state: written back a batch at a time as the scan goes, never held as a list.
+            changed: list[CustomerState] = []
+            for s in self.states.scan():
+                if (g := self.assign_group(s)) is not s and g != s:
+                    changed.append(g)
+                if self.config.sweep_batch is not None and len(changed) >= self.config.sweep_batch:
+                    self.states.put(changed)
+                    changed = []
+            if changed:
+                self.states.put(changed)
+            return
+        rows = [s for s in (self.states.get(c) for c in sorted(customer_ids)) if s is not None]
         changed = [g for s in rows if (g := self.assign_group(s)) is not s and g != s]
         if changed:
             self.states.put(changed)
