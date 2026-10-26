@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: realbench-${{ github.ref }}
+  group: realbench-${{ github.ref }}-${{ github.sha }}   # one group per commit: a later push never cancels a long bench run
   cancel-in-progress: false
 
 permissions:

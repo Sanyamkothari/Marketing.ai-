@@ -12,7 +12,7 @@ on:
     branches: ["version-2", "claude/**"]
 
 concurrency:
-  group: gym-${{ github.ref }}
+  group: gym-${{ github.ref }}-${{ github.sha }}   # one group per commit: a later push never cancels a long Gym run
   cancel-in-progress: false
 
 permissions:
