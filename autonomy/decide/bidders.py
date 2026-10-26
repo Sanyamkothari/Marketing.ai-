@@ -1645,6 +1645,12 @@ class GoalBidder:
         urgency = self._boosted_urgency if self._boosted_urgency is not None and has_choice else self.urgency
         return urgency.at(state, now) if urgency is not None else 1.0
 
+    def urgency_on(self, state: CustomerState, at: datetime) -> float:
+        """This goal's urgency for the customer at `at`, as `bids` would price it then from this state
+        (a cart's fade, a moment that has closed). For the v3 frequency planner's later messages."""
+        has_choice = self._boosted_urgency is not None and self.item_for(state) is not None
+        return self._urgency_at(state, at, has_choice)
+
     def moment_reasons(self, state: CustomerState, now: datetime) -> tuple[str, ...]:
         """Plain sentences for the moments raising this goal's bids for this customer, strongest first
         (empty when moments are off or none is live)."""

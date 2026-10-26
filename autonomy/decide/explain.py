@@ -79,6 +79,7 @@ BLOCK_SENTENCE: dict[str, str] = {
         "Left alone: we are slowing down on this channel to stay under the brief's limits on "
         "complaints and unsubscribes."
     ),
+    rules.FREQUENCY_PLAN: "Left alone: waiting is worth more for them than a message today, by their 3-week plan.",
 }
 BLOCK_ORDER: tuple[str, ...] = (
     rules.HOLDOUT,
@@ -88,6 +89,7 @@ BLOCK_ORDER: tuple[str, ...] = (
     rules.TOO_SOON,
     rules.NO_BUDGET,
     rules.PACING,
+    rules.FREQUENCY_PLAN,
     rules.QUIET_HOURS,
     rules.OFFER_NEEDS_APPROVAL,
     rules.NO_DISCOUNTS,

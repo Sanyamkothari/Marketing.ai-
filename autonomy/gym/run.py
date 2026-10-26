@@ -19,7 +19,8 @@ plain daily sweep.
 Policies are found by name in a registry. `agent` is Autonomy's own policy
 (`autonomy.runtime.agent.build_agent_policy`); `agent_lookalike` is the same agent with the look-alike
 response model on (docs/v3/LOOKALIKE.md); `agent_who` adds the profile and plan-v3 decision 1 to that
-(docs/v3/WHO.md). Another stream adds its own with
+(docs/v3/WHO.md); `agent_frequency` adds look-alike tiredness and 3-week contact plans to it
+(docs/v3/FREQUENCY.md). Another stream adds its own with
 `register_policy("name", lambda world: MyPolicy(...))`; the factory gets the world so a fresh
 policy is built for every run (the oracle uses the world's truth; nothing else may).
 """
@@ -66,6 +67,7 @@ AGENT_NO_MOMENTS = "agent_no_moments"
 """The agent with moments switched off, run beside it under `--moments` (not a registered policy)."""
 AGENT_LOOKALIKE = "agent_lookalike"
 AGENT_WHO = "agent_who"
+AGENT_FREQUENCY = "agent_frequency"
 
 
 def _nothing_factory(world: SimWorld) -> Policy:  # noqa: ARG001
@@ -139,6 +141,15 @@ def agent_who_factory(world: SimWorld) -> Policy:  # noqa: ARG001
     return build_agent_policy([default_brief()], default_content(), lookalike=True, who=True)
 
 
+def agent_frequency_factory(world: SimWorld) -> Policy:  # noqa: ARG001
+    """The look-alike agent with plan-v3 decision 7 on top (docs/v3/FREQUENCY.md): tiredness learned from
+    look-alikes and 3-week contact plans. For CI to compare with `agent` and `agent_lookalike` on the same
+    seeds. It learns only from what the agent observes, never from the world."""
+    from autonomy.runtime.agent import build_agent_policy
+
+    return build_agent_policy([default_brief()], default_content(), lookalike=True, frequency=True)
+
+
 POLICIES: dict[str, PolicyFactory] = {
     EVERYONE: everyone_factory,
     RULE: rule_factory,
@@ -147,6 +158,7 @@ POLICIES: dict[str, PolicyFactory] = {
     AGENT: agent_factory,
     AGENT_LOOKALIKE: agent_lookalike_factory,
     AGENT_WHO: agent_who_factory,
+    AGENT_FREQUENCY: agent_frequency_factory,
     BEST_FIXED: best_fixed_factory,
     SEGMENT_ORACLE: segment_oracle_factory,
 }
