@@ -86,6 +86,9 @@ class WhoConfig:
     """Messages in `load_days` from which a customer counts as heavily contacted ("5 or more last month")."""
     offer_cut: float = 0.5
     """`price_offer_sensitivity` from which a customer counts as a deal buyer."""
+    fill_profile: bool = True
+    """When a state carries no nightly features, put the profile built from the events held on the state
+    each decision is made on, so the look-alike model reads it (as it would the nightly profile)."""
     max_profile_age_days: float = 3.0
     """Nightly features older than this are rebuilt from the events the agent holds, when it holds some."""
 
@@ -307,7 +310,7 @@ class WhoBook:
         self._harm_fit: object = None
         self._traits_at: datetime | None = None
         self._keys: dict[str, str] = {}
-        self._scored: dict[str, tuple[str, dict[str, float]]] = {}
+        self._scored: dict[str, tuple[str, Mapping[str, float] | None, dict[str, float]]] = {}
 
     # -- events --
 
@@ -375,23 +378,40 @@ class WhoBook:
             return profile_for(evs, now)
         return state.features or None
 
-    def score(self, state: CustomerState, now: datetime) -> dict[str, float]:
-        """The state's scores with `churn_risk` and `clv_90d` added where a model passed its check, and
-        remembers the customer's trait group for `leave_alone`. The state is not changed."""
+    def prepare(self, state: CustomerState, now: datetime) -> dict[str, object]:
+        """What to change on the state this decision is made on (for `model_copy(update=...)`):
+
+        * `scores`: the state's own with `churn_risk` and `clv_90d` added where a model passed its check;
+        * with `fill_profile` and no nightly features on the state, `features` and `features_as_of`
+          from the events held, so the look-alike model reads the profile (docs/v3/PROFILE.md).
+
+        Also remembers the customer's trait group for `leave_alone`. Computed once a day per customer;
+        the state itself is not changed."""
         day = now.date().isoformat()
         cached = self._scored.get(state.customer_id)
-        if cached is not None and cached[0] == day:
-            return {**state.scores, **cached[1]}
-        features = self.features(state, now)
-        new: dict[str, float] = {}
-        if features is not None:
-            if self.config.models:
-                new = self.models.scores(features)
-            if self.config.trait_harm and self.traits.fitted:
-                evs = self.events.get(state.customer_id, ())
-                self._keys[state.customer_id] = self.trait_keys.key(features, self._load(evs, now))
-        self._scored[state.customer_id] = (day, new)
-        return {**state.scores, **new}
+        if cached is None or cached[0] != day:
+            features = self.features(state, now)
+            new: dict[str, float] = {}
+            if features is not None:
+                if self.config.models:
+                    new = self.models.scores(features)
+                if self.config.trait_harm and self.traits.fitted:
+                    evs = self.events.get(state.customer_id, ())
+                    self._keys[state.customer_id] = self.trait_keys.key(features, self._load(evs, now))
+            cached = (day, features, new)
+            self._scored[state.customer_id] = cached
+        _day, features, new = cached
+        update: dict[str, object] = {"scores": {**state.scores, **new}}
+        if self.config.fill_profile and not state.features and features:
+            update["features"] = dict(features)
+            update["features_as_of"] = now
+        return update
+
+    def score(self, state: CustomerState, now: datetime) -> dict[str, float]:
+        """`prepare`'s scores alone."""
+        scores = self.prepare(state, now)["scores"]
+        assert isinstance(scores, dict)
+        return scores
 
     # -- what the bidders read --
 
