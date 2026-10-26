@@ -30,7 +30,7 @@ from engine.doctor.order_roll_up import find_log_columns, roll_up
 from engine.storage import LocalStorage
 from tests.fixtures.order_log import order_log_frame
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 USE_CASE = "retail-win-back"
 BUILD_TIMEOUT_S = 240.0

@@ -30,16 +30,22 @@ How the pieces meet, in the order a visit will call them (B6 wires this; today a
 
 ## Run its tests
 
-From the repository root, with the shared virtual environment:
+From the repository root, with the shared virtual environment. The integration test is marked `slow` (about 12 s), so
+`make test` skips it and CI runs it.
 
 ```
 python -m pytest tests/unit/doctor/test_order_log.py tests/unit/doctor/test_order_log_parity.py \
     tests/unit/doctor/test_order_log_config.py tests/unit/doctor/test_order_roll_up.py \
     tests/unit/doctor/test_order_log_outcome.py tests/unit/doctor/test_order_log_cleaning.py \
-    tests/unit/doctor/test_order_log_build.py tests/integration/test_order_log_build.py -n 8 -p no:cacheprovider
-python -m pytest tests/unit/doctor tests/unit/onboarding tests/unit/agent -n 8 -p no:cacheprovider \
-    -m "not slow and not frozen and not bedrock and not aws"
+    tests/unit/doctor/test_order_log_build.py tests/integration/test_order_log_build.py -n 2 -p no:cacheprovider
 make check-generated VENV=<the shared venv>
+```
+
+The wider check, pending CI (the whole folders were run once by the previous builder, below, and are not re-run here):
+
+```
+python -m pytest tests/unit/doctor tests/unit/onboarding tests/unit/agent tests/integration/test_order_log_build.py \
+    -n 4 -p no:cacheprovider -m "not frozen and not bedrock and not aws"
 ```
 
 The synthetic log is `tests/fixtures/order_log.py` (`order_log_frame`): UCI-shaped, with `C` cancellations, negative quantities,
@@ -48,27 +54,30 @@ It is not the real file.
 
 ## What was measured
 
-Every figure is from a command run on this branch; the machine was shared and loaded (load average about 15 on 4 CPUs)
-while they ran.
+Every figure is from a command run on this branch.
 
-| Command | Result |
-|---|---|
-| The eight test files in "Run its tests" above | 166 passed in 87.38 s |
-| `pytest tests/unit/doctor tests/unit/onboarding tests/unit/agent tests/integration/test_order_log_build.py -n 6 -m "not slow and not frozen and not bedrock and not aws"` | 4167 passed, 1 failed in 712 s |
-| `pytest tests/unit/agent/test_scanner_hardening.py` (the one failure above, on its own) | 191 passed in 9.15 s |
-| Agent unpivot and reshape API, the decide phase-2 journey, `test_threshold_fallback_retail.py` and `library/tests/test_online_retail.py` (every test that uses `retail-win-back`, including the shipped `sample.csv` path) | 42 passed in 554 s |
-| `mypy engine` | no issues found in 369 source files |
-| `ruff check engine api scripts autonomy tests`, `black --check` on the same, `make check-generated` | clean |
+| Command | Result | Run by |
+|---|---|---|
+| The eight test files in "Run its tests" above, `-n 2` | 166 passed in 26 s (the integration test alone: 11.7 s) | this completion pass |
+| `tests/unit/doctor/test_build_driver.py test_cleaning.py test_goal_brief.py test_outcome_tools.py test_outcomes.py test_outcomes_key_rules.py test_plan_o_setup.py`, `tests/unit/onboarding/test_sources.py test_roles.py test_validate.py`, `tests/unit/pilot/test_data_request.py test_data_request_messages.py`, `tests/unit/test_config_loading.py test_config_extra_fields.py test_config_merge.py test_config_validators.py`, `tests/unit/agent/test_advisor_order_log_names.py`, `-n 2 -m "not slow and not frozen and not bedrock and not aws"` (the existing files that cover the changed modules) | 288 passed in 11.5 s | this completion pass |
+| `ruff check` and `black --check` on every Python file the branch changed | clean | this completion pass |
+| `mypy --strict` on the 11 changed `engine/` files | no issues found in 11 source files | this completion pass |
+| `make check-generated VENV=...` | clean (templates, `docs/API.md`, dashboard) | this completion pass |
+| `pytest tests/unit/doctor tests/unit/onboarding tests/unit/agent tests/integration/test_order_log_build.py -n 6 -m "not slow and not frozen and not bedrock and not aws"` | 4167 passed, 1 failed in 712 s (load average about 15 on 4 CPUs) | previous builder, before the move to CI; not re-run |
+| `pytest tests/unit/agent/test_scanner_hardening.py` (the one failure above, on its own) | 191 passed in 9.15 s | previous builder |
+| Agent unpivot and reshape API, the decide phase-2 journey, `test_threshold_fallback_retail.py` and `library/tests/test_online_retail.py` (every test that uses `retail-win-back`, including the shipped `sample.csv` path) | 42 passed in 554 s | previous builder; pending CI to repeat |
 
 The one failure is `test_no_scanner_is_slow_on_any_repeated_unit[mask_value]`: a regex-speed budget (0.3 s per scan) that a loaded machine
-misses; it passes on its own, and `engine/agent` is not changed by this branch. `mypy` over the whole repository reports 181
-errors in `scripts/`, `autonomy/` and `api/`; none is in a file this branch changed.
+misses; it passes on its own, and `engine/agent` is not changed by this branch. A whole-repository `mypy` run by the previous builder
+reported 181 errors in `scripts/`, `autonomy/` and `api/`, none in a file this branch changed; it was not repeated here.
 
-On the synthetic log (`order_log_frame()`, 150 shoppers): 2,096 lines, 532 of them (25.4%) with no `CustomerID`, 438 orders,
-34 lines with a quantity below zero on 19 order numbers (16 starting with `C`, 3 lines on a number that does not), 150 shoppers.
+On the synthetic log (`order_log_frame()`, 150 shoppers): 2,096 lines, 532 of them (25.4%) with no `CustomerID` (163 order numbers),
+150 shoppers. Of the 1,564 lines with a shopper (counted by a short script just now): 438 order numbers have a line with a quantity above
+zero, and 34 lines have a quantity below zero, on 19 order numbers (16 start with `C`, 3 do not).
 Through the builder's routes (`tests/integration/test_order_log_build.py`, 1,500 shoppers) the dataset has 5,725 rows, 2,888 yes
-and 2,837 no, over six month-ends, 31 Mar to 31 Aug 2011, and passes its own checks. The roll-up of a tiled log of 586,480 lines
-took 16.4 s (a one-off script, on the loaded machine).
+and 2,837 no, over six month-ends, 31 Mar to 31 Aug 2011, and passes its own checks (the previous builder's figures; the test passes
+here, which asserts both classes and the checks, but the row counts were not re-read). The roll-up of a tiled log of 586,480 lines
+took 16.4 s (previous builder, a one-off script on a loaded machine; not re-run).
 
 ## What is left
 
