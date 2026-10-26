@@ -1242,8 +1242,8 @@ def _suggested(case: Case, step: _Step, given: tuple[str, str] | None) -> ChatSu
     if question is None or question.answer is not None:
         return None
     option = next((o for o in question.options if o.option_id == option_id), None)
-    if option is None or option.safe or option.label == DONT_KNOW:
-        return None
+    if option is None or option.safe or option.label == DONT_KNOW or option.value_kind is not None:
+        return None  # a suggestion carries no value, so it cannot point at an answer that needs one
     return ChatSuggestion(question_id=question_id, option_id=option_id, label=option.label)
 
 
@@ -1426,7 +1426,15 @@ def prescription_digest(case: Case, brief: GoalBrief | None) -> str:
                     ),
                 }
             ),
-            "answers": sorted((q.question_id, q.answer or "") for q in questions if q.answer is not None),
+            "answers": sorted(
+                (
+                    (q.question_id, q.answer or "")
+                    if q.answer_value is None
+                    else (q.question_id, q.answer or "", q.answer_value)
+                )  # a typed date is part of the answer
+                for q in questions
+                if q.answer is not None
+            ),
             "files": list(case.upload_ids()),
         }
     )

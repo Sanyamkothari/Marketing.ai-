@@ -226,7 +226,9 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
                     effect="The data is cut at the date counted back from the days-since column.",
                 ),
                 OptionSpec(
-                    "I will type a date", effect="The data is cut at the date you type.", value_kind="date"
+                    "I will type a date",
+                    effect="Your date is used as the cut-off for the steps that follow.",
+                    value_kind="date",
                 ),
             ),
             blocking=True,

@@ -11,6 +11,7 @@ import pytest
 
 from engine.doctor import visit
 from engine.doctor.agent_review import case_as_of
+from engine.doctor.carry import _answers_mark
 from engine.doctor.case import Case, CaseError, CaseQuestion, CaseStore, TimelineKind
 from engine.doctor.protocol import _case_question, _with_dont_know
 from engine.doctor.questions import build_ask
@@ -57,7 +58,10 @@ def _typed(storage: LocalStorage, w: World, case: Case, option_id: str, value: s
 def test_the_typed_date_option_says_what_it_does_and_asks_for_a_date() -> None:
     question = _q8()
     typed = next(o for o in question.options if o.label == "I will type a date")
-    assert typed.value_kind == "date" and typed.effect == "The data is cut at the date you type."
+    assert (
+        typed.value_kind == "date"
+        and typed.effect == "Your date is used as the cut-off for the steps that follow."
+    )
     assert all(o.value_kind is None for o in question.options if o is not typed)
     assert "value_kind" not in question.options[0].model_dump(mode="json", exclude_defaults=False)
 
@@ -102,3 +106,32 @@ def test_an_old_case_without_the_new_fields_loads_unchanged() -> None:
     assert question.model_dump(mode="json", exclude_defaults=False).get("answer_value") is None
     assert "answer_value" not in question.model_dump(mode="json")
     assert "value_kind" not in question.options[0].model_dump(mode="json")
+
+
+def test_answering_another_option_clears_the_typed_date(storage: LocalStorage, world: World) -> None:
+    case = _with_q8(storage, world)
+    typed = next(o for o in case.questions[-1].options if o.value_kind == "date")
+    first = _typed(storage, world, case, typed.option_id, "2011-11-30")
+    again = _typed(storage, world, first, "c0", None)
+    question = next(q for q in again.questions if q.question_id == "q8")
+    assert question.answer_value is None
+    assert case_as_of(again) == "2011-12-09"  # the label's date, now that nothing is typed
+
+
+def test_a_changed_typed_date_is_a_changed_answer(storage: LocalStorage, world: World) -> None:
+    case = _with_q8(storage, world)
+    typed = next(o for o in case.questions[-1].options if o.value_kind == "date")
+    nov = _typed(storage, world, case, typed.option_id, "2011-11-30")
+    oct_ = _typed(storage, world, nov, typed.option_id, "2011-10-31")
+    assert _answers_mark(nov.questions) != _answers_mark(oct_.questions)
+    assert visit.prescription_digest(nov, None) != visit.prescription_digest(oct_, None)
+
+
+def test_a_suggestion_never_points_at_an_answer_that_needs_a_value(
+    storage: LocalStorage, world: World
+) -> None:
+    case = _with_q8(storage, world)
+    typed = next(o for o in case.questions[-1].options if o.value_kind == "date")
+    step = visit._Step(to=case.state)
+    assert visit._suggested(case, step, ("q8", typed.option_id)) is None
+    assert visit._suggested(case, step, ("q8", "c0")) is not None
