@@ -71,6 +71,7 @@ __all__ = [
     "SPEC_VERSION",
     "WINDOWLESS_FUNCTIONS",
     "AggFunction",
+    "AudienceSpec",
     "BuildReport",
     "BuildStage",
     "BuildStatus",
@@ -198,6 +199,8 @@ def recipe_hash(spec: OnboardingSpec, mappings: Iterable[MappingSpec]) -> str:
         "snapshot_spec": spec.snapshot_spec.model_dump(mode="json"),
         "mappings": decisions,
     }
+    if spec.audience is not None:  # left out while unset, so every earlier recipe keeps its hash
+        payload["audience"] = spec.audience.model_dump(mode="json")
     body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = hashlib.sha256(_RECIPE_HASH_HEADER + body.encode("utf-8")).hexdigest()
     return f"{HASH_PREFIX}{digest}"
@@ -538,6 +541,19 @@ SnapshotSpec = SnapshotDefinition
 """`snapshot_spec.json`. As with the label, the configured default and the saved spec are one model."""
 
 
+class AudienceSpec(Artefact):
+    """Who a dataset is built for, among all the entities (v3 phase 0, B5).
+
+    `{role: orders, no_event_days: 90}` keeps, at each snapshot, only entities that have had an event in `role` on
+    or before it and none in the `no_event_days` days up to and including it: the lapsed audience of a win-back.
+    It looks only at events the point-in-time clause admits, and it applies at train and score time alike
+    (`engine.onboarding.audience`). Part of the recipe's hash, so a dataset built for another audience is another
+    recipe."""
+
+    role: str = Field(min_length=1, description="The event table whose recency decides.")
+    no_event_days: int = Field(ge=1, le=3650, description="No event in `role` in this many days up to the snapshot.")
+
+
 class OnboardingSpec(Artefact):
     """`onboarding_spec.json` - the whole recipe, saved per client per use case.
 
@@ -559,6 +575,12 @@ class OnboardingSpec(Artefact):
     )
     snapshot_spec: SnapshotSpec = Field(
         description="Training snapshot rule. The scoring one is derived from it, never configured separately."
+    )
+    audience: AudienceSpec | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Who the dataset is built for (the lapsed audience); null builds a row for every entity "
+        "that has started. Left out of the document, and so of its hash, while unset.",
     )
     created_at: AwareDatetime = Field(description="UTC time the recipe was saved.")
     hash: str = Field(default="", description="Stable hash of the recipe; set by the writer.")
