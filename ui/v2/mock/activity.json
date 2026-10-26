@@ -23,7 +23,8 @@
             "send_at": "2026-10-20T15:30:00Z",
             "follow_up_step": 0,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.003,
           "value_if_converted": 38.0,
@@ -35,7 +36,10 @@
         }
       ],
       "blocked_by": [],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -62,7 +66,10 @@
       "reason": "In the no-contact holdout: we never message this group, so it shows what happens without us.",
       "bids": [],
       "blocked_by": [],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -90,7 +97,8 @@
         "send_at": "2026-10-20T15:30:00Z",
         "follow_up_step": 0,
         "item_id": null,
-        "asset_id": null
+        "asset_id": null,
+        "journey_id": null
       },
       "group": "agent",
       "probability": 0.86,
@@ -109,7 +117,8 @@
             "send_at": "2026-10-20T15:30:00Z",
             "follow_up_step": 0,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.039,
           "value_if_converted": 58.0,
@@ -123,7 +132,10 @@
       "blocked_by": [
         "channel_paused:whatsapp"
       ],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -161,7 +173,10 @@
       "blocked_by": [
         "channel_paused:whatsapp"
       ],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -189,7 +204,8 @@
         "send_at": "2026-10-20T14:00:00Z",
         "follow_up_step": 0,
         "item_id": null,
-        "asset_id": null
+        "asset_id": null,
+        "journey_id": null
       },
       "group": "agent",
       "probability": 0.05,
@@ -208,7 +224,8 @@
             "send_at": "2026-10-20T14:00:00Z",
             "follow_up_step": 0,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.11,
           "value_if_converted": 44.0,
@@ -229,7 +246,8 @@
             "send_at": "2026-10-20T14:00:00Z",
             "follow_up_step": 0,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.034,
           "value_if_converted": 44.0,
@@ -241,7 +259,10 @@
         }
       ],
       "blocked_by": [],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -280,7 +301,10 @@
         "unsubscribed:email",
         "no_consent:whatsapp"
       ],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -308,7 +332,8 @@
         "send_at": "2026-10-20T15:00:00Z",
         "follow_up_step": 1,
         "item_id": null,
-        "asset_id": null
+        "asset_id": null,
+        "journey_id": null
       },
       "group": "agent",
       "probability": 0.79,
@@ -327,7 +352,8 @@
             "send_at": "2026-10-20T15:00:00Z",
             "follow_up_step": 1,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.044,
           "value_if_converted": 61.0,
@@ -348,7 +374,8 @@
             "send_at": "2026-10-20T15:00:00Z",
             "follow_up_step": 1,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.018,
           "value_if_converted": 61.0,
@@ -360,7 +387,10 @@
         }
       ],
       "blocked_by": [],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -396,7 +426,10 @@
       "reason": "Left alone: bought 3 days ago, so a win-back message would be wasted.",
       "bids": [],
       "blocked_by": [],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -424,7 +457,8 @@
         "send_at": "2026-10-20T14:00:00Z",
         "follow_up_step": 0,
         "item_id": null,
-        "asset_id": null
+        "asset_id": null,
+        "journey_id": null
       },
       "group": "baseline",
       "probability": 1.0,
@@ -433,7 +467,10 @@
       "reason": "Simple rule: everyone who has not bought in 60 days gets the standard reminder email.",
       "bids": [],
       "blocked_by": [],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -471,7 +508,10 @@
       "blocked_by": [
         "max_contacts_per_week"
       ],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -499,7 +539,8 @@
         "send_at": "2026-10-20T14:30:00Z",
         "follow_up_step": 0,
         "item_id": null,
-        "asset_id": null
+        "asset_id": null,
+        "journey_id": null
       },
       "group": "agent",
       "probability": 0.88,
@@ -518,7 +559,8 @@
             "send_at": "2026-10-20T14:30:00Z",
             "follow_up_step": 0,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.083,
           "value_if_converted": 49.0,
@@ -539,7 +581,8 @@
             "send_at": "2026-10-20T14:30:00Z",
             "follow_up_step": 0,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.021,
           "value_if_converted": 55.0,
@@ -551,7 +594,10 @@
         }
       ],
       "blocked_by": [],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -597,7 +643,8 @@
             "send_at": "2026-10-20T14:00:00Z",
             "follow_up_step": 0,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": -0.012,
           "value_if_converted": 71.0,
@@ -609,7 +656,10 @@
         }
       ],
       "blocked_by": [],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -636,7 +686,10 @@
       "reason": "In the no-contact holdout: we never message this group, so it shows what happens without us.",
       "bids": [],
       "blocked_by": [],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -664,7 +717,8 @@
         "send_at": "2026-10-20T13:30:00Z",
         "follow_up_step": 0,
         "item_id": null,
-        "asset_id": null
+        "asset_id": null,
+        "journey_id": null
       },
       "group": "agent",
       "probability": 0.84,
@@ -683,7 +737,8 @@
             "send_at": "2026-10-20T13:30:00Z",
             "follow_up_step": 0,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.071,
           "value_if_converted": 52.0,
@@ -704,7 +759,8 @@
             "send_at": "2026-10-20T13:30:00Z",
             "follow_up_step": 0,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.035,
           "value_if_converted": 52.0,
@@ -725,7 +781,8 @@
             "send_at": "2026-10-20T14:00:00Z",
             "follow_up_step": 0,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.04,
           "value_if_converted": 47.0,
@@ -737,7 +794,10 @@
         }
       ],
       "blocked_by": [],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": null,
@@ -774,7 +834,8 @@
         "send_at": "2026-10-20T14:00:00Z",
         "follow_up_step": 0,
         "item_id": null,
-        "asset_id": null
+        "asset_id": null,
+        "journey_id": null
       },
       "group": "agent",
       "probability": 0.91,
@@ -793,7 +854,8 @@
             "send_at": "2026-10-20T14:00:00Z",
             "follow_up_step": 0,
             "item_id": null,
-            "asset_id": null
+            "asset_id": null,
+            "journey_id": null
           },
           "uplift": 0.052,
           "value_if_converted": 64.0,
@@ -808,7 +870,10 @@
         "no_consent:whatsapp",
         "preference:no_discounts"
       ],
-      "policy_version": "v0.3"
+      "policy_version": "v0.3",
+      "journey_id": null,
+      "journey_probability": null,
+      "journey_ended": null
     },
     "goal_id": "goal_winback",
     "display_name": "Maya",
