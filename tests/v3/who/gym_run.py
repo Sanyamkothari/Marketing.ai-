@@ -44,8 +44,14 @@ def report() -> None:
             f"  trait groups: {traits.describe()} (tau {traits.tau:.2f}, spread between groups "
             f"{traits.spread:.2f}, customers read {traits.customers})"
         )
+        taus = traits.group_tau()
         for key, (n, ratio, p) in traits.groups().items():
-            print(f"    {key}: {n} customers, ratio {ratio:.2f}, chance below 1 {p:.2f}")
+            newcomer = traits.p_harm("", key)
+            print(
+                f"    {key}: {n} customers, ratio {ratio:.2f}, chance below 1 {p:.2f}, "
+                f"tau {taus.get(key, 0.0):.2f}, a newcomer's chance below 1 {newcomer:.2f}"
+            )
+        print(f"  customers read at the last decision day: {book.coverage()}")
         model = policy.bundle.response
         if isinstance(model, LookalikeClickModel):
             la = model.lookalike

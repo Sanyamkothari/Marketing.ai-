@@ -13,10 +13,10 @@ Tests: `tests/v3/who/`.
 | Leaving risk | Chance a customer who has been buying makes no order in the next 60 days | `CustomerState.scores["churn_risk"]` |
 | 90-day value | Margin the customer brings in the next 90 days | `CustomerState.scores["clv_90d"]` |
 | Urgency from risk | A bid is worth `1 + 0.5 x churn_risk` times as much: act before they lapse | `GoalBidder` urgency |
-| Cost ceiling from value | An option costing more than 25% of `clv_90d` is not bid | `GoalBidder` options |
+| Cost ceiling from value | An offer spending more than 25% of the larger of `clv_90d` and what it is expected to earn is not bid | `GoalBidder` options |
 | Sleeping dogs by traits | A customer is also left alone when people like them credibly buy less after a message | `GoalBidder` leave-alone |
 
-The models are numpy only (a ridge logistic regression and a ridge regression). The plan names v1's AutoGluon for
+The models are numpy only (ridge logistic regressions and a ridge regression). The plan names v1's AutoGluon for
 them; `autonomy/` cannot import it (the v2 CI job installs numpy, pandas and a few others), and a regularised linear
 model on the 52-number profile is what the task asked for. The class boundaries (`LeavingRiskModel`,
 `Clv90Model`, `SlowModels.fit` / `scores`) are where a stronger learner would go in.
@@ -28,11 +28,20 @@ the customer profile at that instant (`autonomy.profile.training_rows`, the same
 without the shop's price histogram so the agent's own events are enough: the two price features stay constant and
 get weight 0). Its label is read from the window after the month-end.
 
-- *Risk*: 1 if the customer made no order in the 60 days after, 0 if they did. Only customers who ordered in the
-  180 days before the month-end are asked ("about to stop" means they were buying).
-- *Value*: margin in the 90 days after (the order's margin where reported, the shop's average margin rate of the
-  orders that report one where not, revenue if none reports one), refunds subtracted, at least 0. Asked of every
-  customer with an order.
+- *Risk*: 1 if the customer made no order in the 60 days after, 0 if they did. Any order counts, whatever its value
+  (a free or fully discounted order is an order, as it is in the profile). Only customers who ordered in the 180
+  days before the month-end are asked ("about to stop" means they were buying).
+- *Value*: margin in the 90 days after. The order's margin where reported; where not, the order's value read signed
+  (as the profile reads it: a negative purchase takes money off) at the shop's margin rate as known at the end of
+  that window (revenue while no order reports one); refunds subtracted; at least 0. Asked of every customer with an
+  order. The rate is read at each window's end, so no training label reads a margin reported after the held-out
+  month-end (tested).
+
+**The value model has two parts**: the chance of any margin in the window (a ridge logistic regression) times the
+margin of those with some (a ridge regression, at least the least such margin seen). One straight line through
+everyone put customers likely to lapse below zero, clamped to exactly 0 (35 of 500 on `shop(500)`, measured in
+review), a certainty no record gives. The attention price reads `clv_90d` (`ValueModel.future_value`), so an
+unsubscribe from them was priced at nothing. With the two parts nobody is at 0 (below, tested).
 
 **Point in time** (`test_slow_models.py`). Features come from `profile_for(events, month_end)`, which drops every
 event after the month-end. Labels read only the window after it. The fit takes an `as_of` and drops every event after
@@ -50,24 +59,21 @@ Risk reports the AUC, value reports the root-mean-square error against the error
 (`skill = 1 - model / guess`). A model is **used only when** it passes its bar (`SlowModelConfig`): AUC at least 0.60,
 value skill at least 5%, at least 150 training and 40 held-out rows, at least 10 customers of each kind. A model that
 passes is refit on every closed row. A model that fails writes no score, and its check says why
-(`SlowModels.describe()`: "not used ... below the bar of AUC 0.60", "too few rows (71 to train, 108 held out)",
-"fewer than two month-ends have a closed window").
+(`SlowModels.describe()`: "not used ... below the bar of 5% better than the mean", "too few rows (71 to train, 108
+held out)", "fewer than two month-ends have a closed window").
 
 **Measured, on the test fixtures** (synthetic: customers who order every 20 to 40 days, 40% of whom slow down and stop;
-no claim to resemble a shop). Command and output:
+no claim to resemble a shop). Command `python -m tests.v3.who.probe` (`tests/v3/who/probe.py`), output:
 
-```
-python -c "from tests.v3.who.synth import shop, END; from autonomy.decide.slow_models import SlowModels; \
-m=SlowModels(); m.fit(shop(500), END); print(m.describe())"
-```
+> [slow models, shop(500)] Leaving risk is used: held-out AUC 0.726 on 489 customers of the month ending 2026-04-30,
+> trained on 2631 earlier rows. 90-day value is used: held-out error 59.70 against 69.12 for guessing the mean (skill
+> 13.6%) on 497 customers of the month ending 2026-03-31, trained on 1661 earlier rows. (fit 1.04 s)
+>
+> clv_90d: 500 scored, 0 at exactly 0, lowest 0.13; lapsed (no risk score): 34, lowest 0.13, highest 11.51
 
-> Leaving risk is used: held-out AUC 0.726 on 489 customers of the month ending 2026-04-30, trained on 2631 earlier
-> rows. 90-day value is used: held-out error 60.69 against 69.12 for guessing the mean (skill 12.2%) on 497 customers
-> of the month ending 2026-03-31, trained on 1661 earlier rows.
-
-With `shop(2000)` the same call gives AUC 0.727 and skill 11.7%. The fit of 500 customers took 0.48 s on this machine
-(one process, timed in a throwaway probe). **No real-data figure exists for these models yet**: the order-log fixture
-and the real bench are not part of this stream (see "Not measured").
+The fit time is one run on a shared, loaded machine. The single-line value model gave skill 12.2% on the same fit
+(reproduced in review). **No real-data figure exists for these models yet**: the order-log fixture and the real bench
+are not part of this stream (see "Not measured").
 
 ## Who is scored, and when they are refit
 
@@ -77,7 +83,8 @@ and the real bench are not part of this stream (see "Not measured").
 
 - refits both slow models if a month-end's window has closed since the last fit (so at most monthly: the training rows
   only change then);
-- refits the trait groups if the harm model has been refit and `trait_refit_days` (7) have passed.
+- refits the trait groups if the harm model has been refit and `trait_refit_days` (7) have passed, and drops them when
+  the harm model reads nobody any more (too few customers).
 
 For each agent-group decision `book.prepare(state, now)` returns the changes to the state the decision is made on:
 
@@ -85,9 +92,11 @@ For each agent-group decision `book.prepare(state, now)` returns the changes to 
   with an order), each only if its model passed its check;
 - `features` and `features_as_of`, only if the state carries no nightly profile, built from the events held
   (`WhoConfig.fill_profile`). This is what puts the profile in front of the look-alike model in the Gym, where the
-  folder does not build one. With nightly features younger than 3 days the state's own are used.
+  folder does not build one. Nightly features no older than 3 days, and not from after `now`, are used as they are;
+  otherwise the profile is built from the events held, and with none held the customer gets no profile (tested).
 
-This is cached per customer per day. `explain_bids` prepares the state the same way (it does not refit anything).
+This is cached per customer per day. `explain_bids` prepares the state the same way but stores nothing
+(`prepare(..., remember=False)`) and refits nothing, so explaining does not change the next decision (tested).
 
 ## What the bidders do with the scores
 
@@ -95,9 +104,13 @@ This is cached per customer per day. `explain_bids` prepares the state the same 
   (`risk_urgency` 0.5; no score, no change). The whole expected net scales with urgency, as the cart fade does, so a
   message that loses money for a customer likely to lapse loses more: "high risk + positive uplift = act now" holds,
   and high risk does not rescue a bad bid.
-- **Cost ceiling**: an option whose expected spend (offer cost x chance of redeeming + channel and format cost) is
-  more than `value_cost_share` (25%) of the customer's `clv_90d` is not bid. No `clv_90d`, no ceiling. A customer for
-  whom nothing is cheap enough gets no bids.
+- **Cost ceiling**: an option **with an offer** whose expected spend (offer cost x chance of redeeming + channel and
+  format cost) is more than `value_cost_share` (25%) of the larger of the customer's `clv_90d` and what the option is
+  expected to earn (uplift x value if converted) is not bid (`WhoBook.cost_ceiling`). No `clv_90d`, no ceiling. An
+  option without an offer is never stopped by it: its channel cost is already in its net. `clv_90d` is what the
+  customer brings *without* a message, so capping by it alone would bar the very people a win-back is for. A customer
+  valued at 0 can still be sent a plain message, and an offer for them must earn at least four times what it spends
+  (tested: `test_a_customer_valued_at_nothing_can_still_be_sent_a_plain_message`).
 - `clv_90d` also reaches code that already read it: `ValueModel.future_value` and `ShrunkValueModel.future_value`,
   which the attention price uses (what an unsubscribe costs). So with the switch on, the attention price of a customer
   with a value score is priced on that score instead of two orders' margin. That is the plan's "bidders already read
@@ -115,7 +128,8 @@ This is cached per customer per day. `explain_bids` prepares the state the same 
 | Needs a deal | `price_offer_sensitivity` at or above 0.5 / below |
 | Heavily contacted | 5 or more messages in the last 30 days / fewer |
 
-(3 x 2 x 2 = up to 12 groups; the click-rate cut is the median of the engaged customers at each refit.)
+(3 x 2 x 2 = up to 12 groups; the click-rate cut is the median of the engaged customers at each refit. The plan's
+example is "discount-only buyers who got 5+ messages last month".)
 
 1. Every customer's record is the one `ContactHarm` keeps (`ContactHarm.own_records()`: purchases in a message's week,
    purchases, the week's share of their time) and is read on the same ratio grid: buying in a message's week as a
@@ -124,32 +138,49 @@ This is cached per customer per day. `explain_bids` prepares the state the same 
    business's ratio, whose spread is how far groups really differ beyond their own noise
    (`_spread_between`, the DerSimonian-Laird estimate `ContactHarm` uses for its bands). A group that looks low by
    chance is shrunk back; many groups are read every week.
-3. A member is read against their group **with themselves left out**, then against their own record, spread by the
-   person-to-person `tau` the records make most likely (empirical Bayes over `HARM_TAUS`). A thin record stays near the
-   group; a long one is mostly the person.
+3. A member is read against their group **with themselves left out**, spread by the person-to-person `tau`, then
+   against their own record. A thin record stays near the group; a long one is mostly the person. `tau` is read **per
+   group**: a group can have a low average because a fifth of it are dogs while the rest are helped, and then its
+   people differ widely and the helped members must not be left alone on the average. Every candidate in `HARM_TAUS`
+   is weighed by how likely the group's records make it (flat prior), so a spread that thin records cannot rule out
+   is not ruled out.
 4. A customer is left alone when `LEAVE_ALONE_CREDIBLE` (0.9) of that posterior is below a ratio of 1 and something is
-   at stake. A customer with **no record** is read by their group alone (group key from their profile today). A group
-   with fewer than 20 customers with a record is not read.
-5. It is added to `leave_alone` with "or"; the old rule is untouched. The weekly retry (`leave_alone_retry`) lets a
+   at stake. A customer with **no record** is read as one more person of their group: the group's reading spread by
+   its `tau` (not the group's average alone, which would be surer about a stranger than about a member). A group with
+   fewer than 20 customers with a record is not read.
+5. **A customer left alone keeps the group they were left alone in** (`WhoBook._frozen`) until a refit no longer
+   leaves them alone under it. The load trait is the agent's own doing: once a heavily contacted dog is left alone
+   their 30-day load falls, and keyed afresh they would join the lightly contacted, be let back in, turn heavy again,
+   and so on. Tested (`test_a_dog_left_alone_stays_left_alone_when_its_own_messages_stop`): 40 days on, a dog's fresh
+   key is `silent|deals|light`, and the planted dogs stay left alone.
+6. When `ContactHarm` stops reading anyone (too few customers), the trait reading is dropped too (tested).
+7. It is added to `leave_alone` with "or"; the old rule is untouched. The weekly retry (`leave_alone_retry`) lets a
    left-alone customer back in about one week a year, so a wrong group verdict produces new evidence.
 
-**Tested** (`test_trait_harm.py`, synthetic records, 60 planted dogs with ratio 0.4 and 4 purchases on average,
-60 neutral with ratio 1.0, 370 customers of three other groups with ratios 1.1 to 1.3):
+**Tested** in `test_trait_harm.py` (synthetic records: 60 planted dogs with ratio 0.4 and 4 purchases on average,
+60 neutral with ratio 1.0, 370 customers of three other groups with ratios 1.1 to 1.3) and in `test_book.py` (the
+same kind of population, keyed by the book itself from the customers' own events, `refresh` and `prepare`, and read
+through the bidder):
 
-| Check | Result (command output) |
+| Check | Result |
 |---|---|
-| Dogs left alone | 100% (60 of 60) |
+| Dogs left alone | 78% (47 of 60) |
 | Neutral group left alone | 0% (0 of 60) |
 | The dogs left alone on their own thin record alone (flat prior, same 0.9 bar) | 32% |
-| Planted dogs' group, read | 60 customers, ratio 0.57 (shrunk from the planted 0.4 towards the business's), chance below 1: 1.00 |
+| Planted dogs' group, read | 60 customers, ratio 0.57 (shrunk from the planted 0.4 towards the business's), chance below 1: 1.00, tau 0.38 |
+| A newcomer with the dogs' traits / with the neutral group's | chance below 1: 0.92 (left alone) / 0.52 (not) |
+| A mixed group of 300: 60 dogs (ratio 0.3), 240 helped (1.1) | group ratio 0.84, chance below 1 0.9995, tau 0.37; 5 of 240 helped members left alone (2%), 8 of 60 dogs; a newcomer 0.72 (not left alone) |
 | A dog-group member whose 120-purchase record shows no harm | not left alone |
 | A neutral-group member whose 120-purchase record shows harm | left alone |
 | A dog-group member as their record grows from 1 to 64 purchases (neutral person) | posterior moves from the group's to the person's |
 | 12 groups of 60 with the same ratio (1.3), 4 seeds | nobody left alone, no group read as harmed |
 | Group of 8, or fewer than 50 customers | not read |
 
-The numbers in the first rows are from the command `python -c ...` over `tests/v3/who/test_trait_harm.py`'s `population`
-helper (a throwaway call; the test asserts at least 70% and at most 5%).
+The figures in the first six rows are from `python -m tests.v3.who.probe`; the tests assert at least 70% of the dogs,
+at most 5% of the neutral group and at most 5% of the mixed group's helped members. Before the per-group `tau` (one
+pooled `tau`, and a newcomer read by the group's average) the review measured, on the same populations, 100% of the
+dogs, and in the mixed group 21% of the helped members and every newcomer left alone. The per-group spread costs
+some planted dogs whose group is all alike: thin records cannot show that its people do not differ.
 
 ## Switching it on
 
@@ -165,8 +196,8 @@ helper (a throwaway call; the test asserts at least 70% and at most 5%).
 (`test_without_a_book_scores_in_the_state_change_nothing`); the default Gym run is equal to one with `who=False`
 (`test_the_default_gym_run_is_the_same_with_the_switch_spelled_off`).
 
-`agent_who` is `build_agent_policy(brief, content, lookalike=True, who=True)`. The Gym diagnostics script prints what
-each agent learned: `python -m tests.v3.who.gym_run --scenario sleeping_dogs_15 --policy agent_who ...`.
+`agent_who` is `build_agent_policy(brief, content, lookalike=True, who=True)`. The Gym diagnostics script
+(`tests/v3/who/gym_run.py`) runs the Gym with the same factory and prints what each agent learned.
 
 ### Limits of this stream
 
@@ -186,31 +217,34 @@ each agent learned: `python -m tests.v3.who.gym_run --scenario sleeping_dogs_15 
 ## Smoke run
 
 One run, to see that it works end to end (not a comparison): 1 seed, 200 customers, 90 decision days, the scenario's
-default 180 days of history, no comparison policies.
+default 180 days of history, no comparison policies. It is the Gym CLI with the `agent_who` factory, plus the report
+of what the agent learned:
 
 ```
-python -m autonomy.gym.run --scenario sleeping_dogs_15 --policy agent_who --seeds 1 --customers 200 --no-compare
+python -m tests.v3.who.gym_run --scenario sleeping_dogs_15 --policy agent_who --seeds 1 --customers 200 --no-compare
 ```
 
-- It finished in 25.4 s (the Gym's own timer) with 0 rule breaks.
+- It finished in 27.6 s (the Gym's own timer, on a shared machine) with 0 rule breaks.
 - True value $1,517 (the oracle's $3,378); 1.39 contacts per customer per week; 6.3% unsubscribed.
 - It contacted 19 of 20 planted sleeping dogs (95%). That is no better than v2's 95.2% (`docs/v2/CLICK_HARM.md`), as
-  expected at this size: 200 customers is below what the harm model needs to read anyone (below).
+  expected at this size (below).
 - This says nothing about whether `agent_who` beats `agent`: no `agent` run was made here.
 
-What the agent had learned, from an in-process run of the same agent on the same scenario with 30 decision days and
-210 days of history (a script, not the Gym CLI; 6.3 s, 0 rule breaks):
+What the agent had learned by the end of that run (the same command's report):
 
-- Leaving risk: not used. Held-out AUC 0.521 on 119 customers of the month ending 2025-11-30, trained on 232 rows,
-  below the bar of 0.60.
-- 90-day value: not used. Too few rows (71 to train, 108 held out).
-- The harm model read "no sign that messages put anyone off as a group" (business ratio 1.21); the trait groups
-  (10 groups read, the largest with 44 customers) were all around 1.2, none credibly below 1, and nobody was left
-  alone on them.
-- The look-alike model had 1,437 rows, was in use and refused none, with the filled profile as its features.
+- Leaving risk: used. Held-out AUC 0.610 on 129 customers of the month ending 2026-01-31, trained on 347 rows.
+- 90-day value: not used. Held-out error 39.26 against 34.04 for guessing the mean (skill -15.3%) on 122 customers,
+  trained on 150 rows, below the bar of 5%.
+- The own-record harm model: "No sign that messages put anyone off as a group: across 200 customers, buying after a
+  message runs at 1.77 times their own." The trait groups: 8 read from 149 customers with a record, the largest of 51,
+  all around a ratio of 1.7, none credibly below 1 (a newcomer's chance below 1 at most 0.05); nobody left alone on
+  them.
+- On the last decision day the book prepared 159 customers, all with a profile, 119 with `churn_risk`, none with
+  `clv_90d`, all with a trait group.
+- The look-alike model had 4,230 rows, was in use and refused none, with the filled profile as its features.
 
-So in a 200-customer shop neither slow model clears its bar and trait pooling has nothing to pool: the agent answers
-as the look-alike agent does, with the profile in view. The held-out gate doing its job is the expected outcome here.
+So in a 200-customer shop the value model does not clear its bar and trait pooling finds nothing to pool; leaving
+risk passes just above its bar. The held-out gate doing its job is the expected outcome here.
 
 ## The comparison: pending CI
 
@@ -241,15 +275,24 @@ python -m tests.v3.who.bench_run       --dataset megafon --data-dir DIR --json w
 
 (and `criteo`, `hillstrom`, `x5`). The datasets are not in this environment.
 
+**What the bench can measure of decision 1.** The bench hands `nightly` only the TRAIN customers' history, and its
+TEST states carry no nightly profile, so on its own the book would hold no event of the customers it decides for: no
+profile, no score, no trait group, and the "who" scoreboard would repeat the look-alike one. The wrapper therefore
+also hands the book every customer's pre-campaign events (the `pre` the bench folds the TEST states from: before the
+campaign, so point in time); TEST customers' campaign events are never handed over. It prints the book's coverage
+(customers prepared, with a profile, with each score, with a trait group) after the run: read it before reading the
+scoreboard. The wrapper has not been run here (no datasets), and the book then holds the pre-campaign events of every
+customer in memory, which on Criteo is large.
+
 ## Not measured
 
 - Any real-data figure for leaving risk or 90-day value, and the signal test of the profile against v2's state.
-- Whether the trait groups find the Gym's planted dogs. The planted-group test shows the pooling can; the Gym at 200
+- Whether the trait groups find the Gym's planted dogs. The planted-group tests show the pooling can; the Gym at 200
   customers has too few records to show anything.
 - The cost of the book's profile building at scale. Per decision it builds one profile from the customer's events
   (about 70 microseconds on the profile bench's synthetic events, `docs/v3/PROFILE.md`), once a day per customer.
-- The tests: `tests/v3/who` (the slow one, `test_the_who_agent_runs_in_the_gym_reads_the_history_and_repeats`, takes
-  about 6 s here and is marked `slow`):
+- The tests: `tests/v3/who` (the slow one, `test_the_who_agent_runs_in_the_gym_reads_the_history_and_repeats`, is
+  marked `slow`):
 
 ```
 python -m pytest tests/v3/who -m "not slow"
