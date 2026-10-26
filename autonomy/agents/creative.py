@@ -551,8 +551,10 @@ class Creative:
 
         `type_note` is the type's plain label (no customer data); the model is told it as the
         customer type. Labels, slots, footers and length limits are assigned exactly as in
-        `build_library`; the ids and WhatsApp template names also carry `type_id`, so two types
-        never share an id. Nothing is reset here (see `reset`)."""
+        `build_library`; the ids and WhatsApp template names also carry `type_id` (the caller's key
+        for the type, which may hold more than a type id) and a hash of the final subject and body,
+        so two types never share an id and a template name is never reused for different wording.
+        Nothing is reset here (see `reset`)."""
         if n < 1:
             raise ValueError("n must be at least 1")
         self._kit = kit
@@ -719,6 +721,9 @@ class Creative:
                 continue
             seen_bodies.add(body)
             index = len(out)
+            # Per-type copy: the scope plus a hash of the final wording, so neither an id nor a WhatsApp
+            # template name is ever reused for different words. Without a scope, ids are as before.
+            scoped = f"{scope}_{stable_id('w', subject or '', body)[2:10]}" if scope else None
             out.append(
                 ContentItem(
                     content_id=stable_id(
@@ -729,7 +734,7 @@ class Creative:
                         offer.offer_id,
                         theme.value,
                         index,
-                        *((scope,) if scope else ()),
+                        *((scoped,) if scoped else ()),
                     ),
                     goal_id=brief.goal_id,
                     channel=channel,
@@ -742,7 +747,7 @@ class Creative:
                     slots=slots_in(subject, body),
                     template_name=(
                         template_name(
-                            brief.goal_id, brief.version, channel, offer.offer_id, theme, index, scope
+                            brief.goal_id, brief.version, channel, offer.offer_id, theme, index, scoped
                         )
                         if channel is Channel.WHATSAPP
                         else None
