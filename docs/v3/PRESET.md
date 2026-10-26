@@ -12,7 +12,8 @@ exact command.
 ## What it turns on
 
 `build_agent_policy(briefs, content, v3=True)`, or `v3=V3Preset(...)` to switch a part off. With `v3=False`, the
-default, nothing here runs and every number is unchanged (`test_v3_false_changes_no_decision`).
+default, nothing here runs and every number is unchanged (`test_the_default_agent_decides_and_learns_as_before_the_preset`
+pins a fingerprint of the default agent's decisions and learning taken on the commit before the preset, 20db0504).
 
 | Part | `V3Preset` field | On means | Off inside the preset |
 |---|---|---|---|
@@ -26,7 +27,9 @@ default, nothing here runs and every number is unchanged (`test_v3_false_changes
 
 Each field is True, False or the piece's own config (`LookalikeConfig`, `WhoConfig`, `FrequencyConfig`,
 `JourneyConfig`, `OfferPricing`, a shared `ExperimentBook`). A piece also passed by name to `build_agent_policy`
-(`moments=False`, `journeys=runner`, `offer_pricing=...`) wins over the preset's. The wrapper sits inside the agent,
+wins over the preset's, False included (`journeys=False`, `who=False`, `moments=False`, `journeys=runner`,
+`offer_pricing=...`): `lookalike`, `who`, `frequency` and `journeys` default to None, "not given". Offer pricing has
+no "off" by name (None is "not given"); use `V3Preset(offers=False)`. The wrapper sits inside the agent,
 not around it: `build_agent_policy` still returns an `AgentPolicy`, whose `decide` goes through
 `agent.experiment_policy` (`agent.experiment_policy.book` is the book).
 
@@ -51,8 +54,9 @@ Not switched on by `AUTONOMY_V3`, because nothing in the runtime calls them on t
 One order, fixed by where each piece hooks in. Read it top to bottom for one customer on one daily sweep.
 
 1. **The experiments' wrapper** (`ExperimentPolicy.decide`). The holdout and baseline are only tagged. For an agent
-   customer: if a journey is running for them, the wrapper steps aside (below). Otherwise a hash puts them in at most
-   one running test, and the arm cuts the goal's content library to its offer or channel *before anyone quotes*.
+   customer: if a journey is running for them and this sweep carries it on, the wrapper steps aside (below).
+   Otherwise a hash puts them in at most one running test, and the arm cuts the goal's content library to its offer
+   or channel *before anyone quotes*.
 2. **The agent** (`AgentPolicy._decide`). Paused goals and channels leave the context. `WhoBook` writes the slow
    models' scores and, where the state has no nightly profile (the Gym, the bench), a profile built from the events it
    holds, onto the state this decision is made on. From here the look-alike model, the tiredness model and the trait
@@ -72,8 +76,8 @@ One order, fixed by where each piece hooks in. Read it top to bottom for one cus
 7. **The auction**: the attention price (look-alike tiredness), pacing, the weekly rhythm, **the 3-week plan** (it can
    only hold the customer for a day, never release one), the best options, plausibility, restraint, and the draw with
    the exploration floor. The logged probability is the draw's; for a journey also the chance of the journey.
-8. **After the fact** (`nightly`): the response models and the look-alike outcomes learn from the first message of a
-   journey and from single messages, not from a journey's later steps; the breaker, the tiredness curves and the pacer
+8. **After the fact** (`nightly`, `learn`): the response models and the look-alike outcomes learn from the first
+   message of a journey and from single messages, not from a journey's later steps; the breaker, the tiredness curves and the pacer
    count every message; the offer price moves once a day by the offer money spent.
 
 Where two pieces change the same thing:
@@ -84,9 +88,9 @@ Where two pieces change the same thing:
 | Moments and journeys | A later step is priced at the urgency left on its day: a cart left today raises today's message, and when step 2 runs three days on the moment has closed. Before, a journey priced its later steps at today's urgency | **Fixed** (`JourneyRunner.fade`, set by the agent) |
 | Journeys and the weekly rhythm | The rhythm is one message a week for most customers, so it held every step inside the week of the one before it until the step expired (`max_defer_days`): in a 200-customer Gym run, 124 journeys B started and none of their WhatsApp steps went out, while those customers were held out of the sweep for days. The journey is the plan, so the agent's journeys skip the rhythm (`JourneyRunner.follow_rhythm = False`); the hard weekly cap and the attention price still apply to every step, and a journey the cap cannot hold is not offered | **Fixed** |
 | Journeys and frequency plans | A customer in a journey follows it (the plan is not asked for a step). A journey's first step is one message to the plan like any other, and the plan can hold it for a day. The planner reads a journey bid as one message with the whole plan's gain and cost, and charges the first channel's attention price only; later steps pay theirs when they run | Documented; an approximation |
-| Journeys and learning | A later step goes to someone who did not buy after the step before, so it is not a fresh draw. It no longer teaches the response models or the look-alike outcomes as a treatment; the breaker, the tiredness curves and the pacer still count it | **Fixed** (`AgentPolicy._keep`, `_remember`) |
+| Journeys and learning | A later step goes to someone who did not buy after the step before, so it is not a fresh draw. It no longer teaches the response models or the look-alike outcomes as a treatment, by either road: the nightly log (`_keep`) and the rewards handed to `learn` (the Gym's daily call, whose ledger rewards every send); the breaker, the tiredness curves and the pacer still count it | **Fixed** (`AgentPolicy._keep`, `_remember`, `learn`) |
 | Journeys and a rebuilt policy | A policy built after a restart or a brief change had no runs, so a customer mid-journey would be sent a second first message. It now replays its runs from the decision log it is handed before its first decision | **Fixed** (`AgentPolicy.nightly`) |
-| Experiments and journeys | A journey in progress is finished as planned. A channel arm leaves a later step on the other channel nothing to offer, which ended the journey and started a new one in its place, so a test moved a customer in the middle of a plan. A customer with a journey running is not assigned on the sweep (decisions prompted by a cart or a reply are); they join, by the same hash, after the journey ends. A first step *is* cut by the arm before it is quoted, so a journey with a step on the other channel is not offered to that arm at all | **Fixed** (`ExperimentPolicy(busy=...)`) |
+| Experiments and journeys | A journey in progress is finished as planned. A channel arm leaves a later step on the other channel nothing to offer, which ended the journey and started a new one in its place, so a test moved a customer in the middle of a plan. For a customer with a journey running, the wrapper first lets the agent decide with the whole library and keeps that decision only when it carries the journey on (a hold, or a later step). When the journey ends on that very sweep (a purchase, an unsubscribe, nothing left to offer...), the agent has gone on to a fresh auction; that attempt is dropped and the moment is decided again through the arm, tagged, so the customer joins the test on the sweep the journey ends, not one later (the second attempt has the same decision id: the journey runner undoes the first, the scheduled send and the look-alike row are replaced; the first attempt's bids stay counted once in the pacer's daily mean and the plan's counters). Decisions prompted by a cart or a reply are assigned as always. A first step *is* cut by the arm before it is quoted, so a journey with a step on the other channel is not offered to that arm at all | **Fixed** (`ExperimentPolicy(busy=...)`, `test_a_customer_whose_journey_ends_on_the_sweep_joins_the_test_at_once`) |
 | Experiments and offer pricing | An offer arm forces its offer, and the budget price is charged on that offer's cost like any other; arm redemptions count against the goal's budget. Arms are still a random split compared with each other and the holdout; the price changes how many customers of an arm are worth a send, which is part of what that arm earns | Documented |
 | Offer pricing and the budget planner | A budget move (auto-budget) arrives as a new brief version; the goal's price keeps its spend and takes the new budget (`test_the_offer_price_follows_a_budget_that_moves...`). A plan of `days` (30) that has run pinned every offer at the ceiling from day 31 with budget left; with `renew` the agent plans another period for what is left. The preset starts the price at 0, where the module default of 0.5 held offers back for a week even when the budget did not bind | **Fixed** (`OfferPricing.renew`, `BudgetPrice.extend`, off by default) |
 | Offer pricing and the 3-week plan | The planner values an offer at its cost, without the budget price the auction charges. The plan only holds, never releases, so this can make a hold slightly rosier than the auction's net, not send what the auction would not | Documented; an approximation |
@@ -110,40 +114,34 @@ Where two pieces change the same thing:
 
 ## What was run here
 
-All from this worktree, on a shared 4-CPU machine, nothing heavy.
+All from this worktree, on a shared 4-CPU machine, nothing heavy, on the final code (the commit before this
+page's last edit).
 
-- `python -m pytest tests/v3 -n 2 -m "not slow" -o addopts="" -q`: 701 passed in 20.0 s (all of v3, the pieces' own
-  tests included, on the final code).
-- Our own tests, `tests/v3/preset/` (32 fast tests, 1 slow): the default is unchanged; the preset builds every part;
-  each part switches off apart (7 cases, each also checked as the only part left on); a part given by name wins; the
-  experiments' wrapper changes nothing until a test runs (30 customers, decisions equal); one decision with every part
-  active (a cart left 6 hours ago and a leaving risk of 0.8: urgency 2.106 = 1.505 x 1.4, journeys among the options,
-  the plan made, the send's profile kept, the offer price in the bidder, and with a test started the same wrapper
-  puts a customer on an arm); each row of the table above marked Fixed; `RuntimeSettings.v3` and the scale fixes;
-  the Gym policy and its CI matrix; the bench handing the who book the TEST customers' pre-campaign events (on the
-  synthetic trial of `tests/v2/realfix/test_bench.py`, 303 customers prepared with a profile = the whole TEST half,
-  and none of their campaign events handed over).
-- `tests/v2/agent_brain`, `tests/v2/runtime/test_service.py`, `tests/v2/gym`, `tests/v2/realfix/test_bench.py`,
-  `tests/v2/failure/test_runtime_wiring.py`, `tests/v2/polish/test_runtime_gaps.py`,
-  `tests/v2/zero_touch/test_wiring_production.py`, `tests/v2/decide/test_policy.py` and the four
-  `tests/v2/scientist` files that read the bench and the targets, together with `tests/v3/preset` including its slow
-  test (a 200-customer, 40-day Gym run twice, same card both times, 0 rule breaks): 314 passed in 17.9 s, on the
-  final code.
+- `python -m pytest tests/v3 -n 2 -m "not slow" -o addopts="" -q -p no:cacheprovider`: 705 passed in 19.87 s (all of
+  v3, the pieces' own tests included).
+- Our own tests, `tests/v3/preset/`: the default agent's fingerprint (120 decisions over 4 days, 60 of them sends,
+  `nightly` each day and `learn` once) equals the one taken on 20db0504 before the preset (the same function, run
+  there from a scratch copy, printed `(120, 60, '310d8f3efaf90f03')` on both commits); the preset builds every part;
+  each part switches off apart (7 cases, each also checked as the only part left on), and False given by name wins;
+  the experiments' wrapper changes nothing until a test runs (30 customers, decisions equal); one decision with every
+  part active (the urgency is the goal's fade times moments times leaving risk, journeys among the options, the plan
+  made, the send's profile kept, the offer price in the bidder, and with a test started the same wrapper puts a
+  customer on an arm); each row of the table above marked Fixed, including a journey that ends on the sweep (a
+  purchase, a WhatsApp unsubscribe) and a later step handed to `learn`; `RuntimeSettings.v3` and the scale fixes;
+  the Gym policy, its `--moments` control and its CI matrix; the bench handing the who book the TEST customers'
+  pre-campaign events (on the synthetic trial of `tests/v2/realfix/test_bench.py`: every TEST customer prepared,
+  with a profile, and none of their campaign events handed over).
+- `python -m pytest tests/v3/preset tests/v2/agent_brain tests/v2/runtime/test_service.py tests/v2/gym
+  tests/v2/realfix/test_bench.py tests/v2/decide/test_policy.py tests/v2/failure/test_runtime_wiring.py
+  tests/v2/polish/test_runtime_gaps.py -n 2 -o addopts="" -q -p no:cacheprovider` (slow tests included, among them
+  a 200-customer, 40-day Gym run of `agent_v3` twice, same card both times, 0 rule breaks): 270 passed in 20.03 s.
 - **One smoke run**, so that every part runs together:
   `python -m autonomy.gym.run --scenario baseline_shop --policy agent_v3 --seeds 1 --customers 200 --days 35 --no-compare`
-  (`--days 35` and `--no-compare` to keep it small). On the commit before the weekly-rhythm fix it finished in 7.1 s with
-  0 rule breaks, a true value of $608, 0.86 contacts per customer per week and 2.4% unsubscribed.
-  The same scenario, seed and size through a small harness that counts what each part did (it wraps the same
-  `run_policy`), after the fix: true value $665, 0 rule breaks, 844 sends; journey A started 447 times, journey B 124
-  times and its WhatsApp step went out 92 times (before the fix: 0); the 3-week plan chose `now_and_10d` 811 times and
-  `wait_14d` 405 times, and held 405 decisions; 178 sends carried an offer; the offer price ended at 0.0 after 34
-  days; who's leaving-risk model was **not** in use (held-out AUC 0.566, below its 0.60 bar), its 90-day value model
-  was not in use (24 training rows), trait groups were read (8) and none left anyone alone, and all 167 customers
-  prepared on the last day had a profile; the look-alike model had 824 rows and was still gathering (`ready` false);
-  no experiment ran. This says the wiring works. At 200 customers and one seed it says nothing about whether
-  `agent_v3` beats `agent`, and the two true values above (different code, same seed) show how far one seed moves.
+  (`--days 35` and `--no-compare` to keep it small): 6.9 s, 0 rule breaks, a true value of $665, 37% of the oracle's
+  $1,788, 1.01 contacts per customer per week, 1.8% unsubscribed. This says the wiring works. At 200 customers and
+  one seed it says nothing about whether `agent_v3` beats `agent`.
 - `ruff check`, `black --check` and `mypy --strict --python-version 3.11 --ignore-missing-imports
-  --follow-imports=silent` on every changed file: clean.
+  --follow-imports=silent` on every changed Python file: clean.
 
 ## The comparison: pending CI
 
@@ -172,12 +170,15 @@ Read, per scenario: true value, share of the segment oracle, contacts to sleepin
 and the staged bar of [GYM_BAR.md](../v2/GYM_BAR.md) (`verdict` in the JSON). `agent_v3` against `agent` is the whole
 preset against v2; `agent_v3` against `agent_lookalike`, `agent_who` and `agent_frequency` says what the pieces add on
 top of one another. `moments_planted_v3.json` carries `moments.mean_gain` for the preset's moments against the preset
-with only them off. `better_offer_planted` is the experiments' scenario (`python -m autonomy.experiments.gymrun`); the
+with only them off; in CI it is its own job (`gym-moments-v3`, artefact `gym-moments_planted-agent_v3`), so an
+untimed `agent_v3` run cannot cost the `gym-moments` job its `moments_planted.json`. `better_offer_planted` is the experiments' scenario (`python -m autonomy.experiments.gymrun`); the
 preset's wrapper is a no-op there until a test is started.
 
 **Real bench: `agent` against `agent_v3` on Hillstrom, X5, Criteo and MegaFon.** On `workflow_dispatch` or a commit
 message containing `[real]`, `.github/workflows/realbench.yml` runs each dataset for both policies and renders both
-reports and a table of the doubly-robust profit per customer, `agent_v3` minus `agent`. By hand:
+reports and a table of each policy's doubly-robust profit per customer with its 95% interval, and the difference of
+the two points (two separate runs on the same TEST half: the difference has no interval of its own, read it against
+the two intervals). By hand:
 
 ```
 for d in hillstrom x5 criteo megafon; do
