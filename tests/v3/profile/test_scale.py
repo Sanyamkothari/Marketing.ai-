@@ -38,8 +38,11 @@ def _peak_python_bytes(customers: int) -> int:
     return peak
 
 
+@pytest.mark.slow
 def test_memory_does_not_grow_with_the_number_of_customers() -> None:
+    """About 7 s: most of it loads and folds the SQLite stores. Prints both peaks (run with -s)."""
     small, large = _peak_python_bytes(200), _peak_python_bytes(1_000)
+    print(json.dumps({"peak_bytes_200": small, "peak_bytes_1000": large}))
     # five times the customers, the same batch and page sizes: one batch, one page, a few hundred counters
     assert large < small * 1.5 + 2_000_000, (small, large)
     assert large < 25_000_000

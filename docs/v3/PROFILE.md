@@ -31,7 +31,7 @@ feature returns when there is nothing to measure. Where a zero would be ambiguou
 | 4 | `buy_orders_total` | buying | Orders placed in the customer's whole history | 0 |
 | 5 | `buy_net_revenue` | buying | Money spent in the whole history, minus refunds | 0 |
 | 6 | `buy_avg_order_value` | buying | Average value of one order (0 if no order yet) | 0 |
-| 7 | `buy_margin_rate` | buying | Share of order value kept as margin, over orders that report margin (0 if none do) | 0 |
+| 7 | `buy_margin_rate` | buying | Share of order value kept as margin, over orders with a value that report margin (0 if none do) | 0 |
 | 8 | `buy_active_months` | buying | Calendar months in which the customer ordered | 0 |
 | 9 | `buy_ordered` | buying | 1 if the customer has ever ordered, else 0 | 0 |
 | 10 | `buy_days_since_last_order` | buying | Days since the last order (0 if no order yet; see buy_ordered) | 0 |
@@ -43,9 +43,9 @@ feature returns when there is nothing to measure. Where a zero would be ambiguou
 | 16 | `trend_order_momentum` | trend | Orders in the last 90 days against the 90 before, from -1 (slowing) to 1 (speeding up) | 0 |
 | 17 | `taste_distinct_categories` | taste | Different product categories bought | 0 |
 | 18 | `taste_top_category_share` | taste | Share of category-tagged orders that are in the favourite category (0 if none tagged) | 0 |
-| 19 | `taste_repeat_item_share` | taste | Share of item-tagged orders that re-buy an item bought before (0 if none tagged) | 0 |
-| 20 | `taste_new_category_share_90d` | taste | Share of the last 90 days' tagged orders in a category not bought before then | 0 |
-| 21 | `price_level_known` | price | 1 if the shop has enough orders to read a price level against, and the customer has ordered | 0 |
+| 19 | `taste_repeat_item_share` | taste | Share of item-tagged orders that re-buy an item bought in an earlier order (0 if none tagged) | 0 |
+| 20 | `taste_new_category_share_90d` | taste | Share of the last 90 days' tagged orders with a category not bought before then | 0 |
+| 21 | `price_level_known` | price | 1 if the shop has enough orders to read a price level against, and the customer has spent money | 0 |
 | 22 | `price_level` | price | Where the customer's average order sits among the shop's orders: 0 cheapest, 1 priciest (0.5 unless price_level_known) | 0.5 |
 | 23 | `price_offer_sensitivity` | price | How much the customer needs an offer to buy, 0 to 1: offer share pulled toward 0.3 until there are enough orders | 0.3 |
 | 24 | `price_full_after_offer_known` | price | 1 if an order with an offer was followed by another order, else 0 | 0 |
@@ -95,6 +95,12 @@ The profile can only use what `autonomy/contracts/events.py` carries.
   The learned taste profile the plan lists as "later" is not part of this stream.
 - *Per-channel numbers for every channel.* Email and WhatsApp have their own engagement rate; the rest
   are in the all-channel rates.
+- *The Data Doctor's line -> order -> shopper roll-up.* The plan says the builder reuses it. That roll-up
+  works on the Doctor's dataframes, before events exist; the profile reads `Event` objects, so it rolls
+  lines up itself with one rule (below, "Orders"). A log loaded one PURCHASE per invoice line
+  (`ONLINE_RETAIL_LINE_MAPPING`) therefore gives one order per invoice. What it does not do: lines of one
+  order stamped at different instants stay separate orders, and nothing reads the Doctor's confirmed
+  column choices. Wiring the profile to the Doctor's order-log path is left to the stream that builds it.
 
 ## How a value is read
 
@@ -106,11 +112,22 @@ The profile can only use what `autonomy/contracts/events.py` carries.
   this stream of `Event` objects, so the profile does not import it; it takes over the idea (one place enforces
   the guard, and a test plants the future) and the inclusive snapshot instant.
 - **Windows.** "30 days" is after `as_of - 30 days` and up to `as_of`: an order exactly 30 days ago is out.
+- **Orders.** Purchases of one customer at the same instant that name the same order (`attrs["order_id"]`,
+  else `attrs["invoice_no"]`, else none) are one order: values and margins summed (margin only if every line
+  reports one), categories and items the union of the lines', offer if any line had one. Two invoices at the
+  same instant stay two orders; unnamed purchases at the same instant are one. Every order count, value, gap
+  and share is per order. `ShopPrices` applies the same rule to the shop's orders; it holds only the
+  purchases of the current instant, so it needs the events in time order (`EventStore.scan` gives them so;
+  `training_rows` sorts before it builds the histograms). `price_offer_sensitivity` therefore equals the
+  folder's estimate on a log with one PURCHASE per order, and differs from it on a line-level log, where
+  the folder counts lines.
 - **Time zones, amounts, currency.** As in `autonomy/data/folder.py`: the customer's zone is the last valid
   `timezone` attr on an event they made themselves (signup, visit, view, cart, purchase), else UTC; hours,
-  weekdays and month days are local. Amounts are `Event.value` as given in the business currency (a purchase
-  adds, a refund subtracts) and are never converted; a rebuild already refuses mixed currencies
-  (`MixedCurrencyError`). A value that is not a finite number counts as 0.
+  weekdays and month days are local. Amounts are `Event.value` in the business currency and are never
+  converted; a rebuild already refuses mixed currencies (`MixedCurrencyError`). A purchase adds; a refund
+  subtracts its size (`abs(value)`, as the event mapper writes refunds), so a refund stored as a negative
+  number still takes money off. Here the profile differs from the folder, which subtracts the value as
+  stored. A value that is not a finite number counts as 0.
 - **Offers.** A purchase with `attrs["offer_id"]` set. The offer `none` is not an offer (the spend ledger
   reads it the same way). `price_offer_sensitivity` is the folder's own estimate (prior 0.3, three pseudo
   orders), and a test holds the two equal.
@@ -119,9 +136,20 @@ The profile can only use what `autonomy/contracts/events.py` carries.
 - **Price level** is the share of the shop's orders worth no more than the customer's average order, from a
   histogram with bins about 13% wide. It is 0.5 and `price_level_known` is 0 until the shop has 50 orders.
 - **Finite floats.** Every value is a Python `float` and finite; a computation that comes out NaN or infinite
-  becomes the feature's default. Ratios against the customer's own usual are capped at 10.
-- **Order and repeats.** Events may come in any order and repeat an `event_id`; the first copy is used. Events
-  of more than one customer, or a naive `as_of`, raise `ValueError`.
+  becomes the feature's default. Ratios against the customer's own usual are capped at 10, and every share
+  is kept in [0, 1]. `buy_margin_rate` reads only orders with a positive value; `price_level_known` needs a
+  positive average order.
+- **Buying cycle.** `trend_gap_known` is 1 only when the customer ordered on at least two different local
+  days. `trend_avg_gap_days`, `trend_overdue_ratio` and `mom_refill_due_days` are 0 otherwise, so two orders
+  a minute apart do not make a cycle.
+- **Replies.** `resp_stop_replies` counts distinct replies (`attrs["reply_event_id"]`, else the event's own
+  id) behind `reply_stop` unsubscribes: the Conversation agent unsubscribes every channel the customer has
+  for one "stop", which is one reply. A `snooze_until` preference is read as `autonomy/decide/rules.py`
+  reads it: an empty value clears the snooze (and is not a "not now" reply), a value that cannot be read is
+  a snooze with no end, a time without a zone is on the customer's clock.
+- **Order and repeats.** Events may come in any order and repeat an `event_id`; the first copy is used, in
+  `profile_for` and in `training_rows`, as the stores drop repeats on append. Events of more than one
+  customer, or a naive `as_of`, raise `ValueError`.
 
 ## How to run it
 
@@ -147,15 +175,31 @@ histogram.
 
 ### In the runtime
 
-`RuntimeConfig.nightly_profile` (default `True`, in `autonomy/runtime/service.py`) makes `tick` call
+`RuntimeConfig.nightly_profile` (default `False`, in `autonomy/runtime/service.py`) makes `tick` call
 `build_profiles(self.events, self.states, now)` after the fold on the nightly tick and on any tick that did a
 full rebuild. A rebuild builds states from the log and resets `features`, so refilling on every rebuild keeps a
 state from losing its profile; doing it before `_decide` means the tick that rebuilds also decides on fresh
-profiles. A failure becomes a `profile.error` warning alert and does not stop the tick. An ordinary tick leaves
-`features` as they were; `features_as_of` says how old they are. The setting is a field of `RuntimeConfig`;
-`autonomy/runtime/settings.py` was not edited, so `RuntimeSettings` does not expose it yet.
+profiles. A failure becomes a `profile.error` warning alert and does not stop the tick. After a rebuild the
+states had already lost their profile (a rebuild keeps only `group` and `scores`, `KEPT_ON_REBUILD`), so the
+alert says some states have none until the next night; on a night without a rebuild, states not yet refilled
+keep the last one. An ordinary tick leaves `features` as they were; `features_as_of` says how old they are.
+The setting is a field of `RuntimeConfig`; `autonomy/runtime/settings.py` was not edited, so
+`RuntimeSettings` does not expose it yet. The demo runtime (`autonomy/runtime/demo.py`) sets it `False`
+explicitly.
 
-One cost to know: a process's first tick is a full rebuild, so every restart rebuilds the profiles as well.
+It is off by default because nothing reads `features` yet, so turning it on changes no decision and only
+adds cost:
+
+- each nightly run (and each rebuild, including a process's first tick) streams the log once for the shop's
+  prices and reads every customer's events once;
+- every state carries 52 more floats. The daily sweep holds every refreshed state in one list
+  (`everyone = [self.folder.refresh(s, now) for s in self.states.scan()]` in `service.py`), so its peak
+  grows by the size of the profile per customer. `python -m tests.v3.profile.state_size` (2,000 synthetic
+  states read back from JSON under `tracemalloc`) gave 3,576 bytes per state without the profile and 5,168
+  with it: 1,592 bytes more, about 1.59 GB more at 1M customers. The bench below measures
+  `build_profiles` only, not this.
+
+Turn it on when the first consumer of `features` lands, and measure the sweep's peak with it at that point.
 
 ## Measured
 
@@ -183,17 +227,26 @@ process's resident memory (RSS) every 10 ms. Result:
 A second run, through the slow test (`pytest tests/v3/profile/test_scale.py -m slow`), gave 80.5 s, 1,242
 customers per second and +54 MB.
 
+These bench figures were measured at commit `08f37a60`, before the review fixes (orders rolled up from
+lines, the shop histogram's roll-up, the gap and snooze rules). The fixes add a little work per purchase and
+were not re-benched here (the 100k bench is too heavy for this shared machine): pending CI, with
+`/home/user/Marketing.ai-/.venv/bin/python -m pytest tests/v3/profile/test_scale.py -m slow -s`.
+
 Memory did not grow with the shop: twenty times the customers cost 2 MB more at the peak. A second check
-isolates the Python heap with `tracemalloc` (`test_memory_does_not_grow_with_the_number_of_customers`: batch
-and store page size 100, `build_profiles` over SQLite stores): the peak was 3.19 MB at 200 customers, 3.28 MB
-at 1,000 and 3.36 MB at 3,000.
+isolates the Python heap with `tracemalloc` (`test_memory_does_not_grow_with_the_number_of_customers`, marked
+slow because it takes about 7 s: batch and store page size 100, `build_profiles` over SQLite stores). After
+the review fixes, `pytest tests/v3/profile/test_scale.py::test_memory_does_not_grow_with_the_number_of_customers
+-s` printed a peak of 3,222,511 bytes at 200 customers and 3,317,766 bytes at 1,000.
 
 **Against the plan's pass test** (1M customers in under 15 minutes on 4 CPUs, under 4 GB): 1M was **not run**.
 Filling a 1M-customer SQLite database (about 15 million events) would take roughly 40 minutes on this
 shared 4-CPU machine (the 100k load and fold took 145 s and 79 s), so it was not attempted. Extrapolating the 100k rate linearly, 1,000,000 customers would take about 808
-seconds (13.5 minutes), and the memory is flat, so the 4 GB bar is not in question. That is a projection from
+seconds (13.5 minutes), and `build_profiles`' own memory is flat. That covers the build only: with the
+profile on, the daily sweep's list of every state grows by about 1.59 GB at 1M customers (above), so the 4 GB
+bar has to be checked on the sweep too, not only on the build. That is a projection from
 one SQLite run, with little headroom against 15 minutes, and Postgres could be faster or slower. Run the same
-command with `--customers 1000000` (it needs about 40 minutes to fill the database first) to settle it.
+command with `--customers 1000000` (it needs about 40 minutes to fill the database first) to settle the build,
+and measure the sweep's peak at 1M with `nightly_profile` on to settle the memory.
 
 **Where the time goes** (cProfile of a 5,000-customer build, so absolute times are inflated, shares are
 indicative): reading each customer's events with `SqlEventStore.for_customer` 47%, the shop price pass 16%,
@@ -203,8 +256,8 @@ in one query would be the next step if the time matters; the profile code does n
 
 **Tests.**
 
-    /home/user/Marketing.ai-/.venv/bin/python -m pytest tests/v3 -n 8 -p no:cacheprovider -m "not slow and not frozen and not bedrock and not aws"
-    /home/user/Marketing.ai-/.venv/bin/python -m pytest tests/v3 -m slow     # the 100,000-customer bench, a few minutes
+    /home/user/Marketing.ai-/.venv/bin/python -m pytest tests/v3/profile -p no:cacheprovider -m "not slow"
+    /home/user/Marketing.ai-/.venv/bin/python -m pytest tests/v3/profile -m slow     # the tracemalloc check and the 100,000-customer bench, a few minutes
 
 ## Not measured here
 
