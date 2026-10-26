@@ -5,6 +5,7 @@
     python -m scripts.v2_realbench.run --dataset hillstrom --limit 6000 --json quick.json   # smoke only
     python -m scripts.v2_realbench.run --render out.json          # the markdown tables of a report
     python -m scripts.v2_realbench.run --dataset hillstrom --policy scientist ...   # the Scientist's pick
+    python -m scripts.v2_realbench.run --dataset hillstrom --policy agent_v3 ...    # the plan-v3 preset
     python -m scripts.v2_realbench.run --dataset lenta --sealed-final ...   # SEALED: once, at the end
 
 The sealed datasets (lenta, starbucks) are refused unless `--sealed-final` is passed, are never part of
@@ -200,10 +201,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--json", type=Path, help="write the report here")
     ap.add_argument(
         "--policy",
-        choices=("agent", "scientist"),
+        choices=("agent", "agent_v3", "scientist"),
         default="agent",
-        help="agent: score the learning agent (the scoreboard of record); scientist: the policy the "
-        "Scientist selects on TRAIN from the fixed menu (autonomy/scientist), scored on TEST",
+        help="agent: score the learning agent (the scoreboard of record); agent_v3: the same agent built "
+        "with the plan-v3 preset (docs/v3/PRESET.md), its who book handed every customer's pre-campaign "
+        "events, scored the same way; scientist: the policy the Scientist selects on TRAIN from the fixed "
+        "menu (autonomy/scientist), scored on TEST",
     )
     ap.add_argument(
         "--ai-answers",
@@ -334,6 +337,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     timings=timings,
                     with_decision_log=args.with_decision_log,
                     attach_features=not args.no_features,
+                    v3=args.policy == "agent_v3",
                 )
             del data
         except MemoryError as err:  # keep the other datasets' numbers
@@ -348,7 +352,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         block["peak_rss_mb"] = round(peak_rss_mb(), 1)
         block["timings"] = timings.rows
         report["datasets"][name] = block
-        if args.policy == "agent":
+        if args.policy in ("agent", "agent_v3"):
             add_multiplicity(report)  # raw and Holm-corrected, over the datasets finished so far
         gc.collect()
         if "error" not in block and args.policy == "scientist":

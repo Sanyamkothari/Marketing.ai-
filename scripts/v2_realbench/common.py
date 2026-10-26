@@ -324,6 +324,10 @@ def _learned(policy: object) -> tuple[str, ...]:
     if uplift is not None:
         out.append(f"uplift attached: {bool(getattr(uplift, 'attached', False))}")
         out += [f"uplift: {n}" for n in getattr(uplift, "notes", ())]
+    who = getattr(policy, "who", None)
+    if who is not None:  # the v3 preset: what the slow models and trait groups read, and how many customers
+        out.append(f"who: {who.describe()}")
+        out.append(f"who: customers read at the last decision day: {who.coverage()}")
     return tuple(out)
 
 
@@ -383,8 +387,16 @@ def run_agent(
     timings: Timings,
     with_decision_log: bool = False,
     attach_features: bool = True,
+    v3: bool = False,
 ) -> AgentResult:
-    """Build the production agent, warm-start it on TRAIN as the runtime does, decide for TEST."""
+    """Build the production agent, warm-start it on TRAIN as the runtime does, decide for TEST.
+
+    With `v3` the agent is built with the plan-v3 preset (`build_agent_policy(v3=True)`, docs/v3/PRESET.md),
+    and its who book is handed every customer's pre-campaign events: the book otherwise holds only the
+    TRAIN customers' history (`nightly` gets no more), so a TEST customer would have no profile, no score
+    and no trait group, and decision 1 would not be measured at all. These are the events the bench folds
+    the TEST states from, from before the campaign starts and so point in time; the campaign events of TEST
+    customers are never handed over (the check below still refuses them)."""
     from autonomy.runtime.agent import build_agent_policy
 
     inp = data.agent
@@ -412,13 +424,17 @@ def run_agent(
             raise AssertionError("campaign events of a TEST customer reached the agent")
         history = {c: [*pre.get(c, []), *camp.get(c, [])] for c in train_ids}
         n_events = sum(len(v) for v in history.values())
+        held = pre if v3 else None
         del pre, camp
         gc.collect()
     log = decision_log(data, train) if with_decision_log else []
     with timings.step(f"agent: build (product path) and warm start on {len(train_ids)} train customers"):
-        policy = build_agent_policy(list(inp.briefs), list(inp.content), costs=dict(inp.costs))
+        policy = build_agent_policy(list(inp.briefs), list(inp.content), costs=dict(inp.costs), v3=v3)
         policy.nightly(log, history, inp.now)
         del history
+        if held is not None and policy.who is not None:
+            policy.who.ingest(held, inp.now)  # before the campaign, every customer's: point in time
+        held = None
         gc.collect()
         ctx0 = DecisionContext(now=inp.now, briefs=inp.briefs, content=inp.content, seed=1)
         policy.prepare_day(train_states, ctx0)
@@ -875,8 +891,10 @@ def evaluate_dataset(
     timings: Timings,
     with_decision_log: bool = False,
     attach_features: bool = True,
+    v3: bool = False,
 ) -> dict[str, Any]:
-    """The whole scoreboard for one dataset: split, agent, baselines, scores, calibration, verdict."""
+    """The whole scoreboard for one dataset: split, agent, baselines, scores, calibration, verdict.
+    `v3` scores the plan-v3 preset in the agent's place (`run_agent`); the report still calls it AGENT."""
     train, test = split_by_hash(data.customer_ids)
     profit = data.profit()
     agent = run_agent(
@@ -887,6 +905,7 @@ def evaluate_dataset(
         timings=timings,
         with_decision_log=with_decision_log,
         attach_features=attach_features,
+        v3=v3,
     )
     with timings.step("baselines on train (segment rule, T-learner, best simple policy)"):
         rule, best_name, val_table = choose_simple(data, train, profit)
@@ -950,6 +969,7 @@ def evaluate_dataset(
             "decision_log_fed": agent.decision_log,
             "seeds": agent.seeds,
             "features_attached": attach_features,
+            "v3": v3,
             "learned": list(agent.learned),
         },
         "policies": table,

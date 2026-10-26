@@ -156,7 +156,8 @@ def agent_frequency_factory(world: SimWorld) -> Policy:  # noqa: ARG001
 
 def agent_v3_factory(world: SimWorld) -> Policy:  # noqa: ARG001
     """The agent with every plan-v3 piece on (`build_agent_policy(v3=True)`, docs/v3/PRESET.md). For CI to
-    compare with `agent` on the same seeds. It learns only from what the agent observes, never from the world."""
+    compare with `agent` on the same seeds. It learns only from what the agent observes, never from the world.
+    """
     from autonomy.runtime.agent import build_agent_policy
 
     return build_agent_policy([default_brief()], default_content(), v3=True)

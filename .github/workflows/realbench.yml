@@ -5,6 +5,8 @@
 # Its own workflow, like the Gym's: it runs on a push to version-2 whose commit message contains
 # "[real]", or by hand (workflow_dispatch). Report-only: the targets are read from the uploaded
 # JSON, not enforced; the job turns red only when the bench itself crashes or a dataset errors.
+# Each dataset runs twice, on a policy axis: `agent` (the scoreboard of record) and `agent_v3` (the same agent
+# built with the plan-v3 preset, docs/v3/PRESET.md), so v3 is scored as a whole against v2 on the same split.
 # The datasets (about 1.27 GB) are downloaded from public mirrors with fixed SHA-256 checksums
 # (scripts/v2_realbench/fetch.py) and cached between runs; nothing is written into the repository.
 
@@ -24,15 +26,17 @@ permissions:
 
 jobs:
   scoreboard:
-    name: scoreboard ${{ matrix.dataset }}
+    name: scoreboard ${{ matrix.dataset }} ${{ matrix.policy }}
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[real]')
     runs-on: ubuntu-latest
-    # Locally (4 CPUs) the slowest dataset takes about 8 minutes plus its download.
-    timeout-minutes: 45
+    # Locally (4 CPUs) the slowest dataset takes about 8 minutes plus its download with the agent; agent_v3 is
+    # not timed yet (its who book holds every customer's pre-campaign events), hence the longer limit.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         dataset: [hillstrom, x5, criteo, megafon]
+        policy: [agent, agent_v3]
     env:
       DATA_DIR: ${{ github.workspace }}/.realbench-data   # inside the workspace: actions/cache rejects ".." paths
     steps:
@@ -67,15 +71,16 @@ jobs:
         shell: bash   # bash -eo pipefail: a crash under tee must turn the job red
         run: |
           mkdir -p realbench-report
-          python -m scripts.v2_realbench.run --dataset ${{ matrix.dataset }} --data-dir "$DATA_DIR" \
-            --json realbench-report/${{ matrix.dataset }}.json --quiet \
-            --note "CI ${{ github.sha }}" | tee realbench-report/${{ matrix.dataset }}.md
+          python -m scripts.v2_realbench.run --dataset ${{ matrix.dataset }} --policy ${{ matrix.policy }} \
+            --data-dir "$DATA_DIR" \
+            --json realbench-report/${{ matrix.dataset }}-${{ matrix.policy }}.json --quiet \
+            --note "CI ${{ github.sha }}" | tee realbench-report/${{ matrix.dataset }}-${{ matrix.policy }}.md
       - name: Fail on a dataset error (out of memory and the like)
         shell: bash
         run: |
           python - <<'EOF'
           import json, sys
-          report = json.load(open("realbench-report/${{ matrix.dataset }}.json"))
+          report = json.load(open("realbench-report/${{ matrix.dataset }}-${{ matrix.policy }}.json"))
           bad = {k: v["error"] for k, v in report["datasets"].items() if "error" in v}
           if bad:
               sys.exit(f"dataset error: {bad}")
@@ -83,7 +88,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: realbench-${{ matrix.dataset }}
+          name: realbench-${{ matrix.dataset }}-${{ matrix.policy }}
           path: realbench-report/
           if-no-files-found: ignore
 
@@ -105,25 +110,50 @@ jobs:
           pattern: realbench-*
           path: parts
           merge-multiple: true
-      - name: One report for all four datasets
+      - name: One report per policy for all four datasets
         shell: bash
         run: |
-          python - <<'EOF'
+          python - <<'PY'
           import json, pathlib
-          parts = sorted(pathlib.Path("parts").glob("*.json"))
-          merged = None
-          for p in parts:
-              r = json.loads(p.read_text())
+          # parts/<dataset>-<policy>.json; realbench.json stays the agent's (the scoreboard of record)
+          for policy, out in (("agent", "realbench.json"), ("agent_v3", "realbench-agent_v3.json")):
+              merged = None
+              for p in sorted(pathlib.Path("parts").glob(f"*-{policy}.json")):
+                  r = json.loads(p.read_text())
+                  if merged is None:
+                      merged = {**r, "datasets": {}}
+                  merged["datasets"].update(r["datasets"])
               if merged is None:
-                  merged = {**r, "datasets": {}}
-              merged["datasets"].update(r["datasets"])
-          if merged is None:
-              raise SystemExit("no dataset report was produced")
-          merged["command"] = "CI matrix: python -m scripts.v2_realbench.run --dataset <each> --quiet"
-          pathlib.Path("realbench.json").write_text(json.dumps(merged, indent=1))
-          EOF
+                  print(f"no dataset report was produced for {policy}")
+                  continue
+              merged["command"] = (
+                  f"CI matrix: python -m scripts.v2_realbench.run --dataset <each> --policy {policy} --quiet"
+              )
+              pathlib.Path(out).write_text(json.dumps(merged, indent=1))
+          if not pathlib.Path("realbench.json").exists():
+              raise SystemExit("no agent report was produced")
+          PY
           python -m scripts.v2_realbench.run --render realbench.json | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -f realbench-agent_v3.json ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "## agent_v3 (the plan-v3 preset, docs/v3/PRESET.md)" >> "$GITHUB_STEP_SUMMARY"
+            python -m scripts.v2_realbench.run --render realbench-agent_v3.json | tee -a "$GITHUB_STEP_SUMMARY"
+            python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json
+          a, b = (json.load(open(f)) for f in ("realbench.json", "realbench-agent_v3.json"))
+          print("\n## agent_v3 against agent, doubly-robust profit per customer on the same TEST half\n")
+          print("| Dataset | agent | agent_v3 | v3 minus agent |")
+          print("|---|---:|---:|---:|")
+          for name, x in a["datasets"].items():
+              y = b["datasets"].get(name)
+              if y is None or "error" in x or "error" in y:
+                  print(f"| {name} | n/a | n/a | n/a |")
+                  continue
+              u, v = x["agent"]["value"]["dr"]["point"], y["agent"]["value"]["dr"]["point"]
+              print(f"| {name} | {u:.4f} | {v:.4f} | {v - u:+.4f} |")
+          PY
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: realbench-report
-          path: realbench.json
+          path: realbench*.json
