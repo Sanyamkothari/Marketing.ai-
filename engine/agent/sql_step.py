@@ -51,7 +51,9 @@ __all__ = [
     "SqlStepParams",
     "check_sql",
     "future_rows_moved",
+    "group_by_column",
     "resolve_as_of_rule",
+    "rows_aggregated",
     "run_sql",
     "sql_params",
     "table_alias",
@@ -351,6 +353,83 @@ def check_sql(sql: str, tables: Collection[str], *, as_of: date | None = None) -
         )
     for node in _walk(tree):
         _check_node(node, allowed | ctes, as_of)
+
+
+def group_by_column(sql: str) -> str | None:
+    """The one column a query groups by, as DuckDB's own parser reads it, or none (no GROUP BY, more than one
+    group, or a group that is not a plain column). Returned under the name it has in the result: a column
+    renamed in the SELECT is given by its new name only when it is kept under its own name."""
+    import duckdb
+
+    con = _connect()
+    try:
+        tree = json.loads(con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
+    except (duckdb.Error, ValueError):
+        return None
+    finally:
+        con.close()
+    if tree.get("error"):
+        return None
+    try:
+        node = tree["statements"][0]["node"]
+        groups = node.get("group_expressions") or []
+        if node.get("type") != "SELECT_NODE" or len(groups) != 1:
+            return None
+        group = groups[0]
+        selected = node.get("select_list") or []
+        if group.get("type") == "VALUE_CONSTANT":  # GROUP BY 1: the first column of the SELECT
+            position = int(group["value"]["value"])
+            group = selected[position - 1]
+        if group.get("type") != "COLUMN_REF":
+            return None
+        column = str(group["column_names"][-1])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+    for item in selected:
+        if (
+            item.get("type") == "COLUMN_REF"
+            and item["column_names"][-1] == column
+            and item.get("alias") not in ("", column)
+        ):
+            return None  # kept under another name: the input and the result do not share it
+    return column
+
+
+def rows_aggregated(sql: str, tables: Mapping[str, pd.DataFrame], *, as_of: date | None = None) -> int | None:
+    """How many rows a grouping query actually combines: the rows its FROM, JOIN and WHERE leave for the GROUP BY
+    to fold (rows a WHERE drops are not among them). None when the query does not group, or cannot be counted.
+    """
+    import duckdb
+
+    aliases = {name: table_alias(name) for name in tables}
+    con = _connect()
+    try:
+        tree = json.loads(con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
+        node = tree["statements"][0]["node"]
+        if tree.get("error") or node.get("type") != "SELECT_NODE" or not node.get("group_expressions"):
+            return None
+        star = json.loads(con.execute("SELECT json_serialize_sql('SELECT count(*) FROM x')").fetchone()[0])
+        node.update(
+            select_list=star["statements"][0]["node"]["select_list"],
+            group_expressions=[],
+            group_sets=[],
+            having=None,
+            qualify=None,
+            modifiers=[],
+            aggregate_handling="STANDARD_HANDLING",
+        )
+        counting = con.execute("SELECT json_deserialize_sql(?)", [json.dumps(tree)]).fetchone()[0]
+        for name, frame in tables.items():
+            con.register(aliases[name], frame)
+        _lock(con)
+        uses_as_of = "as_of" in set(_PARAMETER.findall(_blank(counting)))
+        if uses_as_of and as_of is None:
+            return None
+        return int(con.execute(counting, {"as_of": as_of} if uses_as_of else None).fetchone()[0])
+    except (duckdb.Error, ValueError, KeyError, IndexError, TypeError):
+        return None
+    finally:
+        con.close()
 
 
 def _fixed_date_refusal(shown: str) -> SqlStepError:

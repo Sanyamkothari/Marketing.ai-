@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -434,3 +435,122 @@ def test_a_prescription_learns_under_the_guards_and_hands_back_the_receipts() ->
     (run,) = sink
     assert run.receipts[0].keys_lost == 10 and run.ledger is not None and run.ledger.lost_pct == 10.0
     assert "PLAN_LOSES_TOO_MUCH" in codes(run, "stop")
+
+
+# ---------------------------------------------------------------------------
+# Combining rows into one per customer is not losing rows
+# ---------------------------------------------------------------------------
+def invoices(n: int = 1_000, customers_n: int = 100, blank: int = 270) -> pd.DataFrame:
+    ids = [float(i % customers_n) for i in range(n - blank)] + [float("nan")] * blank
+    return pd.DataFrame({"InvoiceNo": range(n), "CustomerID": ids, "Quantity": [2] * n})
+
+
+PER_CUSTOMER = (
+    "SELECT CustomerID, count(*) AS lines, sum(Quantity) AS units FROM t_this "
+    "WHERE CustomerID IS NOT NULL GROUP BY CustomerID"
+)
+
+
+def test_an_aggregation_with_blank_keys_combines_rows_and_loses_no_customers() -> None:
+    result = run_guarded(invoices(), [sql(PER_CUSTOMER)], primary_key=None, target=None, **RUN)
+    receipt = result.receipts[0]
+    assert (receipt.key, receipt.grouped_by) == ("CustomerID", "CustomerID")
+    assert (receipt.keys_in, receipt.keys_out, receipt.keys_lost) == (100, 100, 0)
+    assert "PLAN_LOSES_TOO_MUCH" not in codes(result) and codes(result, "stop") == []
+    (combined,) = [f for f in result.findings if f.code == "STEP_COMBINES_ROWS"]
+    assert combined.message == (
+        "Step 1 combined 730 rows into 100 customers (counted by CustomerID, the column it groups by); "
+        "0 customers lost; 270 rows left out (270 with no CustomerID)."
+    )
+    assert result.ledger is not None and (result.ledger.unit, result.ledger.lost_total) == ("customers", 0)
+
+
+def test_a_real_deletion_of_10_percent_of_customers_still_stops_when_the_query_groups() -> None:
+    query = PER_CUSTOMER.replace("IS NOT NULL", ">= 10")
+    result = run_guarded(invoices(), [sql(query)], primary_key=None, target=None, **RUN)
+    assert result.receipts[0].keys_lost == 10
+    assert "PLAN_LOSES_TOO_MUCH" in codes(result, "stop")
+
+
+def test_keys_unique_passes_for_a_group_by_step_with_no_confirmed_key() -> None:
+    result = run_guarded(
+        invoices(),
+        [sql(PER_CUSTOMER)],
+        primary_key=None,
+        target=None,
+        expectations={1: Expectations(keys_unique=True, max_keys_lost_pct=0.0)},
+        **RUN,
+    )
+    assert "EXPECTATION_FAILED" not in codes(result)
+
+
+def test_a_group_by_that_renames_the_column_is_not_guessed() -> None:
+    query = "SELECT CustomerID AS who, count(*) AS n FROM t_this GROUP BY CustomerID"
+    result = run_guarded(invoices(), [sql(query)], primary_key=None, target=None, **RUN)
+    assert result.receipts[0].grouped_by is None and result.receipts[0].keys_in is None
+
+
+def dated_lines() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "InvoiceNo": range(1_000),
+            "CustomerID": [float(i % 100) for i in range(1_000)],
+            "Quantity": [2] * 1_000,
+            "d": [i // 100 for i in range(1_000)],
+        }
+    )
+
+
+def test_rows_a_where_drops_are_counted_and_flagged_even_when_every_customer_stays() -> None:
+    query = "SELECT CustomerID, sum(Quantity) AS q FROM t_this WHERE d < 7 GROUP BY CustomerID"
+    result = run_guarded(dated_lines(), [sql(query)], primary_key=None, target=None, **RUN)
+    (combined,) = [f for f in result.findings if f.code == "STEP_COMBINES_ROWS"]
+    assert (combined.level, combined.count) == ("flag", 300)
+    assert combined.message.startswith("Step 1 combined 700 rows into 100 customers")
+    assert "300 rows left out" in combined.message and result.receipts[0].keys_lost == 0
+
+
+def test_a_where_on_as_of_is_counted_too() -> None:
+    frame = dated_lines().assign(
+        seen_on=lambda f: pd.Timestamp("2026-01-01") + pd.to_timedelta(f["d"], unit="D")
+    )
+    query = "SELECT CustomerID, sum(Quantity) AS q FROM t_this WHERE seen_on <= $as_of GROUP BY CustomerID"
+    result = run_guarded(frame, [sql(query)], primary_key=None, target=None, as_of=date(2026, 1, 4), **RUN)
+    assert result.receipts[0].rows_aggregated == 400
+    assert any(f.code == "STEP_COMBINES_ROWS" and f.level == "flag" for f in result.findings)
+
+
+def test_a_customer_deleted_after_an_uncounted_step_still_stops_the_plan() -> None:
+    first = sql("SELECT * FROM t_this WHERE Quantity > 0")
+    second = sql(
+        "SELECT CustomerID, sum(Quantity) AS q FROM t_this WHERE CustomerID >= 10 GROUP BY CustomerID",
+        order=2,
+    )
+    result = run_guarded(dated_lines(), [first, second], primary_key=None, target=None, **RUN)
+    assert result.ledger is not None and result.ledger.unit == "rows"
+    assert result.ledger.lost_total >= 100 and "PLAN_LOSES_TOO_MUCH" in codes(result, "stop")
+
+
+def test_grouping_by_a_category_is_not_counted_as_customers() -> None:
+    frame = dated_lines().assign(Country=["UK", "FR", "DE", "ES", "IT"] * 200)
+    query = "SELECT Country, sum(Quantity) AS q FROM t_this GROUP BY Country"
+    result = run_guarded(frame, [sql(query)], primary_key=None, target=None, **RUN)
+    assert result.receipts[0].grouped_by is None and "STEP_NOT_COUNTED" in codes(result, "flag")
+    assert "PLAN_LOSES_TOO_MUCH" in codes(result, "stop")
+
+
+def test_the_receipt_and_loss_message_name_the_group_by_column() -> None:
+    query = "SELECT CustomerID, sum(Quantity) AS q FROM t_this WHERE CustomerID >= 10 GROUP BY CustomerID"
+    result = run_guarded(dated_lines(), [sql(query)], primary_key=None, target=None, **RUN)
+    assert "(counted by CustomerID, the column it groups by)" in result.receipts[0].sentence
+    (lost,) = [f for f in result.findings if f.code == "STEP_LOSES_CUSTOMERS"]
+    assert "counted by CustomerID" in lost.message
+
+
+def test_a_group_by_on_an_already_unique_key_cannot_hide_a_rewrite_from_the_measure() -> None:
+    frame = pd.DataFrame({"CustomerID": range(100), "Age": range(100), "Spend": range(100)})
+    hide = sql(
+        "SELECT CustomerID, any_value(0) AS Age, any_value(Spend) AS Spend FROM t_this GROUP BY CustomerID"
+    )
+    changed, out_of = measure_step(frame, hide, primary_key="CustomerID", target=None)
+    assert changed > 0 and out_of > 0

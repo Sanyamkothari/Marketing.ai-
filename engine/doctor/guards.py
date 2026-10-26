@@ -30,6 +30,7 @@ import math
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Final, Literal
 
 import pandas as pd
@@ -38,7 +39,14 @@ from pydantic import Field
 
 from engine.agent.contracts import RecipeStep, RecipeStepKind
 from engine.agent.recipe import RecipeRun, run_recipe
-from engine.agent.sql_step import THIS_TABLE, SqlStepError, sql_params
+from engine.agent.sql_step import (
+    THIS_TABLE,
+    SqlStepError,
+    group_by_column,
+    resolve_as_of_rule,
+    rows_aggregated,
+    sql_params,
+)
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import StrictBase
 
@@ -59,6 +67,7 @@ __all__ = [
     "build_ledger",
     "cell_change",
     "frame_hash",
+    "grouping_key",
     "infer_key",
     "make_receipt",
     "names_a_log_row",
@@ -190,6 +199,42 @@ class Receipt(StrictBase):
     lost_by_outcome: dict[str, int] = Field(
         default_factory=dict, description="Lost customers by their outcome value."
     )
+    grouped_by: str | None = Field(
+        default=None,
+        description="The column a query groups by, used to count customers when no ID was confirmed.",
+    )
+    rows_no_key_in: int = Field(default=0, description="Rows of the first table with no ID.")
+    rows_no_key_out: int = Field(default=0, description="Rows of the result with no ID.")
+    rows_aggregated: int | None = Field(
+        default=None,
+        description="Rows a grouping query folded into groups (the rows its WHERE kept); none if not counted.",
+    )
+
+    @property
+    def counted_by(self) -> str:
+        """Which column the customers were counted by, said whenever it was the query's GROUP BY (never silent)."""
+        return f" (counted by {self.grouped_by}, the column it groups by)" if self.grouped_by else ""
+
+    @property
+    def rows_left_out(self) -> int:
+        """Rows a grouping query dropped before combining: with a WHERE, the rows it removed; else the rows
+        with no ID that did not come out."""
+        no_key = max(0, self.rows_no_key_in - self.rows_no_key_out)
+        first = next(iter(self.rows_in.values()), 0)
+        if self.rows_aggregated is None or len(self.rows_in) != 1:
+            return no_key
+        return max(no_key, first - self.rows_aggregated)
+
+    @property
+    def combines_rows(self) -> bool:
+        """Whether the step made one row per customer out of more rows: rows folded, not rows deleted."""
+        return (
+            self.keys_in is not None
+            and self.kind == RecipeStepKind.SQL_QUERY.value
+            and self.extra_rows_in > 0
+            and self.keys_repeated == 0
+            and self.rows_out < next(iter(self.rows_in.values()), 0)
+        )
 
     @property
     def lost(self) -> int:
@@ -209,7 +254,7 @@ class Receipt(StrictBase):
         if self.keys_in is None:
             return out + " (no ID column, so customers were not counted)"
         return (
-            f"{out}; customers {self.keys_in:,} before, {self.keys_out:,} after: "
+            f"{out}; customers{self.counted_by} {self.keys_in:,} before, {self.keys_out:,} after: "
             f"{self.keys_lost:,} lost, {self.keys_repeated:,} repeated"
         )
 
@@ -229,6 +274,8 @@ def _key_values(series: pd.Series[Any]) -> pd.Series[Any]:
     """The IDs as text, empty ones left out, index kept. A whole-number float ID reads as the integer (a join
     that turns 7 into 7.0 does not lose and re-add every customer)."""
     values = series.dropna()
+    if pdt.is_object_dtype(values) or pdt.is_string_dtype(values):
+        values = values[values.astype(str).str.strip() != ""]  # an empty ID is no customer
     if pdt.is_float_dtype(values) and bool(((values == values.round()) & (values.abs() < 2**53)).all()):
         values = values.astype("int64")
     return values.astype(str).str.strip()
@@ -236,6 +283,27 @@ def _key_values(series: pd.Series[Any]) -> pd.Series[Any]:
 
 def _key_text(frame: pd.DataFrame, key: str) -> pd.Series[Any]:
     return _key_values(frame[next(c for c in frame.columns if str(c) == key)])
+
+
+def grouping_key(sql: str | None, before: pd.DataFrame, after: pd.DataFrame) -> str | None:
+    """The column a query step groups by when both its input and its result have it: the customers of a step
+    that makes one row per group are the values of that column. None when it is not a plain one-column group,
+    or the column is not named like a customer ID (`Country` groups are categories, an `InvoiceNo` names a row).
+    """
+    column = group_by_column(sql) if sql else None
+    if (
+        column is not None
+        and _looks_like_customer_id(column)
+        and _has(before, column)
+        and _has(after, column)
+    ):
+        return column
+    return None
+
+
+def _looks_like_customer_id(column: str) -> bool:
+    low = column.lower()
+    return (low.endswith(("id", "key")) or "customer" in low) and not names_a_log_row(column)
 
 
 def infer_key(before: pd.DataFrame, after: pd.DataFrame) -> str | None:
@@ -334,17 +402,21 @@ def make_receipt(
     positive: object | None = None,
     stacking: bool = False,
     infer: bool = True,
+    sql: str | None = None,
+    as_of: date | None = None,
 ) -> Receipt:
     """The receipt for a step that read `inputs` (the first one is the base) and made `output`.
 
     When `stacking`, every input is part of the base (a stack puts the files under each other), and the totals
     are of all inputs together. With `infer` false and no `key`, customers are not counted at all (a log's own
-    row ID names a row of the log, not a customer).
+    row ID names a row of the log, not a customer). With no `key` but the `sql` of a query that groups by one
+    column both tables have, that column counts the customers and the receipt says so (`grouped_by`).
     """
     frames = list(inputs.values())
     rows_in = {name: len(frame) for name, frame in inputs.items()}
     first = frames[0]
-    key = key or (infer_key(first, output) if infer else None)
+    grouped = None if key or not infer else grouping_key(sql, first, output)
+    key = key or grouped or (infer_key(first, output) if infer else None)
     base_frames = frames if stacking else [next((f for f in frames if _has(f, key)), first)] if key else []
     receipt: dict[str, Any] = {
         "order": order,
@@ -380,8 +452,18 @@ def make_receipt(
         one_row_per_key=extra_in == 0,
         extra_rows_in=extra_in,
         lost_by_outcome=_lost_by_outcome(base_frames[0], key, lost, target),
+        grouped_by=grouped,
+        rows_no_key_in=_rows_without(base_frames[0], key),
+        rows_no_key_out=_rows_without(output, key),
+        rows_aggregated=rows_aggregated(sql, inputs, as_of=as_of) if sql else None,
     )
     return Receipt(**receipt)
+
+
+def _rows_without(frame: pd.DataFrame, key: str) -> int:
+    """Rows with no ID: empty, or only spaces."""
+    column = frame[next(c for c in frame.columns if str(c) == key)]
+    return int((column.isna() | (column.astype(str).str.strip() == "")).sum())
 
 
 def _has(frame: pd.DataFrame, key: str | None) -> bool:
@@ -467,6 +549,8 @@ def receipt_findings(
         )
     if receipt.keys_in is not None:
         found.extend(_key_findings(receipt, one_row_per_key=one_row_per_key))
+    if receipt.combines_rows:
+        found.append(_combined_finding(receipt))
     moved = [t for t in receipt.totals if not t.kept]
     if moved:
         shown = "; ".join(f"{t.column} {t.before:,.2f} to {t.after:,.2f}" for t in moved[:5])
@@ -480,6 +564,32 @@ def receipt_findings(
             )
         )
     return found
+
+
+def _combined_finding(receipt: Receipt) -> Finding:
+    """Rows folded into one per customer are said apart from customers lost and from rows left out."""
+    n = receipt.order
+    first = next(iter(receipt.rows_in.values()), 0)
+    left_out = receipt.rows_left_out
+    rows = first - left_out if receipt.rows_aggregated is not None else first
+    no_key = max(0, receipt.rows_no_key_in - receipt.rows_no_key_out)
+    text = (
+        f"Step {n} combined {rows:,} rows into {receipt.keys_out:,} customers "
+        f"(counted by {receipt.key}"
+        + (", the column it groups by" if receipt.grouped_by else "")
+        + f"); {receipt.keys_lost:,} customers lost"
+    )
+    if left_out:
+        text += f"; {left_out:,} rows left out"
+        if no_key:
+            text += f" ({min(no_key, left_out):,} with no {receipt.key})"
+    return Finding(
+        level="flag" if left_out else "note",
+        code="STEP_COMBINES_ROWS",
+        order=n,
+        count=left_out or None,
+        message=text + ".",
+    )
 
 
 def _key_findings(receipt: Receipt, *, one_row_per_key: bool) -> list[Finding]:
@@ -518,6 +628,7 @@ def _key_findings(receipt: Receipt, *, one_row_per_key: bool) -> list[Finding]:
                 count=receipt.keys_lost,
                 message=f"Step {n} loses {receipt.keys_lost:,} of {receipt.keys_in:,} customers "
                 f"({_pct(receipt.keys_lost, receipt.keys_in or 0)})"
+                + receipt.counted_by
                 + (f"; by outcome, {by}." if by else "."),
             )
         )
@@ -605,17 +716,29 @@ def build_ledger(receipts: Sequence[Receipt]) -> Ledger | None:
     counted = receipts[0].keys_in is not None
     unit: Literal["customers", "rows"] = "customers" if counted else "rows"
     start = receipts[0].units_in
-    steps = tuple(
-        LedgerStep(
-            order=r.order,
-            kind=r.kind,
-            units_after=(r.keys_out if counted and r.keys_out is not None else r.rows_out),
-            rows_after=r.rows_out,
-            lost=r.lost,
-            rate_after=r.rate_out,
+    steps_list: list[LedgerStep] = []
+    before = start
+    for r in receipts:
+        # One unit all through: a step counted in the other unit is scaled to this one by its share.
+        if (r.keys_in is not None) == counted:
+            lost = r.lost
+            after = r.keys_out if counted and r.keys_out is not None else r.rows_out
+        else:
+            share = r.lost / r.units_in if r.units_in else 0.0
+            lost = min(before, round(share * before))
+            after = r.rows_out if not counted else max(0, before - lost)
+        steps_list.append(
+            LedgerStep(
+                order=r.order,
+                kind=r.kind,
+                units_after=after,
+                rows_after=r.rows_out,
+                lost=lost,
+                rate_after=r.rate_out,
+            )
         )
-        for r in receipts
-    )
+        before = after
+    steps = tuple(steps_list)
     by_outcome: dict[str, int] = {}
     for r in receipts:
         for name, count in r.lost_by_outcome.items():
@@ -737,20 +860,21 @@ def _expectation_failures(receipt: Receipt, exp: Expectations) -> list[str]:
     counted = receipt.keys_in is not None
     if exp.keys_unique and (not counted or receipt.keys_repeated):
         out.append(
-            f"expected every customer once, {receipt.keys_repeated:,} are repeated"
+            f"expected every customer once, {receipt.keys_repeated:,} are repeated{receipt.counted_by}"
             if counted
             else "expected every customer once, but customers could not be counted"
         )
     if exp.max_keys_repeated is not None and counted and receipt.keys_repeated > exp.max_keys_repeated:
         out.append(
             f"expected at most {exp.max_keys_repeated:,} repeated customers, got {receipt.keys_repeated:,}"
+            + receipt.counted_by
         )
     if exp.max_keys_lost_pct is not None:
         share = receipt.keys_lost / receipt.keys_in * 100.0 if receipt.keys_in else 0.0
         if not counted or share > exp.max_keys_lost_pct:
             out.append(
                 f"expected at most {exp.max_keys_lost_pct:g}% of customers lost, got "
-                + (f"{share:.1f}%" if counted else "an unknown share")
+                + (f"{share:.1f}%{receipt.counted_by}" if counted else "an unknown share")
             )
     totals = {t.column: t for t in receipt.totals}
     for column in exp.totals_kept:
@@ -865,6 +989,29 @@ def _inputs_of(
     return {n: f for n, f in found.items() if f is not None} or {THIS_TABLE: before}
 
 
+def _as_of_of(
+    step: RecipeStep, before: pd.DataFrame, tables: Mapping[str, pd.DataFrame] | None, given: date | None
+) -> date | None:
+    """The date `$as_of` had in a query step: the run's own, else its rule worked out on the files, else the step's."""
+    if step.kind is not RecipeStepKind.SQL_QUERY:
+        return None
+    try:
+        params = sql_params(step.params)
+        rule = params.as_of_rule
+        if given is None and rule is not None:
+            source = before if rule.table == THIS_TABLE else (tables or {}).get(rule.table)
+            if source is not None and rule.column in source.columns:
+                return resolve_as_of_rule(rule, source[rule.column])
+        return given or params.as_of
+    except SqlStepError:
+        return given
+
+
+def _sql_of(step: RecipeStep) -> str | None:
+    text = step.params.get("sql") if step.kind is RecipeStepKind.SQL_QUERY else None
+    return text if isinstance(text, str) else None
+
+
 def run_guarded(
     frame: pd.DataFrame,
     steps: Sequence[RecipeStep],
@@ -910,6 +1057,8 @@ def run_guarded(
                     target=target,
                     positive=positive,
                     infer=side_table is None,
+                    sql=_sql_of(step),
+                    as_of=_as_of_of(step, before, tables, recipe_args.get("as_of")),
                 )
             )
             hashes.append(frame_hash(after))
