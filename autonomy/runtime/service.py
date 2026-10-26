@@ -981,6 +981,8 @@ class _GoalPass:
     failures: int = 0
     stray: int = 0
     enrich_alerted: bool = False
+    enriched: bool = False
+    """A batch of this pass has been enriched (later batches read events per customer)."""
     held: _BatchTally | None = None
     """APPROVE: the tally of the batch a person will be asked to approve."""
     no_dispatcher: bool = False
@@ -1000,25 +1002,57 @@ class _GoalPass:
     """Where the current batch's decisions begin in `TickReport.decisions`."""
 
 
+class _Snapshot:
+    """The population as the tick's sweep reads it, without holding it.
+
+    The old sweep read every state once, the first time a goal needed the population this tick
+    (its `prepare_day`, sweep or lapse check), and handed that one list to every later goal. A
+    later goal therefore saw a customer an earlier goal had just sent to as they were before the
+    send. This keeps that: from that point on, the state of each customer this tick sends to is
+    kept from just before the send (the first send, if there are several), and `states()` reads
+    the store with those in place of the live ones. The memory follows this tick's sends, not the
+    population, and is only spent while a later goal will still read the population
+    (`recording`)."""
+
+    def __init__(self) -> None:
+        self.before_send: dict[str, CustomerState] = {}
+        self.recording = False
+
+    def keep(self, states: Iterable[CustomerState]) -> None:
+        """Called with the states of the customers about to be sent to."""
+        if not self.recording:
+            return
+        for state in states:
+            self.before_send.setdefault(state.customer_id, state)
+
+    def states(self, store: StateStore, folder: StateFolder, now: datetime) -> Iterator[CustomerState]:
+        """Every customer's state at `now`, in the store's order, as the snapshot had it."""
+        kept = self.before_send
+        for stored in store.scan():
+            state = kept.get(stored.customer_id)
+            yield folder.refresh(stored, now) if state is None else state
+
+
 class _StateView(Sequence[CustomerState]):
     """Every customer's state at `now`, read from the store each time it is iterated.
 
     `prepare_day` takes the whole population. This hands it the same states, in the same order, as
-    a list would, but a loop over it holds one state at a time. `len` is the store's count; indexing
-    (a policy that wants random access) reads the population into a list once, the old cost."""
+    the old snapshot list would (`_Snapshot`), but a loop over it holds one state at a time. `len`
+    is the store's count; indexing (a policy that wants random access) reads the population into a
+    list once, the old cost."""
 
-    def __init__(self, store: StateStore, folder: StateFolder, now: datetime) -> None:
+    def __init__(self, store: StateStore, folder: StateFolder, now: datetime, snapshot: _Snapshot) -> None:
         self._store = store
         self._folder = folder
         self._now = now
+        self._snapshot = snapshot
         self._all: list[CustomerState] | None = None
 
     def __iter__(self) -> Iterator[CustomerState]:
         if self._all is not None:
             yield from self._all
             return
-        for state in self._store.scan():
-            yield self._folder.refresh(state, self._now)
+        yield from self._snapshot.states(self._store, self._folder, self._now)
 
     def __len__(self) -> int:
         return self._store.count() if self._all is None else len(self._all)
@@ -1730,45 +1764,48 @@ class AutonomyRuntime:
         )
         lapse_due = self._lapse_due(now)
         contacted_this_tick: set[str] = set()
-        before_sends: dict[str, CustomerState] = {}
-        """Only with `one_contact_per_tick` off: a contacted customer's state as it was before the send."""
+        # Which goals read the whole population this tick (prepare_day, a sweep, a lapse check).
+        # The first of them is where the old sweep took its one snapshot of every state, shared by
+        # all later goals (`_Snapshot`).
+        reads = [self._population_reads(run, day.day, local, lapse_due) for run in running]
+        snapshot: _Snapshot | None = None
 
-        for run in running:
+        for i, run in enumerate(running):
             gid = run.goal.goal_id
             may_act, mandate = self._mandate_for(run.goal, now, report)
             if not may_act:
                 report.halted_goals.append(gid)
                 continue  # not even decided: a decision today would block deciding again once it stands
-            if self._prepare_due(run, day.day):
-                self._prepare(run, _StateView(self.states, self.folder, now), now, day.day, report)
+            prepare_due, sweep_due, lapse = reads[i]
+            if snapshot is None and (prepare_due or sweep_due or lapse):
+                snapshot = _Snapshot()
+            if snapshot is not None:
+                # Keep pre-send states only while a later goal will still read the population.
+                snapshot.recording = any(any(r) for r in reads[i + 1 :])
+            if prepare_due:
+                assert snapshot is not None
+                self._prepare(run, _StateView(self.states, self.folder, now, snapshot), now, day.day, report)
             candidates: list[_Candidate] = []
             for e in triggers:
                 did = _decision_id(gid, e.customer_id, Trigger.EVENT, e.event_id)
                 candidates.append(_Candidate(e.customer_id, Trigger.EVENT, did))
-            sweep_due = local.hour >= self.config.sweep_hour and self.cursor.swept.get(gid) != day.day
-            lapse = (
-                lapse_due
-                and not sweep_due
-                and self.cursor.swept.get(gid) == day.day
-                and any(f.op in TIME_OPS for f in run.brief.audience.filters)
-            )
             members: Iterator[_Candidate] = iter(())
             if sweep_due or lapse:
+                assert snapshot is not None
                 members = self._members(
                     run,
                     Trigger.SWEEP if sweep_due else Trigger.LAPSE,
                     now,
                     day.day,
                     None if sweep_due else (self.cursor.lapse_checked_at or self.cursor.last_tick or now),
-                    contacted_this_tick,
-                    before_sends,
+                    snapshot,
                 )
 
             self._decide_goal(
                 run,
                 itertools.chain(candidates, members),
                 contacted_this_tick,
-                before_sends,
+                snapshot,
                 now,
                 report,
                 mandate=mandate,
@@ -1779,6 +1816,20 @@ class AutonomyRuntime:
         if lapse_due:
             self.cursor.lapse_checked_at = now
 
+    def _population_reads(
+        self, run: _Running, day: date, local: datetime, lapse_due: bool
+    ) -> tuple[bool, bool, bool]:
+        """(prepare_day is due, the sweep is due, a lapse check is due) for the goal this tick."""
+        gid = run.goal.goal_id
+        sweep_due = local.hour >= self.config.sweep_hour and self.cursor.swept.get(gid) != day
+        lapse = (
+            lapse_due
+            and not sweep_due
+            and self.cursor.swept.get(gid) == day
+            and any(f.op in TIME_OPS for f in run.brief.audience.filters)
+        )
+        return self._prepare_due(run, day), sweep_due, lapse
+
     def _members(
         self,
         run: _Running,
@@ -1786,23 +1837,18 @@ class AutonomyRuntime:
         now: datetime,
         day: date,
         before: datetime | None,
-        contacted_this_tick: set[str],
-        before_sends: Mapping[str, CustomerState],
+        snapshot: _Snapshot,
     ) -> Iterator[_Candidate]:
         """The goal's audience, read from the state store a page at a time, in customer order.
 
         A sweep is everyone who matches the audience now. A lapse (`before` is the last check) is
-        those who match now and did not at `before`. Each comes with its state refreshed to `now`.
-        Nothing is kept: the caller takes the candidates a batch at a time."""
+        those who match now and did not at `before`. Each comes with its state refreshed to `now`,
+        or, for a customer sent to since the tick's snapshot point, the state they had before that
+        send (`_Snapshot`). Nothing is kept: the caller takes the candidates a batch at a time."""
         gid = run.goal.goal_id
         audience = run.brief.audience
         key = day.isoformat()
-        for stored in self.states.scan():
-            state = self.folder.refresh(stored, now)
-            if state.customer_id in contacted_this_tick:
-                # The sweep reads the population as the tick found it: a customer an earlier goal
-                # contacted since is judged on the state they had before that send.
-                state = before_sends.get(state.customer_id, state)
+        for state in snapshot.states(self.states, self.folder, now):
             if not matches(state, audience, now):
                 continue
             if before is not None and matches(state, audience, before):
@@ -1858,7 +1904,7 @@ class AutonomyRuntime:
         run: _Running,
         candidates: Iterable[_Candidate],
         contacted_this_tick: set[str],
-        before_sends: dict[str, CustomerState],
+        snapshot: _Snapshot | None,
         now: datetime,
         report: TickReport,
         *,
@@ -1885,7 +1931,7 @@ class AutonomyRuntime:
         """Customers an EVENT candidate was decided for in this pass (a sweep's are all distinct)."""
         for chunk in _chunks(candidates, self.config.sweep_batch):
             made = self._decide_chunk(run, ctx, chunk, contacted_this_tick, events_decided, goal, now, report)
-            self._act(run, made, goal, before_sends, now, report, mandate=mandate)
+            self._act(run, made, goal, snapshot, now, report, mandate=mandate)
         contacted_this_tick |= goal.contacted
         self._finish_goal(run, goal, mandate, now, report)
 
@@ -2019,13 +2065,19 @@ class AutonomyRuntime:
         report: TickReport,
     ) -> list[tuple[_Candidate, CustomerState]]:
         """Hand a batch's states to the `state_enricher`, if any; plain states if it fails (one alert
-        for the goal's pass, however many batches fail)."""
+        for the goal's pass, however many batches fail).
+
+        The first batch of the pass reads the recent events as a single batch did (one scan of the
+        lookback window for a large batch); later batches read them per customer through the
+        indexed `for_customer`, so a pass of many batches costs one window scan, not one per batch."""
         enricher = self.state_enricher
         if enricher is None or not picked:
             return picked
         states = [state for _, state in picked]
+        may_scan, goal.enriched = not goal.enriched, True
         try:
-            enriched = enricher(states, self._recent_events([s.customer_id for s in states], now), now)
+            recent = self._recent_events([s.customer_id for s in states], now, may_scan=may_scan)
+            enriched = enricher(states, recent, now)
             by_id = {s.customer_id: s for s in enriched}
         except Exception as err:  # an enricher bug must not stop deciding; the plain states still work
             if goal.enrich_alerted:
@@ -2045,11 +2097,16 @@ class AutonomyRuntime:
             return picked
         return [(cand, by_id.get(cand.customer_id, state)) for cand, state in picked]
 
-    def _recent_events(self, customer_ids: Sequence[str], now: datetime) -> dict[str, list[Event]]:
-        """Each customer's events in the enricher's lookback, oldest first (every id has a list)."""
+    def _recent_events(
+        self, customer_ids: Sequence[str], now: datetime, *, may_scan: bool = True
+    ) -> dict[str, list[Event]]:
+        """Each customer's events in the enricher's lookback, oldest first (every id has a list).
+
+        More than `ENRICH_PER_CUSTOMER_MAX` customers are read with one scan of the window, unless
+        `may_scan` is off; both ways give the same lists."""
         since = now - self.config.enrich_lookback
         wanted = sorted(set(customer_ids))
-        if len(wanted) <= ENRICH_PER_CUSTOMER_MAX:
+        if len(wanted) <= ENRICH_PER_CUSTOMER_MAX or not may_scan:
             return {
                 cid: sorted(self.events.for_customer(cid, since=since, until=now), key=lambda e: e.ts)
                 for cid in wanted
@@ -2068,7 +2125,7 @@ class AutonomyRuntime:
         run: _Running,
         made: Sequence[Decision],
         goal: _GoalPass,
-        before_sends: dict[str, CustomerState],
+        snapshot: _Snapshot | None,
         now: datetime,
         report: TickReport,
         *,
@@ -2079,7 +2136,8 @@ class AutonomyRuntime:
         Under a mandate, every ACT decision is checked again first; what it blocks is neither
         batched nor sent (`_mandate_filter`), and the pacer draws spend only for what is sent.
         What is about the goal's whole pass (the held batch, the alerts) is added to `goal` and
-        settled by `_finish_goal`."""
+        settled by `_finish_goal`. Once the tick's snapshot point is passed, the states of the
+        customers about to be sent to are kept in `snapshot` first."""
         gid = run.goal.goal_id
         acts = [
             d
@@ -2115,8 +2173,8 @@ class AutonomyRuntime:
             return
         if states is None:
             states = self._fresh_states({d.customer_id for d in acts}, now)
-        if not self.config.one_contact_per_tick:
-            before_sends.update(states)
+        if snapshot is not None:
+            snapshot.keep(s for d in acts if (s := states.get(d.customer_id)) is not None)
         self._send_now(gid, acts, states, now, report, goal=goal)
 
     def _send_now(
