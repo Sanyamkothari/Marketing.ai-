@@ -66,6 +66,13 @@ class CustomerState(Contract):
         default_factory=dict, description="Model outputs, e.g. churn_risk, clv_90d"
     )
     segment: str | None = None
+    features: dict[str, float] = Field(
+        default_factory=dict,
+        description="The nightly profile (plan-v3 foundation A): feature name -> value, as of features_as_of",
+    )
+    features_as_of: AwareDatetime | None = Field(
+        default=None, description="The instant the profile was built for; no event after it was read"
+    )
 
     @field_validator("active_hours")
     @classmethod

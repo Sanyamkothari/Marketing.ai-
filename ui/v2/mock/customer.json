@@ -116,7 +116,9 @@
       "clv_90d": 96.0,
       "p_buy_14d": 0.11
     },
-    "segment": "lapsed_loyal"
+    "segment": "lapsed_loyal",
+    "features": {},
+    "features_as_of": null
   },
   "decisions": [
     {
