@@ -1524,13 +1524,14 @@ class GoalBidder:
         harm: ContactHarm | None = None,
         purchase_weighted: bool | None = None,
         uplift: UpliftScorer | None = None,
-        offer_cost_fn: Callable[[OfferOption, CustomerState], float] | None = None,
+        offer_cost_fn: Callable[[OfferOption, CustomerState], float | None] | None = None,
         budget_price: Callable[[], float] | None = None,
     ) -> None:
         if prune_z is not None and prune_z < 0:
             raise ValueError("prune_z must be >= 0")
         # v3 offers (docs/v3/OFFERS.md), both off by default: `offer_cost_fn(offer, state)` is the
-        # cost of one redemption (None: the offer's `cost_per_redemption`, as in v2), and
+        # cost of one redemption (None: the offer's `cost_per_redemption`, as in v2; a function that
+        # returns None says the offer cannot be priced for this customer, and it is not bid), and
         # `budget_price()` the price of one unit of offer cost (None or 0: offers cost what they cost).
         self.offer_cost_fn = offer_cost_fn
         self.budget_price = budget_price
@@ -1653,6 +1654,14 @@ class GoalBidder:
         for channel in channels:
             channel_cost = self.costs.get(channel, 0.0)
             for offer in envelope.offers:
+                priced = (
+                    offer.cost_per_redemption
+                    if self.offer_cost_fn is None
+                    else self.offer_cost_fn(offer, state)
+                )
+                if priced is None:
+                    continue  # an offer whose cost is unknown is never treated as free
+                unit_cost = priced
                 group: list[Bid] = []
                 for opt in (o for o in raw if o.channel is channel and o.offer_id == offer.offer_id):
                     item = opt.item
@@ -1676,11 +1685,6 @@ class GoalBidder:
                     uplift = min(plain * boost, 1.0) if plain > 0 else plain
                     std *= boost
                     p_redeem = 0.0
-                    unit_cost = (
-                        offer.cost_per_redemption
-                        if self.offer_cost_fn is None
-                        else self.offer_cost_fn(offer, state)
-                    )
                     if unit_cost:
                         # Everyone who buys while the offer is open redeems it, including those who
                         # would have bought anyway: organic chance plus what the message adds.

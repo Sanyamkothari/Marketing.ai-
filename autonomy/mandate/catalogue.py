@@ -417,9 +417,12 @@ def offer_cost(offer: OfferOption, basket_value: float | None = None) -> float:
     """What one redemption of this offer costs the business, in the offer's own currency.
 
     An explicit `cost_per_redemption` always wins: it is what the marketer configured, and every v2
-    envelope carries one. Without it the cost comes from the kind:
+    envelope carries one. An offer priced through the v3 fields (free shipping, bundle, loyalty) has
+    it filled in when it is built (`OfferOption.model_cost`), so the v2 readers of that field see the
+    same cost. Without it the cost comes from the kind:
 
-    * percent off: `amount` percent of `basket_value` (0 when the basket is unknown);
+    * percent off: `amount` percent of `basket_value` (0 when the basket is unknown: callers that
+      charge a budget must not treat that as free, see `planner.basket_offer_cost`);
     * amount off: `amount`;
     * free shipping: `shipping_cost`, what shipping one order costs us;
     * bundle: `bundle_discount`, the money taken off the bundle;
@@ -434,13 +437,7 @@ def offer_cost(offer: OfferOption, basket_value: float | None = None) -> float:
         return offer.amount / 100.0 * basket_value if basket_value is not None and basket_value > 0 else 0.0
     if offer.kind is OfferKind.AMOUNT_OFF:
         return offer.amount
-    if offer.kind is OfferKind.FREE_SHIPPING:
-        return offer.shipping_cost
-    if offer.kind is OfferKind.BUNDLE:
-        return offer.bundle_discount
-    if offer.kind is OfferKind.LOYALTY:
-        return offer.points * offer.point_value * offer.redemption_rate
-    return 0.0
+    return offer.model_cost()
 
 
 def priced_offer(offer: OfferOption, basket_value: float | None = None) -> OfferOption:
@@ -479,8 +476,9 @@ def bundle_offer(
 
     `related` is the co-purchase recommender's `related`; `prices` maps item id to list price. Items
     without a price are skipped (a discount on an unpriced item cannot be costed). The bundle's cost
-    is `percent_off` of the listed prices of the items it holds. None when the anchor has no price or
-    fewer than two priced items are found: one item is not a bundle.
+    is `percent_off` of the listed prices of the items it holds, stated as its `cost_per_redemption`
+    too. None when the anchor has no price or fewer than two priced items are found: one item is not
+    a bundle.
     """
     if not 0 < percent_off <= 100 or size < 2:
         raise ValueError("a bundle needs 0 < percent_off <= 100 and a size of at least 2")
@@ -497,12 +495,14 @@ def bundle_offer(
     if len(items) < 2:
         return None
     list_price = sum(prices[i] for i in items)
+    discount = round(list_price * percent_off / 100.0, 2)
     return OfferOption(
         offer_id=offer_id,
         label=label,
         kind=OfferKind.BUNDLE,
         amount=percent_off,
+        cost_per_redemption=discount,
         bundle_item_ids=tuple(items),
-        bundle_discount=round(list_price * percent_off / 100.0, 2),
+        bundle_discount=discount,
         needs_approval=needs_approval,
     )

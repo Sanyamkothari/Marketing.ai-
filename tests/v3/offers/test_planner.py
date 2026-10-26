@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import itertools
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -11,12 +12,16 @@ from autonomy.contracts import (
     NO_OFFER,
     Bid,
     Channel,
+    ChannelStats,
+    CustomerState,
     Envelope,
     OfferKind,
     OfferOption,
 )
 from autonomy.contracts.decisions import Action
 from autonomy.decide.planner import (
+    BELOW_MIN_RATIO,
+    NO_CANDIDATE,
     OVER_BUDGET,
     SURE_THING,
     OfferCandidate,
@@ -146,13 +151,50 @@ def test_min_ratio_keeps_out_pairs_that_barely_pay():
     pairs = [cand("a", "o", 10.0, 100.0), cand("b", "o", 50.0, 10.0)]
     plan = plan_offers(pairs, budget=1e6, min_ratio=0.5)
     assert [a.customer_id for a in plan.assignments] == ["b"]
-    assert plan.left_out == {"a": SURE_THING}
+    assert plan.left_out == {"a": BELOW_MIN_RATIO}  # it pays, just not enough: not a sure thing
 
 
 def test_zero_budget_gives_only_free_offers():
-    plan = plan_offers([cand("a", "o", 10.0, 5.0)], budget=0.0)
-    assert plan.assignments == ()
+    plan = plan_offers([cand("a", "o", 10.0, 5.0), cand("b", "gift", 3.0, 0.0)], budget=0.0)
+    assert [(a.customer_id, a.offer_id) for a in plan.assignments] == [("b", "gift")]
+    assert plan.spent == 0.0
     assert plan.left_out == {"a": OVER_BUDGET}
+
+
+def test_customers_with_no_candidate_are_reported():
+    plan = plan_offers([cand("a", "o", 10.0, 5.0)], budget=10.0, audience=["a", "z"])
+    assert plan.left_out == {"z": NO_CANDIDATE}
+    assert plan.offer_for("z") == "none" and plan.offer_for("a") == "o"
+
+
+def _best_by_brute_force(menus: list[list[OfferCandidate]], budget: float) -> float:
+    best = 0.0
+    for pick in itertools.product(*[[None, *m] for m in menus]):
+        chosen = [c for c in pick if c is not None]
+        if sum(c.cost for c in chosen) <= budget + 1e-9:
+            best = max(best, sum(c.extra_profit for c in chosen))
+    return best
+
+
+def test_the_greedy_plan_is_within_one_pair_of_the_best_plan_on_small_cases():
+    # The greedy fill is the LP optimum up to the one step that did not fit, so it can miss the best
+    # integer plan by at most one pair's extra profit, and it can never beat it.
+    rng = random.Random(5)
+    for _ in range(40):
+        menus = [
+            [
+                cand(f"c{i}", f"o{k}", rng.uniform(-5.0, 40.0), rng.uniform(0.0, 20.0))
+                for k in range(rng.randint(1, 3))
+            ]
+            for i in range(5)
+        ]
+        budget = rng.uniform(0.0, 40.0)
+        plan = plan_offers([c for m in menus for c in m], budget)
+        best = _best_by_brute_force(menus, budget)
+        biggest = max((c.extra_profit for m in menus for c in m), default=0.0)
+        assert plan.spent <= budget + 1e-9
+        assert plan.extra_profit <= best + 1e-9
+        assert plan.extra_profit + max(biggest, 0.0) >= best - 1e-9
 
 
 def test_the_plan_is_deterministic_and_independent_of_input_order():
@@ -236,13 +278,14 @@ def test_choose_at_price_trades_profit_for_cost():
 # --- from bids ------------------------------------------------------------------------------------
 
 
-def bid(offer_id: str, net: float, offer_cost: float = 0.0) -> Bid:
+def bid(offer_id: str, net: float, offer_cost: float = 0.0, urgency: float = 1.0) -> Bid:
     return Bid(
         goal_id="g",
         action=Action(goal_id="g", channel=Channel.EMAIL, offer_id=offer_id, send_at=NOW),
         uplift=0.1,
         value_if_converted=100.0,
         offer_cost=offer_cost,
+        urgency=urgency,
         expected_net=net,
     )
 
@@ -264,3 +307,27 @@ def test_candidates_from_bids_measure_each_offer_against_the_best_plain_bid():
 def test_a_plain_message_not_worth_sending_is_measured_against_doing_nothing():
     out = candidates_from_bids("c1", [bid("none", -4.0), bid("pct10", 1.0, 1.0)])
     assert out[0].extra_profit == pytest.approx(1.0)
+
+
+def test_candidates_read_the_net_without_urgency_so_profit_and_cost_share_units():
+    # The bidder scales expected_net by urgency but not offer_cost: an urgency of 2 doubles the nets.
+    out = candidates_from_bids("c1", [bid("none", 6.0, urgency=2.0), bid("pct10", 16.0, 2.0, urgency=2.0)])
+    assert out[0].extra_profit == pytest.approx(5.0) and out[0].cost == pytest.approx(2.0)
+
+
+def test_candidates_drop_offers_the_customer_cannot_be_sent():
+    env = Envelope(channels=(Channel.EMAIL,), offers=(NO_OFFER, PCT10, VIP), budget=100.0)
+    state = CustomerState.model_validate(
+        {
+            "customer_id": "c1",
+            "as_of": NOW,
+            "purchases": 1,
+            "last_purchase_at": NOW - timedelta(days=90),
+            "preferences": {"no_discounts": "yes"},
+            "channels": {Channel.EMAIL: ChannelStats(address_known=True, consent=True)},
+        }
+    )
+    bids = [bid("none", 1.0), bid("pct10", 9.0, 1.0), bid("vip", 9.0, 1.0)]
+    assert {c.offer_id for c in candidates_from_bids("c1", bids)} == {"pct10", "vip"}
+    # A discount to someone who asked for none, and an offer waiting for approval, are not planned.
+    assert candidates_from_bids("c1", bids, state=state, envelope=env) == []

@@ -30,16 +30,22 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import cached_property
 
-from autonomy.contracts import NO_OFFER, Bid, CustomerState, Envelope, OfferOption
+from autonomy.contracts import NO_OFFER, Bid, CustomerState, Envelope, OfferKind, OfferOption
+from autonomy.decide import rules
 from autonomy.mandate.catalogue import offer_cost
 
 SURE_THING = "sure_thing"
 """Every offer of this customer has negative (or no) extra profit: they would buy anyway."""
 OVER_BUDGET = "over_budget"
 """This customer had an offer that pays, but the budget was spent on pairs with a better ratio."""
+BELOW_MIN_RATIO = "below_min_ratio"
+"""This customer had an offer that pays, but none earned `min_ratio` per unit of cost."""
+NO_CANDIDATE = "no_candidate"
+"""A customer of the `audience` with no candidate at all (no offer bid, or every offer was ruled out)."""
 
 _EPS = 1e-12
 
@@ -85,7 +91,8 @@ class OfferPlan:
     """The result of `plan_offers`.
 
     `price` is the budget price (see the module docstring); `left_out` maps each customer who had an
-    offer that pays but did not get one to `OVER_BUDGET`, and each with none that pays to `SURE_THING`.
+    offer that pays but did not get one to `OVER_BUDGET` (or `BELOW_MIN_RATIO`), each with none that
+    pays to `SURE_THING`, and each of the `audience` with no candidate to `NO_CANDIDATE`.
     """
 
     assignments: tuple[Assignment, ...]
@@ -98,12 +105,13 @@ class OfferPlan:
     def extra_profit(self) -> float:
         return sum(a.extra_profit for a in self.assignments)
 
+    @cached_property
+    def _by_customer(self) -> dict[str, str]:
+        return {a.customer_id: a.offer_id for a in self.assignments}
+
     def offer_for(self, customer_id: str) -> str:
         """The planned offer id for a customer; "none" when they get none."""
-        for a in self.assignments:
-            if a.customer_id == customer_id:
-                return a.offer_id
-        return NO_OFFER.offer_id
+        return self._by_customer.get(customer_id, NO_OFFER.offer_id)
 
 
 @dataclass(frozen=True)
@@ -136,23 +144,61 @@ def offer_economics(
     return uplift_extra * value - spend, spend
 
 
-def candidates_from_bids(customer_id: str, bids: Iterable[Bid]) -> list[OfferCandidate]:
+def _bid_reaches(bid: Bid, state: CustomerState, envelope: Envelope) -> bool:
+    """Whether the hard rules that depend on the offer and the channel let this bid through: the
+    envelope lists the offer and it needs no approval, the customer takes discounts if it is one, and
+    the channel can reach them. (Rules about the hour or the week are the daily loop's.)"""
+    channel = bid.action.channel
+    return all(
+        r.allowed
+        for r in (
+            rules.channel_in_envelope(bid, envelope),
+            rules.offer_in_envelope(bid, envelope),
+            rules.offer_approved(bid, envelope),
+            rules.no_discounts(bid, state, envelope),
+            rules.unsubscribed(state, channel),
+            rules.consent(state, channel),
+            rules.contactable(state, channel),
+        )
+    )
+
+
+def _plain_net(bid: Bid) -> float:
+    """The bid's expected net without its urgency, in the same money as `Bid.offer_cost`."""
+    return bid.expected_net / bid.urgency if bid.urgency > 0 else bid.expected_net
+
+
+def candidates_from_bids(
+    customer_id: str,
+    bids: Iterable[Bid],
+    *,
+    state: CustomerState | None = None,
+    envelope: Envelope | None = None,
+) -> list[OfferCandidate]:
     """Candidates for one customer from the bids `GoalBidder.quote` returned, quoted with no budget price.
 
     The reference is the best plain bid (no offer), or doing nothing (0) when no plain bid is worth
-    sending. Each offer is that offer's best bid, so the planner sees one candidate per offer.
+    sending. Each offer is that offer's best bid, so the planner sees one candidate per offer. The
+    bidder scales `expected_net` by the goal's urgency but not `offer_cost`, so the net is read
+    without it: extra profit and cost are then in the same money, and the plan's price is a price per
+    unit of offer cost. With the customer's `state` and the `envelope`, bids the hard rules would block
+    (a discount to a customer who asked for none, a channel they cannot be reached on, an offer that
+    waits for approval) are dropped first, so the plan never spends budget on them.
     """
     plain = 0.0
-    best: dict[str, Bid] = {}
+    best: dict[str, tuple[float, Bid]] = {}
     for bid in bids:
+        if state is not None and envelope is not None and not _bid_reaches(bid, state, envelope):
+            continue
         offer_id = bid.action.offer_id
+        net = _plain_net(bid)
         if offer_id == NO_OFFER.offer_id:
-            plain = max(plain, bid.expected_net)
-        elif offer_id not in best or bid.expected_net > best[offer_id].expected_net:
-            best[offer_id] = bid
+            plain = max(plain, net)
+        elif offer_id not in best or net > best[offer_id][0]:
+            best[offer_id] = (net, bid)
     return [
-        OfferCandidate(customer_id, offer_id, bid.expected_net - plain, bid.offer_cost)
-        for offer_id, bid in sorted(best.items())
+        OfferCandidate(customer_id, offer_id, net - plain, bid.offer_cost)
+        for offer_id, (net, bid) in sorted(best.items())
     ]
 
 
@@ -191,13 +237,15 @@ def plan_offers(
     *,
     envelope: Envelope | None = None,
     min_ratio: float = 0.0,
+    audience: Iterable[str] = (),
 ) -> OfferPlan:
     """Fill `budget` with the customer-offer pairs that earn the most extra profit per unit of cost.
 
     Only pairs with positive extra profit are considered, and with `min_ratio` only those that earn
     at least `min_ratio` per unit of cost (0: any profit). With an `envelope`, offers it does not
     list or that need approval are dropped, and the budget is capped at the envelope's. A customer
-    gets at most one offer. The plan never spends more than the budget.
+    gets at most one offer. The plan never spends more than the budget. `audience` names every
+    customer the plan is for: those with no candidate are reported in `left_out` as `NO_CANDIDATE`.
     """
     if not math.isfinite(budget) or budget < 0 or min_ratio < 0:
         raise ValueError("need a finite budget >= 0 and min_ratio >= 0")
@@ -217,7 +265,8 @@ def plan_offers(
     for customer_id, options in by_customer.items():
         ladder = _ladder(options, min_ratio)
         if not ladder:
-            left_out[customer_id] = SURE_THING
+            pays = any(o.extra_profit > _EPS for o in options)
+            left_out[customer_id] = BELOW_MIN_RATIO if pays else SURE_THING
             continue
         prev_cost = prev_profit = 0.0
         for level, c in enumerate(ladder):
@@ -245,6 +294,9 @@ def plan_offers(
     for customer_id in by_customer:
         if customer_id not in chosen:
             left_out.setdefault(customer_id, OVER_BUDGET)
+    for customer_id in audience:
+        if customer_id not in by_customer:
+            left_out.setdefault(customer_id, NO_CANDIDATE)
     return OfferPlan(assignments, budget, spent, price, dict(sorted(left_out.items())))
 
 
@@ -268,11 +320,32 @@ def choose_at_price(options: Iterable[OfferCandidate], price: float) -> OfferCan
     return best
 
 
-def basket_offer_cost(offer: OfferOption, state: CustomerState) -> float:
+def basket_offer_cost(
+    offer: OfferOption, state: CustomerState, default_basket: float | None = None
+) -> float | None:
     """`GoalBidder`'s `offer_cost_fn` for the v3 cost model: what one redemption costs for this customer.
 
-    A percent-off offer costs its percent of this customer's usual basket (their average order value;
-    unknown: the configured cost, or 0). The other kinds do not depend on the customer.
+    A percent-off offer with no configured cost costs its percent of this customer's usual basket
+    (their average order value). For a customer with no orders yet the shop's `default_basket` stands
+    in; with neither known the offer cannot be priced and None is returned (the bidder then does not
+    bid it), so a real discount is never counted as free. The other kinds do not depend on the
+    customer.
     """
-    basket = state.avg_order_value
-    return offer_cost(offer, basket if basket > 0 else None)
+    basket = state.avg_order_value if state.avg_order_value > 0 else default_basket
+    if (
+        offer.kind is OfferKind.PERCENT_OFF
+        and offer.cost_per_redemption <= 0
+        and offer.amount > 0
+        and (basket is None or basket <= 0)
+    ):
+        return None
+    return offer_cost(offer, basket)
+
+
+def basket_cost_fn(default_basket: float | None) -> Callable[[OfferOption, CustomerState], float | None]:
+    """`basket_offer_cost` with the shop's typical order value as the fallback basket."""
+
+    def cost(offer: OfferOption, state: CustomerState) -> float | None:
+        return basket_offer_cost(offer, state, default_basket)
+
+    return cost
