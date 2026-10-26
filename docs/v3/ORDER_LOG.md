@@ -6,17 +6,19 @@ left open are in [`docs/DECISIONS.md`](../DECISIONS.md) as DEC-1822.
 
 The path turns a raw order log (UCI Online Retail: one row per line of an order, no customer file, no outcome column) into
 a dataset of one row per shopper per month-end, with the outcome "an order within 90 days after the snapshot". It is behind
-`data_doctor.order_log` (default off, needs `data_doctor.unified`). With the switch off nothing a Data Doctor, onboarding
-or Guided-setup path produces for an existing input changes.
+`data_doctor.order_log` (default off, needs `data_doctor.unified`). With the switch off nothing a Data Doctor, onboarding,
+pilot or Guided-setup path produces for an existing input changes. The one thing that moves is `retail-win-back`'s
+configuration dump (its `run_config.json`), which gains the four declarations below; nothing reads them there, and they stay
+in the dump because a `run_config.json` must read back as the same document (DEC-1822 (o)).
 
 ## What B1 to B4 built
 
 | Milestone | What | Where |
 |---|---|---|
-| B1 | The switch `data_doctor.order_log`; the `retail-win-back` outcome template (`order_log_only`) and `order_log: true` on it and on `win-back-campaign`; `retail_win_back.yaml` gains `label`, `audience`, `suggested_features` and `built_split`; two internal roles, `order_lines` and `returns` | `configs/engine.yaml`, `configs/outcomes.yaml`, `configs/roles.yaml`, `configs/use_cases/retail_win_back.yaml`, `engine/doctor/config.py`, `engine/config.py`, `engine/doctor/outcomes.py` |
+| B1 | The switch `data_doctor.order_log`; the `retail-win-back` outcome template (`order_log_only`) and `order_log: true` on it and on `win-back-campaign`; `retail_win_back.yaml` gains `order_log_label`, `order_log_features`, `audience` and `built_split` (its `label` and `suggested_features` stay unset); two internal roles, `order_lines` and `returns`, refused by the source routes while the path is off | `configs/engine.yaml`, `configs/outcomes.yaml`, `configs/roles.yaml`, `configs/use_cases/retail_win_back.yaml`, `engine/doctor/config.py`, `engine/config.py`, `engine/doctor/outcomes.py` |
 | B2 | The detector `order_log_reading` (names split at capitals, ID-like name first and blank share second), Q1 (which column names the shopper), the test that it never fires on a parity file | `engine/doctor/order_log.py` |
 | B3 | The derived customer list (exact `key_text` rules, first order day as `signup_date`), Q2 through the existing loss guard, the mixed-order question, `derived_entity=` on `offer_outcome` and `propose_event_outcome`, no `parse_number` on the chosen shopper or an order number | `engine/doctor/order_log.py`, `engine/doctor/outcomes.py`, `engine/doctor/outcome_definition.py`, `engine/doctor/cleaning.py` |
-| B4 | `plan_build(order_log=...)` with the line to order to shopper roll-up (`orders`, `order_lines`, `returns`), the list as a real entity source, `drive_builder` and `replay_build` on a log, the check that the list is exactly the log's distinct IDs | `engine/doctor/order_roll_up.py`, `engine/doctor/build_driver.py` |
+| B4 | `plan_build(order_log=...)` with the line to order to shopper roll-up (`orders`, `order_lines`, `returns`), the list as a real entity source, `drive_builder` and `replay_build` on a log, the check, read independently of the list, that the list is exactly the log's distinct IDs | `engine/doctor/order_roll_up.py`, `engine/doctor/build_driver.py` |
 
 How the pieces meet, in the order a visit will call them (B6 wires this; today a caller passes each answer in):
 
@@ -25,7 +27,7 @@ How the pieces meet, in the order a visit will call them (B6 wires this; today a
 3. `derive_customer_list(...)` and `blank_customer_question(...)` (Q2) and `mixed_orders_question(...)`. A person answers them.
 4. `derived_entity(...)` gives `offer_outcome` and `propose_event_outcome` the list, and the outcome is measured on shoppers who had
    started by each month-end. A person approves the sentence.
-5. `plan_build(..., order_log=OrderLogInput(...), suggested=config.suggested_features)` plans the dataset; a person approves
+5. `plan_build(..., label_spec=config.order_log_label, order_log=OrderLogInput(...), suggested=config.order_log_features)` plans the dataset; a person approves
    the plan's exact sentence; `drive_builder(...)` builds it through the builder's routes.
 
 ## Run its tests
@@ -37,7 +39,8 @@ From the repository root, with the shared virtual environment. The integration t
 python -m pytest tests/unit/doctor/test_order_log.py tests/unit/doctor/test_order_log_parity.py \
     tests/unit/doctor/test_order_log_config.py tests/unit/doctor/test_order_roll_up.py \
     tests/unit/doctor/test_order_log_outcome.py tests/unit/doctor/test_order_log_cleaning.py \
-    tests/unit/doctor/test_order_log_build.py tests/integration/test_order_log_build.py -n 2 -p no:cacheprovider
+    tests/unit/doctor/test_order_log_build.py tests/integration/test_order_log_build.py \
+    tests/integration/test_order_log_api.py -n 2 -p no:cacheprovider
 make check-generated VENV=<the shared venv>
 ```
 
@@ -58,7 +61,11 @@ Every figure is from a command run on this branch.
 
 | Command | Result | Run by |
 |---|---|---|
-| The eight test files in "Run its tests" above, `-n 2` | 166 passed in 26 s (the integration test alone: 11.7 s) | this completion pass |
+| The nine test files in "Run its tests" above, `-n 2 -W ignore::FutureWarning` | 184 passed in 28.45 s (the integration test alone: 12.96 s) | review-fix pass |
+| `tests/unit/doctor/test_build_driver.py test_cleaning.py test_outcomes.py test_outcome_tools.py test_outcomes_key_rules.py test_goal_brief.py test_plan_o_setup.py`, `tests/unit/onboarding/test_sources.py test_roles.py test_validate.py test_features.py`, `tests/unit/agent/test_advisor_order_log_names.py`, `tests/unit/test_config_loading.py`, `tests/integration/test_config_roundtrip.py test_api_clients.py test_api_doctor_outcome.py`, `-n 2 -m "not slow and not frozen and not bedrock and not aws"` | 359 passed in 26.22 s | review-fix pass |
+| `tests/unit/pilot/test_data_request.py test_data_request_messages.py -m "not slow"` | 34 passed in 0.46 s | review-fix pass |
+| `ruff check`, `black --check` on the 16 Python files the review fix changed; `mypy --strict` on its 8 changed `engine/` and `api/` files; `make check-generated VENV=...` | clean; no issues found in 8 source files; clean | review-fix pass |
+| The eight test files of the completion pass, `-n 2` | 166 passed in 26 s (the integration test alone: 11.7 s) | this completion pass |
 | `tests/unit/doctor/test_build_driver.py test_cleaning.py test_goal_brief.py test_outcome_tools.py test_outcomes.py test_outcomes_key_rules.py test_plan_o_setup.py`, `tests/unit/onboarding/test_sources.py test_roles.py test_validate.py`, `tests/unit/pilot/test_data_request.py test_data_request_messages.py`, `tests/unit/test_config_loading.py test_config_extra_fields.py test_config_merge.py test_config_validators.py`, `tests/unit/agent/test_advisor_order_log_names.py`, `-n 2 -m "not slow and not frozen and not bedrock and not aws"` (the existing files that cover the changed modules) | 288 passed in 11.5 s | this completion pass |
 | `ruff check` and `black --check` on every Python file the branch changed | clean | this completion pass |
 | `mypy --strict` on the 11 changed `engine/` files | no issues found in 11 source files | this completion pass |
@@ -74,9 +81,12 @@ reported 181 errors in `scripts/`, `autonomy/` and `api/`, none in a file this b
 On the synthetic log (`order_log_frame()`, 150 shoppers): 2,096 lines, 532 of them (25.4%) with no `CustomerID` (163 order numbers),
 150 shoppers. Of the 1,564 lines with a shopper (counted by a short script just now): 438 order numbers have a line with a quantity above
 zero, and 34 lines have a quantity below zero, on 19 order numbers (16 start with `C`, 3 do not).
-Through the builder's routes (`tests/integration/test_order_log_build.py`, 1,500 shoppers) the dataset has 5,725 rows, 2,888 yes
-and 2,837 no, over six month-ends, 31 Mar to 31 Aug 2011, and passes its own checks (the previous builder's figures; the test passes
-here, which asserts both classes and the checks, but the row counts were not re-read). The roll-up of a tiled log of 586,480 lines
+The same log has 3 lines that are exact copies of another line in every column the roll-up reads (`duplicate_lines`, from the
+plan's sentence in `tests/unit/doctor/test_order_log_build.py`); they are kept and counted (DEC-1822 (q)).
+Through the builder's routes (`tests/integration/test_order_log_build.py`, 1,500 shoppers, with the path switched on in a copy of
+`configs/`) the dataset has 5,725 rows, 2,888 yes and 2,837 no, over six month-ends, 31 Mar to 31 Aug 2011, and passes its own checks:
+the review-fix pass re-read these by printing them once from that test (a temporary `print`, removed), and the test now asserts that
+the rows are exactly the shoppers whose first order is on or before each month-end (`snapshot_rows`). The roll-up of a tiled log of 586,480 lines
 took 16.4 s (previous builder, a one-off script on a loaded machine; not re-run).
 
 ## What is left
