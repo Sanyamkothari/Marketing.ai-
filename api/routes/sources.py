@@ -171,7 +171,7 @@ async def create_source(
     load_client(store, client_id)
     roles = get_roles(root)
     if role is not None:
-        require_role(roles, role)
+        require_role(roles, role, root)
     limits = onboarding_limits(root)
     held = len(working_sources(store, client_id))
     if held >= limits.max_sources:
@@ -332,7 +332,7 @@ def create_source_from_connection(
     load_client(store, client_id)
     roles = get_roles(root)
     if body.role is not None:
-        require_role(roles, body.role)
+        require_role(roles, body.role, root)
     limits = onboarding_limits(root)
     held = len(working_sources(store, client_id))
     if held >= limits.max_sources:
@@ -430,7 +430,7 @@ def update_source_role(
     """
     load_source(store, client_id, source_id)
     roles = get_roles(root)
-    require_role(roles, body.role)
+    require_role(roles, body.role, root)
     updated = record_role(storage, store, client_id=client_id, source_id=source_id, role=body.role)
     resync_join_coverage(storage, store, root=root, roles=roles, client_id=client_id)
     return updated
@@ -545,10 +545,21 @@ def any_use_case_config(root: Path) -> UseCaseConfig:
     return load_use_case(ids[0], root)
 
 
-def require_role(roles: RoleCatalogue, role: str) -> None:
+def require_role(roles: RoleCatalogue, role: str, root: Path | None = None) -> None:
     """`409 ROLE_UNKNOWN` when `role` is not in `configs/roles.yaml` (a data problem, not a 404/422:
-    the request named a real source, just an impossible role for it)."""
-    if role not in roles.roles:
+    the request named a real source, just an impossible role for it).
+
+    v3 phase 0 (DEC-1822 (b)): a role marked `internal` (`order_lines`, `returns`) is a table the order-log
+    path builds from one log, so it is unknown here too unless that path is on for this installation
+    (`engine.doctor.order_log.order_log_installed`, read only for such a role), when the path's builder port
+    registers its tables through these routes."""
+    spec = roles.roles.get(role)
+    if spec is not None and spec.internal:
+        from engine.doctor.order_log import order_log_installed
+
+        if not order_log_installed(root):
+            spec = None
+    if spec is None:
         raise http_error(
             409,
             "ROLE_UNKNOWN",

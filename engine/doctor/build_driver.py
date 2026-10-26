@@ -223,6 +223,7 @@ _COUNT_FIELDS: Final[tuple[str, ...]] = (
     "shoppers",
     "shoppers_without_orders",
     "unpriced_lines",
+    "duplicate_lines",
 )
 """The roll-up's counts (`RollUpCounts`) a plan keeps, so its hash covers what was approved."""
 
@@ -259,6 +260,7 @@ class OrderLogPlan(StrictBase):
     shoppers: int
     shoppers_without_orders: int
     unpriced_lines: int
+    duplicate_lines: int = 0
     skipped_features: tuple[str, ...] = Field(
         default=(), description="Suggested features left out because the log has no column they read."
     )
@@ -741,6 +743,11 @@ def _order_log_sentence(
         )
     if plan.zero_lines:
         parts.append(f"{plan.zero_lines:,} lines with a quantity of zero count for nothing.")
+    if plan.duplicate_lines:
+        parts.append(
+            f"{plan.duplicate_lines:,} lines are exact copies of another line; they are kept and counted, as the "
+            "log has them."
+        )
     if plan.unpriced_lines and plan.price_column:
         parts.append(
             f"{plan.unpriced_lines:,} order lines have a '{plan.price_column}' of zero or less and add nothing to spend."
@@ -777,7 +784,7 @@ def _plan_order_log(
         rolled = roll_up(log, columns)
     except OrderLogError as exc:
         raise BuildDriveError(exc.code, exc.message) from exc
-    if not list_matches_log(rolled.customers, log, columns.customer):
+    if not list_matches_log(rolled.customers, log, columns.customer, rolled.tables().values()):
         raise BuildDriveError(
             "BUILD_PLAN_INCOMPLETE",
             f"The customer list does not hold exactly the different '{columns.customer}' values of {item.file_name}.",
@@ -805,6 +812,7 @@ def _plan_order_log(
             kept.append(feature)
     features = tuple(kept) if suggested else _features([source.role for source in events])
     counts = rolled.counts
+    dropped = counts.lines - counts.lines_used - counts.zero_lines
     spec = OrderLogPlan(
         upload_id=order_log.upload_id,
         file_name=item.file_name,
@@ -825,10 +833,16 @@ def _plan_order_log(
         and label_spec.role not in sources
     ):
         blocking.append("BUILD_PLAN_INCOMPLETE")
+    if (
+        suggested and not kept
+    ):  # every named feature reads a column the log lacks: nothing would be learned from
+        blocking.append("BUILD_PLAN_INCOMPLETE")
     reasons: list[str] = []
     if label_spec is not None:
         reasons.append("BUILD_DEFINES_OUTCOME")
-    if counts.lines and counts.lines_without_shopper / counts.lines > APPROVE_DROP_SHARE:
+    # Every line left out for a named reason (no shopper, no order number, a date or quantity that does not read)
+    # counts toward the bar; a line with a quantity of zero is read and counts for nothing, so it is not dropped.
+    if counts.lines and dropped / counts.lines > APPROVE_DROP_SHARE:
         reasons.append("JOIN_DROPS_ROWS")
     left_out = tuple(
         LeftOutFile(
@@ -853,7 +867,7 @@ def _plan_order_log(
         left_out=left_out,
         approval_reasons=tuple(reasons),
         approval_sentence=_order_log_sentence(item.file_name, spec, label_spec, skipped),
-        blocking=tuple(blocking),
+        blocking=tuple(dict.fromkeys(blocking)),
         summary=(
             f"Build one table for {use_case} from {item.file_name}: {counts.shoppers:,} shoppers rolled up from "
             f"{counts.lines:,} lines."
@@ -887,7 +901,7 @@ def order_log_files(
                 f"{spec.file_name} is not the log that was approved ({', '.join(changed)} differ); plan again "
                 "and approve again.",
             )
-    if not list_matches_log(rolled.customers, log, spec.customer_column):
+    if not list_matches_log(rolled.customers, log, spec.customer_column, rolled.tables().values()):
         raise BuildDriveError(
             "BUILD_PLAN_INCOMPLETE",
             f"The customer list does not hold exactly the different '{spec.customer_column}' values of {spec.file_name}.",

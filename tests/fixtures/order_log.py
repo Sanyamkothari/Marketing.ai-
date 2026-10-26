@@ -17,13 +17,15 @@ read in a test.
 
 from __future__ import annotations
 
+import shutil
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Final
 
 import numpy as np
 import pandas as pd
 
-__all__ = ["COLUMNS", "FIRST_DAY", "LAST_DAY", "order_log_frame"]
+__all__ = ["COLUMNS", "FIRST_DAY", "LAST_DAY", "order_log_config_root", "order_log_frame"]
 
 COLUMNS: Final[tuple[str, ...]] = (
     "InvoiceNo",
@@ -198,3 +200,18 @@ def order_log_frame(
             frame.loc[line, "InvoiceDate"] = _stamp(moment + timedelta(minutes=1))
     order = pd.to_datetime(frame["InvoiceDate"], format="%m/%d/%Y %H:%M").to_numpy().argsort(kind="stable")
     return frame.iloc[order].reset_index(drop=True)
+
+
+def order_log_config_root(config_root: Path, destination: Path) -> Path:
+    """A copy of `config_root` at `destination` with the order-log path on: `data_doctor.unified` and
+    `data_doctor.order_log` both true in `engine.yaml`'s defaults."""
+    root = destination / "configs"
+    shutil.copytree(config_root, root)
+    engine = root / "engine.yaml"
+    text = engine.read_text(encoding="utf-8")
+    for key in ("unified", "order_log"):
+        before = f"    {key}: false"
+        assert text.count(before) == 1, key
+        text = text.replace(before, f"    {key}: true ")
+    engine.write_text(text, encoding="utf-8")
+    return root

@@ -382,6 +382,8 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `label` | LabelDefinition \| null | no |  |
 | `audience` | AudienceConfig \| null | no |  |
 | `built_split` | SplitConfig \| null | no |  |
+| `order_log_label` | LabelDefinition \| null | no |  |
+| `order_log_features` | list[FeatureDef] | no |  |
 | `onboarding` | OnboardingConfig | no | `engine.yaml:defaults.onboarding` - every onboarding default, per use case (plan section 5.3). |
 | `uplift` | UpliftConfig | no | `uplift:` in a use case. Inert unless `problem_type` is `uplift`.  The data limits, the randomness check and anything about the treatment assignment are **not** agent-editable: an agent that could loosen them could make a targeted campaign look causal. |
 | `agent` | AgentConfig | no | `agent:` in a use case: the Guided-setup helper for that use case. |

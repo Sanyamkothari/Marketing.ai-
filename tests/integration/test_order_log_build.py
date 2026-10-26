@@ -27,8 +27,9 @@ from engine.doctor.build_driver import OrderLogInput, approval_for, drive_builde
 from engine.doctor.builder_api import ApiBuilderPort
 from engine.doctor.contracts import Diagnosis
 from engine.doctor.order_roll_up import find_log_columns, roll_up
+from engine.doctor.outcomes import snapshot_rows
 from engine.storage import LocalStorage
-from tests.fixtures.order_log import order_log_frame
+from tests.fixtures.order_log import order_log_config_root, order_log_frame
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -43,8 +44,9 @@ def data_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def app(config_root: Path, data_dir: Path) -> FastAPI:
-    return create_app(config_root=config_root, data_dir=data_dir)
+def app(config_root: Path, data_dir: Path, tmp_path: Path) -> FastAPI:
+    # The path is on: the builder port registers `order_lines` and `returns`, which the source routes know only then.
+    return create_app(config_root=order_log_config_root(config_root, tmp_path), data_dir=data_dir)
 
 
 @pytest.fixture
@@ -89,9 +91,9 @@ def test_an_order_log_builds_a_dataset_with_no_customer_file(
         diagnosis,
         {upload_id: frame},
         use_case=USE_CASE,
-        label_spec=config.label,
+        label_spec=config.order_log_label,
         order_log=OrderLogInput(upload_id, columns),
-        suggested=config.suggested_features,
+        suggested=config.order_log_features,
     )
     assert plan.blocking == () and plan.order_log is not None and plan.order_log.skipped_features == ()
 
@@ -115,10 +117,7 @@ def test_an_order_log_builds_a_dataset_with_no_customer_file(
 
     rolled = roll_up(frame, columns)
     dataset = pd.read_parquet(data_dir / "datasets" / manifest["dataset_id"] / "dataset.parquet")
-    keys = {str(value) for value in dataset[manifest["primary_key"][0]]}
-    assert keys <= set(
-        rolled.customers["CustomerID"]
-    ), "only shoppers the log names, written as it writes them"
+    key = manifest["primary_key"][0]
     # Six month-ends, 31 Mar to 31 Aug 2011, as on the real file: at least 90 days of history, and the last month-end
     # whose 90 days are over (30 Sep is censored).
     assert manifest["snapshot_dates"] == [
@@ -129,8 +128,18 @@ def test_an_order_log_builds_a_dataset_with_no_customer_file(
         "2011-07-31",
         "2011-08-31",
     ]
+    # At each month-end, exactly the shoppers whose first order is on or before it, written as the log writes them.
+    signup = rolled.customers.set_index("CustomerID")["signup_date"]
+    dates = [datetime.strptime(day, "%Y-%m-%d").date() for day in manifest["snapshot_dates"]]
+    expected = snapshot_rows(rolled.customers["CustomerID"], dates, signup)
+    built = pd.DataFrame(
+        {"entity_key": dataset[key].astype(str), "snapshot_date": pd.to_datetime(dataset["snapshot_date"])}
+    )
+    as_pairs = {(row.entity_key, row.snapshot_date.date()) for row in expected.itertuples(index=False)}
+    assert {(row.entity_key, row.snapshot_date.date()) for row in built.itertuples(index=False)} == as_pairs
+    assert manifest["n_rows"] == len(dataset) == len(expected) > 0
     assert set(dataset["reactivated_90d"]) == {0, 1}
-    assert manifest["target"] == "reactivated_90d" and manifest["n_rows"] == len(dataset) > 0
+    assert manifest["target"] == "reactivated_90d"
     # The built features are the ones the plan kept, from the roll-up (order counts come from `orders`).
     assert {"orders_total", "spend_total", "returned_orders", "distinct_products"} <= set(dataset.columns)
 
@@ -142,3 +151,11 @@ def test_an_order_log_builds_a_dataset_with_no_customer_file(
     )
     again = _poll(client, str(replayed.dataset_id))
     assert again["status"]["state"] == "done", again["status"]
+    later = order_log_frame(customers=CUSTOMERS + 100)
+    relisted = roll_up(later, columns).customers
+    scored = pd.read_parquet(data_dir / "datasets" / again["manifest"]["dataset_id"] / "dataset.parquet")
+    assert again["manifest"]["n_rows"] == len(scored) > 0
+    assert {str(value) for value in scored[key]} <= set(relisted["CustomerID"])
+    assert len(set(relisted["CustomerID"])) > len(
+        set(rolled.customers["CustomerID"])
+    ), "the new shoppers are listed"

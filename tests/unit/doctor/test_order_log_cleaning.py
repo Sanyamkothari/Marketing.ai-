@@ -83,3 +83,10 @@ def test_the_held_columns_are_the_choice_and_every_order_number() -> None:
     frame = log().assign(CustomerID=1)
     file = loaded(frame, "orders.csv", Path("configs"), "u_1")
     assert key_columns(file, "Shopper") == frozenset({"Shopper", "OrderNo2"})
+
+
+def test_an_order_number_is_held_even_when_most_orders_have_one_line() -> None:
+    frame = log().assign(InvoiceNo=[f"{536_000 + n}" for n in range(ROWS)])  # one line per order: no repeats
+    file = loaded(frame, "orders.csv", Path("configs"), "u_1")
+    assert {"InvoiceNo", "OrderNo2"} <= key_columns(file, "Shopper")
+    assert "Basket" not in key_columns(file, "Shopper"), "a name that is not an order number's is not held"

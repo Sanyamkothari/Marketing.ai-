@@ -1367,14 +1367,20 @@ class UseCaseConfig(_Base):
     suggested_features: tuple[FeatureDef, ...] = ()
     label: LabelDefinition | None = None
     # --- v3 phase 0 (the Data Doctor's order-log path) ---------------------------------------------
-    # Two in-place declarations, for Phase 2's reason (`_Base` forbids unknown keys). Both are optional,
+    # Four in-place declarations, for Phase 2's reason (`_Base` forbids unknown keys). All are optional,
     # read only by the order-log path behind `data_doctor.order_log`, and left out of a dump while unset,
-    # so no other use case's document, run_config.json or hash moves. `audience` is who the outcome is
-    # measured for (B5 applies it to the snapshot rows); `built_split` is the split a dataset built from an
-    # order log uses (month-end rows, several snapshot dates), kept apart from `split` because the shipped
-    # one-snapshot sample of the same use case has one `snapshot_date` and cannot be split by time.
+    # so no other use case's document, run_config.json or hash moves (the one that declares them gains
+    # them in its dump, DEC-1822 (o)). `audience` is who the outcome is measured for (B5 applies it to the
+    # snapshot rows); `built_split` is the split a dataset built from an order log uses (month-end rows,
+    # several snapshot dates), kept apart from `split` because the shipped one-snapshot sample of the same
+    # use case has one `snapshot_date` and cannot be split by time; `order_log_label` and
+    # `order_log_features` are the label and the named features of such a dataset, kept apart from `label`
+    # and `suggested_features` because every onboarding, pilot and measurement path reads those whatever
+    # the switch says.
     audience: AudienceConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     built_split: SplitConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+    order_log_label: LabelDefinition | None = Field(default=None, exclude_if=lambda value: value is None)
+    order_log_features: tuple[FeatureDef, ...] = Field(default=(), exclude_if=lambda value: not value)
     onboarding: OnboardingConfig = Field(default_factory=lambda: OnboardingConfig())
     # --- Phase 3b (uplift) ---------------------------------------------------------------------
     # The one declaration Phase 3b adds above its block, for Phase 2's reason: `_Base` forbids

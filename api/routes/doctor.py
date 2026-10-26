@@ -327,7 +327,7 @@ def agree_outcome(body: OutcomeRequest, storage: StorageDep, root: ConfigRootDep
         )
     config = use_case_config(body.use_case, root)
     catalogue = load_outcome_catalogue(root)
-    template = catalogue.templates.get(config.id)
+    template = catalogue.template_for(config)  # an order-log-only sentence is gated by data_doctor.order_log
     if template is None:
         raise http_error(
             404, "OUTCOME_NO_SENTENCE", f"Data Doctor has no outcome sentence for {config.name}.", "use_case"

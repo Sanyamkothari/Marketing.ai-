@@ -77,7 +77,7 @@ template:
 #   returns      one row per order with lines of a quantity below zero: `quantity`, as a positive number
 # An order is a line with a quantity above zero; the `C` prefix of a cancelled invoice is evidence, not the rule.
 
-label:
+order_log_label:                        # the label of a built dataset; `label` stays unset, so no other path moves
   name: reactivated_90d
   type: event_presence
   role: orders
@@ -93,7 +93,7 @@ built_split:                            # a built dataset has several month-ends
   type: time_based
   time_column: snapshot_date
 
-suggested_features:
+order_log_features:                     # the named features of a built dataset; not `suggested_features`, for the same reason
   - {name: recency_days,             role: orders,      function: days_since_last, description: "Days between the shopper's last order and the snapshot."}
   - {name: tenure_days,              role: orders,      function: days_since_first, description: "Days between the shopper's first order and the snapshot."}
   - {name: orders_total,             role: orders,      function: count, description: "Orders placed on or before the snapshot."}

@@ -41,6 +41,13 @@ def validate_onboarding_config(config: UseCaseConfig, roles: RoleCatalogue | Non
     catalogue = get_roles() if roles is None else roles
     check_suggested_features(config, catalogue)
     check_label(config, catalogue)
+    # --- v3 phase 0: the order-log path's own label and features, by the same rules (DEC-1822 (o)) ---
+    if config.order_log_label is not None or config.order_log_features:
+        built = config.model_copy(
+            update={"label": config.order_log_label, "suggested_features": config.order_log_features}
+        )
+        check_suggested_features(built, catalogue)
+        check_label(built, catalogue)
 
 
 def check_suggested_features(config: UseCaseConfig, roles: RoleCatalogue) -> None:

@@ -158,9 +158,12 @@ class OutcomeCatalogue(BaseModel):
 
     def template_for(self, config: UseCaseConfig) -> OutcomeTemplate | None:
         """The use case's sentence, or None when it has none or its template is for the order-log path and the
-        switch `data_doctor.order_log` is off (so the use case is offered exactly what it was before)."""
+        path is off (`engine.doctor.order_log.order_log_enabled`: `data_doctor.order_log` with `unified`), so the
+        use case is offered exactly what it was before."""
+        from engine.doctor.order_log import order_log_enabled
+
         template = self.templates.get(config.id)
-        if template is not None and template.order_log_only and not config.data_doctor.order_log:
+        if template is not None and template.order_log_only and not order_log_enabled(config):
             return None
         return template
 

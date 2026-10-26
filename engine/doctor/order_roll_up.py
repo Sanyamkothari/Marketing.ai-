@@ -21,13 +21,15 @@ Nothing here reads `Description`: free text may carry personal data.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Final
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
-from engine.agent.key_steps import KeyColumn
+from engine.agent.key_steps import KeyColumn, key_text
 from engine.config import StandardType
 from engine.onboarding.transforms import cast_series
 
@@ -40,7 +42,9 @@ __all__ = [
     "RollUpCounts",
     "RolledUp",
     "find_log_columns",
+    "key_codes",
     "list_matches_log",
+    "read_times",
     "roll_up",
 ]
 
@@ -50,6 +54,35 @@ RETURNS_ROLE: Final[str] = "returns"
 
 EVENT_TIME: Final[str] = "event_time"
 """The date column of each rolled-up table, mapped to the standard `event_time`."""
+
+
+def key_codes(series: pd.Series[Any]) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.object_]]:
+    """`(codes, texts)` of an ID column read as `key_text` writes it: one code per line (-1 for a blank) and the
+    distinct texts in order of first appearance. Two cells written differently but read the same (`7`, `"7"` and
+    `7.0`, as a spreadsheet export mixing number and text cells gives them) are one code, so one shopper or one
+    order; case, spaces and leading zeros still keep two texts apart. `KeyColumn` alone keeps `7` and `"7"` apart
+    (two cells of different types), which is why both the list and the roll-up read their IDs through here."""
+    keys = KeyColumn(series)
+    if not len(keys.texts):
+        return np.full(len(series), -1, dtype=np.int64), np.asarray([], dtype=object)
+    text_codes, texts = pd.factorize(pd.Series(keys.texts, dtype=object))
+    codes = np.where(keys.codes >= 0, np.asarray(text_codes, dtype=np.int64)[np.maximum(keys.codes, 0)], -1)
+    return codes.astype(np.int64), np.asarray(texts, dtype=object)
+
+
+def read_times(series: pd.Series[Any]) -> pd.Series[Any]:
+    """`series` read as the builder reads a date (`cast_series`), as timestamps without a zone, on `series`'s index.
+
+    A time with an offset is moved to UTC and its zone dropped, the repository's rule for a time with a zone
+    (`engine.stages.prepare`, `engine.doctor.impossible`), so times with different offsets, or with and without
+    one, sort and compare together and against a month-end; a time without one is taken as it is. A value that
+    does not read is NaT."""
+    parsed = pd.Series(cast_series(series, StandardType.DATE).values, index=series.index)
+    if parsed.dtype.kind == "M" and not isinstance(parsed.dtype, pd.DatetimeTZDtype):
+        return parsed
+    stamps: pd.Series[Any] = pd.to_datetime(parsed, errors="coerce", utc=True)
+    out: pd.Series[Any] = stamps.dt.tz_convert("UTC").dt.tz_localize(None)
+    return out
 
 
 class OrderLogError(Exception):
@@ -142,6 +175,9 @@ class RollUpCounts:
     shoppers_without_orders: int
     unpriced_lines: int
     """Order lines whose price is zero, negative or unreadable: they add nothing to spend."""
+    duplicate_lines: int = 0
+    """Used lines identical to an earlier used line in every column the roll-up reads. They are kept and summed,
+    as the log has them (the library's file keeps them too, DEC-1822 (q)), and said in the sentence."""
 
     @property
     def lines_used(self) -> int:
@@ -186,22 +222,27 @@ def roll_up(log: pd.DataFrame, columns: LogColumns) -> RolledUp:
             "No column names the order, so the lines cannot be rolled up into orders and nothing is guessed.",
         )
     n = len(log)
-    shopper = KeyColumn(log[columns.customer])
-    order = KeyColumn(log[columns.order])
-    times = pd.Series(cast_series(log[columns.date], StandardType.DATE).values, index=log.index)
+    shopper_codes, shopper_texts = key_codes(log[columns.customer])
+    if n and not len(shopper_texts):
+        raise OrderLogError(
+            "BUILD_PLAN_INCOMPLETE",
+            f"No line names a shopper: '{columns.customer}' is blank on every one of the {n:,} lines.",
+        )
+    order_codes, order_texts = key_codes(log[columns.order])
+    times = read_times(log[columns.date])
     quantity = _numbers(log[columns.quantity]) if columns.quantity else pd.Series(1.0, index=log.index)
     price = _numbers(log[columns.price]) if columns.price else pd.Series(np.nan, index=log.index)
 
-    no_shopper = shopper.codes < 0
-    no_order = ~no_shopper & (order.codes < 0)
+    no_shopper = shopper_codes < 0
+    no_order = ~no_shopper & (order_codes < 0)
     bad_date = ~no_shopper & ~no_order & times.isna().to_numpy()
     bad_quantity = ~no_shopper & ~no_order & ~bad_date & quantity.isna().to_numpy()
     used = ~(no_shopper | no_order | bad_date | bad_quantity)
 
     lines = pd.DataFrame(
         {
-            "shopper": shopper.codes,
-            "order": order.codes,
+            "shopper": shopper_codes,
+            "order": order_codes,
             "at": times.to_numpy(),
             "quantity": quantity.to_numpy(),
             "price": price.to_numpy(),
@@ -227,8 +268,8 @@ def roll_up(log: pd.DataFrame, columns: LogColumns) -> RolledUp:
     zero = int((lines["quantity"] == 0).sum())
 
     name = columns.customer
-    shopper_text = pd.Series(shopper.texts)  # the shopper as `key_text` writes it, by code
-    order_text = pd.Series(order.texts)
+    shopper_text = pd.Series(shopper_texts, dtype=object)  # the shopper as `key_text` writes it, by code
+    order_text = pd.Series(order_texts, dtype=object)
 
     bought["value"] = bought["quantity"] * bought["price"].clip(lower=0).fillna(0.0)
     unpriced = int((~(bought["price"] > 0)).sum()) if columns.price else 0
@@ -291,6 +332,8 @@ def roll_up(log: pd.DataFrame, columns: LogColumns) -> RolledUp:
     list_frame = derive_customer_list(
         log, columns.customer, columns.date, order_column=columns.order, quantity_column=columns.quantity
     ).frame
+    read = [c for c in ("shopper", "order", "at", "quantity", "price", "product", "country") if c in lines]
+    duplicates = int(lines.duplicated(subset=read).sum()) if len(lines) else 0
     counts = RollUpCounts(
         lines=n,
         lines_without_shopper=int(no_shopper.sum()),
@@ -308,14 +351,32 @@ def roll_up(log: pd.DataFrame, columns: LogColumns) -> RolledUp:
         shoppers=len(list_frame),
         shoppers_without_orders=int(list_frame["signup_date"].isna().sum()),
         unpriced_lines=unpriced,
+        duplicate_lines=duplicates,
     )
     return RolledUp(name, list_frame, orders_frame, lines_frame, returns_frame, counts)
 
 
-def list_matches_log(customers: pd.DataFrame, log: pd.DataFrame, customer: str) -> bool:
-    """Whether the customer list holds exactly the distinct non-blank shoppers of the log, written the way the log's
-    column is read (`key_text`): nobody added, nobody missing. The builder's list and the log are one column.
-    """
-    listed = set(map(str, customers[customer].tolist()))
-    found = set(map(str, KeyColumn(log[customer]).texts.tolist()))
-    return listed == found
+def list_matches_log(
+    customers: pd.DataFrame,
+    log: pd.DataFrame,
+    customer: str,
+    tables: Iterable[pd.DataFrame] = (),
+) -> bool:
+    """Whether the customer list holds exactly the distinct non-blank shoppers of the log: nobody added, nobody
+    missing, nobody twice, and every shopper of the rolled-up `tables` on it.
+
+    The log's IDs are read here value by value with `key_text`, the rule itself, not through `key_codes` the list
+    was built with, so a fault in the vectorised reading (a merge too many or too few) shows as a mismatch."""
+    listed = customers[customer].astype(str)
+    if bool(listed.duplicated().any()):
+        return False
+    names = set(listed)
+    values = log[customer].tolist()
+    try:  # each distinct cell once; by type too, so `True` and `1` (equal in Python) stay two cells
+        distinct: Iterable[Any] = [value for _kind, value in dict.fromkeys((type(v), v) for v in values)]
+    except TypeError:  # an unhashable cell: read every one
+        distinct = values
+    found = {text for value in distinct if (text := key_text(value)) is not None}
+    if names != found:
+        return False
+    return all(set(map(str, table[customer].tolist())) <= names for table in tables)

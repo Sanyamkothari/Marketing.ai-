@@ -125,7 +125,13 @@ def test_the_retail_sentence_is_offered_only_while_the_switch_is_on(config_root:
     catalogue = load_outcome_catalogue(config_root)
     config = load_use_case(USE_CASE, config_root)
     assert catalogue.template_for(config) is None, "off: the use case is offered what it was before"
-    on = config.model_copy(update={"data_doctor": config.data_doctor.model_copy(update={"order_log": True})})
+    alone = config.model_copy(
+        update={"data_doctor": config.data_doctor.model_copy(update={"order_log": True})}
+    )
+    assert catalogue.template_for(alone) is None, "the path needs `unified` too (order_log_enabled)"
+    on = config.model_copy(
+        update={"data_doctor": config.data_doctor.model_copy(update={"order_log": True, "unified": True})}
+    )
     template = catalogue.template_for(on)
     assert isinstance(template, OutcomeTemplate) and template.default_days == 90
     # Win-back campaign already had its sentence and keeps it with the switch off.

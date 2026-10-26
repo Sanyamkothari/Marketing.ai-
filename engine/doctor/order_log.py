@@ -35,19 +35,21 @@ The numbers in every sentence are counted on the file. A file that was read in p
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
-from engine.agent.key_steps import KeyColumn
 from engine.doctor.case import CaseOption, CaseQuestion, payload_digest
 from engine.doctor.guards import LOSS_STOP_PCT, Finding, Receipt, build_ledger, plan_findings
 from engine.doctor.visit_contracts import OptionEffect
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from pydantic import JsonValue
 
     from engine.config import RoleCatalogue, UseCaseConfig
@@ -73,6 +75,7 @@ __all__ = [
     "mixed_orders_question",
     "name_words",
     "order_log_enabled",
+    "order_log_installed",
     "order_log_reading",
 ]
 
@@ -96,6 +99,23 @@ ID_MAX_BLANK_SHARE: Final[float] = 0.5
 def order_log_enabled(config: UseCaseConfig) -> bool:
     """Whether the path is on for this use case: `data_doctor.order_log` needs `data_doctor.unified`."""
     return bool(config.data_doctor.unified and config.data_doctor.order_log)
+
+
+def order_log_installed(config_root: Path | None = None) -> bool:
+    """Whether the path is on for this installation (`configs/engine.yaml` defaults), for a caller that has no use
+    case, such as the source routes: `data_doctor.order_log` with `data_doctor.unified`
+    (`engine.doctor.case.data_doctor_unified`). Read leniently: a configuration that cannot be read is off."""
+    from engine.config import ConfigError, load_engine_config
+    from engine.doctor.case import data_doctor_unified
+
+    if not data_doctor_unified(config_root):
+        return False
+    try:
+        defaults = load_engine_config(config_root).defaults
+    except ConfigError:
+        return False
+    section = defaults.get("data_doctor")
+    return isinstance(section, Mapping) and section.get("order_log") is True
 
 
 # ---------------------------------------------------------------------------
@@ -238,8 +258,10 @@ def _measure(file: LoadedFile, position: int, column: str, tier: int) -> IdColum
     exact = file.exact.get(column)
     if exact is not None:
         return IdColumn(column, tier, exact.row_count, exact.null_count, exact.distinct_count)
-    keys = KeyColumn(file.frame.iloc[:, position])
-    return IdColumn(column, tier, len(file.frame), len(file.frame) - keys.rows, len(keys.texts))
+    from engine.doctor.order_roll_up import key_codes
+
+    codes, texts = key_codes(file.frame.iloc[:, position])  # counted as the list will count them
+    return IdColumn(column, tier, len(file.frame), int((codes < 0).sum()), len(texts))
 
 
 def _names_outcome(file: LoadedFile, config: UseCaseConfig) -> bool:
@@ -299,11 +321,11 @@ def order_log_reading(
 
 def key_columns(file: LoadedFile, customer: str) -> frozenset[str]:
     """The columns of an order log that are labels, not quantities: the shopper column a person chose and every
-    column that reads as an order number. No cleaning step reads these as numbers."""
-    reading = order_log_reading(file)
+    column named like an order number (`id_tier` 2: `InvoiceNo`, `OrderID`), however often its values repeat, so
+    an `InvoiceNo` of a log where most orders have one line is held too. No cleaning step reads these as numbers.
+    """
     found = {customer}
-    if reading is not None:
-        found |= {c.column for c in reading.candidates if c.looks_like_order_number}
+    found |= {str(column) for column in file.frame.columns if id_tier(str(column)) == 2}
     return frozenset(found)
 
 
@@ -403,17 +425,21 @@ class DerivedCustomers:
     no_order_shoppers: int
 
 
-def _blank_orders(keys: KeyColumn, orders: pd.Series[Any] | None) -> tuple[int | None, int | None]:
+def _blank_orders(
+    shopper_codes: npt.NDArray[np.int64], orders: pd.Series[Any] | None
+) -> tuple[int | None, int | None]:
     """`(orders whose lines all have no shopper, orders with some lines with and some without)`; (None, None) when
-    no order-number column is known."""
+    no order-number column is known. Order numbers are read as the roll-up reads them (`key_codes`)."""
+    from engine.doctor.order_roll_up import key_codes
+
     if orders is None:
         return None, None
-    order_keys = KeyColumn(orders)
-    blank = keys.codes < 0
-    named = order_keys.codes >= 0
+    order_codes, _texts = key_codes(orders)
+    blank = shopper_codes < 0
+    named = order_codes >= 0
     if not named.any():
         return None, None
-    frame = pd.DataFrame({"order": order_keys.codes[named], "blank": blank[named]})
+    frame = pd.DataFrame({"order": order_codes[named], "blank": blank[named]})
     per_order = frame.groupby("order")["blank"].agg(["sum", "count"])
     all_blank = int((per_order["sum"] == per_order["count"]).sum())
     mixed = int(((per_order["sum"] > 0) & (per_order["sum"] < per_order["count"])).sum())
@@ -437,14 +463,11 @@ def derive_customer_list(
     shopper with no such line stays on the list with a blank `signup_date`, and the snapshot spine then leaves them
     out of every month-end (an unknown date shows nobody existed); `no_order_shoppers` counts them.
     """
-    from engine.config import StandardType
-    from engine.onboarding.transforms import cast_series
+    from engine.doctor.order_roll_up import key_codes, read_times
 
-    keys = KeyColumn(frame[column])
-    # Two values written differently in the file but read the same (`7` and `7.0` in one column) are one shopper.
-    text_codes, texts = pd.factorize(pd.Series(keys.texts, dtype=object))
-    shopper_codes = np.where(keys.codes >= 0, text_codes[np.maximum(keys.codes, 0)], -1)
-    parsed = pd.Series(cast_series(frame[date_column], StandardType.DATE).values, index=frame.index)
+    # Two values written differently in the file but read the same (`7`, `"7"` and `7.0`) are one shopper.
+    shopper_codes, texts = key_codes(frame[column])
+    parsed = read_times(frame[date_column])
     unreadable = int((frame[date_column].notna() & parsed.isna()).sum())
     named = shopper_codes >= 0
     counts_as_order = named.copy()
@@ -461,7 +484,7 @@ def derive_customer_list(
     list_frame = pd.DataFrame(
         {column: np.asarray(texts, dtype=object), "signup_date": first.dt.normalize().to_numpy()}
     )
-    blank_orders, mixed_orders = _blank_orders(keys, frame[order_column] if order_column else None)
+    blank_orders, mixed_orders = _blank_orders(shopper_codes, frame[order_column] if order_column else None)
     return DerivedCustomers(
         column=column,
         date_column=date_column,

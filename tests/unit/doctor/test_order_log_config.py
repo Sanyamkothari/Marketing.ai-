@@ -96,7 +96,9 @@ def test_the_templates_marked_for_the_path_are_the_two_the_owner_chose(config_ro
 def test_retail_win_back_declares_its_label_audience_features_and_built_split(config_root: Path) -> None:
     config = load_use_case("retail-win-back", config_root)
     validate_onboarding_config(config, get_roles(config_root))
-    label = config.label
+    # `label` and `suggested_features` stay unset: every onboarding, pilot and measurement path reads them.
+    assert config.label is None and config.suggested_features == ()
+    label = config.order_log_label
     assert label is not None
     assert (label.name, label.type.value, label.role, label.horizon_days) == (
         "reactivated_90d",
@@ -118,7 +120,7 @@ def test_retail_win_back_declares_its_label_audience_features_and_built_split(co
     # The shipped one-snapshot file keeps its split: a time split of one date cannot be made.
     assert config.split.type is SplitType.RANDOM_STRATIFIED and config.target.column == "reactivated_90d"
     by_role: dict[str, list[str]] = {}
-    for feature in config.suggested_features:
+    for feature in config.order_log_features:
         by_role.setdefault(feature.role, []).append(feature.name)
     assert by_role == {
         "orders": [
@@ -142,12 +144,30 @@ def test_retail_win_back_declares_its_label_audience_features_and_built_split(co
 
 
 def test_only_retail_win_back_gains_the_declarations(config_root: Path) -> None:
+    names = ("audience", "built_split", "order_log_label", "order_log_features")
     for use_case_id, config in load_all_use_cases(config_root).items():
         dump = config.model_dump(mode="json")
         if use_case_id == "retail-win-back":
-            assert dump["audience"] and dump["built_split"]
+            assert all(dump[name] for name in names)
         else:
-            assert "audience" not in dump and "built_split" not in dump, use_case_id
+            assert not set(names) & set(dump), use_case_id
+
+
+def test_an_order_log_feature_or_label_is_checked_like_a_suggested_one(config_root: Path) -> None:
+    config = load_use_case("retail-win-back", config_root)
+    twice = config.model_copy(
+        update={"order_log_features": (*config.order_log_features, config.order_log_features[0])}
+    )
+    with pytest.raises(ConfigError) as caught:
+        validate_onboarding_config(twice, get_roles(config_root))
+    assert caught.value.code == "SUGGESTED_FEATURE_DUPLICATE"
+    assert config.order_log_label is not None
+    entity = config.model_copy(
+        update={"order_log_label": config.order_log_label.model_copy(update={"role": "entity"})}
+    )
+    with pytest.raises(ConfigError) as caught:
+        validate_onboarding_config(entity, get_roles(config_root))
+    assert caught.value.code == "LABEL_ROLE_NOT_EVENT"
 
 
 def test_an_audience_never_goes_agent_editable_or_empty() -> None:

@@ -375,3 +375,110 @@ def test_a_log_without_price_or_product_rolls_up_without_them() -> None:
     rolled = roll_up(log, columns)
     assert "order_value" not in rolled.orders.columns and "country" not in rolled.orders.columns
     assert set(rolled.order_lines.columns) == {"CustomerID", "event_time", "quantity"}
+
+
+# ---------------------------------------------------------------------------
+# Mixed spellings, time zones, a blank column, copies, the independent list check
+# ---------------------------------------------------------------------------
+TINY = LogColumns(customer="Cust", order="Inv", date="When", quantity="Qty", price="Price")
+
+
+def tiny(customers: list[object], orders: list[object], dates: list[object]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Inv": pd.Series(orders, dtype=object),
+            "Cust": pd.Series(customers, dtype=object),
+            "When": pd.Series(dates, dtype=object),
+            "Qty": [1] * len(customers),
+            "Price": [2.0] * len(customers),
+        }
+    )
+
+
+def test_one_shopper_written_as_a_number_and_as_text_is_one_shopper_in_every_table() -> None:
+    log = tiny(
+        [7, "7", 7.0, "8"], ["1", "1", "2", "3"], ["2011-01-03", "2011-01-03", "2011-01-03", "2011-01-04"]
+    )
+    rolled = roll_up(log, TINY)
+    assert list(rolled.customers["Cust"]) == ["7", "8"]
+    assert list(rolled.orders["Cust"]) == ["7", "7", "8"]
+    # Order 2 is on the same day as order 1, by the same shopper: 0 days since the previous one, not a blank.
+    assert list(rolled.orders["days_since_previous_order"].fillna(-1)) == [-1, 0, -1]
+    assert rolled.counts.orders == 3 and rolled.counts.shoppers == 2
+    assert list_matches_log(rolled.customers, log, "Cust", rolled.tables().values())
+
+
+def test_one_order_number_written_as_a_number_and_as_text_is_one_order() -> None:
+    log = tiny(
+        ["7", "7", "8"], [536365, "536365", 536366], ["2011-01-03 08:00", "2011-01-03 08:05", "2011-01-04"]
+    )
+    rolled = roll_up(log, TINY)
+    assert rolled.counts.orders == 2 and rolled.counts.two_timestamp_orders == 1
+    assert list(rolled.orders["quantity"]) == [2, 1]
+
+
+def test_mixed_spellings_of_one_shopper_on_one_order_are_not_two_shoppers() -> None:
+    log = tiny([7, "7", "7"], ["1", "1", "2"], ["2011-01-03", "2011-01-03", "2011-02-03"])
+    rolled = roll_up(log, TINY)  # before the fix: BUILD_PLAN_INCOMPLETE, "more than one 'Cust'"
+    assert rolled.counts.orders == 2 and rolled.counts.shoppers == 1
+
+
+@pytest.mark.parametrize(
+    "dates",
+    [
+        ["2011-01-01T23:30:00+05:30", "2011-01-02 01:00", "2011-01-03 10:00", "not a date"],
+        ["2011-01-01T23:30:00+05:30", "2011-01-02T01:00:00+00:00", "2011-01-03T10:00:00+00:00", "not a date"],
+        ["2011-01-01T23:30:00+05:30", "2011-01-02T06:30:00+05:30", "2011-01-03T15:30:00+05:30", "not a date"],
+        ["2011-01-01 18:00", "2011-01-02 01:00", "2011-01-03 10:00", "not a date"],
+    ],
+    ids=["aware-and-naive", "mixed-offsets", "one-offset", "naive"],
+)
+def test_times_with_a_zone_are_read_in_utc_without_one(dates: list[str]) -> None:
+    from engine.doctor.outcomes import snapshot_rows
+
+    log = tiny(["7", "7", "8", "8"], ["1", "2", "3", "4"], dates)
+    rolled = roll_up(log, TINY)
+    assert rolled.counts.lines_unreadable_date == 1 and rolled.counts.orders == 3
+    times = rolled.orders["event_time"]
+    assert times.dt.tz is None and times.is_monotonic_increasing
+    assert list(times) == [
+        pd.Timestamp("2011-01-01 18:00"),  # 23:30 at +05:30 is 18:00 UTC
+        pd.Timestamp("2011-01-02 01:00"),
+        pd.Timestamp("2011-01-03 10:00"),
+    ]
+    signup = rolled.customers.set_index("Cust")["signup_date"]
+    assert signup.to_dict() == {"7": pd.Timestamp("2011-01-01"), "8": pd.Timestamp("2011-01-03")}
+    rows = snapshot_rows(rolled.customers["Cust"], [datetime(2011, 1, 2).date()], signup)
+    assert list(rows["entity_key"]) == ["7"]
+
+
+def test_a_shopper_column_blank_on_every_line_is_a_clean_refusal() -> None:
+    log = tiny([None, None], ["1", "2"], ["2011-01-03", "2011-01-04"])
+    derived = derive_customer_list(log, "Cust", "When", order_column="Inv", quantity_column="Qty")
+    assert derived.frame.empty and derived.blank_lines == 2 and derived.blank_orders == 2
+    with pytest.raises(OrderLogError) as raised:
+        roll_up(log, TINY)
+    assert raised.value.code == "BUILD_PLAN_INCOMPLETE" and "No line names a shopper" in raised.value.message
+
+
+def test_exact_copies_of_a_line_are_kept_and_counted() -> None:
+    log = tiny(
+        ["7", "7", "7", "8"], ["1", "1", "1", "2"], ["2011-01-03", "2011-01-03", "2011-01-03", "2011-01-04"]
+    )
+    log.loc[2, "Qty"] = 5  # same order, another quantity: not a copy
+    rolled = roll_up(log, TINY)
+    assert rolled.counts.duplicate_lines == 1
+    assert list(rolled.orders["quantity"]) == [7, 1], "the copy is summed, as the log has it"
+
+
+def test_the_list_check_reads_the_log_on_its_own() -> None:
+    log = tiny([7, "7", "8"], ["1", "1", "2"], ["2011-01-03", "2011-01-03", "2011-01-04"])
+    rolled = roll_up(log, TINY)
+    customers = rolled.customers
+    assert list_matches_log(customers, log, "Cust", rolled.tables().values())
+    twice = pd.concat([customers, customers.iloc[:1]], ignore_index=True)
+    assert not list_matches_log(twice, log, "Cust"), "nobody twice"
+    split = pd.DataFrame({"Cust": ["7", "7.0", "8"]})
+    assert not list_matches_log(split, log, "Cust"), "nobody added"
+    stranger = rolled.orders.assign(Cust=["7", "9"])
+    assert not list_matches_log(customers, log, "Cust", [stranger]), "every shopper of a table is on the list"

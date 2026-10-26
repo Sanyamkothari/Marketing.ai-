@@ -52,9 +52,9 @@ def plan_of(world) -> tuple[BuildPlan, dict[str, pd.DataFrame]]:  # type: ignore
         diagnosis,
         {LOG: log},
         use_case=USE_CASE,
-        label_spec=config.label,
+        label_spec=config.order_log_label,
         order_log=order_log,
-        suggested=config.suggested_features,
+        suggested=config.order_log_features,
     )
     return plan, {LOG: log}
 
@@ -113,10 +113,14 @@ def test_the_sentence_says_what_is_left_out_and_what_is_a_return(world) -> None:
         f"{counts.return_lines:,} lines have a quantity below zero ({counts.return_orders:,} order numbers, "
         f"{counts.cancelled_return_orders:,} of them starting with 'C'); they are counted as returns, not orders, "
         f"and {counts.return_lines_without_c:,} of those lines are on numbers that do not start with 'C'. "
+        f"{counts.duplicate_lines:,} lines are exact copies of another line; they are kept and counted, as the "
+        "log has them. "
         f"{counts.unpriced_lines:,} order lines have a 'UnitPrice' of zero or less and add nothing to spend. "
         "Description is not used. The outcome is 'reactivated_90d'."
     )
-    assert counts.return_lines_without_c == 3 and counts.lines_without_shopper > 0
+    assert (
+        counts.return_lines_without_c == 3 and counts.lines_without_shopper > 0 and counts.duplicate_lines > 0
+    )
 
 
 def test_the_hash_covers_the_roll_up_and_a_different_log_is_not_the_approved_one(world) -> None:  # type: ignore[no-untyped-def]
@@ -200,7 +204,7 @@ def test_next_months_whole_log_replays_through_the_frozen_rules(world) -> None: 
 def test_a_plan_without_the_explicit_argument_is_exactly_what_it_was(world) -> None:  # type: ignore[no-untyped-def]
     config, log, diagnosis, _ = world
     with pytest.raises(BuildDriveError) as raised:
-        plan_build(diagnosis, {LOG: log}, use_case=USE_CASE, label_spec=config.label)
+        plan_build(diagnosis, {LOG: log}, use_case=USE_CASE, label_spec=config.order_log_label)
     assert (
         raised.value.code == "BUILD_PLAN_INCOMPLETE" and "No file is a customer list" in raised.value.message
     )
@@ -232,9 +236,9 @@ def test_features_that_read_a_column_the_log_does_not_have_are_left_out_and_name
         diagnosis,
         {LOG: log},
         use_case=USE_CASE,
-        label_spec=config.label,
+        label_spec=config.order_log_label,
         order_log=OrderLogInput(LOG, columns),
-        suggested=config.suggested_features,
+        suggested=config.order_log_features,
     )
     assert plan.order_log is not None
     assert set(plan.order_log.skipped_features) == {
@@ -254,16 +258,54 @@ def test_a_log_with_no_order_number_or_two_shoppers_on_one_order_cannot_be_plann
     config, log, diagnosis, order_log = world
     no_order = OrderLogInput(LOG, LogColumns(customer="CustomerID", order=None, date="InvoiceDate"))
     with pytest.raises(BuildDriveError) as raised:
-        plan_build(diagnosis, {LOG: log}, use_case=USE_CASE, label_spec=config.label, order_log=no_order)
+        plan_build(
+            diagnosis, {LOG: log}, use_case=USE_CASE, label_spec=config.order_log_label, order_log=no_order
+        )
     assert raised.value.code == "BUILD_PLAN_INCOMPLETE"
     twice = log.copy()
     order = twice.loc[twice["CustomerID"].notna(), "InvoiceNo"].iloc[0]
     twice.loc[twice.index[twice["InvoiceNo"] == order][0], "CustomerID"] = 99999.0
     with pytest.raises(BuildDriveError) as raised:
-        plan_build(diagnosis, {LOG: twice}, use_case=USE_CASE, label_spec=config.label, order_log=order_log)
+        plan_build(
+            diagnosis, {LOG: twice}, use_case=USE_CASE, label_spec=config.order_log_label, order_log=order_log
+        )
     assert raised.value.code == "BUILD_PLAN_INCOMPLETE"
     with pytest.raises(BuildDriveError):
-        plan_build(diagnosis, {}, use_case=USE_CASE, label_spec=config.label, order_log=order_log)
+        plan_build(diagnosis, {}, use_case=USE_CASE, label_spec=config.order_log_label, order_log=order_log)
+
+
+def test_every_line_left_out_counts_toward_the_approval_bar(world) -> None:  # type: ignore[no-untyped-def]
+    config, log, diagnosis, order_log = world
+    named = log.loc[log["CustomerID"].notna()].reset_index(drop=True)
+
+    def reasons(frame: pd.DataFrame) -> tuple[str, ...]:
+        plan = plan_build(
+            diagnosis, {LOG: frame}, use_case=USE_CASE, label_spec=config.order_log_label, order_log=order_log
+        )
+        assert plan.order_log is not None and plan.order_log.lines_without_shopper == 0
+        return plan.approval_reasons
+
+    assert "JOIN_DROPS_ROWS" not in reasons(named)
+    undated = named.copy()
+    undated.loc[undated.index[::20], "InvoiceDate"] = "not a date"  # 5% of the lines, over the 2% bar
+    assert "JOIN_DROPS_ROWS" in reasons(undated)
+
+
+def test_a_plan_whose_every_named_feature_is_left_out_waits(world) -> None:  # type: ignore[no-untyped-def]
+    config, log, diagnosis, _order_log = world
+    priced = [f for f in config.order_log_features if f.column == "order_value"]
+    assert priced
+    unpriced = log.drop(columns=["UnitPrice"])
+    columns = find_log_columns(unpriced, customer="CustomerID", order="InvoiceNo", date="InvoiceDate")
+    plan = plan_build(
+        diagnosis,
+        {LOG: unpriced},
+        use_case=USE_CASE,
+        label_spec=config.order_log_label,
+        order_log=OrderLogInput(LOG, columns),
+        suggested=priced,
+    )
+    assert plan.features == () and plan.blocking == ("BUILD_PLAN_INCOMPLETE",)
 
 
 def test_the_files_of_a_plan_are_the_roll_up_row_for_row(world) -> None:  # type: ignore[no-untyped-def]
