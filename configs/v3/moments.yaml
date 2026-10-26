@@ -8,9 +8,10 @@
 # holdout. Set `enabled: false` to switch one moment off.
 version: 1
 
-# The calendar (calendar_<country>.yaml) used for a customer whose country is unknown. A customer
-# whose country is known but has no calendar gets no payday or festival moment.
-default_country: IN
+# Which calendar (calendar_<country>.yaml) a customer gets: their country's, by code or alias. A
+# customer with no country gets the shop's own country, a per-shop setting given in code
+# (MomentBook.load(default_country="IN")), not here; without it they get no payday or festival
+# moment. A customer whose country has no calendar gets none either.
 
 # How several moments at once add up: the strongest raise in full, every other raise at
 # `rest_weight`, and never more than `max_multiplier` in total.
@@ -33,10 +34,11 @@ moments:
     window_days: 3.0
 
   refill_due:
-    label: Probably running low
+    label: Due to buy again
     multiplier: 1.4
-    # With no refill scores on the customer, their own buying rhythm stands in: three or more
-    # purchases, the window opens `lead_days` before the next one is due and closes `late_days` after.
+    # With no refill scores on the customer, their own buying rhythm stands in: a product bought on
+    # three or more different days (else, with no product ids at all, three or more purchase days in
+    # all), the window opens `lead_days` before the next one is due and closes `late_days` after.
     min_purchases: 3
     lead_days: 3.0
     late_days: 7.0

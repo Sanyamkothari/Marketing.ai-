@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from autonomy.contracts import CustomerState, ItemViews
+from autonomy.contracts import CustomerState, ItemPurchases, ItemViews
 from autonomy.decide.moments import (
     CONFIG_DIR,
     SIGNALS,
@@ -53,7 +53,7 @@ def multiplier(name: str) -> float:
 def test_every_configured_moment_has_a_signal_and_the_default_calendar_is_there() -> None:
     config = load_config()
     assert set(config.moments) == set(SIGNALS)
-    assert config.default_country == "IN"
+    assert BOOK.default_country is None
     assert "IN" in BOOK.calendars
     assert BOOK.calendars["IN"].timezone == "Asia/Kolkata"
 
@@ -196,19 +196,48 @@ def test_refill_due_from_the_catalogue_scores() -> None:
 
 
 def test_refill_due_from_the_customers_own_rhythm() -> None:
-    base = {"purchases": 4, "purchase_gap_days": 30.0}
+    base = {"purchases": 4, "purchase_gap_days": 30.0, "purchase_gaps": 3}
     full = multiplier("refill_due") - 1.0
     # 28 days since the last purchase: due in two days, inside the three-day lead.
     near = state(last_purchase_at=NOW - days(28), **base)
     assert lift_of("refill_due", near) == pytest.approx(full)
+    # Their rhythm, not a product's stock, so the reason claims no more than that.
     assert [m.reason for m in BOOK.active(near, NOW) if m.name == "refill_due"] == [
-        "Refill due in about 2 days"
+        "Usually buys again in about 2 days"
     ]
     assert lift_of("refill_due", state(last_purchase_at=NOW - days(20), **base)) == 0.0  # too early
     assert lift_of("refill_due", state(last_purchase_at=NOW - days(36), **base)) == pytest.approx(full)
     assert lift_of("refill_due", state(last_purchase_at=NOW - days(38), **base)) == 0.0  # the window closed
-    young = state(last_purchase_at=NOW - days(28), purchases=2, purchase_gap_days=30.0)
-    assert lift_of("refill_due", young) == 0.0  # two purchases do not make a rhythm
+    young = state(last_purchase_at=NOW - days(28), purchases=2, purchase_gap_days=30.0, purchase_gaps=1)
+    assert lift_of("refill_due", young) == 0.0  # two purchase days do not make a rhythm
+
+
+def test_order_lines_on_one_day_are_not_a_rhythm() -> None:
+    # Five lines of two orders: five purchases but only one gap between purchase days.
+    lines = state(last_purchase_at=NOW - days(28), purchases=5, purchase_gap_days=30.0, purchase_gaps=1)
+    assert lift_of("refill_due", lines) == 0.0
+
+
+def test_refill_due_from_a_products_own_rhythm() -> None:
+    full = multiplier("refill_due") - 1.0
+    cream = ItemPurchases(days=3, last_at=NOW - days(29), gap_days=30.0)
+    st = state(bought_items={"cream": cream}, purchases=3, last_purchase_at=NOW - days(2))
+    # The product is due tomorrow, whatever else they bought two days ago.
+    assert lift_of("refill_due", st) == pytest.approx(full)
+    assert [m.reason for m in BOOK.active(st, NOW) if m.name == "refill_due"] == [
+        "Usually buys cream again in about a day"
+    ]
+    twice = ItemPurchases(days=2, last_at=NOW - days(29), gap_days=30.0)
+    assert lift_of("refill_due", state(bought_items={"cream": twice})) == 0.0  # two days: no rhythm yet
+    # Products known and none due: the rhythm of all their buying is not read instead.
+    early = ItemPurchases(days=3, last_at=NOW - days(10), gap_days=30.0)
+    other = state(
+        bought_items={"cream": early},
+        last_purchase_at=NOW - days(28),
+        purchase_gap_days=30.0,
+        purchase_gaps=4,
+    )
+    assert lift_of("refill_due", other) == 0.0
 
 
 # --- price drop ----------------------------------------------------------------------------------
@@ -337,9 +366,30 @@ def test_a_country_with_no_calendar_gets_no_payday_or_festival() -> None:
     assert BOOK.active(abroad, datetime(2026, 9, 1, 12, tzinfo=UTC)) == ()
 
 
-def test_a_customer_with_no_country_is_read_with_the_default_calendar() -> None:
+def test_a_customer_with_no_country_gets_no_calendar_unless_the_shop_names_one() -> None:
+    diwali = datetime(2026, 11, 8, 12, tzinfo=UTC)
     unknown = state(country=None)
-    assert lift_of("festival", unknown, datetime(2026, 11, 8, 12, tzinfo=UTC)) > 0
+    new_york = state(country=None, timezone="America/New_York")
+    assert lift_of("festival", unknown, diwali) == 0.0
+    assert BOOK.active(new_york, diwali) == ()
+    shop = MomentBook.load(default_country="IN")
+    assert lift_of("festival", unknown, diwali, book=shop) == pytest.approx(0.7)
+    # The shop's country is only for customers with none: a known country still wins.
+    assert shop.active(state(country="US", timezone="America/New_York"), diwali) == ()
+    assert shop.with_price_changes({}).default_country == "IN"
+
+
+@pytest.mark.parametrize("written", ["IN", "in", "India", " india ", "IND", "Bharat"])
+def test_a_country_is_matched_by_its_code_or_a_name(written: str) -> None:
+    diwali = datetime(2026, 11, 8, 12, tzinfo=UTC)
+    assert lift_of("festival", state(country=written), diwali) == pytest.approx(0.7)
+
+
+def test_eid_keeps_a_day_of_tail_for_the_moon_sighting() -> None:
+    eid = datetime(2026, 3, 21, 12, tzinfo=UTC)
+    assert lift_of("festival", state(), eid) == pytest.approx(0.5)
+    assert lift_of("festival", state(), eid + days(1)) == pytest.approx(0.5)
+    assert lift_of("festival", state(), eid + days(2)) == 0.0
 
 
 # --- putting them together -----------------------------------------------------------------------

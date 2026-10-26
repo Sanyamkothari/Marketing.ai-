@@ -22,10 +22,12 @@ the factor multiplies the whole expected net exactly where cart recovery's fade 
 built without a book prices every option as before. A moment is skipped for a goal that already
 prices it: refill goals have `refill_boost`, and cart recovery has its own fade from the cart.
 
-The country of a customer picks the calendar. A customer with no country gets `default_country`'s
-(India, the launch market); a customer whose country has no calendar gets no payday or festival
-moment. Dates are read in the customer's time zone (the calendar's when the customer's is still the
-UTC default and their country is the calendar's).
+The country of a customer picks the calendar, by its code or one of the calendar's `aliases`
+("IN", "India", "IND"; case and spaces do not matter). A customer with no country gets the shop's
+`default_country` (`MomentBook(default_country=...)`, a per-shop setting; None, the default, gives
+them no payday or festival moment, so a shop never pushes India's Diwali to someone it cannot place).
+A customer whose country has no calendar gets no payday or festival moment either. Dates are read in
+the customer's time zone (the calendar's when the customer's is still the UTC default).
 
 Pure and deterministic: no clock reads, no randomness; the files are read only by the `load_*`
 functions.
@@ -68,6 +70,7 @@ __all__ = [
     "MomentUrgency",
     "MomentsConfig",
     "PriceChange",
+    "country_key",
     "load_calendar",
     "load_config",
     "price_drops",
@@ -118,7 +121,6 @@ class Combine(Contract):
 
 class MomentsConfig(Contract):
     version: int = 1
-    default_country: str = "IN"
     combine: Combine = Field(default_factory=Combine)
     moments: dict[str, MomentSpec]
 
@@ -185,6 +187,9 @@ class Calendar(Contract):
 
     country: str
     name: str = ""
+    aliases: tuple[str, ...] = Field(
+        default=(), description="Other ways a customer file writes the country: 'India', 'IND' ..."
+    )
     timezone: str = "UTC"
     payday: Payday = Field(default_factory=Payday)
     festivals: tuple[Festival, ...] = ()
@@ -193,6 +198,11 @@ class Calendar(Contract):
     @classmethod
     def _country(cls, value: str) -> str:
         return value.strip().upper()
+
+    @field_validator("aliases")
+    @classmethod
+    def _aliases(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(country_key(a) for a in value if a.strip())
 
     @field_validator("timezone")
     @classmethod
@@ -223,6 +233,11 @@ class Calendar(Contract):
                     if -fest.tail_days <= ahead <= fest.lead_days:
                         out.append(FestivalWindow(fest, day, ahead))
         return tuple(out)
+
+
+def country_key(country: str) -> str:
+    """How a country is matched to a calendar: upper case, inner spaces collapsed ("  india " -> "INDIA")."""
+    return " ".join(country.split()).upper()
 
 
 def _previous_month(year: int, month: int) -> tuple[int, int]:
@@ -377,13 +392,28 @@ def _refill_due(state: CustomerState, spec: MomentSpec, ctx: _Context) -> Active
         p14 = _finite(state.scores.get(REFILL_P14))
         share = 1.0 if p14 is None else min(max(p14, 0.0), 1.0) / (min(max(p14, 0.0), 1.0) + REFILL_P14_HALF)
         return _live("refill_due", spec, share, _refill_sentence(due))
+    # No refill model: the products they buy again on a rhythm of their own (purchase days, not order
+    # lines), the one most nearly due first.
+    best: tuple[float, str] | None = None
+    for item, bought in state.bought_items.items():
+        if bought.days < spec.min_purchases or bought.gap_days is None:
+            continue
+        due_in = bought.gap_days - _days_since(bought.last_at, ctx.now)
+        if -spec.late_days <= due_in <= spec.lead_days and (best is None or abs(due_in) < abs(best[0])):
+            best = (due_in, item)
+    if best is not None:
+        return _live("refill_due", spec, 1.0, _rhythm_sentence(best[0], best[1]))
+    if state.bought_items:
+        # Their products are known and none is due: the rhythm of all their buying says no more.
+        return None
+    # No product ids at all: their rhythm across every purchase, once it rests on enough gaps.
     last, gap = state.last_purchase_at, state.purchase_gap_days
-    if last is None or gap is None or state.purchases < spec.min_purchases:
+    if last is None or gap is None or state.purchase_gaps < spec.min_purchases - 1:
         return None
     due_in = gap - _days_since(last, ctx.now)
     if not -spec.late_days <= due_in <= spec.lead_days:
         return None
-    return _live("refill_due", spec, 1.0, _refill_sentence(due_in))
+    return _live("refill_due", spec, 1.0, _rhythm_sentence(due_in, None))
 
 
 def _finite(value: float | None) -> float | None:
@@ -398,6 +428,21 @@ def _refill_sentence(due_in: float | None) -> str:
     if due_in <= 0.5:
         return "Refill due about now"
     return f"Refill due in about {due_in:.0f} days"
+
+
+def _rhythm_sentence(due_in: float, item: str | None) -> str:
+    """The reason for a refill read from their own buying rhythm: no claim that the stock runs out."""
+    what = f"buys {item}" if item is not None else "buys"
+    if due_in < -0.5:
+        return f"Usually {what} again about now ({_days_word(-due_in)} later than usual)"
+    if due_in <= 0.5:
+        return f"Usually {what} again about now"
+    return f"Usually {what} again in {_days_word(due_in)}"
+
+
+def _days_word(days: float) -> str:
+    whole = round(days)
+    return "about a day" if whole <= 1 else f"about {whole} days"
 
 
 def _price_drop(state: CustomerState, spec: MomentSpec, ctx: _Context) -> ActiveMoment | None:
@@ -495,6 +540,8 @@ class MomentBook:
         config: MomentsConfig,
         calendars: Iterable[Calendar] = (),
         price_changes: Mapping[str, PriceChange] | None = None,
+        *,
+        default_country: str | None = None,
     ) -> None:
         unknown = sorted(set(config.moments) - set(SIGNALS))
         if unknown:
@@ -502,12 +549,24 @@ class MomentBook:
         self.config = config
         self.calendars: dict[str, Calendar] = {c.country: c for c in calendars}
         self.price_changes: dict[str, PriceChange] = dict(price_changes or {})
+        self.default_country = default_country
+        """The shop's own country, for customers with none (None: they get no calendar moment)."""
+        self._by_name: dict[str, Calendar] = {}
+        for cal in self.calendars.values():
+            for name in (cal.country, *cal.aliases):
+                self._by_name.setdefault(country_key(name), cal)
 
     @classmethod
     def load(
-        cls, directory: Path | None = None, price_changes: Mapping[str, PriceChange] | None = None
+        cls,
+        directory: Path | None = None,
+        price_changes: Mapping[str, PriceChange] | None = None,
+        *,
+        default_country: str | None = None,
     ) -> MomentBook:
-        """The book from `moments.yaml` and every `calendar_*.yaml` in the folder (default configs/v3)."""
+        """The book from `moments.yaml` and every `calendar_*.yaml` in the folder (default configs/v3).
+
+        `default_country` is the shop's country, read for customers whose file names none."""
         folder = directory or CONFIG_DIR
         config = load_config(folder / "moments.yaml")
         calendars = [
@@ -515,15 +574,23 @@ class MomentBook:
             for path in sorted(folder.glob("calendar_*.yaml"))
             if (cal := load_calendar(path.stem.removeprefix("calendar_"), folder)) is not None
         ]
-        return cls(config, calendars, price_changes)
+        return cls(config, calendars, price_changes, default_country=default_country)
 
     def with_price_changes(self, changes: Mapping[str, PriceChange]) -> MomentBook:
         """A book that also knows these catalogue price changes (a newer change to an item replaces the older)."""
-        return MomentBook(self.config, self.calendars.values(), {**self.price_changes, **changes})
+        return MomentBook(
+            self.config,
+            self.calendars.values(),
+            {**self.price_changes, **changes},
+            default_country=self.default_country,
+        )
 
     def calendar_for(self, state: CustomerState) -> Calendar | None:
-        country = (state.country or self.config.default_country).strip().upper()
-        return self.calendars.get(country)
+        """The customer's country's calendar (by code or alias), else the shop's; None when neither has one."""
+        country = state.country if state.country and state.country.strip() else self.default_country
+        if country is None:
+            return None
+        return self._by_name.get(country_key(country))
 
     def active(
         self, state: CustomerState, now: datetime, *, skip: Iterable[str] = ()

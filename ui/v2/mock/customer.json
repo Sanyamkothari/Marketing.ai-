@@ -124,6 +124,8 @@
     "viewed_items": {},
     "usual_gap_days": null,
     "purchase_gap_days": null,
+    "purchase_gaps": 0,
+    "bought_items": {},
     "last_return_at": null,
     "last_return_gap_days": null
   },

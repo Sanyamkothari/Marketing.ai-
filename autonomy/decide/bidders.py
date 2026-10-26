@@ -70,11 +70,14 @@ offered only when its channel can carry its format (`autonomy.assets.support.sup
 media (`asset_url`); `asset_of(item)` names the approved asset behind it for `Action.asset_id`, and
 an action about one product never shows an asset of a different product.
 
-**Moments** (opt-in, plan-v3 decision 2). With a `MomentBook` (`GoalBidder(moments=book)`, or
-`use_moments(book)` for every bidder built afterwards) the goal's `Urgency` is multiplied by the
-factor of the customer's live moments (a cart left, a product viewed twice, a refill due, payday, a
-festival ...; `autonomy.decide.moments`), so a message is worth more for a few days and the raise
-fades with the moment. Without a book nothing changes: every v2 number is the same.
+**Moments** (opt-in, plan-v3 decision 2). With a `MomentBook` (`GoalBidder(moments=book)`, which
+the agent passes from `build_agent_policy(moments=book)`; `use_moments(book)` is a process-wide
+default for bidders built without one, and `moments=False` keeps a bidder off whatever it holds) the
+goal's `Urgency` is multiplied by the factor of the customer's live moments (a cart left, a product
+viewed twice, a refill due, payday, a festival ...; `autonomy.decide.moments`), so a message is
+worth more for a few days and the raise fades with the moment. The factor scales the whole expected
+net, costs and the harm hold included, as cart recovery's own fade does. Without a book nothing
+changes: every v2 number is the same.
 
 The bidder returns every option, including losing and negative ones (unless `prune_z` is set): the
 attention auction, the attention price, "do nothing", the hard rules and exploration all happen
@@ -243,7 +246,9 @@ _default_moments: MomentBook | None = None
 def use_moments(book: MomentBook | None) -> None:
     """Switch moments on for every bidder built from now on (`None` switches them off again).
 
-    A bidder given `moments=` keeps its own book. Bidders already built are not changed.
+    A process-wide default, so one shop's book reaches every bidder built after it: a server with
+    several shops passes each its own (`build_agent_policy(moments=...)`) instead. A bidder given
+    `moments=` keeps its own book (`moments=False`: off). Bidders already built are not changed.
     """
     global _default_moments
     _default_moments = book
@@ -1517,8 +1522,10 @@ class GoalBidder:
     group's that all the customer's options share). An option it does not score is priced by the
     response model alone, exactly as without it.
 
-    `moments` (None: `use_moments`' book, else off) raises the urgency while moments are live (see the
-    module docstring); `moment_reasons` says which, for the explanation.
+    `moments` (None: `use_moments`' book, else off; False: off whatever `use_moments` holds) raises
+    the urgency while moments are live (see the module docstring); `moment_reasons` says which, for
+    the explanation. A refill goal leaves out the refill moment only for a customer it has a product
+    for, since only then does `refill_boost` price the window.
 
     `bids()` remembers each customer's segment and each content item's labels for `learn()`;
     `quote()` prices the same options and remembers nothing (for explaining a decision).
@@ -1548,7 +1555,7 @@ class GoalBidder:
         harm: ContactHarm | None = None,
         purchase_weighted: bool | None = None,
         uplift: UpliftScorer | None = None,
-        moments: MomentBook | None = None,
+        moments: MomentBook | Literal[False] | None = None,
     ) -> None:
         if prune_z is not None and prune_z < 0:
             raise ValueError("prune_z must be >= 0")
@@ -1590,12 +1597,24 @@ class GoalBidder:
             c.content_id: (c.theme.value, c.format) for c in self._content or ()
         }
         self._segments: dict[str, str | None] = {}
-        self.moments = moments if moments is not None else _default_moments
+        self.moments: MomentBook | None = (
+            None if moments is False else moments if moments is not None else _default_moments
+        )
         """The moments that raise this goal's urgency, or None (off)."""
+        self._boosted_urgency: Urgency | None = None
+        """For a refill goal with moments: the urgency without the refill moment, for customers with a
+        product (whose window `refill_boost` already prices)."""
         if self.moments is not None:
             from autonomy.decide.moments import wrap_urgency  # moments.py imports this module
 
-            self.urgency = wrap_urgency(self.urgency, self.moments, kind=kind, refill=self.refill)
+            base = self.urgency
+            self.urgency = wrap_urgency(base, self.moments, kind=kind, refill=False)
+            if self.refill:
+                self._boosted_urgency = wrap_urgency(base, self.moments, kind=kind, refill=True)
+
+    def _urgency_at(self, state: CustomerState, now: datetime, has_choice: bool) -> float:
+        urgency = self._boosted_urgency if self._boosted_urgency is not None and has_choice else self.urgency
+        return urgency.at(state, now) if urgency is not None else 1.0
 
     def moment_reasons(self, state: CustomerState, now: datetime) -> tuple[str, ...]:
         """Plain sentences for the moments raising this goal's bids for this customer, strongest first
@@ -1604,7 +1623,8 @@ class GoalBidder:
             return ()
         from autonomy.decide.moments import skipped_for
 
-        return self.moments.reasons(state, now, skip=skipped_for(self.kind, self.refill))
+        boosted = self.refill and self.item_for(state) is not None
+        return self.moments.reasons(state, now, skip=skipped_for(self.kind, boosted))
 
     # -- products --
 
@@ -1659,9 +1679,9 @@ class GoalBidder:
         if not channels:
             return []
         library = self._usable(self._content if self._content is not None else ctx.content)
-        urgency = self.urgency.at(state, ctx.now) if self.urgency is not None else 1.0
         value = self.value_model.value_if_converted(state, self.brief.objective)
         choice = self.item_for(state)
+        urgency = self._urgency_at(state, ctx.now, choice is not None)
         boost = refill_boost(state) if self.refill and choice is not None else 1.0
         p14 = min(max(_score(state, REFILL_P14) or 0.0, 0.0), 1.0) if boost > 1.0 else 0.0
 

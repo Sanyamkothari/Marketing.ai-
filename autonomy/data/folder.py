@@ -12,8 +12,9 @@ computes, for events folded in time order (the tests hold it to that). On top it
 - moments (plan-v3 decision 2): `last_view_at`, `last_cart_at`, a bounded record of products viewed and
   not bought since (`viewed_items`, at most `MAX_VIEWED_ITEMS`), their usual gap between days of
   activity and between purchases, and the latest return after a gap much longer than usual
-  (`last_return_at`). `autonomy.decide.moments` reads them. A purchase closes the cart and drops
-  the bought product from `viewed_items`;
+  (`last_return_at`), and each bought product's own rhythm (`bought_items`: purchase days and the usual
+  gap, at most `MAX_BOUGHT_ITEMS`). `autonomy.decide.moments` reads them. A purchase closes the cart
+  and drops the bought product from `viewed_items`;
 - `segment`: a plain RFM label (see `SegmentRules`), recomputed in `refresh()` because recency moves
   with the clock even when nothing happens.
 
@@ -36,7 +37,15 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
-from autonomy.contracts import Channel, ChannelStats, CustomerState, Event, EventType, ItemViews
+from autonomy.contracts import (
+    Channel,
+    ChannelStats,
+    CustomerState,
+    Event,
+    EventType,
+    ItemPurchases,
+    ItemViews,
+)
 
 CONTACT_MEMORY = timedelta(days=30)
 """How far back `recent_contacts` reaches; it feeds contacts_7d and contacts_30d."""
@@ -52,6 +61,9 @@ VIP_MIN_BUYERS = 50
 
 MAX_VIEWED_ITEMS = 8
 """How many viewed-but-not-bought products a customer's state keeps; the least recently viewed go first."""
+
+MAX_BOUGHT_ITEMS = 8
+"""How many bought products (`bought_items`, each with its own buying rhythm) a state keeps."""
 
 GAP_SMOOTHING = 0.3
 """Weight of the newest gap in the running averages `usual_gap_days` and `purchase_gap_days`."""
@@ -356,11 +368,14 @@ class StateFolder:
         elif t is EventType.PURCHASE:
             if event.item_id and event.item_id in s.viewed_items:
                 upd["viewed_items"] = {k: v for k, v in s.viewed_items.items() if k != event.item_id}
+            if event.item_id:
+                upd["bought_items"] = _bought(s.bought_items, event.item_id, ts)
             before = s.last_purchase_at
             if before is not None and ts > before:
                 days = (ts - before).total_seconds() / 86_400.0
                 if days >= 1.0:
                     upd["purchase_gap_days"] = _smoothed(s.purchase_gap_days, days)
+                    upd["purchase_gaps"] = s.purchase_gaps + 1
         previous = s.last_seen_at
         if previous is not None and ts > previous:
             days = (ts - previous).total_seconds() / 86_400.0
@@ -411,6 +426,28 @@ def _viewed(items: dict[str, ItemViews], item_id: str, ts: datetime) -> dict[str
     )
     while len(out) > MAX_VIEWED_ITEMS:
         oldest = min(out, key=lambda k: (out[k].last_at, out[k].count, k))
+        del out[oldest]
+    return out
+
+
+def _bought(items: dict[str, ItemPurchases], item_id: str, ts: datetime) -> dict[str, ItemPurchases]:
+    """`items` with a purchase of `item_id` at `ts`, trimmed to `MAX_BOUGHT_ITEMS` (least recently
+    bought out). A purchase less than a day after the last one of the same product is the same order:
+    it moves nothing. An older purchase (a late event) only counts as one more day."""
+    out = dict(items)
+    known = out.get(item_id)
+    if known is None:
+        out[item_id] = ItemPurchases(days=1, last_at=ts)
+    else:
+        days = (ts - known.last_at).total_seconds() / 86_400.0
+        if days >= 1.0:
+            out[item_id] = ItemPurchases(
+                days=known.days + 1, last_at=ts, gap_days=_smoothed(known.gap_days, days)
+            )
+        elif days <= -1.0:
+            out[item_id] = known.model_copy(update={"days": known.days + 1})
+    while len(out) > MAX_BOUGHT_ITEMS:
+        oldest = min(out, key=lambda k: (out[k].last_at, out[k].days, k))
         del out[oldest]
     return out
 

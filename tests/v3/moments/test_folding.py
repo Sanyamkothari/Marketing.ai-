@@ -155,3 +155,41 @@ def test_outbound_events_touch_none_of_it() -> None:
     )
     assert state.usual_gap_days is None
     assert state.last_return_at is None
+
+
+def test_each_bought_product_keeps_its_own_rhythm_in_purchase_days() -> None:
+    state = fold(
+        [
+            ev(EventType.PURCHASE, T0, 1, "cream", value=10.0),
+            ev(EventType.PURCHASE, T0 + timedelta(minutes=1), 2, "cream", value=10.0),  # same order
+            ev(EventType.PURCHASE, T0 + timedelta(days=5), 3, "soap", value=4.0),
+            ev(EventType.PURCHASE, T0 + timedelta(days=30), 4, "cream", value=10.0),
+            ev(EventType.PURCHASE, T0 + timedelta(days=70), 5, "cream", value=10.0),
+        ]
+    )
+    cream = state.bought_items["cream"]
+    assert cream.days == 3
+    assert cream.last_at == T0 + timedelta(days=70)
+    assert cream.gap_days is not None
+    assert abs(cream.gap_days - (0.7 * 30.0 + 0.3 * 40.0)) < 1e-9
+    assert state.bought_items["soap"].days == 1
+    assert state.bought_items["soap"].gap_days is None
+    # Five purchases, three gaps of a day or more between purchase days (5, 25 and 40 days).
+    assert state.purchases == 5
+    assert state.purchase_gaps == 3
+
+
+def test_bought_items_are_bounded_and_a_late_purchase_only_adds_a_day() -> None:
+    from autonomy.data.folder import MAX_BOUGHT_ITEMS
+
+    events = [
+        ev(EventType.PURCHASE, T0 + timedelta(days=k), k + 1, f"p{k}", value=1.0)
+        for k in range(MAX_BOUGHT_ITEMS + 2)
+    ]
+    state = fold(events)
+    assert len(state.bought_items) == MAX_BOUGHT_ITEMS
+    assert "p0" not in state.bought_items and "p1" not in state.bought_items
+    late = FOLDER.fold(state, ev(EventType.PURCHASE, T0, 99, "p9", value=1.0))
+    p9 = late.bought_items["p9"]
+    assert p9.days == 2
+    assert p9.last_at == T0 + timedelta(days=MAX_BOUGHT_ITEMS + 1)

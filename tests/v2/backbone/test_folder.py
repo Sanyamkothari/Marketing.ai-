@@ -96,6 +96,8 @@ NEW_FIELDS = {
     "viewed_items",
     "usual_gap_days",
     "purchase_gap_days",
+    "purchase_gaps",
+    "bought_items",
     "last_return_at",
     "last_return_gap_days",
 }

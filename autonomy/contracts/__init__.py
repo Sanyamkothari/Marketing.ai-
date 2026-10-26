@@ -2,7 +2,7 @@
 
 from autonomy.contracts.base import Channel, Contract, Group, new_id, stable_id
 from autonomy.contracts.content import ContentItem, ContentStatus, Format, Message, SendReceipt, Theme, Tone
-from autonomy.contracts.customer import ChannelStats, CustomerState, ItemViews
+from autonomy.contracts.customer import ChannelStats, CustomerState, ItemPurchases, ItemViews
 from autonomy.contracts.decisions import (
     Action,
     Batch,
@@ -83,6 +83,7 @@ __all__ = [
     "GoalStatus",
     "Group",
     "HealthStatus",
+    "ItemPurchases",
     "ItemViews",
     "Job",
     "JobStatus",

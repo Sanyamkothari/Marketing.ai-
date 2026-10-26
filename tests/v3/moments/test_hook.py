@@ -136,13 +136,50 @@ def test_cart_recovery_keeps_its_own_fade_and_skips_the_cart_moment() -> None:
     assert on.bids(viewed, ctx())[0].urgency > off.bids(viewed, ctx())[0].urgency
 
 
-def test_a_refill_goal_skips_the_refill_moment_it_already_prices() -> None:
+def test_a_refill_goal_skips_the_refill_moment_only_where_it_prices_it() -> None:
     due = state(country="US", timezone="UTC", scores={"refill_window_open": 1.0, "refill_p14": 0.3})
-    refill_on = bidder(moments=BOOK, kind=GoalKind.REPEAT_PURCHASE)
-    refill_off = bidder(kind=GoalKind.REPEAT_PURCHASE)
+
+    def cream(cid: str) -> str:
+        return "cream"
+
+    # With a product, refill_boost prices the window: the moment would count it twice.
+    refill_on = bidder(moments=BOOK, kind=GoalKind.REPEAT_PURCHASE, item_lookup=cream)
+    refill_off = bidder(kind=GoalKind.REPEAT_PURCHASE, item_lookup=cream)
     assert summary(refill_on.bids(due, ctx())) == summary(refill_off.bids(due, ctx()))
+    assert refill_on.moment_reasons(due, NOW) == ()
+    # With no product there is no boost, so the moment prices the window instead.
+    bare = bidder(moments=BOOK, kind=GoalKind.REPEAT_PURCHASE)
+    assert bare.bids(due, ctx())[0].urgency > 1.0
+    assert bare.moment_reasons(due, NOW) != ()
     # Any other goal does not price the refill, so there it counts.
     assert bidder(moments=BOOK).bids(due, ctx())[0].urgency > 1.0
+
+
+def test_false_keeps_a_bidder_off_whatever_use_moments_holds() -> None:
+    use_moments(BOOK)
+    cart = state(**CART)
+    held_off = bidder(moments=False)
+    assert held_off.moments is None
+    use_moments(None)
+    assert summary(held_off.bids(cart, ctx())) == summary(bidder().bids(cart, ctx()))
+
+
+def test_the_agent_passes_its_book_to_its_bidders_and_explains_with_it() -> None:
+    from autonomy.runtime.agent import build_agent_policy
+
+    cart = state(**CART)
+    # The agent's bidders read the live library from the context.
+    with_content = ctx().model_copy(update={"content": tuple(sample_content(NOW))})
+    on = build_agent_policy([sample_brief(NOW)], sample_content(NOW), moments=BOOK)
+    assert all(b.moments is BOOK for b in on.bidders.values())
+    explained = on.explain_bids(cart, with_content)
+    assert explained
+    assert all(e.moment_reasons and e.moment_reasons[0].startswith("Left a cart") for e in explained)
+    off = build_agent_policy([sample_brief(NOW)], sample_content(NOW))
+    assert all(b.moments is None for b in off.bidders.values())
+    plain = off.explain_bids(cart, with_content)
+    assert plain
+    assert all(e.moment_reasons == () for e in plain)
 
 
 def test_the_reasons_name_the_live_moments_strongest_first() -> None:

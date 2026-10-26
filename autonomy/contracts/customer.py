@@ -36,6 +36,16 @@ class ItemViews(Contract):
     last_at: AwareDatetime
 
 
+class ItemPurchases(Contract):
+    """How often one product was bought, when last, and the usual days between (see
+    `CustomerState.bought_items`). `days` counts distinct purchase days: several lines of one order
+    are one purchase of the product."""
+
+    days: int = Field(default=1, ge=1)
+    last_at: AwareDatetime
+    gap_days: float | None = Field(default=None, description="Running average of days between buying it")
+
+
 class CustomerState(Contract):
     customer_id: str
     as_of: AwareDatetime
@@ -98,6 +108,14 @@ class CustomerState(Contract):
     )
     purchase_gap_days: float | None = Field(
         default=None, description="Their usual days between two purchases (a running average)"
+    )
+    purchase_gaps: int = Field(
+        default=0, ge=0, description="How many gaps of a day or more went into purchase_gap_days"
+    )
+    bought_items: dict[str, ItemPurchases] = Field(
+        default_factory=dict,
+        description="Products bought: item id -> purchase days, latest purchase and usual gap; at most 8, "
+        "the least recently bought dropped first",
     )
     last_return_at: AwareDatetime | None = Field(
         default=None, description="Their latest visit, view or cart after a gap much longer than usual"
