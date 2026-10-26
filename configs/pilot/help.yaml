@@ -1117,6 +1117,10 @@ codes:
     title: "That question or suggestion is not in this case"
     meaning: "The question, the answer or the suggestion you picked is not part of this case as it stands now. It may belong to a goal you have put aside. Nothing was changed."
     fix: "Reload the case and pick again. To see a goal you put aside, choose that goal again."
+  VISIT_ANSWER_VALUE_INVALID:
+    title: "That typed value does not fit the answer"
+    meaning: "The answer you picked either needs a value you type (such as a date as year-month-day, for example 2011-11-30) and it was missing or not in that form, or it takes no typed value at all. Nothing was changed."
+    fix: "Type the date as year-month-day, or pick the answer again without a typed value."
   # --- Plan O M236: the remaining wrapper tools and explain (DEC-1806) ---------------------------------------------
   CONNECTION_BUSY:
     title: "Too many connection calls at once"

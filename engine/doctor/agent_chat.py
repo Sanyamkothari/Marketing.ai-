@@ -215,6 +215,8 @@ class _Chat(_Review):
                 for o in q.options
             ]
             chosen = next((o["label"] for o in options if o["id"] == q.answer), None)
+            if chosen is not None and q.answer_value is not None:
+                chosen = f"{chosen}: {self._text(q.upload_id, clean_text(q.answer_value, SHORT))}"
             asked.append(
                 {
                     "id": f"k{number}",

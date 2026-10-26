@@ -143,6 +143,8 @@ class AskOption:
     """The safe choice (hide, leave as text, stop): what "I don't know" and a question past the budget map to."""
     says: str = ""
     """What choosing it does, in a plain sentence with no numbers of its own (the screen puts the measured counts next)."""
+    value_kind: Literal["date", "number", "text"] | None = None
+    """Set when the answer needs a value typed with it (a date, a number or text); the route checks it."""
 
 
 @dataclass(frozen=True)
@@ -288,7 +290,12 @@ def _case_question(ask: Ask, question_id: str, options: tuple[AskOption, ...]) -
                 effect_digest=(
                     payload_digest(option.effect.payload) if option.effect.kind is not None else None
                 ),
-                effect=(option.says or _stated(option)) if option.effect.kind is not None else NO_STEP,
+                effect=(
+                    (option.says or _stated(option))
+                    if option.effect.kind is not None
+                    else (option.says if option.value_kind is not None and option.says else NO_STEP)
+                ),
+                value_kind=option.value_kind,
                 rows_changed=option.rows_changed,
                 label_rate=option.label_rate,
                 safe=option.safe,

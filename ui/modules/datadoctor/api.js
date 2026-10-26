@@ -65,10 +65,16 @@ export const chooseGoal = (c, goalId) =>
   call(one(c.case_id, "/goal"), { method: "POST", body: { version: c.version, goal_id: goalId, op_id: opId() } });
 
 /** Answer one question with one of its options. */
-export const answerQuestion = (c, questionId, optionId) =>
+export const answerQuestion = (c, questionId, optionId, value) =>
   call(one(c.case_id, "/answers"), {
     method: "POST",
-    body: { version: c.version, question_id: questionId, option_id: optionId, op_id: opId() },
+    body: {
+      version: c.version,
+      question_id: questionId,
+      option_id: optionId,
+      ...(value ? { value } : {}),
+      op_id: opId(),
+    },
   });
 
 /** Tick (`accept: true`) or untick a suggestion. */

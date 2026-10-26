@@ -246,7 +246,8 @@ def test_an_answer_claims_an_outcome_only_when_it_carries_a_step(qid: str) -> No
     assert all(not o.effect for o in spec.options if o.repeat), "a repeated answer is already a sentence"
     ask = _ask(qid)
     shown = _case_question(ask, "q", ask.options).options
-    assert all(o.effect == NO_STEP for o in shown), "no step: the screen claims nothing happens"
+    # An answer that asks for a typed value (A1c) says what the value does; every other one claims nothing.
+    assert all(o.effect == NO_STEP for o in shown if o.value_kind is None), "no step: nothing is claimed"
     step = OptionEffect(option_id="c0", kind="doctor.step", title="Fix it")
     with_step = build_ask(qid, SAMPLE, rows=3000, choices=CHOICES, effects=[step] * (len(ask.options) - 1))
     first = _case_question(with_step, "q", with_step.options).options[0].effect

@@ -26,12 +26,12 @@ def _item(payload: dict[str, Any], state: ProposalState = ProposalState.ACCEPTED
     return SimpleNamespace(payload=payload, state=state)
 
 
-def _as_of_question(answer: str | None) -> Any:
+def _as_of_question(answer: str | None, typed: str | None = None) -> Any:
     options = [
         SimpleNamespace(option_id="c0", label="The latest date in the file: 2011-12-09"),
         SimpleNamespace(option_id="c1", label="I will type a date"),
     ]
-    return SimpleNamespace(code="Q08_AS_OF", answer=answer, options=options)
+    return SimpleNamespace(code="Q08_AS_OF", answer=answer, answer_value=typed, options=options)
 
 
 def test_leaving_out_the_unfinished_month_sets_the_as_of_date() -> None:
@@ -44,8 +44,19 @@ def test_a_pending_or_rejected_item_does_not() -> None:
 
 def test_the_as_of_answer_gives_the_date_its_option_names() -> None:
     assert case_as_of(_case(questions=[_as_of_question("c0")])) == "2011-12-09"
-    assert case_as_of(_case(questions=[_as_of_question("c1")])) is None  # a typed date is not given yet
+    assert case_as_of(_case(questions=[_as_of_question("c1")])) is None  # a typed date with no value yet
     assert case_as_of(_case(questions=[_as_of_question(None)])) is None
+
+
+def test_a_typed_date_is_the_as_of_date_and_beats_the_label() -> None:
+    assert case_as_of(_case(questions=[_as_of_question("c1", "2011-11-30")])) == "2011-11-30"
+    assert case_as_of(_case(questions=[_as_of_question("c0", "2011-11-30")])) == "2011-11-30"
+    assert case_as_of(_case(questions=[_as_of_question("c1", "not a date")])) is None
+
+
+def test_an_accepted_step_wins_over_a_typed_date() -> None:
+    case = _case([_item({"as_of": "2011-10-31"})], [_as_of_question("c1", "2011-11-30")])
+    assert case_as_of(case) == "2011-10-31"
 
 
 def test_an_accepted_step_wins_over_the_question() -> None:

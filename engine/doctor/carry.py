@@ -83,7 +83,7 @@ def marks(item: CaseItem) -> tuple[str, str]:
 
 def _answers_mark(questions: Sequence[CaseQuestion]) -> str:
     given = sorted(
-        (q.question_id, q.answer)
+        (q.question_id, q.answer) if q.answer_value is None else (q.question_id, q.answer, q.answer_value)
         for q in questions
         if q.answer is not None and not q.assumed and q.standing_answer_id is None
     )
