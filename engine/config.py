@@ -918,6 +918,10 @@ of a model that was never called.
 """
 
 
+DEFAULT_DATA_AGENT_MAX_OUTPUT_TOKENS: Final[int] = 4096
+"""The shipped answer allowance of one Product AI call; `LlmConfig` leaves it out of a dump while it is this."""
+
+
 class LlmConfig(_Base):
     backend: LlmBackend = LlmBackend.FAKE
     region: Annotated[str, Field(min_length=1)] = "ap-south-1"
@@ -927,7 +931,12 @@ class LlmConfig(_Base):
     temperature: Annotated[float, Field(ge=0.0, le=1.0)] = 0.20
     max_output_tokens: Annotated[int, Field(ge=1, le=8192)] = 800
     # Guided setup, the Data Doctor and the campaign planner reason before they reply; 800 is all thinking for such a model.
-    data_agent_max_output_tokens: Annotated[int, Field(ge=1, le=32768)] = 4096
+    # Left out of every dump while it holds the shipped value, so a run's `run_config.json` (and each digest of it,
+    # `tests/fixtures/decide/golden/m100_binary_digests.json`) is byte for byte what it was before the setting existed.
+    data_agent_max_output_tokens: Annotated[int, Field(ge=1, le=32768)] = Field(
+        default=DEFAULT_DATA_AGENT_MAX_OUTPUT_TOKENS,
+        exclude_if=lambda value: value == DEFAULT_DATA_AGENT_MAX_OUTPUT_TOKENS,
+    )
     timeout_s: Annotated[int, Field(ge=1, le=600)] = 60
     max_retries: Annotated[int, Field(ge=0, le=5)] = 2
 
