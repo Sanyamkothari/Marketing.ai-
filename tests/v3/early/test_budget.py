@@ -60,6 +60,20 @@ def test_return_per_unit_spent_comes_from_the_proof() -> None:
     assert r.profit.point == pytest.approx(200.0)
 
 
+def test_the_proofs_own_return_range_is_used_when_it_has_one() -> None:
+    """A bootstrap proof resamples spend too; auto-budget must show the same range the proof shows."""
+    p = proof("win", 0.5, 0.25, 0.75, spend=400.0).model_copy(
+        update={"roi": Estimate(point=0.5, low=0.1, high=0.95)}
+    )
+    r = goal_returns({"win": p})["win"]
+    assert (r.per_unit.low, r.per_unit.point, r.per_unit.high) == (0.1, 0.5, 0.95)
+
+
+def test_a_proof_filed_under_another_goal_is_refused() -> None:
+    with pytest.raises(BudgetError):
+        goal_returns({"win": proof("repeat", 2.0, 1.5, 2.5)})
+
+
 def test_goals_without_a_range_or_spend_take_no_part() -> None:
     no_range = proof("a", 1, 1, 1).model_copy(update={"incremental_profit": None})
     no_spend = proof("b", 1, 0.5, 1.5, spend=0.0)
@@ -136,6 +150,7 @@ def test_the_receiver_is_limited_too() -> None:
 
 def test_every_week_stays_within_the_limit_over_a_month() -> None:
     led = ledger()
+    amounts: list[float | None] = []
     for week in range(5):
         before = led.budgets()
         res = led.rebalance(SEPARATED, NOW + timedelta(days=7 * week + 1))
@@ -143,7 +158,27 @@ def test_every_week_stays_within_the_limit_over_a_month() -> None:
         for goal in before:
             assert abs(after[goal] - before[goal]) <= 0.2 * before[goal] + 0.01
         assert led.total() == 2000.0
-        assert res.move is not None or week > 0
+        amounts.append(None if res.move is None else res.move.amount)
+    # 20% of the giver each week (1000, 800, 640), then its floor of half its start (500) binds
+    assert amounts == [200.0, 160.0, 128.0, 12.0, None]
+
+
+def test_the_week_is_a_rolling_seven_days() -> None:
+    led = ledger()
+    assert led.rebalance(SEPARATED, NOW).move is not None
+    assert led.rebalance(SEPARATED, NOW + timedelta(days=6.9)).move is None
+    nxt = led.rebalance(SEPARATED, NOW + timedelta(days=7))
+    assert nxt.move is not None and nxt.move.amount == pytest.approx(160.0)
+
+
+def test_the_limit_counts_money_in_and_out_together() -> None:
+    """A goal that gave 20% this week cannot also take 20% back the same week (a 40% swing)."""
+    led = ledger()
+    assert led.rebalance(SEPARATED, NOW).move is not None  # win gives 200 to repeat
+    flipped = {"win": proof("win", 2.0, 1.5, 2.5), "repeat": proof("repeat", 0.2, -0.1, 0.5)}
+    back = led.rebalance(flipped, NOW + timedelta(days=3))
+    assert back.move is None and "weekly limit" in back.reason
+    assert led.budgets() == {"win": 800.0, "repeat": 1200.0}
 
 
 # --- the envelope ------------------------------------------------------------------------------------
@@ -181,13 +216,33 @@ def test_the_giver_keeps_what_it_spent_and_its_floor() -> None:
     assert res2.move is not None and res2.move.amount == pytest.approx(150.0)  # keeps half of 1700
 
 
-def test_the_total_never_leaves_the_envelope() -> None:
-    led = ledger(envelope_total=2000.0)
-    for week in range(6):
-        led.rebalance(SEPARATED, NOW + timedelta(days=8 * week))
-        assert led.total() <= led.envelope_total
+def test_the_receivers_ceiling_holds_over_several_weeks() -> None:
+    led = BudgetLedger(
+        [
+            GoalBudget(goal_id="win", budget=1000.0),
+            GoalBudget(goal_id="repeat", budget=1000.0, ceiling=1300.0),
+        ],
+        ON,
+    )
+    got = [led.rebalance(SEPARATED, NOW + timedelta(days=7 * w)).move for w in range(4)]
+    assert [m.amount if m else None for m in got] == [200.0, 100.0, None, None]
+    assert led.budgets() == {"win": 700.0, "repeat": 1300.0}
+    assert led.total() == 2000.0
+
+
+def test_the_envelope_and_the_log_are_checked_when_the_ledger_is_built() -> None:
     with pytest.raises(BudgetError):
         BudgetLedger([GoalBudget(goal_id="a", budget=900.0)], ON, envelope_total=800.0)
+    move = ledger().rebalance(SEPARATED, NOW).move
+    assert move is not None
+    lines = [GoalBudget(goal_id="win", budget=800.0), GoalBudget(goal_id="repeat", budget=1200.0)]
+    restored = BudgetLedger(lines, ON, moves=[move])
+    restored.undo(move.move_id, NOW + timedelta(days=1))
+    assert restored.budgets() == {"win": 1000.0, "repeat": 1000.0}
+    with pytest.raises(BudgetError):  # a log about goals this ledger does not hold
+        BudgetLedger([GoalBudget(goal_id="other", budget=10.0)], ON, moves=[move])
+    with pytest.raises(BudgetError):  # the same move logged twice
+        BudgetLedger(lines, ON, moves=[move, move])
 
 
 # --- undo --------------------------------------------------------------------------------------------
@@ -259,6 +314,9 @@ def test_the_briefing_entry_is_one_plain_line_with_backed_numbers() -> None:
     assert "Q4" not in text2 and check_numbers(text2, numbers2) == []
     section = budget_week([move], NOW - timedelta(days=1), NOW + timedelta(days=6), names)
     assert section is not None and check_numbers(section.body, section.numbers) == []
+    lower = budget_week([move], NOW - timedelta(days=1), NOW + timedelta(days=6), names, cap=0.1)
+    assert lower is not None and "10.0%" in lower.body and "20.0%" not in lower.body
+    assert lower.numbers["weekly_limit_share"] == 0.1 and check_numbers(lower.body, lower.numbers) == []
 
 
 def test_the_briefing_is_silent_when_nothing_moved_or_it_was_undone() -> None:

@@ -1,7 +1,8 @@
 """Auto-budget: move budget from the weakest goal to the strongest, slowly and only on clear evidence.
 
-**Evidence.** Each goal's proven return is its incremental profit against the holdout divided by
-what it spent (`goal_returns`, from `autonomy.proof`'s per-goal `ProofSummary`), with the 95% range.
+**Evidence.** Each goal's proven return is the proof's own return on spend (`ProofSummary.roi`, so a
+bootstrap proof's range is the one the proof and the briefing show), or, when the proof has none, its
+incremental profit against the holdout divided by what it spent (`goal_returns`), with the 95% range.
 Money not spent earns nothing, so the unit is spend, not the unused allowance. A goal with no
 interval (too few customers, or another goal acted on the same customers) takes no part.
 
@@ -11,7 +12,9 @@ the lowest. Budget moves only when the strongest goal's range lies entirely abov
 The amount is the smallest of:
 
 * the weekly limit, `max_weekly_share` (at most 20%, decision V-4) of the goal's budget a week ago,
-  for the giver and again for the receiver, minus what already moved in the last 7 days;
+  for the giver and again for the receiver, minus everything that already moved in or out of that
+  goal in the last 7 days (the limit is on gross movement, so a goal cannot give 20% and take 20%
+  in the same week);
 * what the giver can part with: it keeps what it has spent and at least `floor_share` of what it
   started with, so it keeps being measured;
 * the receiver's room under its own envelope ceiling, if it has one.
@@ -27,7 +30,7 @@ import math
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 
-from autonomy.budget.models import BudgetConfig, BudgetMove, GoalBudget, GoalReturn
+from autonomy.budget.models import BudgetConfig, BudgetError, BudgetMove, GoalBudget, GoalReturn
 from autonomy.contracts import Estimate, ProofSummary
 
 __all__ = ["cents", "goal_returns", "plan_move"]
@@ -45,13 +48,19 @@ def _floor_cents(value: float) -> float:
 
 
 def goal_returns(proofs: Mapping[str, ProofSummary]) -> dict[str, GoalReturn]:
-    """Per-goal proven return per unit spent, for the goals whose proof has an interval and some spend."""
+    """Per-goal proven return per unit spent, for the goals whose proof has an interval and some spend.
+
+    Raises `BudgetError` when a proof is filed under another goal's id, so money never moves on the
+    wrong goal's evidence.
+    """
     out: dict[str, GoalReturn] = {}
     for goal_id, proof in sorted(proofs.items()):
+        if proof.goal_id is not None and proof.goal_id != goal_id:
+            raise BudgetError(f"the proof filed under goal {goal_id} is for goal {proof.goal_id}")
         profit = proof.incremental_profit
         if profit is None or proof.spend <= 0:
             continue
-        per_unit = Estimate(
+        per_unit = proof.roi or Estimate(
             point=profit.point / proof.spend, low=profit.low / proof.spend, high=profit.high / proof.spend
         )
         out[goal_id] = GoalReturn(goal_id=goal_id, spend=proof.spend, profit=profit, per_unit=per_unit)
@@ -99,9 +108,9 @@ def plan_move(
         return None, "Fewer than two goals have a proven return yet."
     strong = max(known, key=lambda g: (returns[g].per_unit.point, g))
     weak = min(known, key=lambda g: (returns[g].per_unit.point, g))
-    if strong == weak:
-        return None, "The goals earn the same, so nothing moves."
     s, w = returns[strong].per_unit, returns[weak].per_unit
+    if s.point == w.point:
+        return None, "The goals earn the same, so nothing moves."
     if s.low <= w.high:
         return None, "The goals' ranges overlap, so the difference could be noise and nothing moves."
     if s.low <= 0:
@@ -112,8 +121,8 @@ def plan_move(
     g_out, g_in = _moved(moves, now, weak)
     t_out, t_in = _moved(moves, now, strong)
     share = config.max_weekly_share
-    g_room = share * (giver.budget + g_out - g_in) - g_out
-    t_room = share * (taker.budget + t_out - t_in) - t_in
+    g_room = share * (giver.budget + g_out - g_in) - (g_out + g_in)
+    t_room = share * (taker.budget + t_out - t_in) - (t_out + t_in)
     keep = max(config.floor_share * giver.start, giver.spent)
     can_give = giver.budget - keep
     ceiling_room = math.inf if taker.ceiling is None else taker.ceiling - taker.budget

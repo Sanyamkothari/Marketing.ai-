@@ -13,7 +13,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 
-from autonomy.budget.models import BudgetMove
+from autonomy.budget.models import MAX_WEEKLY_SHARE, BudgetMove
 from autonomy.budget.report import move_entry
 from autonomy.contracts import Alert, BriefingSection
 from autonomy.inbox.items import BRIEFING, OPS, route_alert
@@ -74,8 +74,12 @@ def budget_week(
     until: datetime,
     names: Mapping[str, str],
     currency: str = "USD",
+    *,
+    cap: float = MAX_WEEKLY_SHARE,
 ) -> BriefingSection | None:
     """The week's auto-budget moves, one plain line each with its numbers, or None when none were made.
+
+    `cap` is the weekly limit in force (`BudgetConfig.max_weekly_share`), so the line states it.
 
     Only moves still applied are listed; one a person undid is no longer a change to report. None keeps
     the weekly briefing exactly as it was while auto-budget is off.
@@ -86,7 +90,7 @@ def budget_week(
     lines: list[str] = []
     numbers: dict[str, float] = {}
     for i, move in enumerate(sorted(chosen, key=lambda m: (m.at, m.move_id))):
-        text, nums = move_entry(move, names, currency)
+        text, nums = move_entry(move, names, currency, cap=cap)
         lines.append(text)
         numbers.update({k if i == 0 else f"{k}_{i}": v for k, v in nums.items()})
     return BriefingSection(title=BUDGET_TITLE, body=" ".join(lines), numbers=numbers)

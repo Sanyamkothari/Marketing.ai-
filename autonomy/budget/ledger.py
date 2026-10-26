@@ -21,7 +21,13 @@ class RebalanceResult:
 
 
 class BudgetLedger:
-    """Holds the budgets and the log. The caller writes `budgets()` back to its goals after a change."""
+    """Holds the budgets and the log. The caller writes `budgets()` back to its goals after a change.
+
+    The ledger lives in memory. To carry it across a restart, the caller stores `moves` (plain
+    Pydantic rows) and passes them back with `moves=`, together with the goals' *current* budgets,
+    which already include every applied move: the ledger does not replay the log. A log naming a goal
+    that is not listed, or the same move twice, is refused.
+    """
 
     def __init__(
         self,
@@ -44,6 +50,13 @@ class BudgetLedger:
         if total > self.envelope_total:
             raise BudgetError("the goals' budgets add up to more than the approved envelope")
         self._moves: list[BudgetMove] = list(moves)
+        seen: set[str] = set()
+        for m in self._moves:
+            if m.move_id in seen:
+                raise BudgetError(f"budget move {m.move_id} is logged twice")
+            seen.add(m.move_id)
+            if m.from_goal not in self._lines or m.to_goal not in self._lines:
+                raise BudgetError(f"budget move {m.move_id} names a goal that has no budget here")
 
     @property
     def moves(self) -> tuple[BudgetMove, ...]:

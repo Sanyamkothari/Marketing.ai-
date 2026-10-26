@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from autonomy.agents.analyst import format_money, format_rate
 from autonomy.budget.models import MAX_WEEKLY_SHARE, BudgetMove
 
 __all__ = ["move_entry"]
@@ -21,6 +20,9 @@ def move_entry(
     move: BudgetMove, names: Mapping[str, str], currency: str = "USD", *, cap: float = MAX_WEEKLY_SHARE
 ) -> tuple[str, dict[str, float]]:
     """(sentence, numbers) for one move. The sentence also tells the person undo is one click away."""
+    # Imported here so the inbox, which imports this module, does not load the agents package.
+    from autonomy.agents.analyst import format_money, format_rate
+
     weak = _name(names, move.from_goal, "the weaker goal")
     strong = _name(names, move.to_goal, "the stronger goal")
     numbers = {
