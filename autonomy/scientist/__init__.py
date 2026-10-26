@@ -10,6 +10,7 @@ Parts, each usable alone (no model is called here):
   says there is not enough data).
 * `monitor`: the weekly check of forecast against actual, and when to run it all again.
 * `chooser`: the hook by which the runtime runs the selected policy, in Shadow first.
+* `questions`: the typed menu of live experiments the agent may run on itself (`autonomy.experiments`).
 """
 
 from autonomy.scientist.campaign import Campaign, campaign_from_history, campaign_from_table
@@ -26,6 +27,14 @@ from autonomy.scientist.menu import (
     default_candidates,
 )
 from autonomy.scientist.monitor import Forecast, Monitor, MonitorSignal, WeeklyActual, check_week, forecast_of
+from autonomy.scientist.questions import (
+    QUESTION_MENU,
+    Question,
+    QuestionError,
+    QuestionKind,
+    check_question,
+    describe_question,
+)
 from autonomy.scientist.select import (
     ALPHA,
     MAX_CANDIDATES,
@@ -41,6 +50,7 @@ from autonomy.scientist.select import (
 __all__ = [
     "ALPHA",
     "MAX_CANDIDATES",
+    "QUESTION_MENU",
     "ArmAction",
     "BanditAgent",
     "BlanketPolicy",
@@ -52,6 +62,9 @@ __all__ = [
     "MenuError",
     "Monitor",
     "MonitorSignal",
+    "Question",
+    "QuestionError",
+    "QuestionKind",
     "SafeDefault",
     "ScientistChooser",
     "SegmentRule",
@@ -62,9 +75,11 @@ __all__ = [
     "campaign_from_history",
     "campaign_from_table",
     "candidate_from_spec",
+    "check_question",
     "check_week",
     "chooser_from_selection",
     "default_candidates",
+    "describe_question",
     "evaluate_candidates",
     "forecast_of",
     "holm_adjust",

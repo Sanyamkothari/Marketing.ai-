@@ -268,6 +268,24 @@ def _flat(value: float) -> dict[str, dict[str, float]]:
     return {p: dict.fromkeys(kinds, value) for p in PERSONAS}
 
 
+BETTER_OFFER_ID = "freeship"
+"""The offer `better_offer_planted` makes clearly better (see `GYM_OFFERS`)."""
+WORSE_OFFER_ID = "pct10"
+"""The offer `better_offer_planted` makes no better than a plain message."""
+BETTER_OFFER_PLANTED_BETTER = 3.0
+"""Multiplier of free shipping on a message's effect in `better_offer_planted`, for every persona."""
+BETTER_OFFER_PLANTED_WORSE = 1.0
+"""Multiplier of 10% off in `better_offer_planted`: no effect beyond the message itself."""
+
+
+def _two_offers(*, percent_off: float, free_shipping: float) -> dict[str, dict[str, float]]:
+    """The same multiplier per offer kind for every persona."""
+    return {
+        p: {OfferKind.PERCENT_OFF.value: percent_off, OfferKind.FREE_SHIPPING.value: free_shipping}
+        for p in PERSONAS
+    }
+
+
 def _base(name: str, description: str, **changes: object) -> ScenarioSpec:
     fields: dict[str, object] = {
         "name": name,
@@ -400,6 +418,15 @@ def _library() -> dict[str, ScenarioSpec]:
             n_customers=300,
             history_days=60,
             days=14,
+        ),
+        # --- v3: planted for the agent's own experiments (plan-v3 foundation C) -------------------
+        _base(
+            "better_offer_planted",
+            "Free shipping triples what a message does for everyone; 10% off adds nothing to it and still "
+            "costs its redemption. One offer is clearly better, for the agent's own live test to find.",
+            offer_uplift=_two_offers(
+                percent_off=BETTER_OFFER_PLANTED_WORSE, free_shipping=BETTER_OFFER_PLANTED_BETTER
+            ),
         ),
     ]
     return {s.name: s for s in specs}
