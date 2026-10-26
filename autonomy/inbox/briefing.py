@@ -10,14 +10,18 @@ shop owner.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 
+from autonomy.budget.models import BudgetMove
+from autonomy.budget.report import move_entry
 from autonomy.contracts import Alert, BriefingSection
 from autonomy.inbox.items import BRIEFING, OPS, route_alert
 from autonomy.inbox.store import Appearance
 
-__all__ = ["TOPIC_WORDS", "quiet_week"]
+__all__ = ["BUDGET_TITLE", "TOPIC_WORDS", "budget_week", "quiet_week"]
+
+BUDGET_TITLE = "Budget moves"
 
 TOPIC_WORDS: dict[str, tuple[str, str]] = {
     "data": ("data note", "data notes"),
@@ -62,3 +66,27 @@ def quiet_week(
         head += f"; {cleared} cleared on {'its' if cleared == 1 else 'their'} own." if cleared else "."
     body = head if not parts else f"{head} Noted, nothing to do: {', '.join(parts)}."
     return BriefingSection(title="Handled without you", body=body, numbers=numbers)
+
+
+def budget_week(
+    moves: Iterable[BudgetMove],
+    since: datetime,
+    until: datetime,
+    names: Mapping[str, str],
+    currency: str = "USD",
+) -> BriefingSection | None:
+    """The week's auto-budget moves, one plain line each with its numbers, or None when none were made.
+
+    Only moves still applied are listed; one a person undid is no longer a change to report. None keeps
+    the weekly briefing exactly as it was while auto-budget is off.
+    """
+    chosen = [m for m in moves if m.status == "applied" and since <= m.at < until]
+    if not chosen:
+        return None
+    lines: list[str] = []
+    numbers: dict[str, float] = {}
+    for i, move in enumerate(sorted(chosen, key=lambda m: (m.at, m.move_id))):
+        text, nums = move_entry(move, names, currency)
+        lines.append(text)
+        numbers.update({k if i == 0 else f"{k}_{i}": v for k, v in nums.items()})
+    return BriefingSection(title=BUDGET_TITLE, body=" ".join(lines), numbers=numbers)
