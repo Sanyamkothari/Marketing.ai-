@@ -12,7 +12,7 @@ name: realbench
 
 on:
   push:
-    branches: ["version-2"]
+    branches: ["version-2", "claude/**"]
   workflow_dispatch:
 
 concurrency:
