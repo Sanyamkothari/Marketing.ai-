@@ -918,7 +918,9 @@ def _run_sql_step(
     params = sql_params(_params(step))
     read: dict[str, pd.DataFrame] = {}
     for name in params.inputs:
-        frame = work if name == THIS_TABLE else (tables or {}).get(name)
+        # The file being prepared is read as it stands now, after the steps before this one - under `this`, or under
+        # the name the query was tried with (`this_table`). Any other name must be a table the run was given.
+        frame = work if name in (THIS_TABLE, params.this_table) else (tables or {}).get(name)
         if frame is None:
             raise RecipeError(
                 "SQL_INPUT_MISSING",

@@ -216,6 +216,12 @@ class SqlStepParams(StrictBase):
         description="How `$as_of` is worked out on each file, when no run gives one; `as_of` is what it was when "
         "the step was written.",
     )
+    this_table: str | None = Field(
+        default=None,
+        max_length=128,
+        description="The name the query gives the file the recipe prepares (a one-file case): that name is the "
+        "table as it stands when the step runs, after the steps before it, exactly what the step was tried on.",
+    )
     reads_future: bool = Field(
         default=False,
         description="The query reads rows dated after `$as_of` on purpose (it builds the outcome); the "

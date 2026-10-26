@@ -7,6 +7,12 @@ the first rows of each file, and returns a pending, never-ticked proposal: a `sq
 description first, the rows read from each file and the rows and columns the new table would have. The query
 itself is carried as detail only. It is approved with the rest of the plan; nothing is applied here, and next
 month's files go through the same step (the prescription replays it).
+
+What the query reads (one rule, for the trial and for every run): each file AFTER the fixes the person has already
+accepted on it (a date already parsed, a currency already converted), because a query is a `post_build` step and
+runs after the steps before it. The trial applies those accepted steps to the sample first; a run does the same,
+and in a one-file case the step keeps the file's table name (`this_table`) so the run feeds the query that file as
+it stands at the step, never the raw upload and never a table it does not have.
 """
 
 from __future__ import annotations
@@ -20,7 +26,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.access_policy import RoutePolicy
 from engine.access.roles import Role
+from engine.agent.config import AgentConfig
 from engine.agent.contracts import RecipeStep, RecipeStepKind
+from engine.agent.dataset_recipe import consistent_types
+from engine.agent.recipe import RecipeError, run_recipe
 from engine.agent.sql_step import (
     MAX_INPUTS,
     MAX_SQL_CHARS,
@@ -42,6 +51,7 @@ from engine.doctor.guards import (
     plan_findings,
     receipt_findings,
 )
+from engine.doctor.plan_check import guard_levels, recipe_steps_of
 from engine.doctor.prescription import slot_name
 from engine.doctor.registry import (
     BY_EXPOSURE,
@@ -184,6 +194,41 @@ def _names(ctx: DataToolContext, upload_ids: tuple[str, ...]) -> dict[str, tuple
     return out
 
 
+def _prepared(
+    ctx: DataToolContext, named: dict[str, tuple[str, pd.DataFrame, str]]
+) -> dict[str, pd.DataFrame]:
+    """Each file's first rows after the case's accepted steps on it (what the query will read in a run).
+
+    The files not asked for stay as they are: they are the other tables an accepted step may read."""
+    only = len(ctx.files) == 1
+    raw = {n: f for n, (_, f, _) in named.items()}
+    out: dict[str, pd.DataFrame] = {}
+    for name, (upload_id, frame, file_name) in named.items():
+        base = consistent_types(frame.head(DRY_RUN_ROWS)).copy()
+        steps = [step for step, _ in recipe_steps_of(ctx.case_items or (), upload_id, only_file=only)]
+        if not steps:
+            out[name] = base
+            continue
+        try:
+            out[name] = run_recipe(
+                base,
+                steps,
+                upload_id=upload_id,
+                primary_key=None,
+                target=None,
+                levels=guard_levels(steps),
+                max_failure_pct=AgentConfig().max_conversion_failure_pct,
+                tables=raw,
+            ).frame
+        except RecipeError as exc:
+            raise DataToolError(
+                "TOOL_INPUT_INVALID",
+                f"The fixes already accepted on {file_name} cannot be applied to it first: {exc.message}",
+                status=409,
+            ) from exc
+    return out
+
+
 def _as_of_rule(
     given: ProposeSqlStepArgs, named: dict[str, tuple[str, pd.DataFrame, str]]
 ) -> tuple[date, dict[str, Any]]:
@@ -211,16 +256,20 @@ def _two_valued(frame: pd.DataFrame) -> tuple[str, ...]:
 
 
 def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal:
-    named = _names(ctx, given.upload_ids)
+    raw = _names(ctx, given.upload_ids)
+    prepared = _prepared(ctx, raw)
+    named = {name: (upload_id, prepared[name], file_name) for name, (upload_id, _, file_name) in raw.items()}
     params: dict[str, Any] = {
         "sql": given.sql,
         "inputs": list(named),
         "output_name": given.output_name,
         "description": given.description,
     }
+    if len(ctx.files) == 1 and len(named) == 1:
+        params["this_table"] = next(iter(named))  # a run reads its one file under this name, as tried
     as_of = given.as_of
     try:
-        tried = {name: frame.head(DRY_RUN_ROWS) for name, (_, frame, _) in named.items()}
+        tried = {name: frame for name, (_, frame, _) in named.items()}
         if given.as_of_rule is not None:
             as_of, rule = _as_of_rule(given, named)
             params["as_of_rule"] = rule
@@ -247,7 +296,7 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         SqlTableSummary(name=name, file_name=file_name, rows=len(frame), columns=len(frame.columns))
         for name, (_, frame, file_name) in named.items()
     )
-    sampled = any(len(frame) > DRY_RUN_ROWS for _, frame, _ in named.values())
+    sampled = any(len(frame) > DRY_RUN_ROWS for _, frame, _ in raw.values())
     read = ", ".join(f"{t.file_name} ({t.rows:,} rows)" for t in inputs)
     sentence = (
         f"{given.description.rstrip('.')}. Reads {read}; the new table '{given.output_name}' would have "
@@ -293,7 +342,8 @@ def register_sql_tools(registry: DataToolRegistry) -> tuple[str, ...]:
             kind=DataToolKind.PROPOSE,
             description=(
                 "Propose one read-only SQL query over the case's files that makes a new table (a join, a total "
-                "per customer, the latest row). It is tried on the first rows and shown as a plain description "
+                "per customer, the latest row). The query reads each file after the accepted fixes (dates "
+                "already parsed). It is tried on the first rows and shown as a plain description "
                 "with the rows read and made; nothing is changed until the person approves the plan."
             ),
             input_model=ProposeSqlStepArgs,
