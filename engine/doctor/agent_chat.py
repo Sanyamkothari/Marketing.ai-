@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, ToolResult
 from engine.agent.grounding import evidence_numbers, grounded_numbers
-from engine.agent.loop import MAX_MESSAGE_CHARS, MAX_REPLY_CHARS, UNAVAILABLE, _parse
+from engine.agent.loop import MAX_MESSAGE_CHARS, UNAVAILABLE, _parse
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import clean_text, for_prompt
 from engine.doctor.agent_apply import person_owns
@@ -69,6 +69,9 @@ _LOG = get_logger(__name__)
 
 CHAT_PROMPT: Final[str] = "data_doctor_chat"
 HISTORY_TURNS: Final[int] = 12
+# The longest reply the Data Doctor chat accepts: room to explain a plan (a table, its numbers, what it needs from
+# the person). Guided setup keeps the shorter `MAX_REPLY_CHARS`. Nothing else bounds a stored reply.
+DOCTOR_REPLY_CHARS: Final[int] = 2000
 """How many earlier messages of the conversation the model reads."""
 STATE_ITEMS: Final[int] = 40
 STATE_QUESTIONS: Final[int] = 12
@@ -418,8 +421,14 @@ class _Chat(_Review):
         said = str(action.get("text") or "").strip()
         if not said:
             raise AgentToolError("AGENT_TEXT_REFUSED", "Say something to the person in `text`.")
-        failure = self.checker.failure(said, target="doctor reply", max_chars=MAX_REPLY_CHARS)
+        failure = self.checker.failure(said, target="doctor reply", max_chars=DOCTOR_REPLY_CHARS)
         if failure is not None:
+            if len(said) > DOCTOR_REPLY_CHARS:  # too long: the model is told the limit so that it can shorten
+                raise AgentToolError(
+                    "AGENT_TEXT_REFUSED",
+                    f"The reply is {len(said)} characters; the most allowed is {DOCTOR_REPLY_CHARS}. Say the same "
+                    "in fewer words, with the result first.",
+                )
             raise AgentToolError(
                 "AGENT_TEXT_REFUSED",
                 f"The reply failed a check ({failure}); use only numbers from a tool result or the person's words.",
