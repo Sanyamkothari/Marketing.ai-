@@ -23,7 +23,7 @@ jobs:
   # pass the bar yet (docs/v2/GYM_RESULTS.md), so a red Gym must not block other work. Each
   # scenario's scoreboard is uploaded as an artefact.
   gym:
-    name: gym ${{ matrix.scenario }}
+    name: gym ${{ matrix.scenario }} ${{ matrix.policy }}
     if: contains(github.event.head_commit.message, '[gym]')
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -32,6 +32,8 @@ jobs:
       fail-fast: false
       matrix:
         scenario: [baseline_shop, sleeping_dogs_15, sleeping_dogs_hidden, discount_cannibalisation, whatsapp_fatigue, send_time_matters, drift_midway, small_business, null_effect, complaint_storm]
+        # plan-v3 foundation B: the look-alike agent beside the plain one on the same seeds (docs/v3/LOOKALIKE.md)
+        policy: [agent, agent_lookalike]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -45,10 +47,10 @@ jobs:
         shell: bash   # bash -eo pipefail: a crash under tee must turn the job red
         run: |
           mkdir -p gym-report
-          python -m autonomy.gym.run --scenario ${{ matrix.scenario }} --policy agent --seeds 3 --customers 3000 --report-json gym-report/${{ matrix.scenario }}.json | tee gym-report/${{ matrix.scenario }}.txt
+          python -m autonomy.gym.run --scenario ${{ matrix.scenario }} --policy ${{ matrix.policy }} --seeds 3 --customers 3000 --report-json gym-report/${{ matrix.scenario }}-${{ matrix.policy }}.json | tee gym-report/${{ matrix.scenario }}-${{ matrix.policy }}.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: gym-${{ matrix.scenario }}
+          name: gym-${{ matrix.scenario }}-${{ matrix.policy }}
           path: gym-report/
 
   # Plan-v3 decision 2 (docs/v3/MOMENTS.md): moments_planted with the agent's moments on. `--moments`
