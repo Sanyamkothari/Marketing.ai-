@@ -1154,6 +1154,41 @@ def test_a_reply_over_the_doctor_ceiling_is_refused_and_the_model_is_told_the_li
     assert told and str(agent_chat.DOCTOR_REPLY_CHARS) in str(told[0]["message"])
 
 
+def test_an_over_long_reply_that_also_has_a_wrong_number_is_told_both(
+    storage: LocalStorage, world: World
+) -> None:
+    long_wrong = "I found 9,999 gaps. " + _long_reply(2100)
+    client = ChatScript({"explain": [reply(long_wrong), reply("Short version.")]})
+    talk = Talk(storage, world, client)
+    talk.say("explain the plan")
+    told = [r for r in client.seen[1].results if r.get("error") == "AGENT_TEXT_REFUSED"]
+    assert told and "2000" in str(told[0]["message"]) and "numbers_grounded" in str(told[0]["message"])
+
+
+def test_the_last_word_is_told_the_limit_when_a_reply_is_refused_only_for_length(
+    storage: LocalStorage, world: World
+) -> None:
+    client = ChatScript(
+        {"explain": [reply(_long_reply(2100)), reply(_long_reply(2100)), reply("Short version.")]}
+    )
+    talk = Talk(storage, world, client)
+    talk.say("explain the plan")
+    assert talk.reply.text == "Short version."
+    told = [r for r in last_word_seen(client).results if r.get("error") == "AGENT_TEXT_REFUSED"]
+    assert told and all("2000" in str(r["message"]) for r in told)
+
+
+def test_a_long_earlier_reply_is_shown_whole_to_the_model_on_the_next_turn(
+    storage: LocalStorage, world: World
+) -> None:
+    text = _long_reply(1500)[:-1] + " END-MARKER."
+    client = ChatScript({"explain": [reply(text)], "yes do those": [reply("Done.")]})
+    talk = Talk(storage, world, client)
+    talk.say("explain the plan")
+    talk.say("yes do those")
+    assert "END-MARKER" in str(client.seen[-1].history)
+
+
 def test_guided_setup_keeps_its_shorter_reply_ceiling() -> None:
     from engine.agent.loop import MAX_REPLY_CHARS
     from engine.generative.guardrails import CheckContext, Guardrails, load_policy
