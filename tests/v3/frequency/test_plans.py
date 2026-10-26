@@ -238,6 +238,7 @@ def test_a_waiting_plan_leaves_the_customer_alone_and_says_why() -> None:
     )
     when, name, value = planner.last["c1"]
     assert (when, name) == (NOW, WAIT_14D) and value > 0
+    assert planner.chosen == {WAIT_14D: 1}
 
 
 def test_replanning_follows_a_purchase() -> None:
@@ -273,7 +274,7 @@ def test_the_plan_is_made_again_every_day_from_the_state() -> None:
 def test_observe_false_changes_nothing() -> None:
     _, planner = agent_group()
     assert planner.gate(state(contacts_7d=1), [bid(uplift=0.03)], NOW, False) == rules.FREQUENCY_PLAN
-    assert planner.last == {}
+    assert planner.last == {} and planner.chosen == {}
 
 
 def test_the_plan_only_ever_holds_it_never_releases() -> None:

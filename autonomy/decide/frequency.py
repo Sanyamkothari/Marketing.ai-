@@ -411,13 +411,15 @@ class FrequencyPlanner:
 
     `choose(state, bids)` is pure. `gate(state, bids, now, observe)` is the hook
     `AutonomousPolicy(plan_fn=...)` calls: it returns `rules.FREQUENCY_PLAN` when the best plan waits.
-    `last` keeps each customer's latest plan (when it was made, its name, its value) for the
-    briefing and the tests.
+    `last` keeps each customer's latest plan (when it was made, its name, its value) and `chosen`
+    counts how often each plan won, for the briefing and the tests.
     """
 
     pricing: Pricing
     config: PlanConfig = field(default_factory=PlanConfig)
     last: dict[str, tuple[datetime, str, float]] = field(default_factory=dict)
+    chosen: dict[str, int] = field(default_factory=dict)
+    """How many times each plan was the best one (one per customer per decision), by plan name."""
 
     def choose(self, state: CustomerState, bids: Sequence[Bid]) -> PlanChoice:
         cfg = self.config
@@ -464,6 +466,7 @@ class FrequencyPlanner:
         choice = self.choose(state, bids)
         if observe:
             self.last[state.customer_id] = (now, choice.best.name, choice.value)
+            self.chosen[choice.best.name] = self.chosen.get(choice.best.name, 0) + 1
         return rules.FREQUENCY_PLAN if choice.wait else None
 
 
