@@ -17,6 +17,10 @@ The cost guard comes first: a type is written only if all its drafts still fit u
 remaining (smaller) types are listed as skipped and keep using the v2 library; nothing half-written
 is left behind. A model call that fails falls back to the Creative's fixed template copy, as in v2.
 
+Type ids (`ct000`, largest first) are refitted every week, so the same id can name a different group
+next week. Content ids and WhatsApp template names are therefore keyed by the type id, the ISO week,
+a hash of the type's label and centre, and (in the Creative) a hash of the final wording.
+
 With `CopyConfig.enabled` False (the default) `run` does nothing at all: no types, no model call, an
 empty plan, so the agent's behaviour and numbers are exactly v2's.
 """
@@ -31,9 +35,10 @@ from datetime import datetime
 from autonomy.agents.creative import OFFER_THEMES, Creative
 from autonomy.agents.critic import BrandRules, Critic
 from autonomy.brand.kit import BrandKit
+from autonomy.brand.rules import offer_in_style
 from autonomy.content.config import CopyConfig, CostGuard
 from autonomy.content.live import LiveBoard
-from autonomy.content.scoring import DraftResult, ScoringModel, ScoringReport, tally_sends
+from autonomy.content.scoring import PastSend, ScoringModel, ScoringReport, tally_sends
 from autonomy.content.types import CustomerType, CustomerTypes
 from autonomy.contracts import (
     Brief,
@@ -65,11 +70,17 @@ class TypePlan:
 
 @dataclass
 class WeeklyPlan:
-    """The result of one weekly run."""
+    """The result of one weekly run.
+
+    `customer_types` is the fitted grouping: the dispatcher calls `customer_types.assign(state)` at
+    send time to find a customer's type, then `board.tests[type_id].assign(customer_id)` for the
+    draft. `llm_calls` counts requests that reached the model (a JSON retry inside one request is not
+    counted; cells written from template copy while the model was down are not counted)."""
 
     enabled: bool
     goal_id: str
     types: tuple[CustomerType, ...] = ()
+    customer_types: CustomerTypes | None = None
     plans: list[TypePlan] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     writes_used: int = 0
@@ -119,10 +130,25 @@ def _cell_plan(
     The cell list is rotated by `offset` (a hash of the type) so different types start from different
     cells. About `drafts / per_call` cells are used, one model call each (never the same cell twice,
     which would repeat content ids), and the drafts are shared out as evenly as possible."""
+    if not cells:
+        return []
     used = min(math.ceil(drafts / per_call), len(cells))
     start = offset % len(cells)
     base, extra = divmod(drafts, used)
     return [(*cells[(start + j) % len(cells)], base + (1 if j < extra else 0)) for j in range(used)]
+
+
+def week_key(now: datetime) -> str:
+    """The ISO week of `now`, as in "2026w40"."""
+    year, week, _ = now.isocalendar()
+    return f"{year}w{week:02d}"
+
+
+def type_scope(ctype: CustomerType, now: datetime) -> str:
+    """The key per-type copy is filed under: type id, ISO week, and a hash of the type's label and centre.
+
+    A type id alone is not enough, because next week's `ct000` is usually a different group."""
+    return f"{ctype.type_id}_{week_key(now)}_{stable_id('k', ctype.label, ctype.traits)[2:8]}"
 
 
 class CopyPlanner:
@@ -149,35 +175,55 @@ class CopyPlanner:
         brand_voice: str,
         now: datetime,
         channel: Channel | None = None,
-        past_sends: Iterable[tuple[ContentItem, CustomerState, bool]] = (),
+        past_sends: Iterable[PastSend] = (),
         kit: BrandKit | None = None,
     ) -> WeeklyPlan:
         """Plan one week of copy for `brief`'s goal from the customers in `states`.
 
-        `past_sends` are our own earlier sends as (item, customer state, bought) rows; they train the
-        scoring model after being placed in this week's types. `channel` defaults to the envelope's
-        first channel. The result's `board` holds the live tests, ready for `record` and `review_all`."""
+        `past_sends` are our own earlier sends, one `PastSend` (item, state, sent_at, bought) per
+        message, with the customer's state AS OF the send, never today's: today's state already holds
+        the purchase the send caused. Rows with a state dated after the send are skipped and noted.
+        They are placed in this week's types and train the scoring model. `channel` defaults to the
+        envelope's first channel and must be one the envelope allows. The result's `board` holds the
+        live tests, ready for `record` and `review_all`; `customer_types` places a customer in a type."""
         cfg = self._cfg
         plan = WeeklyPlan(enabled=cfg.enabled, goal_id=brief.goal_id, write_cap=cfg.write_cap)
         if not cfg.enabled or not states:
             return plan
+        if channel is not None and channel not in brief.envelope.channels:
+            raise ValueError(f"channel {channel.value} is not in the envelope of goal {brief.goal_id}")
 
         types = CustomerTypes.fit(states, cfg)
         plan.types = types.types
+        plan.customer_types = types
         sizes = types.counts(states)
         offers = {o.offer_id: o for o in brief.envelope.offers}
 
         scoring = self._scoring or ScoringModel(cfg, offers=offers)
-        results: list[DraftResult] = tally_sends(past_sends, types)
-        plan.scoring = scoring.fit(results, {t.type_id: t.traits for t in types.types})
+        tally = tally_sends(past_sends, types)
+        if tally.late_states:
+            plan.notes.append(
+                f"{tally.late_states} past sends skipped: the customer state is dated after the send"
+            )
+        plan.scoring = scoring.fit(tally.cells, {t.type_id: t.traits for t in types.types})
         plan.scoring_used = scoring.usable
 
-        cells = [(o, t) for o in brief.envelope.offers for t in OFFER_THEMES[o.kind]]
+        in_style = [o for o in brief.envelope.offers if kit is None or offer_in_style(o, kit.rules)]
+        plan.notes.extend(
+            f"{o.offer_id}: the shop's own copy never states this kind of discount"
+            for o in brief.envelope.offers
+            if o not in in_style
+        )
+        cells = [(o, t) for o in in_style for t in OFFER_THEMES[o.kind]]
+        if not cells:
+            plan.notes.append("no offer and theme the brief allows: nothing written, v2 copy is in use")
+            return plan
         use_channel = channel or brief.envelope.channels[0]
         guard = CostGuard(cfg.write_cap)
         board = LiveBoard(cfg)
         plan.board = board
         self._creative.reset()
+        templated_cells = 0
 
         order = sorted(types.types, key=lambda t: (-sizes[t.type_id], t.type_id))
         for position, ctype in enumerate(order):
@@ -187,7 +233,12 @@ class CopyPlanner:
                     for t in order[position:]
                 )
                 break
+            before = len(self._creative.templated)
             written = self._write(brief, ctype, cells, use_channel, guard, brand_voice, now, kit)
+            templated_cells += len(self._creative.templated) - before
+            if not written:
+                plan.skipped.append(f"{ctype.type_id}: nothing was written (see the notes)")
+                continue
             reviewed = self._critic.review(written, rules)
             approved = tuple(i for i in reviewed if i.status is ContentStatus.APPROVED)
             plan.rejected += sum(i.status is ContentStatus.REJECTED for i in reviewed)
@@ -210,8 +261,8 @@ class CopyPlanner:
                 )
             )
         plan.writes_used = guard.used
-        plan.llm_calls = guard.calls
-        plan.notes = [*self._creative.dropped, *self._creative.failures, *self._creative.templated]
+        plan.llm_calls = guard.calls - templated_cells
+        plan.notes.extend([*self._creative.dropped, *self._creative.failures, *self._creative.templated])
         return plan
 
     def _write(
@@ -226,6 +277,7 @@ class CopyPlanner:
         kit: BrandKit | None,
     ) -> list[ContentItem]:
         offset = int(stable_id("t", self._cfg.seed, ctype.type_id)[2:10], 16)
+        scope = type_scope(ctype, now)
         out: list[ContentItem] = []
         for offer, theme, n in _cell_plan(
             cells, self._cfg.drafts_per_type, self._cfg.drafts_per_call, offset
@@ -234,7 +286,7 @@ class CopyPlanner:
             out.extend(
                 self._creative.write_for_type(
                     brief,
-                    type_id=ctype.type_id,
+                    type_id=scope,
                     type_note=ctype.note,
                     channel=channel,
                     offer=offer,

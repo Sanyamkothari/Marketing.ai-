@@ -8,8 +8,10 @@ from autonomy.content.live import Arm, Cut, LiveBoard, LiveTest, wilson_bounds
 from autonomy.content.planner import CopyPlanner, TypePlan, WeeklyPlan, select_top
 from autonomy.content.scoring import (
     DraftResult,
+    PastSend,
     ScoringModel,
     ScoringReport,
+    Tally,
     ThemeBaseline,
     draft_features,
     tally_sends,
@@ -28,8 +30,10 @@ __all__ = [
     "DraftResult",
     "LiveBoard",
     "LiveTest",
+    "PastSend",
     "ScoringModel",
     "ScoringReport",
+    "Tally",
     "ThemeBaseline",
     "TypePlan",
     "WeeklyPlan",

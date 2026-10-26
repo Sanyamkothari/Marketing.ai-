@@ -86,17 +86,39 @@ def test_traffic_is_split_equally_and_stably_and_logged_as_a_probability() -> No
     assert {test.assign(f"c{i}") for i in range(50)} == {"d0"}
 
 
-def test_only_top_k_drafts_go_live_and_results_feed_back() -> None:
+def test_a_cut_moves_only_the_customers_of_the_cut_draft() -> None:
+    test = LiveTest.start("ct000", ITEMS, CFG)
+    customers = [f"c{i}" for i in range(3000)]
+    before = {c: test.assign(c) for c in customers}
+    test.record("d0", 5000, 500)
+    test.record("d1", 5000, 480)
+    test.record("d2", 5000, 100)
+    assert [c.content_id for c in test.review()] == ["d2"]
+    after = {c: test.assign(c) for c in customers}
+    for c in customers:
+        if before[c] != "d2":
+            assert after[c] == before[c], c  # a surviving draft keeps every one of its customers
+        else:
+            assert after[c] in ("d0", "d1")
+    moved = [after[c] for c in customers if before[c] == "d2"]
+    assert abs(moved.count("d0") / len(moved) - 0.5) < 0.08  # the cut draft's share is split evenly
+    shares = [list(after.values()).count(cid) / 3000 for cid in ("d0", "d1")]
+    assert all(abs(s - 0.5) < 0.04 for s in shares)
+
+
+def test_only_top_k_drafts_go_live_and_this_weeks_results_are_summarised() -> None:
     many = [make_item(f"m{i}", words=5 + i) for i in range(6)]
     board = LiveBoard(CFG)
     test = board.start("ct001", many)
     assert list(test.arms) == ["m0", "m1", "m2"]
     board.record_many([("ct001", "m0", 400, 40), ("ct001", "m1", 400, 4), ("ct001", "m2", 0, 0)])
-    assert [c.content_id for c in board.review_all()] == ["m1"] or board.review_all() == []
+    # 10% vs 1% on 400 sends each: the Wilson bands at z=3 do not overlap, so m1 is cut (m2 has no sends).
+    assert [c.content_id for c in board.review_all()] == ["m1"]
+    assert board.review_all() == []  # already cut: nothing more to do
+    assert board.live_by_type() == {"ct001": ["m0", "m2"]}
     cells = board.feedback()
     assert {(c.item.content_id, c.sends, c.purchases) for c in cells} == {("m0", 400, 40), ("m1", 400, 4)}
     assert all(c.type_id == "ct001" for c in cells)
-    assert set(board.live_by_type()) == {"ct001"}
     with pytest.raises(KeyError):
         board.record("ct001", "m5", 1, 0)
     with pytest.raises(ValueError):

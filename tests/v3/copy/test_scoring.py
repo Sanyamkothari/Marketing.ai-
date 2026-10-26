@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from autonomy.content.config import CopyConfig
 from autonomy.content.scoring import (
     FEATURE_NAMES,
     DraftResult,
+    PastSend,
     ScoringModel,
     ThemeBaseline,
     draft_features,
@@ -18,7 +21,7 @@ from autonomy.content.scoring import (
 from autonomy.content.types import CustomerTypes
 from autonomy.contracts import Theme
 
-from .synth import make_item, make_states, synth_results
+from .synth import NOW, make_item, make_states, synth_results
 
 CFG = CopyConfig(seed=1)
 
@@ -113,11 +116,23 @@ def test_results_must_be_possible_and_repeats_are_added() -> None:
     assert [(c.sends, c.purchases) for c in merged] == [(40, 5)]
 
 
-def test_past_sends_are_retyped_by_todays_types() -> None:
+def test_past_sends_are_placed_in_this_weeks_types_by_their_send_time_state() -> None:
     states = make_states(90)
     types = CustomerTypes.fit(states, CopyConfig(min_types=3, max_types=3))
     item = make_item("only")
-    cells = tally_sends([(item, s, i % 4 == 0) for i, s in enumerate(states)], types)
-    assert sum(c.sends for c in cells) == 90
-    assert sum(c.purchases for c in cells) == sum(1 for i in range(90) if i % 4 == 0)
-    assert {c.type_id for c in cells} <= {t.type_id for t in types.types}
+    tally = tally_sends([PastSend(item, s, NOW, i % 4 == 0) for i, s in enumerate(states)], types)
+    assert tally.late_states == 0
+    assert sum(c.sends for c in tally.cells) == 90
+    assert sum(c.purchases for c in tally.cells) == sum(1 for i in range(90) if i % 4 == 0)
+    assert {c.type_id for c in tally.cells} <= {t.type_id for t in types.types}
+
+
+def test_a_state_dated_after_the_send_is_skipped_so_the_outcome_cannot_leak_into_the_type() -> None:
+    states = make_states(30)
+    types = CustomerTypes.fit(states, CopyConfig(min_types=3, max_types=3))
+    item = make_item("only")
+    early = NOW - timedelta(days=1)  # every state is as of NOW: one day after these sends
+    rows = [PastSend(item, s, early if i < 10 else NOW, True) for i, s in enumerate(states)]
+    tally = tally_sends(rows, types)
+    assert tally.late_states == 10
+    assert sum(c.sends for c in tally.cells) == 20

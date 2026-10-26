@@ -1,9 +1,10 @@
 """Live tests: the top drafts of each type go out together, and a clear loser is cut (plan-v3 decision 6, step 5).
 
 Per customer type, the top `top_k` drafts (three by default) are sent in equal shares: a customer's
-draft is a fixed hash of the type and the customer, so nobody gets a different draft each week and
-the share of every live draft is known exactly (`LiveTest.probability`, logged with the decision like
-every other choice the agent makes).
+draft is a fixed hash of the type and the customer, so nobody gets a different draft each week, a cut
+moves only the customers of the cut draft, and the share of every live draft is known exactly
+(`LiveTest.probability`, logged with the decision like every other choice the agent makes). Only
+agent-group customers are assigned; the holdout never enters a live test.
 
 A draft is cut only under a conservative rule, because cutting a good draft by luck costs more than
 sending a weak one a little longer:
@@ -18,8 +19,9 @@ Looking often does not defeat this, because the bar is high at every look: for t
 chance that the bands separate at a single look is far below 0.1%, and the tests run many looks over
 many seeds to check that. The cost is patience: a draft that is only a little worse stays live.
 
-Results go back out through `LiveBoard.feedback`, as the same `DraftResult` cells the scoring model
-trains on, so what the live test learns improves next week's ranking.
+What the live test learns improves next week's ranking through the per-send rows: store each send
+with the customer's state as of the send (`autonomy.content.scoring.PastSend`) and pass them to next
+week's `CopyPlanner.run` as `past_sends`. `LiveBoard.feedback` is only this week's summary.
 """
 
 from __future__ import annotations
@@ -106,10 +108,18 @@ class LiveTest:
         return 1.0 / len(live) if content_id in live else 0.0
 
     def assign(self, customer_id: str, seed: int = 0) -> str:
-        """The live draft this customer gets: a fixed, equal-share split by hash."""
-        live = self.live_ids()
+        """The live draft this customer gets: a fixed, equal-share split by hash.
+
+        The customer's slot is taken over all the test's drafts, cut or not, so a cut never moves
+        the customers of a surviving draft. Only the customers of a cut draft are moved, by a second
+        hash over the drafts still live, which keeps the shares equal."""
+        arms = list(self.arms)
         digest = hashlib.sha256(f"{seed}|{self.type_id}|{customer_id}".encode()).hexdigest()
-        return live[int(digest[:12], 16) % len(live)]
+        first = arms[int(digest[:12], 16) % len(arms)]
+        if self.arms[first].live:
+            return first
+        live = self.live_ids()
+        return live[int(digest[12:24], 16) % len(live)]
 
     def record(self, content_id: str, sends: int, purchases: int) -> None:
         """Add results for a live draft. Results for a draft already cut are kept but change nothing."""
@@ -174,7 +184,11 @@ class LiveBoard:
         return [cut for tid in sorted(self.tests) for cut in self.tests[tid].review()]
 
     def feedback(self) -> list[DraftResult]:
-        """Results so far as scoring-model cells, to be added to next week's training data."""
+        """This week's results so far, per (draft, type), as a same-week summary.
+
+        Not training data for next week: the type ids are this week's and are refitted. The scoring
+        model learns from the per-send rows (`PastSend`, with the state as of the send), which the
+        planner places in next week's types."""
         return [
             DraftResult(item=arm.item, type_id=tid, sends=arm.sends, purchases=arm.purchases)
             for tid in sorted(self.tests)

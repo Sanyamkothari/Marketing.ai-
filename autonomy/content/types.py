@@ -93,8 +93,15 @@ _LOG_COLUMNS = frozenset({0, 1, 2, 3, 4, 6})
 """Indices into `BASE_NAMES` that are skewed counts, days or money: log1p-scaled before standardising."""
 
 
+_BASE_FILL: tuple[float, ...] = (NEVER_PURCHASED_DAYS, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0)
+"""What a non-finite base value (a blank or garbled amount in an upload) is read as, per column."""
+
+
 def _base_matrix(states: Sequence[CustomerState]) -> Matrix:
     raw = np.array([base_row(s) for s in states], dtype=np.float64).reshape(len(states), len(BASE_NAMES))
+    bad = ~np.isfinite(raw)
+    if bad.any():  # one NaN would make a column's mean NaN and break the k-means start
+        raw[bad] = np.broadcast_to(np.asarray(_BASE_FILL), raw.shape)[bad]
     for col in _LOG_COLUMNS:
         raw[:, col] = np.log1p(np.maximum(raw[:, col], 0.0))
     return raw

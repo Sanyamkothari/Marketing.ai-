@@ -104,3 +104,17 @@ def test_missing_profile_values_are_filled_not_fatal() -> None:
     ]
     types = CustomerTypes.fit(sparse, CopyConfig(min_types=3, max_types=6))
     assert len(types.assign_many(sparse)) == 60
+
+
+def test_non_finite_base_fields_are_filled_not_fatal() -> None:
+    # A blank or garbled amount in an upload can arrive as NaN or inf; one such customer must not
+    # break the week's run (it used to make a column's mean NaN and crash the k-means start).
+    states = make_states(60)
+    states[0] = states[0].model_copy(update={"revenue": float("nan")})
+    states[1] = states[1].model_copy(update={"revenue": float("inf")})
+    states[2] = states[2].model_copy(update={"offer_sensitivity": float("nan")})
+    types = CustomerTypes.fit(states, CopyConfig(min_types=3, max_types=6))
+    ids = types.assign_many(states)
+    assert len(ids) == 60 and set(ids) <= {t.type_id for t in types.types}
+    assert all(t.label for t in types.types)
+    assert sum(t.size for t in types.types) == 60

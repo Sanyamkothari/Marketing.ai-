@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
+import numpy as np
 import pytest
 
 from autonomy.agents.base import ScriptedLLM
 from autonomy.agents.creative import CHANNEL_BODY_MAX, EMAIL_FOOTER, Creative
 from autonomy.agents.critic import BrandRules, Critic
 from autonomy.content.config import CopyConfig, CostGuard
-from autonomy.content.planner import CopyPlanner, _cell_plan, select_top
-from autonomy.contracts import Channel, ContentStatus, Theme
+from autonomy.content.planner import CopyPlanner, WeeklyPlan, _cell_plan, select_top
+from autonomy.content.scoring import PastSend, ScoringModel
+from autonomy.contracts import Channel, ContentStatus, CustomerState, Theme
 from autonomy.fakes.samples import FREE_SHIP, TEN_OFF, sample_brief
 
 from .synth import NOW, VOICE, creative_script, judge, make_item, make_states
@@ -25,7 +29,8 @@ def _planner(cfg: CopyConfig, bad_theme: str | None = None) -> tuple[CopyPlanner
 
 
 def _run(planner: CopyPlanner, n: int = 60, **kw):  # type: ignore[no-untyped-def]
-    return planner.run(BRIEF, make_states(n), rules=RULES, brand_voice=VOICE, now=NOW, **kw)
+    args = {"rules": RULES, "brand_voice": VOICE, "now": NOW, **kw}
+    return planner.run(BRIEF, make_states(n), **args)
 
 
 def test_the_creative_writes_per_type_with_the_type_in_the_prompt_and_unique_ids() -> None:
@@ -52,7 +57,8 @@ def test_the_creative_writes_per_type_with_the_type_in_the_prompt_and_unique_ids
         BRIEF, type_id="ct001", type_note="x", channel=Channel.WHATSAPP, offer=FREE_SHIP,
         theme=Theme.CONVENIENCE, n=2, brand_voice=VOICE, now=NOW,
     )  # fmt: skip
-    assert all(i.template_name and i.template_name.endswith("ct001") for i in wa)
+    assert all(i.template_name and "_ct001_" in i.template_name for i in wa)
+    assert len({i.template_name for i in wa}) == 2
     assert all(len(i.body) <= CHANNEL_BODY_MAX[Channel.WHATSAPP] for i in wa)
     with pytest.raises(ValueError):
         creative.write_for_type(BRIEF, type_id="t", type_note="x", **{**args, "n": 0})  # type: ignore[arg-type]
@@ -63,7 +69,18 @@ def test_the_default_library_is_unchanged_by_the_hooks() -> None:
     llm = ScriptedLLM(creative_script())
     items = Creative(llm).build_library(BRIEF, brand_voice=VOICE, n_per_cell=2, now=NOW)
     assert items and all("Customer type" not in p for _, p in llm.calls)
-    assert all(i.template_name is None or not i.template_name.endswith("_ct001") for i in items)
+    # Pinned: printed by the same call against autonomy/agents/creative.py at base commit 672602ea.
+    assert len(items) == 28
+    assert [i.content_id for i in items[:3]] == [
+        "ci_05d4f7556e47fe6ca561",
+        "ci_3935a318e29081508391",
+        "ci_cff1a78e7f8fc2975b93",
+    ]
+    wa = [(i.content_id, i.template_name) for i in items if i.template_name][:2]
+    assert wa == [
+        ("ci_b8a98ec38b2162c06b07", "goal_winback_v1_whatsapp_none_reminder_0"),
+        ("ci_fcafd18458d3cc8cacf5", "goal_winback_v1_whatsapp_none_reminder_1"),
+    ]
 
 
 def test_drafts_per_type_are_within_five_to_ten_and_all_pass_the_critic_to_go_live() -> None:
@@ -140,6 +157,7 @@ def test_a_model_outage_falls_back_to_template_copy_and_the_week_still_completes
     plan = _run(planner)
     assert plan.notes and any("could not be reached" in n for n in plan.notes)
     assert plan.plans  # fixed template copy still gave each type something that passed the Critic
+    assert plan.llm_calls == 0  # template copy is not a model call
 
 
 def test_the_same_week_run_twice_gives_the_same_plan() -> None:
@@ -171,3 +189,78 @@ def test_select_top_prefers_a_new_theme_among_equal_scores() -> None:
     assert [i.content_id for i in select_top(equal, 3)] == ["a1", "b1", "c1"]
     clear = [(items[0], 0.09), (items[1], 0.08), (items[2], 0.01), (items[3], 0.02)]
     assert [i.content_id for i in select_top(clear, 3)] == ["a1", "a2", "c1"]  # real differences win
+
+
+def _ids(plan: WeeklyPlan) -> tuple[set[str], set[str]]:
+    items = [i for tp in plan.plans for i in tp.written]
+    return {i.content_id for i in items}, {i.template_name for i in items if i.template_name}
+
+
+def test_ids_and_template_names_are_never_shared_between_weeks_or_between_different_types() -> None:
+    # ct000 is the largest type, refitted every week: next week it is usually a different group.
+    states_b = [s for s in make_states(90, seed=9) if int(s.customer_id[1:]) % 3 != 0]
+    week1 = _run(_planner(CFG)[0], channel=Channel.WHATSAPP)
+    other_types = _planner(CFG)[0].run(
+        BRIEF, states_b, rules=RULES, brand_voice=VOICE, now=NOW, channel=Channel.WHATSAPP
+    )
+    next_week = _run(_planner(CFG)[0], channel=Channel.WHATSAPP, now=NOW + timedelta(days=7))
+    assert week1.plans and other_types.plans and next_week.plans
+    assert week1.plans[0].type_id == other_types.plans[0].type_id == "ct000"
+    assert week1.plans[0].label != other_types.plans[0].label
+    ids1, names1 = _ids(week1)
+    assert names1 and len(names1) == len(ids1)
+    for other in (other_types, next_week):
+        ids, names = _ids(other)
+        assert not ids & ids1 and not names & names1
+
+
+def test_a_goal_with_no_offers_is_skipped_with_a_note_not_a_crash() -> None:
+    brief = BRIEF.model_copy(update={"envelope": BRIEF.envelope.model_copy(update={"offers": ()})})
+    planner, writer, _ = _planner(CFG)
+    plan = planner.run(brief, make_states(60), rules=RULES, brand_voice=VOICE, now=NOW)
+    assert plan.plans == [] and writer.calls == []
+    assert any("nothing written" in n for n in plan.notes)
+
+
+def test_a_channel_outside_the_envelope_is_refused() -> None:
+    with pytest.raises(ValueError, match="not in the envelope"):
+        _run(_planner(CFG)[0], channel=Channel.SMS)
+
+
+def _planted_past_sends(states: list[CustomerState]) -> list[PastSend]:
+    """Sixty past drafts of different lengths. Recent buyers (kind 0) buy short copy, lapsed one-time
+    buyers (kind 1) buy long copy, the middle kind does not care. Each draft went to every customer twice."""
+    rng = np.random.default_rng(4)
+    rows: list[PastSend] = []
+    for j in range(60):
+        words = 5 + (j * 7) % 40
+        item = make_item(f"past{j}", words=words)
+        for s in states:
+            kind = int(s.customer_id[1:]) % 3
+            rate = (0.05 + 0.45 * (45 - words) / 40, 0.05 + 0.45 * (words - 5) / 40, 0.2)[kind]
+            rows.extend(PastSend(item, s, NOW, bool(b)) for b in rng.random(2) < rate)
+    return rows
+
+
+def test_with_enough_history_the_scoring_model_is_used_and_picks_the_live_drafts() -> None:
+    states = make_states(60)
+    model = ScoringModel(CFG)
+    writer, referee = ScriptedLLM(creative_script()), judge(4)
+    planner = CopyPlanner(CFG, Creative(writer), Critic(referee), scoring=model)
+    plan = planner.run(
+        BRIEF, states, rules=RULES, brand_voice=VOICE, now=NOW, past_sends=_planted_past_sends(states)
+    )
+    assert plan.scoring is not None and plan.scoring.used, plan.scoring and plan.scoring.sentence()
+    assert plan.scoring_used and model.usable
+    assert plan.plans
+    for tp in plan.plans:
+        ranked = model.rank(tp.approved, tp.type_id)  # the fitted logistic model, since it is usable
+        assert tp.scores == {i.content_id: s for i, s in ranked}
+        assert [i.content_id for i in tp.live] == [i.content_id for i in select_top(ranked, CFG.top_k)]
+        live_scores = [tp.scores[i.content_id] for i in tp.live]
+        rest = [s for cid, s in tp.scores.items() if cid not in {i.content_id for i in tp.live}]
+        assert min(live_scores) >= max(rest, default=0.0) - 1e-12  # the model's best drafts go live
+    # The model scores the same draft wording differently for different types; theme labels with no
+    # history for these themes could not.
+    first = {tp.type_id: sorted(tp.scores.values()) for tp in plan.plans}
+    assert len({tuple(round(v, 9) for v in s) for s in first.values()}) > 1

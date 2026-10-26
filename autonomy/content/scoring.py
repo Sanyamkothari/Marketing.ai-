@@ -38,6 +38,8 @@ import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
+from typing import NamedTuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -143,26 +145,55 @@ class DraftResult:
             raise ValueError(f"purchases {self.purchases} must be between 0 and sends {self.sends}")
 
 
-def tally_sends(
-    sends: Iterable[tuple[ContentItem, CustomerState, bool]], types: CustomerTypes
-) -> list[DraftResult]:
-    """Per-send outcomes -> `DraftResult` cells, with each customer placed in today's types.
+class PastSend(NamedTuple):
+    """One of our own earlier sends: the draft, the customer's state AS OF the send, and the outcome.
 
-    Types are refitted every week, so old sends are re-typed by their customer's current state
-    rather than by whatever type id they had then."""
-    rows = list(sends)
-    placed = types.assign_many([state for _, state, _ in rows])
+    `state` must be the customer as they were when the message went out (`state.as_of <= sent_at`,
+    no events after it). Today's state would already hold the purchase the send caused (one more
+    order, recency near zero), so buyers would drift into "recent, frequent buyer" types and the
+    outcome would leak into the type the row is counted under. `sent_at` is timezone-aware."""
+
+    item: ContentItem
+    state: CustomerState
+    sent_at: datetime
+    bought: bool
+
+
+@dataclass(frozen=True)
+class Tally:
+    """`tally_sends`' result: the cells, and how many rows were left out for a state after the send."""
+
+    cells: list[DraftResult]
+    late_states: int
+
+
+def tally_sends(sends: Iterable[PastSend], types: CustomerTypes) -> Tally:
+    """Per-send outcomes -> `DraftResult` cells, with each row placed in this week's types.
+
+    Types are refitted every week, so an old send is placed by its customer's state as of the send
+    (see `PastSend`), never by whatever type id it had then. A row whose state is dated after the
+    send is skipped and counted in `late_states`: it would leak the outcome into the type."""
+    rows: list[PastSend] = []
+    late = 0
+    for row in sends:
+        send = PastSend(*row)
+        if send.state.as_of > send.sent_at:
+            late += 1
+            continue
+        rows.append(send)
+    placed = types.assign_many([r.state for r in rows])
     cells: dict[tuple[str, str], list[int]] = {}
     items: dict[str, ContentItem] = {}
-    for (item, _state, bought), type_id in zip(rows, placed, strict=True):
-        items.setdefault(item.content_id, item)
-        cell = cells.setdefault((item.content_id, type_id), [0, 0])
+    for row, type_id in zip(rows, placed, strict=True):
+        items.setdefault(row.item.content_id, row.item)
+        cell = cells.setdefault((row.item.content_id, type_id), [0, 0])
         cell[0] += 1
-        cell[1] += int(bought)
-    return [
+        cell[1] += int(row.bought)
+    out = [
         DraftResult(item=items[cid], type_id=tid, sends=n, purchases=k)
         for (cid, tid), (n, k) in sorted(cells.items())
     ]
+    return Tally(cells=out, late_states=late)
 
 
 # --- ranking quality ----------------------------------------------------------------------------
