@@ -56,6 +56,11 @@ Three more optional hooks let a caller make contacting dearer and rarer (all off
   logged probability counts this exactly: `floor / n` for every option, plus `(1 - floor) x` its
   share of Thompson wins among the options that pass.
 
+One more optional hook is the v3 frequency plan (`plan_fn`, `frequency.FrequencyPlanner.gate`): a customer
+whose best 3-week contact plan sends nothing today and a message later is held (`frequency_plan` in
+`blocked_by`), after the weekly budget and before the draw. It can only hold, never release, and a
+journey's later steps skip it (docs/v3/FREQUENCY.md).
+
 One more optional hook is the v3 channel journeys (`journeys`, a `journeys.JourneyRunner`; off by
 default, and with it off nothing below changes). Each bid on a journey's first channel becomes one
 option per journey, priced over the whole plan, and the chosen journey's chance is logged on the
@@ -114,6 +119,9 @@ ChannelPrices = Callable[[CustomerState, Sequence[Bid]], Mapping[Channel, float]
 """(state, the customer's bids) -> the attention price per channel."""
 ContactBudget = Callable[[CustomerState, Sequence[Bid], Callable[[Bid], float]], int | None]
 """(state, bids, each bid's price) -> how many messages the customer should get in any 7 days."""
+PlanGate = Callable[[CustomerState, Sequence[Bid], datetime, bool], str | None]
+"""(state, the customer's bids, now, whether to record) -> a hold code when the customer's 3-week plan
+waits today, else None (`frequency.FrequencyPlanner.gate`)."""
 RestraintMargin = Callable[[CustomerState, Bid], float]
 """(state, bid) -> how far the bid's net must beat doing nothing to be sampled (0: plain Thompson)."""
 
@@ -297,6 +305,7 @@ class AutonomousPolicy:
         budget_fn: ContactBudget | None = None,
         margin_fn: RestraintMargin | None = None,
         journeys: JourneyRunner | None = None,
+        plan_fn: PlanGate | None = None,
     ) -> None:
         if exploration_floor is not None and not 0 <= exploration_floor <= 1:
             raise ValueError("exploration_floor is a probability")
@@ -320,6 +329,7 @@ class AutonomousPolicy:
         self.budget_fn = budget_fn
         self.margin_fn = margin_fn
         self.journeys = journeys
+        self.plan_fn = plan_fn
         # customer -> {decision_id: send_at} for ACT decisions whose SEND is not in the state yet
         self._scheduled: dict[str, dict[str, datetime]] = {}
 
@@ -501,7 +511,7 @@ class AutonomousPolicy:
         market: Market | None = None
         if check.allowed:
             # The same market as a first message: a hold by pacing or the weekly budget waits.
-            market = self.auction(state, ctx, [bid], [])
+            market = self.auction(state, ctx, [bid], [], plan=False)
             if market.held:
                 check = rules.RuleResult(False, market.held[0][1])
         if check.allowed and runner.late(turn, ctx.now):
@@ -702,14 +712,17 @@ class AutonomousPolicy:
         blocked: list[str],
         *,
         observe: bool = True,
+        plan: bool = True,
     ) -> Market:
         """Price the bids that passed the hard rules and pick the ones the auction weighs.
 
         In order: the attention price per channel, pacing (which may hold a channel), the weekly
-        budget (which may hold the customer), the best `max_options` by net after price, the
+        budget (which may hold the customer), the frequency plan (which may hold the customer for a
+        day), the best `max_options` by net after price, the
         plausible ones among them, and which of those restraint lets into the Thompson draw. Codes
         for what pacing or the budget held are appended to `blocked`. `observe=False` leaves the
-        pacer's running reference alone, so an explanation changes nothing.
+        pacer's running reference alone, so an explanation changes nothing. `plan=False` skips the
+        frequency plan's hold: a journey's later step follows its journey, not a new plan.
         """
         price = self._price(state)
         prices: dict[Channel, float] = {}
@@ -730,6 +743,13 @@ class AutonomousPolicy:
             if budget is not None and state.contacts_7d >= max(budget, 1):
                 blocked.append(rules.WEEKLY_CAP)
                 held.extend((b, rules.WEEKLY_CAP) for b in bids)
+                bids = []
+        if plan and self.plan_fn is not None and bids:
+            # v3 frequency plans: a customer whose best 3-week plan waits is left alone today.
+            code = self.plan_fn(state, bids, ctx.now, observe)
+            if code is not None:
+                blocked.append(code)
+                held.extend((b, code) for b in bids)
                 bids = []
         # Keep the near-best options only: exploring a long tail of poor bids wastes the floor.
         bids = sorted(bids, key=lambda b: b.expected_net - market.cost(b), reverse=True)[: self.max_options]

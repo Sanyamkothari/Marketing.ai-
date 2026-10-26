@@ -48,6 +48,9 @@ PACING = "pacing"
 """Not a hard rule but the policy's own brake: the channel is held because one more complaint or
 unsubscribe could trip the brief's stop rules (`autonomy.decide.pacing`). It is checked after the
 rules above, by the policy, and only when pacing is switched on."""
+FREQUENCY_PLAN = "frequency_plan"
+"""Not a hard rule but the policy's own plan (`autonomy.decide.frequency`): the customer's best 3-week
+plan sends nothing today and a message later. Only when the frequency plans are switched on."""
 
 ALL_CODES: tuple[str, ...] = (
     HOLDOUT,
@@ -66,6 +69,7 @@ ALL_CODES: tuple[str, ...] = (
     NO_BUDGET,
     QUIET_HOURS,
     PACING,
+    FREQUENCY_PLAN,
 )
 
 # Codes that mean "this channel cannot reach this person", as opposed to "not now".

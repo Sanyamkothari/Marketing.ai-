@@ -136,11 +136,13 @@ from autonomy.contracts import (
 )
 from autonomy.decide import rules
 from autonomy.decide.bidders import AssetOf, GoalBidder, ItemLookup, contact_harm_of
+from autonomy.decide.frequency import FrequencyConfig, FrequencyPlanner, LookalikeHazard, lerp
 from autonomy.decide.lookalike import (
     LookalikeConfig,
     LookalikeResponseModel,
     Outcome,
     OutcomeBook,
+    Profile,
     history_profile,
     profile_of,
     stamp,
@@ -1269,22 +1271,41 @@ class ContactPrice:
                 mine[j] = max(mine[j], o.gross * rel[j] - o.fixed)
         return {ch: self.weeks * max(best_rhythm(v).weekly_value, 0.0) for ch, v in values.items()}
 
-    def _price(self, channel: Channel, contacts_7d: int, lost: float) -> float:
+    def _price(
+        self, channel: Channel, contacts_7d: int, lost: float, state: CustomerState | None = None
+    ) -> float:
+        """With a `LookalikeHazard` (v3 frequency, opt-in) and the customer's `state`, the rates are the
+        customer's own; otherwise the plain curves'."""
         return (
-            self.hazard.rate(channel, contacts_7d) * lost
-            + self.complaints.rate(channel, contacts_7d) * self.complaint_cost
+            self._rate(self.hazard, channel, contacts_7d, state) * lost
+            + self._rate(self.complaints, channel, contacts_7d, state) * self.complaint_cost
         )
+
+    @staticmethod
+    def _rate(model: HazardModel, channel: Channel, contacts_7d: int, state: CustomerState | None) -> float:
+        if state is not None and isinstance(model, LookalikeHazard):
+            return model.rate_for(state, channel, contacts_7d)
+        return model.rate(channel, contacts_7d)
+
+    def price_at(self, state: CustomerState, channel: Channel, contacts: float, lost: float) -> float:
+        """The attention price of a message at a fractional week count (the planner's: earlier planned
+        messages count part-way). At a whole count it is the price the auction charges."""
+        return lerp(lambda n: self._price(channel, n, lost, state), contacts)
+
+    def freshness(self, contacts: float) -> float:
+        """The click model's "messages this week" factor at a fractional count."""
+        return lerp(self.fatigue, contacts)
 
     def prices(self, state: CustomerState, bids: Sequence[Bid]) -> dict[Channel, float]:
         """The attention price of the next message on each channel the bids use."""
         lost = self.lost_value(state, bids)
-        return {ch: self._price(ch, state.contacts_7d, v) for ch, v in lost.items()}
+        return {ch: self._price(ch, state.contacts_7d, v, state) for ch, v in lost.items()}
 
     def floor(self, state: CustomerState) -> float:
         """The cheapest a message can be for this customer (no future value at stake): the
         complaint cost alone, on their cheapest reachable channel."""
         channels = state.contactable_channels() or (Channel.EMAIL,)
-        return min(self._price(ch, state.contacts_7d, 0.0) for ch in channels)
+        return min(self._price(ch, state.contacts_7d, 0.0, state) for ch in channels)
 
     def rhythm(self, state: CustomerState, bids: Sequence[Bid]) -> Rhythm:
         """The customer's best rhythm, from their options now, each count priced on its own."""
@@ -1296,7 +1317,8 @@ class ContactPrice:
         options = self._options(bids)
         values = [
             max(
-                o.urgency * (o.gross * rel[j] - o.fixed) - self._price(o.channel, j, lost.get(o.channel, 0.0))
+                o.urgency * (o.gross * rel[j] - o.fixed)
+                - self._price(o.channel, j, lost.get(o.channel, 0.0), state)
                 for o in options
             )
             for j in range(cap)
@@ -1580,6 +1602,7 @@ class AgentPolicy:
         currency: str = "$",
         offer_pricing: OfferPricing | None = None,
         moments: MomentBook | Literal[False] | None = None,
+        frequency: FrequencyConfig | None = None,
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
@@ -1617,7 +1640,28 @@ class AgentPolicy:
         self.chooser: PolicyChooser | None = None
         """Set by `use_chooser`; None (the default) leaves every decision exactly as the agent made it."""
         self.value = ShrunkValueModel(base=bundle.value)
-        self.contact_price = ContactPrice(self._click_fatigue, self._weekly_cap)
+        # v3 frequency (docs/v3/FREQUENCY.md), off by default: tolerance learned from look-alikes and
+        # 3-week plans. With it off the hazard models are the plain ones and no gate is installed.
+        self.frequency = frequency
+        tolerance = frequency.tolerance if frequency is not None else None
+        self.contact_price = (
+            ContactPrice(
+                self._click_fatigue,
+                self._weekly_cap,
+                hazard=LookalikeHazard(tolerance),
+                complaints=LookalikeHazard(tolerance, base_rate=COMPLAINT_BASE_RATE),
+            )
+            if tolerance is not None
+            else ContactPrice(self._click_fatigue, self._weekly_cap)
+        )
+        self.planner: FrequencyPlanner | None = (
+            FrequencyPlanner(self.contact_price, frequency.plans)
+            if frequency is not None and frequency.plans is not None
+            else None
+        )
+        self._tired_profiles: dict[str, tuple[str, Profile]] = {}
+        """With tolerance on: decision_id -> (customer, the profile the send was decided on), until its
+        delivery is seen and the hazard models take it. Filled only by `decide` in this process."""
         self.pacer: Pacer | None = Pacer(step_aside=True) if pacing else None
         self.hour_model: ReadingHourModel | None = ReadingHourModel() if reading_hour_model else None
         self.restraint = restraint
@@ -1651,6 +1695,7 @@ class AgentPolicy:
             channel_price_fn=self.contact_price.prices,
             budget_fn=self.contact_price.budget if weekly_budget else None,
             margin_fn=self._margin if restraint else None,
+            plan_fn=self.planner.gate if self.planner is not None else None,
         )
         for brief in briefs:
             self._install(brief)
@@ -1966,8 +2011,14 @@ class AgentPolicy:
         decision = self.policy.decide(seen, eff, trigger=trigger)
         self._decision_segment[decision.decision_id] = seg
         decision = self._chosen(state, eff, decision, seg)
+        self._note_profile(seen, decision)
         self._remember(seen, decision)
         return decision
+
+    def _note_profile(self, seen: CustomerState, decision: Decision) -> None:
+        """With tolerance on, keep the profile a send was decided on until its delivery is seen."""
+        if isinstance(self.contact_price.hazard, LookalikeHazard) and decision.kind is DecisionKind.ACT:
+            self._tired_profiles[decision.decision_id] = (decision.customer_id, profile_of(seen))
 
     def _remember(self, seen: CustomerState, decision: Decision) -> None:
         """With the look-alike model on, keep the profile this decision was made on until its window
@@ -2673,6 +2724,10 @@ class AgentPolicy:
             none = Timeline(())  # a customer with no events in memory bought nothing and was sent nothing
             model.lookalike.observe(self.outcomes.close(now, lambda cid: seen_by(cid) or none))
             model.lookalike.fit(now)
+        if self._decided:
+            for tired in (self.contact_price.hazard, self.contact_price.complaints):
+                if isinstance(tired, LookalikeHazard):
+                    tired.fit()
         self._judge_lift(now)
         learned = self.bundle.learned_decisions
         self._log = {k: d for k, d in self._log.items() if k not in learned}
@@ -2822,6 +2877,7 @@ class AgentPolicy:
             price = self.contact_price
             price.hazard.observe_send(channel, before)
             price.complaints.observe_send(channel, before)
+            self._tolerance_send(e.decision_id, channel, before)
             if self.hour_model is not None:
                 self.hour_model.observe_send(
                     e.customer_id, send_at, self._timezones.get(e.customer_id, "UTC"), seg
@@ -2840,9 +2896,11 @@ class AgentPolicy:
             if e.decision_id not in self._lost:
                 self._lost.add(e.decision_id)
                 self.contact_price.hazard.observe_event(channel, contacts)
+                self._tolerance_loss(e.decision_id, complaint=False)
             if e.type is EventType.COMPLAINT and e.decision_id not in self._complained:
                 self._complained.add(e.decision_id)
                 self.contact_price.complaints.observe_event(channel, contacts)
+                self._tolerance_loss(e.decision_id, complaint=True)
         elif first_click:
             if keyed is not None and isinstance(model, ClickResponseModel):
                 prior_sends, send_hour = self._send_contacts.get(e.decision_id, (0, None))
@@ -2854,6 +2912,23 @@ class AgentPolicy:
         if e.type is EventType.CLICK and e.ts - send_at >= LATE_CLICK:
             hour = self._local_hour(e.customer_id, e.ts)
             self.reading.observe(e.customer_id, hour, seg)
+
+    def _tolerance_send(self, decision_id: str, channel: Channel, before: int) -> None:
+        """A delivered send goes to the look-alike hazard models with the profile it was decided on
+        (a send decided before this process started has none and only counts in the plain curve)."""
+        noted = self._tired_profiles.pop(decision_id, None)
+        if noted is None:
+            return
+        customer_id, profile = noted
+        for model in (self.contact_price.hazard, self.contact_price.complaints):
+            if isinstance(model, LookalikeHazard):
+                model.record_send(decision_id, customer_id, profile, channel, before)
+
+    def _tolerance_loss(self, decision_id: str, *, complaint: bool) -> None:
+        price = self.contact_price
+        model = price.complaints if complaint else price.hazard
+        if isinstance(model, LookalikeHazard):
+            model.record_loss(decision_id)
 
     def _local_hour(self, customer_id: str, at: datetime) -> int:
         return at.astimezone(zone_named(self._timezones.get(customer_id, "UTC"))).hour
@@ -2882,6 +2957,7 @@ class AgentPolicy:
         self._seen_events = {e.event_id for evs in self._events.values() for e in evs}
         self._sends = {k: v for k, v in self._sends.items() if v[2] >= keep_from}
         self._send_keys = {k: v for k, v in self._send_keys.items() if k in self._sends}
+        self._tired_profiles = {k: v for k, v in self._tired_profiles.items() if k in self._sends}
         self._clicked = {k for k in self._clicked if k in self._sends}
         self._send_contacts = {k: v for k, v in self._send_contacts.items() if k in self._sends}
         self._lost = {k for k in self._lost if k in self._sends}
@@ -2911,6 +2987,7 @@ def build_agent_policy(
     offer_pricing: OfferPricing | None = None,
     moments: MomentBook | Literal[False] | None = None,
     lookalike: bool | LookalikeConfig = False,
+    frequency: bool | FrequencyConfig = False,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -2940,6 +3017,11 @@ def build_agent_policy(
     of the click model (`LookalikeClickModel`, docs/v3/LOOKALIKE.md); pass a `LookalikeConfig` to
     change its numbers. With a `bundle` given, its response model must already be a
     `LookalikeClickModel` (built with its own config; a `LookalikeConfig` here is then refused).
+
+    `frequency` (plan-v3 decision 7, off by default, so every number above is unchanged) plans weeks
+    instead of messages (docs/v3/FREQUENCY.md): the tiredness models learn from look-alikes, and each
+    customer's best 3-week contact plan decides whether today is a day to wait. Pass a
+    `FrequencyConfig` to change its numbers or to switch one of its two parts off.
     """
     if bundle is None:
         fresh = build_bundle()
@@ -2975,4 +3057,9 @@ def build_agent_policy(
         currency=currency,
         offer_pricing=offer_pricing,
         moments=moments,
+        frequency=(
+            (frequency if isinstance(frequency, FrequencyConfig) else FrequencyConfig())
+            if frequency
+            else None
+        ),
     )
