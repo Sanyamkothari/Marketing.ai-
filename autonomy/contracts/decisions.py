@@ -30,6 +30,10 @@ class Action(Contract):
     asset_id: str | None = Field(
         default=None, description="The approved image/video used, when the format needs one"
     )
+    journey_id: str | None = Field(
+        default=None,
+        description="The channel journey this message belongs to (v3), None for a single message",
+    )
 
 
 class Bid(Contract):
@@ -65,6 +69,21 @@ class Decision(Contract):
     bids: tuple[Bid, ...] = Field(default=(), description="The top bids considered, best first")
     blocked_by: tuple[str, ...] = Field(default=(), description="Hard rules that removed options")
     policy_version: str
+    journey_id: str | None = Field(
+        default=None, description="The journey this decision starts, continues or holds (v3), else None"
+    )
+    journey_probability: float | None = Field(
+        default=None,
+        gt=0,
+        le=1,
+        description="Chance the policy had of choosing this journey, summed over its offers and"
+        " content (v3). A later step of a journey carries the value its first step logged.",
+    )
+    journey_ended: str | None = Field(
+        default=None,
+        description="The journey that ended while this decision was made, and why, as"
+        " '<journey id>:<code>' (v3), so the runs rebuilt from the log stay ended",
+    )
 
     @model_validator(mode="after")
     def _action_matches_kind(self) -> Decision:

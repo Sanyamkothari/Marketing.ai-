@@ -13,6 +13,8 @@ got it right already:
   the decision id, so an adapter can pass it to the provider as an idempotency key too.
 - **Holdout is never contacted**, whatever the decision says.
 - **Consent.** A customer who has unsubscribed or withdrawn consent on the channel is skipped.
+- **Journey steps (v3).** A later step of a channel journey is skipped once the customer bought
+  after it was decided.
 - **Goal status.** Only active goals out of shadow mode, inside their start and end dates, send.
   Paused goals and channels (by a person or a circuit breaker) send nothing.
 - **Envelope.** The channel and offer must be ones the goal's brief allows.
@@ -99,6 +101,8 @@ class SkipReason(StrEnum):
     RENDER_FAILED = "render_failed"
     NO_ADDRESS = "no_address"
     DECISION_NOT_FOUND = "decision_not_found"
+    # v3 channel journeys
+    BOUGHT_SINCE = "bought_since_decision"
 
 
 @dataclass(frozen=True)
@@ -173,6 +177,18 @@ class _Prepared:
 
     message: Message
     attrs: dict[str, AttrValue]
+
+
+def _check_journey_step(decision: Decision, state: CustomerState) -> None:
+    """v3 channel journeys: a journey's later step is not sent to a customer who bought after it was
+    decided. The policy checks purchases at each sweep, but a step can be decided up to a day before
+    it is due and timed up to a day after, so this is the last check at send time."""
+    action = decision.action
+    if action is None or action.journey_id is None or action.follow_up_step == 0:
+        return
+    bought = state.last_purchase_at
+    if bought is not None and bought >= decision.made_at:
+        raise _SkipError(SkipReason.BOUGHT_SINCE, f"journey {action.journey_id} stops once the customer buys")
 
 
 class Dispatcher:
@@ -335,6 +351,7 @@ class Dispatcher:
             reachable = stats is not None and stats.consent and not stats.unsubscribed
         if not reachable:
             raise _SkipError(SkipReason.NOT_CONTACTABLE, f"no consent on {channel.value}")
+        _check_journey_step(decision, state)
 
         item = self._content(action.goal_id, action.content_id)
         if item.channel is not channel:
