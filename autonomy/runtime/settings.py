@@ -220,6 +220,12 @@ class RuntimeSettings(BaseModel):
     lift_min_group: int = Field(default=30, ge=2, description="Measured customers per group before judging")
     lift_min_closed: int = Field(default=100, ge=1, description="Closed outcome windows before judging")
 
+    # Look-alike learning (plan-v3 foundation B, docs/v3/LOOKALIKE.md). Off: the agent's click model alone.
+    lookalike_model: bool = Field(
+        default=False,
+        description="Put the look-alike response model on top of the agent's click model",
+    )
+
     @field_validator("countries")
     @classmethod
     def _countries(cls, value: tuple[str, ...]) -> tuple[str, ...]:
@@ -326,6 +332,7 @@ def agent_policy_factory(
     content: Sequence[ContentItem],
     *,
     kinds: Mapping[str, GoalKind] | None = None,
+    lookalike: bool = False,
 ) -> Policy:
     """The agent's policy (`autonomy.runtime.agent.build_agent_policy`), imported when first needed.
 
@@ -336,23 +343,24 @@ def agent_policy_factory(
     proof's "agent vs the simple rule" comparison compared the agent with doing nothing."""
     module = importlib.import_module("autonomy.runtime.agent")
     build = module.build_agent_policy
+    extra: dict[str, Any] = {"lookalike": True} if lookalike else {}
     if kinds is None:
-        built = build(list(briefs), list(content))
+        built = build(list(briefs), list(content), **extra)
     else:
-        built = build(list(briefs), list(content), kinds=dict(kinds))
+        built = build(list(briefs), list(content), kinds=dict(kinds), **extra)
     use_baseline = getattr(built, "use_baseline", None)
     if callable(use_baseline):
         use_baseline(importlib.import_module("autonomy.gym.baselines").RuleBaseline())
     return cast(Policy, built)
 
 
-def workspace_policy_factory(workspace: Workspace) -> PolicyFactory:
+def workspace_policy_factory(workspace: Workspace, *, lookalike: bool = False) -> PolicyFactory:
     """`agent_policy_factory` with each brief's goal kind read from the workspace when it is built."""
 
     def build(briefs: Sequence[Brief], content: Sequence[ContentItem]) -> Policy:
         wanted = {b.goal_id for b in briefs}
         kinds = {g.goal_id: g.kind for g in workspace.goals() if g.goal_id in wanted}
-        return agent_policy_factory(briefs, content, kinds=kinds)
+        return agent_policy_factory(briefs, content, kinds=kinds, lookalike=lookalike)
 
     return build
 
@@ -834,7 +842,8 @@ def build_runtime(
         decisions=decisions,
         workspace=workspace,
         folder=ProductionStateFolder(),
-        policy_factory=policy_factory or workspace_policy_factory(workspace),
+        policy_factory=policy_factory
+        or workspace_policy_factory(workspace, lookalike=settings.lookalike_model),
         queue=queue,
         dispatcher=dispatcher,
         batches=SqlBatchStore(engine),
