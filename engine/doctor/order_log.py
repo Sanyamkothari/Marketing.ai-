@@ -20,9 +20,14 @@ the path; nothing in it runs unless the caller passes the log in explicitly, and
 * **Q2** (`blank_customer_question`) is asked once Q1 is answered: the lines with no shopper cannot be counted for
   anyone, so they are left out; the person says yes, and that yes is the acknowledgement the over-5% loss guard
   asks for (`engine.doctor.guards.LOSS_STOP_PCT`, unchanged).
+* **The mixed-order question** (`mixed_orders_question`) is asked when one order has lines with a shopper and lines
+  without: whose it is is never assumed.
 * **The derived customer list** (`derive_customer_list`) holds the distinct non-blank values of the confirmed column,
   written the way a person reads them (`12346.0` is `12346`: `engine.agent.key_steps.key_text`, the existing exact
-  rule and nothing fuzzy), with each shopper's first order date as `signup_date`.
+  rule and nothing fuzzy), with each shopper's first order date as `signup_date`. `derived_entity` hands it, and the
+  log as the event file, to `offer_outcome` and `propose_event_outcome` as their explicit `derived_entity` argument.
+* **`key_columns`** names the columns no cleaning step may read as numbers: the shopper a person chose and every order
+  number.
 
 The numbers in every sentence are counted on the file. A file that was read in part says so.
 """
