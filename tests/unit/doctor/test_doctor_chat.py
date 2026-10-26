@@ -1125,3 +1125,78 @@ def test_no_last_word_without_consent(storage: LocalStorage, world: World) -> No
     talk = Talk(storage, world, client, consent=False)
     talk.say("look")
     assert client.asked == 0 and talk.reply.blocked_by == "no_consent"
+
+
+def _long_reply(size: int) -> str:
+    """A grounded reply (no number in it) of exactly `size` characters."""
+    sentence = "The customer table is built from the receipts and it needs three answers from you. "
+    return (sentence * (size // len(sentence) + 1))[: size - 1].rstrip() + "."
+
+
+def test_a_long_reply_that_explains_a_plan_is_accepted_and_stored_whole(
+    storage: LocalStorage, world: World
+) -> None:
+    text = _long_reply(1500)
+    talk = Talk(storage, world, ChatScript({"explain": [reply(text)]}))
+    talk.say("explain the plan")
+    assert talk.reply.text == text and len(talk.reply.text) > 800
+    assert talk.case.chat[-1].text == text, "stored whole"
+
+
+def test_a_reply_over_the_doctor_ceiling_is_refused_and_the_model_is_told_the_limit(
+    storage: LocalStorage, world: World
+) -> None:
+    client = ChatScript({"explain": [reply(_long_reply(2100)), reply("Short version.")]})
+    talk = Talk(storage, world, client)
+    talk.say("explain the plan")
+    assert talk.reply.text == "Short version."
+    told = [r for r in client.seen[1].results if r.get("error") == "AGENT_TEXT_REFUSED"]
+    assert told and str(agent_chat.DOCTOR_REPLY_CHARS) in str(told[0]["message"])
+
+
+def test_an_over_long_reply_that_also_has_a_wrong_number_is_told_both(
+    storage: LocalStorage, world: World
+) -> None:
+    long_wrong = "I found 9,999 gaps. " + _long_reply(2100)
+    client = ChatScript({"explain": [reply(long_wrong), reply("Short version.")]})
+    talk = Talk(storage, world, client)
+    talk.say("explain the plan")
+    told = [r for r in client.seen[1].results if r.get("error") == "AGENT_TEXT_REFUSED"]
+    assert told and "2000" in str(told[0]["message"]) and "numbers_grounded" in str(told[0]["message"])
+
+
+def test_the_last_word_is_told_the_limit_when_a_reply_is_refused_only_for_length(
+    storage: LocalStorage, world: World
+) -> None:
+    client = ChatScript(
+        {"explain": [reply(_long_reply(2100)), reply(_long_reply(2100)), reply("Short version.")]}
+    )
+    talk = Talk(storage, world, client)
+    talk.say("explain the plan")
+    assert talk.reply.text == "Short version."
+    told = [r for r in last_word_seen(client).results if r.get("error") == "AGENT_TEXT_REFUSED"]
+    assert told and all("2000" in str(r["message"]) for r in told)
+
+
+def test_a_long_earlier_reply_is_shown_whole_to_the_model_on_the_next_turn(
+    storage: LocalStorage, world: World
+) -> None:
+    text = _long_reply(1500)[:-1] + " END-MARKER."
+    client = ChatScript({"explain": [reply(text)], "yes do those": [reply("Done.")]})
+    talk = Talk(storage, world, client)
+    talk.say("explain the plan")
+    talk.say("yes do those")
+    assert "END-MARKER" in str(client.seen[-1].history)
+
+
+def test_guided_setup_keeps_its_shorter_reply_ceiling() -> None:
+    from engine.agent.loop import MAX_REPLY_CHARS
+    from engine.generative.guardrails import CheckContext, Guardrails, load_policy
+
+    assert MAX_REPLY_CHARS == 800 < agent_chat.DOCTOR_REPLY_CHARS
+    guard = Guardrails(load_policy())
+    text = _long_reply(900)
+    assert not guard.check(text, CheckContext(target="helper reply", max_chars=MAX_REPLY_CHARS)).passed
+    assert guard.check(
+        text, CheckContext(target="doctor reply", max_chars=agent_chat.DOCTOR_REPLY_CHARS)
+    ).passed
