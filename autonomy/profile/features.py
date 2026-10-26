@@ -89,7 +89,8 @@ def feature(
 
 
 def _share(part: float, whole: float) -> float:
-    return part / whole if whole > 0 else 0.0
+    """`part / whole` kept in [0, 1]; 0 when `whole` is not positive."""
+    return min(max(part / whole, 0.0), 1.0) if whole > 0 else 0.0
 
 
 def _capped(x: float) -> float:
@@ -138,10 +139,10 @@ def _aov(f: Facts) -> float:
 @feature(
     "buy_margin_rate",
     FeatureGroup.BUYING,
-    "Share of order value kept as margin, over orders that report margin (0 if none do)",
+    "Share of order value kept as margin, over orders with a value that report margin (0 if none do)",
 )
 def _margin_rate(f: Facts) -> float:
-    with_margin = [o for o in f.orders if o.margin is not None]
+    with_margin = [o for o in f.orders if o.margin is not None and o.value > 0]
     return _share(sum(o.margin or 0.0 for o in with_margin), sum(o.value for o in with_margin))
 
 
@@ -182,14 +183,14 @@ def _tenure(f: Facts) -> float:
     "1 if the customer has ordered at least twice on different days, else 0",
 )
 def _gap_known(f: Facts) -> float:
-    return 1.0 if len(f.orders) >= 2 and f.mean_gap > 0 else 0.0
+    return 1.0 if f.gap_known else 0.0
 
 
 @feature(
     "trend_avg_gap_days", FeatureGroup.TREND, "Usual number of days between orders (0 unless trend_gap_known)"
 )
 def _avg_gap(f: Facts) -> float:
-    return f.mean_gap
+    return f.mean_gap if f.gap_known else 0.0
 
 
 @feature(
@@ -212,7 +213,7 @@ def _last_gap_ratio(f: Facts) -> float:
     "Days since the last order against the usual gap: above 1 means later than usual (0 unless trend_gap_known)",
 )
 def _overdue_ratio(f: Facts) -> float:
-    return _capped(f.days_since_last_order / f.mean_gap) if f.mean_gap > 0 and f.orders else 0.0
+    return _capped(f.days_since_last_order / f.mean_gap) if f.gap_known else 0.0
 
 
 @feature(
@@ -230,7 +231,8 @@ def _order_momentum(f: Facts) -> float:
 
 
 def _category_counts(f: Facts) -> Counter[str]:
-    return Counter(o.category for o in f.orders if o.category)
+    """For each category, the orders with at least one line in it."""
+    return Counter(c for o in f.orders for c in o.categories)
 
 
 @feature("taste_distinct_categories", FeatureGroup.TASTE, "Different product categories bought")
@@ -245,36 +247,36 @@ def _distinct_categories(f: Facts) -> float:
 )
 def _top_category_share(f: Facts) -> float:
     counts = _category_counts(f)
-    return _share(max(counts.values(), default=0), sum(counts.values()))
+    return _share(max(counts.values(), default=0), sum(1 for o in f.orders if o.categories))
 
 
 @feature(
     "taste_repeat_item_share",
     FeatureGroup.TASTE,
-    "Share of item-tagged orders that re-buy an item bought before (0 if none tagged)",
+    "Share of item-tagged orders that re-buy an item bought in an earlier order (0 if none tagged)",
 )
 def _repeat_item_share(f: Facts) -> float:
     seen: set[str] = set()
     tagged = repeats = 0
     for o in f.orders:
-        if o.item is None:
+        if not o.items:
             continue
         tagged += 1
-        repeats += o.item in seen
-        seen.add(o.item)
+        repeats += any(i in seen for i in o.items)
+        seen.update(o.items)
     return _share(repeats, tagged)
 
 
 @feature(
     "taste_new_category_share_90d",
     FeatureGroup.TASTE,
-    "Share of the last 90 days' tagged orders in a category not bought before then",
+    "Share of the last 90 days' tagged orders with a category not bought before then",
 )
 def _new_category_share(f: Facts) -> float:
     cut = f.since(QUARTER_DAYS)
-    known = {o.category for o in f.orders if o.category and o.ts <= cut}
-    recent = [o for o in f.orders_in(cut) if o.category]
-    return _share(sum(o.category not in known for o in recent), len(recent))
+    known = {c for o in f.orders if o.ts <= cut for c in o.categories}
+    recent = [o for o in f.orders_in(cut) if o.categories]
+    return _share(sum(any(c not in known for c in o.categories) for o in recent), len(recent))
 
 
 # --- price ----------------------------------------------------------------------------------------
@@ -283,10 +285,10 @@ def _new_category_share(f: Facts) -> float:
 @feature(
     "price_level_known",
     FeatureGroup.PRICE,
-    "1 if the shop has enough orders to read a price level against, and the customer has ordered",
+    "1 if the shop has enough orders to read a price level against, and the customer has spent money",
 )
 def _price_known(f: Facts) -> float:
-    return 1.0 if f.shop is not None and f.shop.known and f.orders else 0.0
+    return 1.0 if f.shop is not None and f.shop.known and f.mean_order_value > 0 else 0.0
 
 
 @feature(
@@ -296,7 +298,7 @@ def _price_known(f: Facts) -> float:
     default=0.5,
 )
 def _price_level(f: Facts) -> float:
-    if f.shop is None or not f.shop.known or not f.orders:
+    if f.shop is None or not f.shop.known or f.mean_order_value <= 0:
         return 0.5
     return f.shop.rank(f.mean_order_value)
 
@@ -399,12 +401,12 @@ def _payday_share(f: Facts) -> float:
 
 
 def _rate(f: Facts, field: str) -> float:
-    return min(_share(f.total(field), f.total("sends")), 1.0)
+    return _share(f.total(field), f.total("sends"))
 
 
 def _channel_engagement(f: Facts, channel: Channel) -> float:
     c = f.channels.get(channel)
-    return min(_share(c.clicks + c.replies, c.sends), 1.0) if c is not None else 0.0
+    return _share(c.clicks + c.replies, c.sends) if c is not None else 0.0
 
 
 @feature(
@@ -506,7 +508,7 @@ def _returns(f: Facts) -> float:
     "Refunded money as a share of money spent, at most 1 (0 if no order yet)",
 )
 def _refund_share(f: Facts) -> float:
-    return min(_share(f.refunded, f.gross_spend), 1.0)
+    return _share(f.refunded, f.gross_spend)
 
 
 @feature(
@@ -540,7 +542,7 @@ def _days_since_view(f: Facts) -> float:
 )
 def _viewed_not_bought(f: Facts) -> float:
     cut = f.since(RECENT_DAYS)
-    bought = {o.item for o in f.orders if o.item}
+    bought = {i for o in f.orders for i in o.items}
     return float(len({item for ts, item in f.views if ts > cut and item and item not in bought}))
 
 
@@ -576,7 +578,7 @@ def _cart_open(f: Facts) -> float:
     "Days until the next order is due by the customer's usual gap; negative if overdue (0 unless trend_gap_known)",
 )
 def _refill_due(f: Facts) -> float:
-    return f.mean_gap - f.days_since_last_order if f.mean_gap > 0 and f.orders else 0.0
+    return f.mean_gap - f.days_since_last_order if f.gap_known else 0.0
 
 
 # --- the list -------------------------------------------------------------------------------------

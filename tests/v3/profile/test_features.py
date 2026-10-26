@@ -254,3 +254,91 @@ def test_event_order_and_repeated_ids_do_not_matter() -> None:
     shuffled = list(events) * 2  # every id twice
     random.Random(1).shuffle(shuffled)
     assert profile_for(shuffled, AS_OF) == expected
+
+
+# --- edge cases from review -----------------------------------------------------------------------
+
+
+def _invoice(days_ago: float, invoice: str, lines: int, value: float = 4.0) -> list[Event]:
+    """One invoice as a line-level log loads it: one PURCHASE per line, all at the same instant."""
+    return [
+        buy(days_ago, value, item_id=f"i{invoice}-{n}", category=f"k{n % 2}", attrs={"invoice_no": invoice})
+        for n in range(lines)
+    ]
+
+
+def test_purchase_lines_of_one_invoice_are_one_order() -> None:
+    lines = [*_invoice(45, "A1", 5), *_invoice(15, "A2", 5)]
+    p = profile_for(lines, AS_OF)
+    assert p["buy_orders_total"] == 2.0
+    assert p["buy_avg_order_value"] == pytest.approx(20.0)
+    assert p["buy_net_revenue"] == pytest.approx(40.0)
+    assert p["trend_gap_known"] == 1.0 and p["trend_avg_gap_days"] == pytest.approx(30.0)
+    assert p["trend_overdue_ratio"] == pytest.approx(0.5)
+    assert p["mom_refill_due_days"] == pytest.approx(15.0)
+    assert p["taste_distinct_categories"] == 2.0 and p["taste_top_category_share"] == 1.0
+    one_per_invoice = [buy(45, 20.0, attrs={"invoice_no": "A1"}), buy(15, 20.0, attrs={"invoice_no": "A2"})]
+    single = profile_for(one_per_invoice, AS_OF)
+    for name in ("buy_orders_total", "buy_avg_order_value", "trend_avg_gap_days", "trend_overdue_ratio"):
+        assert p[name] == pytest.approx(single[name]), name
+
+
+def test_two_invoices_at_the_same_instant_stay_two_orders_and_unnamed_lines_merge() -> None:
+    same_time = [buy(5, 10.0, attrs={"invoice_no": "X"}), buy(5, 30.0, attrs={"invoice_no": "Y"})]
+    assert profile_for(same_time, AS_OF)["buy_orders_total"] == 2.0
+    unnamed = [buy(5, 10.0), buy(5, 30.0)]
+    assert profile_for(unnamed, AS_OF)["buy_orders_total"] == 1.0
+    assert profile_for(unnamed, AS_OF)["buy_avg_order_value"] == pytest.approx(40.0)
+
+
+def test_the_shop_histogram_counts_orders_not_lines() -> None:
+    lines = sorted((e for i in range(60) for e in _invoice(10 + i * 0.01, f"N{i}", 3)), key=lambda e: e.ts)
+    assert ShopPrices.until(lines, AS_OF).orders == 60
+    assert ShopPrices.at(lines, [AS_OF])[AS_OF].orders == 60
+    repeated = sorted([*lines, *lines], key=lambda e: e.ts)  # a time-ordered stream with each id twice
+    assert ShopPrices.until(repeated, AS_OF).orders == 60
+
+
+def test_one_stop_reply_that_unsubscribes_every_channel_is_one_stop_reply() -> None:
+    stop = [
+        ev(EventType.UNSUBSCRIBE, 3, channel=ch, attrs={"reason": "reply_stop", "reply_event_id": "r1"})
+        for ch in (Channel.EMAIL, Channel.WHATSAPP)
+    ]
+    assert profile_for(stop, AS_OF)["resp_stop_replies"] == 1.0
+    again = ev(
+        EventType.UNSUBSCRIBE,
+        1,
+        channel=Channel.EMAIL,
+        attrs={"reason": "reply_stop", "reply_event_id": "r2"},
+    )
+    assert profile_for([*stop, again], AS_OF)["resp_stop_replies"] == 2.0
+
+
+def test_an_empty_snooze_clears_it_and_is_not_a_not_now_reply() -> None:
+    until = (AS_OF + timedelta(days=30)).isoformat()
+    held = ev(EventType.PREFERENCE, 3, attrs={"key": "snooze_until", "value": until})
+    cleared = ev(EventType.PREFERENCE, 2, attrs={"key": "snooze_until", "value": ""})
+    p = profile_for([held, cleared], AS_OF)
+    assert p["resp_snoozed"] == 0.0 and p["resp_not_now_replies"] == 1.0
+    unreadable = ev(EventType.PREFERENCE, 1, attrs={"key": "snooze_until", "value": "soon"})
+    assert profile_for([held, cleared, unreadable], AS_OF)["resp_snoozed"] == 1.0  # as the rules read it
+
+
+def test_shares_stay_in_range_on_odd_amounts() -> None:
+    p = profile_for([buy(10, 100.0), ev(EventType.REFUND, 5, value=-40.0)], AS_OF)
+    assert p["buy_net_revenue"] == pytest.approx(60.0)  # a refund stored negative still takes money off
+    assert p["resp_refund_value_share"] == pytest.approx(0.4)
+    margin = profile_for([buy(10, 0.0, margin=30.0), buy(5, 10.0, margin=3.0)], AS_OF)
+    assert margin["buy_margin_rate"] == pytest.approx(0.3)
+    shop = ShopPrices()
+    for v in range(1, 200):
+        shop.add(float(v))
+    negative = profile_for([buy(3, -5.0)], AS_OF, shop=shop)
+    assert negative["price_level_known"] == 0.0 and negative["price_level"] == 0.5
+
+
+def test_two_orders_minutes_apart_on_one_day_are_not_a_buying_cycle() -> None:
+    p = profile_for([buy(10), buy(10 - 1 / 1440)], AS_OF)
+    assert p["trend_gap_known"] == 0.0
+    assert p["trend_avg_gap_days"] == 0.0 and p["trend_overdue_ratio"] == 0.0
+    assert p["mom_refill_due_days"] == 0.0

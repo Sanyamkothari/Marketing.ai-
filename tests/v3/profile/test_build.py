@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from autonomy.contracts import AutonomyLevel, CustomerState
+from autonomy.contracts import AutonomyLevel, CustomerState, Event, EventType
 from autonomy.fakes import InMemoryEventStore, InMemoryStateStore
 from autonomy.profile import (
     NAMES,
@@ -16,7 +16,7 @@ from autonomy.profile import (
     training_rows,
     training_rows_from_store,
 )
-from autonomy.runtime.service import RuntimeConfig
+from autonomy.runtime.service import RuntimeConfig, TickReport
 from tests.v2.runtime.test_service import CUSTOMERS, SWEEP, world
 from tests.v3.profile.synthetic import customer_events, customer_id, events
 
@@ -148,9 +148,11 @@ def test_training_rows_need_a_date() -> None:
 
 # --- the runtime's nightly hook ---------------------------------------------------------------------
 
+PROFILED = RuntimeConfig(nightly_profile=True)
+
 
 def test_the_first_tick_gives_every_state_a_fresh_profile_before_deciding() -> None:
-    w = world(autonomy=AutonomyLevel.SHADOW)
+    w = world(autonomy=AutonomyLevel.SHADOW, config=PROFILED)
     report = w.runtime.tick(SWEEP)
     assert report.rebuilt and not any(a.code == "profile.error" for a in report.alerts)
     assert w.states.count() == len(CUSTOMERS)
@@ -161,7 +163,7 @@ def test_the_first_tick_gives_every_state_a_fresh_profile_before_deciding() -> N
 
 
 def test_an_ordinary_tick_keeps_the_last_profile_and_a_new_night_refreshes_it() -> None:
-    w = world(autonomy=AutonomyLevel.SHADOW)
+    w = world(autonomy=AutonomyLevel.SHADOW, config=PROFILED)
     w.runtime.tick(SWEEP)
     w.runtime.tick(SWEEP + timedelta(minutes=5))
     assert {s.features_as_of for s in w.states.scan()} == {SWEEP}
@@ -170,10 +172,13 @@ def test_an_ordinary_tick_keeps_the_last_profile_and_a_new_night_refreshes_it() 
     assert {s.features_as_of for s in w.states.scan()} == {night}
 
 
-def test_the_profile_can_be_turned_off() -> None:
-    w = world(autonomy=AutonomyLevel.SHADOW, config=RuntimeConfig(nightly_profile=False))
-    w.runtime.tick(SWEEP)
-    assert all(not s.features and s.features_as_of is None for s in w.states.scan())
+def test_the_profile_is_off_unless_turned_on() -> None:
+    assert RuntimeConfig().nightly_profile is False
+    for config in (None, RuntimeConfig(nightly_profile=False)):
+        w = world(autonomy=AutonomyLevel.SHADOW, config=config)
+        w.runtime.tick(SWEEP)
+        w.runtime.tick(SWEEP + timedelta(hours=16))
+        assert all(not s.features and s.features_as_of is None for s in w.states.scan())
 
 
 def test_a_profile_failure_is_an_alert_not_a_stop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -181,12 +186,74 @@ def test_a_profile_failure_is_an_alert_not_a_stop(monkeypatch: pytest.MonkeyPatc
         raise RuntimeError("disk")
 
     monkeypatch.setattr("autonomy.runtime.service.build_profiles", boom)
-    w = world(autonomy=AutonomyLevel.SHADOW)
+    w = world(autonomy=AutonomyLevel.SHADOW, config=PROFILED)
     report = w.runtime.tick(SWEEP)
     assert [a.code for a in report.alerts if a.code == "profile.error"] == ["profile.error"]
     assert "RuntimeError" in next(a.message for a in report.alerts if a.code == "profile.error")
     assert len(report.decisions) == len(CUSTOMERS)
 
 
+def _profile_alert(report: TickReport) -> str:
+    return next(a.message for a in report.alerts if a.code == "profile.error")
+
+
+def test_a_profile_failure_after_a_rebuild_says_the_profiles_are_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    w = world(autonomy=AutonomyLevel.SHADOW, config=PROFILED)
+    w.runtime.tick(SWEEP)
+    assert all(s.features_as_of == SWEEP for s in w.states.scan())
+
+    def boom(*_: object, **__: object) -> int:
+        raise RuntimeError("disk")
+
+    monkeypatch.setattr("autonomy.runtime.service.build_profiles", boom)
+    report = w.runtime.tick(SWEEP + timedelta(hours=16))  # the nightly run, with its full rebuild
+    assert report.rebuilt
+    assert "no profile until the next night" in _profile_alert(report)
+    assert all(not s.features and s.features_as_of is None for s in w.states.scan())
+
+
+def test_a_profile_failure_without_a_rebuild_keeps_the_last_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    w = world(
+        autonomy=AutonomyLevel.SHADOW,
+        config=RuntimeConfig(nightly_profile=True, nightly_rebuild=False),
+    )
+    w.runtime.tick(SWEEP)
+
+    def boom(*_: object, **__: object) -> int:
+        raise RuntimeError("disk")
+
+    monkeypatch.setattr("autonomy.runtime.service.build_profiles", boom)
+    report = w.runtime.tick(SWEEP + timedelta(hours=16))
+    assert not report.rebuilt
+    assert "keep the last ones they had" in _profile_alert(report)
+    assert all(s.features_as_of == SWEEP for s in w.states.scan())
+
+
 def _shop(store: InMemoryEventStore) -> ShopPrices:
     return ShopPrices.until(store.scan(), SWEEP)
+
+
+def test_training_rows_read_a_repeated_event_id_once_as_the_nightly_profile_does() -> None:
+    single = [
+        Event(
+            event_id=f"p{i}",
+            customer_id=f"k{i:02d}",
+            type=EventType.PURCHASE,
+            ts=AS_OF - timedelta(days=10, minutes=i),
+            source="test",
+            value=10.0 + i,
+        )
+        for i in range(60)
+    ]
+    everything = [*single, *([single[30]] * 100)]  # one event delivered a hundred times
+    store, states = InMemoryEventStore(), InMemoryStateStore()
+    store.append(everything)
+    states.put([CustomerState(customer_id=e.customer_id, as_of=AS_OF) for e in single])
+    build_profiles(store, states, AS_OF)
+    rows = {r.customer_id: r.features for r in training_rows(everything, [AS_OF])}
+    assert rows == _features(states)
+    assert rows["k30"]["buy_orders_total"] == 1.0

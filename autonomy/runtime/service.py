@@ -334,10 +334,13 @@ class RuntimeConfig:
     """A batch not approved (or not sendable) within this long expires: its decisions are stale."""
     nightly_lookback: timedelta = timedelta(days=30)
     nightly_rebuild: bool = True
-    nightly_profile: bool = True
+    nightly_profile: bool = False
     """Fill every state's `features` (the customer profile, `autonomy.profile`) at each nightly run and
     after any full rebuild, which resets them. Runs before deciding, so a tick that rebuilds still
-    decides on fresh profiles. A failure is an alert; the states keep their last profile."""
+    decides on fresh profiles. Off by default until something reads `features`: it costs a streamed
+    pass over the log, one read per customer, and about 1.6 KB more per state in memory (docs/v3/PROFILE.md).
+    A failure is an alert: after a rebuild, states not yet refilled have no profile until the next
+    night; otherwise they keep the last one."""
     one_contact_per_tick: bool = True
     """A customer contacted (or held for approval) by one goal is not decided by another that tick."""
     run_send_jobs: bool | None = None
@@ -2349,12 +2352,16 @@ class AutonomyRuntime:
         try:
             build_profiles(self.events, self.states, now)
         except Exception as err:  # a profile failing must never stop deciding
+            if report.rebuilt:
+                after = "the rebuild had reset them, so some states have no profile until the next night"
+            else:
+                after = "states not refilled yet keep the last ones they had"
             self._alert(
                 report,
                 code="profile.error",
                 key=now.date().isoformat(),
                 severity="warning",
-                message=f"The customer profiles could not be built ({type(err).__name__}); states keep the last ones they had.",
+                message=f"The customer profiles could not be built ({type(err).__name__}); {after}.",
             )
 
     def _negative_lift(self, running: Sequence[_Running], now: datetime, report: TickReport) -> None:

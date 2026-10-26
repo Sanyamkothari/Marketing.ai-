@@ -26,7 +26,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from autonomy.contracts import CustomerState, Event
+from autonomy.contracts import CustomerState, Event, EventType
 from autonomy.interfaces import EventStore, StateStore
 from autonomy.profile.facts import gather
 from autonomy.profile.features import compute_all
@@ -136,13 +136,25 @@ def training_rows(
     shown up yet is not in the population then. Each row equals `profile_for(that customer's events,
     that date)`; the shop's price histogram is the one `ShopPrices.until` gives for that date.
     `events` are held in memory, grouped by customer; for a store too big for that, use
-    `training_rows_from_store`.
+    `training_rows_from_store`. A repeated `event_id` is read once (the first copy), as the stores
+    keep it, so a row equals what `build_profiles` writes from a store holding the same events.
     """
     dates = _dates(as_ofs)
     by_customer: dict[str, list[Event]] = {}
+    seen: set[str] = set()
     for e in events:
-        by_customer.setdefault(e.customer_id, []).append(e)
-    shops = ShopPrices.at((e for evs in by_customer.values() for e in evs), dates) if price_context else {}
+        if e.event_id not in seen:
+            seen.add(e.event_id)
+            by_customer.setdefault(e.customer_id, []).append(e)
+    del seen
+    if price_context:
+        purchases = sorted(
+            (e for evs in by_customer.values() for e in evs if e.type is EventType.PURCHASE),
+            key=lambda e: (e.ts, e.event_id),
+        )
+        shops = ShopPrices.at(purchases, dates)  # the roll-up into orders needs time order
+    else:
+        shops = {}
     for cid in sorted(by_customer):
         yield from _rows(cid, by_customer[cid], dates, shops)
 

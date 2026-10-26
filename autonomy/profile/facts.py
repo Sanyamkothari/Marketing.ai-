@@ -12,7 +12,12 @@ Conventions follow `autonomy.data.folder`:
 
 - time zone: the last valid `timezone` attr on an event the customer made themselves (signup, visit,
   view, cart, purchase), else UTC. Hours, weekdays and month days are the customer's local ones;
-- amounts: `Event.value` as given, in the business currency. A purchase adds, a refund subtracts. A
+- orders: purchases of one customer at the same instant that name the same order
+  (`attrs["order_id"]`, else `attrs["invoice_no"]`, else nothing) are one order, their values and
+  margins summed. A log with one PURCHASE per invoice line (`ONLINE_RETAIL_LINE_MAPPING`) is read as
+  one order per invoice, not one per line (`autonomy.profile.shop.order_key`);
+- amounts: `Event.value` in the business currency. A purchase adds, a refund subtracts its size
+  (`abs(value)`, as the event mapper does), so a refund stored as a negative number still subtracts. A
   value that is not a finite number counts as 0. Currencies are never converted here;
 - an offer: a purchase whose `attrs["offer_id"]` is set (not empty, not False). The offer named
   "none" is the agent's way of saying "no offer", so it does not count (the spend ledger agrees);
@@ -20,7 +25,7 @@ Conventions follow `autonomy.data.folder`:
   open messages on the reader's behalf.
 
 Pure and deterministic: no clock reads, no randomness, no I/O. Events may arrive in any order and may
-repeat an `event_id` (the first copy is used).
+repeat an `event_id` (the first copy is used; `training_rows` and the stores drop repeats the same way).
 """
 
 from __future__ import annotations
@@ -33,7 +38,7 @@ from functools import cached_property, lru_cache
 from zoneinfo import ZoneInfo
 
 from autonomy.contracts import NO_OFFER, Channel, Event, EventType
-from autonomy.profile.shop import ShopPrices
+from autonomy.profile.shop import ShopPrices, order_key
 
 __all__ = ["ChannelCounts", "Facts", "Order", "gather"]
 
@@ -70,14 +75,32 @@ def days_between(earlier: datetime, later: datetime) -> float:
 
 @dataclass(frozen=True, slots=True)
 class Order:
-    """One purchase."""
+    """One order: one purchase event, or the purchase lines that share an instant and an order id."""
 
     ts: datetime
     value: float
     margin: float | None
-    category: str | None
-    item: str | None
+    """The summed margin, or None unless every line reports one."""
+    categories: tuple[str, ...]
+    """The distinct categories of its lines, sorted (empty if no line is tagged)."""
+    items: tuple[str, ...]
+    """The distinct items of its lines, sorted (empty if no line is tagged)."""
     offered: bool
+    """Whether any line had an offer applied."""
+
+
+def _order(lines: list[Event]) -> Order:
+    """One `Order` from its purchase lines (all at the same instant)."""
+    margins = [e.margin for e in lines]
+    known = [m for m in margins if m is not None and math.isfinite(m)]
+    return Order(
+        ts=lines[0].ts,
+        value=sum(_amount(e.value) for e in lines),
+        margin=sum(known) if len(known) == len(margins) else None,
+        categories=tuple(sorted({e.category for e in lines if e.category})),
+        items=tuple(sorted({e.item_id for e in lines if e.item_id})),
+        offered=any(_has_offer(e) for e in lines),
+    )
 
 
 @dataclass(slots=True)
@@ -119,12 +142,24 @@ def _text(event: Event, key: str) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def _instant(text: str) -> datetime | None:
-    try:
-        moment = datetime.fromisoformat(text)
-    except ValueError:
+NO_END = datetime.max.replace(tzinfo=UTC)
+"""A snooze whose end cannot be read: when we cannot tell, the customer asked us to wait."""
+
+
+def _snooze_end(raw: str, zone: ZoneInfo | None) -> datetime | None:
+    """When a `snooze_until` value ends, read as `autonomy.decide.rules.snooze_until` reads it.
+
+    Empty means no snooze; a value that cannot be read is a snooze with no end; a time without a zone
+    is on the customer's own clock.
+    """
+    text = raw.strip()
+    if not text:
         return None
-    return moment if moment.tzinfo is not None else None
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return NO_END
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=zone or UTC)
 
 
 @dataclass
@@ -147,7 +182,8 @@ class Facts:
     channels: dict[Channel, ChannelCounts] = field(default_factory=dict)
     preferences: dict[str, str] = field(default_factory=dict)
     snoozed_until: datetime | None = None
-    stop_replies: int = 0
+    stop_reply_ids: set[str] = field(default_factory=set)
+    """The replies behind `reply_stop` unsubscribes: one stop reply unsubscribes every channel."""
     not_now_replies: int = 0
     replies: int = 0
 
@@ -174,6 +210,15 @@ class Facts:
         return sum(gaps) / len(gaps) if gaps else 0.0
 
     @cached_property
+    def gap_known(self) -> bool:
+        """Whether the customer ordered on at least two different local days, so a gap means something."""
+        return len({self.local(o.ts).date() for o in self.orders}) >= 2 and self.mean_gap > 0
+
+    @property
+    def stop_replies(self) -> int:
+        return len(self.stop_reply_ids)
+
+    @cached_property
     def last_order_ts(self) -> datetime | None:
         return self.orders[-1].ts if self.orders else None
 
@@ -196,6 +241,7 @@ class Facts:
 
     @cached_property
     def refunded(self) -> float:
+        """Money refunded, as a positive amount."""
         return sum(v for _, v in self.refunds)
 
     @cached_property
@@ -235,6 +281,8 @@ def gather(events: Iterable[Event], as_of: datetime, shop: ShopPrices | None = N
         raise ValueError(f"profile_for takes one customer's events, got {sorted(customers)[:3]}")
     facts = Facts(customer_id=next(iter(customers), ""), as_of=as_of, shop=shop)
     channels = facts.channels
+    lines: dict[tuple[datetime, str], list[Event]] = {}
+    snooze: str | None = None
     for e in ordered:
         t = e.type
         if facts.first_ts is None:
@@ -246,18 +294,9 @@ def gather(events: Iterable[Event], as_of: datetime, shop: ShopPrices | None = N
         if t in _SEEN:
             facts.last_seen_ts = e.ts
         if t is EventType.PURCHASE:
-            facts.orders.append(
-                Order(
-                    ts=e.ts,
-                    value=_amount(e.value),
-                    margin=e.margin if e.margin is not None and math.isfinite(e.margin) else None,
-                    category=e.category or None,
-                    item=e.item_id or None,
-                    offered=_has_offer(e),
-                )
-            )
+            lines.setdefault((e.ts, order_key(e)), []).append(e)
         elif t is EventType.REFUND:
-            facts.refunds.append((e.ts, _amount(e.value)))
+            facts.refunds.append((e.ts, abs(_amount(e.value))))
         elif t is EventType.VIEW:
             facts.views.append((e.ts, e.item_id or None))
         elif t is EventType.CART:
@@ -269,12 +308,13 @@ def gather(events: Iterable[Event], as_of: datetime, shop: ShopPrices | None = N
             if isinstance(key, str) and value is not None:
                 facts.preferences[key] = str(value)
                 if key == SNOOZE_KEY:
-                    facts.not_now_replies += 1
-                    until = _instant(str(value))
-                    if until is not None:
-                        facts.snoozed_until = until
+                    snooze = str(value)
+                    facts.not_now_replies += bool(snooze.strip())  # an empty value clears a snooze
         elif e.channel is not None:
             _channel_event(facts, channels.setdefault(e.channel, ChannelCounts()), e)
+    facts.orders = [_order(group) for group in lines.values()]  # inserted in time order
+    if snooze is not None:
+        facts.snoozed_until = _snooze_end(snooze, facts.zone)
     return facts
 
 
@@ -301,7 +341,8 @@ def _channel_event(facts: Facts, c: ChannelCounts, e: Event) -> None:
     elif t is EventType.UNSUBSCRIBE:
         c.unsubscribed = True
         if _text(e, "reason") == STOP_REASON:
-            facts.stop_replies += 1
+            reply = e.attrs.get("reply_event_id")
+            facts.stop_reply_ids.add(reply if isinstance(reply, str) and reply else e.event_id)
     elif t is EventType.COMPLAINT:
         c.complaints += 1
         c.unsubscribed = True
