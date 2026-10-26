@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from autonomy.gym.run import main as gym_main
-from autonomy.gym.scenarios import PLANTED_HARM, SCENARIOS
+from autonomy.gym.scenarios import EXPERIMENT_SCENARIOS, PLANTED_HARM, SCENARIOS
 from scripts.v2_realbench.adapters import DATASETS
 from scripts.v2_realbench.common import add_multiplicity
 from scripts.v2_realbench.sealed import SEALED_DATASETS
@@ -98,8 +98,9 @@ def test_the_sealed_check_is_one_run_per_sealed_dataset(targets: list[dict[str, 
 def test_the_gym_is_covered_per_scenario_and_stage(targets: list[dict[str, Any]]) -> None:
     ids = by_id(targets)
     for name in SCENARIOS:
-        if name == "smoke":
-            assert not [t for t in targets if t["id"].startswith("gym.smoke.")]
+        if name == "smoke" or name in EXPERIMENT_SCENARIOS:
+            # smoke is a wiring check; a v3 experiment scenario is judged by its own harness
+            assert not [t for t in targets if t["id"].startswith(f"gym.{name}.")]
             continue
         top = 2 if (name in PLANTED_HARM or name == "null_effect") else 3
         for k in range(1, 4):
