@@ -16,14 +16,16 @@ auction, priced by what the whole plan is expected to bring minus everything it 
 `P(step still runs)` is the chance the customer has not bought after the steps before it:
 `prod (1 - uplift)` over them. A later step's uplift is multiplied by `follow_up_uplift_factor`
 (a second message does less than a first), it is priced as a plain reminder (the offer, if any, is
-paid once, in the first step), and its channel cost is paid only when it runs. The bid's uplift,
-channel cost, offer cost and spread are combined the same way. Organic purchases are not modelled
+paid once, in the first step), and its channel cost and its channel's attention price are paid only
+when it runs. The bid's uplift, channel cost, offer cost and spread are combined the same way. Organic purchases are not modelled
 here, so the chance a step is reached is slightly overstated; the step's gain and its cost are
 overstated together, so the sign of its net does not change.
 
 Channels whose customer has been sent `never_open_after_sends` messages without a click or a reply
 count as never read (`ChannelStats` keeps no open count): a journey that would use such a channel is
-not offered, and a step that falls on one while a journey runs is skipped.
+not offered, and a step that falls on one while a journey runs is skipped. A goal for which no journey
+is left for the customer keeps its single-message bids (except on never-read channels), so turning
+journeys on never takes a channel away from a customer the journeys do not fit.
 
 The chosen option's journey is `Action.journey_id`. The decision's `journey_probability` is the
 chance the policy had of choosing that journey, summed over every option of it (offers, content,
@@ -37,26 +39,33 @@ unsubscribe or stop reply on any channel of the journey, or an open complaint. I
 never-read channels. Otherwise the next step is due when its wait has passed (looking ahead by
 `lookahead_hours`, so a daily sweep does not make every step a day late). A step whose condition no
 longer holds ends the journey. A due step is quoted afresh by the goal's bidder, timed (quiet hours
-in the customer's own time zone) and passed through every hard rule, `rules.check_bid` and the gap
-between messages, exactly like a first message. What a blocked step does depends on the rule:
+in the customer's own time zone), passed through every hard rule, `rules.check_bid` and the gap
+between messages, and then priced by the same market as a first message (`AutonomousPolicy.auction`:
+the channel's attention price, pacing, the customer's weekly budget and the restraint margin). What a
+blocked step does depends on the rule:
 
 * ends the journey: holdout, unsubscribed, open complaint, no brief;
 * skips the step (the next one still runs): no consent, no address, channel or offer not allowed;
-* waits for the next sweep (for up to `max_defer_days`, then ends): weekly cap, too soon, snooze,
-  no budget, quiet hours.
+* waits for the next sweep (for up to `max_defer_days`, then ends): weekly cap, the weekly budget,
+  pacing, too soon, snooze, no money left, quiet hours.
+
+A step whose net after its price no longer beats doing nothing ends the journey, and so does a step
+more than `max_defer_days` overdue (sweeps were missed): it is not sent late.
 
 While a journey is mid-way the customer is not put through the auction again in the daily sweep
 (`hold_during_journey`): one plan at a time. Cart and reply triggers still reach the auction.
 
 The runner keeps its runs in memory, like the policy keeps its pending sends. Every run is rebuilt
-from the decision log by `rebuild`, since a run is made of its decisions.
+from the decision log by `rebuild`, since a run is made of its decisions: the decision made when a run
+ended carries `journey_ended`, and a hold that skipped a step carries the rule. Every change made to
+a run while a decision is made is undone when the same moment is decided again (same decision id).
 """
 
 from __future__ import annotations
 
 import math
 from collections import deque
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -94,6 +103,7 @@ CANCELLED = "cancelled"
 COMPLETED = "completed"
 LEFT_AGENT_GROUP = "left_agent_group"
 NEVER_READ = "never_read"
+REPLACED = "replaced"
 
 _STOP_RULES: Final[frozenset[str]] = frozenset(
     {rules.HOLDOUT, rules.UNSUBSCRIBED, rules.OPEN_COMPLAINT, rules.NO_BRIEF}
@@ -143,7 +153,7 @@ class JourneyStep(Contract):
 
 
 class Journey(Contract):
-    journey_id: str = Field(min_length=1)
+    journey_id: str = Field(min_length=1, pattern=r"^[^:]+$")
     name: str
     steps: tuple[JourneyStep, ...] = Field(min_length=1)
     value_bar: float | None = Field(
@@ -344,38 +354,67 @@ class JourneyRunner:
         self.settings = config.settings
         self._runs: dict[str, JourneyRun] = {}
         self._undo: dict[str, tuple[str, JourneyRun | None]] = {}
-        """customer -> (the last journey decision, the run before it), so deciding the same moment again
-        replaces that decision instead of moving the run twice."""
+        """customer -> (the last decision that changed their run, the run before it), so deciding the
+        same moment again replaces that decision instead of moving the run twice."""
+        self._current: tuple[str, str] | None = None
+        """(customer, decision id) being decided: every change to that customer's run is undoable."""
+        self._ended: dict[str, str] = {}
+        """customer -> '<journey id>:<code>' of the run that ended while the current decision was made."""
         self.history: deque[JourneyEvent] = deque(maxlen=history)
 
     # --- choosing: journeys as bids ---------------------------------------------------------------
 
-    def expand(self, offered: Sequence[Bid], state: CustomerState) -> list[Bid]:
+    def expand(
+        self,
+        offered: Sequence[Bid],
+        state: CustomerState,
+        price_of: Callable[[Channel], float] | None = None,
+    ) -> list[Bid]:
         """The bids the auction sees: the offered ones, with every bid on a journey's first channel
         replaced by one bid per journey that starts there (and that this customer may have).
 
         A bid on a channel no journey starts on passes through unchanged. A journey is left out when
         a channel of it is one the customer never reads, when the bid's value is below the journey's
-        bar, or when the goal has no bid on one of its later channels."""
+        bar, or when the goal has no bid on one of its later channels. A goal for which no journey is
+        left keeps its single-message bids, as without journeys, except on channels the customer
+        never reads. `price_of(channel)` is the attention price of one more message there; a later
+        step pays it with the chance it runs (None: free)."""
         starts = {j.steps[0].channel for j in self.config.journeys}
+        limit = self.settings.never_open_after_sends
         pool: dict[tuple[str, Channel], list[Bid]] = {}
         for bid in offered:
             pool.setdefault((bid.goal_id, bid.action.channel), []).append(bid)
         out = [b for b in offered if b.action.channel not in starts]
-        limit = self.settings.never_open_after_sends
+        journeys: list[Bid] = []
+        covered: set[str] = set()
         for journey in self.config.journeys:
             if any(never_read(state.channels.get(ch), limit) for ch in journey.channels):
                 continue
             for first in offered:
                 if first.action.channel is not journey.steps[0].channel:
                     continue
-                priced = self._price(journey, first, pool)
+                priced = self._price(journey, first, pool, price_of)
                 if priced is not None:
-                    out.append(priced)
+                    journeys.append(priced)
+                    covered.add(first.goal_id)
+        # No journey fits this goal for this customer (e.g. WhatsApp only and below every bar):
+        # its single messages go through as they were, so turning journeys on takes no channel away.
+        out.extend(
+            b
+            for b in offered
+            if b.action.channel in starts
+            and b.goal_id not in covered
+            and not never_read(state.channels.get(b.action.channel), limit)
+        )
+        out.extend(journeys)
         return out
 
     def _price(
-        self, journey: Journey, first: Bid, pool: Mapping[tuple[str, Channel], list[Bid]]
+        self,
+        journey: Journey,
+        first: Bid,
+        pool: Mapping[tuple[str, Channel], list[Bid]],
+        price_of: Callable[[Channel], float] | None = None,
     ) -> Bid | None:
         if journey.value_bar is not None and first.value_if_converted < journey.value_bar:
             return None
@@ -389,6 +428,7 @@ class JourneyRunner:
                 return None
             later = _reminder(quotes)
             gain = factor * later.uplift if later.uplift > 0 else later.uplift
+            attention = _price_or_zero(price_of, step.channel)
             uplift += reach * gain
             offer_cost += reach * later.offer_cost
             channel_cost += reach * later.channel_cost
@@ -396,6 +436,7 @@ class JourneyRunner:
                 reach
                 * later.urgency
                 * (gain * later.value_if_converted - later.offer_cost - later.channel_cost)
+                - reach * attention
             )
             variance += (reach * factor * later.uncertainty) ** 2
             reach *= 1.0 - _clamp(gain, 0.0, 1.0)
@@ -413,43 +454,72 @@ class JourneyRunner:
 
     # --- remembering decisions --------------------------------------------------------------------
 
-    def record(self, decision: Decision) -> None:
-        """Fold one decision in: a journey's first step starts a run, a later step moves it on, and any
-        other decision made again for the moment of a run's first step cancels that run.
+    def begin(self, customer_id: str, decision_id: str) -> None:
+        """The policy starts deciding `decision_id`: take back what an earlier decision with the same
+        id did to the run, and make every change from here on undoable under that id."""
+        self.undo(customer_id, decision_id)
+        self._current = (customer_id, decision_id)
+        self._ended.pop(customer_id, None)
 
-        Safe to call on the whole decision log in order (`rebuild`)."""
-        cid = decision.customer_id
-        action = decision.action
-        if decision.kind is not DecisionKind.ACT or action is None or action.journey_id is None:
-            self.undo(cid, decision.decision_id)
+    def ended(self, customer_id: str) -> str | None:
+        """'<journey id>:<code>' of the run that ended while the current decision was made, if any
+        (the policy logs it on the decision as `journey_ended`)."""
+        return self._ended.get(customer_id)
+
+    def record(self, decision: Decision) -> None:
+        """Fold one decision in. A journey's first step starts a run (ending one it replaces), a later
+        step moves it on, a hold that skips a step moves past it, and `journey_ended` ends the run.
+
+        Safe to call on the whole decision log in order (`rebuild`): a decision made again for the
+        same moment replaces the earlier one."""
+        cid, did = decision.customer_id, decision.decision_id
+        if self._current != (cid, did):
+            self.begin(cid, did)
+        try:
+            self._fold(decision)
+        finally:
+            self._current = None
+            self._ended.pop(cid, None)
+
+    def _fold(self, decision: Decision) -> None:
+        cid, at, action = decision.customer_id, decision.made_at, decision.action
+        run = self._runs.get(cid)
+        if decision.journey_ended and run is not None:
+            journey_id, _, code = decision.journey_ended.partition(":")
+            if run.journey_id == journey_id:
+                self._end(run, "completed" if code == COMPLETED else "stopped", code, at)
+                run = None
+        if decision.kind is DecisionKind.NOTHING:
+            if run is not None and decision.journey_id == run.journey_id:
+                self._fold_skip(run, decision)
             return
-        self.undo(cid, decision.decision_id)
-        before = self._runs.get(cid)
+        if decision.kind is not DecisionKind.ACT or action is None or action.journey_id is None:
+            return
         if action.follow_up_step == 0:
             journey = self.config.get(action.journey_id)
             if journey is None:
                 return
-            self._undo[cid] = (decision.decision_id, before)
-            self._runs[cid] = JourneyRun(
+            if run is not None:
+                self._end(run, "stopped", REPLACED, at)
+            started = JourneyRun(
                 customer_id=cid,
                 journey_id=journey.journey_id,
                 goal_id=action.goal_id,
                 first_decision_id=decision.decision_id,
                 last_decision_id=decision.decision_id,
-                started_at=decision.made_at,
+                started_at=at,
                 probability=decision.journey_probability or decision.probability,
                 next_step=1,
                 base_at=action.send_at,
                 last_sent_at=action.send_at,
                 last_sent_channel=action.channel,
             )
-            self._log(cid, journey.journey_id, 0, "started", "", decision.made_at)
-            self._finish_if_last(self._runs[cid], decision.made_at)
+            self._set(cid, started)
+            self._log(cid, journey.journey_id, 0, "started", "", at)
+            self._finish_if_last(started, at)
             return
-        run = before
         if run is None or run.journey_id != action.journey_id or action.follow_up_step < run.next_step:
             return
-        self._undo[cid] = (decision.decision_id, run)
         run = run.model_copy(
             update={
                 "next_step": action.follow_up_step + 1,
@@ -459,9 +529,23 @@ class JourneyRunner:
                 "last_decision_id": decision.decision_id,
             }
         )
-        self._runs[cid] = run
-        self._log(cid, run.journey_id, action.follow_up_step, "sent", "", decision.made_at)
-        self._finish_if_last(run, decision.made_at)
+        self._set(cid, run)
+        self._log(cid, run.journey_id, action.follow_up_step, "sent", "", at)
+        self._finish_if_last(run, at)
+
+    def _fold_skip(self, run: JourneyRun, hold: Decision) -> None:
+        """A hold whose rule skips the due step (no consent, say): the run moves past that step."""
+        code = hold.blocked_by[0] if hold.blocked_by else ""
+        journey = self.config.get(run.journey_id)
+        if code not in _SKIP_RULES or journey is None or run.next_step >= len(journey.steps):
+            return
+        step = journey.steps[run.next_step]
+        self._log(run.customer_id, run.journey_id, run.next_step, "skipped", code, hold.made_at)
+        moved = run.model_copy(
+            update={"next_step": run.next_step + 1, "base_at": run.base_at + timedelta(days=step.wait_days)}
+        )
+        self._set(run.customer_id, moved)
+        self._finish_if_last(moved, hold.made_at)
 
     def undo(self, customer_id: str, decision_id: str) -> None:
         """Take back the customer's last journey decision when it is `decision_id`: the policy is
@@ -476,9 +560,12 @@ class JourneyRunner:
             self._runs[customer_id] = last[1]
 
     def rebuild(self, decisions: Iterable[Decision]) -> None:
-        """Start from nothing and fold the journey decisions of a log, oldest first."""
+        """Start from nothing and fold the journey decisions of a log, oldest first. Runs that ended
+        stay ended: the decision made when one ended carries `journey_ended`."""
         self._runs.clear()
         self._undo.clear()
+        self._current = None
+        self._ended.clear()
         for d in sorted(decisions, key=lambda x: x.made_at):
             self.record(d)
 
@@ -502,13 +589,30 @@ class JourneyRunner:
         return list(self._runs.values())
 
     def stop(self, run: JourneyRun, code: str, at: datetime) -> None:
-        self._runs.pop(run.customer_id, None)
-        self._log(run.customer_id, run.journey_id, run.next_step, "stopped", code, at)
+        self._end(run, "stopped", code, at)
+
+    def _end(self, run: JourneyRun, kind: str, code: str, at: datetime) -> None:
+        self._set(run.customer_id, None)
+        self._log(run.customer_id, run.journey_id, run.next_step, kind, code, at)
+        if self._current is not None and self._current[0] == run.customer_id:
+            self._ended[run.customer_id] = f"{run.journey_id}:{code}"
+
+    def _set(self, customer_id: str, run: JourneyRun | None) -> None:
+        """Change a customer's run; while a decision for them is being made, undoably."""
+        current = self._current
+        if current is not None and current[0] == customer_id:
+            saved = self._undo.get(customer_id)
+            if saved is None or saved[0] != current[1]:
+                self._undo[customer_id] = (current[1], self._runs.get(customer_id))
+        if run is None:
+            self._runs.pop(customer_id, None)
+        else:
+            self._runs[customer_id] = run
 
     def _finish_if_last(self, run: JourneyRun, at: datetime) -> None:
         journey = self.config.get(run.journey_id)
         if journey is not None and run.next_step >= len(journey.steps):
-            self._runs.pop(run.customer_id, None)
+            self._set(run.customer_id, None)
             self._log(run.customer_id, run.journey_id, run.next_step, "completed", COMPLETED, at)
 
     def _log(self, customer_id: str, journey_id: str, step: int, kind: str, code: str, at: datetime) -> None:
@@ -542,10 +646,9 @@ class JourneyRunner:
                     "base_at": run.base_at + timedelta(days=step.wait_days),
                 }
             )
-            self._runs[run.customer_id] = run
+            self._set(run.customer_id, run)
         if run.next_step >= len(journey.steps):
-            self._runs.pop(run.customer_id, None)
-            self._log(run.customer_id, run.journey_id, run.next_step, "completed", COMPLETED, ctx.now)
+            self._end(run, "completed", COMPLETED, ctx.now)
             return Turn(TurnKind.STOPPED, run, journey, code=COMPLETED)
         step = journey.steps[run.next_step]
         due = run.base_at + timedelta(days=step.wait_days)
@@ -555,6 +658,11 @@ class JourneyRunner:
             self.stop(run, CONDITION_FAILED, ctx.now)
             return Turn(TurnKind.STOPPED, run, journey, step, due, CONDITION_FAILED)
         return Turn(TurnKind.STEP, run, journey, step, due)
+
+    def late(self, turn: Turn, now: datetime) -> bool:
+        """Whether the due step is more than `max_defer_days` overdue (sweeps missed, or held too
+        long): it is no longer sent, whatever it waited for."""
+        return turn.due_at is not None and now - turn.due_at > timedelta(days=self.settings.max_defer_days)
 
     @staticmethod
     def stop_reason(run: JourneyRun, journey: Journey, state: CustomerState) -> str:
@@ -587,19 +695,28 @@ class JourneyRunner:
     ) -> Bid | str:
         """The due step as a bid, priced afresh by the goal's bidder (a plain reminder if there is one),
         with its journey, step and due time on the action; or the code that ends the journey when the
-        bidder has nothing to offer on that channel now or what it offers no longer pays."""
+        bidder has nothing to offer on that channel now or what it offers no longer pays. A bid whose
+        value or spread is NaN or infinite is a bidder bug and is not offered, as in the auction."""
         run, step, due = turn.run, turn.step, turn.due_at
         if run is None or step is None or due is None:
             raise ValueError("only a STEP turn can be planned")
         bidder = next((b for b in bidders if b.goal_id == run.goal_id), None)
         quotes = (
-            [] if bidder is None else [b for b in bidder.bids(state, ctx) if b.action.channel is step.channel]
+            []
+            if bidder is None
+            else [
+                b
+                for b in bidder.bids(state, ctx)
+                if b.action.channel is step.channel
+                and math.isfinite(b.expected_net)
+                and math.isfinite(b.uncertainty)
+            ]
         )
         if not quotes:
             self.stop(run, NOTHING_TO_OFFER, ctx.now)
             return NOTHING_TO_OFFER
         best = _reminder(quotes)
-        if self.settings.require_positive_net and best.expected_net <= 0:
+        if self.settings.require_positive_net and not best.expected_net > 0:
             self.stop(run, NO_LONGER_PAYS, ctx.now)
             return NO_LONGER_PAYS
         action = best.action.model_copy(
@@ -608,7 +725,8 @@ class JourneyRunner:
         return best.model_copy(update={"action": action})
 
     def blocked(self, turn: Turn, code: str, now: datetime) -> Verdict:
-        """What a hard rule's block does to the due step (see the module docstring)."""
+        """What a hard rule's block (or the auction's pacing or weekly budget) does to the due step
+        (see the module docstring). A skip takes effect when the hold decision is recorded."""
         run, due = turn.run, turn.due_at
         if run is None or due is None or turn.step is None:
             raise ValueError("only a STEP turn can be blocked")
@@ -616,16 +734,8 @@ class JourneyRunner:
             self.stop(run, code, now)
             return Verdict.STOP
         if code in _SKIP_RULES:
-            self._log(run.customer_id, run.journey_id, run.next_step, "skipped", code, now)
-            self._runs[run.customer_id] = run.model_copy(
-                update={"next_step": run.next_step + 1, "base_at": due}
-            )
-            journey = turn.journey
-            if journey is not None and run.next_step + 1 >= len(journey.steps):
-                self._runs.pop(run.customer_id, None)
-                self._log(run.customer_id, run.journey_id, run.next_step + 1, "completed", COMPLETED, now)
             return Verdict.SKIP
-        if now - due > timedelta(days=self.settings.max_defer_days):
+        if self.late(turn, now):
             self.stop(run, f"{EXPIRED}:{code}", now)
             return Verdict.STOP
         self._log(run.customer_id, run.journey_id, run.next_step, "deferred", code, now)
@@ -636,6 +746,13 @@ class JourneyRunner:
     def describe(self, journey_id: str) -> str:
         journey = self.config.get(journey_id)
         return journey.describe() if journey is not None else journey_id
+
+
+def _price_or_zero(price_of: Callable[[Channel], float] | None, channel: Channel) -> float:
+    if price_of is None:
+        return 0.0
+    price = float(price_of(channel))
+    return price if price > 0 and math.isfinite(price) else 0.0
 
 
 def _reminder(quotes: Sequence[Bid]) -> Bid:

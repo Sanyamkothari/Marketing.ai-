@@ -79,6 +79,11 @@ class Decision(Contract):
         description="Chance the policy had of choosing this journey, summed over its offers and"
         " content (v3). A later step of a journey carries the value its first step logged.",
     )
+    journey_ended: str | None = Field(
+        default=None,
+        description="The journey that ended while this decision was made, and why, as"
+        " '<journey id>:<code>' (v3), so the runs rebuilt from the log stay ended",
+    )
 
     @model_validator(mode="after")
     def _action_matches_kind(self) -> Decision:

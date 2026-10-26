@@ -1925,6 +1925,12 @@ class AgentPolicy:
             for b, kept in _quote_all(bidder, view, eff)
             if math.isfinite(b.expected_net) and math.isfinite(b.uncertainty)
         ]
+        if policy.journeys is not None:  # v3 journeys: the options decide() weighs, not the raw bids
+            quoted = [b for b, kept in offered if kept]
+            prices = policy.journey_prices(view, quoted)
+            offered = [(b, True) for b in policy.journeys.expand(quoted, view, prices)] + [
+                (b, False) for b, kept in offered if not kept
+            ]
         allowed: list[Bid] = []
         blocked: list[tuple[Bid, str]] = []
         for bid, kept in offered:

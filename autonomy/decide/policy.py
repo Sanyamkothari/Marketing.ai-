@@ -87,7 +87,9 @@ from autonomy.contracts import (
 )
 from autonomy.decide import explain, rules
 from autonomy.decide.journeys import (
+    EXPIRED,
     LEFT_AGENT_GROUP,
+    NO_LONGER_PAYS,
     JourneyRun,
     JourneyRunner,
     TurnKind,
@@ -352,11 +354,13 @@ class AutonomousPolicy:
             )
             gap = rules.too_soon(state, ctx.now, self.min_gap, upcoming)
         state = self.with_pending(state, ctx.now, ignore=decision_id)
+        journey_ended: str | None = None
         if self.journeys is not None:
-            self.journeys.undo(state.customer_id, decision_id)
+            self.journeys.begin(state.customer_id, decision_id)
             step = self._journey_turn(state, ctx, decision_id, trigger, gap)
             if step is not None:
                 return step
+            journey_ended = self.journeys.ended(state.customer_id)
         rng_key = state.customer_id if trigger in (None, SWEEP) else f"{state.customer_id}\x1f{trigger}"
         hour_scores: tuple[float, ...] | None = None
         if self.reading_hours is not None:
@@ -374,7 +378,7 @@ class AutonomousPolicy:
             if math.isfinite(b.expected_net) and math.isfinite(b.uncertainty)
         ]
         if self.journeys is not None:
-            offered = self.journeys.expand(offered, state)
+            offered = self.journeys.expand(offered, state, self.journey_prices(state, offered))
         survivors: list[Bid] = []
         blocked: list[str] = []
         for bid in offered:
@@ -426,6 +430,7 @@ class AutonomousPolicy:
             journey_probability=(
                 journey_probability(options, pick.probabilities, journey_id) if journey_id else None
             ),
+            journey_ended=journey_ended,
         )
         sentence = explain.reason(
             draft,
@@ -461,8 +466,11 @@ class AutonomousPolicy:
 
         Only the daily sweep carries journeys on (a cart or a reply is decided on its own). A step
         that is not due yet holds the customer (`hold_during_journey`). A due step is quoted afresh,
-        timed, and passed through every hard rule and the gap between messages; it is sent with
-        probability 1.0 (the journey was the draw) and the first step's `journey_probability`."""
+        timed, passed through every hard rule and the gap between messages, then through the same
+        market as a first message (`auction`: attention price, pacing, weekly budget, restraint). A
+        hold by pacing or the budget waits like a cap; a step that no longer beats its price, or
+        that is more than `max_defer_days` overdue, ends the journey. A step that goes out is sent
+        with probability 1.0 (the journey was the draw) and the first step's `journey_probability`."""
         runner = self.journeys
         if runner is None or trigger not in (None, SWEEP):
             return None
@@ -480,7 +488,8 @@ class AutonomousPolicy:
                 ctx,
                 decision_id,
                 run,
-                f"Waiting: {label} sends its next message, by {where}, on {due:%d %b}.",
+                f"Waiting: {label} sends its next message, by {where},"
+                f" on {due.astimezone(rules.customer_zone(state)):%d %b}.",
             )
         planned = runner.plan(turn, state, ctx, self.bidders)
         if isinstance(planned, str):
@@ -489,6 +498,15 @@ class AutonomousPolicy:
         check = rules.check_bid(bid, state, ctx)
         if check.allowed and not gap.allowed:
             check = gap
+        market: Market | None = None
+        if check.allowed:
+            # The same market as a first message: a hold by pacing or the weekly budget waits.
+            market = self.auction(state, ctx, [bid], [])
+            if market.held:
+                check = rules.RuleResult(False, market.held[0][1])
+        if check.allowed and runner.late(turn, ctx.now):
+            runner.stop(run, EXPIRED, ctx.now)
+            return None
         if not check.allowed:
             verdict = runner.blocked(turn, check.code, ctx.now)
             if verdict is Verdict.STOP:
@@ -498,6 +516,12 @@ class AutonomousPolicy:
             return self._journey_hold(
                 state, ctx, decision_id, run, f"{label} {what} its next message: {why}", (check.code,)
             )
+        assert market is not None  # set whenever the step passed the rules
+        price = market.cost(bid)
+        restrained = bool(market.eligible) and not market.eligible[0]
+        if runner.settings.require_positive_net and (not bid.expected_net - price > 0 or restrained):
+            runner.stop(run, NO_LONGER_PAYS, ctx.now)
+            return None
         draft = Decision(
             decision_id=decision_id,
             customer_id=state.customer_id,
@@ -507,6 +531,7 @@ class AutonomousPolicy:
             group=state.group,
             probability=1.0,
             expected_net=bid.expected_net,
+            attention_price=price,
             reason="-",
             bids=(bid,),
             policy_version=self.version,
@@ -520,13 +545,25 @@ class AutonomousPolicy:
             offers={o.offer_id: o for b in ctx.briefs for o in b.envelope.offers},
             contacts_7d=state.contacts_7d,
             currency=self.currency,
-            base_price=0.0,
+            surcharges=market.surcharges,
+            base_price=market.channel_price(bid.action.channel),
+            prices={bid.action.channel: market.channel_price(bid.action.channel)},
             channels=state.channels,
         )
         self._remember(draft)
         return draft.model_copy(
             update={"reason": f"{sentence} Part of {label}: {runner.describe(run.journey_id)}."}
         )
+
+    def journey_prices(self, state: CustomerState, bids: Sequence[Bid]) -> Callable[[Channel], float]:
+        """The attention price of one more message on each channel, as the auction would price the
+        customer's single-message `bids`: what a journey's later step pays when it runs."""
+        base = self._price(state)
+        prices: dict[Channel, float] = {}
+        if self.channel_price_fn is not None and bids:
+            for channel, p in self.channel_price_fn(state, bids).items():
+                prices[channel] = float(p) if p > 0 and math.isfinite(p) else 0.0
+        return lambda channel: prices.get(channel, base)
 
     def _journey_hold(
         self,

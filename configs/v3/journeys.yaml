@@ -8,6 +8,8 @@
 # A journey is one option in the daily auction, priced over the whole plan (autonomy/decide/journeys.py).
 # `value_bar` (in the shop's own currency, optional) offers the journey only to customers worth at least
 # that much if they buy; it is a starting value to replace per shop (JourneyConfig.with_value_bar).
+# C and D both send WhatsApp first, so both carry the bar. A goal for which no journey fits a customer
+# (WhatsApp only and below the bar, say) keeps its single messages, as without journeys.
 
 settings:
   follow_up_uplift_factor: 0.5   # a later step is assumed to do half as much as a first message; untuned, to calibrate
@@ -38,7 +40,8 @@ journeys:
       - channel: whatsapp
 
   - id: D
-    name: WhatsApp, then an email reminder
+    name: WhatsApp, then an email reminder (high value only, like C)
+    value_bar: 50
     steps:
       - channel: whatsapp
       - channel: email
