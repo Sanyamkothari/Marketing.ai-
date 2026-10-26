@@ -47,6 +47,8 @@ from api.v2.connectors import (
 from api.v2.connectors import router as connectors_router
 from api.v2.deps import Services, attach_services, build_demo_services
 from api.v2.engines.router import router as engines_router
+from api.v2.images import ImageServices, attach_image_services
+from api.v2.images import router as images_router
 from api.v2.inbox import InboxServices, attach_inbox_services, local_inbox_services
 from api.v2.inbox import autopilot_router as inbox_autopilot_router
 from api.v2.inbox import router as inbox_router
@@ -87,6 +89,7 @@ def create_app(
     brand: BrandServices | None = None,
     inbox: InboxServices | None = None,
     local_inbox: bool = True,
+    images: ImageServices | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Autonomy API",
@@ -117,6 +120,9 @@ def create_app(
         attach_inbox_services(app, inbox)
     elif local_inbox:
         attach_inbox_services(app, local_inbox_services(services))
+    # Generated images (/v2/images, docs/v3/IMAGES.md): off by default, so without `images` the routes answer 503.
+    if images is not None:
+        attach_image_services(app, images)
     app.add_exception_handler(RequestValidationError, _validation_error)
     app.add_middleware(
         CORSMiddleware,
@@ -135,6 +141,7 @@ def create_app(
     app.include_router(onboarding_router)  # sized goals and learned limits (docs/v2/ZERO_TOUCH.md)
     app.include_router(inbox_router)  # what needs a person, and its one button (docs/v2/ZERO_TOUCH.md)
     app.include_router(inbox_autopilot_router)  # Shadow -> Autopilot in one click
+    app.include_router(images_router)  # batch approval of generated images (docs/v3/IMAGES.md)
     app.include_router(engines_router)  # the six standalone engines, /v2/engines/... (docs/v2/ENGINES.md)
     return app
 
