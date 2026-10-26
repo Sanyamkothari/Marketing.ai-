@@ -96,6 +96,18 @@ def test_the_lookalike_agent_runs_in_the_gym_and_learns_from_it() -> None:
     model = built[0].bundle.response
     assert isinstance(model, LookalikeClickModel)
     assert model.lookalike.rows > 0 and model.lookalike.refused == 0
+    assert model.lookalike.ready  # the crowd's fit is in use, not only gathering rows
+    state = CustomerState(
+        customer_id="probe",
+        as_of=NOW,
+        purchases=3,
+        revenue=150.0,
+        first_seen_at=NOW - timedelta(days=300),
+        last_purchase_at=NOW - timedelta(days=20),
+        channels={Channel.EMAIL: ChannelStats(address_known=True, consent=True)},
+    )
+    key = "email|none|reminder"
+    assert model.predict(state, key) != ClickResponseModel.predict(model, state, key)
 
 
 def test_the_gym_cli_lists_agent_lookalike_next_to_agent() -> None:

@@ -9,13 +9,20 @@ import numpy as np
 import pytest
 
 from autonomy.contracts import Action, Channel, Decision, DecisionKind, Event, EventType, Group
-from autonomy.decide.lookalike import LookalikeResponseModel, Outcome, OutcomeBook, WindowLookup, profile_of
+from autonomy.decide.lookalike import (
+    LookalikeResponseModel,
+    Outcome,
+    OutcomeBook,
+    Profile,
+    WindowLookup,
+    profile_of,
+)
 from autonomy.learning.observations import Timeline
 
 from .synth import KEY, T0, WINDOW, make_state, outcomes
 
 
-def _profile():  # type: ignore[no-untyped-def]
+def _profile() -> Profile:
     return profile_of(make_state(0, np.random.default_rng(0)))
 
 

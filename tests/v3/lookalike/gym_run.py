@@ -38,6 +38,15 @@ def report() -> None:
             f"[look-alike agent {i}] rows={la.rows} ready={la.ready} refused={la.refused} "
             f"dropped={book.dropped if book else {}} pending={len(book) if book else 0}"
         )
+        if la.rows:
+            crowd = la._crowd_weights(la._rows)
+            treated = sum(w for r, w in zip(la._rows, crowd, strict=True) if r.key is not None)
+            control = sum(w for r, w in zip(la._rows, crowd, strict=True) if r.key is None)
+            people = len({r.customer_id for r in la._rows if r.key is None})
+            print(
+                f"  crowd weight (all rows, after the per-customer cap): treated={treated:.1f} "
+                f"control={control:.1f} from {people} control customers"
+            )
         print(
             "  calibration (scored before learned): treated n={treated_n:.0f} predicted={treated_predicted:.4f} "
             "realised={treated_realised:.4f}; control n={control_n:.0f} predicted={control_predicted:.4f} "
