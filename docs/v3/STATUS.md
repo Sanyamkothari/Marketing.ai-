@@ -28,7 +28,29 @@ Every v3 piece is **off by default**; `build_agent_policy(v3=True)` or `AUTONOMY
 | CI failures that were red on version-2 before v3 | [CI_GREEN.md](CI_GREEN.md) |
 | The preset | [PRESET.md](PRESET.md) |
 
-## Not proven yet
+## Read this first: the review and the first real-data result
+
+**"Built" above means the code and its tests exist. It does not mean wired into the running product or proven.**
+An adversarial review (six red-team lenses, an independent skeptic per finding, a senior architect and a senior
+CMO) is in [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md); its section 7 has the built / wired / proven table.
+In short: experiments, copy per type, images, early signals and auto-budget have no caller in the runtime; the
+wired parts lose what they learn on every rebuild; and no v3 part is proven.
+
+**First real-data bench (CI run 40325405923, commit 3af057a7), doubly-robust profit per customer on the TEST half:**
+
+| Dataset | agent (plain) | agent_v3 | v3 contacted |
+|---|---:|---:|---:|
+| Criteo | 0.0524 | 0.0524 (identical) | 11.9% |
+| MegaFon | 4.196 | 4.196 (identical) | 46.1% |
+| Hillstrom | 0.651 [0.50, 0.80] | **0.285** [0.19, 0.38] | 1.9% |
+| X5 | 72.23 [71.14, 73.32] | **70.76** [69.66, 71.86] | 1.5% |
+
+v3 changed nothing where its parts cannot see the customers' features (Criteo, MegaFon), and nearly stopped
+contacting anyone and lost where they can (Hillstrom, X5). The cause of that collapse is not yet diagnosed (the
+bench records `blocked_by` per decision; reading it is the next step). **Decision: v3 stays off; see the review's
+section 8 for the fix order.** Full numbers: [redteam/bench_results.md](redteam/bench_results.md).
+
+## The proof runs
 
 Nothing here shows yet that v3 beats the plain agent or the best simple rule. That is the job of the CI runs this
 commit starts (`[gym]`, `[real]`):
@@ -38,4 +60,4 @@ commit starts (`[gym]`, `[real]`):
 - **Real bench** (`.github/workflows/realbench.yml`): `agent` and `agent_v3` on Hillstrom, X5, Criteo and MegaFon,
   judged by the targets in [TARGETS.json](../v2/TARGETS.json).
 
-The results will be written up here, wins and losses alike.
+The real bench result is above. The Gym run (CI 40325406058) will be added when it finishes.
