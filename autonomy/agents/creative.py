@@ -411,14 +411,23 @@ def has_unsubscribe_hint(text: str) -> bool:
 
 
 def template_name(
-    goal_id: str, version: int, channel: Channel, offer_id: str, theme: Theme, index: int
+    goal_id: str,
+    version: int,
+    channel: Channel,
+    offer_id: str,
+    theme: Theme,
+    index: int,
+    scope: str | None = None,
 ) -> str:
     """A WhatsApp template name: lowercase letters, digits and underscores only, as Meta requires.
 
     The brief version is part of the name because Meta approves a template by name: a new library
-    for a revised brief must not reuse an old name for different wording.
+    for a revised brief must not reuse an old name for different wording. `scope` (a customer type, in
+    `autonomy.content`) keeps the names of per-type copy apart; without it the name is as before.
     """
     raw = f"{goal_id}_v{version}_{channel.value}_{offer_id}_{theme.value}_{index}".lower()
+    if scope:
+        raw = f"{raw}_{scope}".lower()
     return re.sub(r"[^a-z0-9_]+", "_", raw).strip("_")[:512]
 
 
@@ -514,6 +523,60 @@ class Creative:
                         )
         return items
 
+    def reset(self) -> None:
+        """Forget the notes of earlier work (`dropped`, `failures`, `templated`) and any outage.
+
+        `build_library` does this itself. `write_for_type` does not, so one weekly run over many
+        customer types keeps one set of notes, and a model that went down stays skipped for it."""
+        self.dropped = []
+        self.failures = []
+        self.templated = []
+        self._down = None
+
+    def write_for_type(
+        self,
+        brief: Brief,
+        *,
+        type_id: str,
+        type_note: str,
+        channel: Channel,
+        offer: OfferOption,
+        theme: Theme,
+        n: int,
+        brand_voice: str,
+        now: datetime,
+        kit: BrandKit | None = None,
+    ) -> list[ContentItem]:
+        """Up to `n` DRAFT variants of one cell, written for one customer type (plan-v3 decision 6).
+
+        `type_note` is the type's plain label (no customer data); the model is told it as the
+        customer type. Labels, slots, footers and length limits are assigned exactly as in
+        `build_library`; the ids and WhatsApp template names also carry `type_id` (the caller's key
+        for the type, which may hold more than a type id) and a hash of the final subject and body,
+        so two types never share an id and a template name is never reused for different wording.
+        Nothing is reset here (see `reset`)."""
+        if n < 1:
+            raise ValueError("n must be at least 1")
+        self._kit = kit
+        if kit is not None:
+            brand_voice = " ".join(p for p in (brand_voice.strip(), kit.voice_text()) if p)
+        if kit is not None and not offer_in_style(offer, kit.rules):
+            self.dropped.append(
+                f"{channel.value}/{offer.offer_id}: the shop's own copy never states this kind of discount"
+            )
+            return []
+        return self._cell(
+            brief,
+            channel,
+            offer,
+            theme,
+            brand_voice=brand_voice,
+            n=n,
+            now=now,
+            audience_note=type_note,
+            scope=type_id,
+        )
+
     def _format_variants(
         self,
         brief: Brief,
@@ -574,6 +637,8 @@ class Creative:
         brand_voice: str,
         n: int,
         now: datetime,
+        audience_note: str | None = None,
+        scope: str | None = None,
     ) -> list[ContentItem]:
         tone = THEME_TONE[theme]
         cell = f"{channel.value}/{offer.offer_id}/{theme.value}"
@@ -588,7 +653,15 @@ class Creative:
                     VariantSet,
                     system=self._system(),
                     prompt=self._cell_prompt(
-                        brief, channel, offer, theme, tone, brand_voice, n, kit=self._kit
+                        brief,
+                        channel,
+                        offer,
+                        theme,
+                        tone,
+                        brand_voice,
+                        n,
+                        kit=self._kit,
+                        audience_note=audience_note,
                     ),
                     model_id=self._model_id,
                 ).variants
@@ -599,7 +672,7 @@ class Creative:
                 self._down = f"the model could not be reached ({_why(exc)})"
                 variants = template_variants(channel, offer, theme, n, kit=self._kit)
                 self.templated.append(f"{cell}: {self._down}")
-        return self._items(brief, channel, offer, theme, variants, n=n, now=now)
+        return self._items(brief, channel, offer, theme, variants, n=n, now=now, scope=scope)
 
     def _items(
         self,
@@ -611,6 +684,7 @@ class Creative:
         *,
         n: int,
         now: datetime,
+        scope: str | None = None,
     ) -> list[ContentItem]:
         """DRAFT items for one cell's variants, with code-assigned labels; misfits go to `dropped`."""
         tone = THEME_TONE[theme]
@@ -647,10 +721,20 @@ class Creative:
                 continue
             seen_bodies.add(body)
             index = len(out)
+            # Per-type copy: the scope plus a hash of the final wording, so neither an id nor a WhatsApp
+            # template name is ever reused for different words. Without a scope, ids are as before.
+            scoped = f"{scope}_{stable_id('w', subject or '', body)[2:10]}" if scope else None
             out.append(
                 ContentItem(
                     content_id=stable_id(
-                        "ci", brief.brief_id, brief.version, channel.value, offer.offer_id, theme.value, index
+                        "ci",
+                        brief.brief_id,
+                        brief.version,
+                        channel.value,
+                        offer.offer_id,
+                        theme.value,
+                        index,
+                        *((scoped,) if scoped else ()),
                     ),
                     goal_id=brief.goal_id,
                     channel=channel,
@@ -662,7 +746,9 @@ class Creative:
                     body=body,
                     slots=slots_in(subject, body),
                     template_name=(
-                        template_name(brief.goal_id, brief.version, channel, offer.offer_id, theme, index)
+                        template_name(
+                            brief.goal_id, brief.version, channel, offer.offer_id, theme, index, scoped
+                        )
                         if channel is Channel.WHATSAPP
                         else None
                     ),
@@ -692,6 +778,7 @@ class Creative:
         n: int,
         *,
         kit: BrandKit | None = None,
+        audience_note: str | None = None,
     ) -> str:
         if offer.kind is OfferKind.NONE:
             offer_line = "No offer. Do not mention any discount, price, saving or free item."
@@ -737,6 +824,7 @@ class Creative:
                 *([f"Angle: {THEME_GUIDANCE[theme]}"] if theme in THEME_GUIDANCE else []),
                 offer_line,
                 f"Audience: {brief.audience.description}",
+                *([f"Customer type: {audience_note}"] if audience_note else []),
                 f"Objective: {brief.objective.value}",
                 f"Why this plan: {brief.rationale or 'not given'}",
                 f"Brand voice: {brand_voice}",
