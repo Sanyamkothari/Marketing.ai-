@@ -19,7 +19,7 @@ MAX_PIXELS = 100_000_000
 
 @dataclass(frozen=True)
 class ImageInfo:
-    """What the bytes say about themselves. `text` holds PNG tEXt notes (empty for other types)."""
+    """What the bytes say about themselves. `text` holds PNG tEXt and iTXt notes (empty for other types)."""
 
     mime_type: str
     width: int
@@ -70,6 +70,9 @@ def _read_png(data: bytes) -> ImageInfo:
         elif kind == b"tEXt":
             key, _, value = body.partition(b"\x00")
             text[key.decode("latin-1")] = value.decode("latin-1")
+        elif kind == b"iTXt":
+            note_key, note = _read_itxt(body)
+            text[note_key] = note
         elif kind == b"IEND":
             seen_end = True
             break
@@ -77,6 +80,19 @@ def _read_png(data: bytes) -> ImageInfo:
     if not seen_end or width <= 0 or height <= 0:
         raise ValueError("incomplete PNG")
     return ImageInfo("image/png", width, height, text)
+
+
+def _read_itxt(body: bytes) -> tuple[str, str]:
+    """An iTXt chunk: keyword, compression flag and method, language, translated keyword, UTF-8 text."""
+    key, _, rest = body.partition(b"\x00")
+    if len(rest) < 2:
+        raise ValueError("damaged iTXt chunk")
+    compressed, rest = rest[0], rest[2:]
+    _language, _, rest = rest.partition(b"\x00")
+    _translated, _, value = rest.partition(b"\x00")
+    if compressed:
+        value = zlib.decompress(value)
+    return key.decode("latin-1"), value.decode("utf-8")
 
 
 def _read_jpeg(data: bytes) -> ImageInfo:
@@ -112,7 +128,8 @@ def make_png(
 ) -> bytes:
     """A valid RGB PNG fading from the `top` colour to the `bottom` one; `text` becomes tEXt notes.
 
-    The same arguments always give the same bytes. Notes must be Latin-1 and keys 1 to 79 characters.
+    The same arguments always give the same bytes. Keys must be Latin-1, 1 to 79 characters. A value
+    that Latin-1 can hold goes in a tEXt chunk; any other (say, a Devanagari item id) in a UTF-8 iTXt one.
     """
     if width <= 0 or height <= 0 or width * height > MAX_PIXELS:
         raise ValueError(f"image size {width}x{height} is out of range")
@@ -127,7 +144,12 @@ def make_png(
         value = (text or {})[key]
         if not 1 <= len(key) <= 79:
             raise ValueError(f"PNG note key {key!r} must be 1 to 79 characters")
-        parts.append(_chunk(b"tEXt", key.encode("latin-1") + b"\x00" + value.encode("latin-1")))
+        try:
+            parts.append(_chunk(b"tEXt", key.encode("latin-1") + b"\x00" + value.encode("latin-1")))
+        except UnicodeEncodeError:
+            # keyword, no compression (flag 0, method 0), empty language and translated keyword, UTF-8 text
+            itxt = key.encode("latin-1") + b"\x00\x00\x00\x00\x00" + value.encode("utf-8")
+            parts.append(_chunk(b"iTXt", itxt))
     parts.append(_chunk(b"IDAT", zlib.compress(b"".join(rows), 9)))
     parts.append(_chunk(b"IEND", b""))
     return b"".join(parts)

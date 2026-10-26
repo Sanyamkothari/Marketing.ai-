@@ -222,6 +222,7 @@ _KIND_FORMAT = {
     AssetKind.IMAGE: Format.TEXT_IMAGE,
     AssetKind.VIDEO: Format.VIDEO,
     AssetKind.CAROUSEL_CARD: Format.CAROUSEL,
+    AssetKind.OFFER_BANNER: Format.TEXT_IMAGE,  # v3 generated images; no channel spec accepts the kind
 }
 
 _EXTENSION_MIME = {

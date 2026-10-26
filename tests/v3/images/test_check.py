@@ -174,7 +174,9 @@ def test_composite_merges_reasons_once() -> None:
 
 
 def test_fake_model_checker_takes_any_observer() -> None:
-    seen = FakeModelChecker(lambda image: Observation(depicts_item_id="bottle", logo_intact=False))
+    seen = FakeModelChecker(
+        lambda image: Observation(depicts_item_id="bottle", logo_intact=False, dominant_colour="#1e3a8a")
+    )
     codes = {r.code for r in seen.check(make_image(), CONTEXT).reasons}
     assert codes == {ReasonCode.WRONG_PRODUCT_SEEN, ReasonCode.LOGO_BROKEN}
 
@@ -197,7 +199,11 @@ def planted_eval_set() -> list[tuple[str, GeneratedImage]]:
 
 
 def test_the_default_checker_catches_at_least_95_percent_of_a_fixed_eval_set() -> None:
-    """Plan-v3 decision 5 pass test, with the fake model: the pipeline's catch rate, not a real model's."""
+    """Plan-v3 decision 5 pass test, with the fake model: the pipeline's catch rate, not a real model's.
+
+    The set is the plants above, so the rate is 100% by construction whenever those tests pass; the
+    held-out set in `test_held_out_plants_the_parametrized_tests_do_not_name` is the extra evidence.
+    """
     checker = default_checker()
     planted = planted_eval_set()
     missed = [name for name, image in planted if checker.check(image, CONTEXT).passed]

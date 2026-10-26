@@ -2,12 +2,20 @@
 
 `ImageDesk.submit` checks a `GeneratedImage` with a `VisionChecker`. A failing image is REFUSED with
 its reasons and goes no further. A passing one is PENDING and joins the open batch of at most 20.
-A person then approves a batch (every image still pending in it) or rejects single images.
+A person then approves a batch (every image still pending in it) or rejects single images. A refused
+or rejected image may be submitted again (say, regenerated after a fix); it is checked afresh.
 
-Approval is the one way in. It writes an ordinary `Asset` with `status=approved` and `approved_by`
-into the `AssetLibrary` (docs/v2/FORMATS.md), so lookups, validation and the audit trail downstream
-are untouched. Pending, rejected and refused images are never written to the library at all, not even
-as drafts, so no lookup can return them by mistake.
+Approval is the one way in. It checks each image again against the current catalogue, then writes
+an `Asset` with `status=approved` and `approved_by` into the `AssetLibrary` (docs/v2/FORMATS.md), so
+the audit trail is the existing one. The asset's kind is `AssetKind.OFFER_BANNER`, not `IMAGE`:
+the picture states a price and an offer for one product and one customer type, and no format takes
+that kind, so the Creative never picks it from the general pool for a message whose offer differs,
+and the Critic refuses an item that uses it. `ImageDesk.approved_for` is the lookup that matches
+the product, the customer type and the offer exactly. Pending, rejected and refused images are never
+written to the library at all, not even as drafts, so no lookup can return them by mistake.
+
+`ImageDesk.update_catalogue` takes a new catalogue: an approved image whose text no longer matches
+it (the price changed) is RETIRED in the library, and a pending one is REFUSED.
 
 State is in memory (`InMemoryImageQueue`); a database-backed queue is a second class with the same
 methods. The clock is passed in.
@@ -23,7 +31,7 @@ from enum import StrEnum
 from pydantic import AwareDatetime, Field
 
 from autonomy.assets.check import CheckContext, CheckResult, VisionChecker
-from autonomy.assets.generate import GeneratedImage, ImageConfig
+from autonomy.assets.generate import GeneratedImage, ImageConfig, OfferSpec
 from autonomy.assets.library import Asset, AssetKind, AssetLibrary, AssetStatus
 from autonomy.catalog.products import Catalogue
 from autonomy.contracts.base import Contract
@@ -53,6 +61,8 @@ class ImageStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     REFUSED = "refused"
+    RETIRED = "retired"
+    """Was approved; retired because the catalogue changed under it (`ImageDesk.update_catalogue`)."""
 
 
 class ImageRecord(Contract):
@@ -76,6 +86,8 @@ class BatchSummary(Contract):
     approved: int
     rejected: int
     closed: bool
+    refused: int = 0
+    retired: int = 0
 
 
 def asset_id_for(image_id: str) -> str:
@@ -90,6 +102,8 @@ class InMemoryImageQueue:
         self.records: dict[str, ImageRecord] = {}
         self.batches: dict[str, list[str]] = {}
         self.closed: set[str] = set()
+        self.history: list[ImageRecord] = []
+        """Records replaced by a later submission of the same image id, oldest first (the audit trail)."""
 
     def open_batch(self, batch_size: int) -> str:
         """The batch a new pending image joins: the latest one if it is open and not full, else a new one."""
@@ -115,10 +129,12 @@ class ImageDesk:
         url_for: Callable[[GeneratedImage], str],
         clock: Callable[[], datetime],
         queue: InMemoryImageQueue | None = None,
+        currency: str | None = None,
     ) -> None:
+        """`currency` is the shop's ISO code (`BrandKit.currency`); offers in another one are refused."""
         self.library = library
         self.config = config
-        self._context = CheckContext(catalogue=catalogue, config=config)
+        self._context = CheckContext(catalogue=catalogue, config=config, currency=currency)
         self._checker = checker
         self._url_for = url_for
         self._clock = clock
@@ -128,13 +144,23 @@ class ImageDesk:
     # --- intake --------------------------------------------------------------------------------
 
     def submit(self, image: GeneratedImage) -> ImageRecord:
-        """Check the image. Refused with reasons, or pending in the open batch. Same image twice: same record."""
-        result = self._checker.check(image, self._context)
+        """Check the image. Refused with reasons, or pending in the open batch.
+
+        The same image while it is pending, approved or retired: the same record. After it was
+        refused or rejected it is checked again and starts over; the old record goes to the history.
+        """
+        with self._lock:
+            context = self._context
+        result = self._checker.check(image, context)
         now = self._clock()
         with self._lock:
             existing = self._queue.records.get(image.image_id)
             if existing is not None:
-                return existing
+                if existing.status not in (ImageStatus.REFUSED, ImageStatus.REJECTED):
+                    return existing
+                self._queue.history.append(existing)
+                if existing.batch_id is not None:
+                    self._queue.batches[existing.batch_id].remove(image.image_id)
             if not result.passed:
                 record = ImageRecord(image=image, status=ImageStatus.REFUSED, check=result, submitted_at=now)
             else:
@@ -171,6 +197,8 @@ class ImageDesk:
             approved=count[ImageStatus.APPROVED],
             rejected=count[ImageStatus.REJECTED],
             closed=batch_id in self._queue.closed,
+            refused=count[ImageStatus.REFUSED],
+            retired=count[ImageStatus.RETIRED],
         )
 
     def batches(self, *, only_open: bool = False) -> list[BatchSummary]:
@@ -182,11 +210,32 @@ class ImageDesk:
         """Images the check turned away, oldest first, with their reasons."""
         return [r for r in self._queue.records.values() if r.status is ImageStatus.REFUSED]
 
+    def approved_for(self, item_id: str, customer_type: str, offer: OfferSpec) -> list[Asset]:
+        """The approved banners for exactly this product, customer type and offer, by asset id.
+
+        The one lookup a sender should use for generated images: the banner states this offer and
+        this product's price, so it may go only with a message making the same offer.
+        """
+        found: list[Asset] = []
+        for record in self._queue.records.values():
+            image = record.image
+            if (
+                record.status is ImageStatus.APPROVED
+                and record.asset_id is not None
+                and (image.item_id, image.customer_type, image.offer) == (item_id, customer_type, offer)
+            ):
+                asset = self.library.get(record.asset_id)
+                if asset is not None and asset.is_approved:
+                    found.append(asset)
+        return sorted(found, key=lambda a: a.asset_id)
+
     # --- deciding ------------------------------------------------------------------------------
 
     def approve_batch(self, batch_id: str, approved_by: str) -> list[Asset]:
         """Approve every image still pending in the batch; return the assets now in the library.
 
+        Each image is checked again first, against the catalogue as it is now: one that no longer
+        passes (its price changed since it was submitted) is REFUSED instead, with the new reasons.
         Images already rejected stay rejected. Raises `ImageConflictError` when nothing is pending.
         """
         who = _person(approved_by, "approved_by")
@@ -198,6 +247,12 @@ class ImageDesk:
             now = self._clock()
             assets: list[Asset] = []
             for record in pending:
+                again = self._checker.check(record.image, self._context)
+                if not again.passed:
+                    self._queue.records[record.image.image_id] = record.model_copy(
+                        update={"status": ImageStatus.REFUSED, "check": again}
+                    )
+                    continue
                 asset = self._asset(record.image, who, now)
                 self.library.put(asset)
                 assets.append(asset)
@@ -232,14 +287,47 @@ class ImageDesk:
             self._queue.records[image_id] = rejected
             return rejected
 
+    def update_catalogue(self, catalogue: Catalogue) -> list[ImageRecord]:
+        """Hold every pending and approved image against a new catalogue; return the ones that changed.
+
+        An approved image that no longer passes (its price or name changed) is RETIRED, and its
+        library asset is put back with `status=retired`, so no lookup returns it. A pending one is
+        REFUSED. Regenerating the job then names a new image, with the new text, for approval.
+        """
+        with self._lock:
+            self._context = CheckContext(
+                catalogue=catalogue, config=self.config, currency=self._context.currency
+            )
+            changed: list[ImageRecord] = []
+            for image_id, record in list(self._queue.records.items()):
+                if record.status not in (ImageStatus.PENDING, ImageStatus.APPROVED):
+                    continue
+                again = self._checker.check(record.image, self._context)
+                if again.passed:
+                    continue
+                if record.status is ImageStatus.APPROVED:
+                    updated = record.model_copy(
+                        update={"status": ImageStatus.RETIRED, "check": again, "reason": again.words}
+                    )
+                    asset = self.library.get(record.asset_id) if record.asset_id else None
+                    if asset is not None:
+                        self.library.put(asset.model_copy(update={"status": AssetStatus.RETIRED}))
+                else:
+                    updated = record.model_copy(update={"status": ImageStatus.REFUSED, "check": again})
+                self._queue.records[image_id] = updated
+                changed.append(updated)
+            return changed
+
     def _asset(self, image: GeneratedImage, approved_by: str, now: datetime) -> Asset:
         return Asset(
             asset_id=asset_id_for(image.image_id),
-            kind=AssetKind.IMAGE,
+            kind=AssetKind.OFFER_BANNER,
             url=self._url_for(image),
             alt_text=image.alt_text,
             width=image.width,
             height=image.height,
+            size_bytes=len(image.background),
+            mime_type=image.mime_type,
             item_id=image.item_id,
             category=image.category,
             themes=(image.style.theme,) if image.style.theme is not None else (),

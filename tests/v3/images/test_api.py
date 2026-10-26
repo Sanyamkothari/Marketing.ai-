@@ -19,11 +19,11 @@ from autonomy.assets.library import InMemoryAssetLibrary
 from tests.v3.images.support import desk, make_image
 
 
-def build() -> tuple[TestClient, InMemoryAssetLibrary, Any]:
+def build(approver: str = "Asha") -> tuple[TestClient, InMemoryAssetLibrary, Any]:
     library = InMemoryAssetLibrary()
     d = desk(library=library)
     app = FastAPI()
-    attach_image_services(app, ImageServices(desk=d))
+    attach_image_services(app, ImageServices(desk=d, approver=approver))
     app.include_router(router)
     return TestClient(app), library, d
 
@@ -33,7 +33,7 @@ def test_the_routes_answer_503_when_images_are_not_turned_on() -> None:
     app.include_router(router)
     client = TestClient(app)
     assert client.get("/v2/images/batches").status_code == 503
-    assert client.post("/v2/images/batches/imgb_0001/approve", json={"approved_by": "ana"}).status_code == 503
+    assert client.post("/v2/images/batches/imgb_0001/approve").status_code == 503
 
 
 def test_list_a_batch_then_approve_all() -> None:
@@ -49,7 +49,7 @@ def test_list_a_batch_then_approve_all() -> None:
     assert first["texts"] == ["Runner 0", "20% off", "₹1,299.50", "₹1,039.60"]
     assert library.find(approved_only=False) == []
 
-    done = client.post("/v2/images/batches/imgb_0001/approve", json={"approved_by": "Asha"})
+    done = client.post("/v2/images/batches/imgb_0001/approve")
     assert done.status_code == 200
     assert len(done.json()["approved_asset_ids"]) == 3
     assert done.json()["approved_by"] == "Asha"
@@ -61,30 +61,51 @@ def test_list_a_batch_then_approve_all() -> None:
 def test_reject_one_then_approve_the_rest() -> None:
     client, library, d = build()
     ids = [d.submit(make_image(f"shoe-{i}")).image.image_id for i in range(3)]
-    rejected = client.post(f"/v2/images/{ids[0]}/reject", json={"rejected_by": "ben", "reason": "off colour"})
+    rejected = client.post(f"/v2/images/{ids[0]}/reject", json={"reason": "off colour"})
     assert rejected.status_code == 200
     assert rejected.json()["status"] == "rejected" and rejected.json()["reason"] == "off colour"
-    client.post("/v2/images/batches/imgb_0001/approve", json={"approved_by": "ana"})
+    assert rejected.json()["decided_by"] == "Asha"
+    client.post("/v2/images/batches/imgb_0001/approve")
     assert {a.item_id for a in library.find()} == {"shoe-1", "shoe-2"}
-    again = client.post(f"/v2/images/{ids[0]}/reject", json={"rejected_by": "ben"})
+    again = client.post(f"/v2/images/{ids[0]}/reject", json={})
     assert again.status_code == 409
+
+
+def test_the_approver_is_the_servers_identity_not_the_request_body() -> None:
+    client, library, d = build(approver="marketer")
+    image_id = d.submit(make_image("shoe-0")).image.image_id
+    d.submit(make_image("shoe-1"))
+    # A name in the body is not taken: the reject body has no such field, and approve has no body.
+    assert client.post(f"/v2/images/{image_id}/reject", json={"rejected_by": "mallory"}).status_code == 422
+    done = client.post("/v2/images/batches/imgb_0001/approve", json={"approved_by": "mallory"})
+    assert done.status_code == 200
+    assert done.json()["approved_by"] == "marketer"
+    assert {a.approved_by for a in library.find()} == {"marketer"}
+
+
+def test_the_default_approver_is_the_brief_approver() -> None:
+    from api.v2.deps import APPROVER
+
+    assert ImageServices(desk=desk()).approver == APPROVER
 
 
 def test_errors_are_plain() -> None:
     client, _, d = build()
     d.submit(make_image())
     assert client.get("/v2/images/batches/imgb_9999").status_code == 404
-    assert client.post("/v2/images/batches/imgb_9999/approve", json={"approved_by": "a"}).status_code == 404
-    assert client.post("/v2/images/img_nope/reject", json={"rejected_by": "a"}).status_code == 404
+    assert client.post("/v2/images/batches/imgb_9999/approve").status_code == 404
+    assert client.post("/v2/images/img_nope/reject", json={}).status_code == 404
     assert client.get("/v2/images/img_nope/preview.svg").status_code == 404
-    assert client.post("/v2/images/batches/imgb_0001/approve", json={}).status_code == 422
-    assert client.post("/v2/images/batches/imgb_0001/approve", json={"approved_by": "   "}).status_code == 422
-    assert (
-        client.post("/v2/images/batches/imgb_0001/approve", json={"approved_by": "ana", "x": 1}).status_code
-        == 422
-    )
-    assert client.post("/v2/images/batches/imgb_0001/approve", json={"approved_by": "ana"}).status_code == 200
-    assert client.post("/v2/images/batches/imgb_0001/approve", json={"approved_by": "ana"}).status_code == 409
+    assert client.post("/v2/images/img_nope/reject", json={"reason": "x", "x": 1}).status_code == 422
+    assert client.post("/v2/images/batches/imgb_0001/approve").status_code == 200
+    assert client.post("/v2/images/batches/imgb_0001/approve").status_code == 409
+
+
+def test_a_blank_server_approver_is_refused() -> None:
+    client, library, d = build(approver="   ")
+    d.submit(make_image())
+    assert client.post("/v2/images/batches/imgb_0001/approve").status_code == 422
+    assert library.find(approved_only=False) == []
 
 
 def test_refused_images_are_listed_with_reasons_and_cannot_be_approved() -> None:
@@ -95,7 +116,7 @@ def test_refused_images_are_listed_with_reasons_and_cannot_be_approved() -> None
     assert refused[0]["status"] == "refused"
     assert [r["code"] for r in refused[0]["reasons"]] == ["wrong_product_seen"]
     assert client.get("/v2/images/batches").json() == []
-    assert client.post("/v2/images/batches/imgb_0001/approve", json={"approved_by": "ana"}).status_code == 404
+    assert client.post("/v2/images/batches/imgb_0001/approve").status_code == 404
     assert library.find(approved_only=False) == []
 
 

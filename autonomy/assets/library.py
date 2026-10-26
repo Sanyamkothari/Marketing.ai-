@@ -39,6 +39,10 @@ class AssetKind(StrEnum):
     IMAGE = "image"
     VIDEO = "video"
     CAROUSEL_CARD = "carousel_card"
+    # v3 generated images (docs/v3/IMAGES.md): a banner with a price and an offer drawn on it. No format
+    # takes this kind (`FORMAT_MEDIA`), so the Creative never picks one from the general pool and the
+    # Critic refuses an item that uses one; it is sent only where its exact product and offer are.
+    OFFER_BANNER = "offer_banner"
 
 
 class AssetStatus(StrEnum):

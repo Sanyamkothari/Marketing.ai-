@@ -62,8 +62,10 @@ __all__ = [
     "expected_texts",
     "format_money",
     "generate_image",
+    "layout_problems",
     "render_svg",
     "sale_price",
+    "text_box",
 ]
 
 DEFAULT_WIDTH = 1200
@@ -92,6 +94,7 @@ class ImageConfig(Contract):
     width: int = Field(default=DEFAULT_WIDTH, ge=64, le=4000)
     height: int = Field(default=DEFAULT_HEIGHT, ge=64, le=4000)
     min_width: int = Field(default=600, ge=1, description="Narrower images look poor in email")
+    min_height: int = Field(default=300, ge=1, description="A thin strip has no room for the price lines")
     max_bytes: int = Field(default=5 * 1024 * 1024, ge=1, description="WhatsApp's hard limit is 5 MB")
     allowed_mimes: tuple[str, ...] = ("image/png", "image/jpeg")
     batch_size: int = Field(default=MAX_BATCH, ge=1, le=MAX_BATCH)
@@ -253,13 +256,15 @@ def sale_price(list_price: Decimal, discount_pct: int) -> Decimal:
 def expected_texts(product: Product, offer: OfferSpec) -> dict[OverlayRole, str]:
     """The only text the image may carry, by role, worked out from the catalogue and the offer.
 
-    No price on file (0) means no price is shown; a discount without a price cannot be shown, so it
-    raises `UnknownProductError` rather than print a number nobody can stand behind.
+    The price is rounded to the cent first. No price on file, or one that rounds to 0.00, means no
+    price is shown. A discount without a price, or one whose sale price does not come out below the
+    list price once rounded (20% off 0.01), cannot be shown, so it raises `UnknownProductError` rather
+    than print a number nobody can stand behind.
     """
     texts: dict[OverlayRole, str] = {}
     if product.name.strip():
         texts[OverlayRole.NAME] = product.name.strip()
-    price = _list_price(product)
+    price = _list_price(product).quantize(_CENT, rounding=ROUND_HALF_UP)
     if price <= 0:
         if offer.discount_pct is not None:
             raise UnknownProductError(
@@ -267,9 +272,15 @@ def expected_texts(product: Product, offer: OfferSpec) -> dict[OverlayRole, str]
             )
         return texts
     if offer.discount_pct is not None:
+        now = sale_price(price, offer.discount_pct)
+        if not 0 < now < price:
+            raise UnknownProductError(
+                f"{offer.discount_pct}% off {format_money(price, offer.currency)} does not give a lower "
+                "price to the cent; cannot show the discount"
+            )
         texts[OverlayRole.OFFER] = f"{offer.discount_pct}% off"
         texts[OverlayRole.WAS_PRICE] = format_money(price, offer.currency)
-        texts[OverlayRole.PRICE] = format_money(sale_price(price, offer.discount_pct), offer.currency)
+        texts[OverlayRole.PRICE] = format_money(now, offer.currency)
     else:
         texts[OverlayRole.PRICE] = format_money(price, offer.currency)
     return texts
@@ -297,23 +308,86 @@ _LAYOUT: dict[OverlayRole, tuple[float, float, float, str, bool]] = {
 }
 
 
-def compose_overlay(product: Product, offer: OfferSpec, style: StyleBrief) -> OverlaySpec:
-    """The overlay for a product and an offer: `expected_texts` placed on a fixed layout."""
+_OFFER_SECOND_LINE = 0.27
+"""Where the offer goes when it would collide with a long name on the top line."""
+_MIN_SIZE = 0.035
+"""The smallest font (share of the height) a line is shrunk to so that it fits across the image."""
+_MARGIN = 0.04
+_CHAR_WIDTH = 0.6
+"""A bold sans-serif character is about 0.6 of the font size wide; used to estimate a line's width."""
+_ASCENT, _DESCENT = 0.8, 0.2
+
+
+def text_box(layer: TextLayer, width: int, height: int) -> tuple[float, float, float, float]:
+    """The estimated box a line takes, in pixels: (left, top, right, bottom). No font is measured."""
+    font = layer.size * height
+    span = len(layer.text) * font * _CHAR_WIDTH
+    x = layer.x * width
+    left = x if layer.anchor == "start" else x - span if layer.anchor == "end" else x - span / 2
+    base = layer.y * height
+    return left, base - font * _ASCENT, left + span, base + font * _DESCENT
+
+
+def _overlaps(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def layout_problems(overlay: OverlaySpec, width: int, height: int) -> list[str]:
+    """Lines that run off the image or over each other, in words; empty when every line is clear."""
+    problems: list[str] = []
+    boxes = [(layer, text_box(layer, width, height)) for layer in overlay.layers]
+    for layer, (left, top, right, bottom) in boxes:
+        if left < 0 or top < 0 or right > width or bottom > height:
+            problems.append(f"The {layer.role.value} text {layer.text!r} runs off the image.")
+    for i, (a, box_a) in enumerate(boxes):
+        for b, box_b in boxes[i + 1 :]:
+            if _overlaps(box_a, box_b):
+                problems.append(f"The {a.role.value} and {b.role.value} texts overlap.")
+    return problems
+
+
+def compose_overlay(
+    product: Product,
+    offer: OfferSpec,
+    style: StyleBrief,
+    *,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+) -> OverlaySpec:
+    """The overlay for a product and an offer: `expected_texts` placed on a fixed layout.
+
+    A line too long for the image is shrunk (down to `_MIN_SIZE`) to fit inside the margins, and the
+    offer moves to a second line when it would run into the name. A name so long it still does not
+    fit is left as it is; `layout_problems` (and the rule check) then refuse the image.
+    """
     layers: list[TextLayer] = []
     for role, text in expected_texts(product, offer).items():
         x, y, size, anchor, strike = _LAYOUT[role]
+        room = (1 - 2 * _MARGIN) * width
+        needed = len(text) * size * height * _CHAR_WIDTH
+        if needed > room:
+            size = max(_MIN_SIZE, size * room / needed)
         layers.append(
             TextLayer(
                 role=role,
                 text=text,
                 x=x,
                 y=y,
-                size=size,
+                size=round(size, 4),
                 anchor=anchor,
                 colour=style.text_colour,
                 strike=strike,
             )
         )
+    by_role = {layer.role: layer for layer in layers}
+    name, top_offer = by_role.get(OverlayRole.NAME), by_role.get(OverlayRole.OFFER)
+    if (
+        name is not None
+        and top_offer is not None
+        and _overlaps(text_box(name, width, height), text_box(top_offer, width, height))
+    ):
+        moved = top_offer.model_copy(update={"y": _OFFER_SECOND_LINE})
+        layers = [moved if layer is top_offer else layer for layer in layers]
     return OverlaySpec(layers=tuple(layers))
 
 
@@ -443,14 +517,15 @@ def generate_image(
 
     Raises `ImagesDisabledError` unless `config.enabled`, and `UnknownProductError` when the product
     is not in the catalogue. `now` is passed in, never read from the clock. The id depends only on
-    the job and the provider, so asking again for the same job names the same image.
+    the job, the exact text drawn (so a catalogue price change names a new image), the provider and
+    a hash of the picture it returned (so a provider whose output varies gives a new id each time).
     """
     if not config.enabled:
         raise ImagesDisabledError("image generation is off; set ImageConfig.enabled to turn it on")
     product = catalogue.get(job.item_id)
     if product is None:
         raise UnknownProductError(f"{job.item_id!r} is not in the catalogue")
-    overlay = compose_overlay(product, job.offer, job.style)
+    overlay = compose_overlay(product, job.offer, job.style, width=config.width, height=config.height)
     alt_text = alt_text_for(product, job.offer)
     made = provider.generate(
         ImageRequest(
@@ -470,7 +545,9 @@ def generate_image(
             job.customer_type,
             job.offer.model_dump_json(),
             job.style.model_dump_json(),
+            "\x1f".join(layer.text for layer in overlay.layers),
             made.provider_id,
+            hashlib.sha256(made.data).hexdigest(),
         ),
         item_id=product.item_id,
         customer_type=job.customer_type,

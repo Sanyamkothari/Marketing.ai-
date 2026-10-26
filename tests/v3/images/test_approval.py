@@ -76,7 +76,7 @@ def test_a_batch_size_above_20_is_not_allowed() -> None:
         ImageConfig(batch_size=21)
 
 
-def test_approve_all_writes_ordinary_approved_assets_with_approved_by() -> None:
+def test_approve_all_writes_approved_offer_banners_with_approved_by() -> None:
     library = InMemoryAssetLibrary()
     d = desk(library=library)
     d.submit(make_image("shoe-0"))
@@ -86,14 +86,17 @@ def test_approve_all_writes_ordinary_approved_assets_with_approved_by() -> None:
     for asset in assets:
         assert asset.status is AssetStatus.APPROVED
         assert asset.approved_by == "Asha Rao"
-        assert asset.kind is AssetKind.IMAGE
+        # Its own kind: the banner states a price and an offer, so it is not a general image.
+        assert asset.kind is AssetKind.OFFER_BANNER
         assert asset.alt_text and asset.url.startswith("https://")
         assert (asset.width, asset.height) == (CONFIG.width, CONFIG.height)
+        assert asset.mime_type == "image/png" and asset.size_bytes
         assert library.get(asset.asset_id) == asset
-    found = candidates(library, kind=AssetKind.IMAGE, item_id="shoe-0")
+    assert candidates(library, kind=AssetKind.IMAGE, item_id="shoe-0") == []
+    found = candidates(library, kind=AssetKind.OFFER_BANNER, item_id="shoe-0")
     assert [a.item_id for a in found] == ["shoe-0"]
-    # The existing validator accepts it: no hard error for an email send.
-    assert [p for p in validate(found[0], Channel.EMAIL) if p.severity.value == "error"] == []
+    # The general validator refuses it for any channel: it goes out only through `approved_for`.
+    assert any(p.code.value == "wrong_kind" for p in validate(found[0], Channel.EMAIL))
     summary = d.summary("imgb_0001")
     assert (summary.approved, summary.pending, summary.closed) == (2, 0, True)
     record = d.get(assets[0].asset_id.removeprefix("gen_"))

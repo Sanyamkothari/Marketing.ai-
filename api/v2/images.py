@@ -5,13 +5,17 @@
 | `GET /v2/images/batches?open=true` | The batches (at most 20 images each); `open=true` keeps those with a pending image |
 | `GET /v2/images/batches/{batch_id}` | One batch: its images with the text on them, their checks and their status |
 | `POST /v2/images/batches/{batch_id}/approve` | Approve every image still pending in the batch, recording `approved_by` |
-| `POST /v2/images/{image_id}/reject` | Reject one pending image, with a reason |
+| `POST /v2/images/{image_id}/reject` | Reject one pending image, with a reason, recording who rejected it |
 | `GET /v2/images/{image_id}/preview.svg` | The banner drawn: the picture with the code-written text on it |
 | `GET /v2/images/refused` | Images the vision check turned away, with the reasons |
 
 Approving writes an ordinary approved asset into the asset library; nothing pending is ever in it.
 The routes read and act through an `ImageDesk` (`autonomy.assets.approval`) attached to the app with
 `attach_image_services`. Without one they answer 503, which is the default: image generation is off.
+
+Who approved or rejected is the server's identity, never a name from the request body: until the API
+has real user accounts it is `ImageServices.approver`, which defaults to the same `APPROVER` that
+brief approval records (`api/v2/deps.py`). An auth layer replaces it by setting `approver`.
 
 The routes are not in `docs/v2/openapi.json` (`IN_SCHEMA` is false) while the feature is off by default.
 """
@@ -26,6 +30,7 @@ from fastapi.responses import Response
 from pydantic import AwareDatetime, Field
 from starlette.applications import Starlette
 
+from api.v2.deps import APPROVER
 from autonomy.assets.approval import (
     BatchSummary,
     ImageConflictError,
@@ -54,7 +59,10 @@ router = APIRouter(prefix=PREFIX, tags=["images"], include_in_schema=IN_SCHEMA)
 
 @dataclass
 class ImageServices:
+    """The desk the routes act through, and who they record as deciding (the server's identity)."""
+
     desk: ImageDesk
+    approver: str = APPROVER
 
 
 def attach_image_services(app: Starlette, services: ImageServices) -> None:
@@ -94,12 +102,7 @@ class BatchView(Contract):
     images: list[ImageView]
 
 
-class ApproveRequest(Contract):
-    approved_by: str = Field(min_length=1, max_length=200)
-
-
 class RejectRequest(Contract):
-    rejected_by: str = Field(min_length=1, max_length=200)
     reason: str = Field(default="", max_length=1000)
 
 
@@ -152,9 +155,9 @@ def get_batch(batch_id: str, services: ServicesDep) -> BatchView:
 
 
 @router.post("/batches/{batch_id}/approve")
-def approve_batch(batch_id: str, body: ApproveRequest, services: ServicesDep) -> ApprovedView:
+def approve_batch(batch_id: str, services: ServicesDep) -> ApprovedView:
     try:
-        assets = services.desk.approve_batch(batch_id, body.approved_by)
+        assets = services.desk.approve_batch(batch_id, services.approver)
         summary = services.desk.summary(batch_id)
     except UnknownImageError as err:
         raise _not_found(err) from err
@@ -163,14 +166,16 @@ def approve_batch(batch_id: str, body: ApproveRequest, services: ServicesDep) ->
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
     return ApprovedView(
-        summary=summary, approved_asset_ids=[a.asset_id for a in assets], approved_by=body.approved_by.strip()
+        summary=summary,
+        approved_asset_ids=[a.asset_id for a in assets],
+        approved_by=services.approver.strip(),
     )
 
 
 @router.post("/{image_id}/reject")
 def reject_image(image_id: str, body: RejectRequest, services: ServicesDep) -> ImageView:
     try:
-        record = services.desk.reject(image_id, body.rejected_by, body.reason)
+        record = services.desk.reject(image_id, services.approver, body.reason)
     except UnknownImageError as err:
         raise _not_found(err) from err
     except ImageConflictError as err:

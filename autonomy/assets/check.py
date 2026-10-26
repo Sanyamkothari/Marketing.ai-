@@ -3,12 +3,16 @@
 Two checkers share the `VisionChecker` protocol:
 
 - `RuleChecker` needs no model. It checks what code can know: the file really is a PNG or JPEG of the
-  declared size, it is wide enough and small enough, the alt text is there, the product is the
-  catalogue's product, and the text drawn on it is exactly the text the catalogue and the offer give.
+  declared size, it is wide, tall and small enough, the alt text is there, the product is the
+  catalogue's product, the currency is the shop's, the text drawn on it is exactly the text the
+  catalogue and the offer give, and no line of it runs off the image or over another.
 - `FakeModelChecker` stands in for a vision model. It asks an observer what the picture shows (which
   product, whether the logo is whole, whether the model wrote text of its own, which colours) and
   holds that against the brand. The default observer reads the notes `FakeImageProvider` leaves in
-  its PNGs. A real model replaces the observer (decision V-2).
+  its PNGs. A real model replaces the observer (decision V-2). The check fails closed: a picture the
+  observer could not see, or whose product or colours it could not tell, is refused, so pairing the
+  default checker with a provider the fake observer cannot read refuses every image rather than
+  passing images nobody looked at.
 
 `CompositeChecker` runs several and merges their reasons. A result that is not `passed` carries every
 reason, in words, so the refusal can be shown.
@@ -34,6 +38,7 @@ from autonomy.assets.generate import (
     UnknownProductError,
     colour_distance,
     expected_texts,
+    layout_problems,
     parse_hex,
 )
 from autonomy.assets.pngio import read_info, sniff_mime
@@ -73,6 +78,10 @@ class ReasonCode(StrEnum):
     TEXT_GARBLED = "text_garbled"
     OFF_BRAND_COLOURS = "off_brand_colours"
     NOT_READABLE = "not_readable"
+    # Added by the review fixes: rule checks, then a model-side one.
+    OVERLAY_LAYOUT = "overlay_layout"
+    CURRENCY_MISMATCH = "currency_mismatch"
+    NOT_SEEN = "not_seen"
 
 
 class Reason(Contract):
@@ -100,10 +109,15 @@ class CheckResult(Contract):
 
 @dataclass(frozen=True)
 class CheckContext:
-    """What a check holds an image against: the catalogue and the limits."""
+    """What a check holds an image against: the catalogue, the limits and the shop's currency.
+
+    `currency` is the ISO code the shop prices in (`BrandKit.currency`); when set, an offer in any
+    other currency is refused. None skips that check.
+    """
 
     catalogue: Catalogue
     config: ImageConfig
+    currency: str | None = None
 
 
 @runtime_checkable
@@ -129,7 +143,14 @@ class RuleChecker:
         self._file(image, context.config, add)
         if not image.alt_text.strip():
             add(ReasonCode.ALT_TEXT_MISSING, "The image has no alt text.")
+        if context.currency is not None and image.offer.currency != context.currency.strip().upper():
+            add(
+                ReasonCode.CURRENCY_MISMATCH,
+                f"The offer is priced in {image.offer.currency}; the shop prices in {context.currency}.",
+            )
         self._product_and_text(image, context.catalogue, add)
+        for problem in layout_problems(image.overlay, image.width, image.height):
+            add(ReasonCode.OVERLAY_LAYOUT, problem)
         return CheckResult(checker=self.name, reasons=tuple(reasons))
 
     @staticmethod
@@ -152,10 +173,16 @@ class RuleChecker:
                 f"The file is {info.width}x{info.height} but is declared {image.width}x{image.height}.",
             )
         width = info.width if info is not None else image.width
+        height = info.height if info is not None else image.height
         if width < config.min_width:
             add(
                 ReasonCode.TOO_SMALL,
                 f"The image is {width} px wide; at least {config.min_width} px is needed.",
+            )
+        if height < config.min_height:
+            add(
+                ReasonCode.TOO_SMALL,
+                f"The image is {height} px tall; at least {config.min_height} px is needed.",
             )
         if len(image.background) > config.max_bytes:
             add(
@@ -216,6 +243,7 @@ class Observation(Contract):
         default=False, description="Text the picture itself contains that is unreadable"
     )
     dominant_colour: str | None = Field(default=None, description="#rrggbb")
+    seen: bool = Field(default=True, description="False when the model could not look at the picture")
 
 
 Observer = Callable[[GeneratedImage], Observation]
@@ -224,12 +252,13 @@ Observer = Callable[[GeneratedImage], Observation]
 def observe_fake_png(image: GeneratedImage) -> Observation:
     """Read the notes `FakeImageProvider` left in a PNG, as a stand-in for looking at the pixels.
 
-    A file that is not a readable PNG gives an Observation with nothing flagged: the rule checker
-    already refuses such files.
+    A file with no notes (a JPEG, a PNG from any other provider, a PNG whose notes were stripped, or
+    a damaged file) gives `seen=False`: this stand-in cannot see pixels, so it says so rather than
+    report a clean picture.
     """
     info = read_info(image.background)
     if info is None or not info.text:
-        return Observation(depicts_item_id=image.item_id)
+        return Observation(seen=False)
     return Observation(
         depicts_item_id=info.text.get(NOTE_DEPICTS),
         logo_intact=info.text.get(NOTE_LOGO, "ok") == "ok",
@@ -249,7 +278,22 @@ class FakeModelChecker:
     def check(self, image: GeneratedImage, context: CheckContext) -> CheckResult:
         seen = self._observe(image)
         reasons: list[Reason] = []
-        if seen.depicts_item_id is not None and seen.depicts_item_id != image.item_id:
+        if not seen.seen:
+            reasons.append(
+                Reason(
+                    code=ReasonCode.NOT_SEEN,
+                    message="The vision model could not look at the picture, so nothing vouches for it.",
+                )
+            )
+            return CheckResult(checker=self.name, reasons=tuple(reasons))
+        if seen.depicts_item_id is None:
+            reasons.append(
+                Reason(
+                    code=ReasonCode.NOT_SEEN,
+                    message=f"The vision model could not tell whether the picture shows {image.item_id!r}.",
+                )
+            )
+        elif seen.depicts_item_id != image.item_id:
             reasons.append(
                 Reason(
                     code=ReasonCode.WRONG_PRODUCT_SEEN,
@@ -265,7 +309,14 @@ class FakeModelChecker:
                     message="The picture contains text of its own; all words must be drawn by code.",
                 )
             )
-        if seen.dominant_colour is not None:
+        if seen.dominant_colour is None:
+            reasons.append(
+                Reason(
+                    code=ReasonCode.NOT_SEEN,
+                    message="The vision model could not tell the picture's colours.",
+                )
+            )
+        else:
             seen_rgb = parse_hex(seen.dominant_colour)
             nearest = min(colour_distance(seen_rgb, parse_hex(c)) for c in image.style.palette)
             if nearest > context.config.colour_tolerance:
