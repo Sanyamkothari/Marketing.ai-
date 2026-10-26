@@ -41,7 +41,7 @@ import time
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 HERE = Path(__file__).resolve().parent
 for _p in (str(HERE), str(HERE.parents[1])):
@@ -71,7 +71,7 @@ from autonomy.data.rebuild import rebuild_states  # noqa: E402
 from autonomy.fakes import InMemoryEventStore, InMemoryStateStore  # noqa: E402
 from autonomy.learning.observations import ipw_weights, logged_sends, weighted_rate  # noqa: E402
 from autonomy.proof.ope import evaluate  # noqa: E402
-from autonomy.runtime.agent import build_agent_policy  # noqa: E402
+from autonomy.runtime.agent import ClickResponseModel, build_agent_policy  # noqa: E402
 
 CLIP = 20.0  # the warm start's clip (DEFAULT_LOGGED_IPW_CLIP)
 
@@ -79,7 +79,7 @@ CLIP = 20.0  # the warm start's clip (DEFAULT_LOGGED_IPW_CLIP)
 # --------------------------------------------------------------------------- small models
 
 
-def in_train(ids: pd.Series, seed: str = "d-ipw") -> np.ndarray:  # type: ignore[type-arg]
+def in_train(ids: pd.Series, seed: str = "d-ipw") -> np.ndarray:
     """Half the customers, by a salted hash of the id: the same customer is always on one side."""
     return np.array([int(hashlib.sha256(f"{seed}:{i}".encode()).hexdigest()[:8], 16) % 2 == 0 for i in ids])
 
@@ -108,7 +108,8 @@ def fit_logistic(
 def predict_logistic(model: tuple[np.ndarray, np.ndarray, np.ndarray], x: np.ndarray) -> np.ndarray:
     w, mu, sd = model
     z = np.column_stack([np.ones(len(x)), (x - mu) / sd])
-    return 1 / (1 + np.exp(-np.clip(z @ w, -30, 30)))
+    probability: np.ndarray = 1 / (1 + np.exp(-np.clip(z @ w, -30, 30)))
+    return probability
 
 
 def auc(score: np.ndarray, y: np.ndarray) -> float | None:
@@ -177,6 +178,7 @@ def product_warm_start(history: list[Event], now: datetime, channel: Channel) ->
     policy.nightly([], by_cust, now)
     policy.prepare_day(states, DecisionContext(now=now, briefs=(brief,), content=tuple(content)))
     model = policy.bundle.response
+    assert isinstance(model, ClickResponseModel)  # the default bundle's model, which keeps click rates
     sends = logged_sends(by_cust, {})
     keys = sorted({s.action_key() for s in sends})
     seg_of = {s.customer_id: policy.segment(s, now) for s in states}
@@ -419,6 +421,7 @@ def run_kdd98(clock: Clock, max_rows: int | None) -> dict[str, Any]:
 
     def history(clicks: bool, probs: bool) -> list[Event]:
         evs: list[Event] = []
+        r: Any
         for r in tr.itertuples(index=False):
             did = f"{r.cid}:{r.promo}"
             ts = pd.Timestamp(r.sent_at).to_pydatetime().replace(tzinfo=UTC) + timedelta(hours=14)
@@ -529,7 +532,10 @@ def run_bank(clock: Clock, max_rows: int | None) -> dict[str, Any]:
         "months": len(ct),
         "months_with_under_20_of_one_type": len(one_sided),
         "clients_in_those_months": int(one_sided.sum().sum()),
-        "examples": {f"{y_}-{m}": r.to_dict() for (y_, m), r in one_sided.head(6).iterrows()},
+        "examples": {
+            "-".join(str(part) for part in cast(tuple[Any, ...], key)): row.to_dict()
+            for key, row in one_sided.head(6).iterrows()
+        },
     }
     with clock.step("propensity"):
         pm = fit_logistic(x[tr], a[tr])
@@ -576,6 +582,7 @@ def run_bank(clock: Clock, max_rows: int | None) -> dict[str, Any]:
 
     def history(probs: bool) -> list[Event]:
         evs: list[Event] = []
+        r: Any
         for r, p in zip(trf.itertuples(index=False), p_logged[tr], strict=True):
             ts = r.call_at.to_pydatetime().replace(tzinfo=UTC)
             did = f"{r.cid}:call"

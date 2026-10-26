@@ -167,10 +167,11 @@ def summarise(
     out["customers_decided"] = len({d.customer_id for d in decisions})
     out["customers_with_any_act"] = len({d.customer_id for d in decisions if d.kind is DecisionKind.ACT})
     acts = [d for d in decisions if d.kind is DecisionKind.ACT and d.action is not None]
-    out["act_by_goal"] = dict(Counter(d.action.goal_id for d in acts))
-    out["act_channel_offer"] = dict(Counter(f"{d.action.channel.value}|{d.action.offer_id}" for d in acts))
+    actions = [d.action for d in acts if d.action is not None]
+    out["act_by_goal"] = dict(Counter(a.goal_id for a in actions))
+    out["act_channel_offer"] = dict(Counter(f"{a.channel.value}|{a.offer_id}" for a in actions))
     out["act_send_hour_local"] = dict(
-        sorted(Counter(d.action.send_at.astimezone(runtime._tz).hour for d in acts).items())
+        sorted(Counter(a.send_at.astimezone(runtime._tz).hour for a in actions).items())
     )
     nets = [d.expected_net for d in acts]
     if nets:

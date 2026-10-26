@@ -22,7 +22,7 @@ import argparse
 import sys
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 HERE = Path(__file__).resolve().parent
 for _p in (str(HERE), str(HERE.parents[1])):
@@ -36,6 +36,7 @@ from autonomy.contracts import DecisionKind, EventType, Group  # noqa: E402
 from autonomy.data.folder import StateFolder  # noqa: E402
 from autonomy.decide.bidders import contact_harm_of  # noqa: E402
 from autonomy.proof.split import group_assigner  # noqa: E402
+from autonomy.runtime.agent import AgentPolicy  # noqa: E402
 from autonomy.runtime.service import AutonomyRuntime, RuntimeConfig, TickReport  # noqa: E402
 from autonomy.runtime.settings import workspace_policy_factory  # noqa: E402
 
@@ -43,7 +44,7 @@ from autonomy.runtime.settings import workspace_policy_factory  # noqa: E402
 def harm_view(rt: AutonomyRuntime) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for gid, (_, pol) in sorted(rt._policies.items()):
-        h = contact_harm_of(pol.bundle.response, create=False)
+        h = contact_harm_of(cast(AgentPolicy, pol).bundle.response, create=False)
         if h is None:
             out[gid] = None
             continue

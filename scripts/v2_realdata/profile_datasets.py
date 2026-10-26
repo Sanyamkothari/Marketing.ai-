@@ -19,6 +19,7 @@ finding, not a crash).
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import resource
 import sys
@@ -26,7 +27,7 @@ import time
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -40,7 +41,7 @@ def _rss_mb() -> float:
 
 
 def _span(
-    series: pd.Series, fmt: str | None = None, unit: str | None = None
+    series: pd.Series, fmt: str | None = None, unit: Literal["s", "ms", "us", "ns"] | None = None
 ) -> tuple[str | None, str | None, int]:
     if unit:
         t = pd.to_datetime(series, unit=unit, errors="coerce")
@@ -56,7 +57,7 @@ def _chunked(
     path: str, usecols: list[str], cust: str | None, time_col: str | None, fmt: str | None = None, **kw: Any
 ) -> dict[str, Any]:
     rows = 0
-    custs: set = set()
+    custs: set[str] = set()
     tmin = tmax = None
     bad = 0
     for ch in pd.read_csv(path, usecols=usecols, chunksize=CHUNK, **kw):
@@ -79,7 +80,7 @@ def _chunked(
     }
 
 
-def p_hillstrom(r: str) -> dict:
+def p_hillstrom(r: str) -> dict[str, Any]:
     df = pd.read_csv(f"{r}/hillstrom/hillstorm_no_indices.csv.gz")
     return {
         "rows": len(df),
@@ -92,7 +93,7 @@ def p_hillstrom(r: str) -> dict:
     }
 
 
-def p_criteo(r: str) -> dict:
+def p_criteo(r: str) -> dict[str, Any]:
     rows = 0
     t = c = v = e = 0
     for ch in pd.read_csv(
@@ -117,7 +118,7 @@ def p_criteo(r: str) -> dict:
     }
 
 
-def p_lenta(r: str) -> dict:
+def p_lenta(r: str) -> dict[str, Any]:
     path = f"{r}/lenta/lenta_dataset.csv.gz"
     cols = list(pd.read_csv(path, nrows=0).columns)
     df = pd.read_csv(path, usecols=["group", "response_att", "gender"])
@@ -132,7 +133,7 @@ def p_lenta(r: str) -> dict:
     }
 
 
-def p_megafon(r: str) -> dict:
+def p_megafon(r: str) -> dict[str, Any]:
     df = pd.read_csv(f"{r}/megafon/megafon_dataset.csv.gz", usecols=["treatment_group", "conversion"])
     return {
         "rows": len(df),
@@ -143,7 +144,7 @@ def p_megafon(r: str) -> dict:
     }
 
 
-def p_x5(r: str) -> dict:
+def p_x5(r: str) -> dict[str, Any]:
     d = f"{r}/x5_retailhero"
     up = pd.read_csv(f"{d}/uplift_train.csv.gz")
     cl = pd.read_csv(f"{d}/clients.csv.gz")
@@ -154,7 +155,7 @@ def p_x5(r: str) -> dict:
         "transaction_datetime",
         fmt="%Y-%m-%d %H:%M:%S",
     )
-    tx: set = set()
+    tx: set[str] = set()
     for ch in pd.read_csv(f"{d}/purchases.csv.gz", usecols=["transaction_id"], chunksize=CHUNK):
         tx.update(ch["transaction_id"].unique().tolist())
     out.update(
@@ -174,7 +175,7 @@ def p_x5(r: str) -> dict:
     return out
 
 
-def p_olist(r: str) -> dict:
+def p_olist(r: str) -> dict[str, Any]:
     d = f"{r}/olist"
     o = pd.read_csv(f"{d}/olist_orders_dataset.csv.gz")
     c = pd.read_csv(f"{d}/olist_customers_dataset.csv.gz")
@@ -197,7 +198,7 @@ def p_olist(r: str) -> dict:
     }
 
 
-def p_online_retail_i(r: str) -> dict:
+def p_online_retail_i(r: str) -> dict[str, Any]:
     df = pd.read_csv(f"{r}/online_retail_i/online-retail-dataset.csv", encoding="latin-1")
     a, b, bad = _span(df["InvoiceDate"], "%m/%d/%Y %H:%M")
     return {
@@ -214,10 +215,10 @@ def p_online_retail_i(r: str) -> dict:
     }
 
 
-def p_online_retail_ii(r: str) -> dict:
+def p_online_retail_ii(r: str) -> dict[str, Any]:
     df = pd.read_csv(f"{r}/online_retail_ii/online_retail_II.csv", encoding="latin-1")
     a, b, bad = _span(df["InvoiceDate"], "%Y-%m-%d %H:%M:%S")
-    out = {
+    out: dict[str, Any] = {
         "rows": len(df),
         "customers": int(df["Customer ID"].nunique()),
         "invoices": int(df["Invoice"].nunique()),
@@ -230,15 +231,14 @@ def p_online_retail_ii(r: str) -> dict:
         "exact_duplicate_rows": int(df.duplicated().sum()),
     }
     try:
-        import openpyxl  # noqa: F401
-
+        importlib.import_module("openpyxl")  # its own ImportError, not pandas', if it is missing
         out["xlsx_sheets"] = pd.ExcelFile(f"{r}/online_retail_ii/online_retail_II.xlsx").sheet_names
     except Exception as e:  # pragma: no cover
         out["xlsx_error"] = repr(e)
     return out
 
 
-def p_starbucks_promo(r: str) -> dict:
+def p_starbucks_promo(r: str) -> dict[str, Any]:
     tr = pd.read_csv(f"{r}/starbucks_promo/training.csv")
     te = pd.read_csv(f"{r}/starbucks_promo/Test.csv")
     return {
@@ -252,7 +252,7 @@ def p_starbucks_promo(r: str) -> dict:
     }
 
 
-def p_starbucks_rewards(r: str) -> dict:
+def p_starbucks_rewards(r: str) -> dict[str, Any]:
     d = f"{r}/starbucks_rewards"
     tr = pd.read_json(f"{d}/transcript.json", lines=True)
     pr = pd.read_json(f"{d}/profile.json", lines=True)
@@ -270,7 +270,7 @@ def p_starbucks_rewards(r: str) -> dict:
     }
 
 
-def p_cdnow(r: str) -> dict:
+def p_cdnow(r: str) -> dict[str, Any]:
     df = pd.read_csv(
         f"{r}/cdnow/CDNOW_master.txt", sep=r"\s+", header=0, dtype={"customer_id": str, "date": str}
     )
@@ -285,7 +285,7 @@ def p_cdnow(r: str) -> dict:
     }
 
 
-def p_nbr(r: str, name: str, stem: str) -> dict:
+def p_nbr(r: str, name: str, stem: str) -> dict[str, Any]:
     h = pd.read_csv(f"{r}/{name}/{stem}_history.csv")
     f = pd.read_csv(f"{r}/{name}/{stem}_future.csv")
     return {
@@ -299,7 +299,7 @@ def p_nbr(r: str, name: str, stem: str) -> dict:
     }
 
 
-def p_open_bandit(r: str) -> dict:
+def p_open_bandit(r: str) -> dict[str, Any]:
     out: dict[str, Any] = {"rows": 0, "files": {}}
     for f in sorted(p.name for p in Path(f"{r}/open_bandit_sample").iterdir()):
         if not f.endswith(".csv"):
@@ -322,7 +322,7 @@ def p_open_bandit(r: str) -> dict:
     return out
 
 
-def p_ta_feng(r: str) -> dict:
+def p_ta_feng(r: str) -> dict[str, Any]:
     with zipfile.ZipFile(f"{r}/ta_feng/ta-feng-grocery-dataset.zip") as z:
         df = pd.read_csv(
             z.open("ta_feng_all_months_merged.csv"), encoding="utf-8-sig", dtype={"CUSTOMER_ID": str}
@@ -339,7 +339,7 @@ def p_ta_feng(r: str) -> dict:
     }
 
 
-def p_retailrocket(r: str) -> dict:
+def p_retailrocket(r: str) -> dict[str, Any]:
     with zipfile.ZipFile(f"{r}/retailrocket/retailrocket.zip") as z:
         df = pd.read_csv(z.open("retailrocket/events.csv"))
     a, b, _bad = _span(df["timestamp"], unit="ms")
@@ -354,7 +354,7 @@ def p_retailrocket(r: str) -> dict:
     }
 
 
-def p_rees46(r: str) -> dict:
+def p_rees46(r: str) -> dict[str, Any]:
     out: dict[str, Any] = {"rows": None, "customers": None}
     try:
         frames = [
@@ -369,7 +369,7 @@ def p_rees46(r: str) -> dict:
     return out
 
 
-def p_taobao(r: str) -> dict:
+def p_taobao(r: str) -> dict[str, Any]:
     d = f"{r}/taobao_sample"
     pv = pd.read_csv(f"{d}/pv.csv", sep="\t")
     cart = pd.read_csv(f"{d}/cart.csv", sep="\t")
@@ -386,7 +386,7 @@ def p_taobao(r: str) -> dict:
     }
 
 
-def p_superstore(r: str) -> dict:
+def p_superstore(r: str) -> dict[str, Any]:
     df = pd.read_csv(f"{r}/superstore/sample_superstore.csv")
     a, b, bad = _span(df["order_date"], "%Y-%m-%d")
     return {
@@ -400,7 +400,7 @@ def p_superstore(r: str) -> dict:
     }
 
 
-def p_telco(r: str) -> dict:
+def p_telco(r: str) -> dict[str, Any]:
     df = pd.read_csv(f"{r}/telco_churn/Telco-Customer-Churn.csv")
     tc = pd.to_numeric(df["TotalCharges"], errors="coerce")
     return {
@@ -412,7 +412,7 @@ def p_telco(r: str) -> dict:
     }
 
 
-def p_bank(r: str) -> dict:
+def p_bank(r: str) -> dict[str, Any]:
     df = pd.read_csv(f"{r}/bank_marketing/bank-additional-full.csv", sep=";")
     return {
         "rows": len(df),
@@ -424,7 +424,7 @@ def p_bank(r: str) -> dict:
     }
 
 
-def p_hins(r: str) -> dict:
+def p_hins(r: str) -> dict[str, Any]:
     df = pd.read_csv(f"{r}/health_insurance_xsell/train.csv")
     return {
         "rows": len(df),
@@ -435,7 +435,7 @@ def p_hins(r: str) -> dict:
     }
 
 
-def p_hotels(r: str) -> dict:
+def p_hotels(r: str) -> dict[str, Any]:
     df = pd.read_csv(f"{r}/hotel_bookings/hotels.csv")
     a, b, bad = _span(df["reservation_status_date"], "%Y-%m-%d")
     return {
@@ -450,7 +450,7 @@ def p_hotels(r: str) -> dict:
     }
 
 
-def p_credit(r: str) -> dict:
+def p_credit(r: str) -> dict[str, Any]:
     df = pd.read_csv(f"{r}/uci_credit_default/UCI_Credit_Card.csv")
     return {
         "rows": len(df),
@@ -460,7 +460,7 @@ def p_credit(r: str) -> dict:
     }
 
 
-def p_kdd98(r: str) -> dict:
+def p_kdd98(r: str) -> dict[str, Any]:
     df = pd.read_csv(f"{r}/kdd98_sample/cup98LRN.txt", low_memory=False)
     return {
         "rows": len(df),
@@ -471,7 +471,7 @@ def p_kdd98(r: str) -> dict:
     }
 
 
-PROFILERS: dict[str, Callable[[str], dict]] = {
+PROFILERS: dict[str, Callable[[str], dict[str, Any]]] = {
     "hillstrom": p_hillstrom,
     "criteo_uplift": p_criteo,
     "lenta": p_lenta,

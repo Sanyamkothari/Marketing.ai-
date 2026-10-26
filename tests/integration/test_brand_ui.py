@@ -182,8 +182,9 @@ def test_removing_m182_leaves_nothing_of_it() -> None:
     for path in (ROOT / "ui").rglob("*.js"):
         if path.name == "brand.js" or path.name in MARKED:
             continue
+        # `\b` after `brand.js`: ui/v2/api.js names its mock file `onboarding_brand.json`, which is not this module.
         assert not re.search(
-            r"brand\.js|brandName|brandLogo", path.read_text(encoding="utf-8")
+            r"brand\.js\b|brandName|brandLogo", path.read_text(encoding="utf-8")
         ), f"{path.name} reaches the brand without a mark"
 
 

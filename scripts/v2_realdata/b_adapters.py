@@ -483,7 +483,7 @@ def adapt_superstore(clock: Clock) -> Adapted:
     with clock.step("adapter_orders"):
         for c in ("sales", "profit", "discount", "quantity"):
             raw[c] = pd.to_numeric(raw[c])
-        raw["offer"] = np.where(raw["discount"] > 0, "discount", None)
+        raw["offer"] = np.where(raw["discount"] > 0, "discount", None)  # type: ignore[call-overload]  # None branch
         top = raw.sort_values("sales", ascending=False).drop_duplicates("order_id")[["order_id", "category"]]
         order = raw.groupby(["order_id", "customer_name"], as_index=False, sort=False).agg(
             order_date=("order_date", "first"),
@@ -567,7 +567,7 @@ def nbr_baskets(hist: pd.DataFrame, fut: pd.DataFrame) -> pd.DataFrame:
     step = int(NBR_STEP.total_seconds())
     hist_t = base - (last - hist["n"] + 1) * step
 
-    def table(f: pd.DataFrame, t: pd.Series) -> pd.DataFrame:  # type: ignore[type-arg]
+    def table(f: pd.DataFrame, t: pd.Series) -> pd.DataFrame:
         return pd.DataFrame(
             {
                 "customer_id": f["CUSTOMER_ID"].astype(str),
