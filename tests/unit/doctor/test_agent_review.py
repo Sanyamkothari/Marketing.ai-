@@ -750,3 +750,33 @@ def _build(cls: Any, case: Case, world: World) -> Any:
         _Cached(visit.visit_registry(), _MEMORY),
         **extra,
     )
+
+
+def test_the_plan_view_lists_the_ais_own_waiting_query(world: World, storage: LocalStorage) -> None:
+    from engine.doctor.case import CaseItem, payload_digest
+
+    payload: dict[str, Any] = {
+        "step": {
+            "order": 1,
+            "kind": "sql_query",
+            "params": {"sql": "select 1", "output_name": "t"},
+            "reason": "r",
+        }
+    }
+    item = CaseItem(
+        item_id="i-query",
+        kind="recipe_step",
+        title="Table t",
+        source=ProposalSource.AI,
+        confidence=AgentConfidence.CHECK,
+        state=ProposalState.PENDING,
+        upload_id=None,
+        payload=payload,
+        payload_digest=payload_digest(payload),
+        proposed_at=vs.T0,
+    )
+    case = vs.open_case(storage, world).model_copy(update={"items": (item,)})
+    client = Script([{"action": "finish", "text": "Looked."}])
+    _review(_guard(client))(case, _files(world), None)
+    shown = next(c for c in client.calls if c.kind == "complete").prompt
+    assert '"by": "ai"' in shown and '"state": "pending"' in shown and "all files" in shown

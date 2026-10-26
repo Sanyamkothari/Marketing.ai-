@@ -115,7 +115,7 @@ SUMMARY_CHARS: Final[int] = 800
 EFFECT_CHARS: Final[int] = 160
 _DIGIT: Final = re.compile(r"\d")
 SQL_ARGS: Final[frozenset[str]] = frozenset(
-    {"sql", "output_name", "as_of", "as_of_rule", "as_of_column", "reads_future"}
+    {"sql", "output_name", "as_of", "as_of_rule", "as_of_column", "reads_future", "outcome_window_days"}
 )
 
 
@@ -251,7 +251,7 @@ class _Review:
         names += [g.label(c) for g, ctx in zip(self.gates, self.ctxs, strict=True) for c in ctx.frame.columns]
         self.state = {
             "files": self.overviews,
-            "decided_by_the_rules": self._decided(),
+            "plan_so_far": self._decided(),
             "open_questions": [q.code for q in case.questions if q.answer is None],
             "left": {"blocking_questions": MAX_BLOCKING},
         }
@@ -306,11 +306,23 @@ class _Review:
             index = next((i for i, c in enumerate(self.ctxs) if c.upload_id == item.upload_id), None)
             step = item.payload.get("step")
             column = item.payload.get("column") or (step.get("column") if isinstance(step, dict) else None)
-            if index is None or not isinstance(column, str):
+            whole = item.upload_id is None and isinstance(step, dict)  # the AI's queries are over the files
+            if whole:
+                index = 0 if len(self.ctxs) == 1 else None
+                column = (
+                    column if isinstance(column, str) else str(item.payload.get("output_name") or item.title)
+                )
+            elif index is None or not isinstance(column, str):
                 continue
             kind = step.get("kind") if isinstance(step, dict) else item.kind
             found.append(
-                {"file": f"F{index + 1}", "kind": str(kind), "column": self.gates[index].label(column)}
+                {
+                    "file": f"F{index + 1}" if index is not None else "all files",
+                    "kind": str(kind),
+                    "column": self.gates[index].label(column) if index is not None else column[:60],
+                    "by": item.source.value,  # the AI sees its own items too, and whether each still waits
+                    "state": item.state.value,
+                }
             )
         return found
 
@@ -344,6 +356,8 @@ class _Review:
 
     # -- the loop --------------------------------------------------------------------------------------
     purpose: GenerativePurpose = GenerativePurpose.DOCTOR_AGENT
+    replacing: tuple[str, ...] = ()
+    """Items the chat is swapping out or taking back in the action being run (a query's trial leaves them out)."""
 
     def _tools(self) -> list[dict[str, str]]:
         """Each look tool with its arguments, for the prompt; a tool is read on a file named `F1` .. `Fn`."""
@@ -568,7 +582,9 @@ class _Review:
             )
         first = next(i for i, ctx in enumerate(self.ctxs) if ctx.upload_id == given["upload_ids"][0])
         key = _decided(self.case, "key", given["upload_ids"][0])
-        result = self.registry.call("propose_sql_step", given, self._context(first, primary_key=key))
+        result = self.registry.call(
+            "propose_sql_step", given, self._context(first, primary_key=key, replacing=self.replacing)
+        )
         order = turn.orders.setdefault(name, len(turn.orders) + 1)
         changed = turn.book.declare(order, expectations)
         proposal = SqlStepProposal.model_validate(result.output)

@@ -39,6 +39,7 @@ __all__ = [
     "plan_digest",
     "recipe_steps_of",
     "steps_digest",
+    "trial_steps_of",
 ]
 
 SAMPLE_ROWS: Final[int] = 1_000
@@ -74,6 +75,43 @@ def recipe_steps_of(
     found.sort(key=lambda pair: STEP_PHASE[pair[0].kind])
     return [
         (step.model_copy(update={"order": n}), item_id) for n, (step, item_id) in enumerate(found, start=1)
+    ]
+
+
+_SHAPING: Final[frozenset[RecipeStepKind]] = frozenset(
+    {
+        RecipeStepKind.SQL_QUERY,
+        RecipeStepKind.COMBINE_ROWS,
+        RecipeStepKind.UNPIVOT,
+        RecipeStepKind.KEEP_LATEST_PER_ID,
+    }
+)
+"""The steps that make other rows or another table: a query's trial never applies one that is only proposed."""
+
+
+def trial_steps_of(
+    items: Sequence[CaseItem], upload_id: str, *, only_file: bool, replacing: Collection[str] = ()
+) -> list[tuple[RecipeStep, str]]:
+    """What a new query is tried after: the accepted steps and the waiting per-column fixes (dates parsed, numbers
+    read), never a waiting query, combine or reshape, and never an item named in `replacing` (the chat swaps or
+    takes it back at the end of its turn). Numbered 1..n."""
+    state = {i.item_id: i.state for i in items}
+    everything = recipe_steps_of(items, upload_id, only_file=only_file, pending=True)
+    left_out = [
+        STEP_PHASE[step.kind]
+        for step, item_id in everything
+        if step.kind in _SHAPING and (item_id in replacing or state[item_id] is not ProposalState.ACCEPTED)
+    ]
+    cut = min(left_out, default=None)  # a waiting fix that reads what a left-out step makes would not run
+    kept = [
+        (step, item_id)
+        for step, item_id in everything
+        if item_id not in replacing
+        and (state[item_id] is ProposalState.ACCEPTED or step.kind not in _SHAPING)
+        and (state[item_id] is ProposalState.ACCEPTED or cut is None or STEP_PHASE[step.kind] <= cut)
+    ]
+    return [
+        (step.model_copy(update={"order": n}), item_id) for n, (step, item_id) in enumerate(kept, start=1)
     ]
 
 
@@ -197,6 +235,7 @@ def check_plan(
                 target, key = declared, prepared_key(items, declared, key)
         agent = AgentConfig()
         levels = guard_levels(ordered)
+        drifted = [st.order for st in ordered if _tried_before_change(ordered, st.order)]
         try:
             guarded = run_guarded(
                 frame,
@@ -229,6 +268,20 @@ def check_plan(
                 )
             findings.append(_finding(failed, item_id))
             continue
+        for order in drifted:  # it runs, but not on what it was tried on: the person says yes to that
+            findings.append(
+                _finding(
+                    Finding(
+                        level="stop",
+                        code="PLAN_QUERY_TRIED_BEFORE_CHANGE",
+                        order=order,
+                        message=f"A query was tried on {loaded.file_name or 'the file'} before the other steps "
+                        "now in the plan were settled, and it now runs after them, so its result may differ. "
+                        "Ask for the query again (name the earlier query in `replaces`).",
+                    ),
+                    by_order.get(order),
+                )
+            )
         for receipt in guarded.receipts:
             steps.append(_step_row(receipt, by_order[receipt.order]))
         findings.extend(

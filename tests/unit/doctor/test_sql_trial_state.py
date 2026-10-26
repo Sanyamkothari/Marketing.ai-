@@ -125,3 +125,178 @@ def test_a_query_in_the_post_build_recipe_reads_the_prepared_table_by_name() -> 
     plain = _off_own_table(step)
     assert "this_table" not in plain.params and "tried_after" not in plain.params
     assert plain.params["inputs"] == ["log"]
+
+
+# ---------------------------------------------------------------------------
+# The trial never applies another waiting query, and a window past the data is named
+# ---------------------------------------------------------------------------
+PER_CUSTOMER = "SELECT Customer, count(*) AS n FROM t_log GROUP BY ALL"
+ON_LINES = "SELECT Customer, max(InvoiceDate) AS last_seen FROM t_log GROUP BY ALL"
+
+
+def pending_table(state: ProposalState, item_id: str = "item_c4") -> CaseItem:
+    """The AI's own earlier customer table: one row per customer, no InvoiceDate."""
+    step = RecipeStep.model_validate(propose(PER_CUSTOMER, ())["step"]).model_copy(update={"order": 2})
+    return item(item_id, {"step": step.model_dump(mode="json")}, state, upload_id=None)
+
+
+@pytest.mark.parametrize("state", [ProposalState.PENDING, ProposalState.ACCEPTED])
+def test_a_replacement_query_is_tried_on_the_lines_not_on_the_table_it_replaces(state: ProposalState) -> None:
+    earlier = pending_table(state)
+    parse = parse_date(ProposalState.PENDING)
+    ctx = DataToolContext(
+        files=(loaded(log()),),
+        caller="ai",
+        principal=Principal(user_id="u", username="u", roles=frozenset({Role.ANALYST}), kind="user"),
+        case_items=(parse, earlier),
+        replacing=("item_c4",),
+    )
+    given = {"description": "Last visit.", "sql": ON_LINES, "output_name": "last", "upload_ids": ["up-1"]}
+    proposal = dict(data_registry().call("propose_sql_step", given, ctx).output)
+    assert proposal["rows_out"] == 8
+    # The pending parse_date was applied (InvoiceDate is a time, as the query needs), the table was not.
+    step = RecipeStep.model_validate(proposal["step"])
+    parsed = RecipeStep.model_validate(parse_date(ProposalState.ACCEPTED).payload["step"])
+    assert sql_params(step.params).tried_after == steps_digest([parsed])
+
+
+def test_another_waiting_query_is_not_applied_even_when_nothing_is_replaced() -> None:
+    proposal = propose(ON_LINES, (parse_date(ProposalState.PENDING), pending_table(ProposalState.PENDING)))
+    assert proposal["rows_out"] == 8
+
+
+def ending(days_before_end: int, window: int = 90) -> dict[str, Any]:
+    days = pd.date_range("2025-01-01", "2025-12-09", freq="D")
+    frame = pd.DataFrame({"Customer": [f"C{n % 5}" for n in range(len(days))], "InvoiceDate": days})
+    sql = "SELECT Customer, count(*) FILTER (WHERE InvoiceDate > $as_of) AS again FROM t_log GROUP BY ALL"
+    as_of = (pd.Timestamp("2025-12-09") - pd.Timedelta(days=days_before_end)).date()
+    ctx = DataToolContext(
+        files=(loaded(frame),),
+        caller="ai",
+        principal=Principal(user_id="u", username="u", roles=frozenset({Role.ANALYST}), kind="user"),
+    )
+    given = {
+        "description": "Ordered again.",
+        "sql": sql,
+        "output_name": "outcome",
+        "upload_ids": ["up-1"],
+        "as_of": as_of.isoformat(),
+        "reads_future": True,
+        "outcome_window_days": window,
+    }
+    return dict(data_registry().call("propose_sql_step", given, ctx).output)
+
+
+def test_an_outcome_window_past_the_end_of_the_data_is_named() -> None:
+    late = ending(9)
+    (found,) = [f for f in late["findings"] if f["code"] == "OUTCOME_WINDOW_PAST_DATA"]
+    assert found["level"] == "stop" and late["needs_yes"]
+    assert "90 days past 2025-11-30" in found["message"] and "ends on 2025-12-09" in found["message"]
+    assert "for example 2025-09-10" in found["message"]
+    assert sql_params(late["step"]["params"]).outcome_window_days == 90
+
+
+def test_an_outcome_window_inside_the_data_is_not() -> None:
+    assert not [f for f in ending(100)["findings"] if f["code"] == "OUTCOME_WINDOW_PAST_DATA"]
+
+
+def test_a_query_reading_the_future_states_its_window() -> None:
+    from engine.doctor.registry import DataToolError
+
+    with pytest.raises(DataToolError) as caught:
+        data_registry().call(
+            "propose_sql_step",
+            {
+                "description": "d",
+                "sql": PER_CUSTOMER,
+                "output_name": "o",
+                "upload_ids": ["up-1"],
+                "reads_future": True,
+            },
+            DataToolContext(
+                files=(loaded(log()),),
+                caller="ai",
+                principal=Principal(user_id="u", username="u", roles=frozenset({Role.ANALYST}), kind="user"),
+            ),
+        )
+    assert "outcome_window_days" in caught.value.message
+
+
+def test_two_waiting_queries_both_accepted_name_that_the_later_one_runs_on_the_other() -> None:
+    earlier = pending_table(ProposalState.ACCEPTED, "item_q1")
+    proposal = propose(ON_LINES, (pending_table(ProposalState.PENDING),))
+    step = {**proposal["step"], "order": 3}
+    later = item("item_q2", {"step": step}, ProposalState.ACCEPTED, upload_id=None)
+    case_files = [CaseFile(upload_id="up-1", file_name="log.csv", added_at=NOW, added_by="u")]
+    found = check_plan([loaded(log())], case_files, [earlier, later]).findings
+    assert "PLAN_QUERY_TRIED_BEFORE_CHANGE" in {f.code for f in found}
+    assert next(f for f in found if f.code == "PLAN_QUERY_TRIED_BEFORE_CHANGE").level == "stop"
+
+
+def test_a_waiting_fix_on_what_a_waiting_combine_makes_is_left_out_with_it() -> None:
+    from engine.doctor.plan_check import trial_steps_of
+
+    combine = RecipeStep(order=1, kind=RecipeStepKind.COMBINE_ROWS, column="Customer", params={}, reason="c")
+    derive = RecipeStep(
+        order=2, kind=RecipeStepKind.DERIVE, column="x", new_column="y", params={}, reason="d"
+    )
+    items = (
+        item("c", {"step": combine.model_dump(mode="json")}, ProposalState.PENDING, upload_id="up-1"),
+        item("d", {"step": derive.model_dump(mode="json")}, ProposalState.PENDING, upload_id="up-1"),
+        parse_date(ProposalState.PENDING),
+    )
+    kept = [i for _, i in trial_steps_of(items, "up-1", only_file=True)]
+    assert kept == ["item_parse"]
+
+
+def frames_with(**extra: Any) -> dict[str, pd.DataFrame]:
+    return {"t": pd.DataFrame({"InvoiceDate": pd.to_datetime(["2011-12-09"]), **extra})}
+
+
+def test_the_data_end_reads_naive_and_aware_columns_together() -> None:
+    from engine.doctor.tools_sql import _data_end
+
+    mixed = frames_with(updated_at=["2011-12-01T10:00:00+00:00"])
+    assert _data_end(mixed) == pd.Timestamp("2011-12-09").date()
+
+
+def test_a_future_column_does_not_move_the_data_end_when_the_event_date_is_named() -> None:
+    from engine.doctor.tools_sql import _compared_columns, _data_end
+
+    frames = frames_with(card_expiry_date=["2014-05-01"])
+    assert _data_end(frames) == pd.Timestamp("2014-05-01").date()
+    wanted = _compared_columns("SELECT c FROM t WHERE InvoiceDate > $as_of")
+    assert _data_end(frames, wanted) == pd.Timestamp("2011-12-09").date()
+
+
+def test_the_window_in_the_sql_is_not_shrunk_by_what_the_step_states() -> None:
+    from engine.doctor.tools_sql import _window_in_sql
+
+    assert _window_in_sql("WHERE d <= $as_of + INTERVAL 90 DAY") == 90
+    assert _window_in_sql("WHERE d <= $as_of + INTERVAL '30' DAYS") == 30
+    assert _window_in_sql("WHERE d > $as_of") == 0
+
+
+def test_a_stated_window_smaller_than_the_queries_own_is_overridden() -> None:
+    days = pd.date_range("2025-01-01", "2025-12-09", freq="D")
+    frame = pd.DataFrame({"Customer": [f"C{n % 5}" for n in range(len(days))], "InvoiceDate": days})
+    sql = (
+        "SELECT Customer, count(*) FILTER (WHERE InvoiceDate > $as_of AND "
+        "InvoiceDate <= $as_of + INTERVAL 90 DAY) AS again FROM t_log GROUP BY ALL"
+    )
+    ctx = DataToolContext(
+        files=(loaded(frame),),
+        caller="ai",
+        principal=Principal(user_id="u", username="u", roles=frozenset({Role.ANALYST}), kind="user"),
+    )
+    given = {
+        "description": "Again.",
+        "sql": sql,
+        "output_name": "o",
+        "upload_ids": ["up-1"],
+        "as_of": "2025-11-30",
+        "reads_future": True,
+        "outcome_window_days": 1,
+    }
+    out = dict(data_registry().call("propose_sql_step", given, ctx).output)
+    assert "OUTCOME_WINDOW_PAST_DATA" in {f["code"] for f in out["findings"]}

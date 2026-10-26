@@ -233,6 +233,13 @@ class SqlStepParams(StrictBase):
         description="The query reads rows dated after `$as_of` on purpose (it builds the outcome); the "
         "future-rows check then leaves the outcome column out, and every other column must still not move.",
     )
+    outcome_window_days: int | None = Field(
+        default=None,
+        ge=1,
+        le=3650,
+        description="How many days after `$as_of` the outcome looks (a `reads_future` query states it): the "
+        "trial checks that the data reaches that far.",
+    )
 
 
 def sql_params(params: Mapping[str, Any]) -> SqlStepParams:
@@ -539,8 +546,7 @@ def _first_line(exc: Exception) -> str:
 _CONVERSION_HINTS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
     (
         re.compile(r"invalid (date|timestamp) field format"),
-        "a text value is not written as {0} YYYY-MM-DD; read it "
-        "with strptime(column, '<its format>') first",
+        "a text value is not written as {0} YYYY-MM-DD; read it with strptime(column, '<its format>') first",
     ),
     (re.compile(r"Could not convert string .* to ([A-Z0-9]{2,12})\b"), "a text value cannot be read as {0}"),
 )

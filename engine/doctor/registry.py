@@ -234,6 +234,8 @@ class DataToolContext:
     """Who the ledger names."""
     # Plan O wave 1 integration (DEC-1802 (t)): what the tools of M234, M237, M238, M240 and M241 read beyond the
     # fields above. Each is optional; a tool that needs one is not available without it.
+    replacing: tuple[str, ...] = ()
+    """Case items the caller is taking back or swapping in this very call: a query's trial leaves them out."""
     primary_key: str | None = None
     """The file's ID column as decided in the case or session (M238's and M241's tools never change it)."""
     locale_profile: LocaleProfile | None = None

@@ -24,7 +24,9 @@ tried the same way, on the plan so far.
 
 from __future__ import annotations
 
-from datetime import date
+import re
+from collections.abc import Collection
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Final, Literal
 
@@ -58,7 +60,7 @@ from engine.doctor.guards import (
     plan_findings,
     receipt_findings,
 )
-from engine.doctor.plan_check import guard_levels, recipe_steps_of, steps_digest
+from engine.doctor.plan_check import guard_levels, steps_digest, trial_steps_of
 from engine.doctor.prescription import slot_name
 from engine.doctor.registry import (
     BY_EXPOSURE,
@@ -108,7 +110,14 @@ class ProposeSqlStepArgs(BaseModel):
     reads_future: bool = Field(
         default=False,
         description="True only for a query that builds the outcome from rows after `$as_of`; only the outcome "
-        "column is let off the future-rows check.",
+        "column is let off the future-rows check. Then also set `outcome_window_days`.",
+    )
+    outcome_window_days: int | None = Field(
+        default=None,
+        ge=1,
+        le=3650,
+        description="With `reads_future`: how many days after `$as_of` the outcome looks. The `$as_of` of a "
+        "training table must be at least that many days before the data ends.",
     )
 
 
@@ -207,8 +216,10 @@ def _prepared(
     """Each file's first rows (all of them when `whole`) after the case's accepted steps on it, with the digest
     of the steps applied: what the query will read in a run.
 
-    The steps that are still waiting for a yes count as accepted (the plan as it stands if the person ticks what is
-    proposed); a fix accepted or unticked later changes the input, and the digest is how the step notices."""
+    The per-column fixes still waiting for a yes count as accepted (the plan as it stands if the person ticks what is
+    proposed); a fix accepted or unticked later changes the input, and the digest is how the step notices. Another
+    waiting query, combine or reshape is never applied (a run puts the query last, on the file's rows), and neither
+    is an item being replaced or taken back."""
     only = len(ctx.files) == 1
     raw = {n: f for n, (_, f, _) in named.items()}
     out: dict[str, pd.DataFrame] = {}
@@ -216,7 +227,10 @@ def _prepared(
     for name, (upload_id, frame, file_name) in named.items():
         base = consistent_types(frame if whole else frame.head(DRY_RUN_ROWS)).copy()
         steps = [
-            step for step, _ in recipe_steps_of(ctx.case_items or (), upload_id, only_file=only, pending=True)
+            step
+            for step, _ in trial_steps_of(
+                ctx.case_items or (), upload_id, only_file=only, replacing=ctx.replacing
+            )
         ]
         digests[name] = steps_digest(steps)
         if not steps:
@@ -268,7 +282,91 @@ def _two_valued(frame: pd.DataFrame) -> tuple[str, ...]:
     return tuple(found)
 
 
+_DATE_HINT: Final = ("date", "time", "day", "_at")
+
+
+_AS_OF_SIDE: Final = (
+    r"(?:\"?(\w+)\"?\s*(?:>=|<=|>|<|=|BETWEEN)\s*\$as_of\b|\$as_of\b(?:\s*\+[^,)]*?)?\s*(?:>=|<=|>|<|=)\s*\"?(\w+)\"?)"
+)
+_DAYS_AFTER: Final = re.compile(
+    r"\$as_of\s*\+\s*(?:INTERVAL\s*'?\s*(\d+)\s*(?:DAYS?)?\s*'?\s*(?:DAYS?)?|(\d+)\b)", re.IGNORECASE
+)
+
+
+def _compared_columns(sql: str) -> set[str]:
+    """Column names the query sets against `$as_of`: the event date it reads, when it says so."""
+    found = {m for pair in re.findall(_AS_OF_SIDE, sql, flags=re.IGNORECASE) for m in pair if m}
+    return {n.lower() for n in found}
+
+
+def _window_in_sql(sql: str) -> int:
+    """The longest literal day offset added to `$as_of` in the query (0 when it has none)."""
+    return max((int(a or b) for a, b in _DAYS_AFTER.findall(sql)), default=0)
+
+
+def _data_end(frames: dict[str, pd.DataFrame], prefer: Collection[str] = ()) -> date | None:
+    """The latest date in the date columns of these frames (parsed ones, and text columns named like a date).
+
+    The columns the case or the query names as its event date count alone when the files have them (a card expiry or
+    renewal date lies in the future and says nothing of how far the data reaches); a column that cannot be read is
+    skipped."""
+    wanted = {str(n).lower() for n in prefer}
+    named = any(str(c).lower() in wanted for f in frames.values() for c in f.columns)
+    latest: date | None = None
+    for frame in frames.values():
+        for name in frame.columns:
+            if named and str(name).lower() not in wanted:
+                continue
+            column = frame[name]
+            try:
+                if not pd.api.types.is_datetime64_any_dtype(column):
+                    if column.dtype != object or not any(h in str(name).lower() for h in _DATE_HINT):
+                        continue
+                    column = pd.to_datetime(column, errors="coerce", format="mixed")
+                top = column.max()
+                day = top.date() if pd.notna(top) else None
+            except (TypeError, ValueError, OverflowError, AttributeError):
+                continue
+            if day is not None and (latest is None or day > latest):
+                latest = day
+    return latest
+
+
+def _window_finding(
+    given: ProposeSqlStepArgs, as_of: date | None, frames: dict[str, pd.DataFrame]
+) -> Finding | None:
+    """A query reading the outcome from rows after `$as_of` needs the data to reach `as_of` + its window; when it
+    does not, most customers read as no (the same maturity rule as the readiness check, applied to the step).
+    """
+    stated = given.outcome_window_days
+    if not given.reads_future or stated is None or as_of is None:
+        return None
+    window = max(
+        stated, _window_in_sql(given.sql)
+    )  # the query's own literal offset is not for the AI to shrink
+    prefer = _compared_columns(given.sql) | ({given.as_of_column} if given.as_of_column else set())
+    end = _data_end(frames, prefer)
+    if end is None or as_of + timedelta(days=window) <= end:
+        return None
+    return Finding(
+        level="stop",
+        code="OUTCOME_WINDOW_PAST_DATA",
+        count=window,
+        message=(
+            f"The outcome looks {window} days past {as_of.isoformat()}, but the data ends on {end.isoformat()}: "
+            f"most customers would read as no. Use an as-of date at least {window} days before the end "
+            f"(for example {(end - timedelta(days=window)).isoformat()})."
+        ),
+    )
+
+
 def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal:
+    if given.reads_future and given.outcome_window_days is None:
+        raise DataToolError(
+            "SQL_NOT_VALID",
+            "A query that reads the outcome after `$as_of` states how many days it looks: set outcome_window_days.",
+            status=422,
+        )
     raw = _names(ctx, given.upload_ids)
     prepared, digests = _prepared(ctx, raw)
     named = {name: (upload_id, prepared[name], file_name) for name, (upload_id, _, file_name) in raw.items()}
@@ -294,6 +392,7 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
             params["as_of"] = as_of.isoformat()
         if given.reads_future:
             params["reads_future"] = True
+            params["outcome_window_days"] = given.outcome_window_days
         sql_params(params)
         run = run_sql(given.sql, tried, output_name=given.output_name, as_of=as_of)
     except SqlStepError as exc:
@@ -302,6 +401,8 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
     key = ctx.primary_key
     receipt = make_receipt(1, RecipeStepKind.SQL_QUERY.value, tried, run.frame, key=key, sql=given.sql)
     findings = receipt_findings(receipt) + plan_findings(build_ledger([receipt]))
+    if given.reads_future and (late := _window_finding(given, as_of, _prepared(ctx, raw, whole=True)[0])):
+        findings.append(late)
     changed_cells: int | None
     compared_cells: int | None
     try:
