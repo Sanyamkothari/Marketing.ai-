@@ -80,7 +80,7 @@ def library(goal_id: str = GOAL) -> tuple[ContentItem, ...]:
 
 
 class LibraryBidder:
-    """Bids once for every library item of its goal on a channel the customer can be reached on, so
+    """Bids once for every library item of its goal (or shared by all goals) on a channel the customer can be reached on, so
     what it offers follows `ctx.content`, as the real bidders do."""
 
     def __init__(self, goal_id: str = GOAL) -> None:
@@ -90,7 +90,7 @@ class LibraryBidder:
         reachable = set(state.contactable_channels())
         out: list[Bid] = []
         for item in ctx.content:
-            if item.goal_id != self.goal_id or item.channel not in reachable:
+            if item.goal_id not in (None, self.goal_id) or item.channel not in reachable:
                 continue
             net = NET[item.offer_id]
             out.append(

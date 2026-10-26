@@ -235,7 +235,12 @@ class ExperimentEvent(Contract):
 
 
 class Promotion(Contract):
-    """A winner made the default of a goal, inside the approved envelope. Reversible."""
+    """A winner made the default of a goal, inside the approved envelope. Reversible.
+
+    `audience` is the audience the experiment was run on: the default applies only to customers who
+    match it, since nothing was measured on anyone else. None (a promotion stored without one) applies
+    to every customer of the goal.
+    """
 
     promotion_id: str
     experiment_id: str
@@ -243,6 +248,7 @@ class Promotion(Contract):
     kind: QuestionKind
     value: str = Field(description="The arm id: an offer id or a channel name")
     previous: str | None = Field(description="The default before this promotion, if there was one")
+    audience: Audience | None = Field(default=None, description="Who the default applies to")
     promoted_at: AwareDatetime
     reason: str
     reverted_at: AwareDatetime | None = None

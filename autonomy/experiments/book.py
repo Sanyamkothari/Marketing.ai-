@@ -13,7 +13,9 @@ Everything that changes an experiment goes through here, so the limits cannot be
   at registration, and ends the experiment when they say so. Nothing else ends one except `stop`.
 * **Promotion.** `promote` makes a winner the default of its goal, only when its arm is inside the brief's
   approved envelope (checked again now: the envelope may have narrowed), with a reason, and `revert` undoes
-  it. Promotions never change an envelope; they are a preference inside it that `ExperimentPolicy` applies.
+  it. Promotions never change an envelope; they are a preference inside it that `ExperimentPolicy` applies,
+  only to the audience the experiment was run on, and only while the goal's live envelope still holds it
+  (checked again at every decision).
 * **The log** is append-only and numbered; `snapshot` and `restore` carry the whole book as plain data.
 """
 
@@ -115,6 +117,14 @@ class ExperimentBook:
         """The arm promoted last (and not reverted) for this goal and kind of question, if any."""
         active = [p for p in self._promotions if p.goal_id == goal_id and p.kind is kind and p.active]
         return active[-1].value if active else None
+
+    def active_promotions(self) -> list[Promotion]:
+        """The promotion in force for each (goal, kind of question): the last one not reverted."""
+        latest: dict[tuple[str, QuestionKind], Promotion] = {}
+        for p in self._promotions:
+            if p.active:
+                latest[(p.goal_id, p.kind)] = p
+        return list(latest.values())
 
     def defaults(self) -> list[tuple[str, QuestionKind, str]]:
         """Every active default as (goal id, kind, arm id)."""
@@ -267,6 +277,7 @@ class ExperimentBook:
             kind=exp.spec.kind,
             value=exp.winner,
             previous=self.default_for(exp.goal_id, exp.spec.kind),
+            audience=exp.spec.audience,
             promoted_at=now,
             reason=reason or exp.end_reason or "The experiment found a winner.",
         )
@@ -322,6 +333,7 @@ class ExperimentBook:
     def snapshot(self) -> dict[str, Any]:
         """The whole book as plain, JSON-able data."""
         return {
+            "limits": {"max_per_goal": self.max_per_goal, "max_total_share": self.max_total_share},
             "experiments": [json.loads(e.model_dump_json()) for e in self.all()],
             "promotions": [json.loads(p.model_dump_json()) for p in self._promotions],
             "log": [json.loads(e.model_dump_json()) for e in self._log],
@@ -329,8 +341,12 @@ class ExperimentBook:
 
     @classmethod
     def restore(cls, data: dict[str, Any]) -> ExperimentBook:
-        """A book from `snapshot()` data. Registered rules are kept as they were stored."""
-        book = cls()
+        """A book from `snapshot()` data. Registered rules and the book's limits are kept as stored."""
+        limits = data.get("limits", {})
+        book = cls(
+            max_per_goal=int(limits.get("max_per_goal", MAX_PER_GOAL)),
+            max_total_share=float(limits.get("max_total_share", MAX_TOTAL_SHARE)),
+        )
         for raw in data.get("experiments", []):
             exp = Experiment.model_validate(raw)
             book._experiments[exp.experiment_id] = exp

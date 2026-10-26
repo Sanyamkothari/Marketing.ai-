@@ -224,3 +224,12 @@ def test_the_book_round_trips_as_plain_data() -> None:
     assert again.default_for("goal_exp", QuestionKind.OFFER) == "freeship"
     assert again.get("a").digest_matches()
     assert [e.experiment_id for e in again.running()] == ["b"]
+
+
+def test_a_stricter_book_stays_strict_after_a_round_trip() -> None:
+    book = ExperimentBook(max_per_goal=1, max_total_share=0.05)
+    book.start(spec("a", share=0.05), brief(), NOW)
+    again = ExperimentBook.restore(book.snapshot())
+    assert (again.max_per_goal, again.max_total_share) == (1, 0.05)
+    with pytest.raises(ExperimentRefused, match="limit is 1"):
+        again.start(spec("b", share=0.01), brief(), NOW)
