@@ -63,15 +63,29 @@ OLD_HISTORY = {
 }
 
 
+MOMENT_KNOBS = (
+    "cart_rate_per_day",
+    "cart_lift_multiplier",
+    "cart_half_life_days",
+    "refill_share",
+    "refill_cycle_days",
+    "refill_lift_multiplier",
+    "refill_lead_days",
+    "refill_late_days",
+)
+
+
 def _spec_hash(spec: ScenarioSpec) -> str:
     d = spec.model_dump(mode="json")
     d.pop("click_floor")
     d.pop("click_per_extra_purchase")
+    for knob in MOMENT_KNOBS:  # added with plan-v3's moments_planted; every older scenario leaves them off
+        d.pop(knob)
     return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def test_existing_scenarios_are_unchanged() -> None:
-    assert set(SCENARIOS) == {*OLD_SPECS, REAL_EMAIL_LIKE, REAL_SMS_LIKE}
+    assert set(SCENARIOS) == {*OLD_SPECS, REAL_EMAIL_LIKE, REAL_SMS_LIKE, "moments_planted"}
     for name, digest in OLD_SPECS.items():
         spec = SCENARIOS[name]
         assert _spec_hash(spec) == digest, f"{name} changed"

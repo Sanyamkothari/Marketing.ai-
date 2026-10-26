@@ -50,6 +50,14 @@ Realism, and why (wave 3a):
 * **Unsubscribe risk of annoyed people.** People who resent messages unsubscribe and complain more
   when messaged; `sleeping_dog_unsubscribe_multiplier` (3) is that, in the history and after day 0.
 
+* **Moments** (plan-v3 decision 2; off unless the spec turns them on). Each customer has planted cart
+  times (`cart_s`) and, for the `refill_share` who buy a regular item on a cycle, refill days
+  (`refill_s`). A contact's lift is multiplied by `moment_factor`: 1, plus `cart_lift_multiplier - 1`
+  at the latest cart halving every `cart_half_life_days`, plus `refill_lift_multiplier - 1` while a
+  refill is due (from `refill_lead_days` before to `refill_late_days` after). The world emits the
+  carts as CART events and the refills as PURCHASE events with an item id; the truth and the
+  history's past campaigns use the same factor.
+
 Fatigue, dents and consent change as the world runs, so the world reports contacts (`note_contacts`),
 dents (`note_dent`) and unsubscribes (`note_unsubscribe`) here, including the past campaigns of the
 history; everything else is fixed by `plant`.
@@ -146,6 +154,7 @@ _RATE_SIGMA = 0.5  # spread of the own purchase rate
 _MULT_SIGMA = 0.3  # spread of offer and theme multipliers around the persona value
 _HOUR_SD = 1.5  # spread of the best hour around the persona's, in hours
 _DEFAULT_RATE = 0.005
+_MAX_CARTS = 12  # planted carts per customer over the whole run
 
 
 def _merge(
@@ -288,6 +297,57 @@ class PlantedTruth:
         self._contact_ptr: IntArray = np.zeros(n, dtype=np.int64)
         # The hour (from start) until which a sleeping dog's own rate is already dented.
         self._dent_until_h: FloatArray = np.full(n, -np.inf)
+
+        self._plant_moments(seed)
+
+    def _plant_moments(self, seed: int) -> None:
+        """Cart times and refill days, from their own stream so every other draw is unchanged."""
+        spec = self.spec
+        n = self.n
+        self.moments_on = spec.cart_rate_per_day > 0 or spec.refill_share > 0
+        self.cart_s: FloatArray = np.full((n, 0), np.inf)
+        self.refill_s: FloatArray = np.full((n, 0), np.inf)
+        if not self.moments_on:
+            return
+        rng = np.random.default_rng([seed, 9])
+        lo = np.maximum(self.signup_s, -spec.history_days * 86_400.0) + 60.0
+        hi = float(spec.days) * 86_400.0
+        span_days = np.maximum(hi - lo, 0.0) / 86_400.0
+        if spec.cart_rate_per_day > 0:
+            counts = np.minimum(rng.poisson(spec.cart_rate_per_day * span_days), _MAX_CARTS)
+            width = int(counts.max()) if n else 0
+            draws = lo[:, None] + rng.random((n, width)) * (hi - lo)[:, None]
+            carts = np.where(np.arange(width)[None, :] < counts[:, None], draws, np.inf)
+            self.cart_s = np.sort(carts, axis=1)
+        if spec.refill_share > 0:
+            takes = rng.random(n) < spec.refill_share
+            cycle = spec.refill_cycle_days * rng.uniform(0.85, 1.15, n) * 86_400.0
+            first = lo + rng.random(n) * cycle
+            width = math.ceil(float(span_days.max()) * 86_400.0 / float(cycle.min())) + 1 if n else 0
+            days = first[:, None] + np.arange(width)[None, :] * cycle[:, None]
+            days = days + rng.uniform(-86_400.0, 86_400.0, (n, width))
+            keep = takes[:, None] & (days <= hi) & (days > lo[:, None])
+            self.refill_s = np.sort(np.where(keep, days, np.inf), axis=1)
+
+    def moment_factor(self, idx: IntArray, t_s: FloatArray) -> FloatArray:
+        """How many times as big a contact's lift is for customer `idx[k]` sent at `t_s[k]` seconds
+        (1 where no moment is live, and everywhere when the spec plants none)."""
+        out = np.ones(len(idx), dtype=np.float64)
+        if not self.moments_on:
+            return out
+        spec = self.spec
+        if spec.cart_lift_multiplier > 1.0 and self.cart_s.shape[1]:
+            carts = self.cart_s[idx]
+            latest = np.where(carts <= t_s[:, None], carts, -np.inf).max(axis=1)
+            age = (t_s - latest) / 86_400.0
+            out += (spec.cart_lift_multiplier - 1.0) * np.power(0.5, age / spec.cart_half_life_days)
+        if spec.refill_lift_multiplier > 1.0 and self.refill_s.shape[1]:
+            since_due = (t_s[:, None] - self.refill_s[idx]) / 86_400.0
+            inside = ((since_due >= -spec.refill_lead_days) & (since_due <= spec.refill_late_days)).any(
+                axis=1
+            )
+            out += np.where(inside, spec.refill_lift_multiplier - 1.0, 0.0)
+        return out
 
     def _lost_contact_values(self) -> FloatArray:
         """Margin lost per customer and channel when they unsubscribe from it (see the module notes)."""
@@ -481,6 +541,8 @@ class PlantedTruth:
         theme_mult = np.where(theme >= 0, self.theme_mult[idx, np.maximum(theme, 0)], 1.0)
         dog = self.annoyed(idx, t_s)
         lift = self.uplift[idx, ch] * self.offer_mult[idx, kind] * theme_mult * hour_factor * fatigue
+        if self.moments_on:
+            lift = lift * self.moment_factor(idx, t_s)
         lift = np.where(dog, 0.0, lift)
 
         # Expected purchases over the effect window, without and with the contact.
