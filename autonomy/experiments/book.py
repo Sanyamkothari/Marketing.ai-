@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -53,17 +54,27 @@ class PromotionRefused(ValueError):  # noqa: N818
     """The book will not promote this winner; the message says why in plain words."""
 
 
+@dataclass(frozen=True)
 class Review:
     """What one look at an experiment found and what the book did about it."""
 
-    def __init__(self, experiment: Experiment, reading: Reading, judgement: Judgement) -> None:
-        self.experiment = experiment
-        self.reading = reading
-        self.judgement = judgement
+    experiment: Experiment
+    reading: Reading
+    judgement: Judgement
 
     @property
     def ended(self) -> bool:
         return not self.experiment.running
+
+
+def _recorded(exp: Experiment) -> Judgement:
+    """The call an ended experiment already ended with."""
+    reason = exp.end_reason or ""
+    if exp.end_kind is EndKind.WINNER:
+        return Judgement("winner", exp.winner, exp.losing, reason)
+    if exp.end_kind is EndKind.STOPPED_LOSING:
+        return Judgement("stop_losing", None, exp.losing, reason)
+    return Judgement("no_winner", None, exp.losing, reason)
 
 
 class ExperimentBook:
@@ -185,7 +196,7 @@ class ExperimentBook:
         exp = self.get(experiment_id)
         reading = read(exp, outcomes, now)
         if not exp.running:
-            return Review(exp, reading, Judgement("continue", exp.winner, exp.losing, exp.end_reason or ""))
+            return Review(exp, reading, _recorded(exp))
         if not exp.digest_matches():
             raise RuntimeError(f"experiment {experiment_id!r} no longer matches what was registered")
         judgement = judge(exp, reading)
