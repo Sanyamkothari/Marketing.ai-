@@ -22,7 +22,10 @@ and the operator endpoint call it by hand. Each tick does, in order:
    and after the sweep for customers who have just crossed a time threshold of the audience (a
    lapse). Customers already decided for the goal today are skipped. What happens next depends on
    the goal's autonomy level: SHADOW logs only; APPROVE logs and holds the ACT decisions in one
-   pending `Batch`; AUTOPILOT logs and dispatches.
+   pending `Batch`; AUTOPILOT logs and dispatches. A goal's audience is read from the state store
+   and decided `RuntimeConfig.sweep_batch` customers at a time, each batch recorded and sent or
+   held before the next is read, so the sweep's memory follows the batch, not the customer count
+   (`docs/v3/SCALE.md`).
 6. **Nightly**, once a day at `nightly_hour`: each goal's policy gets `nightly(decisions,
    events_by_customer, now)` with its own goal's decisions, if it has the hook (the fast learning
    loop). A policy built in this process (the first tick after a start, or a materially new brief)
@@ -97,6 +100,7 @@ the same tick, and the contact caps in `decide()` read the SENDs every goal made
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import math
 from collections import Counter, defaultdict
@@ -355,6 +359,16 @@ class RuntimeConfig:
     imported events, not only customers already decided on, not only `replay_lookback`)."""
     history_batch: int = 2_000
     """Customers per `nightly()` call while that history is streamed in."""
+    sweep_batch: int | None = 5_000
+    """Customers the daily sweep (and a lapse check) reads, decides, sends or holds, and records at a
+    time, then drops. Peak memory of the sweep is bounded by this, not by the number of customers.
+    None: the whole audience in one batch, the memory use of before. The decisions are the same
+    either way (`docs/v3/SCALE.md`)."""
+    report_decisions: int | None = None
+    """How many of a tick's decisions the `TickReport` keeps in full. None keeps every one. A number
+    keeps the first that many and only counts the rest (`decision_count`, `act_count`); every
+    decision is still recorded in the decision log. Set it for a population too large to hold the
+    tick's decisions in memory."""
     plan_days: int = 30
     """A goal with no end date has its budget paced evenly over this many days from its start."""
     holdout_share: float | None = None
@@ -393,6 +407,10 @@ class RuntimeConfig:
             raise ValueError("replay_lookback cannot be negative")
         if self.plan_days < 1:
             raise ValueError("plan_days must be at least 1")
+        if self.sweep_batch is not None and self.sweep_batch < 1:
+            raise ValueError("sweep_batch must be at least 1, or None")
+        if self.report_decisions is not None and self.report_decisions < 0:
+            raise ValueError("report_decisions cannot be negative, or None")
         for name in ("holdout_share", "baseline_share"):
             share = getattr(self, name)
             if share is not None and not 0 <= share <= 0.5:
@@ -430,6 +448,10 @@ class TickReport:
     events_folded: int = 0
     rebuilt: bool = False
     decisions: list[Decision] = field(default_factory=list)
+    decisions_omitted: int = 0
+    """Decisions made this tick that `decisions` does not hold (`RuntimeConfig.report_decisions`)."""
+    acts_omitted: int = 0
+    """How many of the omitted decisions were ACT decisions."""
     dispatch: DispatchReport = field(default_factory=DispatchReport)
     batches_created: list[Batch] = field(default_factory=list)
     batches_sent: list[Batch] = field(default_factory=list)
@@ -463,6 +485,15 @@ class TickReport:
         return [d for d in self.decisions if d.kind is DecisionKind.ACT]
 
     @property
+    def decision_count(self) -> int:
+        """Every decision this tick made, those in `decisions` and those left out of it."""
+        return len(self.decisions) + self.decisions_omitted
+
+    @property
+    def act_count(self) -> int:
+        return len(self.acts) + self.acts_omitted
+
+    @property
     def briefings(self) -> list[Briefing]:
         return [w.insights for w in self.weekly]
 
@@ -470,8 +501,8 @@ class TickReport:
         """Counts plus the batches and alerts in full, JSON-ready."""
         return {
             "now": self.now.isoformat(),
-            "decisions": len(self.decisions),
-            "acts": len(self.acts),
+            "decisions": self.decision_count,
+            "acts": self.act_count,
             "sent": len(self.sent),
             "queued": len(self.dispatch.queued),
             "failed": len(self.dispatch.failed),
@@ -851,36 +882,56 @@ def material_brief(brief: Brief) -> str:
     return json.dumps(brief.model_dump(mode="json", include=set(MATERIAL_BRIEF_FIELDS)), sort_keys=True)
 
 
+class _BatchTally:
+    """What a pending batch says about its decisions, added to a chunk at a time.
+
+    A sweep holds its ACT decisions in one batch, but not in memory: each chunk is counted here
+    (ids, channels, offers, spend) and dropped. `make_batch` is this tally over a whole list."""
+
+    def __init__(self) -> None:
+        self.ids: list[str] = []
+        self.channels: Counter[str] = Counter()
+        self.offers: Counter[str] = Counter()
+        self.spend = 0.0
+        self.expected_net = 0.0
+
+    def add(self, acts: Iterable[Decision]) -> None:
+        for d in acts:
+            self.ids.append(d.decision_id)
+            self.expected_net += d.expected_net
+            if d.action is None:
+                continue
+            self.channels[d.action.channel.value] += 1
+            self.offers[d.action.offer_id] += 1
+            chosen = next((b for b in d.bids if b.action == d.action), None)
+            if chosen is not None:
+                self.spend += max(chosen.offer_cost, 0.0) + max(chosen.channel_cost, 0.0)
+
+    def batch(self, goal_id: str, now: datetime) -> Batch:
+        ids = tuple(sorted(self.ids))
+        n = len(ids)
+
+        def listed(counts: Counter[str]) -> str:
+            return ", ".join(f"{k} ({v})" for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+        who = "1 customer" if n == 1 else f"{n} customers"
+        return Batch(
+            batch_id=stable_id("batch", goal_id, *ids),
+            goal_id=goal_id,
+            created_at=now,
+            decision_ids=ids,
+            n_contacts=n,
+            expected_net=round(self.expected_net, 2),
+            expected_spend=round(self.spend, 2),
+            summary=f"{who} by {listed(self.channels)}; offers: {listed(self.offers)}.",
+        )
+
+
 def make_batch(goal_id: str, acts: Sequence[Decision], now: datetime) -> Batch:
     """One pending batch holding a goal's ACT decisions. Its id depends only on the decisions."""
-    ids = tuple(sorted(d.decision_id for d in acts))
-    channels: Counter[str] = Counter()
-    offers: Counter[str] = Counter()
-    spend = 0.0
-    for d in acts:
-        if d.action is None:
-            continue
-        channels[d.action.channel.value] += 1
-        offers[d.action.offer_id] += 1
-        chosen = next((b for b in d.bids if b.action == d.action), None)
-        if chosen is not None:
-            spend += max(chosen.offer_cost, 0.0) + max(chosen.channel_cost, 0.0)
-    n = len(ids)
-
-    def listed(counts: Counter[str]) -> str:
-        return ", ".join(f"{k} ({v})" for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
-
-    who = "1 customer" if n == 1 else f"{n} customers"
-    return Batch(
-        batch_id=stable_id("batch", goal_id, *ids),
-        goal_id=goal_id,
-        created_at=now,
-        decision_ids=ids,
-        n_contacts=n,
-        expected_net=round(sum(d.expected_net for d in acts), 2),
-        expected_spend=round(spend, 2),
-        summary=f"{who} by {listed(channels)}; offers: {listed(offers)}.",
-    )
+    tally = _BatchTally()
+    tally.add(acts)
+    return tally.batch(goal_id, now)
 
 
 @dataclass
@@ -923,6 +974,113 @@ class _Candidate:
     decision_id: str
     state: CustomerState | None = None
     """Already read and refreshed this tick (sweeps and lapses); None means read it when needed."""
+
+
+@dataclass
+class _GoalPass:
+    """What one goal's pass over its candidates adds up to across the pass's batches.
+
+    The sweep decides, sends or holds and records one batch of customers at a time, so anything
+    that is about the goal's whole pass (one alert, one held batch, the mandate's spend so far) is
+    added up here and settled once, in `_finish_goal`, exactly as when the pass was a single batch."""
+
+    contacted: set[str] = field(default_factory=set)
+    """Customers this goal contacted (or held for approval); merged into the tick's set at the end."""
+    failures: int = 0
+    stray: int = 0
+    enrich_alerted: bool = False
+    enriched: bool = False
+    """A batch of this pass has been enriched (later batches read events per customer)."""
+    held: _BatchTally | None = None
+    """APPROVE: the tally of the batch a person will be asked to approve."""
+    no_dispatcher: bool = False
+    spend: SpendToDate | None = None
+    """The mandate's spend when the pass first needed it; later batches add `extra` to it."""
+    extra: float = 0.0
+    blocked_n: int = 0
+    blocked_codes: Counter[str] = field(default_factory=Counter)
+    blocked_ids: list[str] = field(default_factory=list)
+    sent_ids: list[str] = field(default_factory=list)
+    refused: Counter[str] = field(default_factory=Counter)
+    send_failed_ids: list[str] = field(default_factory=list)
+    send_error: Exception | None = None
+    dispatched: int = 0
+    """Decisions handed to the dispatcher in calls that did not raise."""
+    report_start: int = 0
+    """Where the current batch's decisions begin in `TickReport.decisions`."""
+
+
+class _Snapshot:
+    """The population as the tick's sweep reads it, without holding it.
+
+    The old sweep read every state once, the first time a goal needed the population this tick
+    (its `prepare_day`, sweep or lapse check), and handed that one list to every later goal. A
+    later goal therefore saw a customer an earlier goal had just sent to as they were before the
+    send. This keeps that: from that point on, the state of each customer this tick sends to is
+    kept from just before the send (the first send, if there are several), and `states()` reads
+    the store with those in place of the live ones. The memory follows this tick's sends, not the
+    population, and is only spent while a later goal will still read the population
+    (`recording`)."""
+
+    def __init__(self) -> None:
+        self.before_send: dict[str, CustomerState] = {}
+        self.recording = False
+
+    def keep(self, states: Iterable[CustomerState]) -> None:
+        """Called with the states of the customers about to be sent to."""
+        if not self.recording:
+            return
+        for state in states:
+            self.before_send.setdefault(state.customer_id, state)
+
+    def states(self, store: StateStore, folder: StateFolder, now: datetime) -> Iterator[CustomerState]:
+        """Every customer's state at `now`, in the store's order, as the snapshot had it."""
+        kept = self.before_send
+        for stored in store.scan():
+            state = kept.get(stored.customer_id)
+            yield folder.refresh(stored, now) if state is None else state
+
+
+class _StateView(Sequence[CustomerState]):
+    """Every customer's state at `now`, read from the store each time it is iterated.
+
+    `prepare_day` takes the whole population. This hands it the same states, in the same order, as
+    the old snapshot list would (`_Snapshot`), but a loop over it holds one state at a time. `len`
+    is the store's count; indexing (a policy that wants random access) reads the population into a
+    list once, the old cost."""
+
+    def __init__(self, store: StateStore, folder: StateFolder, now: datetime, snapshot: _Snapshot) -> None:
+        self._store = store
+        self._folder = folder
+        self._now = now
+        self._snapshot = snapshot
+        self._all: list[CustomerState] | None = None
+
+    def __iter__(self) -> Iterator[CustomerState]:
+        if self._all is not None:
+            yield from self._all
+            return
+        yield from self._snapshot.states(self._store, self._folder, self._now)
+
+    def __len__(self) -> int:
+        return self._store.count() if self._all is None else len(self._all)
+
+    def __getitem__(self, index: Any) -> Any:
+        if self._all is None:
+            self._all = list(self)
+        return self._all[index]
+
+
+def _chunks(items: Iterable[_Candidate], size: int | None) -> Iterator[list[_Candidate]]:
+    """`items` in lists of `size` (all of them in one list when size is None). None when empty."""
+    it = iter(items)
+    if size is None:
+        whole = list(it)
+        if whole:
+            yield whole
+        return
+    while chunk := list(itertools.islice(it, size)):
+        yield chunk
 
 
 class AutonomyRuntime:
@@ -1361,9 +1519,18 @@ class AutonomyRuntime:
             return
         rows: Iterable[CustomerState]
         if customer_ids is None:
-            rows = list(self.states.scan())
-        else:
-            rows = [s for s in (self.states.get(c) for c in sorted(customer_ids)) if s is not None]
+            # Every state: written back a batch at a time as the scan goes, never held as a list.
+            changed: list[CustomerState] = []
+            for s in self.states.scan():
+                if (g := self.assign_group(s)) is not s and g != s:
+                    changed.append(g)
+                if self.config.sweep_batch is not None and len(changed) >= self.config.sweep_batch:
+                    self.states.put(changed)
+                    changed = []
+            if changed:
+                self.states.put(changed)
+            return
+        rows = [s for s in (self.states.get(c) for c in sorted(customer_ids)) if s is not None]
         changed = [g for s in rows if (g := self.assign_group(s)) is not s and g != s]
         if changed:
             self.states.put(changed)
@@ -1606,55 +1773,98 @@ class AutonomyRuntime:
             key=lambda e: (e.ts, e.event_id),
         )
         lapse_due = self._lapse_due(now)
-        everyone: list[CustomerState] | None = None
         contacted_this_tick: set[str] = set()
+        # Which goals read the whole population this tick (prepare_day, a sweep, a lapse check).
+        # The first of them is where the old sweep took its one snapshot of every state, shared by
+        # all later goals (`_Snapshot`).
+        reads = [self._population_reads(run, day.day, local, lapse_due) for run in running]
+        snapshot: _Snapshot | None = None
 
-        for run in running:
+        for i, run in enumerate(running):
             gid = run.goal.goal_id
             may_act, mandate = self._mandate_for(run.goal, now, report)
             if not may_act:
                 report.halted_goals.append(gid)
                 continue  # not even decided: a decision today would block deciding again once it stands
-            if self._prepare_due(run, day.day):
-                if everyone is None:
-                    everyone = [self.folder.refresh(s, now) for s in self.states.scan()]
-                self._prepare(run, everyone, now, day.day, report)
+            prepare_due, sweep_due, lapse = reads[i]
+            if snapshot is None and (prepare_due or sweep_due or lapse):
+                snapshot = _Snapshot()
+            if snapshot is not None:
+                # Keep pre-send states only while a later goal will still read the population.
+                snapshot.recording = any(any(r) for r in reads[i + 1 :])
+            if prepare_due:
+                assert snapshot is not None
+                self._prepare(run, _StateView(self.states, self.folder, now, snapshot), now, day.day, report)
             candidates: list[_Candidate] = []
             for e in triggers:
                 did = _decision_id(gid, e.customer_id, Trigger.EVENT, e.event_id)
                 candidates.append(_Candidate(e.customer_id, Trigger.EVENT, did))
-            sweep_due = local.hour >= self.config.sweep_hour and self.cursor.swept.get(gid) != day.day
-            lapse = (
-                lapse_due
-                and not sweep_due
-                and self.cursor.swept.get(gid) == day.day
-                and any(f.op in TIME_OPS for f in run.brief.audience.filters)
-            )
+            members: Iterator[_Candidate] = iter(())
             if sweep_due or lapse:
-                if everyone is None:
-                    everyone = [self.folder.refresh(s, now) for s in self.states.scan()]
-                if sweep_due:
-                    trig, key = Trigger.SWEEP, day.day.isoformat()
-                    members = [s for s in everyone if matches(s, run.brief.audience, now)]
-                else:
-                    trig, key = Trigger.LAPSE, day.day.isoformat()
-                    before = self.cursor.lapse_checked_at or self.cursor.last_tick or now
-                    members = [
-                        s
-                        for s in everyone
-                        if matches(s, run.brief.audience, now) and not matches(s, run.brief.audience, before)
-                    ]
-                for s in members:
-                    did = _decision_id(gid, s.customer_id, trig, key)
-                    candidates.append(_Candidate(s.customer_id, trig, did, s))
+                assert snapshot is not None
+                members = self._members(
+                    run,
+                    Trigger.SWEEP if sweep_due else Trigger.LAPSE,
+                    now,
+                    day.day,
+                    None if sweep_due else (self.cursor.lapse_checked_at or self.cursor.last_tick or now),
+                    snapshot,
+                )
 
-            made = self._decide_goal(run, candidates, contacted_this_tick, now, report)
+            self._decide_goal(
+                run,
+                itertools.chain(candidates, members),
+                contacted_this_tick,
+                snapshot,
+                now,
+                report,
+                mandate=mandate,
+            )
             if sweep_due:
                 self.cursor.swept[gid] = day.day
                 report.swept_goals.append(gid)
-            self._act(run, made, contacted_this_tick, now, report, mandate=mandate)
         if lapse_due:
             self.cursor.lapse_checked_at = now
+
+    def _population_reads(
+        self, run: _Running, day: date, local: datetime, lapse_due: bool
+    ) -> tuple[bool, bool, bool]:
+        """(prepare_day is due, the sweep is due, a lapse check is due) for the goal this tick."""
+        gid = run.goal.goal_id
+        sweep_due = local.hour >= self.config.sweep_hour and self.cursor.swept.get(gid) != day
+        lapse = (
+            lapse_due
+            and not sweep_due
+            and self.cursor.swept.get(gid) == day
+            and any(f.op in TIME_OPS for f in run.brief.audience.filters)
+        )
+        return self._prepare_due(run, day), sweep_due, lapse
+
+    def _members(
+        self,
+        run: _Running,
+        trigger: Trigger,
+        now: datetime,
+        day: date,
+        before: datetime | None,
+        snapshot: _Snapshot,
+    ) -> Iterator[_Candidate]:
+        """The goal's audience, read from the state store a page at a time, in customer order.
+
+        A sweep is everyone who matches the audience now. A lapse (`before` is the last check) is
+        those who match now and did not at `before`. Each comes with its state refreshed to `now`,
+        or, for a customer sent to since the tick's snapshot point, the state they had before that
+        send (`_Snapshot`). Nothing is kept: the caller takes the candidates a batch at a time."""
+        gid = run.goal.goal_id
+        audience = run.brief.audience
+        key = day.isoformat()
+        for state in snapshot.states(self.states, self.folder, now):
+            if not matches(state, audience, now):
+                continue
+            if before is not None and matches(state, audience, before):
+                continue
+            did = _decision_id(gid, state.customer_id, trigger, key)
+            yield _Candidate(state.customer_id, trigger, did, state)
 
     def _prepare_due(self, run: _Running, day: date) -> bool:
         """Whether the goal's policy has `prepare_day` and has not run it today (a rebuilt policy
@@ -1669,7 +1879,10 @@ class AutonomyRuntime:
     ) -> None:
         """Once a day, before the goal's first decision: `prepare_day` with every customer's state
         (the agent fits its segments and organic rates, and on its first day learns from the history
-        it was handed). A failure is an alert; the policy still decides."""
+        it was handed). A failure is an alert; the policy still decides.
+
+        `everyone` is a `_StateView`: the policy's loops read the store a page at a time instead
+        of the runtime holding every state."""
         gid = run.goal.goal_id
         self._prepared[gid] = (run.policy, day)
         prepare = getattr(run.policy, "prepare_day", None)
@@ -1699,13 +1912,22 @@ class AutonomyRuntime:
     def _decide_goal(
         self,
         run: _Running,
-        candidates: Sequence[_Candidate],
+        candidates: Iterable[_Candidate],
         contacted_this_tick: set[str],
+        snapshot: _Snapshot | None,
         now: datetime,
         report: TickReport,
-    ) -> list[Decision]:
+        *,
+        mandate: Mandate | None,
+    ) -> None:
+        """Decide for a goal's candidates and act on the decisions, `config.sweep_batch` at a time.
+
+        A batch is picked, enriched, decided, recorded, then sent or held, and dropped before the
+        next is read, so memory holds one batch whatever the audience's size. Everything that is about
+        the whole pass (the budget, the one-contact rule, the mandate's spend, a held batch, the
+        alerts) is carried in a `_GoalPass` and settled at the end, so the result is the single
+        batch's."""
         gid = run.goal.goal_id
-        day = self._today()
         ctx = DecisionContext(
             now=now,
             briefs=(run.brief,),
@@ -1714,11 +1936,34 @@ class AutonomyRuntime:
             seed=_seed(self.config.seed, gid, now),
             policy_version=run.policy.version,
         )
+        goal = _GoalPass()
+        events_decided: set[str] = set()
+        """Customers an EVENT candidate was decided for in this pass (a sweep's are all distinct)."""
+        for chunk in _chunks(candidates, self.config.sweep_batch):
+            made = self._decide_chunk(run, ctx, chunk, contacted_this_tick, events_decided, goal, now, report)
+            self._act(run, made, goal, snapshot, now, report, mandate=mandate)
+        contacted_this_tick |= goal.contacted
+        self._finish_goal(run, goal, mandate, now, report)
+
+    def _decide_chunk(
+        self,
+        run: _Running,
+        ctx: DecisionContext,
+        candidates: Sequence[_Candidate],
+        contacted_this_tick: set[str],
+        events_decided: set[str],
+        goal: _GoalPass,
+        now: datetime,
+        report: TickReport,
+    ) -> list[Decision]:
+        gid = run.goal.goal_id
+        day = self._today()
+        goal.report_start = len(report.decisions)
         picked: list[tuple[_Candidate, CustomerState]] = []
         decided_now: set[str] = set()
         for cand in candidates:
             cid = cand.customer_id
-            if cand.decision_id in day.ids or cid in decided_now:
+            if cand.decision_id in day.ids or cid in decided_now or cid in events_decided:
                 continue  # already decided: a repeated tick, or one decision per goal per customer per tick
             if cand.trigger is not Trigger.EVENT and (gid, cid) in day.decided:
                 continue  # sweeps and lapses decide a customer once a day per goal
@@ -1741,18 +1986,42 @@ class AutonomyRuntime:
                 continue
             picked.append((cand, state))
             decided_now.add(cid)
-        picked = self._enrich(gid, picked, now, report)
+            if cand.trigger is Trigger.EVENT:
+                events_decided.add(cid)
+        picked = self._enrich(gid, picked, goal, now, report)
         made: list[Decision] = []
-        failures = 0
         for cand, state in picked:
             try:
                 decision = run.policy.decide(state, ctx)
             except Exception:  # P3 Decision Hub: log DO_NOTHING for this customer; the rest still decide
-                failures += 1
+                goal.failures += 1
                 made.append(_left_alone(cand.decision_id, state, now, run.policy.version))
                 continue
             made.append(decision.model_copy(update={"decision_id": cand.decision_id}))
-        if failures:
+        if made:
+            self.decisions.record(made)
+            for d in made:
+                day.add(d, gid)
+            self._report_decisions(made, report)
+        return made
+
+    def _report_decisions(self, made: Sequence[Decision], report: TickReport) -> None:
+        """Put a batch's decisions in the report, up to `config.report_decisions` of the tick's."""
+        limit = self.config.report_decisions
+        keep = len(made) if limit is None else max(0, min(len(made), limit - len(report.decisions)))
+        report.decisions.extend(made[:keep])
+        left = made[keep:]
+        if left:
+            report.decisions_omitted += len(left)
+            report.acts_omitted += sum(1 for d in left if d.kind is DecisionKind.ACT)
+
+    def _finish_goal(
+        self, run: _Running, goal: _GoalPass, mandate: Mandate | None, now: datetime, report: TickReport
+    ) -> None:
+        """The alerts and the held batch a goal's whole pass adds up to, in the order a single batch
+        raised them."""
+        gid = run.goal.goal_id
+        if goal.failures:
             self._alert(
                 report,
                 code="decide.error",
@@ -1760,33 +2029,70 @@ class AutonomyRuntime:
                 severity="warning",
                 goal_id=gid,
                 message=(
-                    f"The policy failed for {failures} customers of this goal; each was left alone this "
+                    f"The policy failed for {goal.failures} customers of this goal; each was left alone this "
                     "tick (a do-nothing decision is logged) and nothing was sent to them."
                 ),
             )
-        if made:
-            self.decisions.record(made)
-            for d in made:
-                day.add(d, gid)
-            report.decisions.extend(made)
-        return made
+        if goal.stray:
+            self._alert(
+                report,
+                code="decide.wrong_goal",
+                key=f"{gid}:{now.isoformat()}",
+                severity="warning",
+                goal_id=gid,
+                message=f"The policy chose another goal for {goal.stray} customers; those were logged, not sent.",
+            )
+        if goal.blocked_n and mandate is not None:
+            self._alert_blocked(
+                mandate, gid, goal.blocked_codes, goal.blocked_n, goal.blocked_ids, now, report
+            )
+        if goal.held is not None and goal.held.ids:
+            batch = goal.held.batch(gid, now)
+            if self.batches.put(batch):
+                report.batches_created.append(batch)
+        if goal.no_dispatcher:
+            self._alert(
+                report,
+                code="dispatch.missing",
+                key=gid,
+                severity="critical",
+                goal_id=gid,
+                message="This goal is on autopilot but no channels are set up; nothing was sent.",
+            )
+        if goal.send_error is not None:
+            self._alert_send_failed(
+                gid, goal.send_failed_ids, goal.send_error, now, report, also_sent=goal.dispatched
+            )
+        if goal.refused:
+            self._alert_refused(gid, goal.refused, goal.sent_ids, now, report)
 
     def _enrich(
         self,
         goal_id: str,
         picked: list[tuple[_Candidate, CustomerState]],
+        goal: _GoalPass,
         now: datetime,
         report: TickReport,
     ) -> list[tuple[_Candidate, CustomerState]]:
-        """Hand the candidates' states to the `state_enricher`, if any; plain states if it fails."""
+        """Hand a batch's states to the `state_enricher`, if any; plain states if it fails (one alert
+        for the goal's pass, however many batches fail).
+
+        The first batch of the pass reads the recent events as a single batch did (one scan of the
+        lookback window for a large batch); later batches read them per customer through the
+        indexed `for_customer`, so a pass of many batches costs one window scan, not one per batch."""
         enricher = self.state_enricher
         if enricher is None or not picked:
             return picked
         states = [state for _, state in picked]
+        may_scan, goal.enriched = not goal.enriched, True
         try:
-            enriched = enricher(states, self._recent_events([s.customer_id for s in states], now), now)
+            recent = self._recent_events([s.customer_id for s in states], now, may_scan=may_scan)
+            enriched = enricher(states, recent, now)
             by_id = {s.customer_id: s for s in enriched}
         except Exception as err:  # an enricher bug must not stop deciding; the plain states still work
+            if goal.enrich_alerted:
+                return picked
+            goal.enrich_alerted = True
             self._alert(
                 report,
                 code="enrich.error",
@@ -1801,11 +2107,16 @@ class AutonomyRuntime:
             return picked
         return [(cand, by_id.get(cand.customer_id, state)) for cand, state in picked]
 
-    def _recent_events(self, customer_ids: Sequence[str], now: datetime) -> dict[str, list[Event]]:
-        """Each customer's events in the enricher's lookback, oldest first (every id has a list)."""
+    def _recent_events(
+        self, customer_ids: Sequence[str], now: datetime, *, may_scan: bool = True
+    ) -> dict[str, list[Event]]:
+        """Each customer's events in the enricher's lookback, oldest first (every id has a list).
+
+        More than `ENRICH_PER_CUSTOMER_MAX` customers are read with one scan of the window, unless
+        `may_scan` is off; both ways give the same lists."""
         since = now - self.config.enrich_lookback
         wanted = sorted(set(customer_ids))
-        if len(wanted) <= ENRICH_PER_CUSTOMER_MAX:
+        if len(wanted) <= ENRICH_PER_CUSTOMER_MAX or not may_scan:
             return {
                 cid: sorted(self.events.for_customer(cid, since=since, until=now), key=lambda e: e.ts)
                 for cid in wanted
@@ -1823,16 +2134,20 @@ class AutonomyRuntime:
         self,
         run: _Running,
         made: Sequence[Decision],
-        contacted_this_tick: set[str],
+        goal: _GoalPass,
+        snapshot: _Snapshot | None,
         now: datetime,
         report: TickReport,
         *,
         mandate: Mandate | None = None,
     ) -> None:
-        """Do what the goal's autonomy level allows with its ACT decisions.
+        """Do what the goal's autonomy level allows with a batch's ACT decisions.
 
         Under a mandate, every ACT decision is checked again first; what it blocks is neither
-        batched nor sent (`_mandate_filter`), and the pacer draws spend only for what is sent."""
+        batched nor sent (`_mandate_filter`), and the pacer draws spend only for what is sent.
+        What is about the goal's whole pass (the held batch, the alerts) is added to `goal` and
+        settled by `_finish_goal`. Once the tick's snapshot point is passed, the states of the
+        customers about to be sent to are kept in `snapshot` first."""
         gid = run.goal.goal_id
         acts = [
             d
@@ -1842,49 +2157,35 @@ class AutonomyRuntime:
             and d.action.goal_id == gid
             and d.group is not Group.HOLDOUT
         ]
-        stray = sum(1 for d in made if d.action is not None and d.action.goal_id != gid)
-        if stray:
-            self._alert(
-                report,
-                code="decide.wrong_goal",
-                key=f"{gid}:{now.isoformat()}",
-                severity="warning",
-                goal_id=gid,
-                message=f"The policy chose another goal for {stray} customers; those were logged, not sent.",
-            )
+        goal.stray += sum(1 for d in made if d.action is not None and d.action.goal_id != gid)
         if not acts:
             return
         level = run.goal.autonomy
         if level is AutonomyLevel.SHADOW:
             return
-        contacted_this_tick.update(d.customer_id for d in acts)
+        goal.contacted.update(d.customer_id for d in acts)
         states: dict[str, CustomerState] | None = None
         if mandate is not None:
             states = self._fresh_states({d.customer_id for d in acts}, now)
             # A batch is paced when it is sent, not when it is held for a person; with no channels
             # nothing is sent, so nothing is drawn from the pacer either.
             pace = level is AutonomyLevel.AUTOPILOT and self.dispatcher is not None
-            acts = self._mandate_filter(mandate, run.brief, acts, states, now, report, pace=pace)
+            acts = self._mandate_filter(mandate, run.brief, acts, states, now, report, pace=pace, goal=goal)
             if not acts:
                 return
         if level is AutonomyLevel.APPROVE:
-            batch = make_batch(gid, acts, now)
-            if self.batches.put(batch):
-                report.batches_created.append(batch)
+            if goal.held is None:
+                goal.held = _BatchTally()
+            goal.held.add(acts)
             return
         if self.dispatcher is None:
-            self._alert(
-                report,
-                code="dispatch.missing",
-                key=gid,
-                severity="critical",
-                goal_id=gid,
-                message="This goal is on autopilot but no channels are set up; nothing was sent.",
-            )
+            goal.no_dispatcher = True
             return
         if states is None:
             states = self._fresh_states({d.customer_id for d in acts}, now)
-        self._send_now(gid, acts, states, now, report)
+        if snapshot is not None:
+            snapshot.keep(s for d in acts if (s := states.get(d.customer_id)) is not None)
+        self._send_now(gid, acts, states, now, report, goal=goal)
 
     def _send_now(
         self,
@@ -1893,11 +2194,14 @@ class AutonomyRuntime:
         states: Mapping[str, CustomerState],
         now: datetime,
         report: TickReport,
+        *,
+        goal: _GoalPass | None = None,
     ) -> None:
         """Dispatch, through the gateway when there is one. A refusal or a crash is an alert.
 
         A failing channel or gateway must never stop the tick: the other goals still decide and
-        send, and a person reads what went wrong."""
+        send, and a person reads what went wrong. With `goal` (a sweep's batch), the alerts wait to
+        be raised once for the goal's whole pass."""
         if not acts:
             return
         assert self.dispatcher is not None  # callers check
@@ -1907,38 +2211,74 @@ class AutonomyRuntime:
             else:
                 result = self.dispatcher.dispatch(acts, states, now)
         except Exception as err:
-            self._alert(
-                report,
-                code="dispatch.error",
-                key=f"{goal_id}:{now.isoformat()}:{_ids_key(d.decision_id for d in acts)}",
-                severity="critical",
-                goal_id=goal_id,
-                message=(
-                    f"Sending {len(acts)} messages for this goal failed ({type(err).__name__}: {err}); "
-                    "nothing was sent this tick. The decisions are logged."
-                )[:1000],
-            )
+            if goal is None:
+                self._alert_send_failed(goal_id, [d.decision_id for d in acts], err, now, report)
+            else:
+                goal.send_failed_ids.extend(d.decision_id for d in acts)
+                goal.send_error = goal.send_error or err
             return
         self._take_dispatch(result, now, report)
+        if goal is not None:
+            goal.dispatched += len(acts)
         if self.gateway is None:
             return
         refused = Counter(r.reason for r in result.skipped if r.reason not in _DISPATCHER_SKIPS)
-        if refused:
-            listed = ", ".join(
-                f"{k} ({v})" for k, v in sorted(refused.items(), key=lambda kv: (-kv[1], kv[0]))
-            )
-            n = sum(refused.values())
-            self._alert(
-                report,
-                code="dispatch.refused",
-                key=f"{goal_id}:{now.isoformat()}:{_ids_key(d.decision_id for d in acts)}",
-                severity="warning",
-                goal_id=goal_id,
-                message=(
-                    f"The send-time gateway refused {n} {'message' if n == 1 else 'messages'} for this "
-                    f"goal: {listed}. Nothing was sent to them."
-                ),
-            )
+        if goal is None:
+            if refused:
+                self._alert_refused(goal_id, refused, [d.decision_id for d in acts], now, report)
+            return
+        goal.sent_ids.extend(d.decision_id for d in acts)
+        goal.refused.update(refused)
+
+    def _alert_send_failed(
+        self,
+        goal_id: str,
+        decision_ids: Sequence[str],
+        err: Exception,
+        now: datetime,
+        report: TickReport,
+        *,
+        also_sent: int = 0,
+    ) -> None:
+        """`also_sent`: the goal's decisions that went through other batches of the same sweep."""
+        outcome = (
+            "nothing was sent this tick"
+            if not also_sent
+            else f"those were not sent this tick ({also_sent} others, in batches that went through, were handed over)"
+        )
+        self._alert(
+            report,
+            code="dispatch.error",
+            key=f"{goal_id}:{now.isoformat()}:{_ids_key(decision_ids)}",
+            severity="critical",
+            goal_id=goal_id,
+            message=(
+                f"Sending {len(decision_ids)} messages for this goal failed ({type(err).__name__}: {err}); "
+                f"{outcome}. The decisions are logged."
+            )[:1000],
+        )
+
+    def _alert_refused(
+        self,
+        goal_id: str,
+        refused: Counter[str],
+        decision_ids: Sequence[str],
+        now: datetime,
+        report: TickReport,
+    ) -> None:
+        listed = ", ".join(f"{k} ({v})" for k, v in sorted(refused.items(), key=lambda kv: (-kv[1], kv[0])))
+        n = sum(refused.values())
+        self._alert(
+            report,
+            code="dispatch.refused",
+            key=f"{goal_id}:{now.isoformat()}:{_ids_key(decision_ids)}",
+            severity="warning",
+            goal_id=goal_id,
+            message=(
+                f"The send-time gateway refused {n} {'message' if n == 1 else 'messages'} for this "
+                f"goal: {listed}. Nothing was sent to them."
+            ),
+        )
 
     # --- mandates -------------------------------------------------------------------------------
 
@@ -2139,15 +2479,24 @@ class AutonomyRuntime:
         report: TickReport,
         *,
         pace: bool,
+        goal: _GoalPass | None = None,
     ) -> list[Decision]:
         """The ACT decisions the mandate lets through now; the rest are noted and alerted.
 
         Each is checked with `check_action` (via `check_bid` when the decision carries its bid), with
         the mandate's spend so far plus what this call already let through. With `pace`, what passes
         is drawn from the mandate's `TokenBucket`; a send the bucket cannot cover is held
-        (`mandate_paced`) and the customer is decided again on another day."""
-        spend = self._mandate_spend(mandate, now)
-        extra = 0.0
+        (`mandate_paced`) and the customer is decided again on another day.
+
+        With `goal` (a sweep's batch) the spend is read once for the goal's pass and what each batch
+        lets through is added to it, as when the pass was one call; the blocked are noted now and
+        alerted once, by `_finish_goal`."""
+        if goal is None:
+            spend, extra = self._mandate_spend(mandate, now), 0.0
+        else:
+            if goal.spend is None:
+                goal.spend = self._mandate_spend(mandate, now)
+            spend, extra = goal.spend, goal.extra
         # P6 spend: with spend unknown nothing passes the ceiling, and a pacer built now (from a
         # ledger a cold start never filled) would be kept with a whole fresh burst in it.
         bucket = self._bucket(mandate, now) if pace and not math.isinf(spend.today) else None
@@ -2171,8 +2520,16 @@ class AutonomyRuntime:
             allowed.append(d)
         if bucket is not None:
             self._buckets[(mandate.mandate_id, mandate.version)] = bucket
-        if blocked:
+        if goal is not None:
+            goal.extra = extra
+        if blocked and goal is None:
             self._note_blocked(mandate, blocked, now, report)
+        elif blocked and goal is not None:
+            by_goal = self._record_blocked(blocked, report, start=goal.report_start)
+            goal.blocked_n += len(blocked)
+            goal.blocked_ids.extend(d.decision_id for d, _ in blocked)
+            for counts in by_goal.values():
+                goal.blocked_codes.update(counts)
         return allowed
 
     def _note_blocked(
@@ -2183,6 +2540,18 @@ class AutonomyRuntime:
         report: TickReport,
     ) -> None:
         """Note on each decision why the mandate stopped it, and raise one alert per goal."""
+        by_goal = self._record_blocked(blocked, report)
+        ids = [d.decision_id for d, _ in blocked]
+        for gid in sorted(by_goal):
+            n = sum(1 for d, _ in blocked if d.action is not None and d.action.goal_id == gid)
+            self._alert_blocked(mandate, gid, by_goal[gid], n, ids, now, report)
+
+    def _record_blocked(
+        self, blocked: Sequence[tuple[Decision, list[str]]], report: TickReport, *, start: int = 0
+    ) -> dict[str, Counter[str]]:
+        """Write each blocked decision back with why it was stopped; the violation codes per goal.
+
+        `start` is where, in `report.decisions`, the decisions these were made among begin."""
         noted: dict[str, Decision] = {}
         by_goal: dict[str, Counter[str]] = defaultdict(Counter)
         for d, codes in blocked:
@@ -2202,26 +2571,33 @@ class AutonomyRuntime:
             by_goal[d.action.goal_id].update(codes)
             report.mandate_blocked.append(d.decision_id)
         self.decisions.record(noted.values())
-        report.decisions = [noted.get(d.decision_id, d) for d in report.decisions]
-        for gid in sorted(by_goal):
-            counts = by_goal[gid]
-            n = sum(1 for d, _ in blocked if d.action is not None and d.action.goal_id == gid)
-            listed = ", ".join(
-                f"{k} ({v})" for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-            )
-            only_paced = set(counts) == {MANDATE_PACED}
-            self._alert(
-                report,
-                code="mandate.paced" if only_paced else "mandate.violation",
-                key=f"{gid}:{now.isoformat()}:{_ids_key(d.decision_id for d, _ in blocked)}",
-                severity="info" if only_paced else "warning",
-                goal_id=gid,
-                message=(
-                    f"Mandate {mandate.mandate_id} (v{mandate.version}) held back {n} "
-                    f"{'send' if n == 1 else 'sends'} for this goal: {listed}. "
-                    "Each decision notes why; nothing was sent to those customers."
-                ),
-            )
+        report.decisions[start:] = [noted.get(d.decision_id, d) for d in report.decisions[start:]]
+        return by_goal
+
+    def _alert_blocked(
+        self,
+        mandate: Mandate,
+        goal_id: str,
+        counts: Counter[str],
+        n: int,
+        decision_ids: Sequence[str],
+        now: datetime,
+        report: TickReport,
+    ) -> None:
+        listed = ", ".join(f"{k} ({v})" for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+        only_paced = set(counts) == {MANDATE_PACED}
+        self._alert(
+            report,
+            code="mandate.paced" if only_paced else "mandate.violation",
+            key=f"{goal_id}:{now.isoformat()}:{_ids_key(decision_ids)}",
+            severity="info" if only_paced else "warning",
+            goal_id=goal_id,
+            message=(
+                f"Mandate {mandate.mandate_id} (v{mandate.version}) held back {n} "
+                f"{'send' if n == 1 else 'sends'} for this goal: {listed}. "
+                "Each decision notes why; nothing was sent to those customers."
+            ),
+        )
 
     def _mandate_spend(self, mandate: Mandate, now: datetime) -> SpendToDate:
         """Money spent under the mandate: over its validity window, and on `now`'s UTC day."""

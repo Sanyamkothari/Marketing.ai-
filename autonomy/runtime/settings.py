@@ -155,6 +155,19 @@ class RuntimeSettings(BaseModel):
         default=0.10, ge=0, le=0.5, description="The business's one baseline share; briefs must match it"
     )
     plan_days: int = Field(default=30, ge=1, description="Days a goal with no end date paces its budget over")
+    sweep_batch: int = Field(
+        default=5_000,
+        ge=1,
+        description="Customers the daily sweep decides and sends at a time (memory bound)",
+    )
+    report_decisions: int | None = Field(
+        default=1_000,
+        ge=0,
+        description=(
+            "Decisions a built runtime's tick report keeps in full; the rest are counted (and all "
+            "are logged). Bounded so a worker's tick does not hold every decision of a large sweep"
+        ),
+    )
     late_window_hours: float = Field(default=48.0, ge=0)
     trigger_window_hours: float = Field(default=24.0, ge=0)
     batch_max_age_hours: float = Field(default=72.0, gt=0)
@@ -300,6 +313,7 @@ class RuntimeSettings(BaseModel):
             trigger_window=timedelta(hours=self.trigger_window_hours),
             batch_max_age=timedelta(hours=self.batch_max_age_hours),
             plan_days=self.plan_days,
+            sweep_batch=self.sweep_batch,
             seed=self.seed,
         )
 
@@ -867,6 +881,8 @@ def build_runtime(
             holdout_share=settings.holdout_share,
             baseline_share=settings.baseline_share,
             run_send_jobs=run_send_jobs,
+            # v3 scale: the worker never reads a tick's decisions back, so it keeps a bounded few.
+            report_decisions=settings.report_decisions,
         ),
         alerts=alert_store,
         briefings=SqlBriefingStore(engine),

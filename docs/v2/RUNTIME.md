@@ -33,7 +33,9 @@ customer, trigger, local day or event), so the same tick twice is a no-op. Each 
 6. **Decide.** For each active goal with an approved brief: at once for a customer with a new REPLY
    or CART, at the daily sweep hour (`sweep_hour`, local time) for the goal's whole audience, and
    after the sweep for customers who just crossed a time threshold of the audience (a lapse). A
-   customer is decided once per goal per day, and contacted by at most one goal per tick.
+   customer is decided once per goal per day, and contacted by at most one goal per tick. The
+   audience is decided and sent or held `sweep_batch` (5,000) customers at a time, so memory follows
+   the batch (`docs/v3/SCALE.md`).
 7. **Nightly**, once a day after `nightly_hour`: each goal's policy gets
    `nightly(decisions, events_by_customer, now)` with its own goal's decisions (the fast learning
    loop).
@@ -162,7 +164,7 @@ command prints `cannot start the worker: ...` and exits with status 2.
 The main settings (`AUTONOMY_<NAME>`): `DATABASE_URL`, `TIMEZONE`, `SWEEP_HOUR` (10), `NIGHTLY_HOUR`
 (2), `WEEKLY_WEEKDAY` (0, Monday), `WEEKLY_HOUR` (7), `TICK_EVERY_MINUTES` (5), `SEED`, `SPLIT_SALT`,
 `HOLDOUT_SHARE` and `BASELINE_SHARE` (0.10 each), `PLAN_DAYS` (30), `LATE_WINDOW_HOURS` (48),
-`TRIGGER_WINDOW_HOURS` (24), `BATCH_MAX_AGE_HOURS` (72), plus each channel's settings (SES,
+`TRIGGER_WINDOW_HOURS` (24), `BATCH_MAX_AGE_HOURS` (72), `SWEEP_BATCH` (5,000), `REPORT_DECISIONS` (1,000), plus each channel's settings (SES,
 WhatsApp, the client's webhook or CSV export). Secrets are never in settings: `*_REF` names the
 environment variable that holds each one.
 
