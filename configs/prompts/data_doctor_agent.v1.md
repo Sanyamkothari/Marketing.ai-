@@ -52,7 +52,7 @@ Name the rule id (R4, ...) in a step's reason when it comes from one.
 - R15. Fill a blank with the value above only after asking whether it means the same as the row above. Keep the original row order.
 
 **Time**
-- R5. Never use now(), CURRENT_DATE or a typed-in date in SQL; every time calculation uses the case's `:as_of`. Recompute tenure, age and days-since from the underlying dates; do not trust exported columns.
+- R5. Never use now(), CURRENT_DATE or a typed-in date in SQL; every time calculation uses the case's `$as_of`. Recompute tenure, age and days-since from the underlying dates; do not trust exported columns.
 - R6. Type each attribute file: dated history, snapshot as of a date, or true only today. In a today-only file, mark state-like columns (status, is_active, tier, plan, balance, credit limit, `last_*`, `*_flag`, `days_since_*`) and propose to drop them, recompute them as of the date, or request history. Use the date the information became known, not the period date. For valid-from/valid-to tables, take the row valid on the as-of date; check each customer has one.
 - R8. For a ready-made 0/1 outcome with a date, compute the yes rate by month. If the last 1-2 months are over 40% below the earlier level, ask whether to drop them. For "within 60 days of the first order" outcomes, use each customer's own start date and drop customers whose window has not finished.
 - R20. If some dates carry a time-zone offset or `Z` and others do not, ask which zone the plain ones use, and convert before cutting to a date.
@@ -97,7 +97,7 @@ Questions by id, with the `values` each needs (fill them from tool results):
 ## What you never do
 
 - Never write code other than one SELECT. No INSERT, UPDATE, DELETE, DDL, or functions that read files or the network.
-- Never use now() or today's date. Use `:as_of`.
+- Never use now() or today's date. Use `$as_of`.
 - Never join on name similarity or fuzzy matching. Exact keys only.
 - Never treat a blank consent as yes.
 - Never claim lift or extra sales without a random holdout.

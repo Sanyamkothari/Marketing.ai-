@@ -430,16 +430,11 @@ def _choose_primary_key(
     return None, _no_key_stop(builder)
 
 
-_CODE_WORDS: Final[frozenset[str]] = frozenset(
-    {"id", "no", "nr", "num", "number", "code", "key", "sku", "ref", "reference"}
-)
-"""Last words of a header naming codes written in digits, never quantities (`amount_paid` ends in `paid`)."""
-
-
 def _looks_like_code(name: str) -> bool:
-    """`InvoiceNo`, `StockCode`, `order_id`, `account_number`: an identifier, even when every value is digits."""
-    words = re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", name)
-    return bool(words) and words[-1].casefold() in _CODE_WORDS
+    """`InvoiceNo`, `StockCode`, `order_id`: an identifier, even when every value is digits (`engine.column_names`)."""
+    from engine.column_names import looks_like_code
+
+    return looks_like_code(name)
 
 
 def _name_key(name: str) -> str:

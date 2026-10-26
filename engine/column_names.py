@@ -66,6 +66,7 @@ __all__ = [
     "internal_importance",
     "is_safe_name",
     "load_for_model",
+    "looks_like_code",
     "present_explanations",
     "restore_beeswarm",
     "restore_importance",
@@ -83,6 +84,20 @@ FALLBACK_BASE: Final[str] = "column"
 """The base of a name with nothing left once it is transliterated to ASCII (`婚姻` -> `column`)."""
 
 _UNSAFE_RUN: Final[re.Pattern[str]] = re.compile(r"[^A-Za-z0-9_]+")
+
+
+CODE_WORDS: Final[frozenset[str]] = frozenset(
+    {"id", "no", "nr", "num", "number", "code", "key", "sku", "ref", "reference"}
+)
+"""Last words of a header naming codes written in digits, never quantities (`amount_paid` ends in `paid`)."""
+
+_WORDS: Final[re.Pattern[str]] = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
+
+
+def looks_like_code(name: str) -> bool:
+    """`InvoiceNo`, `StockCode`, `order_id`, `account_number`: an identifier, even when its values read as numbers."""
+    words = _WORDS.findall(name)
+    return bool(words) and words[-1].casefold() in CODE_WORDS
 
 
 def is_safe_name(name: str) -> bool:

@@ -29,3 +29,23 @@ def test_without_an_id_named_column_the_ranking_stands() -> None:
     ranked = (_candidate("code", 0.0), _candidate("amount", 0.1))
     assert _id_column(ranked) == ranked[0]
     assert _id_column(()) is None
+
+
+def test_a_product_code_is_never_read_as_lakh_or_crore() -> None:
+    import pandas as pd
+
+    from engine.doctor.indian_values import propose_indian_numbers
+
+    codes = [
+        "71053",
+        "22752",
+        "82494L",
+        "21730",
+        "84029K",
+        "85123A",
+    ] * 50  # as in UCI: 82494L is not 82,494 lakh
+    frame = pd.DataFrame(
+        {"StockCode": codes, "amount": ["2L", "3 lakh", "1.5 crore", "40000", "5L", "70000"] * 50}
+    )
+    proposed = {p.column for p in propose_indian_numbers(frame)}
+    assert "StockCode" not in proposed and "amount" in proposed

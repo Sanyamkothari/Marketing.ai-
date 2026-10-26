@@ -40,6 +40,7 @@ from engine.agent.formats import (
     masked_cut,
     parse_numbers,
 )
+from engine.column_names import looks_like_code
 
 if TYPE_CHECKING:
     from engine.doctor.locale import LocaleProfile
@@ -274,6 +275,8 @@ def propose_indian_numbers(
         return ()
     found: list[LocaleStepProposal] = []
     for name in _text_columns(frame, columns, primary_key, target):
+        if looks_like_code(name):
+            continue  # `StockCode` 85123A is a product code, not 85,123 with a word after it
         cells = _present_text(frame[name])
         if cells.empty:
             continue
