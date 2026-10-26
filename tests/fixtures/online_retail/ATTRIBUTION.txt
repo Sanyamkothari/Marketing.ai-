@@ -1,0 +1,17 @@
+UCI Online Retail, sampled: attribution
+=======================================
+
+`online_retail_sample.csv.gz` and `online_retail_small.csv.gz` hold lines of the UCI Online Retail dataset, chosen by
+customer with a fixed seed by `make_fixture.py` (see it for exactly how). The lines are as the dataset has them.
+
+Dataset      Online Retail (541,909 invoice lines, 8 columns, 2010-12-01 to 2011-12-09)
+Upstream     https://archive.ics.uci.edu/dataset/352/online+retail
+Licence      Creative Commons Attribution 4.0 International (CC BY 4.0), https://creativecommons.org/licenses/by/4.0/
+Credit       Chen, D. (2015). Online Retail [Dataset]. UCI Machine Learning Repository.
+             https://doi.org/10.24432/C5BW33
+Changes      Only a sample of the lines is kept (by customer), as described above; no cell is altered.
+Copy used    https://raw.githubusercontent.com/databricks/Spark-The-Definitive-Guide/master/data/retail-data/all/online-retail-dataset.csv
+             (the same 541,909 data rows and 8 columns; `make_fixture.py` refuses a file that is not)
+
+The licence record for the whole repository's use of this dataset, with the paper to cite and what was not verified, is
+`library/online-retail/LICENSE.txt`.
