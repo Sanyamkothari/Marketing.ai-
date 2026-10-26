@@ -72,7 +72,9 @@ clearly losing, or after `max_days`.
 - a brief that is not approved or belongs to another goal, arms outside the envelope, an offer that needs
   approval, an id already used, and a spec whose reference is not the goal's promoted default.
 
-A book may be made stricter than these limits, never looser. When an experiment ends it frees its place.
+A book may be made stricter than these limits, never looser, and `snapshot()` / `restore()` carry its limits
+(tested: a book with 1 per goal and 5% stays that strict after a round trip). When an experiment ends it frees
+its place.
 
 ## Assignment
 
@@ -82,10 +84,20 @@ below `share`; the arm is that band cut into equal parts, so given participation
 exactly 1/k.
 
 - Only the AGENT group is ever assigned. Holdout and baseline customers are never assigned, whatever their hash.
-- The customer must match the experiment's audience (`autonomy.decide.audience.matches`) at the decision.
+- The decision must fall inside the experiment's window: at or after `registered_at` and before
+  `registered_at + max_days` (`assign.in_window`). A decision timestamped before registration (a replay, a
+  backfill, a clock behind the book's) is not assigned, so `first_assignment_at` can never come before the
+  registered rules; an experiment whose weekly review did not run stops restricting anyone at `max_days`.
+- The customer must match the experiment's audience (`autonomy.decide.audience.matches`) at the decision,
+  and the audience of the goal's brief in the decision context: a customer the goal never targets is never
+  restricted for it. An experiment whose goal has no brief in the context assigns nobody.
 - With several experiments running, a customer is in at most one: the earliest started whose hash admits
   them. Whether an earlier test admitted a customer depends only on that test's own hash, so the arms of a
   later test are still a fair random split of whoever is left.
+- The matched holdout is read like for like (`assign.holdout_experiments`): a holdout customer is tagged for
+  every eligible experiment up to and including the first whose hash band admits them. A holdout customer
+  the first experiment's band would take is therefore not in a later experiment's holdout, exactly as an
+  agent customer in that band is not in the later experiment's arms.
 
 On 30,000 synthetic ids with a 10% share and three arms, participation and arm shares come out within the
 tolerances asserted in `test_assign.py::test_share_and_arms_come_out_as_planned` (passes).
@@ -94,7 +106,14 @@ tolerances asserted in `test_assign.py::test_share_and_arms_come_out_as_planned`
 
 The arm **restricts the options** and nothing else. The wrapper hands the inner policy a
 `DecisionContext` whose content library keeps only the items of the arm's offer (or channel) for the
-experiment's goal. The inner policy then does everything it always does with what is left: hard rules (consent,
+experiment's goal. Only that goal's view is cut: content shared by all goals (`goal_id` None) that falls
+outside the arm is handed to each other goal of the brief list as that goal's own copy, so the customer's
+other goals see the library they always see (tested: 6 shared items cut for the free-shipping arm leave the 2
+shared free-shipping items plus 4 copies for the other goal, and the other goal's decision and probability are
+exactly what the unwrapped policy gives). An offer arm forces its offer, "no offer" included in the cut
+(unless "none" is itself an arm): the agent's evidence gate defaults to no offer until an offer has shown what
+it adds, so an arm that could fall back to a plain message would measure that gate, not the offer. The inner
+policy then does everything it always does with what is left: hard rules (consent,
 unsubscribes, quiet hours, caps, the holdout, the envelope), pricing, exploration, send time. The wrapper
 never sends and never lets through what the inner policy blocked. Tests show an unsubscribed or
 non-consenting customer in an arm is still left alone, and the holdout still gets "do nothing" with probability 1.
@@ -103,30 +122,53 @@ Why the library and not the brief's envelope: `AgentPolicy` caches the live brie
 so a per-arm envelope with the same id would be served from the first arm's cache. The library is read
 fresh on every decision. If a policy ignores the restricted library and returns an action outside the arm,
 the wrapper turns it into "do nothing" (`experiment_arm` in `blocked_by`) and counts it in
-`stats["outside_arm"]`. The Gym smoke run below had 0 of these with the real agent.
+`stats["outside_arm"]`; the send the inner policy had scheduled is withdrawn (`forget_pending`, on the
+inner policy or on its `.policy`) so its weekly cap and minimum gap do not count it. Such a row keeps the
+probability of the discarded draw, a lower bound on the chance of "do nothing", and should be left out of
+off-policy reads. The Gym smoke run below had 0 of these with the real agent.
 
-**The logged probability** for an assigned customer is
+**The logged probability** for an assigned customer is the inner policy's own probability of its choice
+among the options left in the arm, unchanged. The arm is a fixed function of (experiment id, customer id): for
+this customer at this moment it is context, like the holdout split, not randomness; the only random step is
+the inner policy's draw, which already counts its exploration floor. So the probability is right for every
+decision, a "do nothing" and another goal's action included, and for both of its readers: `autonomy.proof.ope`
+(weight = target / logged) and the agent's own learner, which weights agent "do nothing" rows by
+1 / probability (`autonomy/learning/observations.py`, `autonomy/learning/update.py`). Tests: a customer nobody
+may contact gets "do nothing" with probability 1 on either arm; with an exploration floor of 0.4 the logged
+probability equals the inner policy's on the arm's library; another goal's decision inside an arm is exactly
+the unwrapped one; and an off-policy read of a log mixing sends and "do nothing" rows has every probability in
+(0, 1] and, for the logging policy itself, weights of 1 and the logged mean back.
 
-    probability = (1 / number of arms) x (the inner policy's probability of this choice among the options left)
+**Consequence for off-policy reads (positivity).** On an experiment row an option outside the customer's arm
+had probability 0. A target policy that would pick such an option is not supported on those rows, the
+positivity assumption in `autonomy.proof.ope`. The arms are compared by the reading below, the randomised
+comparison, not by off-policy evaluation. (An earlier version multiplied the probability by 1/k; that is the
+mixture probability only for an option that exists in exactly one arm and was about k times too small for a
+"do nothing" or another goal's action, so it was dropped.)
 
-The first factor is the randomisation by the hash. The second already counts the inner policy's own
-exploration floor over the restricted options. Tests check the product exactly (0.5 for two arms with a certain
-inner choice, 1/3 for three, and `direct / 2` with an exploration floor of 0.4), and that `autonomy.proof.ope`
-accepts the log with finite weights and recovers a planted gap. Whether a customer is in the test at all
-(the hash band) is treated like the holdout split, a known context and not the policy's randomness; the
-share is in the experiment's record when it matters. **Consequence:** the probabilities are right for
-reading inside the experiment. An off-policy estimate that pools experiment and non-experiment customers must
-also model participation, whose probability is `share` among matching agent customers.
-
-**The log reads itself.** The decision's `policy_version` gains `|exp:<id>:<arm>`. Holdout customers who match
-the audience gain `|exp:<id>:holdout` (their decision is still "do nothing", probability 1). Baseline customers
+**The log reads itself.** The decision's `policy_version` gains `|exp:<id>:<arm>`. Holdout customers of the
+matched holdout gain `|exp:<id>:holdout` (their decision is still "do nothing", probability 1). Baseline customers
 are not tagged. `collect_outcomes` rebuilds arms and the matched holdout from the decision log and the closed
 rewards alone.
 
 **Promoted defaults.** With `apply_defaults` on (the default) and a promotion in the book, a customer outside
-any test gets a library cut to the default offer and "no offer" (an offer default), or to the default channel
-if they can be reached on it (a channel default). Undoing the promotion puts the agent back as it was (tested). With no running
-experiment and no promotion `decide` returns exactly what the inner policy returns (tested on 50 customers).
+any test who matches the audience the experiment ran on (`Promotion.audience`) gets a library cut to the
+default offer and "no offer" (an offer default), or to the default channel (a channel default). At every
+decision the default is checked again against the goal's brief in the context: it is skipped, and counted in
+`stats["default_skipped"]`, when the goal has no brief there, when the value is no longer inside that brief's
+envelope (`check_arm`), or, for a channel, when the customer cannot be reached on it or the inner policy's
+breaker has paused the goal or that channel of it. Tests: an offer default is skipped once the marketer
+withdraws the offer (the other approved offers come back, not only "no offer"); a channel default is skipped
+when email leaves the envelope or the breaker pauses it, and the goal falls back to WhatsApp; a default tested
+on big spenders is not applied to a small one. Undoing the promotion puts the agent back as it was (tested).
+With no running experiment and no promotion `decide` returns exactly what the inner policy returns (tested on
+50 customers).
+
+**Why the promoted default differs from the tested arm.** The arm forced its offer (no plain message) to
+measure the offer; the default keeps "no offer" beside it, so the agent's evidence gate still chooses between
+the default offer and a plain message per customer and never pushes an offer where a plain message is expected
+to do better. The pick rule shows the winner beats the reference offer and doing nothing; it does not show it
+beats a plain message unless "none" is one of the arms. To claim that, put "none" in the arms.
 
 ## Reading
 
@@ -179,8 +221,15 @@ At small samples with rare, large purchases, treat the intervals as approximate.
    best lower bound against the reference if two qualify. (Ends at once if `stop_for_win`, else at the end.)
 3. An arm is **clearly losing** and `stop_for_loss` is on: the upper end of its interval is below zero against
    the holdout (it loses money compared with doing nothing), or, for a challenger, against the reference.
-   The test stops and nothing is promoted.
+   The test stops and nothing is promoted. When the losing arm is the reference itself (today's default loses
+   money against doing nothing), the reason and the briefing line say so and ask for a person's review
+   instead of "the default stays".
 4. `max_days` reached: no winner, the default stays. Otherwise continue.
+
+Any clearly losing arm ends the whole test, a challenger included, even when another challenger might still
+be winning (with three or four arms). Dropping only the losing challenger and carrying on would be fair under
+the always-valid intervals, but it changes the registered stopping rule and the arm bands, so it is not done
+here; it is a candidate for a later version of the rule.
 
 Tests (synthetic data, seconds): a planted clear winner is found with both intervals above zero and the plain
 proof interval agreeing; across **200 simulated nulls, each read weekly for four weeks, no winner is ever called**;
@@ -195,7 +244,9 @@ experiment does not change on another look.
 - only an experiment that ended with a winner, not already promoted, whose digest still matches;
 - only with the goal's approved brief **as it stands now**: the winner must still be inside its envelope (a
   winner whose offer the marketer has withdrawn meanwhile is refused);
-- logged as `promoted` with the reason (the judgement's sentence unless one is given) and the default it replaces.
+- logged as `promoted` with the reason (the judgement's sentence unless one is given) and the default it replaces;
+- recorded with the audience the experiment ran on (`Promotion.audience`): the default is applied to those
+  customers only, since nothing was measured on anyone else.
 
 `ExperimentBook.revert(promotion_id, now, reason)` undoes it: the goal returns to the default before it (or to none),
 `reverted` is logged with the reason, and undoing twice is harmless. A promotion never edits the envelope: it is a
@@ -214,16 +265,19 @@ seed 3, 600 customers per arm and 600 held out):
 `briefing_section(...)` returns the same sentence as a `BriefingSection` whose `numbers` contain every figure it
 quotes (`gain_vs_default`, its range, `gain_vs_nothing`, `customers_measured`, `days`), so the Analyst quotes and
 never computes. Variants: still running, no clear winner (the default stays), stopped because an arm was
-clearly losing, stopped by a person.
+clearly losing (the default stays, or, when the default itself was losing, it needs a person's review), stopped
+by a person.
 
 ## The Gym: `better_offer_planted`
 
 The scenario is the last entry of the registry. Free shipping multiplies a message's effect by 3.0 for every
 persona; 10% off multiplies it by 1.0 (nothing beyond the message itself) and still costs its redemption.
-Check of the planted truth (`PlantedTruth.expected_net`, 400 customers, 14 days, 60 days of history, seed 0,
-email, mean over customers of the true extra profit of one message with the offer): free shipping **0.818**,
-no offer **0.363**, 10% off **-0.004**; free shipping is worth more than 10% off for 87.5% of customers.
-`test_gym_scenario.py` asserts the same ordering on 300 customers.
+Check of the planted truth, `python -m autonomy.experiments.gymrun --truth --customers 400` (`planted_truth`:
+the world's `PlantedTruth.expected_net`, 400 customers, 14 days, 60 days of history, seed 0, email, mean over
+customers of the true extra profit of one message with the offer; no policy is run, a few seconds): free
+shipping **0.818**, no offer **0.363**, 10% off **-0.004**; free shipping is worth more than 10% off for
+**87.5%** of customers. `test_gym_scenario.py` calls the same `planted_truth` on 300 customers and asserts the
+ordering.
 
 `python -m autonomy.experiments.gymrun --seeds 10 --customers 5000` runs the plan's pass test: the agent
 wrapped in `ExperimentPolicy`, one offer test registered on day 0 (10% off is the reference, free shipping the
@@ -234,13 +288,20 @@ same bar is `test_the_better_offer_is_found_within_four_weeks_on_nine_of_ten_see
 
 ## What was run here
 
-- `pytest tests/v3/experiments -m "not slow"` plus `tests/v2/scientist/test_menu_select.py`: **81 passed, 1
-  deselected in 4.39s** (the `slow` test is the 10-seed bar). After the last change to `book.py`, the experiments
-  tests alone: **56 passed, 1 deselected in 3.11s**.
-- `pytest tests/v2/gym/test_score.py -k "scenarios_are_valid or library_has"`: 15 passed (the new scenario
-  satisfies the scenario-validity checks).
+After the review fixes (probability, per-goal restriction, defaults re-checked at decide time, audience on
+promotions, decision window, like-for-like holdout, limits kept on restore):
+
+- `pytest tests/v3/experiments -m "not slow"` plus the two v2 tests the new scenario had broken
+  (`test_testing_gym_calibration.py::test_existing_scenarios_are_unchanged`,
+  `test_testing_targets.py::test_the_gym_is_covered_per_scenario_and_stage`): **67 passed, 1 deselected in
+  4.56s** (the `slow` test is the 10-seed bar). The scenario is in `EXPERIMENT_SCENARIOS`
+  (`autonomy/gym/scenarios.py`): it has no v2 per-stage Gym targets in docs/v2/TARGETS.json, since its bar is
+  this harness's.
+- `pytest tests/v2/scientist/test_menu_select.py tests/v2/scientist/test_testing_targets.py
+  tests/v2/scientist/test_testing_gym_calibration.py::test_existing_scenarios_are_unchanged
+  tests/v2/gym/test_score.py -m "not slow"`: **78 passed in 6.87s**.
 - Smoke run of the harness (`run_gym_experiment(0, n_customers=200, days=14, share=0.10, min_per_arm=30)`,
-  2.3s): the wrapped agent acts inside its arms (`outside_arm` 0; 21 sends chosen under 10% off, 20 under free
+  1.7s): the wrapped agent acts inside its arms (`outside_arm` 0; 20 sends chosen under 10% off, 17 under free
   shipping), 22 matched holdout customers and 10 and 8 customers in the arms were measured, nothing was
   concluded (far too few customers), and the registered rules were unchanged. It says nothing about power.
 - `ruff check`, `black --check` and `mypy --strict --python-version 3.11` on every file added or changed.

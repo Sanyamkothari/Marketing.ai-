@@ -102,6 +102,10 @@ def test_an_arm_that_loses_money_against_doing_nothing_stops_the_test() -> None:
     assert review.experiment.end_kind is EndKind.STOPPED_LOSING
     assert review.experiment.losing == ("pct10",)
     assert review.experiment.winner is None
+    # the losing arm is today's default: a person is asked to look, not told that it stays
+    line = summary_line(review.experiment, review.reading)
+    assert "needs a person's review" in line and "default stays" not in line
+    assert "a person should review it" in review.judgement.reason
 
 
 def test_a_challenger_clearly_worse_than_the_default_stops_the_test() -> None:

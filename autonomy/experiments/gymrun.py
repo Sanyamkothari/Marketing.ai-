@@ -1,6 +1,7 @@
 """Run a live experiment inside the Gym: the pass test of plan-v3 foundation C, as code.
 
     python -m autonomy.experiments.gymrun --seeds 10 --customers 5000
+    python -m autonomy.experiments.gymrun --truth --customers 400    # the planted truth only, seconds
 
 The agent (`autonomy.runtime.agent.build_agent_policy`) is wrapped in `ExperimentPolicy`, one offer test
 is registered on day 0 in the `better_offer_planted` scenario (the reference is the worse offer, 10% off;
@@ -26,7 +27,9 @@ from typing import Any
 import numpy as np
 
 from autonomy.contracts import (
+    Action,
     Brief,
+    Channel,
     ContentItem,
     CustomerState,
     Decision,
@@ -59,7 +62,13 @@ from autonomy.gym.score import SimWorld, gym_world, run_policy
 from autonomy.interfaces import Policy
 from autonomy.scientist.questions import QuestionKind, describe_question
 
-__all__ = ["GymExperimentResult", "experiment_spec", "run_gym_experiment"]
+__all__ = [
+    "GymExperimentResult",
+    "PlantedOfferTruth",
+    "experiment_spec",
+    "planted_truth",
+    "run_gym_experiment",
+]
 
 REVIEW_EVERY_DAYS = 7
 EXPERIMENT_ID = "offer_test_1"
@@ -262,13 +271,56 @@ def run_gym_experiment(
     )
 
 
+@dataclass(frozen=True)
+class PlantedOfferTruth:
+    """The world's true extra profit of one email with each offer, averaged over its customers."""
+
+    mean_net: Mapping[str, float]
+    """Offer id -> mean over customers of `truth.expected_net` for one email with that offer, on day 0."""
+    share_better: float
+    """Share of customers for whom the better offer is worth more than the worse one."""
+    n_customers: int
+
+
+def planted_truth(
+    seed: int = 0, *, n_customers: int = 400, days: int = 14, history_days: int = 60
+) -> PlantedOfferTruth:
+    """What `better_offer_planted` plants, read from the world's own truth (no policy is run)."""
+    spec = get_scenario("better_offer_planted", n_customers=n_customers, days=days, history_days=history_days)
+    world = gym_world(spec, [default_brief()], default_content())
+    world.reset(seed)
+    now = world.now().replace(hour=10)
+    truth: Any = world.truth
+    ids = list(truth.customer_ids)
+
+    def nets(offer: str) -> np.ndarray[Any, np.dtype[np.float64]]:
+        action = Action(goal_id=GYM_GOAL_ID, channel=Channel.EMAIL, offer_id=offer, send_at=now)
+        return np.array([truth.expected_net(c, action, now) for c in ids], dtype=np.float64)
+
+    per = {o: nets(o) for o in (BETTER_OFFER_ID, WORSE_OFFER_ID, "none")}
+    return PlantedOfferTruth(
+        mean_net={o: float(v.mean()) for o, v in per.items()},
+        share_better=float(np.mean(per[BETTER_OFFER_ID] > per[WORSE_OFFER_ID])),
+        n_customers=len(ids),
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m autonomy.experiments.gymrun", description=__doc__)
     parser.add_argument("--seeds", type=int, default=10)
     parser.add_argument("--first-seed", type=int, default=0)
     parser.add_argument("--customers", type=int, default=5000)
     parser.add_argument("--days", type=int, default=29)
+    parser.add_argument("--truth", action="store_true", help="Print the planted truth only (no policy run)")
     args = parser.parse_args(argv)
+    if args.truth:
+        t = planted_truth(args.first_seed, n_customers=args.customers)
+        means = ", ".join(f"{o} {v:.3f}" for o, v in t.mean_net.items())
+        print(
+            f"{t.n_customers} customers, seed {args.first_seed}: mean true extra profit of one email: {means}."
+        )
+        print(f"{BETTER_OFFER_ID} is worth more than {WORSE_OFFER_ID} for {t.share_better:.1%} of customers.")
+        return 0
     found = worse = 0
     seeds = range(args.first_seed, args.first_seed + args.seeds)
     for seed in seeds:

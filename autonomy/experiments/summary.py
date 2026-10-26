@@ -63,9 +63,14 @@ def _parts(exp: Experiment, reading: Reading, currency: str, promoted: bool) -> 
         )
     if exp.end_kind is EndKind.STOPPED_LOSING:
         names = ", ".join(spec.label_of(a) for a in exp.losing)
+        after = (
+            f"{ref}, today's default, loses money against doing nothing: it needs a person's review."
+            if spec.reference_arm in exp.losing
+            else f"The default stays {ref}."
+        )
         return (
             f"The test of {', '.join(a.label for a in spec.arms)} for {audience} stopped after {days}: {names} "
-            f"was clearly losing. The default stays {ref}.",
+            f"was clearly losing. {after}",
             _numbers(reading, reading.arm(exp.losing[0]) if exp.losing else None),
         )
     if exp.end_kind is EndKind.STOPPED_MANUALLY:

@@ -237,7 +237,13 @@ def judge(experiment: Experiment, reading: Reading) -> Judgement:
     losing = tuple(a.arm_id for a in reading.arms if clearly_losing(a))
     if losing and stop.stop_for_loss:
         names = ", ".join(spec.label_of(a) for a in losing)
-        return Judgement("stop_losing", None, losing, f"{names} was clearly losing, so the test stopped.")
+        reason = f"{names} was clearly losing, so the test stopped."
+        if spec.reference_arm in losing:
+            reason += (
+                f" {spec.label_of(spec.reference_arm)} is today's default and loses money against doing "
+                "nothing: a person should review it."
+            )
+        return Judgement("stop_losing", None, losing, reason)
     if time_up:
         return Judgement(
             "no_winner",

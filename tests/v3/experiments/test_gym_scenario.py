@@ -2,21 +2,16 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
-from autonomy.contracts import NO_OFFER, Action, Channel
-from autonomy.experiments.gymrun import experiment_spec, run_gym_experiment
+from autonomy.contracts import NO_OFFER
+from autonomy.experiments.gymrun import experiment_spec, planted_truth, run_gym_experiment
 from autonomy.gym.scenarios import (
     BETTER_OFFER_ID,
-    GYM_GOAL_ID,
     SCENARIOS,
     WORSE_OFFER_ID,
-    default_brief,
-    default_content,
     get_scenario,
 )
-from autonomy.gym.score import gym_world
 from autonomy.scientist.questions import (
     QuestionError,
     QuestionKind,
@@ -37,21 +32,13 @@ def test_the_scenario_is_the_last_one_registered_and_plants_one_better_offer() -
 
 
 def test_in_the_truth_free_shipping_is_clearly_worth_more_than_ten_percent_off() -> None:
-    spec = get_scenario("better_offer_planted", n_customers=300, days=14, history_days=60)
-    world = gym_world(spec, [default_brief()], default_content())
-    world.reset(0)
-    now = world.now().replace(hour=10)
-    truth = world.truth
-    ids = list(getattr(truth, "customer_ids"))  # noqa: B009
-
-    def mean_net(offer: str) -> float:
-        action = Action(goal_id=GYM_GOAL_ID, channel=Channel.EMAIL, offer_id=offer, send_at=now)
-        return float(np.mean([truth.expected_net(c, action, now) for c in ids]))
-
-    better, worse, plain = mean_net("freeship"), mean_net("pct10"), mean_net("none")
+    truth = planted_truth(0, n_customers=300)
+    better, worse, plain = (truth.mean_net[o] for o in ("freeship", "pct10", "none"))
+    assert truth.n_customers == 300
     assert better > plain + 0.2  # free shipping adds real profit to a plain message
     assert worse < plain  # 10% off adds nothing and costs its redemption
     assert better - worse > 0.5
+    assert truth.share_better > 0.5
 
 
 def test_the_menu_checks_the_arms_against_the_envelope() -> None:
