@@ -6,6 +6,7 @@ in `AutonomousPolicy` without depending on the real bidders' maths.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -14,8 +15,10 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from autonomy.channels import Dispatcher, DispatchStatus, SkipReason
 from autonomy.contracts import (
     Action,
+    AutonomyLevel,
     Bid,
     Channel,
     ChannelStats,
@@ -23,14 +26,19 @@ from autonomy.contracts import (
     Decision,
     DecisionContext,
     DecisionKind,
+    GoalStatus,
     Group,
 )
 from autonomy.decide import rules
 from autonomy.decide.journeys import (
     COMPLAINT,
     CONDITION_FAILED,
+    EXPIRED,
     NEVER_READ,
+    NO_LONGER_PAYS,
+    NOTHING_TO_OFFER,
     PURCHASED,
+    REPLACED,
     UNSUBSCRIBED,
     JourneyConfig,
     JourneyRunner,
@@ -40,7 +48,8 @@ from autonomy.decide.journeys import (
     parse_journeys,
 )
 from autonomy.decide.policy import AutonomousPolicy
-from autonomy.fakes.samples import sample_brief, sample_content
+from autonomy.fakes import FakeChannelAdapter, InMemoryEventStore, InMemoryWorkspace
+from autonomy.fakes.samples import sample_brief, sample_content, sample_goal
 
 NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
 GOAL = "goal_winback"
@@ -175,7 +184,8 @@ def test_shipped_config_has_the_four_journeys() -> None:
     assert [s.channel for s in c.steps] == [Channel.WHATSAPP]
     assert c.value_bar is not None and c.value_bar > 0
     assert [s.channel for s in d.steps] == [Channel.WHATSAPP, Channel.EMAIL]
-    assert a.value_bar is None and b.value_bar is None and d.value_bar is None
+    assert a.value_bar is None and b.value_bar is None
+    assert d.value_bar == c.value_bar  # both send WhatsApp first
 
 
 def test_describe_and_window() -> None:
@@ -265,13 +275,14 @@ def test_value_bar_keeps_whatsapp_now_for_valuable_customers() -> None:
     assert bar is not None
     low = bid(Channel.WHATSAPP, 0.06, 0.03, value=bar - 1)
     high = bid(Channel.WHATSAPP, 0.06, 0.03, value=bar)
-    assert runner.expand([low], state()) == []
+    # below the bar no journey fits, so the single WhatsApp message goes through as without journeys
+    assert runner.expand([low], state()) == [low]
     assert [b.action.journey_id for b in runner.expand([high], state())] == ["C"]
 
 
 def test_value_bar_can_be_replaced_per_shop() -> None:
     cfg = load_journeys().with_value_bar("C", 500.0)
-    assert JourneyRunner(only_ids(cfg, ["C"])).expand([WHATSAPP], state()) == []
+    assert JourneyRunner(only_ids(cfg, ["C"])).expand([WHATSAPP], state()) == [WHATSAPP]
     with pytest.raises(KeyError):
         cfg.with_value_bar("Z", 1.0)
 
@@ -354,16 +365,53 @@ def test_first_decision_explains_the_journey() -> None:
 # --- journeys off: nothing changes ---------------------------------------------------------------------
 
 
-def test_journeys_off_gives_identical_decisions() -> None:
+def test_journeys_on_with_no_journey_for_the_channels_in_use_gives_identical_decisions() -> None:
+    # Every journey hook runs (advance, expand, record), but no journey starts on email or WhatsApp,
+    # so the decisions must be exactly those of a policy without journeys. The guarantee for the
+    # default (journeys=None) is the v2 test suite, which runs that code path unchanged.
+    web_only = parse_journeys({"journeys": [{"id": "W", "name": "web", "steps": [{"channel": "web"}]}]})
     bids = [EMAIL, bid(Channel.EMAIL, 0.03, 0.001, content="ci_1", sd=1.0), WHATSAPP]
     for seed in range(30):
         s = state(customer_id=f"c{seed}", contacts_7d=seed % 3)
-        plain = AutonomousPolicy([PriceBidder(bids)], None, 0.1)
-        off = AutonomousPolicy([PriceBidder(bids)], None, 0.1, journeys=None)
-        a, b = plain.decide(s, ctx(seed=seed)), off.decide(s, ctx(seed=seed))
+        off = AutonomousPolicy([PriceBidder(bids)], lambda st: 0.5, 0.1)
+        on = AutonomousPolicy([PriceBidder(bids)], lambda st: 0.5, 0.1, journeys=JourneyRunner(web_only))
+        a, b = off.decide(s, ctx(seed=seed)), on.decide(s, ctx(seed=seed))
         assert a == b
-        assert a.journey_id is None and a.journey_probability is None
+        assert a.journey_id is None and a.journey_probability is None and a.journey_ended is None
         assert a.action is None or a.action.journey_id is None
+
+
+def test_a_whatsapp_only_customer_below_the_bar_gets_the_same_decision_as_without_journeys() -> None:
+    low = bid(Channel.WHATSAPP, 0.06, 0.03, value=40.0)
+    s = state(channels={Channel.WHATSAPP: REACHABLE})
+    on = make([EMAIL, low]).decide(s, ctx())
+    off = AutonomousPolicy([PriceBidder([EMAIL, low])], None, 0.0).decide(s, ctx())
+    assert on.kind is DecisionKind.ACT and on.action is not None
+    assert on.action.channel is Channel.WHATSAPP and on.journey_id is None
+    assert on == off
+
+
+def test_a_customer_who_never_reads_email_still_gets_whatsapp_below_the_bar() -> None:
+    deaf = ChannelStats(address_known=True, consent=True, sends=6, delivers=6)
+    s = state(channels={Channel.EMAIL: deaf, Channel.WHATSAPP: REACHABLE})
+    d = make(
+        [bid(Channel.EMAIL, 0.05, 0.001, value=40.0), bid(Channel.WHATSAPP, 0.06, 0.03, value=40.0)]
+    ).decide(s, ctx())
+    assert d.kind is DecisionKind.ACT and d.action is not None
+    assert d.action.channel is Channel.WHATSAPP and d.journey_id is None
+
+
+def test_a_later_step_pays_its_channels_attention_price_in_the_journeys_price() -> None:
+    prices = {Channel.EMAIL: 0.0, Channel.WHATSAPP: 100.0}
+    out = JourneyRunner(only(["B"])).expand([EMAIL, WHATSAPP], state(), lambda ch: prices[ch])
+    b = next(x for x in out if x.action.journey_id == "B")
+    free = next(
+        x for x in JourneyRunner(only(["B"])).expand([EMAIL, WHATSAPP], state()) if x.action.journey_id
+    )
+    assert b.expected_net == pytest.approx(free.expected_net - (1 - EMAIL.uplift) * 100.0)
+    # in the auction, journey B now loses to the plain email journey A
+    policy = make(config=only(["A", "B"]), channel_price_fn=lambda st, bids: prices)
+    assert policy.decide(state(), ctx()).journey_id == "A"
 
 
 def test_journeys_on_never_changes_the_single_message_rules_for_other_channels() -> None:
@@ -684,3 +732,197 @@ def test_mapping_of_conditions_covers_every_journey_step() -> None:
     cfg = load_journeys()
     conditions: Mapping[str, StepCondition] = {j.journey_id: j.steps[-1].when for j in cfg.journeys}
     assert conditions["B"] is StepCondition.NO_PURCHASE and conditions["A"] is StepCondition.ALWAYS
+
+
+# --- a step goes through the same market as a first message ------------------------------------------------------
+
+
+def test_the_weekly_budget_holds_a_step_like_a_single_message() -> None:
+    policy = make(config=only(["B"]), budget_fn=lambda st, bids, cost: 1)
+    first = policy.decide(state(), ctx())
+    assert first.journey_id == "B"
+    d = policy.decide(after_first(first), due_ctx(first))
+    assert d.kind is DecisionKind.NOTHING and d.blocked_by == (rules.WEEKLY_CAP,)
+    assert d.journey_id == "B" and "holds" in d.reason
+    assert runner_of(policy).active("c1") is not None
+
+
+def test_a_step_that_no_longer_beats_its_attention_price_ends_the_journey() -> None:
+    prices = {Channel.EMAIL: 0.0, Channel.WHATSAPP: 0.0}
+    policy = make(config=only(["B"]), channel_price_fn=lambda st, bids: dict(prices))
+    first = policy.decide(state(), ctx())
+    assert first.journey_id == "B"
+    prices[Channel.WHATSAPP] = 100.0
+    d = policy.decide(after_first(first), due_ctx(first))
+    assert d.action is None or d.action.channel is not Channel.WHATSAPP
+    assert NO_LONGER_PAYS in stops(policy)
+
+
+def test_a_sent_step_logs_its_attention_price() -> None:
+    policy = make(config=only(["B"]), channel_price_fn=lambda st, bids: {Channel.WHATSAPP: 0.5})
+    first = policy.decide(state(), ctx())
+    second = policy.decide(after_first(first), due_ctx(first))
+    assert second.action is not None and second.action.follow_up_step == 1
+    assert second.attention_price == pytest.approx(0.5)
+
+
+class NaNStepBidder(PriceBidder):
+    """Quotes a NaN WhatsApp bid once `broken` is set: a bidder bug."""
+
+    def __init__(self) -> None:
+        super().__init__([EMAIL, WHATSAPP])
+        self.broken = False
+
+    def bids(self, state: CustomerState, ctx: DecisionContext) -> list[Bid]:
+        out = super().bids(state, ctx)
+        if not self.broken:
+            return out
+        return [
+            b.model_copy(update={"expected_net": math.nan}) if b.action.channel is Channel.WHATSAPP else b
+            for b in out
+        ]
+
+
+def test_a_nan_quote_for_a_step_is_not_sent() -> None:
+    bidder = NaNStepBidder()
+    policy = AutonomousPolicy([bidder], None, 0.0, journeys=JourneyRunner(only(["B"])))
+    first = policy.decide(state(), ctx())
+    assert first.journey_id == "B"
+    bidder.broken = True
+    d = policy.decide(after_first(first), due_ctx(first))
+    assert d.action is None or d.action.follow_up_step == 0
+    assert NOTHING_TO_OFFER in stops(policy)
+
+
+# --- deciding again, restarts and late steps ------------------------------------------------------------------------
+
+
+def test_deciding_a_skipped_step_again_gives_the_same_decision() -> None:
+    policy = AutonomousPolicy(
+        [PriceBidder([EMAIL, WHATSAPP], reachable_only=False)], None, 0.0, journeys=JourneyRunner(only(["B"]))
+    )
+    first = policy.decide(state(), ctx())
+    no_consent = ChannelStats(address_known=True, consent=False)
+    s = after_first(first, channels={Channel.EMAIL: REACHABLE, Channel.WHATSAPP: no_consent})
+    a = policy.decide(s, due_ctx(first))
+    b = policy.decide(s, due_ctx(first))
+    assert a.blocked_by == (rules.NO_CONSENT,) and a.journey_id == "B"
+    assert a == b
+
+
+def test_deciding_a_never_read_skip_again_gives_the_same_decision() -> None:
+    policy, first = start_b()
+    deaf = ChannelStats(address_known=True, consent=True, sends=6, delivers=6)
+    s = after_first(first, channels={Channel.EMAIL: REACHABLE, Channel.WHATSAPP: deaf})
+    a = policy.decide(s, due_ctx(first))
+    b = policy.decide(s, due_ctx(first))
+    assert a == b
+    assert a.journey_ended == "B:completed"
+
+
+def test_a_run_that_ended_stays_ended_when_rebuilt_from_the_log() -> None:
+    policy, first = start_b()
+    no_consent = ChannelStats(address_known=True, consent=False)
+    d = policy.decide(
+        after_first(first, channels={Channel.EMAIL: REACHABLE, Channel.WHATSAPP: no_consent}), due_ctx(first)
+    )
+    assert d.journey_ended == f"B:{NOTHING_TO_OFFER}"
+    fresh = JourneyRunner(only(["B"]))
+    fresh.rebuild([first, d])
+    assert fresh.active("c1") is None
+
+
+def test_a_skip_is_rebuilt_from_its_hold_decision() -> None:
+    policy = AutonomousPolicy(
+        [PriceBidder([EMAIL, WHATSAPP], reachable_only=False)], None, 0.0, journeys=JourneyRunner(only(["B"]))
+    )
+    first = policy.decide(state(), ctx())
+    no_consent = ChannelStats(address_known=True, consent=False)
+    hold = policy.decide(
+        after_first(first, channels={Channel.EMAIL: REACHABLE, Channel.WHATSAPP: no_consent}), due_ctx(first)
+    )
+    assert hold.blocked_by == (rules.NO_CONSENT,)
+    fresh = JourneyRunner(only(["B"]))
+    fresh.rebuild([first, hold])
+    assert fresh.active("c1") is None  # the skipped step was B's last
+
+
+def test_a_step_long_overdue_is_not_sent() -> None:
+    _, first = start_b()
+    assert first.action is not None
+    restarted = make(config=only(["B"]))
+    runner_of(restarted).rebuild([first])  # a restart after sweeps were missed
+    d = restarted.decide(after_first(first), ctx(first.action.send_at + timedelta(days=20)))
+    assert d.action is None or d.action.follow_up_step == 0
+    assert EXPIRED in stops(restarted)
+
+
+def test_a_new_journey_from_a_trigger_ends_the_running_one() -> None:
+    policy, first = start_b()
+    assert first.action is not None
+    d = policy.decide(after_first(first), ctx(first.action.send_at + timedelta(days=1)), trigger="cart:e1")
+    assert d.kind is DecisionKind.ACT and d.journey_id == "B"
+    assert REPLACED in stops(policy)
+    run = runner_of(policy).active("c1")
+    assert run is not None and run.first_decision_id == d.decision_id
+
+
+def test_the_hold_names_the_due_day_in_the_customers_time_zone() -> None:
+    policy = make(config=only(["B"]))
+    zone = "Pacific/Kiritimati"  # UTC+14
+    first = policy.decide(state(timezone=zone), ctx())
+    assert first.action is not None
+    held = policy.decide(after_first(first, timezone=zone), ctx(first.action.send_at + timedelta(days=1)))
+    due = (first.action.send_at + timedelta(days=3)).astimezone(rules.customer_zone(state(timezone=zone)))
+    assert held.reason.endswith(f"on {due:%d %b}.")
+
+
+# --- the dispatcher's last check at send time ---------------------------------------------------------------------
+
+
+def _dispatcher() -> Dispatcher:
+    ws = InMemoryWorkspace()
+    ws.put_goal(
+        sample_goal(NOW).model_copy(update={"status": GoalStatus.ACTIVE, "autonomy": AutonomyLevel.AUTOPILOT})
+    )
+    ws.put_brief(sample_brief(NOW))
+    ws.put_content(sample_content(NOW))
+    adapters = {
+        Channel.EMAIL: FakeChannelAdapter(Channel.EMAIL),
+        Channel.WHATSAPP: FakeChannelAdapter(Channel.WHATSAPP),
+    }
+    return Dispatcher(adapters, lambda cid, ch: "+15550001111", ws, InMemoryEventStore())
+
+
+def _step_decision(step: int) -> Decision:
+    return Decision(
+        decision_id=f"dec_step_{step}",
+        customer_id="c1",
+        made_at=NOW,
+        kind=DecisionKind.ACT,
+        action=Action(
+            goal_id=GOAL,
+            channel=Channel.WHATSAPP,
+            offer_id="none",
+            content_id="ci_3",
+            send_at=NOW,
+            follow_up_step=step,
+            journey_id="B",
+        ),
+        probability=1.0,
+        reason="test",
+        policy_version="t",
+        journey_id="B",
+        journey_probability=0.5,
+    )
+
+
+def test_the_dispatcher_skips_a_later_step_once_the_customer_bought() -> None:
+    later = NOW + timedelta(hours=20)
+    bought = state(top_categories=("trail shoes",), last_purchase_at=NOW + timedelta(hours=2), purchases=1)
+    report = _dispatcher().dispatch([_step_decision(1)], {"c1": bought}, later)
+    assert [r.reason for r in report.results] == [SkipReason.BOUGHT_SINCE.value]
+    # no purchase: it goes out
+    calm = state(top_categories=("trail shoes",))
+    report = _dispatcher().dispatch([_step_decision(1)], {"c1": calm}, later)
+    assert [r.status for r in report.results] == [DispatchStatus.SENT]
