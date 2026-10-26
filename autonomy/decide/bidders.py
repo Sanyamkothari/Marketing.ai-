@@ -81,11 +81,12 @@ changes: every v2 number is the same.
 
 **Who to contact** (opt-in, plan-v3 decision 1). With a `WhoBook` (`GoalBidder(who=book)`, which the
 agent passes from `build_agent_policy(who=...)`): the goal's urgency is multiplied by `1 + gain x
-churn_risk` from the customer's `scores` (act before they lapse; no score, no change); an option whose
-cost (offer cost x chance of redeeming + channel and format cost) is more than a share of the
-customer's `clv_90d` is not bid; and a customer is also left alone when the look-alike reading of
-people like them credibly says messages lower their buying (`TraitHarm`, which pools the harm records
-across profile neighbours). Without a book nothing changes: every v2 number is the same.
+churn_risk` from the customer's `scores` (act before they lapse; no score, no change); an option
+with an offer whose spend (offer cost x chance of redeeming + channel and format cost) is more than a
+share of the larger of the customer's `clv_90d` and what the option is expected to earn is not bid
+(an option without an offer never is: its channel cost is already in its net); and a customer is
+also left alone when the look-alike reading of people like them credibly says messages lower their
+buying (`TraitHarm`, which pools the harm records across profile neighbours). Without a book nothing changes: every v2 number is the same.
 
 The bidder returns every option, including losing and negative ones (unless `prune_z` is set): the
 attention auction, the attention price, "do nothing", the hard rules and exploration all happen
@@ -1710,10 +1711,8 @@ class GoalBidder:
         value = self.value_model.value_if_converted(state, self.brief.objective)
         choice = self.item_for(state)
         urgency = self._urgency_at(state, ctx.now, choice is not None)
-        ceiling: float | None = None
-        if self.who is not None:  # plan-v3 decision 1: act before they lapse; spend by what they are worth
+        if self.who is not None:  # plan-v3 decision 1: act before they lapse
             urgency *= self.who.urgency_factor(state)
-            ceiling = self.who.cost_ceiling(state)
         boost = refill_boost(state) if self.refill and choice is not None else 1.0
         p14 = min(max(_score(state, REFILL_P14) or 0.0, 0.0), 1.0) if boost > 1.0 else 0.0
 
@@ -1779,8 +1778,10 @@ class GoalBidder:
                     uplift -= loss
                     offer_cost = unit_cost * p_redeem
                     cost = channel_cost + self.format_costs.get(item.format, 0.0)
-                    if ceiling is not None and offer_cost + cost > ceiling:
-                        continue  # costs more than this customer's 90 days are worth to us
+                    if self.who is not None and offer_cost > 0:  # plan-v3 decision 1: spend by worth
+                        ceiling = self.who.cost_ceiling(state, uplift * value)
+                        if ceiling is not None and offer_cost + cost > ceiling:
+                            continue  # an offer costing more than this customer is worth to us
                     # The budget price is charged on top of the cost, so an offer wins only when its
                     # extra profit per unit of cost is above the price (autonomy.decide.planner).
                     net = urgency * (uplift * value - offer_cost * (1.0 + shadow) - cost)

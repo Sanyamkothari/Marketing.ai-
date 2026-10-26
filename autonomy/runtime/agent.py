@@ -2046,8 +2046,8 @@ class AgentPolicy:
             update["contacts_7d"] = self._contacts_at_send(state, eff, hour)
         elif state.active_hours:
             update["active_hours"] = ()
-        if self.who is not None:
-            update.update(self.who.prepare(state, ctx.now))
+        if self.who is not None:  # read-only: explaining stores nothing (`WhoBook.prepare`)
+            update.update(self.who.prepare(state, ctx.now, remember=False))
         view = state.model_copy(update=update)
 
         policy = self.policy

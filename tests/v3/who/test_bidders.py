@@ -118,8 +118,24 @@ def test_an_option_costing_more_than_a_share_of_90_day_value_is_not_bid():
     assert all(b.offer_cost + b.channel_cost <= ceiling for b in poor)
     assert any(c > ceiling for c in spend.values())
     assert book.cost_ceiling(state(**{CLV_90D: 8.0})) == 2.0
+    assert book.cost_ceiling(state(**{CLV_90D: 8.0}), 20.0) == 5.0  # or what the option earns
     assert book.cost_ceiling(state()) is None
     assert WhoBook(WhoConfig(value_cost_share=None)).cost_ceiling(state(**{CLV_90D: 8.0})) is None
+
+
+def test_a_customer_valued_at_nothing_can_still_be_sent_a_plain_message():
+    # `clv_90d` is what they bring without a message: 0 for a lapsed customer is no reason not to
+    # write to them. Options without an offer are never stopped by the ceiling, and an offer is
+    # weighed against what it is expected to earn.
+    book = WhoBook(WhoConfig(risk_urgency=0.0, value_cost_share=0.25, trait_harm=False))
+    plain = bids_of(bidder(), state())
+    lapsed = bids_of(bidder(book), state(**{CLV_90D: 0.0}))
+    plain_message = [b for b in lapsed if b.offer_cost == 0]
+    assert plain_message and plain_message[0].channel_cost > 0
+    assert dump(plain_message) == dump([b for b in plain if b.offer_cost == 0])
+    for b in lapsed:
+        if b.offer_cost > 0:
+            assert b.offer_cost + b.channel_cost <= 0.25 * max(b.uplift * b.value_if_converted, 0.0) + 1e-12
 
 
 # --- sleeping dogs by traits ------------------------------------------------------------------------

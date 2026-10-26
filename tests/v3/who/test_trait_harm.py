@@ -170,3 +170,25 @@ def test_the_config_refuses_nonsense():
         WhoConfig(value_cost_share=0.0)
     with pytest.raises(ValueError):
         TraitHarm(credible=0.2)
+
+
+def test_in_a_mixed_group_the_helped_members_and_newcomers_are_not_left_alone():
+    # A group whose average is low because a fifth of it are dogs (ratio 0.3) while the rest are
+    # helped (1.1). The group's average is credibly below 1, but a given member, or someone new to
+    # the group, is most likely one of the helped: the person-to-person spread inside the group says
+    # so, and neither the helped members nor a newcomer may be left alone on the average.
+    records, keys = population(BACKGROUND, seed=1)
+    rng = np.random.default_rng(7)
+    for i in range(300):
+        cid = f"mix-{i:03d}"
+        records[cid] = record(rng, 0.3 if i < 60 else 1.1, max(int(rng.poisson(4)), 1))
+        keys[cid] = "mix"
+    harm = TraitHarm()
+    harm.fit(records, keys)
+    n, ratio, p_group = harm.groups()["mix"]
+    assert n == 300 and ratio < 0.9 and p_group >= LEAVE_ALONE_CREDIBLE  # the average is low
+    assert harm.group_tau()["mix"] > harm.group_tau()["loyal|light"]  # and the people differ
+    helped = [f"mix-{i:03d}" for i in range(60, 300)]
+    assert np.mean([harm.leave_alone(c, 1.0) for c in helped]) <= 0.05
+    assert harm.p_harm("newcomer", "mix") < LEAVE_ALONE_CREDIBLE
+    assert not harm.leave_alone("newcomer", 1.0, "mix")

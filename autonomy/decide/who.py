@@ -9,9 +9,11 @@ every number of the agent is what it was.
 * **Bidders read them.** Leaving risk raises urgency: the bid of a customer likely to lapse is worth
   `1 + risk_urgency x churn_risk` times as much, and since the whole expected net scales, a message
   that would lose money for them loses more (urgency makes good bids better and bad ones worse). 90-day
-  value caps what an action may cost: an option whose expected cost (offer cost x chance of redeeming
-  + channel cost) is more than `value_cost_share` of `clv_90d` is not bid. `clv_90d` also reaches the
-  attention price, which already reads it (`ValueModel.future_value`).
+  value caps what an offer may cost: an option with an offer whose expected spend (offer cost x chance
+  of redeeming + channel and format cost) is more than `value_cost_share` of the larger of `clv_90d`
+  and what the option is expected to earn is not bid (`WhoBook.cost_ceiling`; a message without an
+  offer is never stopped by it). `clv_90d` also reaches the attention price, which already reads it
+  (`ValueModel.future_value`).
 * **Sleeping dogs by traits** (`TraitHarm`). `ContactHarm` reads each customer's own purchases around
   messages, shrunk towards neighbours along three clues (clicks, direct visits, unsubscribes). A
   customer with a thin record, or none, is left alone only if those neighbours say so. `TraitHarm`
@@ -19,10 +21,12 @@ every number of the agent is what it was.
   how much they need an offer, how many messages they had last month). Each group's records are pooled
   on the same ratio grid, shrunk towards the business's by as much as groups really differ beyond
   their own noise (empirical Bayes, `_spread_between`), and a customer's posterior is their group's
-  (themselves left out) times their own record, spread by the person-to-person `tau`. A thin record
-  stays near its group; a long one is mostly the person. A customer is left alone when
-  `LEAVE_ALONE_CREDIBLE` of that posterior lies below a ratio of 1. A customer with no record of their
-  own is read by their group alone. It is added to `leave_alone`, never in place of it.
+  (themselves left out), spread by how far the group's people differ from each other (`tau`, per
+  group), times their own record. A thin record stays near its group; a long one is mostly the person.
+  A customer is left alone when `LEAVE_ALONE_CREDIBLE` of that posterior lies below a ratio of 1. A
+  customer with no record of their own is read as one more person of their group (the group's reading
+  spread by its `tau`). A customer left alone keeps the group they were left alone in until the
+  evidence says otherwise (`WhoBook._frozen`). It is added to `leave_alone`, never in place of it.
 
 Numpy only. `WhoBook` is the object the agent and the bidders share; it keeps the events the agent has
 been handed (the profile is built from them when the state carries no nightly features) and refits
@@ -75,7 +79,8 @@ class WhoConfig:
     risk_urgency: float = 0.5
     """Urgency is multiplied by `1 + risk_urgency x churn_risk` (0: leaving risk does not touch it)."""
     value_cost_share: float | None = 0.25
-    """An option costing more than this share of `clv_90d` is not bid (None: no ceiling)."""
+    """An option with an offer spending more than this share of the larger of `clv_90d` and what it is
+    expected to earn is not bid (None: no ceiling)."""
     trait_harm: bool = True
     """Pool the harm reading across profile neighbours and leave alone on it."""
     trait_min_group: int = 20
@@ -137,9 +142,15 @@ class TraitHarm:
     buying without one. A group's reading is the sum of its members' log-likelihoods, with a Normal
     prior centred on the business's ratio whose spread is how far groups really differ
     (`_spread_between`), so a group that merely looks low by chance is not believed. A member is read
-    against their group with themselves left out, then against their own record, spread by the
-    person-to-person `tau` the records make most likely: a thin record stays near the group, a long
-    one is mostly the person. A customer with no record is read by their group alone.
+    against their group with themselves left out, spread by the person-to-person `tau`, then against
+    their own record: a thin record stays near the group, a long one is mostly the person.
+
+    `tau` is read per group, since a group can have a low average because a few of its people are put
+    off while the rest are helped: then the spread is wide and the helped members are not left alone
+    on the average. Every candidate (`HARM_TAUS`) is weighed by how likely the group's records make it
+    (a flat prior over them), so a spread that thin records cannot rule out is not ruled out. A
+    customer with no record is read the same way, as one more person of the group: the group's
+    reading spread by its `tau` (`p_harm`). `tau` itself is the pooled most likely value, for reports.
     """
 
     def __init__(
@@ -168,6 +179,8 @@ class TraitHarm:
         self._group_p: dict[str, float] = {}
         self._group_ratio: dict[str, float] = {}
         self._group_size: dict[str, int] = {}
+        self._group_tau: dict[str, float] = {}
+        self._stranger_p: dict[str, float] = {}
 
     @property
     def fitted(self) -> bool:
@@ -179,14 +192,21 @@ class TraitHarm:
             g: (self._group_size[g], self._group_ratio[g], self._group_p[g]) for g in sorted(self._group_p)
         }
 
+    def group_tau(self) -> dict[str, float]:
+        """Group key -> the person-to-person spread (log scale) its records make likely, averaged over
+        the candidates (`HARM_TAUS`) by how likely each is."""
+        return {g: self._group_tau[g] for g in sorted(self._group_tau)}
+
     def p_harm(self, customer_id: str, key: str | None = None) -> float:
         """Chance a message lowers this customer's buying, on their group and their own record. A
-        customer without a record is read by the group `key` alone; 0 for a stranger."""
+        customer without a record is read as one more person of the group `key`: the group's reading
+        spread by how far its people differ from each other (not the group's average alone, which
+        would be surer about a stranger than about a member). 0 for a stranger of no group."""
         found = self._p.get(customer_id)
         if found is not None:
             return found
         if key is not None and self._group_size.get(key, 0) >= self.min_group:
-            return self._group_p.get(key, 0.0)
+            return self._stranger_p.get(key, 0.0)
         return 0.0
 
     def leave_alone(self, customer_id: str, at_stake: float, key: str | None = None) -> bool:
@@ -214,6 +234,7 @@ class TraitHarm:
         """Read every group and every member. Customers without a key are left out."""
         ids = sorted(c for c in records if c in keys)
         self._p, self._group_p, self._group_ratio, self._group_size = {}, {}, {}, {}
+        self._stranger_p, self._group_tau = {}, {}
         self.customers = len(ids)
         if len(ids) < self.min_customers:
             return
@@ -224,6 +245,7 @@ class TraitHarm:
         names = sorted({keys[c] for c in ids})
         code = np.array([names.index(keys[c]) for c in ids], dtype=np.int64)
         n, g = len(ids), len(names)
+        taus = np.array(self.taus)
 
         def rows(a: int, b: int) -> _FloatArray:
             return _own_loglik(hits[a:b], trials[a:b], share[a:b], ok[a:b])
@@ -238,52 +260,59 @@ class TraitHarm:
         self.spread = _spread_between(list(sums), self.ratio_sd)
         prior = -0.5 * ((_LOG_GRID - self.business) / self.spread) ** 2
         sizes = np.bincount(code, minlength=g)
+        group_mean = np.empty(g)
+        group_sd = np.empty(g)
         for k, name in enumerate(names):
             score = sums[k] + prior
             post = np.exp(score - score.max())
             post /= post.sum()
+            group_mean[k] = float((post * _LOG_GRID).sum())
+            group_sd[k] = math.sqrt(max(float((post * (_LOG_GRID - group_mean[k]) ** 2).sum()), 0.0))
             self._group_p[name] = float(post[_BELOW].sum())
             self._group_ratio[name] = float((post * _RATIO_GRID).sum())
             self._group_size[name] = int(sizes[k])
-        # each member against their group with themselves left out
-        near_mean = np.empty(n)
-        near_sd = np.empty(n)
+        # Each member against their group with themselves left out, at every candidate `tau`: how
+        # likely their record is (to choose `tau`) and how much of their posterior is below 1.
+        loglik = np.zeros((n, len(taus)))
+        below = np.zeros((n, len(taus)))
         for a in range(0, n, self.block):
             b = min(a + self.block, n)
-            score = sums[code[a:b]] - rows(a, b) + prior[None, :]
+            ll = rows(a, b)
+            score = sums[code[a:b]] - ll + prior[None, :]
             post = np.exp(score - score.max(axis=1, keepdims=True))
             post /= post.sum(axis=1, keepdims=True)
-            m = (post * _LOG_GRID[None, :]).sum(axis=1)
-            near_mean[a:b] = m
-            near_sd[a:b] = np.sqrt(
-                np.maximum((post * (_LOG_GRID[None, :] - m[:, None]) ** 2).sum(axis=1), 0.0)
+            near_mean = (post * _LOG_GRID[None, :]).sum(axis=1)
+            near_sd = np.sqrt(
+                np.maximum((post * (_LOG_GRID[None, :] - near_mean[:, None]) ** 2).sum(axis=1), 0.0)
             )
-        # the person-to-person spread the records make most likely
-        marginal = np.zeros(len(self.taus))
-        for a in range(0, n, self.block):
-            b = min(a + self.block, n)
-            ll = rows(a, b)
             lik = np.exp(ll - ll.max(axis=1, keepdims=True))
             for t, tau in enumerate(self.taus):
-                pri = _normal_on_grid(near_mean[a:b], np.sqrt(near_sd[a:b] ** 2 + tau * tau))
-                marginal[t] += float(np.log(np.maximum((pri * lik)[ok[a:b]].sum(axis=1), _TINY)).sum())
-        best, best_ll = self.taus[0], -math.inf
-        for tau, value in zip(self.taus, marginal.tolist(), strict=True):
-            if value > best_ll + 1e-9:
-                best, best_ll = tau, value
-        self.tau = best
+                joint = _normal_on_grid(near_mean, np.sqrt(near_sd**2 + tau * tau)) * lik
+                total = np.maximum(joint.sum(axis=1), _TINY)
+                loglik[a:b, t] = np.where(ok[a:b], np.log(total), 0.0)
+                below[a:b, t] = joint[:, _BELOW].sum(axis=1) / total
+        # The person-to-person spread, per group: how far people in it differ from each other, which
+        # the pooled `tau` would hide (a group of a few dogs among many helped customers has a low
+        # average and a wide spread). Every candidate is weighed by how likely the group's records
+        # make it, so a spread the records cannot rule out is not ruled out.
+        per_group = np.zeros((g, len(taus)))
+        np.add.at(per_group, code, loglik)
+        weights = np.exp(per_group - per_group.max(axis=1, keepdims=True))
+        weights /= weights.sum(axis=1, keepdims=True)
+        pooled = per_group.sum(axis=0)
+        self.tau = float(taus[int(np.argmax(pooled))])
+        p = (below * weights[code]).sum(axis=1)
+        for k, name in enumerate(names):
+            self._group_tau[name] = float((weights[k] * taus).sum())
+            # someone in the group without a record: the group's reading spread by its person-to-person tau
+            spread = np.sqrt(group_sd[k] ** 2 + taus**2)
+            on_grid = _normal_on_grid(np.full(len(taus), group_mean[k]), spread)
+            self._stranger_p[name] = float((weights[k] * on_grid[:, _BELOW].sum(axis=1)).sum())
         small = sizes[code] < self.min_group
-        for a in range(0, n, self.block):
-            b = min(a + self.block, n)
-            ll = rows(a, b)
-            lik = np.exp(ll - ll.max(axis=1, keepdims=True))
-            post = _normal_on_grid(near_mean[a:b], np.sqrt(near_sd[a:b] ** 2 + best * best)) * lik
-            post /= np.maximum(post.sum(axis=1, keepdims=True), _TINY)
-            p = post[:, _BELOW].sum(axis=1)
-            for i in range(a, b):
-                # A group too small to read is no evidence about its members: `ContactHarm` has them.
-                if not small[i]:
-                    self._p[ids[i]] = float(p[i - a])
+        for i in range(n):
+            # A group too small to read is no evidence about its members: `ContactHarm` has them.
+            if not small[i]:
+                self._p[ids[i]] = float(p[i])
 
 
 # --- the book the agent and the bidders share ---------------------------------------------------------
@@ -310,6 +339,11 @@ class WhoBook:
         self._harm_fit: object = None
         self._traits_at: datetime | None = None
         self._keys: dict[str, str] = {}
+        self._frozen: dict[str, str] = {}
+        """The group key of every customer left alone on it, kept until a refit no longer leaves them
+        alone under it. The load trait is the agent's own doing: once a heavily contacted customer is
+        left alone their load falls, and keyed afresh they would join the lightly contacted, be let
+        back in, turn heavy again, and so on. A verdict is undone by evidence, not by its own effect."""
         self._scored: dict[str, tuple[str, Mapping[str, float] | None, dict[str, float]]] = {}
 
     # -- events --
@@ -348,6 +382,12 @@ class WhoBook:
                 self._harm_fit = harm.fit
                 self._traits_at = now
                 self._fit_traits(harm, now)
+        elif self._harm_fit is not None:
+            # The harm model reads nothing any more (too few customers): neither does the trait reading.
+            self.traits = TraitHarm(min_group=cfg.trait_min_group)
+            self._harm_fit = None
+            self._traits_at = None
+            self._keys.clear()
 
     def _fit_traits(self, harm: ContactHarm, now: datetime) -> None:
         records = harm.own_records()
@@ -359,8 +399,19 @@ class WhoBook:
         engaged = [f["ch_click_rate"] for f, _ in profiles.values() if f.get("ch_engaged", 0.0) >= 0.5]
         cut = float(np.median(engaged)) if engaged else 0.0
         self.trait_keys = TraitKeys(cut, self.config.offer_cut, self.config.load_cut)
-        keys = {cid: self.trait_keys.key(f, load) for cid, (f, load) in profiles.items()}
+        keys = {
+            cid: self._frozen.get(cid) or self.trait_keys.key(f, load) for cid, (f, load) in profiles.items()
+        }
         self.traits.fit(records, keys)
+        # Who stays held back under the key they were held back on: members on their new posterior,
+        # customers without a record on their group's.
+        for cid, key in list(self._frozen.items()):
+            if self.traits.p_harm(cid, key) < self.traits.credible:
+                del self._frozen[cid]
+        for cid, key in keys.items():
+            if self.traits.p_harm(cid, key) >= self.traits.credible:
+                self._frozen[cid] = key
+        self._keys.update(self._frozen)
 
     def _load(self, events: Sequence[Event], now: datetime) -> int:
         since = now - self.config.load_days * _DAY
@@ -369,37 +420,47 @@ class WhoBook:
     # -- one customer --
 
     def features(self, state: CustomerState, now: datetime) -> Mapping[str, float] | None:
-        """This customer's profile: the nightly one when it is fresh, else built from the events held."""
+        """This customer's profile: the nightly one when it is fresh (no older than
+        `max_profile_age_days`, and not from after `now`), else built from the events held; None when
+        neither is there."""
         age = timedelta(days=self.config.max_profile_age_days)
-        if state.features and state.features_as_of is not None and now - state.features_as_of <= age:
+        at = state.features_as_of
+        if state.features and at is not None and at <= now and now - at <= age:
             return state.features
         evs = self.events.get(state.customer_id)
         if evs:
             return profile_for(evs, now)
-        return state.features or None
+        return None
 
-    def prepare(self, state: CustomerState, now: datetime) -> dict[str, object]:
+    def prepare(self, state: CustomerState, now: datetime, *, remember: bool = True) -> dict[str, object]:
         """What to change on the state this decision is made on (for `model_copy(update=...)`):
 
         * `scores`: the state's own with `churn_risk` and `clv_90d` added where a model passed its check;
         * with `fill_profile` and no nightly features on the state, `features` and `features_as_of`
           from the events held, so the look-alike model reads the profile (docs/v3/PROFILE.md).
 
-        Also remembers the customer's trait group for `leave_alone`. Computed once a day per customer;
-        the state itself is not changed."""
+        Also remembers the customer's trait group for `leave_alone` (a customer left alone keeps the
+        group they were left alone in, see `_frozen`). Computed once a day per customer; the state
+        itself is not changed. With `remember=False` (explaining a decision) nothing is stored: the
+        day's stored answer is read when there is one, else it is worked out and dropped."""
         day = now.date().isoformat()
-        cached = self._scored.get(state.customer_id)
+        cid = state.customer_id
+        cached = self._scored.get(cid)
         if cached is None or cached[0] != day:
             features = self.features(state, now)
             new: dict[str, float] = {}
             if features is not None:
                 if self.config.models:
                     new = self.models.scores(features)
-                if self.config.trait_harm and self.traits.fitted:
-                    evs = self.events.get(state.customer_id, ())
-                    self._keys[state.customer_id] = self.trait_keys.key(features, self._load(evs, now))
+                if remember and self.config.trait_harm and self.traits.fitted:
+                    frozen = self._frozen.get(cid)
+                    key = frozen or self.trait_keys.key(features, self._load(self.events.get(cid, ()), now))
+                    self._keys[cid] = key
+                    if frozen is None and self.traits.p_harm(cid, key) >= self.traits.credible:
+                        self._frozen[cid] = key
             cached = (day, features, new)
-            self._scored[state.customer_id] = cached
+            if remember:
+                self._scored[cid] = cached
         _day, features, new = cached
         update: dict[str, object] = {"scores": {**state.scores, **new}}
         if self.config.fill_profile and not state.features and features:
@@ -422,20 +483,38 @@ class WhoBook:
             return 1.0
         return 1.0 + self.config.risk_urgency * min(max(risk, 0.0), 1.0)
 
-    def cost_ceiling(self, state: CustomerState) -> float | None:
-        """The most one action for this customer may cost, a share of their 90-day value; None when
-        there is no ceiling or no value score."""
+    def cost_ceiling(self, state: CustomerState, earns: float = 0.0) -> float | None:
+        """The most an option with an offer may spend on this customer (offer cost x chance of
+        redeeming + channel and format cost): `value_cost_share` of the larger of their 90-day value
+        and what the option is expected to earn (`earns`, uplift x value if converted). `clv_90d` is
+        what they bring without a message, so a lapsed customer's is near 0, and capping by it alone
+        would bar every offer from the very people a win-back is for. None when there is no ceiling or
+        no value score. The bidder never applies it to an option without an offer: its channel cost is
+        already weighed in its net."""
         share = self.config.value_cost_share
         clv = state.scores.get(CLV_90D)
         if share is None or clv is None or not math.isfinite(clv) or clv < 0:
             return None
-        return share * clv
+        return share * max(clv, earns if math.isfinite(earns) else 0.0)
 
     def leave_alone(self, customer_id: str, at_stake: float) -> bool:
         """Whether the people like this customer credibly buy less after a message."""
         if not self.config.trait_harm:
             return False
         return self.traits.leave_alone(customer_id, at_stake, self._keys.get(customer_id))
+
+    def coverage(self) -> dict[str, int]:
+        """How many customers the last day's decisions read: prepared, with a profile, with each
+        score, and with a trait group (for the bench and the Gym diagnostics)."""
+        rows = list(self._scored.values())
+        return {
+            "prepared": len(rows),
+            "profile": sum(1 for _d, f, _n in rows if f),
+            CHURN_RISK: sum(1 for _d, _f, n in rows if CHURN_RISK in n),
+            CLV_90D: sum(1 for _d, _f, n in rows if CLV_90D in n),
+            "trait_group": sum(1 for cid in self._scored if cid in self._keys),
+            "left_alone_kept": len(self._frozen),
+        }
 
     def describe(self) -> str:
         parts = [self.models.describe()]
