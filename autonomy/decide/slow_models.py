@@ -171,9 +171,10 @@ def build_training_set(
     """Month-end rows for both models, read from `events` as they stood at `as_of`.
 
     An event after `as_of` is dropped before anything is read; a repeated `event_id` counts once. A
-    row is made for each month-end with at least one closed window (risk's or value's) and for each
-    customer with an event by then; each label is NaN where its window is not over (censored) or the
-    customer is not in that model's population. See the module docstring.
+    row is made for each customer at each month-end where at least one label exists; each label is NaN
+    where its window is not over (censored) or the customer is not in that model's population. The
+    rows left out because both windows are open are counted in `censored_risk` and `censored_value`.
+    See the module docstring.
     """
     cfg = config or SlowModelConfig()
     if as_of.tzinfo is None or as_of.utcoffset() is None:
@@ -210,8 +211,7 @@ def build_training_set(
         gain_cum[cid] = np.concatenate([[0.0], np.cumsum([r[2] for r in rows])])
 
     first = min(e.ts for e in kept)
-    shortest = min(cfg.risk_window_days, cfg.value_window_days)
-    cuts = [c for c in month_ends(first, as_of) if c + shortest * _DAY <= as_of]
+    cuts = month_ends(first, as_of)
     if not cuts:
         return empty
     risk_end = {c: c + cfg.risk_window_days * _DAY <= as_of for c in cuts}
