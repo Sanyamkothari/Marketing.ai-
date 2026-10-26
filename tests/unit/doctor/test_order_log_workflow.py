@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from engine.access.roles import Principal, Role
 from engine.config import get_roles, load_use_case
 from engine.doctor.build_driver import approval_for as build_approval
 from engine.doctor.diagnose import LoadedFile, diagnose_file
@@ -33,6 +35,7 @@ from tests.unit.doctor.m237_support import RecordingBuilder
 from tests.unit.doctor.order_log_support import USE_CASE, loaded
 
 NOW = datetime(2026, 10, 26, tzinfo=UTC)
+ANALYST = Principal(user_id="analyst-7", username="asha", roles=frozenset({Role.ANALYST}))
 
 
 @pytest.fixture(scope="module")
@@ -105,8 +108,8 @@ def test_the_proposal_is_the_outcome_and_the_plan_each_with_its_exact_sentence(p
     assert proposal.plan.blocking == () and proposal.plan.order_log is not None
     # The audience is in both sentences and both hashes (the person reads it in each).
     expected = (
-        audience_words("orders", 90, rows="a place in the count"),
-        audience_words("orders", 90, rows="a row"),
+        audience_words("orders", 90, rows="a place in the count", inclusive=True),
+        audience_words("orders", 90, rows="a row", inclusive=True),
     )
     assert expected[0] in proposal.outcome_sentence and expected[1] in proposal.plan.approval_sentence
     assert proposal.outcome.definition.audience is not None and proposal.plan.audience is not None
@@ -229,6 +232,7 @@ def test_nothing_reaches_the_builder_without_both_approvals_for_what_is_read_now
                 USE_CASE,
                 approvals,
                 port,  # type: ignore[arg-type]
+                approver=ANALYST,
                 config_root=on_root,
                 diagnosis=diagnosis,
             )
@@ -259,8 +263,102 @@ def test_a_changed_log_is_not_the_one_that_was_approved(world, on_root: Path, pr
             USE_CASE,
             approvals_for(proposal),
             port,  # type: ignore[arg-type]
+            approver=ANALYST,
             config_root=on_root,
             diagnosis=diagnose_file(file, config, get_roles(on_root)),
         )
     assert codes(raised) in {"OUTCOME_NOT_APPROVED", "APPROVAL_SENTENCE_CHANGED", "BUILD_PLAN_NOT_APPROVED"}
     assert port.calls == [] and diagnosis is not None
+
+
+def build_with(world, on_root: Path, approvals: OrderLogApprovals, approver: Principal, **extra):  # type: ignore[no-untyped-def]
+    file, diagnosis, leave_out = world
+    port = RecordingBuilder()
+    with pytest.raises(OrderLogWorkflowError) as raised:
+        build_from_order_log(
+            file,
+            "CustomerID",
+            leave_out,
+            USE_CASE,
+            approvals,
+            port,  # type: ignore[arg-type]
+            approver=approver,
+            config_root=on_root,
+            diagnosis=diagnosis,
+            **extra,
+        )
+    assert port.calls == [], "no source, mapping, recipe or build was made"
+    return raised.value.code
+
+
+def test_an_approval_not_given_by_the_approver_is_refused_an_agent_cannot_approve_for_them(  # type: ignore[no-untyped-def]
+    world, on_root: Path, proposal
+) -> None:
+    """The outcome is a person's choice: an approval the AI (or anyone else) wrote for itself is not the approver's."""
+    assert proposal.outcome.definition is not None
+    agent_made = OrderLogApprovals(
+        outcome=outcome_approval(
+            proposal.outcome.definition, proposal.outcome_sentence, user_id="agent", at=NOW
+        ),
+        build=build_approval(proposal.plan, user_id="agent", at=NOW),
+    )
+    assert build_with(world, on_root, agent_made, ANALYST) == "OUTCOME_NOT_APPROVED"
+    plan_by_agent = approvals_for(proposal).model_copy(
+        update={"build": build_approval(proposal.plan, user_id="agent", at=NOW)}
+    )
+    assert build_with(world, on_root, plan_by_agent, ANALYST) == "BUILD_PLAN_NOT_APPROVED"
+
+
+def test_an_approver_without_the_analyst_role_is_refused(world, on_root: Path, proposal) -> None:  # type: ignore[no-untyped-def]
+    viewer = Principal(user_id="analyst-7", username="asha", roles=frozenset({Role.VIEWER}))
+    assert build_with(world, on_root, approvals_for(proposal), viewer) == "TOOL_ROLE_REQUIRED"
+
+
+def test_with_separation_of_duties_the_proposer_cannot_approve(  # type: ignore[no-untyped-def]
+    world, on_root: Path, proposal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import engine.doctor.order_log_workflow as workflow
+
+    real = workflow.load_use_case
+
+    def separated(use_case: str, root: Path | None = None):  # type: ignore[no-untyped-def]
+        config = real(use_case, root)
+        governance = config.governance.model_copy(update={"approval_required": True})
+        return config.model_copy(update={"governance": governance})
+
+    monkeypatch.setattr(workflow, "load_use_case", separated)
+    approver = Principal(user_id="analyst-7", username="asha", roles=frozenset({Role.ANALYST, Role.APPROVER}))
+    code = build_with(world, on_root, approvals_for(proposal), approver, proposed_by="analyst-7")
+    assert code == "POLICY_ROLE_SEPARATION"
+
+
+class EmptyBuild(RecordingBuilder):
+    """A builder whose build stopped because the audience kept no one (`LocalBuilderPort.read_dataset`'s answer)."""
+
+    def read_dataset(self, dataset_id: str) -> Any:
+        from engine.doctor.build_driver import BuildDriveError
+
+        raise BuildDriveError(
+            "AUDIENCE_EMPTY", f"The build {dataset_id} wrote no dataset. No one is in the audience."
+        )
+
+
+def test_a_build_the_audience_leaves_empty_is_the_workflows_error_with_that_code(  # type: ignore[no-untyped-def]
+    world, on_root: Path, proposal
+) -> None:
+    file, diagnosis, leave_out = world
+    port = EmptyBuild()
+    with pytest.raises(OrderLogWorkflowError) as raised:
+        build_from_order_log(
+            file,
+            "CustomerID",
+            leave_out,
+            USE_CASE,
+            approvals_for(proposal),
+            port,
+            approver=ANALYST,
+            config_root=on_root,
+            diagnosis=diagnosis,
+        )
+    assert codes(raised) == "AUDIENCE_EMPTY" and "No one is in the audience" in raised.value.message
+    assert [call[0] for call in port.calls][-1] == "build"

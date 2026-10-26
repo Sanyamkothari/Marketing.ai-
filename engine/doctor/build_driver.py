@@ -738,6 +738,8 @@ def _order_log_sentence(
     label_spec: LabelDefinition | None,
     skipped: Sequence[str],
     audience: AudienceSpec | None = None,
+    *,
+    inclusive: bool = True,
 ) -> str:
     customer = plan.customer_column
     parts = [
@@ -774,7 +776,7 @@ def _order_log_sentence(
     if plan.shoppers_without_orders:
         parts.append(f"{plan.shoppers_without_orders:,} shoppers have only returns and are in no month-end.")
     if audience is not None:
-        parts.append(audience_words(audience.role, audience.no_event_days, rows="a row"))
+        parts.append(audience_words(audience.role, audience.no_event_days, rows="a row", inclusive=inclusive))
     parts.append("Description is not used.")
     if skipped:
         parts.append(f"Not built, the log has no column they read: {', '.join(skipped)}.")
@@ -893,7 +895,14 @@ def _plan_order_log(
         snapshot_spec=snapshot_spec or SnapshotDefinition(),
         left_out=left_out,
         approval_reasons=tuple(reasons),
-        approval_sentence=_order_log_sentence(item.file_name, spec, label_spec, skipped, audience_spec),
+        approval_sentence=_order_log_sentence(
+            item.file_name,
+            spec,
+            label_spec,
+            skipped,
+            audience_spec,
+            inclusive=(snapshot_spec or SnapshotDefinition()).inclusive_snapshot_time,
+        ),
         blocking=tuple(dict.fromkeys(blocking)),
         summary=(
             f"Build one table for {use_case} from {item.file_name}: {counts.shoppers:,} shoppers rolled up from "

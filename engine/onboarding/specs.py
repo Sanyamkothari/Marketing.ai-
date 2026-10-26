@@ -544,9 +544,10 @@ SnapshotSpec = SnapshotDefinition
 class AudienceSpec(Artefact):
     """Who a dataset is built for, among all the entities (v3 phase 0, B5).
 
-    `{role: orders, no_event_days: 90}` keeps, at each snapshot, only entities that have had an event in `role` on
-    or before it and none in the `no_event_days` days up to and including it: the lapsed audience of a win-back.
-    It looks only at events the point-in-time clause admits, and it applies at train and score time alike
+    `{role: orders, no_event_days: 90}` keeps, at each snapshot, only entities that have had an event in `role`
+    before it and whose last such event is `no_event_days` or more days before it: the lapsed audience of a
+    win-back. The snapshot is the instant its day begins, so an event later that day is not read here. It looks only
+    at events the point-in-time clause admits, and it applies at train and score time alike
     (`engine.onboarding.audience`). Part of the recipe's hash, so a dataset built for another audience is another
     recipe."""
 

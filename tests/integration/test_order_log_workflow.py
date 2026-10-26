@@ -31,6 +31,7 @@ from fastapi import FastAPI
 from api.main import create_app
 from api.routes.clients import get_client_store
 from api.routes.schedules import app_request
+from engine.access.roles import Principal, Role
 from engine.config import get_roles, load_use_case
 from engine.doctor.build_driver import approval_for as build_approval
 from engine.doctor.build_driver import replay_build
@@ -65,6 +66,7 @@ MONTH_ENDS = (
 MIN_ROWS, MIN_POSITIVE = 1_000, 200
 """`min_rows` and `min_positive` of `configs/engine.yaml`: unchanged by the path, and met by the sample on their own."""
 READY = {"ready", "ready_with_warnings"}
+ANALYST = Principal(user_id="analyst-7", username="asha", roles=frozenset({Role.ANALYST}))
 FETCH = Path(__file__).resolve().parents[2] / "library" / "online-retail" / "fetch.py"
 
 
@@ -111,7 +113,15 @@ def approve_and_build(
         build=build_approval(proposal.plan, user_id="analyst-7", at=NOW),
     )
     built = build_from_order_log(
-        file, "CustomerID", answer, USE_CASE, approvals, port, config_root=root, diagnosis=diagnosis
+        file,
+        "CustomerID",
+        answer,
+        USE_CASE,
+        approvals,
+        port,
+        approver=ANALYST,
+        config_root=root,
+        diagnosis=diagnosis,
     )
     return built, answer
 
@@ -167,6 +177,28 @@ def test_the_sample_reaches_ready_with_the_minimums_unchanged(world: World) -> N
     assert log["lines_without_shopper"] == int(world.log["CustomerID"].isna().sum())
     assert log["shoppers"] == 1_000
     assert world.dataset["reactivated_90d"].isin([0, 1]).all()
+    # The figures docs/v3/ORDER_LOG.md quotes for the sample, pinned here so the page cannot drift from the build.
+    assert (built.counts.rows, built.counts.yes, built.counts.no) == (1_190, 413, 777)
+    per_month = pd.to_datetime(world.dataset["snapshot_date"]).dt.date.value_counts().sort_index()
+    assert tuple(per_month) == (83, 133, 166, 223, 257, 328)
+    shares = world.dataset[["days_between_orders_mean", "returned_items"]].isna().mean().round(2)
+    assert tuple(shares) == (0.76, 0.73)
+    # The three readiness warnings: the two mostly blank columns, and the probe that could not count dropped lines.
+    report = built.readiness.dry_run_report
+    assert report is not None and "with 3 warning(s)" in built.readiness.verdict_reason
+    warned = [(c.code, c.column) for c in report.checks if c.severity.value == "warning"]
+    assert sorted(warned) == [
+        ("HIGH_NULL_COLUMN", "days_between_orders_mean"),
+        ("HIGH_NULL_COLUMN", "returned_items"),
+    ]
+    assert [probe.code for probe in built.readiness.probes if probe.status == "warn"] == ["X_PARSER_ROW_LOSS"]
+    # The build report's own three warnings.
+    built_report = world.port.read_dataset(built.dataset_id).report
+    assert sorted(c.code for c in built_report.checks if c.severity.value == "warning") == [
+        "ENTITY_ATTRIBUTES_NOT_TIME_VERSIONED",
+        "HIGH_NULL_COLUMN",
+        "HIGH_NULL_COLUMN",
+    ]
 
 
 def orders_of(log: pd.DataFrame) -> pd.DataFrame:
@@ -181,8 +213,9 @@ def orders_of(log: pd.DataFrame) -> pd.DataFrame:
 
 
 def lapsed_rows(log: pd.DataFrame, snapshot: date, *, window: int = 90) -> pd.DataFrame:
-    """Shoppers with an order on or before `snapshot` and none in the `window` days up to it, with the outcome:
-    an order in the `window` days after it. Worked out from the raw lines alone."""
+    """Shoppers with an order before `snapshot` began (its 00:00) whose last such order is `window` or more days
+    earlier, with the outcome: an order after that instant and in the `window` days after it (an order later on the
+    month-end day included). Worked out from the raw lines alone."""
     orders = orders_of(log)
     day = pd.Timestamp(snapshot)
     last = orders.loc[orders["at"] <= day].groupby("shopper")["at"].max()
@@ -208,6 +241,14 @@ def test_every_row_is_a_lapsed_shopper_at_its_month_end_and_every_lapsed_shopper
         assert len(expected) > 0
     assert built["entity_key"].duplicated().sum() > 0, "a shopper is in several month-ends"
     assert not built.duplicated(["entity_key", "snapshot_date"]).any()
+    # The snapshot is the instant the month-end day begins: a lapsed shopper who orders later that very day keeps
+    # their row, and that order is their 'yes' (the audience sentence says so). Six rows of the sample are such.
+    orders = orders_of(world.log)
+    same_day = set(zip(orders["shopper"], orders["at"].dt.normalize(), strict=True))
+    on_the_day = built.loc[
+        [(key, day) in same_day for key, day in zip(built["entity_key"], built["snapshot_date"], strict=True)]
+    ]
+    assert len(on_the_day) == 6 and (on_the_day["reactivated_90d"] == 1).all()
 
 
 def test_a_scoring_build_has_the_same_audience_at_the_end_of_the_data(world: World) -> None:
@@ -307,6 +348,7 @@ def test_the_library_cross_check(world: World) -> None:
         at.loc[~returned, "returned_items"].isna().all() and (lib.loc[~returned, "returned_items"] == 0).all()
     )
     assert returned.sum() > 0 and single.sum() > 0 and (~single).sum() > 0
+    assert (int(single.sum()), int((~returned).sum())) == (220, 236), "the counts docs/v3/ORDER_LOG.md quotes"
 
 
 def test_the_small_slice_honestly_comes_out_rows_too_few(world: World) -> None:

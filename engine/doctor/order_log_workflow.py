@@ -15,8 +15,10 @@ module is that workflow without any visit state, plan item or screen. Two functi
 Everything is behind `data_doctor.order_log` (with `unified`): off, both raise `ORDER_LOG_OFF` and nothing else in the
 product moves. The customer column and the outcome are chosen by a person, never ticked; the loss guard, the minimum
 rows and positives (`min_rows`, `min_positive`) and the leak probe are the engine's own and unchanged: this module
-lowers nothing. Who may approve (the Analyst role, `data.define_outcome` and `data.build_dataset`) is the caller's
-policy layer; here an approval must name the hash and the exact sentence it reads now.
+lowers nothing. Who may approve is checked here, with the policy's own rules, before anything is built: each approval
+is the approver's own (`approved_by` is the `Principal`'s user id, never an agent's), the approver holds the Analyst
+role that `data.define_outcome` and `build_dataset` need, read the exact sentence shown now and, with
+`governance.approval_required`, did not propose it (`check_outcome_approval`, `protocol.confirmation_refusal`).
 
 The caller supplies the whole log (`LoadedFile.file_rows` unset): a sample cannot be rolled up honestly.
 """
@@ -65,6 +67,9 @@ from engine.doctor.outcomes import OutcomeFile, load_outcome_catalogue
 from engine.doctor.readiness_contracts import DataReadinessReport
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from engine.access.roles import Principal
     from engine.doctor.builder_local import BuiltDataset
 
 __all__ = [
@@ -108,8 +113,8 @@ class GuestsAnswer(StrictBase):
 
 
 class OrderLogApprovals(StrictBase):
-    """The person's two yeses: the outcome's exact sentence and the build plan's. Each names the hash and the
-    sentence it read; the policy check of who may give them (Analyst) is the caller's."""
+    """The person's two yeses: the outcome's exact sentence and the build plan's. Each names the hash, the sentence
+    it read and who gave it; `build_from_order_log` checks that against the approver and the policy."""
 
     outcome: OutcomeApproval
     build: BuildApproval
@@ -300,18 +305,25 @@ def build_from_order_log(
     approvals: OrderLogApprovals,
     port: OrderLogPort,
     *,
+    approver: Principal,
+    proposed_by: str | Sequence[str] | None = None,
     config_root: Path | None = None,
     mixed_answer: str | None = None,
     diagnosis: FileDiagnosis | None = None,
 ) -> OrderLogBuild:
     """Build the lapsed-shopper table from the order log `file`, once both approvals hold, and check it is ready.
 
-    Re-derives the proposal (:func:`propose_order_log`; the same inputs give the same hashes and sentences), refuses an
-    outcome approval that is not for this definition (`OUTCOME_NOT_APPROVED`) or this sentence
-    (`APPROVAL_SENTENCE_CHANGED`), runs the approved plan through the builder (`drive_builder` refuses a plan hash or
-    sentence that is not the one approved), reads the built table back and runs the readiness check on it, with the
-    use case's `built_split` (time-based, on `snapshot_date`). A build that finds a blocking problem raises with that
-    check's code; a table that is built but not ready is returned with its report, never hidden."""
+    Re-derives the proposal (:func:`propose_order_log`; the same inputs give the same hashes and sentences), then
+    refuses, before any builder call, an approval that is not for this definition (`OUTCOME_NOT_APPROVED`) or this
+    sentence (`APPROVAL_SENTENCE_CHANGED`), one not given by `approver` (`OUTCOME_NOT_APPROVED`,
+    `BUILD_PLAN_NOT_APPROVED`), an approver without the role (`TOOL_ROLE_REQUIRED`) and, with the use case's
+    `governance.approval_required`, an approver who is among `proposed_by` (`POLICY_ROLE_SEPARATION`). `approver` is the
+    caller's authenticated person, never built from a request body or by an agent; `proposed_by` is whoever proposed or
+    answered the questions (the person the AI acted for). It then runs the approved plan through the builder
+    (`drive_builder` refuses a plan hash or sentence that is not the one approved), reads the built table back and runs
+    the readiness check on it, with the use case's `built_split` (time-based, on `snapshot_date`). A build that finds a
+    blocking problem raises with that check's code; a table that is built but not ready is returned with its report,
+    never hidden."""
     proposal = propose_order_log(
         file,
         customer_column,
@@ -331,6 +343,7 @@ def build_from_order_log(
             "APPROVAL_SENTENCE_CHANGED",
             "The outcome now reads differently from what was approved; read it again before approving.",
         )
+    _check_approvers(proposal, approvals, approver, proposed_by, use_case, config_root)
     try:
         driven = drive_builder(
             proposal.plan, {file.upload_id: file.frame}, port, approvals.build, mode="train"
@@ -349,6 +362,56 @@ def build_from_order_log(
         counts=_counts(proposal.plan, built.frame, built.manifest.target, built.manifest.snapshot_dates),
         readiness=_readiness(config, built),
     )
+
+
+def _check_approvers(
+    proposal: OrderLogProposal,
+    approvals: OrderLogApprovals,
+    approver: Principal,
+    proposed_by: str | Sequence[str] | None,
+    use_case: str,
+    config_root: Path | None,
+) -> None:
+    """Who approved, by the policy's own rules: the outcome by `check_outcome_approval` (`data.define_outcome`), the
+    build plan by the `build_dataset` APPROVE-class rule (`protocol.confirmation_refusal`). Both are the approver's own
+    yes; their sentences were matched to the ones shown now just before."""
+    from engine.doctor.outcome_definition import check_outcome_approval
+    from engine.doctor.protocol import APPROVE_CLASS_ITEMS, confirmation_refusal
+
+    required = bool(load_use_case(use_case, config_root).governance.approval_required)
+    proposers: tuple[str, ...] = (
+        () if proposed_by is None else (proposed_by,) if isinstance(proposed_by, str) else tuple(proposed_by)
+    )
+    assert proposal.outcome.definition is not None
+    for proposer in proposers or (None,):
+        try:
+            check_outcome_approval(
+                kind="data.define_outcome",
+                definition=proposal.outcome.definition,
+                current_sentence=proposal.outcome_sentence,
+                approval=approvals.outcome,
+                approver=approver,
+                proposed_by=proposer,
+                approval_required=required,
+                config_root=config_root,
+            )
+        except OutcomeError as exc:
+            raise OrderLogWorkflowError(exc.code, exc.message) from exc
+    if approvals.build.approved_by != approver.user_id:
+        raise _fail(
+            "BUILD_PLAN_NOT_APPROVED",
+            "This approval of the build plan is not by this person; approve it again.",
+        )
+    refused = confirmation_refusal(
+        rule=APPROVE_CLASS_ITEMS["build_dataset"],
+        approver=approver,
+        sentence_read=approvals.build.sentence,
+        sentence_now=proposal.plan.approval_sentence,
+        proposed_by=proposers or None,
+        approval_required=required,
+    )
+    if refused is not None:
+        raise _fail(refused.code or "POLICY_NO_RULES", str(refused.detail.get("reason", "Not allowed.")))
 
 
 def _counts(

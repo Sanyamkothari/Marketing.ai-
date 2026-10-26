@@ -857,6 +857,7 @@ def event_sentence(
     unreadable: int = 0,
     not_numbers: int = 0,
     audience: AudienceSpec | None = None,
+    inclusive: bool = True,
 ) -> str:
     """The sentence an event definition is approved with: what *yes* means, the window and its grace, which date
     each file is read on, who is left out, every row that counts for nothing (a date that cannot be read, a
@@ -899,7 +900,9 @@ def event_sentence(
     if rules_note:
         text += f" {rules_note}"
     if audience is not None:
-        text += " " + audience_words(audience.role, audience.no_event_days, rows="a place in the count")
+        text += " " + audience_words(
+            audience.role, audience.no_event_days, rows="a place in the count", inclusive=inclusive
+        )
     text += f" Month-ends whose window is not over by {data_end:%d %b %Y} are left out"
     if counts is not None and counts.not_over:
         text += f" ({counts.not_over} month-end{'s' if counts.not_over != 1 else ''})"
@@ -1272,6 +1275,7 @@ def propose_event_outcome(
         unreadable=unreadable,
         not_numbers=not_numbers,
         audience=audience_spec,
+        inclusive=inclusive,
     )
     return EventOutcomeProposal(
         entity_file_name=entity.diagnosis.file_name,

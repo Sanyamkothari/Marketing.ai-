@@ -1,8 +1,8 @@
 """The lapsed audience on the spine (v3 phase 0, B5): who has a row at a snapshot, and that it is point in time.
 
-A shopper has a row at a snapshot only with an event in the audience's table on or before it and none in the
-`no_event_days` days up to and including it. Only events the point-in-time clause admits are read, so an event after
-the snapshot never keeps or drops a row.
+A shopper has a row at a snapshot only with an event in the audience's table before it and the last such event
+`no_event_days` or more days before it. The snapshot is the instant its day begins; only events the point-in-time
+clause admits are read, so an event after that instant (later the same day included) never keeps or drops a row.
 """
 
 from __future__ import annotations
@@ -88,12 +88,27 @@ def test_a_shopper_whose_only_orders_are_in_the_future_is_not_in() -> None:
     assert kept(events({"late": ["2011-09-20", "2011-10-20"]}), spine("late")) == []
 
 
-def test_the_inclusive_flag_moves_no_row() -> None:
-    """It only puts an event stamped at the snapshot's own instant on one side of the clause; such an event is
-    inside the last 90 days either way."""
-    log = events({"x": ["2011-03-01"], "y": ["2011-08-31"], "z": ["2011-06-02"]})
+def test_an_order_later_on_the_snapshot_day_is_after_the_snapshot_and_keeps_a_lapsed_shopper_in() -> None:
+    """The snapshot is 31 Aug 00:00: an order at 10:00 that day is not seen, so a shopper whose last earlier order is
+    in March is lapsed (that order is their outcome, not their history), with the flag either way."""
+    log = pd.DataFrame(
+        {
+            "entity_key": ["y", "y"],
+            "event_time": [pd.Timestamp("2011-03-01"), pd.Timestamp("2011-08-31 10:00")],
+        }
+    )
+    for inclusive in (True, False):
+        assert kept(log, spine("y"), inclusive=inclusive) == [("y", "2011-08-31")], inclusive
+
+
+def test_the_inclusive_flag_moves_an_event_stamped_at_the_snapshot_instant() -> None:
+    """An order dated 31 Aug with no time is stamped 00:00, the snapshot's own instant. Inclusive reads it as before
+    the snapshot (the shopper ordered within 90 days: not lapsed); exclusive reads it as after (lapsed, and it is
+    their outcome). A shopper with no earlier order is out either way."""
+    log = events({"x": ["2011-03-01", "2011-08-31"], "y": ["2011-08-31"], "z": ["2011-03-01"]})
     snapshots = spine("x", "y", "z")
-    assert kept(log, snapshots, inclusive=True) == kept(log, snapshots, inclusive=False)
+    assert kept(log, snapshots, inclusive=True) == [("z", "2011-08-31")]
+    assert kept(log, snapshots, inclusive=False) == [("x", "2011-08-31"), ("z", "2011-08-31")]
 
 
 def test_the_view_is_left_registered_for_the_audience_only() -> None:
@@ -148,3 +163,10 @@ def test_an_unset_audience_leaves_the_document_alone_and_a_set_one_is_in_the_rec
     assert (written["role"], written["no_event_days"]) == ("orders", 90)
     assert recipe_hash(plain, ()) != recipe_hash(ruled, ())
     assert recipe_hash(ruled, ()) != recipe_hash(_spec(AudienceSpec(role="orders", no_event_days=60)), ())
+
+
+def test_an_unset_audience_keeps_the_recipe_hash_of_the_commit_before_it() -> None:
+    """Pinned against the base commit (101b2e9f, before B5), computed there with the same spec."""
+    assert recipe_hash(_spec(None), ()) == (
+        "sha256:v1:56d905b31ca83849600251b373d1734c3b4849956b495a3d447778ba5eec7d23"
+    )

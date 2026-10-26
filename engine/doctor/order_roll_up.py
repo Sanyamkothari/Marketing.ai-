@@ -57,14 +57,24 @@ EVENT_TIME: Final[str] = "event_time"
 """The date column of each rolled-up table, mapped to the standard `event_time`."""
 
 
-def audience_words(role: str, no_event_days: int, *, rows: str) -> str:
-    """The lapsed audience (B5) as the build and outcome sentences say it. `rows` is what a shopper who counts has:
-    "a row" in the build sentence, "a place in the count" in the outcome sentence."""
-    event = "order" if role == ORDERS_ROLE else f"event in {role}"
+def audience_words(role: str, no_event_days: int, *, rows: str, inclusive: bool) -> str:
+    """The lapsed audience (B5) as the build and outcome sentences say it, as it runs: a month-end's snapshot is the
+    instant its day begins, so only what came before that instant (and, with `inclusive`, at it) decides, and an order
+    later that day is part of the outcome window. `rows` is what a shopper who counts has: "a row" in the build
+    sentence, "a place in the count" in the outcome sentence. `inclusive` is the snapshot spec's
+    `inclusive_snapshot_time`."""
+    event, noun = ("an order", "order") if role == ORDERS_ROLE else (f"an event in {role}", "event")
+    midnight = (
+        f"an {noun} later on the month-end day counts towards the outcome instead (one stamped exactly at midnight, as "
+        "a date with no time is, is before the day began)"
+        if inclusive
+        else f"an {noun} on the month-end day counts towards the outcome instead, even one stamped exactly at "
+        "midnight, as a date with no time is"
+    )
     return (
-        f"Only shoppers who have lapsed count: a shopper has {rows} at a month-end when they have an {event} "
-        f"on or before it and none in the {no_event_days} days up to and including it; every other shopper is left "
-        "out of that month-end."
+        f"Only shoppers who have lapsed count: a shopper has {rows} at a month-end when they had {event} before that "
+        f"day began and the last such {noun} was {no_event_days} or more days earlier; {midnight}. Every other "
+        "shopper is left out of that month-end."
     )
 
 

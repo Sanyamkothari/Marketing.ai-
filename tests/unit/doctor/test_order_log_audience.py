@@ -115,7 +115,7 @@ def test_the_outcome_is_counted_on_the_lapsed_rows_only(world) -> None:  # type:
     assert lapsed.definition.definition_hash != everyone.definition.definition_hash
     assert lapsed.definition.audience is not None and everyone.definition.audience is None
     assert lapsed.sentence is not None and everyone.sentence is not None
-    assert audience_words("orders", LAPSED, rows="a place in the count") in lapsed.sentence
+    assert audience_words("orders", LAPSED, rows="a place in the count", inclusive=True) in lapsed.sentence
     assert "lapsed" not in everyone.sentence
     assert f"{counts.yes:,} of {counts.rows:,} shoppers" in lapsed.sentence
 
@@ -127,6 +127,10 @@ def test_without_an_audience_the_definition_dump_and_hash_are_what_they_were(wor
     )
     assert plain.definition is not None
     assert "audience" not in plain.definition.model_dump(mode="json")
+    # Pinned against the base commit (101b2e9f, before B5), computed there on this log and configuration.
+    assert plain.definition.definition_hash == (
+        "619a7abbc4b71b7eb29234e1fea650c7635d9e5c2444b23083be25ff0c8e1e82"
+    )
 
 
 def test_an_audience_that_reads_a_table_the_outcome_does_not_is_refused(world) -> None:  # type: ignore[no-untyped-def]
@@ -163,14 +167,17 @@ def test_the_audience_is_in_the_plan_hash_and_the_build_sentence(world) -> None:
     lapsed = plan_with(world, world[0].audience)
     assert lapsed.blocking == () and lapsed.audience is not None
     assert lapsed.plan_hash != plain.plan_hash
-    assert audience_words("orders", LAPSED, rows="a row") in lapsed.approval_sentence
+    assert audience_words("orders", LAPSED, rows="a row", inclusive=True) in lapsed.approval_sentence
     assert "lapsed" not in plain.approval_sentence
     other = plan_with(world, audience(days=60))
     assert other.plan_hash != lapsed.plan_hash and other.approval_sentence != lapsed.approval_sentence
 
 
 def test_a_plan_without_an_audience_has_none_in_its_dump(world) -> None:  # type: ignore[no-untyped-def]
-    assert "audience" not in plan_with(world, None).model_dump(mode="json")
+    plain = plan_with(world, None)
+    assert "audience" not in plain.model_dump(mode="json")
+    # Pinned against the base commit (101b2e9f, before B5), computed there on this log and configuration.
+    assert plain.plan_hash == "17c849ddcee6639d5cfd7fd4564cd394765e54a2a2c438a99b673f0ed64ad49e"
     assert plan_with(world, world[0].audience).model_dump(mode="json")["audience"]["no_event_days"] == 90
 
 
@@ -197,3 +204,30 @@ def test_the_recipe_the_builder_is_given_carries_the_audience(world) -> None:  #
     quiet = RecordingBuilder()
     drive_builder(plain, {LOG: world[3]}, quiet, approval_for(plain, user_id="analyst-7", at=NOW))
     assert "audience" not in next(call for call in quiet.calls if call[0] == "save_spec")[1]
+
+
+def test_the_audience_words_say_how_an_order_on_the_month_end_day_is_read(world) -> None:  # type: ignore[no-untyped-def]
+    """The snapshot is the instant the month-end day begins: an order later that day is the outcome's, and the snapshot
+    spec's flag decides an order stamped at midnight exactly. The plan sentence follows the plan's own flag.
+    """
+    from engine.config import SnapshotDefinition
+
+    inclusive = audience_words("orders", LAPSED, rows="a row", inclusive=True)
+    exclusive = audience_words("orders", LAPSED, rows="a row", inclusive=False)
+    assert (
+        "before that day began" in inclusive
+        and "later on the month-end day counts towards the outcome" in inclusive
+    )
+    assert "even one stamped exactly at midnight" in exclusive and inclusive != exclusive
+    config, _, _, log, _, _, diagnosis, columns = world
+    plan = plan_build(
+        diagnosis,
+        {LOG: log},
+        use_case=USE_CASE,
+        label_spec=config.order_log_label,
+        order_log=OrderLogInput(LOG, columns),
+        suggested=config.order_log_features,
+        snapshot_spec=SnapshotDefinition(inclusive_snapshot_time=False),
+        audience=config.audience,
+    )
+    assert exclusive in plan.approval_sentence and inclusive not in plan.approval_sentence

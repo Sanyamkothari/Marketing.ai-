@@ -1,10 +1,15 @@
 """The lapsed audience (v3 phase 0, B5): which `(entity, snapshot)` rows of the spine count at all.
 
 A win-back model is asked about shoppers who have stopped buying, so a spine row is kept only where the
-customer has had an event in `role` on or before the snapshot (a customer with no history is not "lapsed", they
-have not started) and none in the `no_event_days` days up to and including it. That is `MAX(event_time) <=
-snapshot - no_event_days days` over the events the point-in-time clause lets in. It is the library's own rule for
+customer has had an event in `role` before the snapshot (a customer with no history is not "lapsed", they have not
+started) and the last of them is `no_event_days` or more days before it. That is `MAX(event_time) <= snapshot -
+no_event_days days` over the events the point-in-time clause lets in. It is the library's own rule for
 `library/online-retail/fetch.py` ("at least 90 whole days earlier, i.e. at or before 2011-06-12 00:00").
+
+The snapshot is the instant `snapshot_date` begins (`point_in_time_join_clause`). An event later that day is after
+it: it neither keeps nor drops the row, and it falls in the outcome window. An event stamped exactly at that instant
+(a date with no time) is read as before it with `inclusive` (so a shopper with one is not lapsed) and as after it
+without (so it is their outcome); that is the one row `inclusive` can move.
 
 The one clause that keeps the future out is `features.point_in_time_join_clause`, the same function the feature
 queries use, and the query goes through `features.assert_point_in_time` like theirs: a row can never be kept or
