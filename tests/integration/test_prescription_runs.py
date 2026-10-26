@@ -899,3 +899,123 @@ def test_a_guided_run_with_a_conversion_keeps_its_money_basis_with_the_switch_on
     assert (money.column, money.written_in, money.reported_in) == ("amount", ("USD",), "INR")
     (rate,) = money.rates
     assert (rate.rate, rate.source, str(rate.rate_date)) == (83.1, "RBI reference rate", "2026-10-10")
+
+
+# ---------------------------------------------------------------------------
+# An approved query on a single uploaded file: the run reads what the trial read
+# ---------------------------------------------------------------------------
+def _invoice_log() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "InvoiceNo": [f"I{n:03d}" for n in range(1, 41)],
+            "Customer": [f"C{n % 8}" for n in range(40)],
+            "Amount": [float(10 + n) for n in range(40)],
+            "InvoiceDate": [f"{1 + n % 12}/{1 + n % 27}/2025 {n % 24}:30" for n in range(40)],
+        }
+    )
+
+
+def _accepted_parse_date(upload_id: str) -> Any:
+    from engine.agent.contracts import ProposalState
+    from engine.doctor.case import CaseItem
+
+    step = RecipeStep(
+        order=1,
+        kind=RecipeStepKind.PARSE_DATE,
+        column="InvoiceDate",
+        params={"dayfirst": False},
+        reason="dates",
+    )
+    payload: dict[str, JsonValue] = {"step": step.model_dump(mode="json", exclude={"proposal_id"})}
+    return CaseItem.model_validate(
+        {
+            "item_id": "item_parse_date",
+            "kind": "recipe_step",
+            "source": "rules",
+            "confidence": "sure",
+            "state": ProposalState.ACCEPTED.value,
+            "upload_id": upload_id,
+            "payload": payload,
+            "payload_digest": "x",
+            "proposed_at": utc_now(),
+        }
+    )
+
+
+def test_an_approved_query_on_one_upload_runs_on_the_file_as_it_was_tried(
+    api: tuple[TestClient, Path], built: tuple[Path, str], unified: None
+) -> None:
+    from typing import cast
+
+    from engine.access.roles import Principal, Role
+    from engine.doctor.diagnose import LoadedFile
+    from engine.doctor.registry import DataToolContext, data_registry
+
+    client, data_dir = api
+    storage = LocalStorage(data_dir)
+    frame = _invoice_log()
+    sent = client.post(
+        "/uploads",
+        files={"file": ("history.csv", frame.to_csv(index=False).encode(), "text/csv")},
+        data={"use_case": USE_CASE, "mode": "train"},
+    )
+    assert sent.status_code == 201, sent.text
+    upload_id = str(sent.json()["upload_id"])
+    # The trial: the AI sees InvoiceDate after the person's accepted parse_date, so it writes timestamp SQL.
+    ctx = DataToolContext(
+        files=(
+            LoadedFile(upload_id=upload_id, file_name="history.csv", frame=frame, profile=cast(Any, None)),
+        ),
+        caller="ai",
+        principal=Principal(user_id="u", username="u", roles=frozenset({Role.ANALYST}), kind="user"),
+        case_items=(_accepted_parse_date(upload_id),),
+    )
+    proposal = (
+        data_registry()
+        .call(
+            "propose_sql_step",
+            {
+                "description": "Count each customer's invoices by month.",
+                "sql": "SELECT Customer, date_trunc('month', InvoiceDate) AS month, count(*) AS invoices "
+                "FROM t_history GROUP BY ALL",
+                "output_name": "monthly",
+                "upload_ids": [upload_id],
+            },
+            ctx,
+        )
+        .output
+    )
+    sql_step = RecipeStep.model_validate(proposal["step"]).model_copy(update={"order": 2})
+    parse = _accepted_parse_date(upload_id).payload["step"]
+    steps = (RecipeStep.model_validate(parse), sql_step)
+    the_recipe = DataRecipe(
+        recipe_id="rc-sql-one-file",
+        use_case_id=USE_CASE,
+        source_fingerprint="sha256:f",
+        steps=steps,
+        recipe_hash=recipe_hash(steps),
+        primary_key=None,
+        target=None,
+        levels=(AgentLevel.CLEAN, AgentLevel.RESHAPE),
+        max_failure_pct=5.0,
+        created_at=utc_now(),
+    )
+    ref, _ = _prescribe(
+        storage, files=(FilePart(slot="history", upload_ids=(upload_id,), recipe=the_recipe),), basis=None
+    )
+    bind_upload(storage, upload_id, ref)
+    from api.routes.run_prescriptions import prescribed_training
+    from api.routes.uploads import load_upload
+
+    made = prescribed_training(
+        storage,
+        load_use_case(USE_CASE),
+        upload=load_upload(storage, upload_id),
+        dataset_id=None,
+        primary_key=None,
+        target=None,
+    )
+    assert made is not None and made.upload is not None
+    table = _frame(storage, made.upload.source_key)
+    assert list(table.columns) == ["Customer", "month", "invoices"]
+    assert int(table["invoices"].sum()) == 40

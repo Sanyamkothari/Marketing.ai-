@@ -982,10 +982,12 @@ def _inputs_of(
     if step.kind is not RecipeStepKind.SQL_QUERY:
         return {THIS_TABLE: before}
     try:
-        names = sql_params(step.params).inputs
+        params = sql_params(step.params)
     except SqlStepError:
         return {THIS_TABLE: before}
-    found = {n: (before if n == THIS_TABLE else (tables or {}).get(n)) for n in names}
+    found = {
+        n: (before if n in (THIS_TABLE, params.this_table) else (tables or {}).get(n)) for n in params.inputs
+    }
     return {n: f for n, f in found.items() if f is not None} or {THIS_TABLE: before}
 
 
@@ -999,7 +1001,8 @@ def _as_of_of(
         params = sql_params(step.params)
         rule = params.as_of_rule
         if given is None and rule is not None:
-            source = before if rule.table == THIS_TABLE else (tables or {}).get(rule.table)
+            own = rule.table in (THIS_TABLE, params.this_table)
+            source = before if own else (tables or {}).get(rule.table)
             if source is not None and rule.column in source.columns:
                 return resolve_as_of_rule(rule, source[rule.column])
         return given or params.as_of

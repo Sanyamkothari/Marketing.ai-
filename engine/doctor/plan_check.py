@@ -19,7 +19,7 @@ from engine.agent.config import AgentConfig, AgentLevel
 from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind
 from engine.agent.dataset_recipe import consistent_types
 from engine.agent.recipe import STEP_PHASE, RecipeError
-from engine.agent.sql_step import SqlStepError
+from engine.agent.sql_step import SqlStepError, sql_params
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.doctor.case import CaseFile, CaseItem
 from engine.doctor.diagnose import LoadedFile
@@ -38,6 +38,7 @@ __all__ = [
     "open_stops",
     "plan_digest",
     "recipe_steps_of",
+    "steps_digest",
 ]
 
 SAMPLE_ROWS: Final[int] = 1_000
@@ -53,12 +54,16 @@ def plan_digest(files: Sequence[CaseFile], items: Sequence[CaseItem]) -> str:
 
 
 def recipe_steps_of(
-    items: Sequence[CaseItem], upload_id: str, *, only_file: bool
+    items: Sequence[CaseItem], upload_id: str, *, only_file: bool, pending: bool = False
 ) -> list[tuple[RecipeStep, str]]:
-    """The accepted recipe steps for one file with their item ids, in the engine's fixed order, numbered 1..n."""
+    """The accepted recipe steps for one file with their item ids, in the engine's fixed order, numbered 1..n.
+
+    `pending` also takes the steps still waiting for a yes: the plan as it will stand if they are all accepted.
+    """
     found: list[tuple[RecipeStep, str]] = []
+    states = (ProposalState.ACCEPTED, ProposalState.PENDING) if pending else (ProposalState.ACCEPTED,)
     for item in items:
-        if item.state is not ProposalState.ACCEPTED or not isinstance(item.payload.get("step"), dict):
+        if item.state not in states or not isinstance(item.payload.get("step"), dict):
             continue
         if item.upload_id != upload_id and not (item.upload_id is None and only_file):
             continue
@@ -70,6 +75,13 @@ def recipe_steps_of(
     return [
         (step.model_copy(update={"order": n}), item_id) for n, (step, item_id) in enumerate(found, start=1)
     ]
+
+
+def steps_digest(steps: Sequence[RecipeStep]) -> str:
+    """A short digest of what steps do (kind, columns, parameters), not of their number or who proposed them: how a
+    query step remembers the fixes it was tried after."""
+    shape = [[s.kind.value, s.column, s.new_column, s.params] for s in steps]
+    return sha256_hex(canonical_bytes(shape))[:16]
 
 
 def accepted_column(
@@ -127,6 +139,18 @@ def _step_row(receipt: Receipt, item_id: str) -> dict[str, JsonValue]:
             {"column": t.column, "before": t.before, "after": t.after} for t in receipt.totals[:_TOTALS_SHOWN]
         ],
     }
+
+
+def _tried_before_change(ordered: Sequence[RecipeStep], order: int | None) -> bool:
+    """Whether the step that failed is a query tried on the file after other fixes than those it now runs after."""
+    step = next((s for s in ordered if s.order == order), None)
+    if step is None or step.kind is not RecipeStepKind.SQL_QUERY:
+        return False
+    try:
+        tried = sql_params(step.params).tried_after
+    except SqlStepError:
+        return False
+    return tried is not None and tried != steps_digest([s for s in ordered if s.order < step.order])
 
 
 def check_plan(
@@ -194,6 +218,15 @@ def check_plan(
                 message=f"A step could not run on a sample of {loaded.file_name or 'the file'}: "
                 f"{getattr(exc, 'message', None) or type(exc).__name__}",
             )
+            if _tried_before_change(ordered, getattr(exc, "order", None)):
+                failed = failed.model_copy(
+                    update={
+                        "code": "PLAN_QUERY_TRIED_BEFORE_CHANGE",
+                        "message": f"The query was tried before the fixes now in the plan for "
+                        f"{loaded.file_name or 'the file'} were settled, and it cannot run after them. "
+                        "Ask for the query again.",
+                    }
+                )
             findings.append(_finding(failed, item_id))
             continue
         for receipt in guarded.receipts:
