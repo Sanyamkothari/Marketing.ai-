@@ -3,7 +3,8 @@
 * **Leaving risk** (`churn_risk`): the chance a customer who has been buying stops buying in the next
   `risk_window_days` (60). A regularised logistic regression.
 * **90-day value** (`clv_90d`): what the customer brings in the next `value_window_days` (90), in
-  margin where the shop reports it. A ridge regression.
+  margin where the shop reports it. The chance of any (a ridge logistic regression) times the margin
+  of those with some (a ridge regression), so nobody is valued at exactly 0.
 
 Both learn from the profile (`autonomy.profile`, 52 numbers) at past month-ends, with labels read from
 the window after each month-end, so what a model learned from is what the agent is fed.
@@ -137,11 +138,12 @@ class TrainingSet:
     cut_of: npt.NDArray[np.int64]
     x: _FloatArray
     stopped: _FloatArray
-    """1.0 if the customer made no order in the risk window, else 0.0; NaN when the window is not over
-    (censored) or the customer was not active."""
+    """1.0 if the customer made no order in the risk window (whatever its value: a free order is an
+    order), else 0.0; NaN when the window is not over (censored) or the customer was not active."""
     value: _FloatArray
-    """Margin (revenue where none is reported) in the value window; NaN when the window is not over or
-    the customer had never ordered."""
+    """Margin in the value window, at least 0: as reported, else order value (read signed, as the
+    profile does) less refunds at the shop's margin rate known at the window's end (1, revenue, while
+    no purchase reports a margin); NaN when the window is not over or the customer had never ordered."""
     censored_risk: int = 0
     """Active customer-month-ends whose risk window was not over at `as_of`, left without a label."""
     censored_value: int = 0
@@ -155,14 +157,29 @@ def _amount(value: float | None) -> float:
     return float(value) if value is not None and math.isfinite(value) else 0.0
 
 
-def _margin_rate(events: Sequence[Event]) -> float:
-    """Share of order value kept as margin over the purchases that report one; 1 (revenue) if none."""
-    kept = total = 0.0
-    for e in events:
-        if e.type is EventType.PURCHASE and e.margin is not None and math.isfinite(e.margin):
-            kept += e.margin
-            total += max(_amount(e.value), 0.0)
-    return kept / total if total > 0 and kept > 0 else 1.0
+def _reported(e: Event) -> bool:
+    return e.margin is not None and math.isfinite(e.margin)
+
+
+class _MarginRate:
+    """The shop's margin rate as it stood at any instant: the share of order value kept as margin over
+    the purchases up to then that report one; 1 (revenue) while none does. A label read at the end of
+    its window uses the rate known then, so no label reads a margin reported after its window."""
+
+    def __init__(self, events: Sequence[Event]) -> None:
+        rows = sorted(
+            (e.ts.timestamp(), float(e.margin or 0.0), max(_amount(e.value), 0.0))
+            for e in events
+            if e.type is EventType.PURCHASE and _reported(e)
+        )
+        self._ts = np.array([r[0] for r in rows])
+        self._kept = np.concatenate([[0.0], np.cumsum([r[1] for r in rows])])
+        self._total = np.concatenate([[0.0], np.cumsum([r[2] for r in rows])])
+
+    def at(self, t: float) -> float:
+        i = int(np.searchsorted(self._ts, t, side="right"))
+        kept, total = float(self._kept[i]), float(self._total[i])
+        return kept / total if total > 0 and kept > 0 else 1.0
 
 
 def build_training_set(
@@ -191,26 +208,30 @@ def build_training_set(
     )
     if not kept:
         return empty
-    rate = _margin_rate(kept)
-    buys: dict[str, list[tuple[float, float, float]]] = {}
+    rate = _MarginRate(kept)
+    # Per customer and in time order: (when, margin as reported, order value without a reported margin
+    # less refunds). A purchase's value is read signed, as the profile reads it (a negative purchase
+    # takes money off); a refund always takes its amount off. The value label is the reported margin in
+    # the window plus the rest at the margin rate known at the window's end.
+    money_rows: dict[str, list[tuple[float, float, float]]] = {}
+    orders: dict[str, list[float]] = {}
     for e in kept:
-        if e.type is EventType.PURCHASE or e.type is EventType.REFUND:
-            money = abs(_amount(e.value))
-            if e.type is EventType.PURCHASE:
-                profit = (
-                    _amount(e.margin) if e.margin is not None and math.isfinite(e.margin) else money * rate
-                )
-                buys.setdefault(e.customer_id, []).append((e.ts.timestamp(), money, profit))
-            else:
-                buys.setdefault(e.customer_id, []).append((e.ts.timestamp(), 0.0, -money * rate))
-    stamps: dict[str, _FloatArray] = {}
-    paid: dict[str, _FloatArray] = {}
-    gain_cum: dict[str, _FloatArray] = {}
-    for cid, rows in buys.items():
-        rows.sort()
-        stamps[cid] = np.array([r[0] for r in rows])
-        paid[cid] = np.array([r[1] for r in rows])
-        gain_cum[cid] = np.concatenate([[0.0], np.cumsum([r[2] for r in rows])])
+        t = e.ts.timestamp()
+        if e.type is EventType.PURCHASE:
+            orders.setdefault(e.customer_id, []).append(t)
+            entry = (t, float(e.margin or 0.0), 0.0) if _reported(e) else (t, 0.0, _amount(e.value))
+            money_rows.setdefault(e.customer_id, []).append(entry)
+        elif e.type is EventType.REFUND:
+            money_rows.setdefault(e.customer_id, []).append((t, 0.0, -abs(_amount(e.value))))
+    stamps: dict[str, _FloatArray] = {cid: np.sort(np.array(ts)) for cid, ts in orders.items()}
+    money_ts: dict[str, _FloatArray] = {}
+    margin_cum: dict[str, _FloatArray] = {}
+    plain_cum: dict[str, _FloatArray] = {}
+    for cid, entries in money_rows.items():
+        entries.sort()
+        money_ts[cid] = np.array([r[0] for r in entries])
+        margin_cum[cid] = np.concatenate([[0.0], np.cumsum([r[1] for r in entries])])
+        plain_cum[cid] = np.concatenate([[0.0], np.cumsum([r[2] for r in entries])])
 
     first = min(e.ts for e in kept)
     cuts = month_ends(first, as_of)
@@ -233,20 +254,26 @@ def build_training_set(
         ordered = vec[j_ordered] >= 0.5
         active = ordered and vec[j_recency] <= cfg.active_days
         t0 = row.as_of.timestamp()
-        ts, pay = stamps.get(row.customer_id), paid.get(row.customer_id)
+        cid = row.customer_id
         lab_stop = math.nan
         if active:
             if risk_end[row.as_of]:
-                lo, hi = _window(ts, t0, cfg.risk_window_days)
-                lab_stop = 0.0 if pay is not None and float(pay[lo:hi].sum()) > 0 else 1.0
+                # Any order counts, whatever it cost (a free or fully discounted order is an order, as
+                # it is in the profile's `buy_ordered` and recency).
+                lo, hi = _window(stamps.get(cid), t0, cfg.risk_window_days)
+                lab_stop = 0.0 if hi > lo else 1.0
             else:
                 censored_risk += 1
         lab_value = math.nan
         if ordered:
             if value_end[row.as_of]:
-                lo, hi = _window(ts, t0, cfg.value_window_days)
-                cum = gain_cum.get(row.customer_id)
-                lab_value = max(float(cum[hi] - cum[lo]), 0.0) if cum is not None else 0.0
+                lo, hi = _window(money_ts.get(cid), t0, cfg.value_window_days)
+                lab_value = 0.0
+                if hi > lo:
+                    end = t0 + cfg.value_window_days * 86_400.0
+                    margin = float(margin_cum[cid][hi] - margin_cum[cid][lo])
+                    plain = float(plain_cum[cid][hi] - plain_cum[cid][lo])
+                    lab_value = max(margin + plain * rate.at(end), 0.0)
             else:
                 censored_value += 1
         if math.isnan(lab_stop) and math.isnan(lab_value):
@@ -347,7 +374,14 @@ class LeavingRiskModel:
 
 @dataclass(frozen=True)
 class Clv90Model:
-    """Margin in the next `window_days`, from a profile."""
+    """Margin in the next `window_days`, from a profile, in two parts: the chance of any margin in the
+    window (a ridge logistic regression, `buy_beta`; None when every training row had some) times the
+    margin of those who have some (a ridge regression, at least `floor`, the least such margin seen).
+
+    One straight line through everyone would put a customer who is likely to lapse below zero and the
+    value would be clamped to exactly 0, a certainty no record gives: a lapsed customer is still worth
+    their small chance of coming back, and what an unsubscribe costs is priced on it
+    (`ValueModel.future_value`)."""
 
     names: tuple[str, ...]
     mean: _FloatArray
@@ -356,10 +390,16 @@ class Clv90Model:
     y_mean: float
     y_scale: float
     window_days: int
+    buy_beta: _FloatArray | None = None
+    floor: float = 0.0
 
     def predict(self, x: _FloatArray) -> _FloatArray:
         z = (np.atleast_2d(x) - self.mean) / self.scale
-        return np.asarray(np.maximum(self.y_mean + self.y_scale * (self.beta[0] + z @ self.beta[1:]), 0.0))
+        given = np.maximum(self.y_mean + self.y_scale * (self.beta[0] + z @ self.beta[1:]), self.floor)
+        if self.buy_beta is None:
+            return np.asarray(given)
+        eta = np.clip(self.buy_beta[0] + z @ self.buy_beta[1:], -30.0, 30.0)
+        return np.asarray(given / (1.0 + np.exp(-eta)))
 
 
 def _fit_risk(
@@ -373,11 +413,19 @@ def _fit_risk(
 
 def _fit_value(x: _FloatArray, y: _FloatArray, names: tuple[str, ...], cfg: SlowModelConfig) -> Clv90Model:
     z, mean, scale = _standardise(x)
-    capped = np.minimum(y, float(np.quantile(y, cfg.value_cap_quantile)))
+    some = y > 0
+    if not some.any():
+        zero = np.zeros(z.shape[1] + 1)
+        return Clv90Model(names, mean, scale, zero, 0.0, 1.0, cfg.value_window_days, None, 0.0)
+    buy_beta = None if some.all() else _fit_logistic(z, some.astype(np.float64), cfg.risk_ridge, cfg.rounds)
+    positive = y[some]
+    capped = np.minimum(positive, float(np.quantile(positive, cfg.value_cap_quantile)))
     centre, spread = float(capped.mean()), float(capped.std())
     spread = spread if spread > 1e-9 else 1.0
-    beta = _fit_ridge(z, (capped - centre) / spread, cfg.value_ridge)
-    return Clv90Model(names, mean, scale, beta, centre, spread, cfg.value_window_days)
+    beta = _fit_ridge(z[some], (capped - centre) / spread, cfg.value_ridge)
+    return Clv90Model(
+        names, mean, scale, beta, centre, spread, cfg.value_window_days, buy_beta, float(capped.min())
+    )
 
 
 # --- the held-out checks -----------------------------------------------------------------------------

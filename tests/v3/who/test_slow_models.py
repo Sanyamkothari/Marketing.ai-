@@ -7,12 +7,13 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 import pytest
 
-from autonomy.contracts import Event
+from autonomy.contracts import Event, EventType
 from autonomy.decide.slow_models import (
     CHURN_RISK,
     CLV_90D,
     SlowModelConfig,
     SlowModels,
+    TrainingSet,
     _split,
     auc,
     build_training_set,
@@ -217,3 +218,70 @@ def test_leavers_score_higher_than_stayers():
     stopped = set(risk) - bought_again
     assert len(stopped) > 20 and len(bought_again) > 20
     assert np.mean([risk[c] for c in stopped]) > np.mean([risk[c] for c in bought_again]) + 0.05
+
+
+# --- labels read purchases as the profile does ------------------------------------------------------
+
+
+def unpriced(cid: str, ts: datetime, value: float, event_id: str, margin: float | None = None) -> Event:
+    """A purchase that reports no margin unless one is given."""
+    return Event(
+        event_id=event_id,
+        customer_id=cid,
+        type=EventType.PURCHASE,
+        ts=ts,
+        source="test",
+        value=value,
+        margin=margin,
+    )
+
+
+def first_cut_value(data: TrainingSet, cid: str) -> float:
+    return float(
+        data.value[next(i for i in range(data.rows) if data.customers[i] == cid and data.cut_of[i] == 0)]
+    )
+
+
+def test_a_free_order_is_an_order_not_a_stopped_customer():
+    # 'a' ordered on 10 January and again on 10 February, both fully discounted (value 0)
+    events = [purchase("a", at(1, 10), 0.0), purchase("a", at(2, 10), 0.0)]
+    data = build_training_set(events, at(6, 1))
+    i = next(i for i in range(data.rows) if data.cut_of[i] == 0)
+    assert data.stopped[i] == 0.0
+
+
+def test_a_negative_purchase_takes_money_off_the_value():
+    # margin 40 on the 100 order; the -40 order reports no margin and is read at the shop's rate (0.4)
+    events = [
+        purchase("b", at(1, 10)),
+        purchase("b", at(2, 10), 100.0),
+        unpriced("b", at(2, 15), -40.0, "b-neg"),
+    ]
+    data = build_training_set(events, at(6, 1))
+    assert first_cut_value(data, "b") == pytest.approx(40.0 - 40.0 * 0.4)
+
+
+def test_the_margin_rate_of_a_label_is_the_one_known_at_the_end_of_its_window():
+    # c's February order reports no margin and is read at the shop's rate (0.4 so far). A margin
+    # reported after the January window closed (20 May) must not change that window's label.
+    events = [
+        purchase("c", at(1, 10)),
+        unpriced("c", at(2, 10), 100.0, "c-plain"),
+        purchase("o", at(1, 5), 100.0),
+    ]
+    before = build_training_set(events, at(6, 1))
+    after = build_training_set([*events, unpriced("o", at(5, 20), 100.0, "late", margin=90.0)], at(6, 1))
+    assert first_cut_value(before, "c") == pytest.approx(100.0 * 0.4)
+    assert first_cut_value(after, "c") == pytest.approx(100.0 * 0.4)
+
+
+def test_nobody_is_valued_at_exactly_nothing():
+    events = shop(500)
+    models = SlowModels()
+    models.fit(events, END)
+    assert models.value_usable
+    known = by_customer(events, END)
+    values = [models.scores(profile_for(evs, END))[CLV_90D] for evs in known.values()]
+    assert min(values) > 0.0
+    lapsed = models.scores({"buy_ordered": 1.0, "buy_days_since_last_order": 400.0})
+    assert 0.0 < lapsed[CLV_90D] < float(np.median(values))
