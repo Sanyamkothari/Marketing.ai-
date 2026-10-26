@@ -109,3 +109,16 @@ def test_budget_price_rejects_nonsense():
         BudgetPrice(10.0, 3, gain=0.0)
     with pytest.raises(ValueError):
         BudgetPrice(10.0, 3).update(-1.0)
+
+
+def test_channel_spend_counts_against_the_budget_and_is_set_aside_for_the_days_left():
+    # 100 a day of messages is planned out of 1,000 over 5 days: 500 is left for offers, 100 a day.
+    p = BudgetPrice(1000.0, 5, channel_plan_per_day=100.0)
+    assert p.daily_target == pytest.approx(100.0)
+    # The messages actually cost 150 a day: that rate is now set aside for the 4 days left.
+    p.update(100.0, other_spend=150.0)
+    assert p.other_spent == 150.0
+    assert p.remaining == pytest.approx(1000.0 - 100.0 - 150.0 - 4 * 150.0)
+    assert p.daily_target == pytest.approx(150.0 / 4)
+    with pytest.raises(ValueError):
+        p.update(1.0, other_spend=-1.0)

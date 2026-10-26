@@ -110,11 +110,13 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import numpy as np
 
 from autonomy.contracts import (
+    NO_OFFER,
     Bid,
     Brief,
     Channel,
@@ -147,7 +149,8 @@ from autonomy.decide.models import (
     shrink_to_pool,
 )
 from autonomy.decide.models import action_key as key_of
-from autonomy.decide.pacing import Pacer
+from autonomy.decide.pacing import BudgetPrice, OfferPricing, Pacer
+from autonomy.decide.planner import basket_cost_fn
 from autonomy.decide.policy import SWEEP, AutonomousPolicy, seeded_rng
 from autonomy.decide.timing import LATE_CLICK, ReadingHourModel, zone_named
 from autonomy.interfaces import Bidder, Policy
@@ -1488,9 +1491,19 @@ class AgentPolicy:
         restraint: bool = True,
         weekly_budget: bool = True,
         currency: str = "$",
+        offer_pricing: OfferPricing | None = None,
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
+        # v3 offers (docs/v3/OFFERS.md), off by default: a budget price per goal, charged on every
+        # offer's cost by its bidder and moved once a day by the offer money actually spent.
+        self.offer_pricing = offer_pricing
+        self.offer_prices: dict[str, BudgetPrice] = {}
+        self._offer_spend: dict[str, float] = {}
+        self._channel_spend: dict[str, float] = {}
+        self._offer_goal: dict[tuple[str, str], str] = {}
+        self._priced_sends: set[str] = set()
+        self._priced_day: date | None = None
         self.version = version
         self.refill_items: dict[str, str | tuple[str, str]] = {}
         """customer -> refill pick (item id, or (item id, reason)), set by `set_items`; read when no
@@ -1630,6 +1643,7 @@ class AgentPolicy:
             asset_of=self.asset_of,
             carousel_template=self.carousel_template,
             format_costs=self.format_costs,
+            **self._offer_pricing_hooks(brief),
         )
 
     def _install(self, brief: Brief) -> None:
@@ -2464,8 +2478,72 @@ class AgentPolicy:
         if self.pacer is not None:
             for goal in self.briefs:
                 self.pacer.set_unsubscribe_baseline(goal, self.breaker.unsub_baseline.get(goal))
+        if self.offer_pricing is not None and self._decided:
+            self._roll_offer_prices(now)
         self.alerts.extend(news)
         return news
+
+    # --- the budget price for offers (v3, opt-in) -----------------------------------------------
+
+    def _offer_pricing_hooks(self, brief: Brief) -> dict[str, Any]:
+        """The bidder's v3 offer hooks for this brief: none unless `offer_pricing` is on."""
+        pricing = self.offer_pricing
+        if pricing is None:
+            return {}
+        price = self.offer_prices.get(brief.goal_id)
+        if price is None:
+            price = self.offer_prices[brief.goal_id] = pricing.price_for(brief.envelope.budget)
+        else:
+            price.budget = brief.envelope.budget  # a new brief version may move the budget
+        hooks: dict[str, Any] = {"budget_price": price}
+        if pricing.default_basket is not None:
+            hooks["offer_cost_fn"] = basket_cost_fn(pricing.default_basket)
+        return hooks
+
+    def _price_send(self, d: Decision) -> None:
+        """Count an agent send's channel cost against its goal, and remember which goal its offer is
+        on, so a later redemption is charged to that goal."""
+        if d.kind is not DecisionKind.ACT or d.action is None or d.group is not Group.AGENT:
+            return
+        if d.decision_id in self._priced_sends:
+            return
+        self._priced_sends.add(d.decision_id)
+        goal = d.action.goal_id
+        bidder = self.bidders.get(goal)
+        if bidder is not None:
+            cost = bidder.costs.get(d.action.channel, 0.0) + bidder.format_costs.get(d.action.format, 0.0)
+            self._channel_spend[goal] = self._channel_spend.get(goal, 0.0) + cost
+        if d.action.offer_id != NO_OFFER.offer_id:
+            self._offer_goal[(d.customer_id, d.action.offer_id)] = goal
+
+    def _price_redemption(self, e: Event) -> None:
+        """Charge a purchase that used one of our offers to the goal that sent it: the cost the shop
+        reported (`attrs["offer_cost"]`), else the offer's own `cost_per_redemption`."""
+        offer_id = e.attrs.get("offer_id")
+        if not isinstance(offer_id, str) or offer_id == NO_OFFER.offer_id:
+            return
+        goal = self._offer_goal.get((e.customer_id, offer_id))
+        if goal is None:
+            return
+        reported = e.attrs.get("offer_cost")
+        if isinstance(reported, int | float) and not isinstance(reported, bool):
+            cost = max(float(reported), 0.0)
+        else:
+            brief = self.briefs.get(goal)
+            found = (
+                next((o for o in brief.envelope.offers if o.offer_id == offer_id), None) if brief else None
+            )
+            cost = found.cost_per_redemption if found is not None else 0.0
+        self._offer_spend[goal] = self._offer_spend.get(goal, 0.0) + cost
+
+    def _roll_offer_prices(self, now: datetime) -> None:
+        """Close the day for every goal's budget price, once per calendar day (UTC) of `now`."""
+        day = now.astimezone(UTC).date()
+        if self._priced_day == day:
+            return
+        self._priced_day = day
+        for goal, price in self.offer_prices.items():
+            price.update(self._offer_spend.pop(goal, 0.0), other_spend=self._channel_spend.pop(goal, 0.0))
 
     def _segment_at(self, decisions: Iterable[Decision], now: datetime | None) -> Callable[[str], str | None]:
         """A customer -> segment lookup that gives, for the decisions closing now, the segment the
@@ -2508,11 +2586,15 @@ class AgentPolicy:
                             self._expected_by_kind[kind] += max(chosen.uplift, 0.0)
         elif d.group is Group.HOLDOUT:
             self._log[d.decision_id] = d
+        if self.offer_pricing is not None:
+            self._price_send(d)
 
     def _observe(self, e: Event) -> None:
         """Feed one event to the lift estimate, the breaker, the click model and the reading hours."""
         if e.type is EventType.PURCHASE:
             self.lift.purchase(e.customer_id, e.ts)
+            if self.offer_pricing is not None:
+                self._price_redemption(e)
         if e.decision_id is None:
             return
         sent = self._sends.get(e.decision_id)
@@ -2622,6 +2704,7 @@ def build_agent_policy(
     restraint: bool = True,
     weekly_budget: bool = True,
     currency: str = "$",
+    offer_pricing: OfferPricing | None = None,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -2641,7 +2724,8 @@ def build_agent_policy(
     channel before a stop rule trips, `autonomy.decide.pacing`) is off by default: on the Gym it
     changed nothing where no stop rule is near and kept the breaker from stopping a complaint storm.
     See docs/v2/CONTACT_LESS.md. `currency` is how money is written in each decision's reason (the
-    shop's own: "₽", "EUR "...).
+    shop's own: "₽", "EUR "...). `offer_pricing` (v3, off by default) charges each goal's offers a
+    budget price that the nightly loop moves day by day (docs/v3/OFFERS.md).
     """
     if bundle is None:
         fresh = build_bundle()
@@ -2665,4 +2749,5 @@ def build_agent_policy(
         restraint=restraint,
         weekly_budget=weekly_budget,
         currency=currency,
+        offer_pricing=offer_pricing,
     )

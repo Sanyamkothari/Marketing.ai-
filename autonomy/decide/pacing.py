@@ -334,6 +334,11 @@ class BudgetPrice:
     price, below it lowers it, by a multiple that grows with the miss. `initial` is where it starts;
     `planner.OfferPlan.price` on a sample of the audience is a good start.
 
+    The goal's budget also pays for the messages. `update(..., other_spend=...)` takes the day's
+    channel spend: it counts against the budget, and its daily average (before any day has run,
+    `channel_plan_per_day`) is set aside for every day left, so the price aims the offers at the
+    budget net of the planned channel spend rather than at the whole budget.
+
     Deterministic, with no clock: the caller says when a day ends. The object is callable and returns
     the current price, so it can be handed to a bidder directly.
     """
@@ -348,9 +353,12 @@ class BudgetPrice:
         floor: float = BUDGET_PRICE_FLOOR,
         ceiling: float = BUDGET_PRICE_CEILING,
         max_miss: float = BUDGET_PRICE_MAX_MISS,
+        channel_plan_per_day: float = 0.0,
     ) -> None:
         if not math.isfinite(budget) or budget < 0 or days < 1:
             raise ValueError("need a finite budget >= 0 and at least one day")
+        if not math.isfinite(channel_plan_per_day) or channel_plan_per_day < 0:
+            raise ValueError("the planned channel spend must be finite and >= 0")
         if gain <= 0 or not 0 < floor < ceiling or max_miss <= 0 or initial < 0:
             raise ValueError("need gain > 0, 0 < floor < ceiling, max_miss > 0 and initial >= 0")
         self.budget = budget
@@ -360,16 +368,28 @@ class BudgetPrice:
         self.ceiling = ceiling
         self.max_miss = max_miss
         self._level = min(max(initial, floor), ceiling)
+        self.channel_plan_per_day = channel_plan_per_day
         self._spent = 0.0
+        self._other = 0.0
         self._days_done = 0
 
     @property
     def spent(self) -> float:
+        """Offer spend so far."""
         return self._spent
 
     @property
+    def other_spent(self) -> float:
+        """Channel (and other non-offer) spend so far."""
+        return self._other
+
+    @property
     def remaining(self) -> float:
-        return max(self.budget - self._spent, 0.0)
+        """What is left for offers: the budget less all spend so far and the channel spend set aside
+        for the days left."""
+        rate = self._other / self._days_done if self._days_done else self.channel_plan_per_day
+        reserve = rate * max(self.days - self._days_done, 0)
+        return max(self.budget - self._spent - self._other - reserve, 0.0)
 
     @property
     def days_left(self) -> int:
@@ -394,14 +414,53 @@ class BudgetPrice:
     def __call__(self) -> float:
         return self.price
 
-    def update(self, spent_today: float) -> float:
-        """Close a day that spent `spent_today`, and return tomorrow's price."""
-        if not math.isfinite(spent_today) or spent_today < 0:
+    def update(self, spent_today: float, *, other_spend: float = 0.0) -> float:
+        """Close a day that spent `spent_today` on offers (and `other_spend` on messages), and return
+        tomorrow's price."""
+        if (
+            not (math.isfinite(spent_today) and math.isfinite(other_spend))
+            or min(spent_today, other_spend) < 0
+        ):
             raise ValueError("spend cannot be negative or infinite")
         target = self.daily_target
         if target > 0:
             miss = min(spent_today / target - 1.0, self.max_miss)
             self._level = min(max(self._level * math.exp(self.gain * miss), self.floor), self.ceiling)
         self._spent += spent_today
+        self._other += other_spend
         self._days_done += 1
         return self.price
+
+
+@dataclass(frozen=True)
+class OfferPricing:
+    """Opt-in settings for the budget price in the agent's daily loop (`AgentPolicy(offer_pricing=...)`).
+
+    Each goal gets a `BudgetPrice` over its envelope's budget, spread over `days`. `initial` is where
+    the price starts (`planner.OfferPlan.price` on a sample is a good start). `channel_plan_per_day`
+    is the channel spend to set aside per day before any day has run. With `default_basket` set, a
+    percent-off offer with no configured cost is priced at its percent of the customer's basket, or of
+    `default_basket` for a customer with no orders (`planner.basket_offer_cost`); None leaves the
+    offer's own `cost_per_redemption`, as in v2.
+    """
+
+    days: int = 30
+    initial: float = 0.5
+    gain: float = BUDGET_PRICE_GAIN
+    channel_plan_per_day: float = 0.0
+    default_basket: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.days < 1 or self.initial < 0 or self.gain <= 0 or self.channel_plan_per_day < 0:
+            raise ValueError("need days >= 1, initial >= 0, gain > 0 and channel_plan_per_day >= 0")
+        if self.default_basket is not None and not self.default_basket > 0:
+            raise ValueError("default_basket must be > 0 when given")
+
+    def price_for(self, budget: float) -> BudgetPrice:
+        return BudgetPrice(
+            budget,
+            self.days,
+            initial=self.initial,
+            gain=self.gain,
+            channel_plan_per_day=self.channel_plan_per_day,
+        )
