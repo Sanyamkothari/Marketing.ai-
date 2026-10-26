@@ -10,6 +10,10 @@
 # (that is M151's diagnosis), and a `value_threshold` outcome needs a condition the person writes
 # (Build from raw tables). Nothing here is ever built until the person picks one sentence and says yes.
 #
+# `order_log: true` marks a template that may be offered on a raw order log (one row per order line) once the
+# switch `data_doctor.order_log` is on (docs/plans/DATA_DOCTOR_EVENT_LOG_PATH.md). It is explicit per template,
+# never "every template": everyone in an order log has bought, so only outcomes that make sense there carry it.
+#
 # Placeholders in `sentence`: {An_entity} ("A customer", "An asset"), {entity}, {an_event} ("a
 # recharge", "an order"), {event}, {days}. A use case with no template here is offered no sentence.
 schema_version: 1
@@ -74,6 +78,17 @@ templates:
     event_kinds: [activity, orders, payments, usage, other_event]
     days: [30, 60, 90]
     default_days: 90
+    order_log: true                      # a raw order log may be turned into the customer list (v3 phase 0, B-1)
+
+  retail-win-back:
+    question: When has a lapsed shopper come back?
+    sentence: "{An_entity} has come back when there is {an_event} within {days} days after the snapshot."
+    label_type: event_presence
+    event_kinds: [orders, bills, other_event]
+    days: [30, 60, 90]
+    default_days: 90
+    order_log: true                      # the use case the order-log path is built for (v3 phase 0, B-1)
+    order_log_only: true                 # no sentence while the switch is off: the use case is offered what it was before
 
   targeted-advertisement:
     question: When has a customer converted?

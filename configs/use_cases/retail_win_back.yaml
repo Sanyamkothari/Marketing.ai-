@@ -18,8 +18,9 @@ target:
 primary_key_hints: [customer_id, shopper_id, id]
 
 # The file is a single snapshot, so `snapshot_date` is the same date in every row and the split
-# stays random_stratified (the engine default). A file with several snapshots would set
-# split.type: time_based and split.time_column: snapshot_date instead.
+# stays random_stratified (the engine default). A dataset built from a raw order log has one row per
+# shopper per month-end (v3 phase 0, the Data Doctor's order-log path), so it is split by time:
+# `built_split` below, which only that path reads.
 
 model_search:
   metric: pr_auc                           # 41% of this audience comes back, but the business question is
@@ -65,6 +66,47 @@ template:
     - {name: returned_orders,          role: feature,     type: integer, description: "Orders the shopper cancelled or returned on or before the snapshot",            examples: ["0","0","1","2","5"]}
     - {name: returned_items,           role: feature,     type: integer, description: "Items returned on or before the snapshot",                                      examples: ["0","0","3","24","180"]}
     - {name: reactivated_90d,          role: target,      type: integer, description: "Target: 1 when the shopper ordered again within 90 days of the snapshot, else 0. Leave blank when scoring.", examples: ["0","1","0","1","1"]}
+
+# --- v3 phase 0: the Data Doctor's order-log path ------------------------------------------------
+# Read only when a dataset is built from a raw order log (docs/plans/DATA_DOCTOR_EVENT_LOG_PATH.md, behind
+# `data_doctor.order_log`). The path rolls the log up into three event tables, deterministically:
+#   orders       one row per order: the shopper, the earliest timestamp, `order_value` (quantity x price over
+#                its lines with a quantity above zero), `quantity` (units on those lines), `order_month`,
+#                `days_since_previous_order` (the shopper's earlier orders only) and `country` when the log has one
+#   order_lines  one row per line with a quantity above zero: `product_code`, `quantity`, `line_value`
+#   returns      one row per order with lines of a quantity below zero: `quantity`, as a positive number
+# An order is a line with a quantity above zero; the `C` prefix of a cancelled invoice is evidence, not the rule.
+
+label:
+  name: reactivated_90d
+  type: event_presence
+  role: orders
+  horizon_days: 90
+  where: {column: quantity, op: gt, value: 0}
+  description: The shopper placed an order within 90 days of the snapshot.
+
+audience:                               # who the outcome is measured for: shoppers who have stopped buying
+  role: orders
+  no_event_days: 90
+
+built_split:                            # a built dataset has several month-ends; the newest rows are the test
+  type: time_based
+  time_column: snapshot_date
+
+suggested_features:
+  - {name: recency_days,             role: orders,      function: days_since_last, description: "Days between the shopper's last order and the snapshot."}
+  - {name: tenure_days,              role: orders,      function: days_since_first, description: "Days between the shopper's first order and the snapshot."}
+  - {name: orders_total,             role: orders,      function: count, description: "Orders placed on or before the snapshot."}
+  - {name: spend_total,              role: orders,      function: sum,   column: order_value, description: "Total order value on or before the snapshot."}
+  - {name: order_value_mean,         role: orders,      function: mean,  column: order_value, description: "Mean value of the shopper's orders."}
+  - {name: order_value_max,          role: orders,      function: max,   column: order_value, description: "Value of the shopper's largest order."}
+  - {name: active_months,            role: orders,      function: nunique, column: order_month, description: "Calendar months in which the shopper placed at least one order."}
+  - {name: days_between_orders_mean, role: orders,      function: mean,  column: days_since_previous_order, description: "Mean days between consecutive orders; blank when the shopper has placed only one."}
+  - {name: country,                  role: orders,      function: latest, column: country, description: "Country of the shopper's latest order."}
+  - {name: items_total,              role: order_lines, function: sum,   column: quantity, description: "Items bought on or before the snapshot, summed over every order."}
+  - {name: distinct_products,        role: order_lines, function: nunique, column: product_code, description: "Distinct product codes bought on or before the snapshot."}
+  - {name: returned_orders,          role: returns,     function: count, description: "Orders with returned or cancelled items on or before the snapshot."}
+  - {name: returned_items,           role: returns,     function: sum,   column: quantity, description: "Items returned on or before the snapshot."}
 
 agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
   goal: "Find the lapsed shoppers most likely to order again within 90 days."

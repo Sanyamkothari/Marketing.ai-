@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from engine.access.roles import Principal
     from engine.config import RoleCatalogue, UseCaseConfig
     from engine.doctor.case import Case, CaseStore
-    from engine.doctor.outcomes import KeyRulePair, OutcomeCatalogue, OutcomeFile
+    from engine.doctor.outcomes import DerivedEntity, KeyRulePair, OutcomeCatalogue, OutcomeFile
 
 __all__ = [
     "EVENT_KINDS",
@@ -664,7 +664,12 @@ def _event_role(file: OutcomeFile, roles: RoleCatalogue) -> str | None:
 
 
 def _pair(
-    file: OutcomeFile, roles: RoleCatalogue, entity: OutcomeFile, entity_keys: pd.Series[Any], entity_ids: Any
+    file: OutcomeFile,
+    roles: RoleCatalogue,
+    entity: OutcomeFile,
+    entity_keys: pd.Series[Any],
+    entity_ids: Any,
+    derived: DerivedEntity | None = None,
 ) -> _Paired | None:
     """The event file's customer column against the list: as written (`join_coverage`), else through the rules
     M157's offer uses since M237 (`propose_key_rules`; never a near match)."""
@@ -674,6 +679,8 @@ def _pair(
     if role is None or not file.diagnosis.date_columns:
         return None
     entity_id = entity.diagnosis.id_column or ""
+    if derived is not None and file.diagnosis.upload_id == derived.source_upload_id:
+        return _Paired(file, role, derived.join_column, 1.0, None)  # the list is this file's own column
     joined = _join_column(file, entity_keys, entity_id)
     if joined is not None:
         return _Paired(file, role, joined[0], joined[1], None)
@@ -719,6 +726,7 @@ def _counted(
     *,
     excluded_tables: Mapping[str, pd.DataFrame],
     inclusive: bool,
+    signup: pd.Series[Any] | None = None,
 ) -> OutcomeCounts | None:
     """`build_labels` on month-end snapshots near the data's end (M157's `_measure`, with the tables an exclusion
     reads registered too); the latest month-end whose window is over. None when there is none."""
@@ -753,9 +761,9 @@ def _counted(
     )
     if not plan.dates:
         return None
-    entities = pd.DataFrame({"entity_key": entity_keys.drop_duplicates().reset_index(drop=True)})
-    spine = pd.DataFrame({"snapshot_date": pd.to_datetime(list(plan.dates))})
-    snapshots = entities.merge(spine, how="cross").reset_index(drop=True)
+    from engine.doctor.outcomes import snapshot_rows
+
+    snapshots = snapshot_rows(entity_keys, plan.dates, signup)
     role = str(spec.role)
     con = duckdb.connect()
     try:
@@ -938,13 +946,15 @@ def propose_event_outcome(
     column: str | None = None,
     operator: Operator | None = None,
     threshold: float | None = None,
+    derived_entity: DerivedEntity | None = None,
 ) -> EventOutcomeProposal:
     """`define_outcome`'s rules: the outcome from an event file, measured by the builder's `build_labels`.
 
-    The customer list is the diagnosis's (M157's rule). The event file, its date column and the window are the
-    caller's, and so is the date each file that leaves customers out is read on (`exclude_date_columns`, by upload
-    id); when one is not given and more than one is possible, it is a blocking question and no definition is
-    proposed. Rows whose date cannot be read and threshold values that are not numbers are counted in the
+    The customer list is the diagnosis's (M157's rule), or, only when the caller passes one explicitly
+    (`derived_entity`, v3 phase 0), the list an order log gives from the shopper column a person chose. The event
+    file, its date column and the window are the caller's, and so is the date each file that leaves customers out
+    is read on (`exclude_date_columns`, by upload id); when one is not given and more than one is possible, it is a
+    blocking question and no definition is proposed. Rows whose date cannot be read and threshold values that are not numbers are counted in the
     sentence the person approves. Every count is the label builder's, through the ID rules M157's offer uses.
     """
     from engine.agent.key_steps import KeyColumn
@@ -953,7 +963,7 @@ def propose_event_outcome(
     name = _label_name(config)
     if name is None:
         raise OutcomeError("OUTCOME_CANNOT_MEASURE", "This use case names no outcome column to build.")
-    entity = _entity_file(files, roles)
+    entity = _entity_file(files, roles) if derived_entity is None else derived_entity.file
     if entity is None or entity.diagnosis.id_column is None:
         raise OutcomeError(
             "OUTCOME_CANNOT_MEASURE",
@@ -962,7 +972,11 @@ def propose_event_outcome(
     entity_keys = _key_text(entity.frame[entity.diagnosis.id_column])
     entity_ids = KeyColumn(entity.frame[entity.diagnosis.id_column])
     others = [file for file in files if file is not entity]
-    paired = [p for p in (_pair(file, roles, entity, entity_keys, entity_ids) for file in others) if p]
+    paired = [
+        p
+        for p in (_pair(file, roles, entity, entity_keys, entity_ids, derived_entity) for file in others)
+        if p
+    ]
     if event_upload_id is not None:
         if not any(file.diagnosis.upload_id == event_upload_id for file in others):
             raise OutcomeError("OUTCOME_CANNOT_MEASURE", "That event file is not one of the case's files.")
@@ -1135,7 +1149,7 @@ def propose_event_outcome(
                 unreadable=excluded_bad,
             )
         )
-    template = catalogue.templates.get(config.id)
+    template = catalogue.template_for(config)
     windows = (days,) if days is not None else (template.days if template is not None else _DEFAULT_WINDOWS)
     inclusive = config.onboarding.snapshots.inclusive_snapshot_time
     data_end = min(
@@ -1183,7 +1197,14 @@ def propose_event_outcome(
             spec = label_spec_of(definition)
         except (ValueError, OutcomeError) as exc:  # a definition the label model refuses is not proposed
             raise OutcomeError("OUTCOME_CANNOT_MEASURE", f"The outcome cannot be built: {exc}") from exc
-        return _counted(entity_keys, table, spec, excluded_tables=excluded_tables, inclusive=inclusive)
+        return _counted(
+            entity_keys,
+            table,
+            spec,
+            excluded_tables=excluded_tables,
+            inclusive=inclusive,
+            signup=None if derived_entity is None else derived_entity.signup_by_key(),
+        )
 
     choices = tuple(WindowChoice(days=window, counts=measured(definition_for(window))) for window in windows)
     if days is None:

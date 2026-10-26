@@ -109,3 +109,28 @@ roles:
     required_columns: [entity_key, event_time]
     typical_columns: []
     name_tokens: []
+
+  # ---- Roles the order-log path builds from a log (v3 phase 0, B1) -----------------------------------
+  # `internal: true` = never uploaded by a client, never proposed by role detection and not listed in the
+  # role lists a person sees, so adding them moves nothing while `data_doctor.order_log` is off. The path
+  # builds `orders` (one row per order, the existing role above), `order_lines` and `returns` from one log.
+
+  order_lines:
+    kind: event
+    internal: true
+    description: One row per line of an order, kept for product-level counts.
+    required_columns: [entity_key, event_time]
+    typical_columns:
+      - {name: product_code,  type: categorical, aliases: [stockcode, stock_code, sku, item_code], description: "Which product the line is for."}
+      - {name: quantity,      type: numeric,     aliases: [qty, units], description: "Units on the line; always above zero here, returns are their own table.", range: [0, 100000000]}
+      - {name: line_value,    type: numeric,     aliases: [line_total, line_amount], description: "Quantity times unit price.", range: [0, 100000000]}
+    name_tokens: []
+
+  returns:
+    kind: event
+    internal: true
+    description: One row per order that has lines with a quantity below zero (returns and cancellations).
+    required_columns: [entity_key, event_time]
+    typical_columns:
+      - {name: quantity,      type: numeric,     aliases: [qty, units], description: "Units returned on the order, as a positive number.", range: [0, 100000000]}
+    name_tokens: []

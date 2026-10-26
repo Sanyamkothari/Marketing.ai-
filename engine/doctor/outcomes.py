@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "OUTCOMES_FILENAME",
+    "DerivedEntity",
     "OutcomeAgreement",
     "OutcomeCatalogue",
     "OutcomeChoice",
@@ -65,6 +66,7 @@ __all__ = [
     "next_steps",
     "offer_outcome",
     "sentence_for",
+    "snapshot_rows",
 ]
 
 _LOG = get_logger(__name__)
@@ -100,6 +102,20 @@ class OutcomeTemplate(BaseModel):
         min_length=1, max_length=6, description="The windows offered, in days."
     )
     default_days: int = Field(description="The window shown first; one of `days`.")
+    order_log: bool = Field(
+        default=False,
+        description=(
+            "True when a raw order log (one row per order line) may be turned into this use case's customer "
+            "list and outcome, once `data_doctor.order_log` is on. Explicit per use case, never every one."
+        ),
+    )
+    order_log_only: bool = Field(
+        default=False,
+        description=(
+            "True for a sentence that exists only for the order-log path: while `data_doctor.order_log` is off the "
+            "use case is offered no sentence, exactly as before the template was added. Needs `order_log`."
+        ),
+    )
 
     @field_validator("days")
     @classmethod
@@ -109,6 +125,8 @@ class OutcomeTemplate(BaseModel):
         return tuple(sorted(days))
 
     def model_post_init(self, _context: Any) -> None:
+        if self.order_log_only and not self.order_log:
+            raise ValueError("order_log_only needs order_log: true")
         if self.default_days not in self.days:
             raise ValueError(f"default_days {self.default_days} is not one of {list(self.days)}")
         try:
@@ -137,6 +155,14 @@ class OutcomeCatalogue(BaseModel):
     @classmethod
     def _lowered(cls, words: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(dict.fromkeys(word.strip().lower() for word in words if word.strip()))
+
+    def template_for(self, config: UseCaseConfig) -> OutcomeTemplate | None:
+        """The use case's sentence, or None when it has none or its template is for the order-log path and the
+        switch `data_doctor.order_log` is off (so the use case is offered exactly what it was before)."""
+        template = self.templates.get(config.id)
+        if template is not None and template.order_log_only and not config.data_doctor.order_log:
+            return None
+        return template
 
 
 _CACHE: dict[Path, tuple[float, OutcomeCatalogue]] = {}
@@ -313,6 +339,47 @@ class OutcomeFile:
 
 
 @dataclass(frozen=True)
+class DerivedEntity:
+    """A customer list derived from an order log's own shopper column (v3 phase 0, B3), passed explicitly.
+
+    Without one, a customer list must be a file of its own and the log alone is refused (M157). With one, `file` is
+    the list (read as the entity role, one row per shopper) and the log it came from, `source_upload_id`, meets it
+    on `join_column` by construction: both are the same column, written the same way (`key_text`)."""
+
+    file: OutcomeFile
+    source_upload_id: str
+    join_column: str
+
+    def signup_by_key(self) -> pd.Series[Any]:
+        """Each shopper's first order date, by the shopper as the list writes them (`signup_date`)."""
+        import pandas as pd
+
+        frame = self.file.frame
+        column = str(self.file.diagnosis.id_column)
+        return pd.Series(
+            pd.to_datetime(frame["signup_date"], errors="coerce").to_numpy(),
+            index=pd.Index(frame[column].astype(str)),
+        )
+
+
+def snapshot_rows(
+    entity_keys: pd.Series[Any], dates: Sequence[date], signup: pd.Series[Any] | None = None
+) -> pd.DataFrame:
+    """One row per customer per snapshot date, `(entity_key, snapshot_date)`: the customers in the list at each date,
+    or, with `signup` (each customer's first date, by key), only those who had started by it, the way the dataset
+    builder's spine does (`engine.onboarding.snapshots.build_snapshot_frame`; an unknown date is left out)."""
+    import pandas as pd
+
+    entities = pd.DataFrame({"entity_key": entity_keys.drop_duplicates().reset_index(drop=True)})
+    spine = pd.DataFrame({"snapshot_date": pd.to_datetime(list(dates))})
+    rows = entities.merge(spine, how="cross").reset_index(drop=True)
+    if signup is None:
+        return rows
+    started = pd.to_datetime(rows["entity_key"].map(signup), errors="coerce")
+    return rows.loc[started <= rows["snapshot_date"]].reset_index(drop=True)
+
+
+@dataclass(frozen=True)
 class _Events:
     file: OutcomeFile
     kind: str
@@ -444,7 +511,13 @@ class _Measured:
 
 
 def _measure(
-    entity_keys: pd.Series[Any], events: pd.DataFrame, spec: LabelSpec, *, role: str, inclusive: bool
+    entity_keys: pd.Series[Any],
+    events: pd.DataFrame,
+    spec: LabelSpec,
+    *,
+    role: str,
+    inclusive: bool,
+    signup: pd.Series[Any] | None = None,
 ) -> _Measured:
     """`build_labels` on month-end snapshots near the data's end; the latest one whose window is over."""
     import duckdb
@@ -475,9 +548,7 @@ def _measure(
         return _Measured(None, None, None, 0)
     # `build_snapshot_frame(entities, plan.dates, signup_column=None)` without its warning: the offer
     # counts every customer in the list at each date, which is what a list with no signup date means.
-    entities = pd.DataFrame({"entity_key": entity_keys.drop_duplicates().reset_index(drop=True)})
-    spine = pd.DataFrame({"snapshot_date": pd.to_datetime(list(plan.dates))})
-    snapshots = entities.merge(spine, how="cross").reset_index(drop=True)
+    snapshots = snapshot_rows(entity_keys, plan.dates, signup)
     con = duckdb.connect()
     try:
         con.register(role, events)
@@ -533,6 +604,7 @@ def _candidates(
     event_upload_id: str | None,
     date_column: str | None,
     entity_ids: KeyColumn | None = None,
+    derived: DerivedEntity | None = None,
 ) -> list[_Events]:
     events: list[_Events] = []
     fallback = "other_event" if "other_event" in roles.roles else None
@@ -549,8 +621,11 @@ def _candidates(
         when = diagnosis.date_columns[0] if date_column is None else date_column
         if when not in diagnosis.date_columns:
             continue
-        joined = _join_column(file, entity_keys, entity.diagnosis.id_column or "")
         rules: KeyRulePair | None = None
+        if derived is not None and diagnosis.upload_id == derived.source_upload_id:
+            joined: tuple[str, float] | None = (derived.join_column, 1.0)
+        else:
+            joined = _join_column(file, entity_keys, entity.diagnosis.id_column or "")
         if joined is None and entity_ids is not None:
             ruled = _ruled_join_column(file, entity_ids, entity.diagnosis.id_column or "")
             if ruled is not None:
@@ -592,15 +667,20 @@ def offer_outcome(
     roles: RoleCatalogue,
     event_upload_id: str | None = None,
     date_column: str | None = None,
+    derived_entity: DerivedEntity | None = None,
 ) -> OutcomeOffer | None:
     """The sentence and its choices for `config`, measured on `files`; None when the files cannot say.
 
     Needs a customer list (a file read as the entity role, with an ID column) and an event file of one
     of the template's kinds with a readable date column and a column whose values are the list's IDs.
     `event_upload_id` and `date_column` narrow the offer to the ones the person picked.
+
+    `derived_entity` (v3 phase 0, B3) is the explicit exception to "a customer list is a file of its own": the
+    list an order log gives (`engine.doctor.order_log.derive_customer_list`), passed by a caller that has the
+    person's answer to which column names the shopper. It is never inferred; without it nothing changes.
     """
     name = _label_name(config)
-    entity = _entity_file(files, roles)
+    entity = _entity_file(files, roles) if derived_entity is None else derived_entity.file
     if name is None or entity is None or entity.diagnosis.id_column is None:
         return None
     entity_keys = _key_text(entity.frame[entity.diagnosis.id_column])
@@ -616,6 +696,7 @@ def offer_outcome(
         event_upload_id=event_upload_id,
         date_column=date_column,
         entity_ids=entity_ids,
+        derived=derived_entity,
     )
     if not candidates:
         return None
@@ -651,7 +732,14 @@ def offer_outcome(
         except (ConfigError, ValidationError) as exc:  # a template the label model refuses is not offered
             _LOG.info("doctor.outcome_label_refused use_case=%s error=%s", config.id, exc)
             return None
-        measured = _measure(entity_keys, chosen.table, spec, role=chosen.kind, inclusive=inclusive)
+        measured = _measure(
+            entity_keys,
+            chosen.table,
+            spec,
+            role=chosen.kind,
+            inclusive=inclusive,
+            signup=None if derived_entity is None else derived_entity.signup_by_key(),
+        )
         no = None if measured.customers is None or measured.yes is None else measured.customers - measured.yes
         choices.append(
             OutcomeChoice(
@@ -728,8 +816,8 @@ def attach_outcome_offers(
     roles = get_roles(root)
     updated: list[UseCaseReadiness] = []
     for verdict in verdicts:
-        template = catalogue.templates.get(verdict.use_case_id)
         config = configs.get(verdict.use_case_id)
+        template = None if config is None else catalogue.template_for(config)
         offer = None
         if verdict.status == "missing" and verdict.upload_id is None and template and config:
             try:
