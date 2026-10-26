@@ -87,7 +87,20 @@ def test_satisfies_the_protocol() -> None:
 
 # --- agreement with the fake --------------------------------------------------------------------
 
-NEW_FIELDS = {"offer_sensitivity", "segment"}
+NEW_FIELDS = {
+    "offer_sensitivity",
+    "segment",
+    # moments (plan-v3 decision 2): views, carts, gaps and returns, which the fake does not keep
+    "last_view_at",
+    "last_cart_at",
+    "viewed_items",
+    "usual_gap_days",
+    "purchase_gap_days",
+    "purchase_gaps",
+    "bought_items",
+    "last_return_at",
+    "last_return_gap_days",
+}
 
 
 @pytest.mark.parametrize("seed", range(8))

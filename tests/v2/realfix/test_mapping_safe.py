@@ -267,7 +267,12 @@ def test_two_currencies_are_never_added() -> None:
     rated = _orders(attrs={"currency": "cur"}, currency="GBP", currency_rates={"BRL": 0.2})
     converted, problems = map_frame(frame, rated, "csv", ask=True)
     assert not problems and [e.value for e in converted] == [10.0, 20.0, 20.0]
-    assert converted[1].attrs == {"currency": "GBP", "original_currency": "BRL", "original_value": 100.0}
+    assert converted[1].attrs == {
+        "timezone": "Europe/London",
+        "currency": "GBP",
+        "original_currency": "BRL",
+        "original_value": 100.0,
+    }
     with pytest.raises(ValueError, match="currency_rates needs currency"):
         _orders(currency_rates={"BRL": 0.2})
 

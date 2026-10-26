@@ -1,0 +1,71 @@
+# Moments: times when a message is worth more to one customer (plan-v3 decision 2).
+#
+# Read by autonomy/decide/moments.py. Each moment raises the value of a message by `multiplier`
+# when it starts and fades: the raise (multiplier - 1) halves every `half_life_days` and is gone
+# after `window_days`. A moment that is a window (refill due, a festival) holds its full raise
+# inside the window instead. Every number here is a starting prior, not a measurement: the agent's
+# response model learns what a message really earns at these moments from its own sends and the
+# holdout. Set `enabled: false` to switch one moment off.
+version: 1
+
+# Which calendar (calendar_<country>.yaml) a customer gets: their country's, by code or alias. A
+# customer with no country gets the shop's own country, a per-shop setting given in code
+# (MomentBook.load(default_country="IN")), not here; without it they get no payday or festival
+# moment. A customer whose country has no calendar gets none either.
+
+# How several moments at once add up: the strongest raise in full, every other raise at
+# `rest_weight`, and never more than `max_multiplier` in total.
+combine:
+  rest_weight: 0.5
+  max_multiplier: 2.5
+
+moments:
+  viewed_twice:
+    label: Looked at the same product twice
+    multiplier: 1.35
+    half_life_days: 1.0
+    window_days: 2.0
+    min_views: 2
+
+  cart_left:
+    label: Left something in the cart
+    multiplier: 1.6
+    half_life_days: 1.0
+    window_days: 3.0
+
+  refill_due:
+    label: Due to buy again
+    multiplier: 1.4
+    # With no refill scores on the customer, their own buying rhythm stands in: a product bought on
+    # three or more different days (else, with no product ids at all, three or more purchase days in
+    # all), the window opens `lead_days` before the next one is due and closes `late_days` after.
+    min_purchases: 3
+    lead_days: 3.0
+    late_days: 7.0
+
+  price_drop:
+    label: Price dropped on something they looked at
+    multiplier: 1.4
+    half_life_days: 2.0
+    window_days: 3.0
+    # Smaller drops than this share of the old price are not worth a message.
+    min_drop_share: 0.05
+
+  back_after_absence:
+    label: Back after a long absence
+    multiplier: 1.3
+    half_life_days: 1.0
+    window_days: 2.0
+    # Besides being three times their usual gap (the state folder's rule), the gap is at least this.
+    min_gap_days: 14.0
+
+  payday:
+    label: Just after payday
+    multiplier: 1.15
+    half_life_days: 1.5
+    window_days: 3.0
+
+  festival:
+    label: Festival season
+    # A festival's own multiplier (in the calendar) wins; this is for one that gives none.
+    multiplier: 1.4

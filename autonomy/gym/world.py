@@ -55,6 +55,11 @@ way to make any policy pass:
   complaints), at daily resolution: a send's lift starts the day after it and lasts `effect_days`
   days. A past send's effect still running on day 0 carries on into the decision period, and its
   unsubscribes stay in force.
+* **Moments** (when the spec plants them: `cart_rate_per_day`, `refill_share`). The planted cart times
+  become CART events (with an item id and the customer's favourite category) and the refill days
+  become PURCHASE events with an item id, in the history and while the world runs. A contact's
+  lift is multiplied while a cart is fresh or a refill is due (see `autonomy.gym.truth`); the
+  customer's own purchase rate is not changed.
 * **Sleeping dogs leave faint clues.** People annoyed by marketing ignore messages, come in through
   direct visits rather than links, and now and then unsubscribe from one channel. From each dog's
   planted onset (see `autonomy.gym.truth`; `sleeping_dog_signal` sets how far back it lies) the
@@ -111,6 +116,7 @@ DELIVERY_DELAY = timedelta(minutes=1)
 UNSUBSCRIBE_DELAY = timedelta(hours=2)
 FAVOURITE_CATEGORY_SHARE = 0.7
 HISTORY_VISITS_MEAN = 3.0
+REFILL_VALUE_SHARE = 0.6  # a refill order is this share of the average order value
 CLICK_FLOOR = 0.02  # clicks from people the message does not move
 CLICK_PER_EXTRA_PURCHASE = 3.0  # click chance added per expected extra purchase the contact causes
 CLICK_CEILING = 0.8
@@ -234,6 +240,47 @@ class GymWorld:
         self._violations: list[str] = []
         self._act_calls = 0
         self._day: tuple[int, _DayDraws] | None = None
+        self._moments_before: list[Event] = []
+        self._moments_by_hour: dict[int, list[Event]] = {}
+        self._plant_moment_events()
+
+    def _plant_moment_events(self) -> None:
+        """The planted carts and refill purchases as events: before day 0 for the history, the rest by hour."""
+        t = self.planted
+        if not t.moments_on:
+            return
+        events: list[tuple[float, Event]] = []
+        for i, cid in enumerate(t.customer_ids):
+            fav = CATEGORIES[int(t.favourite[i])]
+            for k, sec in enumerate(t.cart_s[i].tolist()):
+                if math.isfinite(sec):
+                    ts = self.start + timedelta(seconds=round(sec))
+                    item = f"sku_{fav}_{(i + k) % 5}"
+                    events.append((sec, self._moment_event(("cart", cid, k), cid, ts, fav, item)))
+            for k, sec in enumerate(t.refill_s[i].tolist()):
+                if math.isfinite(sec):
+                    ts = self.start + timedelta(seconds=round(sec))
+                    value = max(0.01, round(self.spec.aov_mean * REFILL_VALUE_SHARE, 2))
+                    bought = self._purchase(("refill", cid, k), cid, ts, value, int(t.favourite[i]))
+                    events.append((sec, bought.model_copy(update={"item_id": f"sku_{fav}_refill"})))
+        for sec, event in sorted(events, key=lambda pair: (pair[0], pair[1].event_id)):
+            if sec < 0:
+                self._moments_before.append(event)
+            else:
+                self._moments_by_hour.setdefault(int(sec // 3600), []).append(event)
+
+    def _moment_event(
+        self, key: tuple[object, ...], cid: str, ts: datetime, category: str, item: str
+    ) -> Event:
+        return Event(
+            event_id=stable_id("gev", self.seed, *key),
+            customer_id=cid,
+            type=EventType.CART,
+            ts=ts,
+            source=SOURCE,
+            category=category,
+            item_id=item,
+        )
 
     def reset(self, seed: int) -> Sequence[Event]:
         """Plant a new truth from `seed` and return the history before decision day 0, in time order.
@@ -342,6 +389,7 @@ class GymWorld:
                 ts = self.start + timedelta(seconds=math.floor(lo + float(where[i, k]) * (-lo)))
                 out.append(self._event(("visit", cid, k), cid, EventType.VISIT, ts))
         out.extend(self._direct_visits_of_annoyed_dogs())
+        out.extend(self._moments_before)
         if past is not None:
             past.carry_over()
         # A past send's click or unsubscribe can land after day 0 when `start` is not a midnight; it
@@ -590,8 +638,9 @@ class GymWorld:
         p = np.where(dog_on, base * t.dog_multiplier(), base) + np.maximum(self._lift, 0.0) / 24.0
         u = draws.u[hour]
         buyers = np.flatnonzero(u < p)
+        moments = self._moments_by_hour.get(h, [])
         if buyers.size == 0:
-            return []
+            return list(moments)
         sure_things_redeem = self.spec.discount_redeemed_by_sure_things
         out: list[Event] = []
         for i in buyers.tolist():
@@ -611,7 +660,7 @@ class GymWorld:
                     offer=(self._offer_id[i], float(self._offer_cost[i])) if redeem else None,
                 )
             )
-        return out
+        return [*moments, *out]
 
     # --- events --------------------------------------------------------------------------------
 

@@ -22,8 +22,8 @@ from autonomy.scientist.questions import (
 from tests.v3.experiments.helpers import FREE_SHIP, TEN_OFF, brief
 
 
-def test_the_scenario_is_the_last_one_registered_and_plants_one_better_offer() -> None:
-    assert list(SCENARIOS)[-1] == "better_offer_planted"
+def test_the_scenario_is_registered_and_plants_one_better_offer() -> None:
+    assert "better_offer_planted" in SCENARIOS
     spec = get_scenario("better_offer_planted")
     for persona, row in spec.offer_uplift.items():
         assert row["free_shipping"] == 3.0, persona

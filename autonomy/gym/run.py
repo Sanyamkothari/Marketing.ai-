@@ -9,6 +9,13 @@ Safe, Stage 2 Useful, Stage 3 Smart, with the plan's 80%-of-the-oracle as a stre
 `--no-compare` scores the policy alone. `--report-json PATH` writes the scorecards and the verdicts
 as JSON, for CI artefacts.
 
+`--moments` (plan-v3 decision 2) switches the agent's moments on (`autonomy.decide.moments`, the
+shipped `configs/v3` book, no default country) and folds every policy's states with the full
+`StateFolder`, which keeps the carts, views and buying rhythms moments read. With the comparison it
+also runs the same agent with moments off on the same folder and seeds (`agent_no_moments`) and
+reports the difference under `moments` in the JSON: the moment-raised bids against the same agent's
+plain daily sweep.
+
 Policies are found by name in a registry. `agent` is Autonomy's own policy
 (`autonomy.runtime.agent.build_agent_policy`). Another stream adds its own with
 `register_policy("name", lambda world: MyPolicy(...))`; the factory gets the world so a fresh
@@ -50,9 +57,11 @@ from autonomy.gym.score import (
     segment_oracle_factory,
     staged_criteria,
 )
-from autonomy.interfaces import Policy
+from autonomy.interfaces import Policy, StateFolder
 
 AGENT = "agent"
+AGENT_NO_MOMENTS = "agent_no_moments"
+"""The agent with moments switched off, run beside it under `--moments` (not a registered policy)."""
 
 
 def _nothing_factory(world: SimWorld) -> Policy:  # noqa: ARG001
@@ -66,6 +75,47 @@ def agent_factory(world: SimWorld) -> Policy:  # noqa: ARG001
     from autonomy.runtime.agent import build_agent_policy
 
     return build_agent_policy([default_brief()], default_content())
+
+
+def moments_agent_factory(world: SimWorld) -> Policy:  # noqa: ARG001
+    """`agent_factory` with the shipped moments book (`MomentBook.load()`: no default country, so the
+    Gym's customers, who have none, get no payday or festival moment)."""
+    from autonomy.decide.moments import MomentBook
+    from autonomy.runtime.agent import build_agent_policy
+
+    return build_agent_policy([default_brief()], default_content(), moments=MomentBook.load())
+
+
+def no_moments_agent_factory(world: SimWorld) -> Policy:  # noqa: ARG001
+    """`agent_factory` with moments held off whatever `use_moments` holds: the control for `--moments`."""
+    from autonomy.runtime.agent import build_agent_policy
+
+    return build_agent_policy([default_brief()], default_content(), moments=False)
+
+
+def full_folder() -> StateFolder:
+    """The production `StateFolder` inside the Gym's wrapper: what `--moments` folds states with."""
+    from autonomy.data.folder import StateFolder as FullFolder
+    from autonomy.gym.score import GymFolder
+
+    return GymFolder(FullFolder())
+
+
+def moments_gain(cards: Sequence[ScoreCard], policy: str = AGENT) -> dict[str, object]:
+    """Per seed, the agent's true value with moments minus the same agent's without them."""
+    on = {c.seed: c.true_value for c in cards if c.policy == policy}
+    off = {c.seed: c.true_value for c in cards if c.policy == AGENT_NO_MOMENTS}
+    seeds = sorted(set(on) & set(off))
+    gains = [on[s] - off[s] for s in seeds]
+    mean = sum(gains) / len(gains) if gains else None
+    return {
+        "seeds": seeds,
+        "with_moments": [on[s] for s in seeds],
+        "without_moments": [off[s] for s in seeds],
+        "gain_per_seed": gains,
+        "mean_gain": mean,
+        "beats_without": mean is not None and mean > 0,
+    }
 
 
 POLICIES: dict[str, PolicyFactory] = {
@@ -182,6 +232,11 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
         help=f"Local send hour of the best fixed rule (default {BEST_FIXED_HOUR})",
     )
     parser.add_argument(
+        "--moments",
+        action="store_true",
+        help="Switch the agent's moments on, fold with the full StateFolder and compare with moments off",
+    )
+    parser.add_argument(
         "--report-json", type=Path, default=None, metavar="PATH", help="Write scorecards and verdicts as JSON"
     )
     args = parser.parse_args(argv)
@@ -206,7 +261,12 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
     registry = dict(POLICIES)
     if args.fixed_hour is not None:
         registry[BEST_FIXED] = fixed_hour_factory(args.fixed_hour)
+    if args.moments:
+        if args.policy != AGENT:
+            parser.error("--moments is for --policy agent")
+        registry[AGENT] = moments_agent_factory
     factory = registry[args.policy]
+    folders = full_folder if args.moments else None
     seeds = list(range(args.first_seed, args.first_seed + args.seeds))
     worlds = world_factory or make_world
     learn = not args.no_learn
@@ -223,10 +283,19 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
         "seeds": seeds,
         "n_customers": spec.n_customers,
         "days": spec.days,
+        "moments_on": bool(args.moments),
     }
     if args.no_compare:
         cards = [
-            run_policy(spec, factory, seed, policy_name=args.policy, world_factory=worlds, learn=learn)
+            run_policy(
+                spec,
+                factory,
+                seed,
+                policy_name=args.policy,
+                world_factory=worlds,
+                learn=learn,
+                folder=folders() if folders is not None else None,
+            )
             for seed in seeds
         ]
         for card in cards:
@@ -235,7 +304,9 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
     else:
         names = [args.policy, *REFERENCES]
         policies = {n: registry[n] for n in dict.fromkeys(names)}
-        result = compare(spec, policies, seeds, world_factory=worlds, learn=learn)
+        if args.moments:
+            policies[AGENT_NO_MOMENTS] = no_moments_agent_factory
+        result = compare(spec, policies, seeds, world_factory=worlds, learn=learn, folder_factory=folders)
         for card in result.cards:
             if card.policy == args.policy:
                 print(describe(card))
@@ -255,6 +326,12 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
             report["verdict"] = staged.verdict()
             report["staged"] = staged.model_dump(mode="json")
             report["plan_bar"] = {**plan.model_dump(mode="json"), "passed": plan.passed}
+        if args.moments:
+            gain = moments_gain(result.cards, args.policy)
+            report["moments"] = gain
+            mean = gain["mean_gain"]
+            if isinstance(mean, float):
+                print(f"\nMoments: {money(mean)} a seed against the same agent with moments off.")
     elapsed = time.perf_counter() - started
     report["seconds"] = round(elapsed, 1)
     if args.report_json is not None:

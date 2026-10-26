@@ -25,6 +25,19 @@ Realism knobs added in wave 3a, each with the real-world behaviour it stands for
   purchases, so an agent can learn before day 1. The past campaigns follow a documented, randomised
   logging policy and every past send carries `attrs["logged_probability"]`. The bare spec keeps the
   old history (0: no past marketing); every library scenario turns it on.
+
+Moments (plan-v3 decision 2), all off by default so every earlier scenario is unchanged:
+
+* `cart_*`: customers leave carts now and then (the world emits CART events), and a message sent in
+  the days after a cart is worth more: its lift is multiplied by `1 + (cart_lift_multiplier - 1)`
+  at the cart, halving every `cart_half_life_days`: someone who has just put something in the basket
+  is close to buying.
+* `refill_*`: a share of customers buy a regular item on a cycle (the world emits those purchases,
+  with an item id, whatever is sent), and a message sent in the `refill_lead_days` before one is due
+  has its lift multiplied by `refill_lift_multiplier`: the reminder lands while the stock is running
+  out. Once they have restocked the raise is over, so the window ends at the purchase.
+
+The numbers are planted beliefs of ours, like every other knob here; nothing is fitted to data.
 """
 
 from __future__ import annotations
@@ -179,6 +192,27 @@ class ScenarioSpec(Contract):
             "Past marketing in the history: the weekly campaign's base inclusion probability for a "
             "consented customer (0 = no past campaigns; the library uses 0.4)"
         ),
+    )
+    cart_rate_per_day: float = Field(
+        default=0.0, ge=0, le=1, description="Chance per day that a customer leaves a cart (0: no carts)"
+    )
+    cart_lift_multiplier: float = Field(
+        default=1.0, ge=1, description="A message's lift is this many times as big the moment a cart is left"
+    )
+    cart_half_life_days: float = Field(
+        default=1.0, gt=0, description="The extra lift after a cart halves this often"
+    )
+    refill_share: float = Field(
+        default=0.0, ge=0, le=1, description="Share of customers who buy a regular item on a cycle"
+    )
+    refill_cycle_days: float = Field(
+        default=30.0, gt=0, description="Days between those purchases (each customer's own is within 15%)"
+    )
+    refill_lift_multiplier: float = Field(
+        default=1.0, ge=1, description="A message's lift is this many times as big while a refill is due"
+    )
+    refill_lead_days: float = Field(
+        default=2.0, ge=0, description="The refill window opens this long before the refill purchase"
     )
 
 

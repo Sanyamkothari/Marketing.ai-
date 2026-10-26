@@ -428,6 +428,20 @@ def _library() -> dict[str, ScenarioSpec]:
                 percent_off=BETTER_OFFER_PLANTED_WORSE, free_shipping=BETTER_OFFER_PLANTED_BETTER
             ),
         ),
+        # Plan-v3 decision 2. Appended at the end of the registry; the numbers are planted beliefs.
+        _base(
+            "moments_planted",
+            "Customers leave carts now and then and a third buy a regular item every month. A message "
+            "sent in the day or two after a cart, or in the days before a refill, is worth up to three times "
+            "as much as the same message at a quiet moment: the plain shop plus moments to find.",
+            cart_rate_per_day=0.02,
+            cart_lift_multiplier=3.0,
+            cart_half_life_days=1.0,
+            refill_share=0.33,
+            refill_cycle_days=30.0,
+            refill_lift_multiplier=3.0,
+            refill_lead_days=3.0,
+        ),
     ]
     return {s.name: s for s in specs}
 

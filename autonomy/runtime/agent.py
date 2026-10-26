@@ -111,7 +111,7 @@ import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
@@ -165,6 +165,9 @@ from autonomy.learning.calibration import (
 )
 from autonomy.learning.observations import LoggedSend, ipw_weights, logged_sends, weighted_rate
 from autonomy.uplift import UpliftWarmStart, warm_start_uplift
+
+if TYPE_CHECKING:
+    from autonomy.decide.moments import MomentBook
 
 AGENT_VERSION = "autonomy-agent-v1"
 
@@ -1424,7 +1427,9 @@ class BidExplanation:
     hard rule that removes it (a code from `autonomy.decide.rules`, or `BASELINE_GROUP`), None when
     it may go out. `considered` is True for the options Thompson sampling and the exploration floor
     choose among (the near-best few that could beat doing nothing). `item_reason` says why the
-    action is about its product (`bid.action.item_id`), when it is about one.
+    action is about its product (`bid.action.item_id`), when it is about one. `moment_reasons` names
+    the live moments that raise the bid's goal for this customer (plan-v3 decision 2; empty when
+    moments are off or none is live), strongest first.
     """
 
     bid: Bid
@@ -1432,6 +1437,7 @@ class BidExplanation:
     blocked_by: str | None = None
     considered: bool = False
     item_reason: str | None = None
+    moment_reasons: tuple[str, ...] = ()
 
     @property
     def allowed(self) -> bool:
@@ -1465,6 +1471,14 @@ def _item_reason(bid: Bid, bidders: Mapping[str, Bidder], state: CustomerState) 
     return choice.reason if choice is not None and choice.item_id == bid.action.item_id else None
 
 
+def _moment_reasons(
+    bid: Bid, bidders: Mapping[str, Bidder], state: CustomerState, now: datetime
+) -> tuple[str, ...]:
+    """The live moments raising the bid's goal (`GoalBidder.moment_reasons`); () for other bidders."""
+    bidder = bidders.get(bid.goal_id)
+    return bidder.moment_reasons(state, now) if isinstance(bidder, GoalBidder) else ()
+
+
 class AgentPolicy:
     """Autonomy's policy for the agent group (implements `Policy`). Build it with `build_agent_policy`."""
 
@@ -1492,6 +1506,7 @@ class AgentPolicy:
         weekly_budget: bool = True,
         currency: str = "$",
         offer_pricing: OfferPricing | None = None,
+        moments: MomentBook | Literal[False] | None = None,
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
@@ -1515,6 +1530,8 @@ class AgentPolicy:
         self.asset_of = asset_of
         self.carousel_template = carousel_template
         self.format_costs = dict(format_costs) if format_costs is not None else None
+        self.moments: MomentBook | Literal[False] | None = moments
+        """The bidders' moments (plan-v3 decision 2): a book, False for off, None for `use_moments`'."""
         self.bundle = bundle
         self.costs = dict(costs) if costs is not None else None
         self.kinds: dict[str, GoalKind] = dict(kinds or {})
@@ -1644,6 +1661,7 @@ class AgentPolicy:
             carousel_template=self.carousel_template,
             format_costs=self.format_costs,
             **self._offer_pricing_hooks(brief),
+            moments=self.moments,
         )
 
     def _install(self, brief: Brief) -> None:
@@ -1901,7 +1919,15 @@ class AgentPolicy:
             held = [b for bidder in bidders for b in _quote(bidder, view, eff)]
             held.sort(key=lambda b: -b.expected_net)
             return [
-                BidExplanation(b, b.expected_net, code, False, _item_reason(b, by_goal, view)) for b in held
+                BidExplanation(
+                    b,
+                    b.expected_net,
+                    code,
+                    False,
+                    _item_reason(b, by_goal, view),
+                    _moment_reasons(b, by_goal, view, ctx.now),
+                )
+                for b in held
             ]
         hour = self._send_hour(state.customer_id, seg, eff, trigger)
         if hour is not None:
@@ -1969,13 +1995,25 @@ class AgentPolicy:
         )
         out = [
             BidExplanation(
-                b, b.expected_net - market.cost(b), None, id(b) in considered, _item_reason(b, by_goal, view)
+                b,
+                b.expected_net - market.cost(b),
+                None,
+                id(b) in considered,
+                _item_reason(b, by_goal, view),
+                _moment_reasons(b, by_goal, view, ctx.now),
             )
             for b in ranked
         ]
         blocked.sort(key=lambda x: -x[0].expected_net)
         out.extend(
-            BidExplanation(b, b.expected_net - market.cost(b), code, False, _item_reason(b, by_goal, view))
+            BidExplanation(
+                b,
+                b.expected_net - market.cost(b),
+                code,
+                False,
+                _item_reason(b, by_goal, view),
+                _moment_reasons(b, by_goal, view, ctx.now),
+            )
             for b, code in blocked
         )
         return out
@@ -2711,6 +2749,7 @@ def build_agent_policy(
     weekly_budget: bool = True,
     currency: str = "$",
     offer_pricing: OfferPricing | None = None,
+    moments: MomentBook | Literal[False] | None = None,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -2732,6 +2771,9 @@ def build_agent_policy(
     See docs/v2/CONTACT_LESS.md. `currency` is how money is written in each decision's reason (the
     shop's own: "₽", "EUR "...). `offer_pricing` (v3, off by default) charges each goal's offers a
     budget price that the nightly loop moves day by day (docs/v3/OFFERS.md).
+    `moments` (plan-v3 decision 2, opt-in) is the shop's `autonomy.decide.moments.MomentBook`: the
+    bidders raise a message's worth while a customer's moments are live. None leaves it to
+    `use_moments` (off unless switched on), False keeps it off.
     """
     if bundle is None:
         fresh = build_bundle()
@@ -2756,4 +2798,5 @@ def build_agent_policy(
         weekly_budget=weekly_budget,
         currency=currency,
         offer_pricing=offer_pricing,
+        moments=moments,
     )

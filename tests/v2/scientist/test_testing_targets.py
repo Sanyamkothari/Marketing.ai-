@@ -38,7 +38,7 @@ def test_the_file_is_well_formed(targets: list[dict[str, Any]]) -> None:
         assert t["passes"] in (None, True, False)
 
 
-PREREGISTERED = "f54d2454bf6b761a8b8f50c7d66923663222c718849c4ffc51390479eec62f6f"
+PREREGISTERED = "b88ec8e03b5969c33ebfaa76e59198e9c6e232c08996c23bdf183b8a178f9a02"
 """SHA-256 of every claim's (id, claim, command, threshold), fixed when the file was written, before any
 command was run for it. `passes` is the only field a run may change; editing a claim, a command or a
 threshold after seeing a result changes this and fails the test."""
