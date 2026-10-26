@@ -34,7 +34,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -58,6 +58,9 @@ from autonomy.contracts import (
 )
 from engine.llm import LLMClient, LLMError
 
+if TYPE_CHECKING:
+    from autonomy.learning.early_signal import EarlyRead
+
 Period = Literal["daily", "weekly"]
 BriefingSource = Literal["llm", "llm_retry", "template"]
 
@@ -68,6 +71,7 @@ MONEY_TITLE = "Extra profit vs people we never contact"
 BASELINE_TITLE = "Against the simple rule"
 HEALTH_TITLE = "Customer health"
 LEARNED_TITLE = "What it learned"
+EARLY_TITLE = "Early read"
 """Section titles, shared with Live (it shows one figure per line under these labels)."""
 
 CURRENCY_SYMBOLS: dict[str, str] = {"USD": "$", "EUR": "€", "GBP": "£", "INR": "₹", "JPY": "¥"}
@@ -402,6 +406,37 @@ def _template_headline(proof: ProofSummary, health: HealthStatus, money: Section
     return f"Not sure yet whether it made extra profit: the likely range runs from {lo} to {hi}."
 
 
+def _early_section(read: EarlyRead, currency: str) -> SectionDraft:
+    """The early read (plan-v3 decision 8): a forecast of 90-day margin per customer from first-week
+    signals, agent group against the people we never contact. Only built when the early-signal model
+    passed its own backtest; the measured results confirm it later."""
+    d = SectionDraft("early", EARLY_TITLE)
+    est = read.difference
+    p, lo, hi = _estimate(d, "early_margin_difference", est, "money", currency)
+    n_a = d.add("agent_customers", read.n_agent, format_count(read.n_agent))
+    n_h = d.add("holdout_customers", read.n_holdout, format_count(read.n_holdout))
+    days = d.add("forecast_days", read.horizon_days, format_count(read.horizon_days))
+    verdict = _verdict(est)
+    if verdict == "up":
+        d.sentences.append(
+            f"From their first week alone, customers in the agent group are forecast to bring {p} more margin "
+            f"each over {days} days than people we never contact (likely range {lo} to {hi}; {n_a} and {n_h} customers)."
+        )
+    elif verdict == "down":
+        d.sentences.append(
+            f"From their first week alone, customers in the agent group are forecast to bring less margin than "
+            f"people we never contact over {days} days (likely range {lo} to {hi}; {n_a} and {n_h} customers)."
+        )
+    else:
+        d.sentences.append(
+            f"The first week does not yet show a clear difference in {days}-day margin from people we never "
+            f"contact: the likely range runs from {lo} to {hi} per customer ({n_a} and {n_h} customers)."
+        )
+    d.sentences.append("This is a forecast; the measured results will confirm or correct it.")
+    d.notes.append("This is a forecast from first-week behaviour, not a measured result; say so.")
+    return d
+
+
 def build_sections(
     goal: Goal | None,
     proof: ProofSummary,
@@ -409,15 +444,18 @@ def build_sections(
     facts: Mapping[str, float],
     *,
     learned: Learned = (),
+    early: EarlyRead | None = None,
 ) -> list[SectionDraft]:
     """The briefing's sections with every number, computed by code: money, the simple rule, health,
-    then what it learned and other facts when there are any."""
+    then the early read, what it learned and other facts when there are any."""
     currency = goal.currency if goal else "USD"
     drafts = [
         _money_section(goal, proof, currency),
         _baseline_section(proof, currency),
         _health_section(health),
     ]
+    if early is not None:
+        drafts.append(_early_section(early, currency))
     lesson = _learned_section(learned, currency)
     if lesson is not None:
         drafts.append(lesson)
@@ -436,11 +474,12 @@ def template_briefing(
     now: datetime,
     *,
     learned: Learned = (),
+    early: EarlyRead | None = None,
     briefing_id: str | None = None,
 ) -> Briefing:
     """The briefing written entirely by code, with no model: what the Analyst falls back to, and what
     the API rebuilds a stored briefing with when the measurement it serves has moved on."""
-    drafts = build_sections(goal, proof, health, facts, learned=learned)
+    drafts = build_sections(goal, proof, health, facts, learned=learned, early=early)
     goal_id = goal.goal_id if goal else proof.goal_id
     return Briefing(
         briefing_id=briefing_id or stable_id("brf", goal_id or "all", period, now.isoformat()),
@@ -612,9 +651,10 @@ class Analyst:
         facts: Mapping[str, float],
         *,
         learned: Learned = (),
+        early: EarlyRead | None = None,
     ) -> list[SectionDraft]:
         """The briefing's sections with every number, computed by code."""
-        return build_sections(goal, proof, health, facts, learned=learned)
+        return build_sections(goal, proof, health, facts, learned=learned, early=early)
 
     def briefing(
         self,
@@ -626,9 +666,12 @@ class Analyst:
         now: datetime,
         *,
         learned: Learned = (),
+        early: EarlyRead | None = None,
     ) -> Briefing:
         """The briefing a marketer reads. Never raises for bad or missing model output; code fills in."""
-        return self.write_briefing(goal, proof, health, facts, period, now, learned=learned).briefing
+        return self.write_briefing(
+            goal, proof, health, facts, period, now, learned=learned, early=early
+        ).briefing
 
     def write_briefing(
         self,
@@ -640,9 +683,10 @@ class Analyst:
         now: datetime,
         *,
         learned: Learned = (),
+        early: EarlyRead | None = None,
     ) -> BriefingResult:
         """As `briefing`, also saying whether the model's words or the template were used, and why."""
-        drafts = self.sections(goal, proof, health, facts, learned=learned)
+        drafts = self.sections(goal, proof, health, facts, learned=learned, early=early)
         goal_id = goal.goal_id if goal else proof.goal_id
         briefing_id = stable_id("brf", goal_id or "all", period, now.isoformat())
         system = load_prompt("analyst")
@@ -683,7 +727,7 @@ class Analyst:
             seen += problems
         return BriefingResult(
             briefing=template_briefing(
-                goal, proof, health, facts, period, now, learned=learned, briefing_id=briefing_id
+                goal, proof, health, facts, period, now, learned=learned, early=early, briefing_id=briefing_id
             ),
             source="template",
             problems=tuple(seen),
