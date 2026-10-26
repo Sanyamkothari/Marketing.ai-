@@ -51,9 +51,15 @@ that channel. With no promotion, and no running experiment, `decide` is exactly 
 running for them, the agent's `journeys.active`), a daily-sweep decision for a customer who is busy is the
 inner policy's, with the library whole and no tag: an arm that cut the library would end the journey at its
 next step (a channel arm leaves the later channel with nothing to offer), and a customer would be moved by the
-test in the middle of a plan the auction chose before it. They join the test, by the same hash, at their
-first sweep decision after the journey ends. Decisions prompted by an event (a cart, a reply) are not
-journey steps and are assigned as always (docs/v3/PRESET.md).
+test in the middle of a plan the auction chose before it. The inner decision is kept only when it carries the
+journey on (a hold of it, or a later step: `stats["journey_running"]`). When the journey ends on that very
+sweep (a purchase, an unsubscribe, nothing left to offer...), the inner policy has gone on to a fresh auction
+with the whole library; that first attempt is dropped (`retract_decision` on the inner policy, if it has one)
+and the moment is decided again as for any customer, so a customer the hash puts in an arm gets the arm and
+the tag from that sweep on (`stats["journey_ended"]`). The second attempt has the same decision id, so the
+journey runner undoes the first (`JourneyRunner.begin`) and the scheduled send is replaced; the first
+attempt's bids stay counted once in the pacer's daily reference (a mean) and the plan's counters. Decisions
+prompted by an event (a cart, a reply) are not journey steps and are assigned as always (docs/v3/PRESET.md).
 
 Everything else (`learn`, `nightly`, `prepare_day`, `explain_bids`...) is the inner policy's.
 """
@@ -124,6 +130,16 @@ def _other_goals(ctx: DecisionContext, goal_id: str) -> tuple[str, ...]:
     return tuple(b.goal_id for b in ctx.briefs if b.goal_id != goal_id)
 
 
+def _continues_journey(decision: Decision) -> bool:
+    """Whether the decision carries on a running journey: a hold of it, or one of its later steps. A first
+    step (`follow_up_step` 0) starts a journey from a fresh auction and is not a continuation."""
+    if decision.journey_id is None:
+        return False
+    if decision.kind is DecisionKind.NOTHING:
+        return True
+    return decision.action is not None and decision.action.follow_up_step > 0
+
+
 class ExperimentPolicy:
     """`Policy` that wraps another and runs the book's running experiments on a random few."""
 
@@ -142,7 +158,7 @@ class ExperimentPolicy:
         self.version = inner.version
         self.stats: Counter[str] = Counter()
         """Counts for checking a run: `assigned:<experiment>:<arm>`, `acted:<experiment>:<arm>`,
-        `outside_arm`, `defaulted`, `default_skipped`, `journey_running`."""
+        `outside_arm`, `defaulted`, `default_skipped`, `journey_running`, `journey_ended`."""
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -167,13 +183,33 @@ class ExperimentPolicy:
                     }
                 )
             return decision
+        first: Decision | None = None
         if trigger in (None, SWEEP) and self._busy is not None and self._busy(state.customer_id):
-            self.stats["journey_running"] += 1
-            return self._call(state, ctx, trigger)
+            first = self._call(state, ctx, trigger)
+            if _continues_journey(first):
+                self.stats["journey_running"] += 1
+                return first
+            # The journey ended on this sweep and the inner policy went on to a fresh auction with the
+            # whole library: the customer joins the test now, so the moment is decided again below.
+            self.stats["journey_ended"] += 1
         found = assign(running, state, ctx.now, ctx.briefs)
         if found is None:
-            return self._call(state, self._with_defaults(state, ctx, defaults), trigger)
+            defaulted = self._with_defaults(state, ctx, defaults)
+            if first is not None and defaulted is ctx:
+                return first  # not in a test and no default applies: the fresh auction stands
+            self._retract(first)
+            return self._call(state, defaulted, trigger)
+        self._retract(first)
         return self._in_experiment(found, state, ctx, trigger)
+
+    def _retract(self, first: Decision | None) -> None:
+        """Before a moment is decided again: tell the inner policy, if it asks to be told
+        (`retract_decision`), to drop what it kept of its first attempt."""
+        if first is None:
+            return
+        retract = getattr(self._inner, "retract_decision", None)
+        if callable(retract):
+            retract(first.decision_id)
 
     def _call(self, state: CustomerState, ctx: DecisionContext, trigger: str | None) -> Decision:
         if trigger is None:

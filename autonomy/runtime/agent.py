@@ -1579,6 +1579,16 @@ def _moment_reasons(
     return bidder.moment_reasons(state, now) if isinstance(bidder, GoalBidder) else ()
 
 
+def _later_step(decision: Decision | None) -> bool:
+    """Whether the decision sends a journey's later step (not its first message)."""
+    return (
+        decision is not None
+        and decision.kind is DecisionKind.ACT
+        and decision.action is not None
+        and decision.action.follow_up_step > 0
+    )
+
+
 class _Undecorated:
     """The agent as the experiments' wrapper sees it: `decide` without the wrapper, everything else as the agent's."""
 
@@ -1588,6 +1598,14 @@ class _Undecorated:
 
     def decide(self, state: CustomerState, ctx: DecisionContext, *, trigger: str | None = None) -> Decision:
         return self._agent._decide(state, ctx, trigger=trigger)
+
+    def retract_decision(self, decision_id: str) -> None:
+        """The wrapper is about to decide this moment again (same decision id): drop what the agent kept of
+        the first attempt that the second does not overwrite. The journey runner undoes it by itself
+        (`JourneyRunner.begin`), and the scheduled send is replaced under the same id."""
+        if self._agent.outcomes is not None:
+            self._agent.outcomes.forget(decision_id)
+        self._agent._tired_profiles.pop(decision_id, None)
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -2663,7 +2681,11 @@ class AgentPolicy:
     # --- learning -------------------------------------------------------------------------------
 
     def learn(self, rewards: Sequence[Reward], decisions: Mapping[str, Decision]) -> None:
-        """Closed rewards (the `Policy` hook) into the shared models, skipping what is learned."""
+        """Closed rewards (the `Policy` hook) into the shared models, skipping what is learned.
+
+        A journey's later step is left out, as in `_keep`: it went to someone who did not buy after the step
+        before it, so it is not a fresh draw for the response models."""
+        rewards = [r for r in rewards if not _later_step(decisions.get(r.decision_id))]
         if not rewards:
             return
         learn_from_rewards(
@@ -3067,10 +3089,10 @@ def build_agent_policy(
     currency: str = "$",
     offer_pricing: OfferPricing | None = None,
     moments: MomentBook | Literal[False] | None = None,
-    lookalike: bool | LookalikeConfig = False,
-    who: bool | WhoConfig | WhoBook = False,
-    frequency: bool | FrequencyConfig = False,
-    journeys: bool | JourneyConfig | JourneyRunner = False,
+    lookalike: bool | LookalikeConfig | None = None,
+    who: bool | WhoConfig | WhoBook | None = None,
+    frequency: bool | FrequencyConfig | None = None,
+    journeys: bool | JourneyConfig | JourneyRunner | None = None,
     v3: bool | V3Preset = False,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
@@ -3120,7 +3142,9 @@ def build_agent_policy(
     (`autonomy.runtime.v3.V3Preset`, docs/v3/PRESET.md): look-alike, who, frequency, the shipped
     moments, the shipped journeys, the budget price for offers and the experiments' wrapper with no
     experiment running (`agent.experiment_policy.book`). Pass a `V3Preset` to switch a part off. A piece
-    also passed by name here (`moments=False`, a `journeys=` runner...) wins over the preset's.
+    also passed by name here wins over the preset's, False included (`journeys=False`, `moments=False`, a
+    `journeys=` runner...); `lookalike`, `who`, `frequency` and `journeys` default to None, "not given",
+    which is off without the preset. Offer pricing is switched off only with `V3Preset(offers=False)`.
     """
     parts = resolve_v3(
         v3,

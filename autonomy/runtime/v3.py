@@ -15,8 +15,9 @@ real bench can ask for "v3" as a whole and be compared with the plain v2 agent:
 
 Each field is True (the piece with its defaults), False (off) or the piece's own config. Switching one off
 here leaves the others on, which is how a part is measured alone. Passing the same piece to
-`build_agent_policy` by name (`moments=`, `journeys=`, ...) wins over the preset's. With `v3=False`, the
-default, nothing here runs and every number is unchanged.
+`build_agent_policy` by name (`moments=`, `journeys=`, ...) wins over the preset's, False included
+(`journeys=False` switches journeys off); offer pricing is switched off only here (`offers=False`). With
+`v3=False`, the default, nothing here runs and every number is unchanged.
 
 The order in which the pieces compose is fixed by the code they hook into and is written out in
 docs/v3/PRESET.md.
@@ -25,7 +26,7 @@ docs/v3/PRESET.md.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 from autonomy.decide.frequency import FrequencyConfig
 from autonomy.decide.journeys import JourneyConfig, JourneyRunner, load_journeys
@@ -38,6 +39,9 @@ if TYPE_CHECKING:
     from autonomy.experiments.book import ExperimentBook
 
 __all__ = ["DEFAULT_OFFER_PRICING", "V3Parts", "V3Preset", "resolve_v3"]
+
+_T = TypeVar("_T")
+_U = TypeVar("_U")
 
 DEFAULT_OFFER_PRICING = OfferPricing(initial=0.0, renew=True)
 """The preset's budget price for offers. It starts at 0, which prices offers at what they cost: the price rises
@@ -80,21 +84,31 @@ class V3Parts:
 def resolve_v3(
     v3: bool | V3Preset,
     *,
-    lookalike: bool | LookalikeConfig = False,
-    who: bool | WhoConfig | WhoBook = False,
-    frequency: bool | FrequencyConfig = False,
+    lookalike: bool | LookalikeConfig | None = None,
+    who: bool | WhoConfig | WhoBook | None = None,
+    frequency: bool | FrequencyConfig | None = None,
     moments: MomentBook | Literal[False] | None = None,
-    journeys: bool | JourneyConfig | JourneyRunner = False,
+    journeys: bool | JourneyConfig | JourneyRunner | None = None,
     offer_pricing: OfferPricing | None = None,
 ) -> V3Parts:
     """What `build_agent_policy` builds for `v3` and the pieces it was also given by name.
 
-    A piece given by name wins over the preset's: `moments=False` keeps moments off, a `journeys=` runner is
-    used as it is. A piece left at its default (the off value) takes the preset's. With `v3=False` the
-    pieces given by name are used as they are and the preset adds nothing."""
+    A piece given by name wins over the preset's, False included: `journeys=False` or `moments=False` keeps
+    that part off, a `journeys=` runner is used as it is. A piece left at None (not given) takes the
+    preset's. Offer pricing has no "off" by name (None is "not given"): switch it off with
+    `V3Preset(offers=False)`. With `v3=False` the pieces given by name are used as they are (None is off)
+    and the preset adds nothing."""
     preset = v3 if isinstance(v3, V3Preset) else V3Preset() if v3 else None
     if preset is None:
-        return V3Parts(lookalike, who, frequency, moments, _runner(journeys), offer_pricing, None)
+        return V3Parts(
+            _given(lookalike, False),
+            _given(who, False),
+            _given(frequency, False),
+            moments,
+            _runner(_given(journeys, False)),
+            offer_pricing,
+            None,
+        )
     if moments is None:  # the preset has a say either way: off is False, which beats `use_moments`' default
         if preset.moments:
             from autonomy.decide.moments import MomentBook
@@ -112,14 +126,19 @@ def resolve_v3(
             preset.experiments if isinstance(preset.experiments, ExperimentBook) else ExperimentBook()
         )
     return V3Parts(
-        lookalike=lookalike or preset.lookalike,
-        who=who or preset.who,
-        frequency=frequency or preset.frequency,
+        lookalike=_given(lookalike, preset.lookalike),
+        who=_given(who, preset.who),
+        frequency=_given(frequency, preset.frequency),
         moments=moments,
-        journeys=_runner(journeys or preset.journeys),
+        journeys=_runner(_given(journeys, preset.journeys)),
         offer_pricing=offer_pricing,
         experiments=experiments,
     )
+
+
+def _given(value: _T | None, otherwise: _U) -> _T | _U:
+    """`value` when it was given (not None), else `otherwise`."""
+    return otherwise if value is None else value
 
 
 def _runner(journeys: bool | JourneyConfig | JourneyRunner) -> JourneyRunner | None:

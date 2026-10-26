@@ -14,6 +14,7 @@ from autonomy.contracts import (
     Decision,
     DecisionKind,
     Group,
+    Reward,
 )
 from autonomy.decide.frequency import FrequencyPlanner, LookalikeHazard
 from autonomy.decide.journeys import JourneyRunner, load_journeys
@@ -121,6 +122,15 @@ def test_a_piece_given_by_name_wins_over_the_preset() -> None:
     # with v3 off, the pieces given by name are used as they are
     only = build(journeys=True)
     assert only.policy.journeys is not None and only.who is None and only.experiment_policy is None
+
+
+def test_false_given_by_name_switches_a_part_off_inside_the_preset() -> None:
+    assert type(build(v3=True, lookalike=False).bundle.response) is ClickResponseModel
+    assert build(v3=True, who=False).who is None
+    no_frequency = build(v3=True, frequency=False)
+    assert no_frequency.frequency is None and no_frequency.planner is None
+    no_journeys = build(v3=True, journeys=False)
+    assert no_journeys.policy.journeys is None and no_journeys.who is not None
 
 
 def test_the_shops_calendar_comes_from_the_preset() -> None:
@@ -259,6 +269,42 @@ def test_a_journey_in_progress_is_not_cut_by_a_test_that_starts_under_it() -> No
     assert "exp:expc:email" in cut.policy_version
 
 
+@pytest.mark.parametrize("ending", ["purchase", "unsubscribe"])
+def test_a_customer_whose_journey_ends_on_the_sweep_joins_the_test_at_once(ending: str) -> None:
+    """The journey ends on the very sweep the wrapper sees it running (a purchase, a WhatsApp unsubscribe):
+    the inner policy then runs a fresh auction with the whole library. That decision is not kept: the
+    customer is in the test from this sweep, on the arm the hash gives them, tagged."""
+    channel_test = spec("expc", kind=QuestionKind.CHANNEL, arms=("email", "whatsapp"), share=0.10)
+    agent = build(v3=True)
+    wrapper = agent.experiment_policy
+    assert wrapper is not None and agent.policy.journeys is not None
+    cid, _first = _journey_b_customer(agent, customers_in(channel_test, "whatsapp", 60))
+    wrapper.book.start(channel_test, brief(), NOW + timedelta(hours=1))
+    later = NOW + timedelta(days=3)
+    after = customer(cid, later)
+    if ending == "purchase":
+        after = after.model_copy(update={"last_purchase_at": NOW + timedelta(days=1), "purchases": 4})
+    else:
+        channels = dict(after.channels)
+        channels[Channel.WHATSAPP] = channels[Channel.WHATSAPP].model_copy(update={"unsubscribed": True})
+        after = after.model_copy(update={"channels": channels})
+    d = agent.decide(after, ctx(later))
+    assert "exp:expc:whatsapp" in d.policy_version  # in the test, on its arm, tagged
+    assert d.action is None or d.action.channel is Channel.WHATSAPP
+    code = "purchased" if ending == "purchase" else "unsubscribed"
+    assert d.journey_ended == f"B:{code}"  # the journey's end is still on the decision
+    assert wrapper.stats["journey_ended"] == 1 and wrapper.stats["journey_running"] == 0
+    assert wrapper.stats["assigned:expc:whatsapp"] == 1
+    run = agent.policy.journeys.active(cid)
+    assert run is None or run.first_decision_id == d.decision_id  # B ended; at most a run this decision began
+    # the first attempt left nothing behind: the scheduled send and the look-alike row are the second's
+    pending = agent.policy._scheduled.get(cid, {})
+    assert (d.decision_id in pending) == (d.action is not None)
+    assert agent.outcomes is not None
+    kept = agent.outcomes._pending.get(d.decision_id)
+    assert kept is None or kept.decision.action == d.action
+
+
 def test_a_test_does_not_price_a_journey_its_arm_cannot_run() -> None:
     """In a channel test the arm's library is cut before the bidders quote, so a journey with a step on the
     other channel is not offered at all: there is no quote for that step to price."""
@@ -325,6 +371,25 @@ def test_a_journeys_later_step_is_a_message_but_not_a_fresh_draw_for_the_models(
     assert len(agent.outcomes) == 0  # a later step is not a treatment the look-alike model learns from
     agent._remember(customer("c9"), made[0])
     assert len(agent.outcomes) == 1
+    # nor through `Policy.learn`, which the Gym calls every day with the ledger's rewards for every send
+    rewards = [
+        Reward(
+            decision_id=d.decision_id,
+            customer_id="c9",
+            goal_id=GOAL,
+            window_end=NOW + timedelta(days=14),
+            converted=True,
+            revenue=100.0,
+            margin=40.0,
+            cost=0.1,
+            net=39.9,
+            unsubscribed=False,
+            complained=False,
+        )
+        for d in made
+    ]
+    agent.learn(rewards, {d.decision_id: d for d in made})
+    assert "d1" in agent.bundle.learned_decisions and "d2" not in agent.bundle.learned_decisions
 
 
 def test_the_offer_price_follows_a_budget_that_moves_and_renews_when_its_plan_has_run() -> None:
