@@ -388,7 +388,7 @@ class AutonomousPolicy:
             if math.isfinite(b.expected_net) and math.isfinite(b.uncertainty)
         ]
         if self.journeys is not None:
-            offered = self.journeys.expand(offered, state, self.journey_prices(state, offered))
+            offered = self.journeys.expand(offered, state, self.journey_prices(state, offered), ctx.now)
         survivors: list[Bid] = []
         blocked: list[str] = []
         for bid in offered:

@@ -137,6 +137,7 @@ from autonomy.contracts import (
 from autonomy.decide import rules
 from autonomy.decide.bidders import AssetOf, GoalBidder, ItemLookup, contact_harm_of
 from autonomy.decide.frequency import FrequencyConfig, FrequencyPlanner, LookalikeHazard, lerp
+from autonomy.decide.journeys import JourneyConfig, JourneyRunner
 from autonomy.decide.lookalike import (
     LookalikeConfig,
     LookalikeResponseModel,
@@ -184,10 +185,13 @@ from autonomy.learning.observations import (
     timelines,
     weighted_rate,
 )
+from autonomy.runtime.v3 import V3Preset, resolve_v3
 from autonomy.uplift import UpliftWarmStart, warm_start_uplift
 
 if TYPE_CHECKING:
     from autonomy.decide.moments import MomentBook
+    from autonomy.experiments.book import ExperimentBook
+    from autonomy.experiments.policy import ExperimentPolicy
 
 AGENT_VERSION = "autonomy-agent-v1"
 
@@ -1575,6 +1579,22 @@ def _moment_reasons(
     return bidder.moment_reasons(state, now) if isinstance(bidder, GoalBidder) else ()
 
 
+class _Undecorated:
+    """The agent as the experiments' wrapper sees it: `decide` without the wrapper, everything else as the agent's."""
+
+    def __init__(self, agent: AgentPolicy) -> None:
+        self._agent = agent
+        self.version = agent.version
+
+    def decide(self, state: CustomerState, ctx: DecisionContext, *, trigger: str | None = None) -> Decision:
+        return self._agent._decide(state, ctx, trigger=trigger)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._agent, name)
+
+
 class AgentPolicy:
     """Autonomy's policy for the agent group (implements `Policy`). Build it with `build_agent_policy`."""
 
@@ -1605,6 +1625,8 @@ class AgentPolicy:
         moments: MomentBook | Literal[False] | None = None,
         who: WhoBook | None = None,
         frequency: FrequencyConfig | None = None,
+        journeys: JourneyRunner | None = None,
+        experiments: ExperimentBook | None = None,
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
@@ -1701,7 +1723,18 @@ class AgentPolicy:
             budget_fn=self.contact_price.budget if weekly_budget else None,
             margin_fn=self._margin if restraint else None,
             plan_fn=self.planner.gate if self.planner is not None else None,
+            journeys=journeys,
         )
+        if journeys is not None and journeys.fade is None:
+            journeys.fade = self._urgency_fade  # a later step is priced at the urgency left on its day
+        self._journeys_replayed = False
+        self.experiment_policy: ExperimentPolicy | None = None
+        """With a book (the v3 preset), the wrapper `decide` goes through: it runs the book's running
+        experiments on a random few and changes nothing while none runs (docs/v3/EXPERIMENTS.md)."""
+        if experiments is not None:
+            from autonomy.experiments.policy import ExperimentPolicy
+
+            self.experiment_policy = ExperimentPolicy(_Undecorated(self), experiments)
         for brief in briefs:
             self._install(brief)
         # what the nightly learner needs and decisions do not carry
@@ -1987,6 +2020,11 @@ class AgentPolicy:
         self._weak_lift = weak
 
     def decide(self, state: CustomerState, ctx: DecisionContext, *, trigger: str | None = None) -> Decision:
+        if self.experiment_policy is not None:  # the v3 preset: the experiments' wrapper, then `_decide`
+            return self.experiment_policy.decide(state, ctx, trigger=trigger)
+        return self._decide(state, ctx, trigger=trigger)
+
+    def _decide(self, state: CustomerState, ctx: DecisionContext, *, trigger: str | None = None) -> Decision:
         if not self._decided:
             self._warm_start({}, ctx.now)
         eff = self._effective(ctx)
@@ -2132,7 +2170,7 @@ class AgentPolicy:
         if policy.journeys is not None:  # v3 journeys: the options decide() weighs, not the raw bids
             quoted = [b for b, kept in offered if kept]
             prices = policy.journey_prices(view, quoted)
-            offered = [(b, True) for b in policy.journeys.expand(quoted, view, prices)] + [
+            offered = [(b, True) for b in policy.journeys.expand(quoted, view, prices, ctx.now)] + [
                 (b, False) for b, kept in offered if not kept
             ]
         allowed: list[Bid] = []
@@ -2650,6 +2688,13 @@ class AgentPolicy:
             self._keep(d)
         if self.who is not None:
             self.who.ingest(events_by_customer, now)
+        journeys = self.policy.journeys
+        if journeys is not None and not self._decided and not self._journeys_replayed:
+            # A policy built after a restart or a brief change has no runs; the log has them (JOURNEYS.md).
+            running = [d for d in decisions if d.journey_id is not None or d.journey_ended is not None]
+            if running:
+                journeys.rebuild(running)
+                self._journeys_replayed = True
         if not self._decided:
             # Before the first decision everything handed over is history: past campaigns' sends
             # and clicks are learned from at the first decision (they need segments, see _warm_start).
@@ -2814,8 +2859,11 @@ class AgentPolicy:
         if self._priced_day == day:
             return
         self._priced_day = day
+        renew = self.offer_pricing is not None and self.offer_pricing.renew
         for goal, price in self.offer_prices.items():
             price.update(self._offer_spend.pop(goal, 0.0), other_spend=self._channel_spend.pop(goal, 0.0))
+            if renew and price.days_left == 0 and price.remaining > 0:
+                price.extend(self.offer_pricing.days if self.offer_pricing is not None else 1)
 
     def _segment_at(self, decisions: Iterable[Decision], now: datetime | None) -> Callable[[str], str | None]:
         """A customer -> segment lookup that gives, for the decisions closing now, the segment the
@@ -3013,6 +3061,8 @@ def build_agent_policy(
     lookalike: bool | LookalikeConfig = False,
     who: bool | WhoConfig | WhoBook = False,
     frequency: bool | FrequencyConfig = False,
+    journeys: bool | JourneyConfig | JourneyRunner = False,
+    v3: bool | V3Preset = False,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -3052,7 +3102,28 @@ def build_agent_policy(
     instead of messages (docs/v3/FREQUENCY.md): the tiredness models learn from look-alikes, and each
     customer's best 3-week contact plan decides whether today is a day to wait. Pass a
     `FrequencyConfig` to change its numbers or to switch one of its two parts off.
+
+    `journeys` (plan-v3 decision 4, off by default) lets the auction choose a short plan of messages
+    over several channels (docs/v3/JOURNEYS.md): True is the shipped `configs/v3/journeys.yaml`, or pass
+    a `JourneyConfig` or a `JourneyRunner`. Later steps are priced at the urgency left on their day.
+
+    `v3` (off by default, so every number above is unchanged) turns on every v3 piece together
+    (`autonomy.runtime.v3.V3Preset`, docs/v3/PRESET.md): look-alike, who, frequency, the shipped
+    moments, the shipped journeys, the budget price for offers and the experiments' wrapper with no
+    experiment running (`agent.experiment_policy.book`). Pass a `V3Preset` to switch a part off. A piece
+    also passed by name here (`moments=False`, a `journeys=` runner...) wins over the preset's.
     """
+    parts = resolve_v3(
+        v3,
+        lookalike=lookalike,
+        who=who,
+        frequency=frequency,
+        moments=moments,
+        journeys=journeys,
+        offer_pricing=offer_pricing,
+    )
+    lookalike, who, frequency = parts.lookalike, parts.who, parts.frequency
+    moments, offer_pricing = parts.moments, parts.offer_pricing
     book = (
         who
         if isinstance(who, WhoBook)
@@ -3098,4 +3169,6 @@ def build_agent_policy(
             if frequency
             else None
         ),
+        journeys=parts.journeys,
+        experiments=parts.experiments,
     )

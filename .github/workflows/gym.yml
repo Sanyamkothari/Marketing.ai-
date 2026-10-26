@@ -33,7 +33,8 @@ jobs:
       matrix:
         scenario: [baseline_shop, sleeping_dogs_15, sleeping_dogs_hidden, discount_cannibalisation, whatsapp_fatigue, send_time_matters, drift_midway, small_business, null_effect, complaint_storm]
         # plan-v3 foundation B: the look-alike agent beside the plain one on the same seeds (docs/v3/LOOKALIKE.md)
-        policy: [agent, agent_lookalike, agent_who, agent_frequency]
+        # agent_v3: every v3 piece together, the preset scored as a whole against agent (docs/v3/PRESET.md)
+        policy: [agent, agent_lookalike, agent_who, agent_frequency, agent_v3]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -76,6 +77,8 @@ jobs:
         run: |
           mkdir -p gym-report
           python -m autonomy.gym.run --scenario moments_planted --policy agent --moments --seeds 3 --customers 3000 --report-json gym-report/moments_planted.json | tee gym-report/moments_planted.txt
+          # the preset with its moments on against the preset with only them off (docs/v3/PRESET.md)
+          python -m autonomy.gym.run --scenario moments_planted --policy agent_v3 --moments --seeds 3 --customers 3000 --report-json gym-report/moments_planted_v3.json | tee gym-report/moments_planted_v3.txt
       - uses: actions/upload-artifact@v4
         with:
           name: gym-moments_planted

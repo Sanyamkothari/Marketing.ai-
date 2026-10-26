@@ -42,6 +42,12 @@ SQL consent registry, do-not-disturb registers read from files (`dnd_registries`
 default, so a deployment that does not turn it on sends exactly as before. Mandates
 (`mandates=`) and a state enricher (`state_enricher=`) are passed by argument. The nightly
 negative-lift breaker is on (`negative_lift_breaker`); its sample floors are settings too.
+
+**Plan-v3** (`v3`, `AUTONOMY_V3`, docs/v3/PRESET.md). Off by default. On, the agent is built with the v3
+preset (look-alike, who, frequency, moments, journeys, offer pricing and the experiments' wrapper with no
+experiment running) and the nightly run fills every state's profile (`RuntimeConfig.nightly_profile`), which
+the look-alike model, who and the tiredness model read. The sweep's batches and the bounded tick report stay
+as they are.
 """
 
 from __future__ import annotations
@@ -110,6 +116,7 @@ if TYPE_CHECKING:
     from autonomy.connectors.shopify import ProductSink, ShopifyPrivacyDesk
     from autonomy.connectors.sync import ConnectorEngine, TransportFor
     from autonomy.connectors.tokens import SecretCipher
+    from autonomy.runtime.v3 import V3Preset
 
 __all__ = [
     "ENV_PREFIX",
@@ -239,6 +246,15 @@ class RuntimeSettings(BaseModel):
         description="Put the look-alike response model on top of the agent's click model",
     )
 
+    # Plan-v3 as a whole (docs/v3/PRESET.md). Off: the plain v2 agent, or whichever single v3 setting is on.
+    v3: bool = Field(
+        default=False,
+        description=(
+            "Build the agent with every plan-v3 piece on and fill the nightly profile they read "
+            "(AUTONOMY_V3)"
+        ),
+    )
+
     @field_validator("countries")
     @classmethod
     def _countries(cls, value: tuple[str, ...]) -> tuple[str, ...]:
@@ -315,7 +331,16 @@ class RuntimeSettings(BaseModel):
             plan_days=self.plan_days,
             sweep_batch=self.sweep_batch,
             seed=self.seed,
+            nightly_profile=self.v3,  # the profile v3 reads (look-alike, who, tiredness)
         )
+
+    def v3_preset(self) -> V3Preset | None:
+        """The agent's v3 preset when `v3` is on (the shop's calendar is its one country, if it has one), else None."""
+        if not self.v3:
+            return None
+        from autonomy.runtime.v3 import V3Preset
+
+        return V3Preset(moments_country=self.countries[0] if len(self.countries) == 1 else None)
 
     @staticmethod
     def secret(ref: str, environ: Mapping[str, str] | None = None) -> str | None:
@@ -347,6 +372,7 @@ def agent_policy_factory(
     *,
     kinds: Mapping[str, GoalKind] | None = None,
     lookalike: bool = False,
+    v3: V3Preset | bool = False,
 ) -> Policy:
     """The agent's policy (`autonomy.runtime.agent.build_agent_policy`), imported when first needed.
 
@@ -358,6 +384,8 @@ def agent_policy_factory(
     module = importlib.import_module("autonomy.runtime.agent")
     build = module.build_agent_policy
     extra: dict[str, Any] = {"lookalike": True} if lookalike else {}
+    if v3:
+        extra["v3"] = v3
     if kinds is None:
         built = build(list(briefs), list(content), **extra)
     else:
@@ -368,13 +396,15 @@ def agent_policy_factory(
     return cast(Policy, built)
 
 
-def workspace_policy_factory(workspace: Workspace, *, lookalike: bool = False) -> PolicyFactory:
+def workspace_policy_factory(
+    workspace: Workspace, *, lookalike: bool = False, v3: V3Preset | bool = False
+) -> PolicyFactory:
     """`agent_policy_factory` with each brief's goal kind read from the workspace when it is built."""
 
     def build(briefs: Sequence[Brief], content: Sequence[ContentItem]) -> Policy:
         wanted = {b.goal_id for b in briefs}
         kinds = {g.goal_id: g.kind for g in workspace.goals() if g.goal_id in wanted}
-        return agent_policy_factory(briefs, content, kinds=kinds, lookalike=lookalike)
+        return agent_policy_factory(briefs, content, kinds=kinds, lookalike=lookalike, v3=v3)
 
     return build
 
@@ -857,7 +887,9 @@ def build_runtime(
         workspace=workspace,
         folder=ProductionStateFolder(),
         policy_factory=policy_factory
-        or workspace_policy_factory(workspace, lookalike=settings.lookalike_model),
+        or workspace_policy_factory(
+            workspace, lookalike=settings.lookalike_model, v3=settings.v3_preset() or False
+        ),
         queue=queue,
         dispatcher=dispatcher,
         batches=SqlBatchStore(engine),

@@ -361,6 +361,11 @@ class JourneyRunner:
         self._ended: dict[str, str] = {}
         """customer -> '<journey id>:<code>' of the run that ended while the current decision was made."""
         self.history: deque[JourneyEvent] = deque(maxlen=history)
+        self.fade: Callable[[CustomerState, str, datetime, float], float | None] | None = None
+        """Optional, set by the agent: `fade(state, goal_id, now, days)` is the share of the goal's urgency
+        still there `days` later (a cart reminder halves every day, a moment closes), or None for a goal it
+        does not know. Without it, or when it answers None, a later step is priced at today's urgency, as
+        before. See `expand`."""
 
     # --- choosing: journeys as bids ---------------------------------------------------------------
 
@@ -369,6 +374,7 @@ class JourneyRunner:
         offered: Sequence[Bid],
         state: CustomerState,
         price_of: Callable[[Channel], float] | None = None,
+        now: datetime | None = None,
     ) -> list[Bid]:
         """The bids the auction sees: the offered ones, with every bid on a journey's first channel
         replaced by one bid per journey that starts there (and that this customer may have).
@@ -378,7 +384,11 @@ class JourneyRunner:
         bar, or when the goal has no bid on one of its later channels. A goal for which no journey is
         left keeps its single-message bids, as without journeys, except on channels the customer
         never reads. `price_of(channel)` is the attention price of one more message there; a later
-        step pays it with the chance it runs (None: free)."""
+        step pays it with the chance it runs (None: free).
+
+        With `fade` set (the agent sets it), a later step's urgency is today's times the share of it left on
+        the day the step runs, read from `now` (default: the bid's send time): a message three days after a
+        cart is left is not worth what one today is, and a moment that has closed raises nothing."""
         starts = {j.steps[0].channel for j in self.config.journeys}
         limit = self.settings.never_open_after_sends
         pool: dict[tuple[str, Channel], list[Bid]] = {}
@@ -393,7 +403,7 @@ class JourneyRunner:
             for first in offered:
                 if first.action.channel is not journey.steps[0].channel:
                     continue
-                priced = self._price(journey, first, pool, price_of)
+                priced = self._price(journey, first, pool, price_of, state, now)
                 if priced is not None:
                     journeys.append(priced)
                     covered.add(first.goal_id)
@@ -415,6 +425,8 @@ class JourneyRunner:
         first: Bid,
         pool: Mapping[tuple[str, Channel], list[Bid]],
         price_of: Callable[[Channel], float] | None = None,
+        state: CustomerState | None = None,
+        now: datetime | None = None,
     ) -> Bid | None:
         if journey.value_bar is not None and first.value_if_converted < journey.value_bar:
             return None
@@ -422,20 +434,27 @@ class JourneyRunner:
         uplift, offer_cost, channel_cost = first.uplift, first.offer_cost, first.channel_cost
         net, variance = first.expected_net, first.uncertainty**2
         reach = 1.0 - _clamp(first.uplift, 0.0, 1.0)  # chance the customer has not bought yet
+        days = 0.0
         for step in journey.steps[1:]:
+            days += step.wait_days
             quotes = pool.get((first.goal_id, step.channel))
             if not quotes:
                 return None
             later = _reminder(quotes)
             gain = factor * later.uplift if later.uplift > 0 else later.uplift
             attention = _price_or_zero(price_of, step.channel)
+            urgency = later.urgency
+            if self.fade is not None and state is not None:
+                share = self.fade(
+                    state, first.goal_id, now if now is not None else first.action.send_at, days
+                )
+                if share is not None:
+                    urgency *= max(share, 0.0)
             uplift += reach * gain
             offer_cost += reach * later.offer_cost
             channel_cost += reach * later.channel_cost
             net += (
-                reach
-                * later.urgency
-                * (gain * later.value_if_converted - later.offer_cost - later.channel_cost)
+                reach * urgency * (gain * later.value_if_converted - later.offer_cost - later.channel_cost)
                 - reach * attention
             )
             variance += (reach * factor * later.uncertainty) ** 2

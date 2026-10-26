@@ -414,6 +414,12 @@ class BudgetPrice:
     def __call__(self) -> float:
         return self.price
 
+    def extend(self, days: int) -> None:
+        """Plan `days` more days: what is left of the budget is paced over them (a goal that outlives its plan)."""
+        if days < 1:
+            raise ValueError("extend by at least one day")
+        self.days += days
+
     def update(self, spent_today: float, *, other_spend: float = 0.0) -> float:
         """Close a day that spent `spent_today` on offers (and `other_spend` on messages), and return
         tomorrow's price."""
@@ -442,6 +448,10 @@ class OfferPricing:
     percent-off offer with no configured cost is priced at its percent of the customer's basket, or of
     `default_basket` for a customer with no orders (`planner.basket_offer_cost`); None leaves the
     offer's own `cost_per_redemption`, as in v2.
+
+    `renew` (off by default): when the plan's `days` have run and budget is left, plan another `days`
+    for what is left, instead of pricing every offer at the ceiling from then on. A goal with no end
+    date outlives its first `days`; the v3 preset turns this on (docs/v3/PRESET.md).
     """
 
     days: int = 30
@@ -449,6 +459,7 @@ class OfferPricing:
     gain: float = BUDGET_PRICE_GAIN
     channel_plan_per_day: float = 0.0
     default_basket: float | None = None
+    renew: bool = False
 
     def __post_init__(self) -> None:
         if self.days < 1 or self.initial < 0 or self.gain <= 0 or self.channel_plan_per_day < 0:
