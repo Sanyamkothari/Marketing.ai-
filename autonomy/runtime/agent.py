@@ -134,12 +134,14 @@ from autonomy.contracts import (
 )
 from autonomy.decide import rules
 from autonomy.decide.bidders import AssetOf, GoalBidder, ItemLookup, contact_harm_of
+from autonomy.decide.lookalike import LookalikeConfig, LookalikeResponseModel, OutcomeBook, profile_of
 from autonomy.decide.models import (
     ANY,
     Beta,
     BetaResponseModel,
     HazardModel,
     PersonalEffects,
+    ResponseObservation,
     ValueModel,
     base_key,
     cuped_adjust,
@@ -160,7 +162,14 @@ from autonomy.learning.calibration import (
     randomised_arms,
     with_prior,
 )
-from autonomy.learning.observations import LoggedSend, ipw_weights, logged_sends, weighted_rate
+from autonomy.learning.observations import (
+    LoggedSend,
+    Timeline,
+    ipw_weights,
+    logged_sends,
+    timelines,
+    weighted_rate,
+)
 from autonomy.uplift import UpliftWarmStart, warm_start_uplift
 
 AGENT_VERSION = "autonomy-agent-v1"
@@ -770,6 +779,62 @@ class ClickResponseModel(BetaResponseModel):
 
     def treated_rate(self, state: CustomerState, action_key: str) -> float:
         return min(1.0, max(self.organic(state), 0.0) + max(self.predict(state, action_key)[0], 0.0))
+
+
+class _ClickCrowd:
+    """A `ClickResponseModel` as the look-alike model's prior: its own estimate, with nothing blended in."""
+
+    def __init__(self, owner: ClickResponseModel) -> None:
+        self.owner = owner
+
+    def predict(self, state: CustomerState, action_key: str) -> tuple[float, float]:
+        return ClickResponseModel.predict(self.owner, state, action_key)
+
+    def treated_rate(self, state: CustomerState, action_key: str) -> float:
+        mean = ClickResponseModel.predict(self.owner, state, action_key)[0]
+        return min(1.0, max(self.owner.organic(state), 0.0) + max(mean, 0.0))
+
+    def update(self, observations: Iterable[ResponseObservation]) -> None:
+        ClickResponseModel.update(self.owner, observations)
+
+    def option_std(self, state: CustomerState, action_key: str) -> float:
+        return ClickResponseModel.option_std(self.owner, state, action_key)
+
+
+class LookalikeClickModel(ClickResponseModel):
+    """The click model with the look-alike model on top (opt-in: `build_agent_policy(lookalike=True)`).
+
+    Everything the click model learns (click rates, personal factors, lift per click, fatigue) is
+    unchanged and is the prior. `lookalike` learns purchase given profile and action from the
+    agent's own closed windows and the holdout's (the agent feeds it, see `AgentPolicy.nightly`), and
+    where it has enough data its uplift is combined with the click model's by precision. With too
+    little data the answer is the click model's, exactly. See docs/v3/LOOKALIKE.md.
+    """
+
+    def __init__(
+        self,
+        priors: Mapping[str, tuple[float, float]] | None = None,
+        *,
+        click_prior: Beta = CLICK_PRIOR,
+        click_pool: float = CLICK_POOL,
+        lift_per_click: tuple[float, float] = LIFT_PER_CLICK_PRIOR,
+        people: PersonalEffects | None = None,
+        config: LookalikeConfig | None = None,
+    ) -> None:
+        super().__init__(
+            priors,
+            click_prior=click_prior,
+            click_pool=click_pool,
+            lift_per_click=lift_per_click,
+            people=people,
+        )
+        self.lookalike = LookalikeResponseModel(_ClickCrowd(self), config=config)
+
+    def predict(self, state: CustomerState, action_key: str) -> tuple[float, float]:
+        return self.lookalike.predict(state, action_key)
+
+    def option_std(self, state: CustomerState, action_key: str) -> float:
+        return self.lookalike.option_std(state, action_key)
 
 
 CLICK = "click"
@@ -1524,6 +1589,13 @@ class AgentPolicy:
         self.organic = OrganicRate(self.segmenter, days=float(learn_horizon_days))
         if isinstance(bundle.response, ClickResponseModel):
             bundle.response.organic = self.organic
+        self.outcomes: OutcomeBook | None = (
+            OutcomeBook(timedelta(days=learn_horizon_days))
+            if isinstance(bundle.response, LookalikeClickModel)
+            else None
+        )
+        """With the look-alike model on: the profile each holdout or sent decision was made on, kept until its
+        window closes and handed to the model as an outcome (`nightly`). None otherwise."""
         self.briefs: dict[str, Brief] = {}
         self.bidders: dict[str, GoalBidder] = {}
         self.policy = AutonomousPolicy(
@@ -1836,8 +1908,10 @@ class AgentPolicy:
         update: dict[str, object] = {"segment": seg}
         if state.group is not Group.AGENT:
             # The holdout is left alone and the baseline rule times its own sends: no hour to plan.
-            decision = self.policy.decide(state.model_copy(update=update), eff, trigger=trigger)
+            seen = state.model_copy(update=update)
+            decision = self.policy.decide(seen, eff, trigger=trigger)
             self._decision_segment[decision.decision_id] = seg
+            self._remember(seen, decision)
             return decision
         hour = self._send_hour(state.customer_id, seg, eff, trigger)
         if hour is not None:
@@ -1847,9 +1921,28 @@ class AgentPolicy:
             # The folder's profile counts every click, most of them at the hour we sent: it would
             # only teach the agent its own habits.
             update["active_hours"] = ()
-        decision = self.policy.decide(state.model_copy(update=update), eff, trigger=trigger)
+        seen = state.model_copy(update=update)
+        decision = self.policy.decide(seen, eff, trigger=trigger)
         self._decision_segment[decision.decision_id] = seg
-        return self._chosen(state, eff, decision, seg)
+        decision = self._chosen(state, eff, decision, seg)
+        self._remember(seen, decision)
+        return decision
+
+    def _remember(self, seen: CustomerState, decision: Decision) -> None:
+        """With the look-alike model on, keep the profile this decision was made on until its window
+        closes. Only sends and the holdout's "do nothing" are kept: the agent's own "do nothing" goes to
+        the customers it judged least likely to respond, so it is not a control."""
+        book = self.outcomes
+        if book is None:
+            return
+        key: str | None = None
+        action = decision.action
+        if action is not None:
+            item = self.content_by_id.get(action.content_id or "")
+            if item is None:
+                return
+            key = key_of(action.channel, action.offer_id, item.theme.value, item.format)
+        book.remember(decision, profile_of(seen), key)
 
     # --- explaining ------------------------------------------------------------------------------
 
@@ -2455,6 +2548,13 @@ class AgentPolicy:
             if self._refit_at is None or now - self._refit_at >= timedelta(days=PERSONAL_REFIT_DAYS):
                 model.people.refit()
                 self._refit_at = now
+        if isinstance(model, LookalikeClickModel) and self.outcomes is not None and self._decided:
+            # Windows that closed by tonight, on the profiles they were decided on: the crowd's model
+            # learns from them, and refits when the data has grown.
+            seen_by = timelines(self._events)
+            none = Timeline(())  # a customer with no events in memory bought nothing and was sent nothing
+            model.lookalike.observe(self.outcomes.close(now, lambda cid: seen_by(cid) or none))
+            model.lookalike.fit(now)
         self._judge_lift(now)
         learned = self.bundle.learned_decisions
         self._log = {k: d for k, d in self._log.items() if k not in learned}
@@ -2622,6 +2722,7 @@ def build_agent_policy(
     restraint: bool = True,
     weekly_budget: bool = True,
     currency: str = "$",
+    lookalike: bool | LookalikeConfig = False,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -2642,10 +2743,23 @@ def build_agent_policy(
     changed nothing where no stop rule is near and kept the breaker from stopping a complaint storm.
     See docs/v2/CONTACT_LESS.md. `currency` is how money is written in each decision's reason (the
     shop's own: "₽", "EUR "...).
+
+    `lookalike` (off by default, so every number above is unchanged) puts the look-alike model on top
+    of the click model (`LookalikeClickModel`, docs/v3/LOOKALIKE.md); pass a `LookalikeConfig` to
+    change its numbers. With a `bundle` given, its response model must already be a
+    `LookalikeClickModel`.
     """
     if bundle is None:
         fresh = build_bundle()
-        bundle = ModelBundle(response=ClickResponseModel(), value=fresh.value, fatigue=fresh.fatigue)
+        if lookalike is False:
+            response: ClickResponseModel = ClickResponseModel()
+        else:
+            response = LookalikeClickModel(
+                config=lookalike if isinstance(lookalike, LookalikeConfig) else None
+            )
+        bundle = ModelBundle(response=response, value=fresh.value, fatigue=fresh.fatigue)
+    elif lookalike is not False and not isinstance(bundle.response, LookalikeClickModel):
+        raise ValueError("lookalike needs a bundle whose response model is a LookalikeClickModel")
     return AgentPolicy(
         briefs,
         content,
