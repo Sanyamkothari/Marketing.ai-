@@ -161,6 +161,7 @@ from autonomy.interfaces import (
 )
 from autonomy.mandate.enforce import ActionCosts, SpendToDate, TokenBucket, check_action, check_bid
 from autonomy.mandate.models import Mandate, MandateStatus
+from autonomy.profile import build_profiles
 from autonomy.proof.rewards import Costs
 from autonomy.runtime.batches import (
     BatchStore,
@@ -333,6 +334,10 @@ class RuntimeConfig:
     """A batch not approved (or not sendable) within this long expires: its decisions are stale."""
     nightly_lookback: timedelta = timedelta(days=30)
     nightly_rebuild: bool = True
+    nightly_profile: bool = True
+    """Fill every state's `features` (the customer profile, `autonomy.profile`) at each nightly run and
+    after any full rebuild, which resets them. Runs before deciding, so a tick that rebuilds still
+    decides on fresh profiles. A failure is an alert; the states keep their last profile."""
     one_contact_per_tick: bool = True
     """A customer contacted (or held for approval) by one goal is not decided by another that tick."""
     run_send_jobs: bool | None = None
@@ -1127,6 +1132,8 @@ class AutonomyRuntime:
         )
         if requested and not report.rebuilt:
             self._rebuild_requested = True  # the log could not be read: try again next tick
+        if self.config.nightly_profile and (nightly_due or report.rebuilt):
+            self._profiles(now, report)
         self._handle_replies(new_events, now, report)
         self._run_breakers(now, report)
         self._expire_batches(now, report)
@@ -2335,6 +2342,20 @@ class AutonomyRuntime:
         running = self._running(now, report)
         self._learn(running, now, self.config.nightly_lookback, report, code="nightly.error")
         self._negative_lift(running, now, report)
+
+    def _profiles(self, now: datetime, report: TickReport) -> None:
+        """The nightly profile: every state's `features`, as of `now`, built in batches
+        (`autonomy.profile.build_profiles`). A rebuild just reset them, so this runs right after the fold."""
+        try:
+            build_profiles(self.events, self.states, now)
+        except Exception as err:  # a profile failing must never stop deciding
+            self._alert(
+                report,
+                code="profile.error",
+                key=now.date().isoformat(),
+                severity="warning",
+                message=f"The customer profiles could not be built ({type(err).__name__}); states keep the last ones they had.",
+            )
 
     def _negative_lift(self, running: Sequence[_Running], now: datetime, report: TickReport) -> None:
         """The nightly negative-lift breaker: pause an acting goal whose proof shows it losing money.
