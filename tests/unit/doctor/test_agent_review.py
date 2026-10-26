@@ -674,7 +674,25 @@ def test_the_goal_brief_is_callable_for_the_active_goal_only(world: World, stora
     briefs = [r for r in found.evidence if r.tool == "load_goal_brief"]
     assert len(briefs) == 1 and briefs[0].output["goal_id"] == "retail-win-back"
     assert briefs[0].output["brief_hash"], "the brief comes back through the registry"
-    assert found.sent, "and is recorded as sent through the gate"
+    sent = [s for s in found.sent if s["tool"] == "load_goal_brief"]
+    assert len(sent) == 1, "and is recorded as sent through the gate"
+    assert "retail-win-back" in str(sent[0]), "with the goal named in what was sent"
+
+
+def test_a_brief_of_another_goal_is_refused_as_unknown_and_the_mode_is_the_visits(
+    world: World, storage: LocalStorage
+) -> None:
+    from engine.agent.tools import AgentToolError
+    from engine.doctor.agent_review import _Review
+
+    review = _build(_Review, _goal_case(storage, world), world)
+    with pytest.raises(AgentToolError) as raised:
+        review._act({"action": "load_goal_brief", "file": "F1", "args": {"goal_id": "telco-churn"}})
+    assert raised.value.code == "AGENT_GOAL_UNKNOWN"
+    review._act(
+        {"action": "load_goal_brief", "file": "F1", "args": {"goal_id": "retail-win-back", "mode": "audit"}}
+    )
+    assert review.turn.looks[-1].result["mode"] == "train", "the model cannot change the visit's mode"
 
 
 def _named(tools: list[dict[str, str]]) -> list[str]:

@@ -482,6 +482,10 @@ class _Review:
             goal = _active_goal(self.case)
             if goal is None or args.setdefault("goal_id", goal.goal_id) != goal.goal_id:
                 raise AgentToolError("AGENT_GOAL_UNKNOWN", "Only the active goal's brief can be loaded.")
+            # the visit's own mode, as the frozen brief has it: the AI is never told the outcome is optional
+            args["mode"] = (
+                self.brief.mode if self.brief is not None and self.brief.goal_id == goal.goal_id else "train"
+            )
         evidence_id = f"r{len(turn.looks) + 1}"
         result: ToolResult
         if name in M_PREVIEW_TOOLS or name == GOAL_BRIEF_TOOL:  # a registry READ tool of its own
