@@ -241,6 +241,8 @@ class ConverseResult:
     """Ids of the agent's own earlier changes it took back (waiting, or applied by the agent itself)."""
     suggestion: tuple[str, str] | None = None
     """`(question_id, option_id)`: the answer it suggests to an open question; never recorded by the AI."""
+    suggestions: tuple[tuple[str, str], ...] = ()
+    """Every answer it suggests, one per open question (`suggestion` alone is the older single form)."""
     tools: tuple[str, ...] = ()
     """What it did to answer, in order (the looks and the actions)."""
     model_calls: int = 0
@@ -1154,8 +1156,10 @@ def _converse(run: _Run, case: Case) -> _Step:
             f" I did not put back “{again[0].title}”: it was left out earlier; tick it again if you want it."
         )
     left_out = {i.item_id for i in again}
-    suggestion = _suggested(case, step, result.suggestion)
-    if result.suggestion is not None and suggestion is None:  # its question was settled meanwhile: no button
+    given = result.suggestions or ((result.suggestion,) if result.suggestion is not None else ())
+    shown = [found for found in (_suggested(case, step, g) for g in given) if found is not None]
+    suggestion = shown[0] if shown else None
+    if len(shown) < len(given):  # a question was settled meanwhile: no button for it
         text += " (The answer I pointed at is no longer open, so there is nothing to click for it.)"
     entry = CaseChatEntry(
         role="agent",
@@ -1171,6 +1175,7 @@ def _converse(run: _Run, case: Case) -> _Step:
         withdrawn=tuple(back),
         tools=result.tools,
         suggestion=suggestion,
+        suggestions=tuple(shown),
         blocked_by=result.blocked_by,
         error_codes=result.error_codes,
     )

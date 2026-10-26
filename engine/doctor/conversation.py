@@ -649,23 +649,36 @@ def _first_look(case: Case, fixes: int, questions: int, timeline: Sequence[Timel
     )
 
 
-def _suggested(case: Case, entry: Any) -> tuple[CaseQuestion, Any] | None:
-    """The question an agent reply suggests an answer for, and the suggestion, when both are still in the case."""
-    wanted = getattr(entry, "suggestion", None)
-    if wanted is None:
-        return None
-    question = next((q for q in case.questions if q.question_id == wanted.question_id), None)
-    if question is None or not any(o.option_id == wanted.option_id for o in question.options):
-        return None
-    return question, wanted
+def _all_suggested(case: Case, entry: Any) -> list[tuple[CaseQuestion, Any]]:
+    """Every answer an agent reply suggests whose question and option are still in the case, in the order made."""
+    wanted = getattr(entry, "suggestions", ()) or (
+        (entry.suggestion,) if getattr(entry, "suggestion", None) else ()
+    )
+    found: list[tuple[CaseQuestion, Any]] = []
+    for one in wanted:
+        question = next((q for q in case.questions if q.question_id == one.question_id), None)
+        if question is not None and any(o.option_id == one.option_id for o in question.options):
+            found.append((question, one))
+    return found
 
 
-def _message(case: Case, entry: Any, *, live: bool = False) -> MessageCard:
+def _suggested(
+    case: Case, entry: Any, live_for: frozenset[str] = frozenset()
+) -> tuple[CaseQuestion, Any] | None:
+    """The suggestion a reply shows: the first one that is the live answer to its question (`live_for`), else the
+    first. A reply may suggest several; its card shows one, and the others' questions keep their own cards."""
+    found = _all_suggested(case, entry)
+    return next((f for f in found if f[0].question_id in live_for), found[0] if found else None)
+
+
+def _message(
+    case: Case, entry: Any, *, live: bool = False, live_for: frozenset[str] = frozenset()
+) -> MessageCard:
     """A chat message. `live`: the newest suggestion for a question nobody has answered; the question's other answers
     are offered with it, since its own card waits until the question is answered."""
     titles = {i.item_id: i.title or i.kind for i in case.items}
     suggestion: MessageSuggestion | None = None
-    found = _suggested(case, entry)
+    found = _suggested(case, entry, live_for)
     if found is not None:
         question, wanted = found
         others: tuple[ChatOption, ...] = ()
@@ -795,13 +808,17 @@ def build_conversation(
     # question's own card waits until it is answered (the same thing is not drawn twice).
     newest: dict[str, int] = {}
     for index, entry in messages:
-        offered = _suggested(case, entry)
-        if offered is not None and offered[0].answer is None:
-            newest[offered[0].question_id] = index
+        for question, _ in _all_suggested(case, entry):
+            if question.answer is None:
+                newest[question.question_id] = index
+    shown_live: set[str] = set()
     for index, entry in messages:
-        offered = _suggested(case, entry)
-        live = offered is not None and newest.get(offered[0].question_id) == index
-        add(entry.at, 1, _message(case, entry, live=live))
+        mine = frozenset(q for q, i in newest.items() if i == index)
+        offered = _suggested(case, entry, mine)
+        live = offered is not None and offered[0].question_id in mine
+        if live and offered is not None:
+            shown_live.add(offered[0].question_id)
+        add(entry.at, 1, _message(case, entry, live=live, live_for=mine))
 
     def said(question: CaseQuestion) -> str:
         prefix = f"{question.question_id}:"
@@ -815,7 +832,7 @@ def build_conversation(
     shown_questions = [q for q in questions if q.code not in _REQUEST_CODES | _FOLDED_CODES]
     open_questions = [q for q in shown_questions if q.answer is None]
     for q in shown_questions:
-        if q.answer is None and q.question_id in newest:
+        if q.answer is None and q.question_id in shown_live:
             continue
         add(in_reply(asked_at.get(q.question_id, case.created_at)), 3, _question(q, said(q)))
     goal_ids = (view.goal_id,) if view.goal_id else tuple(view.missing_for[:4])

@@ -10,14 +10,20 @@ before. It answers with one JSON action per call:
   make **changes to the working copy**: pending items carrying the receipt our code counted. The visit applies the
   clean ones for the person to undo (`engine.doctor.visit._converse`); the model never ticks anything;
 * `ask` raises a catalogue question, or a quick question with its own short options (no numbers); `suggest_answer`
-  points at one answer of an open question from what the person typed. It never records it: only the person's click
-  does. `express_doubt` and `request_data` are the review's;
+  points at one answer of an open question from what the person typed (one per open question; a second for the same
+  question replaces the first). It never records it: only the person's click does. `express_doubt` and `request_data` are the review's;
 * `withdraw` takes back one of the agent's **own** earlier changes, and `replaces` on a new change swaps it;
 * `reply` ends the turn with a short message in plain words.
 
 Held in code, not in the prompt: the egress gate of each file, the number check (a number in what the person reads
 is in a tool result or in their own words), the guardrails, at most `data_doctor.ai_limits.max_chat_steps` actions,
 two bad replies end the turn. Everything the review refuses, the chat refuses.
+
+**The last word.** A turn that would end without the AI's own reply (its steps used up, a refusal or two bad actions,
+an `AGENT_*` limit) gets one more call, told plainly why the turn is ending and that only a `reply` is accepted now,
+so the AI can tell the person what happened. The reply passes the same checks as any reply; if the call fails or is
+not a valid reply, the fixed sentence below stands. It is never made when the AI service is the reason (it did not
+answer, or the case's spending or the client's consent ran out): there is nobody to ask.
 """
 
 from __future__ import annotations
@@ -84,6 +90,9 @@ catalogue's questions, which only the person answers."""
 OUT_OF_STEPS: Final[str] = (
     "That took more steps than I may take in one message. What I did so far is above; ask me to go on if you want more."
 )
+NO_LAST_WORD: Final[frozenset[str]] = frozenset({"unavailable", "prompt_too_large", "failed"})
+"""Why a turn ended without a reply that is not worth one more call: the AI service did not answer (or the case's
+money ran out), the prompt cannot be sent, or a step broke in a way nobody can explain to the person."""
 NOTHING_SAID: Final[str] = "I could not answer that from what I have checked."
 
 
@@ -98,8 +107,9 @@ class ChatTurn:
     doubts: tuple[CaseDoubt, ...] = ()
     requests: tuple[DataRequest, ...] = ()
     withdrawn: tuple[str, ...] = ()
-    suggestion: tuple[str, str] | None = None
-    """`(question_id, option_id)` the model pointed at; the visit checks the question is open."""
+    suggestions: tuple[tuple[str, str], ...] = ()
+    """`(question_id, option_id)` for each open question the model pointed at, one per question; the visit checks the
+    question is still open."""
     tools: tuple[str, ...] = ()
     sent: tuple[dict[str, Any], ...] = ()
     blocked_by: str | None = None
@@ -109,6 +119,11 @@ class ChatTurn:
     """Why the AI service did not answer, when it did not: the failure's own code (`LLM_UNAVAILABLE`; `LLM_REFUSED`
     for a model that ran out of room; `BUDGET_EXCEEDED`), then the kind the HTTP client found (`LLM_KEY_EXPIRED`,
     `LLM_OUT_OF_ROOM` ...): `engine.agent.loop.ai_failure_codes`."""
+
+    @property
+    def suggestion(self) -> tuple[str, str] | None:
+        """The first suggestion, for a reader that shows one."""
+        return self.suggestions[0] if self.suggestions else None
 
 
 @dataclass
@@ -120,7 +135,8 @@ class _Chosen:
     combined: list[CaseItem] = field(default_factory=list)
     asked: dict[str, Ask] = field(default_factory=dict)
     quick: int = 0
-    suggestion: tuple[str, str] | None = None
+    suggestions: dict[str, str] = field(default_factory=dict)
+    """Question id -> the option the model points at; a second suggestion for a question replaces the first."""
     used: list[str] = field(default_factory=list)
     reported: set[str] = field(default_factory=set)
     applied: list[CaseItem] = field(default_factory=list)
@@ -289,8 +305,9 @@ class _Chat(_Review):
         # What the person is told the AI looked at: the case as the model reads it, and the conversation.
         shown = json.dumps(self.state, ensure_ascii=False) + "\n" + history
         self.turn.sent.append(sent_item(self.gates[0], STATE_TOOL, {}, shown))
-        for _ in range(self.max_steps + 1):
-            variables = {
+
+        def variables_for(results: list[dict[str, Any]]) -> dict[str, Any]:
+            return {
                 "goal": goal,
                 "tools": tools,
                 "questions": catalogue_lines(chat=True),
@@ -298,9 +315,12 @@ class _Chat(_Review):
                 "conversation": history,
                 "message": text,
                 "turn_results": (
-                    json.dumps(for_prompt(turn.feedback, {}), ensure_ascii=False) if turn.feedback else "none"
+                    json.dumps(for_prompt(results, {}), ensure_ascii=False) if results else "none"
                 ),
             }
+
+        for _ in range(self.max_steps + 1):
+            variables = variables_for(turn.feedback)
             try:
                 answer = self._complete(prompt, variables)
             except _NoAnswerError as stop:
@@ -314,10 +334,12 @@ class _Chat(_Review):
                 self._act(action)
             except AgentToolError as exc:
                 strikes += 1
+                # The message goes into the feedback even when this is the last strike: the last word reads it, so
+                # a reply refused for its number is not written again with the same number.
+                turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
                 if strikes >= STRIKES:
                     blocked = exc.code
                     break
-                turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
             except Exception as exc:  # a model's odd input must never cost a paid turn that nobody records
                 _LOG.warning("doctor chat step failed: %s", type(exc).__name__)
                 blocked = "failed"
@@ -326,6 +348,12 @@ class _Chat(_Review):
         made = {item.item_id for item in items}
         chosen = self.chosen
         withdrawn = [i for i in dict.fromkeys([*chosen.withdrawn, *chosen.replaces]) if i not in made]
+        if not reply and blocked not in NO_LAST_WORD and not self._spent():
+            reply = self._last_word(prompt, variables_for, blocked)
+            if reply:
+                blocked = (
+                    None  # the AI wrote this reply itself: nothing blocked it (the same as a guided session)
+                )
         if not reply:
             reply = lead if blocked == "unavailable" else (OUT_OF_STEPS if blocked is None else NOTHING_SAID)
         return ChatTurn(
@@ -336,12 +364,53 @@ class _Chat(_Review):
             doubts=tuple(turn.doubts),
             requests=tuple(turn.requests),
             withdrawn=tuple(withdrawn),
-            suggestion=chosen.suggestion,
+            suggestions=tuple(chosen.suggestions.items()),
             tools=tuple(dict.fromkeys(chosen.used)),
             sent=tuple(s.model_dump(mode="json") for s in turn.sent[:MAX_SENT_ITEMS]),
             blocked_by=blocked,
             error_codes=why,
         )
+
+    def _spent(self) -> bool:
+        """Whether the case's spending limit is reached (a meter without a limit never is)."""
+        spent = getattr(self.meter, "spent", None)
+        return bool(spent()) if callable(spent) else False
+
+    def _last_word(
+        self,
+        prompt: Any,
+        variables_for: Callable[[list[dict[str, Any]]], dict[str, Any]],
+        blocked: str | None,
+    ) -> str:
+        """One more call, so the AI can tell the person why its turn is ending. The model is told the reason and that
+        only a `reply` is accepted; the reply passes the same checks as any. An empty string when the call fails or
+        what came back is not a valid reply: the fixed sentence then stands. Counted in the meter like any call.
+        """
+        why = (
+            "You have used all the steps you may take in one message."
+            if blocked is None
+            else f"Your last actions were refused ({blocked}) and this message ends now."
+        )
+        told = [
+            *self.turn.feedback,
+            self.gates[0].prepare(
+                {
+                    "turn_ending": why,
+                    "now": 'Only {"action":"reply","text":"..."} is accepted now. Tell the person plainly what '
+                    "you did, what you could not do and why, and what they can ask next.",
+                }
+            ),
+        ]
+        try:
+            action = _plain_or_action(self._complete(prompt, variables_for(told)))
+            if str(action["action"]) != "reply":
+                return ""
+            return self._reply(action)
+        except (_NoAnswerError, AgentToolError):
+            return ""
+        except Exception as exc:  # a model's odd input must never cost the turn its fixed reply
+            _LOG.warning("doctor chat last word failed: %s", type(exc).__name__)
+            return ""
 
     def _reply(self, action: dict[str, Any]) -> str:
         said = str(action.get("text") or "").strip()
@@ -555,8 +624,6 @@ class _Chat(_Review):
 
     def _suggest(self, args: dict[str, Any]) -> None:
         """Point at one answer of an open question. Nothing is recorded; the person's click does that."""
-        if self.chosen.suggestion is not None:
-            raise AgentToolError("AGENT_SUGGESTION_LIMIT", "Suggest one answer per message.")
         qid = self.handles.get(str(args.get("question_id", "")), "")
         oid = str(args.get("option_id", ""))
         labels: dict[str, str] = {}
@@ -574,7 +641,7 @@ class _Chat(_Review):
             raise AgentToolError(
                 "AGENT_SUGGESTION_UNKNOWN", "Suggest an answer of a question that is open, by its ids."
             )
-        self.chosen.suggestion = (qid, oid)
+        self.chosen.suggestions[qid] = oid
         self.turn.feedback.append({"suggested": str(args.get("question_id"))})
 
     # -- files -------------------------------------------------------------------------------------
@@ -736,6 +803,7 @@ def doctor_converse(
             requests=done.requests,
             withdrawn=done.withdrawn,
             suggestion=done.suggestion,
+            suggestions=done.suggestions,
             tools=done.tools,
             model_calls=meter.calls_used() - calls,
             tokens=meter.tokens_used() - tokens,
