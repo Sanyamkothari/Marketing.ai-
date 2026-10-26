@@ -306,14 +306,20 @@ class _Review:
             index = next((i for i, c in enumerate(self.ctxs) if c.upload_id == item.upload_id), None)
             step = item.payload.get("step")
             column = item.payload.get("column") or (step.get("column") if isinstance(step, dict) else None)
-            if index is None or not isinstance(column, str):
+            whole = item.upload_id is None and isinstance(step, dict)  # the AI's queries are over the files
+            if whole:
+                index = 0 if len(self.ctxs) == 1 else None
+                column = (
+                    column if isinstance(column, str) else str(item.payload.get("output_name") or item.title)
+                )
+            elif index is None or not isinstance(column, str):
                 continue
             kind = step.get("kind") if isinstance(step, dict) else item.kind
             found.append(
                 {
-                    "file": f"F{index + 1}",
+                    "file": f"F{index + 1}" if index is not None else "all files",
                     "kind": str(kind),
-                    "column": self.gates[index].label(column),
+                    "column": self.gates[index].label(column) if index is not None else column[:60],
                     "by": item.source.value,  # the AI sees its own items too, and whether each still waits
                     "state": item.state.value,
                 }

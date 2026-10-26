@@ -220,3 +220,83 @@ def test_a_query_reading_the_future_states_its_window() -> None:
             ),
         )
     assert "outcome_window_days" in caught.value.message
+
+
+def test_two_waiting_queries_both_accepted_name_that_the_later_one_runs_on_the_other() -> None:
+    earlier = pending_table(ProposalState.ACCEPTED, "item_q1")
+    proposal = propose(ON_LINES, (pending_table(ProposalState.PENDING),))
+    step = {**proposal["step"], "order": 3}
+    later = item("item_q2", {"step": step}, ProposalState.ACCEPTED, upload_id=None)
+    case_files = [CaseFile(upload_id="up-1", file_name="log.csv", added_at=NOW, added_by="u")]
+    found = check_plan([loaded(log())], case_files, [earlier, later]).findings
+    assert "PLAN_QUERY_TRIED_BEFORE_CHANGE" in {f.code for f in found}
+    assert next(f for f in found if f.code == "PLAN_QUERY_TRIED_BEFORE_CHANGE").level == "stop"
+
+
+def test_a_waiting_fix_on_what_a_waiting_combine_makes_is_left_out_with_it() -> None:
+    from engine.doctor.plan_check import trial_steps_of
+
+    combine = RecipeStep(order=1, kind=RecipeStepKind.COMBINE_ROWS, column="Customer", params={}, reason="c")
+    derive = RecipeStep(
+        order=2, kind=RecipeStepKind.DERIVE, column="x", new_column="y", params={}, reason="d"
+    )
+    items = (
+        item("c", {"step": combine.model_dump(mode="json")}, ProposalState.PENDING, upload_id="up-1"),
+        item("d", {"step": derive.model_dump(mode="json")}, ProposalState.PENDING, upload_id="up-1"),
+        parse_date(ProposalState.PENDING),
+    )
+    kept = [i for _, i in trial_steps_of(items, "up-1", only_file=True)]
+    assert kept == ["item_parse"]
+
+
+def frames_with(**extra: Any) -> dict[str, pd.DataFrame]:
+    return {"t": pd.DataFrame({"InvoiceDate": pd.to_datetime(["2011-12-09"]), **extra})}
+
+
+def test_the_data_end_reads_naive_and_aware_columns_together() -> None:
+    from engine.doctor.tools_sql import _data_end
+
+    mixed = frames_with(updated_at=["2011-12-01T10:00:00+00:00"])
+    assert _data_end(mixed) == pd.Timestamp("2011-12-09").date()
+
+
+def test_a_future_column_does_not_move_the_data_end_when_the_event_date_is_named() -> None:
+    from engine.doctor.tools_sql import _compared_columns, _data_end
+
+    frames = frames_with(card_expiry_date=["2014-05-01"])
+    assert _data_end(frames) == pd.Timestamp("2014-05-01").date()
+    wanted = _compared_columns("SELECT c FROM t WHERE InvoiceDate > $as_of")
+    assert _data_end(frames, wanted) == pd.Timestamp("2011-12-09").date()
+
+
+def test_the_window_in_the_sql_is_not_shrunk_by_what_the_step_states() -> None:
+    from engine.doctor.tools_sql import _window_in_sql
+
+    assert _window_in_sql("WHERE d <= $as_of + INTERVAL 90 DAY") == 90
+    assert _window_in_sql("WHERE d <= $as_of + INTERVAL '30' DAYS") == 30
+    assert _window_in_sql("WHERE d > $as_of") == 0
+
+
+def test_a_stated_window_smaller_than_the_queries_own_is_overridden() -> None:
+    days = pd.date_range("2025-01-01", "2025-12-09", freq="D")
+    frame = pd.DataFrame({"Customer": [f"C{n % 5}" for n in range(len(days))], "InvoiceDate": days})
+    sql = (
+        "SELECT Customer, count(*) FILTER (WHERE InvoiceDate > $as_of AND "
+        "InvoiceDate <= $as_of + INTERVAL 90 DAY) AS again FROM t_log GROUP BY ALL"
+    )
+    ctx = DataToolContext(
+        files=(loaded(frame),),
+        caller="ai",
+        principal=Principal(user_id="u", username="u", roles=frozenset({Role.ANALYST}), kind="user"),
+    )
+    given = {
+        "description": "Again.",
+        "sql": sql,
+        "output_name": "o",
+        "upload_ids": ["up-1"],
+        "as_of": "2025-11-30",
+        "reads_future": True,
+        "outcome_window_days": 1,
+    }
+    out = dict(data_registry().call("propose_sql_step", given, ctx).output)
+    assert "OUTCOME_WINDOW_PAST_DATA" in {f["code"] for f in out["findings"]}

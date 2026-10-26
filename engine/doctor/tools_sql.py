@@ -24,6 +24,8 @@ tried the same way, on the plan so far.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Collection
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Final, Literal
@@ -283,20 +285,51 @@ def _two_valued(frame: pd.DataFrame) -> tuple[str, ...]:
 _DATE_HINT: Final = ("date", "time", "day", "_at")
 
 
-def _data_end(frames: dict[str, pd.DataFrame]) -> date | None:
-    """The latest date in the date columns of these frames (parsed ones, and text columns named like a date)."""
-    latest: pd.Timestamp | None = None
+_AS_OF_SIDE: Final = (
+    r"(?:\"?(\w+)\"?\s*(?:>=|<=|>|<|=|BETWEEN)\s*\$as_of\b|\$as_of\b(?:\s*\+[^,)]*?)?\s*(?:>=|<=|>|<|=)\s*\"?(\w+)\"?)"
+)
+_DAYS_AFTER: Final = re.compile(
+    r"\$as_of\s*\+\s*(?:INTERVAL\s*'?\s*(\d+)\s*(?:DAYS?)?\s*'?\s*(?:DAYS?)?|(\d+)\b)", re.IGNORECASE
+)
+
+
+def _compared_columns(sql: str) -> set[str]:
+    """Column names the query sets against `$as_of`: the event date it reads, when it says so."""
+    found = {m for pair in re.findall(_AS_OF_SIDE, sql, flags=re.IGNORECASE) for m in pair if m}
+    return {n.lower() for n in found}
+
+
+def _window_in_sql(sql: str) -> int:
+    """The longest literal day offset added to `$as_of` in the query (0 when it has none)."""
+    return max((int(a or b) for a, b in _DAYS_AFTER.findall(sql)), default=0)
+
+
+def _data_end(frames: dict[str, pd.DataFrame], prefer: Collection[str] = ()) -> date | None:
+    """The latest date in the date columns of these frames (parsed ones, and text columns named like a date).
+
+    The columns the case or the query names as its event date count alone when the files have them (a card expiry or
+    renewal date lies in the future and says nothing of how far the data reaches); a column that cannot be read is
+    skipped."""
+    wanted = {str(n).lower() for n in prefer}
+    named = any(str(c).lower() in wanted for f in frames.values() for c in f.columns)
+    latest: date | None = None
     for frame in frames.values():
         for name in frame.columns:
+            if named and str(name).lower() not in wanted:
+                continue
             column = frame[name]
-            if not pd.api.types.is_datetime64_any_dtype(column):
-                if column.dtype != object or not any(h in str(name).lower() for h in _DATE_HINT):
-                    continue
-                column = pd.to_datetime(column, errors="coerce", format="mixed")
-            top = column.max()
-            if pd.notna(top) and (latest is None or top > latest):
-                latest = top
-    return None if latest is None else latest.date()
+            try:
+                if not pd.api.types.is_datetime64_any_dtype(column):
+                    if column.dtype != object or not any(h in str(name).lower() for h in _DATE_HINT):
+                        continue
+                    column = pd.to_datetime(column, errors="coerce", format="mixed")
+                top = column.max()
+                day = top.date() if pd.notna(top) else None
+            except (TypeError, ValueError, OverflowError, AttributeError):
+                continue
+            if day is not None and (latest is None or day > latest):
+                latest = day
+    return latest
 
 
 def _window_finding(
@@ -305,10 +338,14 @@ def _window_finding(
     """A query reading the outcome from rows after `$as_of` needs the data to reach `as_of` + its window; when it
     does not, most customers read as no (the same maturity rule as the readiness check, applied to the step).
     """
-    window = given.outcome_window_days
-    if not given.reads_future or window is None or as_of is None:
+    stated = given.outcome_window_days
+    if not given.reads_future or stated is None or as_of is None:
         return None
-    end = _data_end(frames)
+    window = max(
+        stated, _window_in_sql(given.sql)
+    )  # the query's own literal offset is not for the AI to shrink
+    prefer = _compared_columns(given.sql) | ({given.as_of_column} if given.as_of_column else set())
+    end = _data_end(frames, prefer)
     if end is None or as_of + timedelta(days=window) <= end:
         return None
     return Finding(
