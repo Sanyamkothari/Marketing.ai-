@@ -86,10 +86,13 @@ PLAN_SECTION_7_CODES = frozenset(
         "TOO_MANY_SOURCES",
     }
 )
+# v3 phase 0, B5 (DEC-1823 (c)): the lapsed audience's two codes, added beside the plan's table.
+AUDIENCE_CODES = frozenset({"AUDIENCE_ROLE_MISSING", "AUDIENCE_EMPTY"})
 
 
 def test_the_onboarding_table_is_the_plan_s_table() -> None:
-    assert ONBOARDING_VALIDATION_CODES == PLAN_SECTION_7_CODES
+    assert ONBOARDING_VALIDATION_CODES == PLAN_SECTION_7_CODES | AUDIENCE_CODES
+    assert len(PLAN_SECTION_7_CODES) == 26
 
 
 def test_the_phase_one_table_is_untouched() -> None:

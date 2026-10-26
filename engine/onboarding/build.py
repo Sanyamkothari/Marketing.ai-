@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
 from engine.config import ColumnType, RunMode, StandardType, get_roles
 from engine.contracts import RunState, Severity
+from engine.onboarding.audience import apply_audience
 from engine.onboarding.datasets import DatasetError, build_manifest
 from engine.onboarding.features import (
     SNAPSHOT_VIEW,
@@ -98,7 +99,7 @@ if TYPE_CHECKING:
     from engine.jobs import CancelToken
     from engine.onboarding.datasets import DatasetRegistry
     from engine.onboarding.sources import SourceReader
-    from engine.onboarding.specs import DatasetManifest, LabelSpec
+    from engine.onboarding.specs import AudienceSpec, DatasetManifest, LabelSpec
 
 __all__ = ["BUILD_STAGES", "build_dataset", "is_first_build_of_recipe"]
 
@@ -1175,6 +1176,27 @@ def build_dataset(
                 ),
             )
 
+        if spec.audience is not None and (
+            spec.audience.role not in views or EVENT_TIME not in views[spec.audience.role].columns
+        ):  # the audience reads a mapped event table, or nothing is built (v3 phase 0, B5)
+            return _stop(
+                status,
+                registry,
+                _report(
+                    dataset_id=dataset_id,
+                    checks=[
+                        *checks,
+                        _audience_role_missing(spec.audience.role, mapped=spec.audience.role in views),
+                    ],
+                    tables=tables,
+                    snapshots=(),
+                    features=(),
+                    frame=None,
+                    duration_s=perf_counter() - started,
+                    features_sql_path=None,
+                ),
+            )
+
         # --- snapshots ------------------------------------------------------
         began = perf_counter()
         status.start("snapshots")
@@ -1196,10 +1218,46 @@ def build_dataset(
         signup = SIGNUP_COLUMN if SIGNUP_COLUMN in entities.columns else None
         snapshots = build_snapshot_frame(entities, dates, signup_column=signup)
         con.register(SNAPSHOT_VIEW, snapshots)
+        audience_note = ""
+        if (
+            spec.audience is not None
+        ):  # who the dataset is for, at train and score time alike (v3 phase 0, B5)
+            everyone = len(snapshots)
+            snapshots = apply_audience(
+                con,
+                snapshots,
+                spec.audience.role,
+                spec.audience.no_event_days,
+                inclusive=spec.snapshot_spec.inclusive_snapshot_time,
+            )
+            audience_note = (
+                f" {len(snapshots):,} of {everyone:,} are in the audience (an event in {spec.audience.role}, "
+                f"the last one {spec.audience.no_event_days} or more days before the snapshot)."
+            )
+            if snapshots.empty:  # nothing to build, label or measure; said in the audience's words
+                status.finish(
+                    "snapshots",
+                    detail=f"{len(dates)} snapshot date(s), 0 rows to build.{audience_note}",
+                    seconds=perf_counter() - began,
+                )
+                return _stop(
+                    status,
+                    registry,
+                    _report(
+                        dataset_id=dataset_id,
+                        checks=[*checks, _audience_empty(spec.audience, everyone=everyone, mode=mode)],
+                        tables=tables,
+                        snapshots=(),
+                        features=(),
+                        frame=None,
+                        duration_s=perf_counter() - started,
+                        features_sql_path=None,
+                    ),
+                )
         _cancelled(cancel)
         status.finish(
             "snapshots",
-            detail=f"{len(dates)} snapshot date(s), {len(snapshots):,} rows to build.",
+            detail=f"{len(dates)} snapshot date(s), {len(snapshots):,} rows to build.{audience_note}",
             seconds=perf_counter() - began,
         )
 
@@ -1405,6 +1463,44 @@ def build_dataset(
         raise
     finally:
         con.close()
+
+
+def _audience_role_missing(role: str, *, mapped: bool) -> OnboardingCheck:
+    """The audience reads a table that was not mapped, or one with no event time, so no row can be kept or dropped
+    by it."""
+    why = "has no event time" if mapped else "has not been mapped"
+    return OnboardingCheck(
+        code="AUDIENCE_ROLE_MISSING",
+        severity=Severity.ERROR,
+        message=(
+            f"The audience (who the table is built for) is read from the {role} table, which {why}, so no row "
+            "can be kept or left out."
+        ),
+        suggestion=(
+            f"Map the date column of the {role} table, or build without the audience."
+            if mapped
+            else f"Upload the {role} table and map its columns, or build without the audience."
+        ),
+        details={"role": role, "mapped": mapped},
+    )
+
+
+def _audience_empty(audience: AudienceSpec, *, everyone: int, mode: RunMode) -> OnboardingCheck:
+    """The audience keeps none of the snapshot rows: a young shop, everyone bought lately, or nobody lapsed now."""
+    when = "on the scoring date" if mode is RunMode.SCORE else "at any snapshot date"
+    return OnboardingCheck(
+        code="AUDIENCE_EMPTY",
+        severity=Severity.ERROR,
+        message=(
+            f"No one is in the audience {when}: of {everyone:,} rows, none has an event in {audience.role} whose "
+            f"last one is {audience.no_event_days} or more days before the snapshot, so there is nothing to build."
+        ),
+        suggestion=(
+            "Wait until some customers have gone quiet for that long, send a longer history, or build without "
+            "the audience."
+        ),
+        details={"role": audience.role, "no_event_days": audience.no_event_days, "rows_before": everyone},
+    )
 
 
 def _stop(status: _StatusWriter, registry: DatasetRegistry, report: BuildReport) -> BuildReport:

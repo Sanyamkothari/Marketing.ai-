@@ -187,6 +187,7 @@ def replayed_spec(spec: OnboardingSpec, plan: ReplayPlan, *, spec_id: str) -> On
         feature_spec=spec.feature_spec,
         label_spec=spec.label_spec,
         snapshot_spec=spec.snapshot_spec,
+        audience=spec.audience,
         created_at=utc_now(),
     )
 

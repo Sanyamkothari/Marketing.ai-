@@ -53,6 +53,7 @@ from engine.agent.key_steps import (
 from engine.agent.recipe import RecipeError, run_recipe
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import AggFunction, FeatureDef, LabelDefinition, SnapshotDefinition, StrictBase
+from engine.doctor.config import AudienceConfig
 from engine.doctor.contracts import Diagnosis, FileDiagnosis, FileStack
 from engine.doctor.join_files import APPROVE_DROP_SHARE
 from engine.doctor.order_roll_up import (
@@ -63,6 +64,7 @@ from engine.doctor.order_roll_up import (
     LogColumns,
     OrderLogError,
     RolledUp,
+    audience_words,
     list_matches_log,
     roll_up,
 )
@@ -75,6 +77,7 @@ from engine.doctor.stack_files import (
     plan_stack,
     run_stack,
 )
+from engine.onboarding.specs import AudienceSpec
 
 __all__ = [
     "BUILD_CODES",
@@ -310,6 +313,14 @@ class BuildPlan(StrictBase):
             "derived from the log and the sources are its roll-up. Left out of a dump (and the hash) when unset."
         ),
     )
+    audience: AudienceSpec | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Who the dataset is built for (v3 phase 0, B5): the lapsed audience, applied to the snapshot rows at "
+            "train and score time. In the hash and the sentence; left out of a dump while unset."
+        ),
+    )
 
     @property
     def plan_hash(self) -> str:
@@ -447,13 +458,16 @@ def plan_build(
     stack_answers: Mapping[str, ConflictRule] | None = None,
     order_log: OrderLogInput | None = None,
     suggested: Sequence[FeatureDef] = (),
+    audience: AudienceConfig | None = None,
 ) -> BuildPlan:
     """Propose how the diagnosed files become one built dataset (the `build_dataset` tool's rules).
 
     With `order_log` (v3 phase 0, B4) the dataset is built from one raw order log instead: no file need be a customer
     list, because the list is derived from the log's shopper column (the one a person chose) and the sources are the
     log's roll-up. It is an explicit argument, never inferred, so without it nothing here changes. `suggested` are the
-    use case's own features; those that read a column the log does not have are left out and named."""
+    use case's own features; those that read a column the log does not have are left out and named. `audience` (the
+    use case's, B5) keeps a row only for a shopper who has had an order and none in its last `no_event_days` days; it is
+    in the plan's hash and sentence, and is read by the order-log path only."""
     if order_log is not None:
         return _plan_order_log(
             diagnosis,
@@ -463,6 +477,7 @@ def plan_build(
             snapshot_spec=snapshot_spec,
             order_log=order_log,
             suggested=suggested,
+            audience=audience,
         )
     proposer: RoleProposer = roles or DiagnosisRoles(diagnosis)
     answers = dict(stack_answers or {})
@@ -718,7 +733,13 @@ def _sources_of(
 
 
 def _order_log_sentence(
-    name: str, plan: OrderLogPlan, label_spec: LabelDefinition | None, skipped: Sequence[str]
+    name: str,
+    plan: OrderLogPlan,
+    label_spec: LabelDefinition | None,
+    skipped: Sequence[str],
+    audience: AudienceSpec | None = None,
+    *,
+    inclusive: bool = True,
 ) -> str:
     customer = plan.customer_column
     parts = [
@@ -754,6 +775,8 @@ def _order_log_sentence(
         )
     if plan.shoppers_without_orders:
         parts.append(f"{plan.shoppers_without_orders:,} shoppers have only returns and are in no month-end.")
+    if audience is not None:
+        parts.append(audience_words(audience.role, audience.no_event_days, rows="a row", inclusive=inclusive))
     parts.append("Description is not used.")
     if skipped:
         parts.append(f"Not built, the log has no column they read: {', '.join(skipped)}.")
@@ -771,6 +794,7 @@ def _plan_order_log(
     snapshot_spec: SnapshotDefinition | None,
     order_log: OrderLogInput,
     suggested: Sequence[FeatureDef],
+    audience: AudienceConfig | None = None,
 ) -> BuildPlan:
     log = frames.get(order_log.upload_id)
     item = next((f for f in diagnosis.files if f.upload_id == order_log.upload_id), None)
@@ -837,6 +861,11 @@ def _plan_order_log(
         suggested and not kept
     ):  # every named feature reads a column the log lacks: nothing would be learned from
         blocking.append("BUILD_PLAN_INCOMPLETE")
+    audience_spec = (
+        None if audience is None else AudienceSpec(role=audience.role, no_event_days=audience.no_event_days)
+    )
+    if audience_spec is not None and audience_spec.role not in sources:
+        blocking.append("BUILD_PLAN_INCOMPLETE")  # the audience reads a table this log does not give
     reasons: list[str] = []
     if label_spec is not None:
         reasons.append("BUILD_DEFINES_OUTCOME")
@@ -866,13 +895,21 @@ def _plan_order_log(
         snapshot_spec=snapshot_spec or SnapshotDefinition(),
         left_out=left_out,
         approval_reasons=tuple(reasons),
-        approval_sentence=_order_log_sentence(item.file_name, spec, label_spec, skipped),
+        approval_sentence=_order_log_sentence(
+            item.file_name,
+            spec,
+            label_spec,
+            skipped,
+            audience_spec,
+            inclusive=(snapshot_spec or SnapshotDefinition()).inclusive_snapshot_time,
+        ),
         blocking=tuple(dict.fromkeys(blocking)),
         summary=(
             f"Build one table for {use_case} from {item.file_name}: {counts.shoppers:,} shoppers rolled up from "
             f"{counts.lines:,} lines."
         ),
         order_log=spec,
+        audience=audience_spec,
     )
 
 
@@ -1241,6 +1278,8 @@ def _run_plan(
         ),
         "snapshot_spec": plan.snapshot_spec.model_dump(mode="json", exclude_defaults=True),
     }
+    if plan.audience is not None:  # left out while unset, so every earlier recipe body is the same
+        body["audience"] = plan.audience.model_dump(mode="json", exclude_defaults=True)
     spec_id = port.save_spec(body)
     record_key = port.save_record(
         BuildRecord(

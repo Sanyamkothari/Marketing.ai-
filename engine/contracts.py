@@ -1691,9 +1691,14 @@ ONBOARDING_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
         "FUTURE_EVENTS_LEAKED",
         "SOURCE_TOO_LARGE",
         "TOO_MANY_SOURCES",
+        # v3 phase 0, B5 (DEC-1823 (c)): the lapsed audience reads a table that is not mapped or has no event time,
+        # or keeps no row. `engine.onboarding.build`.
+        "AUDIENCE_ROLE_MISSING",
+        "AUDIENCE_EMPTY",
     }
 )
-"""The Phase 2 plan section 7 table: the 26 onboarding codes, none of which is a Phase 1 code.
+"""The Phase 2 plan section 7 table: the 26 onboarding codes, none of which is a Phase 1 code, and the lapsed
+audience's two (v3 phase 0, B5).
 
 Defined here rather than in `engine.onboarding.specs` (which re-exports it) because `ValidationCheck`
 has to accept these codes and `engine.onboarding.specs` imports this module, not the other way round.

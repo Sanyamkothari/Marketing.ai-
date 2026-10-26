@@ -80,3 +80,36 @@ def test_the_path_registers_an_internal_role_while_the_switch_is_on(switched_on:
     assert status == 201, body
     profile = body["profile"]
     assert isinstance(profile, dict) and profile["role"] == "returns"
+
+
+def _spec_with_audience(client: TestClient) -> tuple[int, dict[str, object]]:
+    made = client.post("/clients", json={"name": "Gifts Co", "industry": "ecommerce", "notes": ""})
+    assert made.status_code == 201, made.text
+    response = client.post(
+        f"/clients/{made.json()['client_id']}/onboarding-specs",
+        json={
+            "use_case": "retail-win-back",
+            "entity_source_id": "src_missing",
+            "mapping_ids": ["map_missing"],
+            "feature_spec": {"features": []},
+            "snapshot_spec": {"mode": "periodic"},
+            "audience": {"role": "orders", "no_event_days": 90},
+        },
+    )
+    return response.status_code, response.json()
+
+
+def test_a_recipe_may_not_carry_an_audience_while_the_switch_is_off(client: TestClient) -> None:
+    """The audience is the order-log path's (B5): off, the recipe route refuses it before reading anything else."""
+    status, body = _spec_with_audience(client)
+    assert status == 422, body
+    detail = body["detail"]
+    assert (
+        isinstance(detail, dict) and detail["code"] == "AUDIENCE_NOT_ENABLED" and detail["path"] == "audience"
+    )
+
+
+def test_with_the_switch_on_the_audience_passes_to_the_recipes_own_checks(switched_on: TestClient) -> None:
+    status, body = _spec_with_audience(switched_on)
+    detail = body["detail"]
+    assert status == 404 and isinstance(detail, dict) and detail["code"] != "AUDIENCE_NOT_ENABLED", body

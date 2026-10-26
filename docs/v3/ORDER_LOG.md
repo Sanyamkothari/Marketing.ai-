@@ -1,11 +1,22 @@
-# The order-log path: status of phase 0 (B1 to B4)
+# The order-log path: status of phase 0 (B1 to B7; B8 skipped)
 
-Branch `v3/dd-order-log`. Design: [`docs/plans/DATA_DOCTOR_EVENT_LOG_PATH.md`](../plans/DATA_DOCTOR_EVENT_LOG_PATH.md).
+Branches `v3/dd-order-log` (B1 to B4) and `v3/dd-tool` (B5 to B7). Design: [`docs/plans/DATA_DOCTOR_EVENT_LOG_PATH.md`](../plans/DATA_DOCTOR_EVENT_LOG_PATH.md).
 The owner's answers to its open questions are rows B-1 to B-8 of [`DECISIONS.md`](DECISIONS.md); the choices the proposal
-left open are in [`docs/DECISIONS.md`](../DECISIONS.md) as DEC-1822.
+left open are in [`docs/DECISIONS.md`](../DECISIONS.md) as DEC-1822 (B1 to B4) and DEC-1823 (the re-scope and B5 to B7).
+
+**Re-scoped.** The owner's newer design, [`docs/plans/DATA_DOCTOR_AI_FIRST.md`](../plans/DATA_DOCTOR_AI_FIRST.md), makes the
+order-log path one of the AI's workflows (milestone A3: "order-log workflow as a tool: customer table, returns netted,
+guests out, outcome ordered again within 90 days"), not a rule path inside the visit's state machine, and another session
+is changing the visit (`engine/doctor/visit.py`, `agent_chat.py`, `questions.py`, `ui/modules/datadoctor/`) right now. So
+B5 to B7 build what A3 will call and nothing that touches the visit: the audience filter (B5), the in-process builder port
+and one pure entry point (the reusable part of B6), and the real-data fixture with its tests (B7). **B8 (the no-goal
+wording, the legacy offer's next step, the Guided-setup pointer, the new questions in the UI) is skipped**: it is
+superseded by A3 (the AI's tool asks and words the questions) and A6 (plan, assumptions and approval on one screen). The
+`order_log_build` plan item, PRESCRIBE running `drive_builder`, `current_upload` following the built table, VERIFY on the
+dataset and `_goal_rules` calling `order_log.rules` of B6 are not built for the same reason: they are visit wiring.
 
 The path turns a raw order log (UCI Online Retail: one row per line of an order, no customer file, no outcome column) into
-a dataset of one row per shopper per month-end, with the outcome "an order within 90 days after the snapshot". It is behind
+a dataset of one row per lapsed shopper per month-end, with the outcome "an order within 90 days after the snapshot". It is behind
 `data_doctor.order_log` (default off, needs `data_doctor.unified`). With the switch off nothing a Data Doctor, onboarding,
 pilot or Guided-setup path produces for an existing input changes. The one thing that moves is `retail-win-back`'s
 configuration dump (its `run_config.json`), which gains the four declarations below; nothing reads them there, and they stay
@@ -20,7 +31,7 @@ in the dump because a `run_config.json` must read back as the same document (DEC
 | B3 | The derived customer list (exact `key_text` rules, first order day as `signup_date`), Q2 through the existing loss guard, the mixed-order question, `derived_entity=` on `offer_outcome` and `propose_event_outcome`, no `parse_number` on the chosen shopper or an order number | `engine/doctor/order_log.py`, `engine/doctor/outcomes.py`, `engine/doctor/outcome_definition.py`, `engine/doctor/cleaning.py` |
 | B4 | `plan_build(order_log=...)` with the line to order to shopper roll-up (`orders`, `order_lines`, `returns`), the list as a real entity source, `drive_builder` and `replay_build` on a log, the check, read independently of the list, that the list is exactly the log's distinct IDs | `engine/doctor/order_roll_up.py`, `engine/doctor/build_driver.py` |
 
-How the pieces meet, in the order a visit will call them (B6 wires this; today a caller passes each answer in):
+How the pieces meet, in the order a caller uses them (`engine/doctor/order_log_workflow.py` below does exactly this; no visit calls them):
 
 1. `order_log_reading(file, config)` says the file reads as an order log, with the shopper candidates.
 2. `customer_question(reading)` is Q1. A person answers it.
@@ -32,14 +43,17 @@ How the pieces meet, in the order a visit will call them (B6 wires this; today a
 
 ## Run its tests
 
-From the repository root, with the shared virtual environment. The integration test is marked `slow` (about 12 s), so
-`make test` skips it and CI runs it.
+From the repository root, with the shared virtual environment. The two integration tests that build a dataset are marked
+`slow` (about 12 s for the synthetic log, about 55 s for the real sample), so `make test` skips them and CI runs them.
 
 ```
 python -m pytest tests/unit/doctor/test_order_log.py tests/unit/doctor/test_order_log_parity.py \
     tests/unit/doctor/test_order_log_config.py tests/unit/doctor/test_order_roll_up.py \
     tests/unit/doctor/test_order_log_outcome.py tests/unit/doctor/test_order_log_cleaning.py \
-    tests/unit/doctor/test_order_log_build.py tests/integration/test_order_log_build.py \
+    tests/unit/doctor/test_order_log_build.py tests/unit/doctor/test_order_log_audience.py \
+    tests/unit/doctor/test_order_log_workflow.py tests/unit/doctor/test_builder_local.py \
+    tests/unit/onboarding/test_audience.py \
+    tests/integration/test_order_log_build.py tests/integration/test_order_log_workflow.py \
     tests/integration/test_order_log_api.py -n 2 -p no:cacheprovider
 make check-generated VENV=<the shared venv>
 ```
@@ -53,11 +67,11 @@ python -m pytest tests/unit/doctor tests/unit/onboarding tests/unit/agent tests/
 
 The synthetic log is `tests/fixtures/order_log.py` (`order_log_frame`): UCI-shaped, with `C` cancellations, negative quantities,
 prices of 0, a float `CustomerID` with about a quarter of the lines blank (whole guest orders), two orders with two timestamps.
-It is not the real file.
+It is not the real file; the real one is `tests/fixtures/online_retail/` (B7, below).
 
-## What was measured
+## What was measured (B1 to B4)
 
-Every figure is from a command run on this branch.
+Every figure is from a command run on `v3/dd-order-log`.
 
 | Command | Result | Run by |
 |---|---|---|
@@ -89,25 +103,94 @@ the review-fix pass re-read these by printing them once from that test (a tempor
 the rows are exactly the shoppers whose first order is on or before each month-end (`snapshot_rows`). The roll-up of a tiled log of 586,480 lines
 took 16.4 s (previous builder, a one-off script on a loaded machine; not re-run).
 
+## What B5 to B7 built
+
+| Milestone | What | Where |
+|---|---|---|
+| B5 | The lapsed audience on the spine: a shopper has a row at a month-end only with an order before that day began and the last such order `no_event_days` or more days earlier (`MAX(event_time) <= snapshot - N days`, through `point_in_time_join_clause` and `assert_point_in_time`, so a later event can never keep or drop a row; "has an earlier order" is the same clause, because an event at or before `snapshot - N` is before the snapshot). The snapshot is the instant the day begins: an order later on the month-end day is outcome, not history, and `inclusive_snapshot_time` decides only an order stamped at midnight exactly; both sentences say so. Applied after `build_snapshot_frame` at train and score time. It is `OnboardingSpec.audience` (so in `recipe_hash`), `BuildPlan.audience` (so in `plan_hash` and the build sentence), `OutcomeDefinition.audience` (so in `definition_hash`, the outcome sentence and the counts, which are those of the rows the build will have); replay carries it; all are left out of a dump while unset (the plan, outcome and recipe hashes with no audience are pinned to the commit before B5). A recipe whose audience reads a table that is not mapped or has no event time stops with `AUDIENCE_ROLE_MISSING`; one that keeps no row stops with `AUDIENCE_EMPTY` (two new onboarding codes, with help entries). The recipe route refuses `audience` while the path is off (`422 AUDIENCE_NOT_ENABLED`) | `engine/onboarding/audience.py`, `specs.py`, `build.py`, `replay.py`, `api/routes/datasets.py`, `engine/doctor/build_driver.py`, `outcome_definition.py`, `order_roll_up.py` (`audience_words`) |
+| B6 (reusable pieces) | `LocalBuilderPort`: the `BuilderPort` that calls the onboarding routes' own functions (`create_source`, `suggest_mapping`, `save_mapping`, `create_onboarding_spec`, `create_dataset`) in process, the dataset job run on the calling thread, and reads the finished build back (`read_dataset`; a report that does not read back is `BUILD_STEP_FAILED`). `propose_order_log` (the outcome with its exact sentence and the plan with its exact sentence, nothing built) and `build_from_order_log(file, customer_column, guests_answer, use_case, approvals, port, approver=...)`: re-derives both, refuses an approval that is not for the hash and sentence read now or not the approver's own yes under the policy's rules, runs `drive_builder`, reads the table back and runs `check_readiness` on it with the use case's `built_split` | `engine/doctor/builder_local.py`, `engine/doctor/order_log_workflow.py` |
+| B7 | A seeded by-customer sample of the real UCI log (1,000 of its 4,372 customers, guest checkouts in proportion), a slice that is too small, their generator and the CC BY 4.0 attribution; the end-to-end test; the library cross-check | `tests/fixtures/online_retail/`, `tests/integration/test_order_log_workflow.py` |
+
+What `build_from_order_log` takes and refuses, for the tool that wraps it:
+
+- The customer column is a person's choice among the reading's candidates (`ORDER_LOG_CUSTOMER_UNKNOWN` otherwise); an
+  order-number column cannot be it. The answer to Q2 (the lines with no shopper) is a `GuestsAnswer`; unanswered, a stop or a
+  yes tied to another count (`finding_key`) is refused (`ORDER_LOG_GUESTS_UNANSWERED`, `ORDER_LOG_STOPPED`,
+  `ORDER_LOG_GUESTS_STALE`); an order with and without a shopper needs `mixed_answer="keep_named"`.
+- A sample of the log (`LoadedFile.file_rows` set) is refused (`ORDER_LOG_SAMPLED`): the path rolls up the whole log.
+- Off, or a use case without `order_log_label` and an `order_log` template, is `ORDER_LOG_OFF` or `ORDER_LOG_USE_CASE`.
+- The two approvals are checked for the hash and the exact sentence (`OUTCOME_NOT_APPROVED`,
+  `APPROVAL_SENTENCE_CHANGED`, `BUILD_PLAN_NOT_APPROVED`) and for who gave them: `approver` is the caller's
+  authenticated `Principal`, each approval must be theirs (an approval an agent writes for itself is
+  `OUTCOME_NOT_APPROVED` or `BUILD_PLAN_NOT_APPROVED`), they need the Analyst role (`TOOL_ROLE_REQUIRED`), and with
+  `governance.approval_required` they may not be among `proposed_by` (`POLICY_ROLE_SEPARATION`). The rules are the
+  policy's own (`check_outcome_approval` for `data.define_outcome`, `protocol.confirmation_refusal` for `build_dataset`).
+- A build the audience leaves empty, or whose audience table is missing, is `AUDIENCE_EMPTY` or `AUDIENCE_ROLE_MISSING`.
+- `STOP_CODES`, `min_rows`, `min_positive` and `LOSS_STOP_PCT` are not touched: a build that does not reach them is
+  refused with the engine's own words (the slice below).
+
+## B5 to B7 run
+
+Every figure is from a command run on this branch, on this machine.
+
+| Command | Result |
+|---|---|
+| `python -m tests.fixtures.online_retail.make_fixture <full csv>`, then again with `--check` | Full file: 541,909 data rows, the 8 expected columns, 135,080 lines with no `CustomerID`, 4,372 customers (the script refuses anything else). Sample: 114,440 lines, 1,000 customers, 31,357 lines (27.4%) with no `CustomerID`, 1,601,381 bytes gzipped. Small slice: 4,797 lines, 46 customers, 68,840 bytes. `--check`: both files identical to a fresh run |
+| A one-off pandas script over the full file (the same rule as the test's `lapsed_rows`: an order before the month-end day began, the last one 90 or more days earlier, outcome an order after that instant and in the 90 days after) | 5,132 shopper-months and 1,724 'yes' over the six month-ends 31 Mar to 31 Aug 2011 (361/123, 533/185, 743/229, 977/288, 1,127/349, 1,391/550): the proposal's 5,132 and 1,724 |
+| `tests/integration/test_order_log_workflow.py` (the sample through `LocalBuilderPort`) | 6 passed in 54.46 s (module setup, the date profiling and the one build, 35 s; the scoring replay, 13.5 s). The sample builds **1,190 rows** over the six month-ends (83, 133, 166, 223, 257 and 328 rows), **413 yes and 777 no**, passes the engine's minimums (1,000 rows, 200 positives) unchanged, and the readiness verdict is `ready_with_warnings` with three warnings: two `HIGH_NULL_COLUMN` (`days_between_orders_mean`, empty for one-order shoppers, 76%; `returned_items`, empty where there is no return, 73%) and the `X_PARSER_ROW_LOSS` probe (the stored file was not read line by line). The build report has its own three warnings: `ENTITY_ATTRIBUTES_NOT_TIME_VERSIONED` (the shopper table's only attribute is `signup_date`) and the same two `HIGH_NULL_COLUMN`. Every figure in this cell is asserted by `test_the_sample_reaches_ready_with_the_minimums_unchanged` (the review-fix pass added the asserts; an earlier text of this row named the build report's warnings as the readiness ones) |
+| The same test file: the audience against the raw lines | At each of the six month-ends the built rows are exactly the shoppers with an order before that day began and the last one 90 or more days earlier, with the outcome an order after that instant and in the 90 days after; 6 of the rows are lapsed shoppers who ordered later on that very month-end day, each a 'yes' (asserted); the scoring replay has one snapshot, 9 Dec 2011, with the same rule. At 31 Aug 2011 the built table has 328 shoppers, the same 328 as `library/online-retail/fetch.py`'s own functions give at that day |
+| The same test file: the cross-check at 31 Aug 2011, for all 328 shoppers | Equal: `orders_total`, `items_total`, `distinct_products`, `active_months`, `returned_orders`, `country`, the outcome, `returned_items` where there is a return, and `spend_total`, `order_value_mean`, `order_value_max` (the library rounds to 2 places; within 0.0051). Different by rule, pinned in the test: `recency_days` and `tenure_days` are one day more for every shopper (the feature engine counts calendar days from the order's date, the library whole 24-hour periods from its time; equal to the calendar count exactly); `days_between_orders_mean` is blank for the 220 one-order shoppers (the library: 0) and is the calendar span over orders minus one for the other 108 (53 differ from the library's by up to a day); `returned_items` is blank for the 236 shoppers with no return (the library: 0). The 220 and 236 are asserted in `test_the_library_cross_check` |
+| The same test file: the small slice | `OrderLogWorkflowError`: 66 rows and 36 positives, `ROWS_TOO_FEW` ("At least 1,000 are needed") and `TARGET_TOO_FEW_POSITIVES`, the engine's own words, and no dataset written |
+| `tests/unit/onboarding/test_audience.py`, `tests/unit/doctor/test_order_log_audience.py`, `tests/unit/doctor/test_order_log_workflow.py`, `tests/unit/doctor/test_builder_local.py` | 17, 9, 17 and 10 tests pass (review-fix pass; before it 15, 8 and 13, and no port file). The point-in-time cases: a later event never changes a row, the boundary is 90 whole days, a first order on the snapshot day is not lapsed, an order later on the snapshot day keeps a lapsed shopper in, and the flag moves an event stamped at the snapshot's instant. The port's refusals are stubbed route by route; an audience that keeps no one stops with `AUDIENCE_EMPTY` at train and score time, and one on an unmapped or dateless table with `AUDIENCE_ROLE_MISSING`, through the real routes |
+| `tests/unit/doctor/test_order_log.py test_order_log_parity.py test_order_log_config.py test_order_log_outcome.py test_order_log_cleaning.py test_order_log_build.py test_order_log_audience.py test_order_log_workflow.py test_order_roll_up.py test_build_driver.py test_outcome_tools.py test_outcomes.py`, `tests/integration/test_order_log_api.py`, `tests/unit/onboarding/test_specs.py test_snapshots.py test_labels.py test_audience.py test_replay.py test_features.py test_validate.py`, `-n 2 -W ignore::FutureWarning` | 419 passed in 46.52 s |
+| `tests/integration/test_order_log_build.py test_api_onboarding_replay.py test_api_datasets.py`, `-n 2` | 63 passed in 28.36 s |
+| `ruff check`, `black --check` on every file the branch changed; `mypy --strict` on the changed and new `engine/` and `api/` files; `python -m scripts.gen_api_docs --check` and `gen_templates --check` | clean |
+
+Review-fix pass (on this branch, after the fixes):
+
+| Command | Result |
+|---|---|
+| `tests/unit/doctor/test_order_log*.py` (9 files), `test_order_roll_up.py`, `test_builder_local.py`, `tests/integration/test_order_log_api.py`, `tests/unit/onboarding/test_specs.py test_snapshots.py test_labels.py test_audience.py test_replay.py test_validate.py`, `tests/unit/pilot/test_help.py`, `tests/unit/test_one_check_contract.py`, `tests/integration/test_order_log_workflow.py`, `-n 2 -p no:warnings -o addopts=""` (slow tests included) | 460 passed in 85.29 s |
+| A one-off script (scratch, not committed) printing `plan_hash`, `definition_hash` and `recipe_hash` with no audience, run on an export of the base commit 101b2e9f and on this branch | the same three values on both; pinned in `test_order_log_audience.py` and `test_audience.py` |
+| `ruff check`, `black --check` on the 19 changed and new Python files; `mypy --strict` on the 11 changed `engine/` and `api/` files; `python -m scripts.gen_templates --check`, `python -m scripts.gen_api_docs --check` | clean; no issues found in 11 source files; clean |
+
+A one-off run (a script, not a committed test) of the same workflow on the synthetic log with 1,500 shoppers stopped at
+169 positives with `TARGET_TOO_FEW_POSITIVES`: the audience leaves the synthetic log below the minimum, and the path does
+not hide it. That is why the real sample is what the end-to-end test builds.
+
+Pending CI (not run here, by the compute rule):
+
+```
+python -m pytest tests/unit/doctor tests/unit/onboarding tests/unit/agent tests/integration/test_order_log_build.py \
+    tests/integration/test_order_log_workflow.py -n 4 -p no:cacheprovider -m "not frozen and not bedrock and not aws"
+make lint
+```
+
+and the parity runs with `data_doctor.order_log` on (the goldens byte-identical, the M160 benchmark with no diff), which
+need the visit and are the visit-wiring stream's.
+
 ## What is left
 
-- **B5.** The audience filter (`audience: {role: orders, no_event_days: 90}`) on the snapshot rows at train and score time,
-  with point-in-time tests. It also has to require an earlier order: a shopper whose first order is on the snapshot day has a
-  `signup_date` on or before it and no history.
-- **B6.** The `order_log_build` plan item and PREVIEW sampled by customer; the in-process `BuilderPort`; PRESCRIBE running
-  `drive_builder`; `current_upload` following the built table; VERIFY on the dataset; `_goal_rules` calling `order_log.rules`;
-  readiness and training reading `built_split` for such a dataset; keeping `signup_date` out of the model's features (the
-  builder carries it as an entity attribute, as for every use case).
-- **B7.** The real-data fixture (about 1,000 customers, gzipped, with its generator and attribution), the end-to-end test to
-  `ready`, the library cross-check (`recency_days`, `orders_total`, `spend_total`, `order_value_mean` against
-  `library/online-retail/fetch.py` at T = 2011-08-31) and the parity runs with the switch on. The cross-check is also where
-  `days_between_orders_mean` (blank for a shopper with one order here; 0 in the library file) is compared.
-- **B8.** The no-goal "can be built from this log" wording, the legacy offer's next step, the Guided-setup pointer behind the
-  flag (B-6) and the new questions in `ui/modules/datadoctor/`.
+- **For the AI's tool (A3).** Wrap `propose_order_log` and `build_from_order_log`: ask Q1 and Q2 in the AI's own words, show
+  the two sentences, pass the session's authenticated person as `approver` (and whoever proposed as `proposed_by`) and call
+  the builder through `LocalBuilderPort.for_app(app, client_id)`. The built dataset still carries `signup_date` as an entity attribute, as for every use case; keeping it out of
+  the model's features is the training step's. `read_dataset` is on `LocalBuilderPort` only; `ApiBuilderPort` has no
+  equivalent.
+- **Visit wiring (B6, not built).** The `order_log_build` plan item, PREVIEW sampled by customer, PRESCRIBE running
+  `drive_builder`, `current_upload` following the built table, VERIFY on the dataset, `_goal_rules` calling `order_log.rules`,
+  readiness and training reading `built_split` for such a dataset in the visit and in `POST /runs`. `build_from_order_log`
+  reads `built_split` itself for its readiness check.
+- **The offer's counts.** `offer_outcome` (the legacy offer, a list of window choices with counts) does not take the
+  audience; only `propose_event_outcome` does. The legacy offer is not part of A3.
+- **Next month's scoring.** The score-time audience is tested through `replay_build` on the saved record
+  (`LocalBuilderPort.load_record(build.spec_id)`); a tool for scoring would wrap that.
 
 ## Not checked
 
-- The real UCI file was not used (its fixture is B7, a later wave; no download was attempted). Every figure above is on the
-  synthetic log.
 - The Q1, Q2 and outcome wording is the proposal's, checked against golden strings on a ten-line log; it has not been read by
-  a person on the real file.
+  a person on the real file. The audience sentence ("Only shoppers who have lapsed count: ...", reworded in the review-fix
+  pass to say how an order on the month-end day is read) is new and has not been read by a person either.
+- The whole real file was not built through the product (only the 1,000-customer sample was); the full-file figures above are
+  the independent pandas count, not a product run. The roll-up of a tiled log of 586,480 lines (16.4 s, previous builder)
+  was not re-run.
+- The ready verdict was not followed by a training run, and `POST /runs` was not called on the built dataset.

@@ -96,6 +96,7 @@ from engine.onboarding.datasets import (
 from engine.onboarding.replay import ReplayedSource, UnmatchedSource, plan_replay, replayed_spec
 from engine.onboarding.sources import FileSourceReader, SourceReader
 from engine.onboarding.specs import (
+    AudienceSpec,
     BuildReport,
     BuildStage,
     BuildStatus,
@@ -181,6 +182,7 @@ class OnboardingSpecCreateRequest(StrictBase):
     feature_spec: FeatureSpec
     label_spec: LabelSpec | None = None
     snapshot_spec: SnapshotSpec
+    audience: AudienceSpec | None = None
 
 
 class OnboardingSpecCreateResponse(StrictBase):
@@ -325,6 +327,18 @@ def create_onboarding_spec(
     """
     load_client(store, client_id)
     config = use_case_config(body.use_case, root)
+    # v3 phase 0, B5: the lapsed audience is the order-log path's, so only that path's switch lets a recipe carry it.
+    if body.audience is not None:
+        from engine.doctor.order_log import order_log_enabled
+
+        if not order_log_enabled(config):
+            raise http_error(
+                422,
+                "AUDIENCE_NOT_ENABLED",
+                f"{config.id} does not build for an audience here: that needs data_doctor.order_log (with "
+                "data_doctor.unified). Save the recipe without `audience`.",
+                path="audience",
+            )
     source_ids = (body.entity_source_id, *body.event_source_ids)
     sources = load_source_specs(store, client_id, source_ids)
     mappings = load_mappings(store, client_id, body.mapping_ids)
@@ -963,6 +977,7 @@ def build_onboarding_spec(spec_id: str, client_id: str, body: OnboardingSpecCrea
             feature_spec=body.feature_spec,
             label_spec=body.label_spec,
             snapshot_spec=body.snapshot_spec,
+            audience=body.audience,
             created_at=utc_now(),
         )
     except ValidationError as exc:

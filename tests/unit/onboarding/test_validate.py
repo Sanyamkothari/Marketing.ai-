@@ -40,8 +40,11 @@ from engine.onboarding.validate import (
     run_onboarding_checks,
 )
 
-#: The eight plan section 7 codes that belong to labels.py, snapshots.py and the mapping stage.
+#: The eight plan section 7 codes that belong to labels.py, snapshots.py and the mapping stage, and the
+#: lapsed audience's two, which the build raises (v3 phase 0, B5).
 CODES_OWNED_ELSEWHERE = {
+    "AUDIENCE_EMPTY",
+    "AUDIENCE_ROLE_MISSING",
     "LABEL_DEGENERATE_SNAPSHOT",
     "LABEL_HORIZON_CENSORED",
     "LABEL_ROLE_MISSING",
