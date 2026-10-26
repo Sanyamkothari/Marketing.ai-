@@ -142,15 +142,18 @@ jobs:
           import json
           a, b = (json.load(open(f)) for f in ("realbench.json", "realbench-agent_v3.json"))
           print("\n## agent_v3 against agent, doubly-robust profit per customer on the same TEST half\n")
-          print("| Dataset | agent | agent_v3 | v3 minus agent |")
+          print("Each policy's DR point with its 95% interval, from two separate runs. The last column is the")
+          print("difference of the two points only, with no interval of its own: read it against the intervals.\n")
+          print("| Dataset | agent (95% CI) | agent_v3 (95% CI) | v3 minus agent, points only |")
           print("|---|---:|---:|---:|")
           for name, x in a["datasets"].items():
               y = b["datasets"].get(name)
               if y is None or "error" in x or "error" in y:
                   print(f"| {name} | n/a | n/a | n/a |")
                   continue
-              u, v = x["agent"]["value"]["dr"]["point"], y["agent"]["value"]["dr"]["point"]
-              print(f"| {name} | {u:.4f} | {v:.4f} | {v - u:+.4f} |")
+              u, v = x["agent"]["value"]["dr"], y["agent"]["value"]["dr"]
+              cell = lambda e: f"{e['point']:.4f} ({e['low']:.4f} to {e['high']:.4f})"
+              print(f"| {name} | {cell(u)} | {cell(v)} | {v['point'] - u['point']:+.4f} |")
           PY
           fi
       - uses: actions/upload-artifact@v4

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -66,8 +67,63 @@ def test_the_default_agent_has_no_v3_part() -> None:
     assert type(agent.contact_price.hazard) is HazardModel
 
 
-def test_v3_false_changes_no_decision() -> None:
+def test_v3_false_is_the_default() -> None:
     assert decisions(build(v3=False)) == decisions(build())
+
+
+DEFAULT_FINGERPRINT = (120, 60, "310d8f3efaf90f03")
+"""`fingerprint(build())` on the commit the preset was built on (20db0504, the merge of v3/frequency), before
+any of the preset's edits to the shared code (the auction, journey options, `_keep`, `learn`)."""
+
+
+def fingerprint(agent: AgentPolicy) -> tuple[int, int, str]:
+    """Four days of 30 decisions, each day's handed to `nightly`, and rewards for the sends of the first two
+    days handed to `learn`: (decisions, sends, a digest of every decision's choice, odds and value)."""
+    rows: list[tuple[object, ...]] = []
+    acts: dict[str, Decision] = {}
+    for day in range(4):
+        now = NOW + timedelta(days=day)
+        made = [agent.decide(customer(f"c{i}", now), ctx(now, seed=i)) for i in range(30)]
+        acts.update({d.decision_id: d for d in made if d.kind is DecisionKind.ACT})
+        rows += [
+            (
+                d.decision_id,
+                d.kind.value,
+                d.action
+                and (d.action.channel.value, d.action.content_id, d.action.offer_id, str(d.action.send_at)),
+                round(d.probability, 6),
+                round(d.expected_net, 6),
+                d.policy_version,
+                d.blocked_by,
+            )
+            for d in made
+        ]
+        agent.nightly(made, {}, now + timedelta(hours=12))
+        if day == 1:
+            rewards = [
+                Reward(
+                    decision_id=did,
+                    customer_id=d.customer_id,
+                    goal_id=GOAL,
+                    window_end=now + timedelta(hours=12),
+                    converted=i % 3 == 0,
+                    revenue=100.0 if i % 3 == 0 else 0.0,
+                    margin=40.0 if i % 3 == 0 else 0.0,
+                    cost=0.1,
+                    net=39.9 if i % 3 == 0 else -0.1,
+                    unsubscribed=False,
+                    complained=False,
+                )
+                for i, (did, d) in enumerate(sorted(acts.items()))
+            ]
+            agent.learn(rewards, acts)
+    digest = hashlib.sha256(repr(rows).encode()).hexdigest()[:16]
+    return len(rows), sum(1 for r in rows if r[1] == "act"), digest
+
+
+def test_the_default_agent_decides_and_learns_as_before_the_preset() -> None:
+    """The shared code the preset edits must leave the default agent's numbers as they were."""
+    assert fingerprint(build()) == DEFAULT_FINGERPRINT
 
 
 def test_the_preset_turns_every_part_on() -> None:

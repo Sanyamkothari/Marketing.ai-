@@ -9,12 +9,15 @@ from pathlib import Path
 import pytest
 
 from autonomy.gym import default_brief, default_content, get_scenario
+from autonomy.gym import run as gym_run
 from autonomy.gym.run import (
+    AGENT_NO_MOMENTS,
     AGENT_V3,
     POLICIES,
     agent_factory,
     agent_v3_factory,
     main,
+    no_moments_agent_factory,
     v3_no_moments_agent_factory,
 )
 from autonomy.gym.score import run_policy
@@ -78,7 +81,30 @@ def test_the_gym_lists_agent_v3_next_to_the_others() -> None:
     assert control.moments is False and control.who is not None and control.policy.journeys is not None
 
 
-def test_the_gym_cli_takes_agent_v3_with_moments_and_refuses_other_policies() -> None:
+class _ComparedError(Exception):
+    """Raised by the stand-in `compare` once it has seen what the CLI hands it."""
+
+
+def test_the_gym_cli_takes_agent_v3_with_moments_and_refuses_other_policies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def compare(spec: object, policies: dict[str, object], seeds: object, **kw: object) -> None:
+        seen.update(policies)
+        seen["folder_factory"] = kw.get("folder_factory")
+        raise _ComparedError
+
+    monkeypatch.setattr(gym_run, "compare", compare)
+    with pytest.raises(_ComparedError):
+        main(["--scenario", "smoke", "--policy", "agent_v3", "--moments", "--seeds", "1"])
+    assert seen[AGENT_V3] is agent_v3_factory  # the preset as it is: its moments are on already
+    assert seen[AGENT_NO_MOMENTS] is v3_no_moments_agent_factory  # the control is the preset less moments
+    assert seen["folder_factory"] is not None  # folded with the full StateFolder
+    seen.clear()
+    with pytest.raises(_ComparedError):
+        main(["--scenario", "smoke", "--policy", "agent", "--moments", "--seeds", "1"])
+    assert seen[AGENT_NO_MOMENTS] is no_moments_agent_factory  # the plain agent keeps its own control
     with pytest.raises(SystemExit):
         main(["--scenario", "smoke", "--policy", "rule_baseline", "--moments"])
 

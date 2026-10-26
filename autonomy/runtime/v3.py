@@ -26,7 +26,7 @@ docs/v3/PRESET.md.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Literal
 
 from autonomy.decide.frequency import FrequencyConfig
 from autonomy.decide.journeys import JourneyConfig, JourneyRunner, load_journeys
@@ -39,9 +39,6 @@ if TYPE_CHECKING:
     from autonomy.experiments.book import ExperimentBook
 
 __all__ = ["DEFAULT_OFFER_PRICING", "V3Parts", "V3Preset", "resolve_v3"]
-
-_T = TypeVar("_T")
-_U = TypeVar("_U")
 
 DEFAULT_OFFER_PRICING = OfferPricing(initial=0.0, renew=True)
 """The preset's budget price for offers. It starts at 0, which prices offers at what they cost: the price rises
@@ -101,11 +98,11 @@ def resolve_v3(
     preset = v3 if isinstance(v3, V3Preset) else V3Preset() if v3 else None
     if preset is None:
         return V3Parts(
-            _given(lookalike, False),
-            _given(who, False),
-            _given(frequency, False),
+            False if lookalike is None else lookalike,
+            False if who is None else who,
+            False if frequency is None else frequency,
             moments,
-            _runner(_given(journeys, False)),
+            _runner(False if journeys is None else journeys),
             offer_pricing,
             None,
         )
@@ -126,19 +123,14 @@ def resolve_v3(
             preset.experiments if isinstance(preset.experiments, ExperimentBook) else ExperimentBook()
         )
     return V3Parts(
-        lookalike=_given(lookalike, preset.lookalike),
-        who=_given(who, preset.who),
-        frequency=_given(frequency, preset.frequency),
+        lookalike=preset.lookalike if lookalike is None else lookalike,
+        who=preset.who if who is None else who,
+        frequency=preset.frequency if frequency is None else frequency,
         moments=moments,
-        journeys=_runner(_given(journeys, preset.journeys)),
+        journeys=_runner(preset.journeys if journeys is None else journeys),
         offer_pricing=offer_pricing,
         experiments=experiments,
     )
-
-
-def _given(value: _T | None, otherwise: _U) -> _T | _U:
-    """`value` when it was given (not None), else `otherwise`."""
-    return otherwise if value is None else value
 
 
 def _runner(journeys: bool | JourneyConfig | JourneyRunner) -> JourneyRunner | None:
