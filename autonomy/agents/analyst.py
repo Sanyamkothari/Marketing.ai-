@@ -407,31 +407,42 @@ def _template_headline(proof: ProofSummary, health: HealthStatus, money: Section
 
 
 def _early_section(read: EarlyRead, currency: str) -> SectionDraft:
-    """The early read (plan-v3 decision 8): a forecast of 90-day margin per customer from first-week
-    signals, agent group against the people we never contact. Only built when the early-signal model
-    passed its own backtest; the measured results confirm it later."""
+    """The early read (plan-v3 decision 8): a forecast of 90-day margin per customer from their first
+    days in the test, agent group against the people we never contact, with the model's own
+    backtest. Only built when the early-signal model passed that backtest; the measured results
+    confirm it later."""
     d = SectionDraft("early", EARLY_TITLE)
     est = read.difference
     p, lo, hi = _estimate(d, "early_margin_difference", est, "money", currency)
     n_a = d.add("agent_customers", read.n_agent, format_count(read.n_agent))
     n_h = d.add("holdout_customers", read.n_holdout, format_count(read.n_holdout))
     days = d.add("forecast_days", read.horizon_days, format_count(read.horizon_days))
+    week = d.add("signal_days", read.signal_days, format_count(read.signal_days))
+    start = f"From what they did in their first {week} days in the test"
+    later = f"in the {days} days after that"
     verdict = _verdict(est)
     if verdict == "up":
         d.sentences.append(
-            f"From their first week alone, customers in the agent group are forecast to bring {p} more margin "
-            f"each over {days} days than people we never contact (likely range {lo} to {hi}; {n_a} and {n_h} customers)."
+            f"{start}, customers in the agent group are forecast to bring {p} more margin each {later} "
+            f"than people we never contact (likely range {lo} to {hi}; {n_a} and {n_h} customers)."
         )
     elif verdict == "down":
         d.sentences.append(
-            f"From their first week alone, customers in the agent group are forecast to bring less margin than "
-            f"people we never contact over {days} days (likely range {lo} to {hi}; {n_a} and {n_h} customers)."
+            f"{start}, customers in the agent group are forecast to bring less margin {later} than people "
+            f"we never contact (likely range {lo} to {hi}; {n_a} and {n_h} customers)."
         )
     else:
         d.sentences.append(
-            f"The first week does not yet show a clear difference in {days}-day margin from people we never "
+            f"{start}, there is no clear difference yet in forecast margin {later} from people we never "
             f"contact: the likely range runs from {lo} to {hi} per customer ({n_a} and {n_h} customers)."
         )
+    band = d.add("early_band", read.band, format_rate(read.band))
+    within = d.add("early_months_within", read.cohorts_within, format_count(read.cohorts_within))
+    checked = d.add("early_months_checked", read.cohorts_checked, format_count(read.cohorts_checked))
+    d.sentences.append(
+        f"On this shop's own past customers, its forecasts were within {band} of what happened for "
+        f"{within} of {checked} months."
+    )
     d.sentences.append("This is a forecast; the measured results will confirm or correct it.")
     d.notes.append("This is a forecast from first-week behaviour, not a measured result; say so.")
     return d

@@ -19,6 +19,8 @@ from autonomy.learning.early_signal import (
 
 T0 = datetime(2025, 1, 1, tzinfo=UTC)
 CFG = EarlySignalConfig(enabled=True, min_train=60, min_cohort_size=10, min_cohorts=3)
+FIRST = EarlySignalConfig(enabled=True, cutoff_every_days=0)
+"""First weeks only: one row per customer, for the tests about one window's edges."""
 
 
 def _buy(cid: str, at: datetime, value: float = 100.0, margin: float | None = None, n: int = 0) -> Event:
@@ -52,7 +54,7 @@ def _row(ex, cid):  # type: ignore[no-untyped-def]
 
 
 def test_unfinished_window_gets_no_label() -> None:
-    cfg = EarlySignalConfig(enabled=True)
+    cfg = FIRST
     # "done" bought on day 0 and again on day 50; "open" bought on day 0 only, 60 days before the end.
     ev = [
         _buy("done", T0, margin=10.0),
@@ -83,7 +85,7 @@ def test_window_closing_exactly_at_the_end_is_labelled() -> None:
 
 
 def test_first_week_not_over_is_not_an_example() -> None:
-    cfg = EarlySignalConfig(enabled=True)
+    cfg = FIRST
     ev = [_buy("old", T0), _buy("new", T0 + timedelta(days=200)), _buy("new", T0 + timedelta(days=202))]
     ex = build_examples(ev, cfg)
     assert ex.customer_ids == ("old",)
@@ -154,6 +156,64 @@ def test_features_read_the_four_signals() -> None:
     assert f["log_basket"] == pytest.approx(math.log1p(50.0))
     g = dict(zip(FEATURE_NAMES, ex.features[_row(ex, "b")], strict=True))
     assert g["second_visit"] == 0.0 and g["second_order"] == 0.0 and g["replied"] == 0.0
+    assert f["had_history"] == 0.0 and f["log_prior_margin"] == 0.0  # a first week has no past
+
+
+def test_a_repeated_event_is_counted_once() -> None:
+    e = [_buy("a", T0, margin=5.0), _buy("a", T0 + timedelta(days=20), margin=7.0)]
+    e += [_buy("z", T0 + timedelta(days=300))]
+    once = build_examples(e, FIRST)
+    twice = build_examples([*e, e[1], e[0]], FIRST)
+    assert twice.labels[_row(twice, "a")] == pytest.approx(7.0) == once.labels[_row(once, "a")]
+    np.testing.assert_array_equal(twice.features, once.features)
+
+
+# --- starts after the first week: past cut-offs and test entry ---------------------------------------
+
+
+def test_training_also_starts_weeks_at_past_cutoffs_for_known_customers() -> None:
+    cfg = EarlySignalConfig(enabled=True, cutoff_every_days=30)
+    ev = [
+        _buy("a", T0, margin=5.0),
+        _buy("a", T0 + timedelta(days=31), value=80.0, margin=8.0),  # in the week after the day-30 cut-off
+        _buy("a", T0 + timedelta(days=50), margin=9.0),
+        _buy("late", T0 + timedelta(days=27)),  # first week not over at day 30
+        _buy("z", T0 + timedelta(days=300)),
+    ]
+    ex = build_examples(ev, cfg)
+    at30 = [
+        i
+        for i, c in enumerate(ex.customer_ids)
+        if c == "a" and ex.anchor_ts[i] == (T0 + timedelta(days=30)).timestamp()
+    ]
+    assert len(at30) == 1
+    f = dict(zip(FEATURE_NAMES, ex.features[at30[0]], strict=True))
+    assert f["had_history"] == 1.0 and f["log_prior_margin"] == pytest.approx(math.log1p(5.0))
+    assert f["log_basket"] == pytest.approx(math.log1p(80.0))  # only the week after the cut-off
+    assert f["log_days_known"] == pytest.approx(math.log1p(30.0))
+    assert ex.labels[at30[0]] == pytest.approx(9.0)  # (day 37, day 127]
+    late = [ex.anchor_ts[i] for i, c in enumerate(ex.customer_ids) if c == "late"]
+    assert (T0 + timedelta(days=30)).timestamp() not in late  # its first week overlapped that cut-off
+
+
+def test_a_start_given_by_the_caller_reads_only_what_came_after_it() -> None:
+    entry = T0 + timedelta(days=100)
+    before = [_buy("a", T0, margin=5.0), _buy("a", entry - timedelta(days=2), value=900.0, margin=50.0)]
+    after = [
+        _buy("a", entry + timedelta(days=1), value=40.0),
+        _buy("a", entry + timedelta(days=3), value=60.0),
+    ]
+    end = [_buy("z", T0 + timedelta(days=400))]
+    ex = build_examples(before + after + end, FIRST, anchors={"a": entry, "quiet": entry})
+    assert ex.customer_ids == ("a", "quiet")  # only the listed customers, one start each
+    f = dict(zip(FEATURE_NAMES, ex.features[0], strict=True))
+    assert f["second_order"] == 1.0 and f["log_basket"] == pytest.approx(math.log1p(50.0))
+    # the past 90 days are history, not the week (the day-0 purchase is older than that)
+    assert f["log_prior_margin"] == pytest.approx(math.log1p(50.0))
+    assert f["log_days_since_seen"] == pytest.approx(math.log1p(2.0))
+    assert ex.features[1].tolist() == [0.0] * len(FEATURE_NAMES)  # did nothing: a row of zeros
+    open_ = build_examples(before, FIRST, anchors={"a": entry})
+    assert open_.customer_ids == () and open_.open_week == 1  # the week after entry is not over
 
 
 # --- the backtest gate ------------------------------------------------------------------------------
@@ -241,30 +301,124 @@ def test_a_month_is_forecast_with_nothing_from_after_it() -> None:
     assert new.actual == pytest.approx(old.actual)
 
 
+def test_open_windows_of_earlier_customers_do_not_leak_into_a_months_forecast() -> None:
+    """Earlier customers whose label windows were still open at the forecast date are the risky rows:
+    what they did after that date must change neither the forecast nor what it was trained on."""
+    ev = _shop()
+    ex = build_examples(ev, CFG)
+    base = fit(ev, CFG).backtest
+    assert base is not None
+    month = base.cohorts[2].cohort
+    months = [datetime.fromtimestamp(t, UTC).strftime("%Y-%m") for t in ex.anchor_ts]
+    rows = [i for i, m in enumerate(months) if m == month]
+    forecast_at = float(ex.cutoff_ts[rows].max())
+    earlier = {ex.customer_ids[i] for i, m in enumerate(months) if m < month}
+    still_open = {
+        ex.customer_ids[i] for i, m in enumerate(months) if m < month and ex.close_ts[i] > forecast_at
+    }
+    assert still_open  # the test touches rows that really were open
+    at = datetime.fromtimestamp(forecast_at, UTC) + timedelta(hours=1)
+    pert = ev + [_buy(c, at, value=1e5, margin=5e4, n=98) for c in sorted(earlier)]
+    again = fit(pert, CFG).backtest
+    assert again is not None
+    old = {r.cohort: r for r in base.cohorts}[month]
+    new = {r.cohort: r for r in again.cohorts}[month]
+    assert new.forecast == pytest.approx(old.forecast)
+    assert new.n_train == old.n_train
+
+
+def _flat(seed: int = 5) -> list[Event]:
+    """Every customer buys at one steady rate from arrival to the end: nothing tells them apart."""
+    rng = np.random.default_rng(seed)
+    out: list[Event] = []
+    for m in range(14):
+        for i in range(40):
+            cid = f"c{m:02d}-{i:03d}"
+            start = float(30 * m + int(rng.integers(0, 28)))
+            out.append(_buy(cid, T0 + timedelta(days=start), value=float(rng.uniform(30, 60)), margin=15.0))
+            t, k = start, 0
+            while (t := t + float(rng.exponential(30.0))) <= 450.0:
+                out.append(_buy(cid, T0 + timedelta(days=t), value=45.0, margin=13.0, n=10 + k))
+                k += 1
+    return out
+
+
+def test_a_model_that_cannot_tell_customers_apart_is_not_used() -> None:
+    """Every month's average can be right while the forecasts say nothing about who will spend more;
+    the early read compares groups of customers, so that model is refused."""
+    sig = fit(_flat(), CFG)
+    assert sig.backtest is not None
+    assert sig.backtest.share_within >= CFG.min_share_within  # the averages alone would pass
+    assert not sig.usable and "tell customers apart" in sig.reason
+    assert sig.backtest.correlation is not None and sig.backtest.correlation < CFG.min_correlation
+
+
 def test_off_by_default_changes_nothing() -> None:
     ev = _shop(months=12)
     sig = fit(ev, EarlySignalConfig())
     assert not sig.usable and sig.model is None and sig.backtest is None
     assert sig.forecasts(ev) == {}
-    assert early_read(sig, {"a": 1.0}, {"a": Group.AGENT}) is None
+    assert early_read(sig, ev, {"c00-000": T0}, {"c00-000": Group.AGENT}) is None
 
 
 # --- the early read ---------------------------------------------------------------------------------
 
 
-def test_early_read_compares_agent_and_holdout_forecasts() -> None:
+ENTRY = T0 + timedelta(days=450)
+
+
+def _test_groups(ev: list[Event]) -> tuple[dict[str, datetime], dict[str, Group]]:
+    """Existing customers (arrived in the first nine months, long quiet by day 450) enter a test."""
+    ids = sorted({e.customer_id for e in ev if e.customer_id < "c09"})
+    return dict.fromkeys(ids, ENTRY), {
+        c: (Group.AGENT if i % 2 else Group.HOLDOUT) for i, c in enumerate(ids)
+    }
+
+
+def test_early_read_sees_what_the_agent_group_did_after_entering_the_test() -> None:
     ev = _shop()
     sig = fit(ev, CFG)
     assert sig.usable
-    fc = sig.forecasts(ev)
-    group = {c: (Group.AGENT if i % 2 else Group.HOLDOUT) for i, c in enumerate(sorted(fc))}
-    read = early_read(sig, fc, group)
-    assert read is not None
-    assert read.n_agent + read.n_holdout == len(fc)
-    assert read.difference.low <= read.difference.point <= read.difference.high
-    assert read.horizon_days == 90
+    entered, group = _test_groups(ev)
+    same = early_read(sig, ev, entered, group)
+    assert same is not None
+    assert same.n_agent + same.n_holdout == len(entered)
+    assert same.difference.low <= 0.0 <= same.difference.high  # nothing happened yet: no difference
+    assert same.horizon_days == 90 and same.signal_days == 7
+    assert sig.backtest is not None and same.cohorts_checked == len(sig.backtest.cohorts)
+    assert same.cohorts_within == sig.backtest.within
+    came_back = [
+        _buy(c, ENTRY + timedelta(days=d), value=45.0, margin=13.0, n=50 + d)
+        for c, g in group.items()
+        if g is Group.AGENT
+        for d in (1, 3)
+    ]
+    moved = early_read(sig, ev + came_back, entered, group)
+    assert moved is not None
+    assert moved.difference.low > 0.0  # the agent group came back in its first week in the test
     small = dict(list(group.items())[:10])
-    assert early_read(sig, fc, small) is None  # too few customers per group
+    assert early_read(sig, ev, entered, small) is None  # too few customers per group
+
+
+def test_customers_whose_week_in_the_test_is_not_over_are_not_counted() -> None:
+    ev = _shop()
+    sig = fit(ev, CFG)
+    entered, group = _test_groups(ev)
+    end = max(e.ts for e in ev)
+    late = {c: (end - timedelta(days=2) if i < 40 else t) for i, (c, t) in enumerate(entered.items())}
+    read = early_read(sig, ev, late, group)
+    assert read is not None
+    assert read.n_agent + read.n_holdout == len(entered) - 40
+    assert any("not counted yet" in n for n in read.notes)
+
+
+def test_a_first_weeks_only_model_does_not_forecast_known_customers() -> None:
+    ev = _shop()
+    sig = fit(ev, EarlySignalConfig(enabled=True, min_train=60, min_cohort_size=10, cutoff_every_days=0))
+    assert sig.usable
+    entered, _ = _test_groups(ev)
+    assert sig.forecasts(ev, anchors=entered) == {}  # it never learned what their week says
+    assert sig.forecasts(ev)  # new customers' first weeks are still forecast
 
 
 def test_the_analyst_briefing_carries_the_early_read_with_backed_numbers() -> None:
@@ -289,8 +443,9 @@ def test_the_analyst_briefing_carries_the_early_read_with_backed_numbers() -> No
         holdout_mean=25.5,
         difference=Estimate(point=5.5, low=2.25, high=8.75),
         band=0.25,
-        share_within=0.9,
+        share_within=8 / 9,
         cohorts_checked=9,
+        cohorts_within=8,
     )
     plain = template_briefing(goal, proof, HealthStatus(as_of=now), {}, "weekly", now)
     withit = template_briefing(goal, proof, HealthStatus(as_of=now), {}, "weekly", now, early=read)
@@ -298,4 +453,6 @@ def test_the_analyst_briefing_carries_the_early_read_with_backed_numbers() -> No
     assert [s.title for s in withit.sections[:-1]] == [s.title for s in plain.sections]
     section = withit.sections[-1]
     assert section.title == EARLY_TITLE and "forecast" in section.body
+    assert "8 of 9 months" in section.body and "25.0%" in section.body  # its own backtest
+    assert "in the 90 days after that" in section.body and "first 7 days in the test" in section.body
     assert check_numbers(section.body, section.numbers) == []
