@@ -647,3 +647,106 @@ def test_an_answer_with_no_step_says_so_instead_of_claiming_an_outcome(
     assert settled.question is not None
     # An AI-made question carries no step, so answering it changes nothing: the screen may not claim an outcome.
     assert [o.effect for o in settled.question.options[:2]] == [NO_STEP, NO_STEP]
+
+
+def _goal_case(storage: LocalStorage, world: World) -> Case:
+    from engine.doctor.case import CaseGoal
+
+    case = vs.open_case(storage, world)
+    goal = CaseGoal(goal_id="retail-win-back", active=True, set_at=vs.T0, set_by=ANALYST)
+    return case.model_copy(update={"goals": (goal,)})
+
+
+def test_the_goal_brief_is_callable_for_the_active_goal_only(world: World, storage: LocalStorage) -> None:
+    case = _goal_case(storage, world)
+    client = Script(
+        [
+            {
+                "action": "load_goal_brief",
+                "file": "F1",
+                "args": {"goal_id": "retail-win-back", "mode": "train"},
+            },
+            {"action": "load_goal_brief", "file": "F1", "args": {"goal_id": "telco-churn"}},
+            {"action": "finish", "text": "I read the goal."},
+        ]
+    )
+    found = _review(_guard(client))(case, _files(world), None)
+    briefs = [r for r in found.evidence if r.tool == "load_goal_brief"]
+    assert len(briefs) == 1 and briefs[0].output["goal_id"] == "retail-win-back"
+    assert briefs[0].output["brief_hash"], "the brief comes back through the registry"
+    sent = [s for s in found.sent if s["tool"] == "load_goal_brief"]
+    assert len(sent) == 1, "and is recorded as sent through the gate"
+    assert "retail-win-back" in str(sent[0]), "with the goal named in what was sent"
+
+
+def test_a_brief_of_another_goal_is_refused_as_unknown_and_the_mode_is_the_visits(
+    world: World, storage: LocalStorage
+) -> None:
+    from engine.agent.tools import AgentToolError
+    from engine.doctor.agent_review import _Review
+
+    review = _build(_Review, _goal_case(storage, world), world)
+    with pytest.raises(AgentToolError) as raised:
+        review._act({"action": "load_goal_brief", "file": "F1", "args": {"goal_id": "telco-churn"}})
+    assert raised.value.code == "AGENT_GOAL_UNKNOWN"
+    review._act(
+        {"action": "load_goal_brief", "file": "F1", "args": {"goal_id": "retail-win-back", "mode": "audit"}}
+    )
+    assert review.turn.looks[-1].result["mode"] == "train", "the model cannot change the visit's mode"
+
+
+def _named(tools: list[dict[str, str]]) -> list[str]:
+    return [t["name"] for t in tools]
+
+
+@pytest.mark.parametrize("with_goal", [False, True])
+def test_every_tool_the_prompt_lists_is_a_tool_the_ai_can_call(
+    world: World, storage: LocalStorage, with_goal: bool
+) -> None:
+    """A guard: the review's and the chat's listed tools all dispatch (never AGENT_TOOL_UNKNOWN)."""
+    from engine.agent.tools import AgentToolError
+    from engine.doctor.agent_chat import _Chat
+    from engine.doctor.agent_review import _Review
+
+    case = _goal_case(storage, world) if with_goal else vs.open_case(storage, world)
+    checked = 0
+    for cls in (_Review, _Chat):
+        review = _build(cls, case, world)
+        listed = _named(review._tools())
+        assert ("load_goal_brief" in listed) is with_goal
+        for name in listed:
+            try:
+                review._act({"action": name, "file": "F1", "args": {}})
+            except AgentToolError as exc:
+                assert exc.code != "AGENT_TOOL_UNKNOWN", f"{cls.__name__} lists {name} but cannot call it"
+            except Exception:
+                pass
+            checked += 1
+    assert checked >= 2
+
+
+def _build(cls: Any, case: Case, world: World) -> Any:
+    def context_for(_case: Case, files: tuple[LoadedFile, ...]) -> AgentContext:
+        return AgentContext(
+            use_case_id=GOAL_A,
+            config=load_use_case(GOAL_A),
+            config_root=None,
+            upload_id=files[0].upload_id,
+            mode=RunMode.TRAIN,
+            profile=files[0].profile,
+            frame=files[0].frame,
+        )
+
+    extra = {"chat_steps": 3} if cls.__name__ == "_Chat" else {}
+    return cls(
+        case,
+        _files(world),
+        None,
+        context_for,
+        _guard(Script([])),
+        guardrails(),
+        ASHA,
+        None,
+        _Cached(visit.visit_registry(), _MEMORY),
+        **extra,
+    )
