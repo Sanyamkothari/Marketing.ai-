@@ -897,13 +897,15 @@ def compare(
     world_factory: WorldFactory | None = None,
     learn: bool = True,
     interval_method: IntervalMethod = "normal",
+    folder_factory: Callable[[], StateFolder] | None = None,
 ) -> Comparison:
     """Score every named policy on every seed. The oracle runs once per seed and its value is shared;
     its own card is included only if `policies` names it. When `policies` names the segment oracle
     (`SEGMENT_ORACLE`) or the best fixed rule (`BEST_FIXED`), each runs once per seed first and its
     true value goes on every other card of that seed, so each card says its share of the segment
     oracle and its margin over the best fixed rule. Pass factories, not instances, for policies that
-    learn, so each run starts fresh."""
+    learn, so each run starts fresh. `folder_factory` gives every run its own state folder (None:
+    `run_policy`'s default, `GymFolder()`), the same kind for every policy."""
     seed_list = list(range(seeds)) if isinstance(seeds, int) else list(seeds)
     cards: list[ScoreCard] = []
     for seed in seed_list:
@@ -918,6 +920,7 @@ def compare(
             with_oracle=False,
             learn=False,
             interval_method=interval_method,
+            folder=folder_factory() if folder_factory is not None else None,
         )
         done: dict[str, ScoreCard] = {ORACLE: oracle_card}
         for ref in (SEGMENT_ORACLE, BEST_FIXED):
@@ -933,6 +936,7 @@ def compare(
                     oracle_value=oracle_card.true_value,
                     learn=False,
                     interval_method=interval_method,
+                    folder=folder_factory() if folder_factory is not None else None,
                 )
         seg = done[SEGMENT_ORACLE].true_value if SEGMENT_ORACLE in done else None
         fixed = done[BEST_FIXED].true_value if BEST_FIXED in done else None
@@ -954,6 +958,7 @@ def compare(
                     oracle_value=oracle_card.true_value,
                     learn=learn,
                     interval_method=interval_method,
+                    folder=folder_factory() if folder_factory is not None else None,
                     segment_oracle_value=seg,
                     best_fixed_rule_value=fixed,
                 )

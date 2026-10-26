@@ -71,7 +71,6 @@ MOMENT_KNOBS = (
     "refill_cycle_days",
     "refill_lift_multiplier",
     "refill_lead_days",
-    "refill_late_days",
 )
 
 

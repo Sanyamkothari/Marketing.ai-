@@ -365,23 +365,30 @@
   },
   {
     "id": "gym.moments_planted.stage1",
-    "claim": "On the Gym scenario moments_planted (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
-    "command": "python -m autonomy.gym.run --scenario moments_planted --policy agent --seeds 3 --customers 3000 --report-json out/gym/moments_planted.json",
+    "claim": "On the Gym scenario moments_planted (3,000 customers x 3 seeds, the CI size), the agent with moments on (`--moments`) reaches at least Stage 1 of docs/v2/GYM_BAR.md: Safe (no rule breaks, breaker, interval coverage).",
+    "command": "python -m autonomy.gym.run --scenario moments_planted --policy agent --moments --seeds 3 --customers 3000 --report-json out/gym/moments_planted.json",
     "threshold": "out/gym/moments_planted.json :: verdict.stage_reached >= 1",
     "passes": null
   },
   {
     "id": "gym.moments_planted.stage2",
-    "claim": "On the Gym scenario moments_planted (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
-    "command": "python -m autonomy.gym.run --scenario moments_planted --policy agent --seeds 3 --customers 3000 --report-json out/gym/moments_planted.json",
+    "claim": "On the Gym scenario moments_planted (3,000 customers x 3 seeds, the CI size), the agent with moments on (`--moments`) reaches at least Stage 2 of docs/v2/GYM_BAR.md: Useful (beats send-to-all, the rule baseline and the best fixed rule; where nothing works loses at most $0.25 a customer; planted harm loses less than send-to-all).",
+    "command": "python -m autonomy.gym.run --scenario moments_planted --policy agent --moments --seeds 3 --customers 3000 --report-json out/gym/moments_planted.json",
     "threshold": "out/gym/moments_planted.json :: verdict.stage_reached >= 2",
     "passes": null
   },
   {
     "id": "gym.moments_planted.stage3",
-    "claim": "On the Gym scenario moments_planted (3,000 customers x 3 seeds, the CI size), the agent reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
-    "command": "python -m autonomy.gym.run --scenario moments_planted --policy agent --seeds 3 --customers 3000 --report-json out/gym/moments_planted.json",
+    "claim": "On the Gym scenario moments_planted (3,000 customers x 3 seeds, the CI size), the agent with moments on (`--moments`) reaches at least Stage 3 of docs/v2/GYM_BAR.md: Smart (80% of the segment oracle; fewer sleeping dogs contacted where observable).",
+    "command": "python -m autonomy.gym.run --scenario moments_planted --policy agent --moments --seeds 3 --customers 3000 --report-json out/gym/moments_planted.json",
     "threshold": "out/gym/moments_planted.json :: verdict.stage_reached >= 3",
+    "passes": null
+  },
+  {
+    "id": "gym.moments_planted.moments_beat_sweep",
+    "claim": "On the Gym scenario moments_planted (3,000 customers x 3 seeds, the CI size), the agent with moments on earns more true value, averaged over the seeds, than the same agent with moments off on the same folder and seeds: moment-raised sends beat the same messages in the plain daily sweep (plan-v3 decision 2's Gym pass test).",
+    "command": "python -m autonomy.gym.run --scenario moments_planted --policy agent --moments --seeds 3 --customers 3000 --report-json out/gym/moments_planted.json",
+    "threshold": "out/gym/moments_planted.json :: moments.mean_gain > 0",
     "passes": null
   }
 ]

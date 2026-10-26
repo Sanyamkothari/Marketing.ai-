@@ -405,7 +405,7 @@ def _library() -> dict[str, ScenarioSpec]:
         _base(
             "moments_planted",
             "Customers leave carts now and then and a third buy a regular item every month. A message "
-            "sent in the day or two after a cart, or when a refill is due, is worth up to three times "
+            "sent in the day or two after a cart, or in the days before a refill, is worth up to three times "
             "as much as the same message at a quiet moment: the plain shop plus moments to find.",
             cart_rate_per_day=0.02,
             cart_lift_multiplier=3.0,
@@ -413,8 +413,7 @@ def _library() -> dict[str, ScenarioSpec]:
             refill_share=0.33,
             refill_cycle_days=30.0,
             refill_lift_multiplier=3.0,
-            refill_lead_days=2.0,
-            refill_late_days=4.0,
+            refill_lead_days=3.0,
         ),
     ]
     return {s.name: s for s in specs}

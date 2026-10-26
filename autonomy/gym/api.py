@@ -33,9 +33,9 @@ Moments (plan-v3 decision 2), all off by default so every earlier scenario is un
   at the cart, halving every `cart_half_life_days`: someone who has just put something in the basket
   is close to buying.
 * `refill_*`: a share of customers buy a regular item on a cycle (the world emits those purchases,
-  with an item id), and a message sent from `refill_lead_days` before one is due to
-  `refill_late_days` after it has its lift multiplied by `refill_lift_multiplier`: the reminder
-  lands when the stock is running out.
+  with an item id, whatever is sent), and a message sent in the `refill_lead_days` before one is due
+  has its lift multiplied by `refill_lift_multiplier`: the reminder lands while the stock is running
+  out. Once they have restocked the raise is over, so the window ends at the purchase.
 
 The numbers are planted beliefs of ours, like every other knob here; nothing is fitted to data.
 """
@@ -211,9 +211,8 @@ class ScenarioSpec(Contract):
     refill_lift_multiplier: float = Field(
         default=1.0, ge=1, description="A message's lift is this many times as big while a refill is due"
     )
-    refill_lead_days: float = Field(default=2.0, ge=0, description="The refill window opens this long before")
-    refill_late_days: float = Field(
-        default=4.0, ge=0, description="... and closes this long after the due day"
+    refill_lead_days: float = Field(
+        default=2.0, ge=0, description="The refill window opens this long before the refill purchase"
     )
 
 
