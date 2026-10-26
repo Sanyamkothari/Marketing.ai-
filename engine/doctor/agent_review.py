@@ -69,6 +69,7 @@ from engine.agent.loop import (
 )
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import for_prompt
+from engine.doctor.goal_brief import GOAL_BRIEF_TOOL
 from engine.doctor.guards import ExpectationBook, Expectations, Finding
 from engine.doctor.protocol import DataRequest, ProtocolError, doubt_ask, express_doubt
 from engine.doctor.questions import QuestionError, build_ask, catalogue_lines
@@ -214,6 +215,11 @@ def agent_review(
     return review
 
 
+def _active_goal(case: Case) -> Any:
+    """The case's active goal (`visit.active_goal`, which this module cannot import at load time)."""
+    return next((goal for goal in case.goals if goal.active), None)
+
+
 class _Review:
     def __init__(
         self,
@@ -353,7 +359,18 @@ class _Review:
                 ),
             }
             for t in self.registry.listed_for(self._context(0), DataToolKind.READ)
+            if self._callable(t)
         ]
+
+    def _callable(self, tool: Any) -> bool:
+        """Whether `_act` dispatches this READ tool: the prompt lists exactly these, no more (a listed tool that
+        answers AGENT_TOOL_UNKNOWN costs the model a call). `load_goal_brief` exists only while a goal is active.
+        """
+        if tool.kind is not DataToolKind.READ:
+            return False
+        if tool.name == GOAL_BRIEF_TOOL:
+            return _active_goal(self.case) is not None
+        return bool(tool.session_tool or tool.name in M_PREVIEW_TOOLS)
 
     def _complete(self, prompt: Prompt, variables: dict[str, Any]) -> str:
         """One call to the model on `prompt` rendered with `variables`, after the last egress check. Raises
@@ -444,9 +461,7 @@ class _Review:
             self._doubt(action, args)
         elif name == "request_data":
             self._request(action, args)
-        elif (tool := self.registry.find(name, self._context(0))) is not None and (
-            tool.kind is DataToolKind.READ and (tool.session_tool or name in M_PREVIEW_TOOLS)
-        ):
+        elif (tool := self.registry.find(name, self._context(0))) is not None and self._callable(tool):
             self._look(name, action, args)
         else:
             raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no action called {name[:40]!r} here.")
@@ -463,9 +478,13 @@ class _Review:
                 [r for r in turn.looks if turn.files_of[r.evidence_id] == index],
                 args,
             )
+        if name == GOAL_BRIEF_TOOL:  # only the active goal's brief: the goal comes from the case
+            goal = _active_goal(self.case)
+            if goal is None or args.setdefault("goal_id", goal.goal_id) != goal.goal_id:
+                raise AgentToolError("AGENT_GOAL_UNKNOWN", "Only the active goal's brief can be loaded.")
         evidence_id = f"r{len(turn.looks) + 1}"
         result: ToolResult
-        if name in M_PREVIEW_TOOLS:  # a registry READ tool of its own (not one of Plan G's look tools)
+        if name in M_PREVIEW_TOOLS or name == GOAL_BRIEF_TOOL:  # a registry READ tool of its own
             made = self.registry.call(name, args, self._context(index))
             result = ToolResult(
                 evidence_id=evidence_id,
@@ -832,7 +851,7 @@ def _data_result(result: ToolResult, ctx: AgentContext, now: Any) -> DataToolRes
         tool=result.tool,
         kind=(
             DataToolKind.READ
-            if result.tool in TOOLS or result.tool in M_PREVIEW_TOOLS
+            if result.tool in TOOLS or result.tool in M_PREVIEW_TOOLS or result.tool == GOAL_BRIEF_TOOL
             else DataToolKind.PROPOSE
         ),
         exposure=Exposure.SESSION_ONLY,
