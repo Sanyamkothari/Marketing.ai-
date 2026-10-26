@@ -79,6 +79,14 @@ worth more for a few days and the raise fades with the moment. The factor scales
 net, costs and the harm hold included, as cart recovery's own fade does. Without a book nothing
 changes: every v2 number is the same.
 
+**Who to contact** (opt-in, plan-v3 decision 1). With a `WhoBook` (`GoalBidder(who=book)`, which the
+agent passes from `build_agent_policy(who=...)`): the goal's urgency is multiplied by `1 + gain x
+churn_risk` from the customer's `scores` (act before they lapse; no score, no change); an option whose
+cost (offer cost x chance of redeeming + channel and format cost) is more than a share of the
+customer's `clv_90d` is not bid; and a customer is also left alone when the look-alike reading of
+people like them credibly says messages lower their buying (`TraitHarm`, which pools the harm records
+across profile neighbours). Without a book nothing changes: every v2 number is the same.
+
 The bidder returns every option, including losing and negative ones (unless `prune_z` is set): the
 attention auction, the attention price, "do nothing", the hard rules and exploration all happen
 downstream. It does not choose a send time; `Action.send_at` is `ctx.now` and the timing step
@@ -136,6 +144,7 @@ from autonomy.uplift.score import UpliftScorer, blend, uplift_of
 
 if TYPE_CHECKING:
     from autonomy.decide.moments import MomentBook
+    from autonomy.decide.who import WhoBook
 
 DEFAULT_CHANNEL_COSTS: Mapping[Channel, float] = MappingProxyType(
     {
@@ -754,6 +763,12 @@ class ContactHarm:
         """The dent the customer's neighbours along the clue index make credible, without their own
         record (0 when none is credible, or without a record)."""
         return self._near_dent.get(customer_id, 0.0)
+
+    def own_records(self) -> Mapping[str, tuple[float, float, float]]:
+        """Customer -> (purchases in a message's week, purchases, that week's share of their time): the
+        records `refit` could read, for the customers who have one. Read-only; the trait-pooled reading
+        of plan-v3 decision 1 (`autonomy.decide.who.TraitHarm`) pools these across look-alikes."""
+        return MappingProxyType(self._own)
 
     def note_click(self, customer_id: str, organic: float, gain: float, gain_sd: float) -> None:
         """Remember what a click model credits a message with for this customer (`gain` +-
@@ -1559,6 +1574,7 @@ class GoalBidder:
         offer_cost_fn: Callable[[OfferOption, CustomerState], float | None] | None = None,
         budget_price: Callable[[], float] | None = None,
         moments: MomentBook | Literal[False] | None = None,
+        who: WhoBook | None = None,
     ) -> None:
         if prune_z is not None and prune_z < 0:
             raise ValueError("prune_z must be >= 0")
@@ -1570,6 +1586,9 @@ class GoalBidder:
         self.budget_price = budget_price
         self.harm = harm
         self.uplift = uplift
+        self.who = who
+        """Plan-v3 decision 1 (None: off): leaving risk and 90-day value from `state.scores`, and the
+        look-alikes' harm reading (`autonomy.decide.who`)."""
         self.response_model: ResponseModel = response_model or BetaResponseModel()
         self.purchase_weighted = (
             purchase_weighted
@@ -1691,6 +1710,10 @@ class GoalBidder:
         value = self.value_model.value_if_converted(state, self.brief.objective)
         choice = self.item_for(state)
         urgency = self._urgency_at(state, ctx.now, choice is not None)
+        ceiling: float | None = None
+        if self.who is not None:  # plan-v3 decision 1: act before they lapse; spend by what they are worth
+            urgency *= self.who.urgency_factor(state)
+            ceiling = self.who.cost_ceiling(state)
         boost = refill_boost(state) if self.refill and choice is not None else 1.0
         p14 = min(max(_score(state, REFILL_P14) or 0.0, 0.0), 1.0) if boost > 1.0 else 0.0
 
@@ -1756,6 +1779,8 @@ class GoalBidder:
                     uplift -= loss
                     offer_cost = unit_cost * p_redeem
                     cost = channel_cost + self.format_costs.get(item.format, 0.0)
+                    if ceiling is not None and offer_cost + cost > ceiling:
+                        continue  # costs more than this customer's 90 days are worth to us
                     # The budget price is charged on top of the cost, so an offer wins only when its
                     # extra profit per unit of cost is above the price (autonomy.decide.planner).
                     net = urgency * (uplift * value - offer_cost * (1.0 + shadow) - cost)
@@ -1804,17 +1829,20 @@ class GoalBidder:
                 and _offer_allowed(bid, state, envelope, ctx)
             }
             out = [b for b in out if id(b) not in dropped]
-        if prune_z is not None and harm is not None and out:
+        if prune_z is not None and (harm is not None or self.who is not None) and out:
             # Leave alone someone a message clearly harms: their credible harm is larger than every
             # option's gain even prune_z standard deviations up, or their own posterior makes it
-            # credible that messages lower their buying (`leave_alone`). A week or so a year they are
-            # let back in (`LEAVE_ALONE_RETRY`), so a wrong verdict can be undone.
+            # credible that messages lower their buying (`leave_alone`), or (plan-v3 decision 1) the
+            # people like them are credibly put off (`WhoBook.leave_alone`). A week or so a year they
+            # are let back in (`LEAVE_ALONE_RETRY`), so a wrong verdict can be undone.
             harm_cost = urgency * loss * value
             z = prune_z
+            stake = urgency * organic * value
             clear = loss > 0 and harm_cost > max(b.expected_net + harm_cost + z * b.uncertainty for b in out)
-            if (clear or leave_alone(harm, state.customer_id, urgency * organic * value)) and not (
-                leave_alone_retry(state.customer_id, ctx.now)
-            ):
+            alone = (harm is not None and leave_alone(harm, state.customer_id, stake)) or (
+                self.who is not None and self.who.leave_alone(state.customer_id, stake)
+            )
+            if (clear or alone) and not leave_alone_retry(state.customer_id, ctx.now):
                 return []
         if prune_z is not None and len(out) > 1:
             # The floor is set by options the offer rules let through for this customer: a discount

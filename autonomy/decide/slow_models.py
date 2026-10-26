@@ -197,7 +197,9 @@ def build_training_set(
         if e.type is EventType.PURCHASE or e.type is EventType.REFUND:
             money = abs(_amount(e.value))
             if e.type is EventType.PURCHASE:
-                profit = _amount(e.margin) if e.margin is not None and math.isfinite(e.margin) else money * rate
+                profit = (
+                    _amount(e.margin) if e.margin is not None and math.isfinite(e.margin) else money * rate
+                )
                 buys.setdefault(e.customer_id, []).append((e.ts.timestamp(), money, profit))
             else:
                 buys.setdefault(e.customer_id, []).append((e.ts.timestamp(), 0.0, -money * rate))
@@ -271,7 +273,9 @@ def _window(ts: _FloatArray | None, t0: float, days: int) -> tuple[int, int]:
     """Indices of the purchases in (t0, t0 + days]."""
     if ts is None:
         return 0, 0
-    return int(np.searchsorted(ts, t0, side="right")), int(np.searchsorted(ts, t0 + days * 86_400.0, side="right"))
+    return int(np.searchsorted(ts, t0, side="right")), int(
+        np.searchsorted(ts, t0 + days * 86_400.0, side="right")
+    )
 
 
 # --- the fits ---------------------------------------------------------------------------------------
@@ -320,7 +324,9 @@ def _fit_ridge(z: _FloatArray, y: _FloatArray, ridge: float) -> _FloatArray:
     design = np.column_stack([np.ones(len(z)), z])
     penalty = np.full(design.shape[1], ridge)
     penalty[0] = 0.0
-    return np.linalg.solve(design.T @ design + np.diag(penalty) + 1e-9 * np.eye(design.shape[1]), design.T @ y)
+    return np.linalg.solve(
+        design.T @ design + np.diag(penalty) + 1e-9 * np.eye(design.shape[1]), design.T @ y
+    )
 
 
 @dataclass(frozen=True)
@@ -356,9 +362,13 @@ class Clv90Model:
         return np.asarray(np.maximum(self.y_mean + self.y_scale * (self.beta[0] + z @ self.beta[1:]), 0.0))
 
 
-def _fit_risk(x: _FloatArray, y: _FloatArray, names: tuple[str, ...], cfg: SlowModelConfig) -> LeavingRiskModel:
+def _fit_risk(
+    x: _FloatArray, y: _FloatArray, names: tuple[str, ...], cfg: SlowModelConfig
+) -> LeavingRiskModel:
     z, mean, scale = _standardise(x)
-    return LeavingRiskModel(names, mean, scale, _fit_logistic(z, y, cfg.risk_ridge, cfg.rounds), cfg.risk_window_days)
+    return LeavingRiskModel(
+        names, mean, scale, _fit_logistic(z, y, cfg.risk_ridge, cfg.rounds), cfg.risk_window_days
+    )
 
 
 def _fit_value(x: _FloatArray, y: _FloatArray, names: tuple[str, ...], cfg: SlowModelConfig) -> Clv90Model:
@@ -507,7 +517,9 @@ class SlowModels:
             reason: str, rmse: float | None = None, base: float | None = None
         ) -> tuple[Clv90Model | None, ValueCheck]:
             skill = 1.0 - rmse / base if rmse is not None and base is not None and base > 0 else None
-            return None, ValueCheck(False, rmse, base, skill, n_train, n_held, cut, reason, data.censored_value)
+            return None, ValueCheck(
+                False, rmse, base, skill, n_train, n_held, cut, reason, data.censored_value
+            )
 
         if cut is None:
             return fail("fewer than two month-ends have a closed window")
@@ -532,7 +544,11 @@ class SlowModels:
             return out
         if features.get(_ORDERED, 0.0) < 0.5:
             return out
-        if self.risk is not None and self.risk_usable and features.get(_RECENCY, 0.0) <= self.config.active_days:
+        if (
+            self.risk is not None
+            and self.risk_usable
+            and features.get(_RECENCY, 0.0) <= self.config.active_days
+        ):
             out[CHURN_RISK] = float(self.risk.predict(_vector(self.risk.names, self.risk.mean, features))[0])
         if self.value is not None and self.value_usable:
             out[CLV_90D] = float(self.value.predict(_vector(self.value.names, self.value.mean, features))[0])
