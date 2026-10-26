@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from autonomy.contracts import Channel, ChannelStats, CustomerState
 from autonomy.decide.lookalike import LookalikeConfig, LookalikeResponseModel
 from autonomy.decide.models import ResponseModel
@@ -73,6 +75,7 @@ def test_the_default_gym_run_repeats() -> None:
     assert first.model_dump() == again.model_dump()
 
 
+@pytest.mark.slow
 def test_the_lookalike_agent_runs_in_the_gym_and_learns_from_it() -> None:
     spec = get_scenario("smoke", n_customers=200, days=40, history_days=30)
     built: list[AgentPolicy] = []
@@ -93,3 +96,32 @@ def test_the_lookalike_agent_runs_in_the_gym_and_learns_from_it() -> None:
     model = built[0].bundle.response
     assert isinstance(model, LookalikeClickModel)
     assert model.lookalike.rows > 0 and model.lookalike.refused == 0
+
+
+def test_the_gym_cli_lists_agent_lookalike_next_to_agent() -> None:
+    from autonomy.gym.run import POLICIES, agent_lookalike_factory
+
+    assert "agent" in POLICIES and POLICIES["agent_lookalike"] is agent_lookalike_factory
+    policy = _agent(agent_lookalike_factory(object()))  # type: ignore[arg-type]
+    assert isinstance(policy.bundle.response, LookalikeClickModel)
+    assert type(_agent(agent_factory(object())).bundle.response) is ClickResponseModel  # type: ignore[arg-type]
+
+
+def test_autonomy_imports_neither_scikit_learn_nor_lightgbm() -> None:
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3] / "autonomy"
+    banned = {"sklearn", "lightgbm"}
+    offenders = []
+    for path in root.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                continue
+            if any(n.split(".")[0] in banned for n in names):
+                offenders.append(str(path))
+    assert offenders == []
