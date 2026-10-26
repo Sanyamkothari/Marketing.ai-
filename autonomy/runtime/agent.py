@@ -1603,7 +1603,8 @@ class AgentPolicy:
             else None
         )
         """With the look-alike model on: the profile each holdout or sent decision was made on, kept until its
-        window closes and handed to the model as an outcome (`nightly`). None otherwise."""
+        window closes and handed to the model as an outcome (`nightly`). None otherwise. It is filled only by
+        `decide` in this process: decisions replayed through `nightly` after a rebuild do not reach it."""
         self.briefs: dict[str, Brief] = {}
         self.bidders: dict[str, GoalBidder] = {}
         self.policy = AutonomousPolicy(
@@ -2202,7 +2203,12 @@ class AgentPolicy:
                 segment=lambda st: self.segmenter.label(st, arm_start),
             )
             end = arm_start + horizon
-            converted = digest.money(customer, arm_start.timestamp(), end.timestamp(), None) > 0
+            t0, t1 = arm_start.timestamp(), end.timestamp()
+            # Any purchase in the window, whatever its value, as `Timeline.bought` counts it on the
+            # live path; refunds are kept with a negative value (a zero one as -0.0) and are not one.
+            converted = row is not None and any(
+                t0 <= row[i] < t1 and math.copysign(1.0, row[i + 1]) > 0 for i in range(0, len(row), 3)
+            )
             return Outcome(customer, profile, key, converted, arm_start, end)
 
         for arm in arms:
@@ -2801,19 +2807,21 @@ def build_agent_policy(
     `lookalike` (off by default, so every number above is unchanged) puts the look-alike model on top
     of the click model (`LookalikeClickModel`, docs/v3/LOOKALIKE.md); pass a `LookalikeConfig` to
     change its numbers. With a `bundle` given, its response model must already be a
-    `LookalikeClickModel`.
+    `LookalikeClickModel` (built with its own config; a `LookalikeConfig` here is then refused).
     """
     if bundle is None:
         fresh = build_bundle()
-        if lookalike is False:
+        if not lookalike:
             response: ClickResponseModel = ClickResponseModel()
         else:
             response = LookalikeClickModel(
                 config=lookalike if isinstance(lookalike, LookalikeConfig) else None
             )
         bundle = ModelBundle(response=response, value=fresh.value, fatigue=fresh.fatigue)
-    elif lookalike is not False and not isinstance(bundle.response, LookalikeClickModel):
+    elif lookalike and not isinstance(bundle.response, LookalikeClickModel):
         raise ValueError("lookalike needs a bundle whose response model is a LookalikeClickModel")
+    elif isinstance(lookalike, LookalikeConfig):
+        raise ValueError("with a bundle given, pass the LookalikeConfig to its LookalikeClickModel instead")
     return AgentPolicy(
         briefs,
         content,

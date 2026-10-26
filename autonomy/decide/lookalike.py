@@ -15,9 +15,14 @@ a segment label, in three layers:
    from every row; the effect only from contacted ones, and only the people we never contact (the
    holdout) tell the two apart, so no estimate of uplift exists without a control. The effect's
    profile slopes are penalised hard: heterogeneity is expected to be small and a few hundred
-   outcomes cannot tell a 1-point uplift from a 2-point one. The model keeps a posterior (a Laplace
-   approximation, drawn as antithetic samples) rather than a point: its spread is what Thompson
-   sampling explores, and it shrinks as rows arrive.
+   outcomes cannot tell a 1-point uplift from a 2-point one. The effect has a shared "contacted"
+   term plus one per channel, offer, theme and format level; a level never seen is neutral with the
+   prior's spread, so new content is neither penalised nor taken as certain. The model keeps a
+   posterior (a Laplace approximation, drawn as antithetic samples) rather than a point: its spread
+   is what Thompson sampling explores, and it shrinks as rows arrive. Contacted rows are weighted by
+   the inverse of their logged propensity (clipped, self-normalised), and no customer's rows weigh
+   more than `max_customer_weight` in the fit, so one regular's many windows are not taken for many
+   independent customers.
 2. **The prior.** Where the crowd has too few rows, or none with a control, the answer is the prior
    model's. Where it has some, the two are combined by precision (inverse variance), so a posterior
    that is still wide counts for little. The prior is whatever model the caller already trusts
@@ -112,17 +117,28 @@ def _days(later: datetime, earlier: datetime | None, default: float) -> float:
 
 
 def profile_of(state: CustomerState) -> Profile:
-    """The profile of a customer's state: everything is as of `state.as_of`, never the clock."""
+    """The profile of a customer's state: everything is as of `state.as_of`, never the clock.
+
+    With nightly features, the profile is stamped with the later of `state.as_of` and
+    `state.features_as_of`: features built after a window opened could carry its outcome, so such a
+    profile is refused as evidence for that window. With no first-seen date, tenure and frequency are
+    unknown (NaN, read as the training average) rather than a brand-new customer's."""
     now = state.as_of
     recency = _days(now, state.last_purchase_at, _RECENCY_CAP_DAYS)
-    tenure = _days(now, state.first_seen_at, 0.0)
-    freq = state.purchases * 30.0 / max(tenure, 30.0)
+    if state.first_seen_at is None:
+        tenure_col = freq = math.nan
+        if state.purchases == 0:
+            freq = 0.0
+    else:
+        tenure = _days(now, state.first_seen_at, 0.0)
+        tenure_col = math.log1p(tenure)
+        freq = state.purchases * 30.0 / max(tenure, 30.0)
     sens = state.offer_sensitivity
     known = sens is not None and math.isfinite(sens)
     row: list[float] = [
         math.log1p(min(recency, _RECENCY_CAP_DAYS)),
         0.0 if state.purchases > 0 and state.last_purchase_at is not None else 1.0,
-        math.log1p(tenure),
+        tenure_col,
         math.log1p(state.purchases),
         math.log1p(max(state.revenue, 0.0)),
         math.log1p(max(state.avg_order_value, 0.0)),
@@ -141,7 +157,10 @@ def profile_of(state: CustomerState) -> Profile:
         idle = min(_days(now, stats.last_engaged_at, _ENGAGED_CAP_DAYS), _ENGAGED_CAP_DAYS)
         row += [math.log1p(stats.delivers), stats.clicks / (stats.delivers + 5.0), math.log1p(idle)]
     extra = {k: float(v) for k, v in state.features.items() if math.isfinite(v)} if state.features else {}
-    return Profile(as_of=now, base=np.asarray(row, dtype=np.float64), extra=extra)
+    stamped = now
+    if extra and state.features_as_of is not None and state.features_as_of > now:
+        stamped = state.features_as_of
+    return Profile(as_of=stamped, base=np.asarray(row, dtype=np.float64), extra=extra)
 
 
 def history_profile(
@@ -162,7 +181,7 @@ def history_profile(
     bought = sorted((t, v) for t, v in purchases if t < at)
     paid = [(t, v) for t, v in bought if v > 0]
     week, month = at - timedelta(days=7), at - timedelta(days=30)
-    sent = [t for t in sends if month < t <= at]
+    sent = [t for t in sends if month < t < at]  # strictly before: a send at `at` is the treatment
     state = CustomerState(
         customer_id=customer_id,
         as_of=at,
@@ -190,7 +209,9 @@ class Outcome:
     """One closed window: what the customer looked like, what we did, and whether they bought.
 
     `action_key` is None for a customer we did not contact (the holdout). `profile` must have been
-    taken no later than `window_start`; `window_end` is when the answer was known."""
+    taken no later than `window_start`; `window_end` is when the answer was known. `propensity` is the
+    logged chance the policy had of taking this action (`Decision.probability`), None when the action
+    was randomised or not logged: the crowd's fit weights contacted rows by its inverse."""
 
     customer_id: str
     profile: Profile
@@ -199,6 +220,7 @@ class Outcome:
     window_start: datetime
     window_end: datetime
     weight: float = 1.0
+    propensity: float | None = None
 
 
 @dataclass
@@ -209,6 +231,7 @@ class _Row:
     y: float
     w: float
     end: datetime
+    propensity: float | None = None
     absorbed: bool = False
 
 
@@ -243,6 +266,13 @@ class LookalikeConfig:
     """Variance (logit scale) of customers' baseline and response shifts before the data says."""
     person_min_customers: int = 30
     """Customers with evidence needed before those variances are estimated from the data."""
+    ipw_clip: float = 20.0
+    """Largest inverse-propensity weight of a contacted row before the weights are self-normalised."""
+    max_customer_weight: float = 4.0
+    """Most weight one customer's rows carry in the crowd's fit (in windows). One customer's windows
+    are not independent draws (the same person buys, or not, again and again), so a customer decided
+    on every day cannot count for more than this many strangers. Their own record (the person's
+    shifts) still uses every row."""
     seed: int = 0
 
 
@@ -325,6 +355,8 @@ class _Fit:
     d: int
     beta: Vec
     draws: Vec
+    unseen: Vec
+    """Prior draws (sd 1/sqrt(level_penalty)) for a level the fit never saw, one column per slot."""
     sigma_base: float
     sigma_effect: float
     n_treated: float
@@ -336,8 +368,28 @@ class _Fit:
         return len(self.levels)
 
     @property
+    def contact(self) -> int:
+        """Column of the shared effect of contact (any channel, offer, theme and format)."""
+        return 1 + self.d
+
+    @property
+    def lv(self) -> int:
+        """First column of the per-level effects."""
+        return 2 + self.d
+
+    @property
+    def tau(self) -> int:
+        """First column of the effect's profile slopes."""
+        return self.lv + self.n_levels
+
+    @property
+    def chan(self) -> int:
+        """First column of the per-channel profile slopes."""
+        return self.tau + self.d
+
+    @property
     def width(self) -> int:
-        return 1 + self.d + self.n_levels + self.d + len(self.channels) * self.d
+        return self.chan + len(self.channels) * self.d
 
 
 @dataclass
@@ -442,6 +494,7 @@ class LookalikeResponseModel:
                     1.0 if o.converted else 0.0,
                     o.weight,
                     o.window_end,
+                    o.propensity,
                 )
             )
             taken += 1
@@ -464,13 +517,35 @@ class LookalikeResponseModel:
             keep = set(map(id, usable[drop:]))
             self._rows = [r for r in self._rows if id(r) in keep or r.end > now]
             usable = usable[drop:]
-        treated = sum(r.w for r in usable if r.key is not None)
-        control = sum(r.w for r in usable if r.key is None)
+        crowd = self._crowd_weights(usable)
+        contacted = np.asarray([r.key is not None for r in usable], dtype=bool)
+        treated = float(crowd[contacted].sum())
+        control = float(crowd[~contacted].sum())
         if treated < self.config.min_treated or control < self.config.min_control:
             self._rows_at_fit = len(usable)
             return False
-        self._refit(usable)
+        self._refit(usable, crowd)
         return True
+
+    def _crowd_weights(self, usable: Sequence[_Row]) -> Vec:
+        """Each row's weight in the crowd's fit: its own weight, times the clipped inverse of its
+        logged propensity for a contacted row (self-normalised, so the contacted rows that logged one
+        keep their total), then scaled so no customer's rows weigh more than `max_customer_weight`."""
+        cfg = self.config
+        w = np.asarray([r.w for r in usable], dtype=np.float64)
+        logged = np.asarray([r.key is not None and r.propensity is not None for r in usable], dtype=bool)
+        if logged.any():
+            props = np.asarray([r.propensity or 1.0 for r in usable], dtype=np.float64)
+            ipw = np.minimum(1.0 / np.clip(props, 1e-12, 1.0), cfg.ipw_clip)
+            scaled = w[logged] * ipw[logged]
+            total = float(scaled.sum())
+            if total > 0:
+                w[logged] = scaled * float(w[logged].sum()) / total
+        ids = {cid: i for i, cid in enumerate(dict.fromkeys(r.customer_id for r in usable))}
+        code = np.asarray([ids[r.customer_id] for r in usable], dtype=np.intp)
+        per = np.bincount(code, weights=w, minlength=len(ids))
+        scale = np.minimum(1.0, cfg.max_customer_weight / np.maximum(per, 1e-12))
+        return np.asarray(w * scale[code], dtype=np.float64)
 
     # -- reading --
 
@@ -484,17 +559,17 @@ class LookalikeResponseModel:
         u, v, var_v = self._person(state.customer_id)
         channel, offer, theme, fmt = action_features(action_key)
         idx = [fit.levels.get((s, val)) for s, val in enumerate((channel, offer, theme, fmt))]
-        lv = fit.draws[:, 1 + fit.d : 1 + fit.d + fit.n_levels]
+        lv = fit.draws[:, fit.lv : fit.lv + fit.n_levels]
+        # A level the fit never saw is neutral on average with the prior's spread, not a sure zero.
         action = np.zeros(fit.draws.shape[0])
-        for i in idx:
-            if i is not None:
-                action += lv[:, i]
+        for s, i in enumerate(idx):
+            action += lv[:, i] if i is not None else fit.unseen[:, s]
         ci = fit.channels.get(channel)
         if ci is not None:
             action = action + ctx.by_channel[:, ci]
         eta_c = ctx.eta + u
         p_c = _sigmoid(eta_c)
-        p_t = _sigmoid(eta_c + ctx.common + action + v)
+        p_t = _sigmoid(eta_c + fit.draws[:, fit.contact] + ctx.common + action + v)
         gap = p_t - p_c
         mean = float(gap.mean())
         pt = float(p_t.mean())
@@ -569,13 +644,12 @@ class LookalikeResponseModel:
         x = np.zeros((n, fit.width))
         x[:, 0] = 1.0
         x[:, 1 : 1 + d] = z
-        lv = 1 + d
-        tau = lv + fit.n_levels
-        chan = tau + d
+        lv, tau, chan = fit.lv, fit.tau, fit.chan
         by_channel: dict[int, list[int]] = {}
         for i, r in enumerate(rows):
             if r.key is None:
                 continue
+            x[i, fit.contact] = 1.0
             for s, val in enumerate(action_features(r.key)):
                 j = fit.levels.get((s, val))
                 if j is not None:
@@ -588,7 +662,7 @@ class LookalikeResponseModel:
             x[members, chan + ci * d : chan + (ci + 1) * d] = z[members]
         return x
 
-    def _refit(self, usable: Sequence[_Row]) -> None:
+    def _refit(self, usable: Sequence[_Row], crowd: Vec) -> None:
         cfg = self.config
         counts: dict[str, int] = {}
         for r in usable:
@@ -606,8 +680,12 @@ class LookalikeResponseModel:
             raw = np.hstack([base, extra])
         else:
             raw = base
-        mean = np.asarray(np.nanmean(raw, axis=0), dtype=np.float64)
-        std = np.asarray(np.nanstd(raw, axis=0), dtype=np.float64)
+        known = ~np.isnan(raw)
+        count = np.maximum(known.sum(axis=0), 1)
+        filled = np.where(known, raw, 0.0)
+        mean = np.asarray(filled.sum(axis=0) / count, dtype=np.float64)
+        dev = np.where(known, raw - mean, 0.0)
+        std = np.asarray(np.sqrt((dev * dev).sum(axis=0) / count), dtype=np.float64)
         keep = np.flatnonzero(std > 1e-6)
         std = np.where(std > 1e-6, std, 1.0)
         levels: dict[tuple[int, str], int] = {}
@@ -634,21 +712,23 @@ class LookalikeResponseModel:
             d=d,
             beta=np.zeros(0),
             draws=np.zeros((0, 0)),
+            unseen=np.zeros((0, 0)),
             sigma_base=cfg.person_var,
             sigma_effect=cfg.person_effect_var,
-            n_treated=sum(r.w for r in usable if r.key is not None),
-            n_control=sum(r.w for r in usable if r.key is None),
+            n_treated=float(sum(c for r, c in zip(usable, crowd, strict=True) if r.key is not None)),
+            n_control=float(sum(c for r, c in zip(usable, crowd, strict=True) if r.key is None)),
             rows=len(usable),
         )
         x = self._design(fit, usable)
         y = np.asarray([r.y for r in usable])
-        w = np.asarray([r.w for r in usable])
+        w = crowd
         lam = np.empty(fit.width)
         lam[0] = 1e-3
         lam[1 : 1 + d] = cfg.base_penalty
-        lam[1 + d : 1 + d + fit.n_levels] = cfg.level_penalty
-        lam[1 + d + fit.n_levels : 1 + 2 * d + fit.n_levels] = cfg.slope_penalty
-        lam[1 + 2 * d + fit.n_levels :] = cfg.channel_slope_penalty
+        lam[fit.contact] = cfg.level_penalty
+        lam[fit.lv : fit.tau] = cfg.level_penalty
+        lam[fit.tau : fit.chan] = cfg.slope_penalty
+        lam[fit.chan :] = cfg.channel_slope_penalty
         beta = np.zeros(fit.width)
         rate = float(np.clip((w * y).sum() / w.sum(), 1e-4, 1 - 1e-4))
         beta[0] = math.log(rate / (1.0 - rate))
@@ -673,10 +753,15 @@ class LookalikeResponseModel:
         eps = np.vstack([half, -half])
         fit.beta = beta
         fit.draws = beta + np.linalg.solve(chol.T, eps.T).T
+        unseen = rng.standard_normal((half.shape[0], 4))
+        fit.unseen = np.vstack([unseen, -unseen]) / math.sqrt(cfg.level_penalty)
         self._fit_state = fit
         self._rows_at_fit = len(usable)
         self._context = None
-        self._rebuild_people(fit, usable, y, w, p)
+        # The person's record uses each row's own weight: the cap on a customer's total is about
+        # what the crowd learns from them, not about what they show of themselves.
+        own = np.asarray([r.w for r in usable], dtype=np.float64)
+        self._rebuild_people(fit, usable, y, own, p)
 
     def _rebuild_people(self, fit: _Fit, usable: Sequence[_Row], y: Vec, w: Vec, p: Vec) -> None:
         cfg = self.config
@@ -759,10 +844,10 @@ class LookalikeResponseModel:
         z = self._z(fit, [profile_of(state)])[0]
         d = fit.d
         eta = fit.draws[:, 0] + fit.draws[:, 1 : 1 + d] @ z
-        tau = 1 + d + fit.n_levels
+        tau = fit.tau
         common = fit.draws[:, tau : tau + d] @ z
         c = len(fit.channels)
-        chan = tau + d
+        chan = fit.chan
         by_channel = np.zeros((fit.draws.shape[0], c))
         for ci in range(c):
             lo = chan + ci * d
@@ -803,8 +888,13 @@ class OutcomeBook:
     A contacted decision (agent or baseline group, with its action key) closes `horizon` after the
     send; a holdout "do nothing" closes `horizon` after the decision and counts only if nothing was
     sent to the customer in between. Like the existing learner, consecutive control windows of one
-    customer overlap, so each is weighted by the share not covered by their previous one. The
-    profile is the one the decision was made on, so what the model learns from is what it saw."""
+    customer overlap, so each is weighted by the share not covered by their previous one; so are
+    consecutive contacted windows (a follow-up sent inside a window is in both). A contacted outcome
+    carries the decision's logged probability, which the crowd's fit weights by. The profile is the
+    one the decision was made on, so what the model learns from is what it saw.
+
+    The book lives in memory: a process that rebuilds the policy (the runtime does, on a changed
+    brief or content library) starts with an empty book and an empty crowd."""
 
     def __init__(self, horizon: timedelta, *, max_age: timedelta | None = None) -> None:
         if horizon <= timedelta(0):
@@ -813,6 +903,7 @@ class OutcomeBook:
         self.max_age = max_age if max_age is not None else 4 * horizon
         self._pending: dict[str, _Pending] = {}
         self._control_start: dict[str, datetime] = {}
+        self._treated_start: dict[str, datetime] = {}
         self.dropped: dict[str, int] = {}
         """Decisions closed without an outcome, by reason: `never_sent`, `undelivered`, `contaminated`, `stale`."""
 
@@ -871,19 +962,33 @@ class OutcomeBook:
             if sent is None or did in tl.undelivered:
                 self._drop("never_sent" if sent is None else "undelivered")
                 continue
-            out.append(Outcome(d.customer_id, pend.profile, pend.key, tl.bought(start, end), start, end))
+            weight = self._overlap(self._treated_start, d.customer_id, start)
+            out.append(
+                Outcome(
+                    d.customer_id,
+                    pend.profile,
+                    pend.key,
+                    tl.bought(start, end),
+                    start,
+                    end,
+                    weight,
+                    d.probability,
+                )
+            )
         for pend, converted in controls:
             d = pend.decision
             end = d.made_at + self.horizon
-            last = self._control_start.get(d.customer_id)
-            weight = (
-                1.0
-                if last is None
-                else min(1.0, abs((d.made_at - last).total_seconds()) / self.horizon.total_seconds())
-            )
-            self._control_start[d.customer_id] = max(d.made_at, last) if last is not None else d.made_at
+            weight = self._overlap(self._control_start, d.customer_id, d.made_at)
             out.append(Outcome(d.customer_id, pend.profile, None, converted, d.made_at, end, weight))
         return out
+
+    def _overlap(self, starts: dict[str, datetime], customer_id: str, start: datetime) -> float:
+        """The share of this window not covered by the customer's previous one of the same kind."""
+        last = starts.get(customer_id)
+        starts[customer_id] = max(start, last) if last is not None else start
+        if last is None:
+            return 1.0
+        return min(1.0, abs((start - last).total_seconds()) / self.horizon.total_seconds())
 
 
 __all__ = [
