@@ -58,8 +58,8 @@ Three more optional hooks let a caller make contacting dearer and rarer (all off
 
 One more optional hook is the v3 frequency plan (`plan_fn`, `frequency.FrequencyPlanner.gate`): a customer
 whose best 3-week contact plan sends nothing today and a message later is held (`frequency_plan` in
-`blocked_by`), after the weekly budget and before the draw. It can only hold, never release, and a
-journey's later steps skip it (docs/v3/FREQUENCY.md).
+`blocked_by`), after the weekly budget and before the draw. It can only hold, never release; a
+journey's later steps and event-triggered decisions (a cart, a reply) skip it (docs/v3/FREQUENCY.md).
 
 One more optional hook is the v3 channel journeys (`journeys`, a `journeys.JourneyRunner`; off by
 default, and with it off nothing below changes). Each bid on a journey's first channel becomes one
@@ -401,7 +401,8 @@ class AutonomousPolicy:
                 blocked.append(check.code)
         if not offered:
             blocked.extend(unreachable(state, ctx))
-        market = self.auction(state, ctx, survivors, blocked)
+        # v3 frequency: only the daily sweep is planned; a cart or a reply is answered when it comes.
+        market = self.auction(state, ctx, survivors, blocked, plan=trigger in (None, SWEEP))
         survivors, options, cost = market.survivors, market.options, market.cost
         means = [0.0] + [b.expected_net - cost(b) for b in options]  # option 0 is "do nothing"
         sds = [0.0] + [b.uncertainty for b in options]
@@ -722,7 +723,8 @@ class AutonomousPolicy:
         plausible ones among them, and which of those restraint lets into the Thompson draw. Codes
         for what pacing or the budget held are appended to `blocked`. `observe=False` leaves the
         pacer's running reference alone, so an explanation changes nothing. `plan=False` skips the
-        frequency plan's hold: a journey's later step follows its journey, not a new plan.
+        frequency plan's hold: a journey's later step follows its journey, not a new plan, and a
+        decision prompted by an event (a cart, a reply) is answered when it comes.
         """
         price = self._price(state)
         prices: dict[Channel, float] = {}

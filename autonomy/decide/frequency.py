@@ -26,14 +26,23 @@ the next 21 days is compared by total expected value minus the tiredness each me
 message now; one now and one in 10 days; nothing for 14 days, then one; nothing. A message of a plan is
 the customer's best option at that moment (the same bids the auction weighs), worth
 
-    urgency x (uplift x value x freshness - offer cost - channel cost) - attention price
+    urgency(day) x (uplift x value x freshness - offer cost - channel cost) - attention price
 
-discounted by `weekly_discount` per week of waiting. A later message is priced with the hazard the
-earlier ones raised: the messages counted against it are the customer's week now, fading by
-`exp(-days / memory_days)`, plus each earlier message of the plan, fading the same way, so a message
-sent 10 days ago still leaves the next one dearer. Both the freshness (how well a message does at that
-count) and the hazard are read at that fractional count. The first message of any plan is priced
-exactly as the auction prices it now.
+discounted by `weekly_discount` per week of waiting. This is how `ContactPrice.rhythm` values a bid, not
+the auction's `expected_net - market.cost(bid)`: it leaves out pacing surcharges, the offer's shadow
+price, the attention price of a journey's later steps, and a negative uplift counts as 0.
+`urgency(day)` is the bid's urgency today for a message today; for a later message it is today's times
+the goal's fade over those days (`fade`, from the goal's bidder: a cart reminder 14 days on is worth
+about 2^-14 of today's), so a time-sensitive message is not held for a later day it would be worthless on.
+
+A later message is priced with the hazard the earlier ones raised: the messages counted against a
+message on day d are the customer's real past sends (`recent_contacts`), each fading by
+`exp(-(age + d) / memory_days)`, plus each earlier message of the plan, fading the same way. So the
+plan and the plan made again on a later day agree: a message sent 10 days ago still leaves today's
+dearer, by the same `exp(-1)` the plan charged for it. Both the freshness (how well a message does at
+that count, relative to the week's count the bids were read at) and the hazard are read at that
+fractional count. A message sent today counts 1, as in the auction's weekly count; sends the counts
+hold but the list does not explain (pending ones) count at age 0.
 
 Today's decision follows the best plan's first step, and the plan is made again every day from the
 customer's state, so it bends when something happens (a purchase changes the bids; a moment raises
@@ -41,8 +50,9 @@ urgency; a reply changes the record). The first step is applied as a veto only: 
 waits (nothing now, a message later) the customer is left alone today (`rules.FREQUENCY_PLAN`). When
 the best plan is to send, the auction goes on as before, with its price, restraint, Thompson draw and
 exploration floor; when no plan with a message beats nothing, the auction goes on too, so exploration
-is not cut where no plan is worth anything. The hard rules and the weekly caps run before and after
-and stay a backstop. A customer inside a journey is not planned: the journey runs its steps before the
+is not cut where no plan is worth anything. Only the daily sweep is planned: a decision prompted by an
+event (a cart, a reply) is not held. The hard rules and the weekly caps run before and after and stay
+a backstop. A customer inside a journey is not planned: the journey runs its steps before the
 auction, so it follows the journey.
 
 Numbers here are design defaults (`memory_days`, `weekly_discount`, the plans, the ridge); none was
@@ -54,7 +64,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 import numpy as np
@@ -151,6 +161,8 @@ class LookalikeHazard(HazardModel):
         self._crowd: _Crowd | None = None
         self._people: dict[str, float] = {}
         self._rows_at_fit = 0
+        self._new_rows = 0
+        """Sends recorded since the crowd was last refitted (not reduced by trimming to `max_rows`)."""
         self._last: tuple[CustomerState, float] | None = None
 
     def record_send(
@@ -165,6 +177,7 @@ class LookalikeHazard(HazardModel):
         """A delivered message and the profile it was decided on, under `key` (its decision id)."""
         if weight > 0 and key not in self._rows:
             self._rows[key] = _Send(customer_id, profile, channel, self._cell(contacts_7d), weight)
+            self._new_rows += 1
 
     def record_loss(self, key: str) -> None:
         """That message lost the contact."""
@@ -222,13 +235,14 @@ class LookalikeHazard(HazardModel):
         events = sum(r.weight for r in rows if r.lost)
         if events < cfg.min_events:
             self._crowd, self._people, self._last = None, {}, None
-            self._rows_at_fit = len(rows)
+            self._rows_at_fit, self._new_rows = len(rows), 0
             return False
-        fresh = len(rows) - self._rows_at_fit
+        # New sends are counted as they come, so a full store (`max_rows`, oldest dropped) still refits.
+        fresh = self._new_rows
         refit = self._crowd is None or fresh >= max(cfg.refit_min_new, cfg.refit_growth * self._rows_at_fit)
         if refit:
             self._crowd = self._refit(rows)
-            self._rows_at_fit = len(rows)
+            self._rows_at_fit, self._new_rows = len(rows), 0
         self._people = self._person_factors(rows)
         self._last = None
         return refit
@@ -397,34 +411,66 @@ class Pricing(Protocol):
     def freshness(self, contacts: float) -> float: ...
 
 
+Fade = Callable[[CustomerState, str, datetime, float], float | None]
+"""(state, goal id, now, days later) -> the share of the goal's urgency today still there that many
+days later (a cart's fade, a moment that closes), or None when unknown (`runtime.agent` builds it from
+each goal's bidder)."""
+
+_DAY_SECONDS = 86_400.0
+
+
 @dataclass(frozen=True)
 class _Option:
+    goal_id: str
     channel: Channel
     gross: float
     fixed: float
     urgency: float
 
 
+def past_send_ages(state: CustomerState, now: datetime) -> list[float]:
+    """Ages in days, at `now`, of the customer's past messages, for the planner's starting count.
+
+    Read from `recent_contacts` (send times in the last 30 days). Messages the weekly or monthly count
+    holds but the list does not explain (a pending send `AutonomousPolicy.with_pending` added, or a
+    state whose list was not filled) are counted at the youngest age they can have: 0 for the week's,
+    7 days for the month's, as `mandate.enforce.touches_in_window` counts them."""
+    ages = [max((now - t).total_seconds(), 0.0) / _DAY_SECONDS for t in state.recent_contacts if t <= now]
+    as_of = state.as_of
+    week = sum(1 for t in state.recent_contacts if as_of - timedelta(days=7) < t <= as_of)
+    month = sum(1 for t in state.recent_contacts if as_of - timedelta(days=30) < t <= as_of)
+    missing_week = max(0, state.contacts_7d - week)
+    missing_month = max(0, state.contacts_30d - month - missing_week)
+    return ages + [0.0] * missing_week + [7.0] * missing_month
+
+
 @dataclass
 class FrequencyPlanner:
     """Compares the fixed plans for one customer and says whether today is a day to wait.
 
-    `choose(state, bids)` is pure. `gate(state, bids, now, observe)` is the hook
+    `choose(state, bids, now)` is pure. `gate(state, bids, now, observe)` is the hook
     `AutonomousPolicy(plan_fn=...)` calls: it returns `rules.FREQUENCY_PLAN` when the best plan waits.
+    `fade` (optional) says how much of a goal's urgency is left on a later day; without it, or when it
+    does not know the goal, a later message keeps the bid's urgency up to 1 (a moment's boost is taken
+    as gone) and a bid whose urgency already fades (below 1) is worth nothing later.
     `last` keeps each customer's latest plan (when it was made, its name, its value) and `chosen`
     counts how often each plan won, for the briefing and the tests.
     """
 
     pricing: Pricing
     config: PlanConfig = field(default_factory=PlanConfig)
+    fade: Fade | None = None
     last: dict[str, tuple[datetime, str, float]] = field(default_factory=dict)
     chosen: dict[str, int] = field(default_factory=dict)
     """How many times each plan was the best one (one per customer per decision), by plan name."""
 
-    def choose(self, state: CustomerState, bids: Sequence[Bid]) -> PlanChoice:
+    def choose(self, state: CustomerState, bids: Sequence[Bid], now: datetime | None = None) -> PlanChoice:
+        """Every plan's value for this customer at `now` (default: the state's `as_of`), and the best."""
         cfg = self.config
+        now = now if now is not None else state.as_of
         options = [
             _Option(
+                b.goal_id,
                 b.action.channel,
                 max(b.uplift, 0.0) * max(b.value_if_converted, 0.0),
                 b.offer_cost + b.channel_cost,
@@ -435,18 +481,20 @@ class FrequencyPlanner:
         if not options:
             return PlanChoice(cfg.plans[0], tuple((p.name, 0.0) for p in cfg.plans))
         lost = self.pricing.lost_value(state, bids)
-        now_count = float(state.contacts_7d)
-        fresh_now = max(self.pricing.freshness(now_count), 1e-9)
+        ages = past_send_ages(state, now)
+        # The bids' uplift was read at the week's count; a later message's is read at its faded count.
+        fresh_now = max(self.pricing.freshness(float(state.contacts_7d)), 1e-9)
+        fades: dict[tuple[str, float], float | None] = {}
         values: list[tuple[str, float]] = []
         for plan in cfg.plans:
             total = 0.0
             for k, day in enumerate(plan.days):
-                count = now_count * math.exp(-day / cfg.memory_days) + sum(
+                count = sum(math.exp(-(age + day) / cfg.memory_days) for age in ages) + sum(
                     math.exp(-(day - earlier) / cfg.memory_days) for earlier in plan.days[:k]
                 )
-                fresh = max(self.pricing.freshness(count), 0.0) / fresh_now
+                fresh = 1.0 if day == 0 else max(self.pricing.freshness(count), 0.0) / fresh_now
                 best = max(
-                    (o.urgency if day == 0 else min(o.urgency, 1.0)) * (o.gross * fresh - o.fixed)
+                    self._urgency(o, state, now, day, fades) * (o.gross * fresh - o.fixed)
                     - self.pricing.price_at(state, o.channel, count, lost.get(o.channel, 0.0))
                     for o in options
                 )
@@ -459,11 +507,31 @@ class FrequencyPlanner:
                 best_plan, best_value = plan, value
         return PlanChoice(best_plan, tuple(values))
 
+    def _urgency(
+        self,
+        option: _Option,
+        state: CustomerState,
+        now: datetime,
+        day: float,
+        cache: dict[tuple[str, float], float | None],
+    ) -> float:
+        """The option's urgency `day` days from now: the bid's own today, the goal's fade later."""
+        if day == 0:
+            return option.urgency
+        if self.fade is not None:
+            key = (option.goal_id, day)
+            if key not in cache:
+                cache[key] = self.fade(state, option.goal_id, now, day)
+            share = cache[key]
+            if share is not None:
+                return option.urgency * max(share, 0.0)
+        return min(option.urgency, 1.0) if option.urgency >= 1.0 else 0.0
+
     def gate(
         self, state: CustomerState, bids: Sequence[Bid], now: datetime, observe: bool = True
     ) -> str | None:
         """`rules.FREQUENCY_PLAN` when the customer's best plan waits, else None."""
-        choice = self.choose(state, bids)
+        choice = self.choose(state, bids, now)
         if observe:
             self.last[state.customer_id] = (now, choice.best.name, choice.value)
             self.chosen[choice.best.name] = self.chosen.get(choice.best.name, 0) + 1

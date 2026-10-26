@@ -1655,7 +1655,7 @@ class AgentPolicy:
             else ContactPrice(self._click_fatigue, self._weekly_cap)
         )
         self.planner: FrequencyPlanner | None = (
-            FrequencyPlanner(self.contact_price, frequency.plans)
+            FrequencyPlanner(self.contact_price, frequency.plans, fade=self._urgency_fade)
             if frequency is not None and frequency.plans is not None
             else None
         )
@@ -2912,6 +2912,17 @@ class AgentPolicy:
         if e.type is EventType.CLICK and e.ts - send_at >= LATE_CLICK:
             hour = self._local_hour(e.customer_id, e.ts)
             self.reading.observe(e.customer_id, hour, seg)
+
+    def _urgency_fade(self, state: CustomerState, goal_id: str, now: datetime, days: float) -> float | None:
+        """v3 frequency plans: the share of a goal's urgency now still there `days` later, from its
+        bidder (a cart reminder halves every day, a moment closes); None for an unknown goal."""
+        bidder = self.bidders.get(goal_id)
+        if bidder is None:
+            return None
+        today = bidder.urgency_on(state, now)
+        if today <= 0:
+            return 0.0
+        return bidder.urgency_on(state, now + timedelta(days=days)) / today
 
     def _tolerance_send(self, decision_id: str, channel: Channel, before: int) -> None:
         """A delivered send goes to the look-alike hazard models with the profile it was decided on

@@ -57,7 +57,14 @@ def customer(i: int, group: str = "calm", **kw: object) -> CustomerState:
         "last_purchase_at": NOW - timedelta(days=90),
     }
     if group == "tired":
-        base.update(segment="lapsed", last_purchase_at=NOW - timedelta(days=300), contacts_30d=6)
+        # six messages this month, the last 12 days ago: the send times explain the count
+        sent = tuple(NOW - timedelta(days=d) for d in (27, 24, 21, 18, 15, 12))
+        base.update(
+            segment="lapsed",
+            last_purchase_at=NOW - timedelta(days=300),
+            contacts_30d=6,
+            recent_contacts=sent,
+        )
     base.update(kw)
     return CustomerState.model_validate(base)
 
@@ -84,6 +91,9 @@ def test_a_falsy_switch_is_the_default(flag: object) -> None:
 
 
 def test_default_decisions_are_identical_with_the_switch_off() -> None:
+    # Both build through the same code: this pins the switch, not the default's numbers. That the
+    # default is unchanged by this stream is guarded by the v2 tests of the code it touches
+    # (tests/v2/contact_less, tests/v2/decide/test_policy.py), which pin those numbers.
     plain = build_agent_policy([default_brief()], default_content())
     off = build_agent_policy([default_brief()], default_content(), frequency=False)
     for i in range(40):
@@ -273,6 +283,66 @@ def test_a_planted_tired_group_gets_fewer_messages(plans: bool) -> None:
     # the plain curve cannot tell them apart: the same bidder sends to everyone
     flat = ContactPrice(lambda n: 0.7**n, lambda: 3)
     assert messages(flat, "tired", plans) == messages(flat, "calm", plans) == 60
+
+
+def decisions_after_a_send_yesterday(price: ContactPrice, group: str, plans: bool) -> tuple[int, int]:
+    """(messages, customers the plan held) for 60 customers of `group` sent one message yesterday."""
+    planner = FrequencyPlanner(price)
+    policy = AutonomousPolicy(
+        [Bidder()],
+        price.floor,
+        0.0,
+        channel_price_fn=price.prices,
+        plan_fn=planner.gate if plans else None,
+        mc_draws=50,
+    )
+    context = DecisionContext(
+        now=NOW, briefs=(sample_brief(NOW),), content=tuple(sample_content(NOW)), seed=0
+    )
+    sent = held = 0
+    for i in range(60):
+        yesterday = (NOW - timedelta(days=1),)
+        d = policy.decide(
+            customer(i, group, contacts_7d=1, contacts_30d=1, recent_contacts=yesterday), context
+        )
+        sent += d.kind is DecisionKind.ACT
+        held += rules.FREQUENCY_PLAN in d.blocked_by
+    return sent, held
+
+
+def test_the_plan_holds_a_planted_tired_group_after_a_message_and_not_a_calm_one() -> None:
+    # tired enough that the price alone still lets a second message through, not so tired that it
+    # blocks them before the plan is asked
+    hazard, complaints = LookalikeHazard(), LookalikeHazard(base_rate=0.0005)
+    planted(hazard, tired_rate=0.015, calm_rate=0.002)
+    price = ContactPrice(lambda n: 0.7**n, lambda: 3, hazard=hazard, complaints=complaints)
+    assert decisions_after_a_send_yesterday(price, "calm", plans=True) == (60, 0)
+    tired_sent, tired_held = decisions_after_a_send_yesterday(price, "tired", plans=True)
+    without_plan, _ = decisions_after_a_send_yesterday(price, "tired", plans=False)
+    assert without_plan > 50  # the price alone sends to nearly all of them
+    assert tired_held > 50 and tired_sent < 10  # the plan waits for most of them
+    # with the plain curve both groups are planned alike
+    flat = ContactPrice(lambda n: 0.7**n, lambda: 3)
+    flat_calm = decisions_after_a_send_yesterday(flat, "calm", plans=True)
+    assert decisions_after_a_send_yesterday(flat, "tired", plans=True) == flat_calm
+
+
+def test_the_agent_fades_a_cart_reminder_by_its_bidder() -> None:
+    from autonomy.contracts import GoalKind
+    from autonomy.decide.bidders import GoalBidder
+
+    policy = build_agent_policy([default_brief()], default_content(), frequency=True)
+    goal = default_brief().goal_id
+    s = customer(1, last_seen_at=NOW)
+    assert policy._urgency_fade(s, goal, NOW, 14.0) == pytest.approx(1.0)  # this goal does not fade
+    assert policy._urgency_fade(s, "no_such_goal", NOW, 14.0) is None
+    cart_brief = sample_brief(NOW)
+    policy.bidders[cart_brief.goal_id] = GoalBidder(
+        cart_brief, sample_content(NOW), kind=GoalKind.CART_RECOVERY
+    )
+    assert policy._urgency_fade(s, cart_brief.goal_id, NOW, 1.0) == pytest.approx(0.5)
+    assert policy._urgency_fade(s, cart_brief.goal_id, NOW, 14.0) == pytest.approx(0.5**14)
+    assert policy.planner is not None and policy.planner.fade == policy._urgency_fade
 
 
 def test_the_package_imports_nothing_the_v2_ci_job_lacks() -> None:

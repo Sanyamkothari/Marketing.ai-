@@ -203,6 +203,36 @@ def test_a_customer_just_contacted_is_planned_to_wait_two_weeks() -> None:
     assert choice.wait and choice.best.name == WAIT_14D
 
 
+def test_a_fading_bid_is_never_held_for_a_later_day() -> None:
+    # without a fade: a bid whose urgency is already below 1 (a cart some hours old) is worth nothing later
+    planner = FrequencyPlanner(priced())
+    choice = planner.choose(state(contacts_7d=1), [bid(uplift=0.03, urgency=0.5)])
+    assert not choice.wait
+    assert dict(choice.values)[WAIT_14D] < 0
+    # a fresh cart (urgency 1 today) is held without its fade and sent with it
+    fresh = [bid(uplift=0.03, urgency=1.0)]
+    assert planner.choose(state(contacts_7d=1), fresh).wait
+    seen: list[tuple[str, float]] = []
+
+    def cart(s: CustomerState, goal_id: str, now: datetime, days: float) -> float | None:
+        seen.append((goal_id, days))
+        return float(0.5**days)  # halves every day, as `bidders.DEFAULT_CART_HALF_LIFE_DAYS`
+
+    faded = FrequencyPlanner(priced(), fade=cart).choose(state(contacts_7d=1), fresh)
+    assert not faded.wait and faded.send_now
+    assert dict(faded.values)[WAIT_14D] < 0
+    assert sorted(set(seen)) == [(GOAL, 10.0), (GOAL, 14.0)]  # asked once per goal and day
+
+
+def test_a_fade_that_does_not_know_the_goal_leaves_the_default() -> None:
+    def unknown(s: CustomerState, goal_id: str, now: datetime, days: float) -> float | None:
+        return None
+
+    plain = FrequencyPlanner(priced()).choose(state(contacts_7d=1), [bid(uplift=0.03)])
+    with_unknown = FrequencyPlanner(priced(), fade=unknown).choose(state(contacts_7d=1), [bid(uplift=0.03)])
+    assert plain.values == with_unknown.values
+
+
 class Bidder:
     """A fixed bid whose uplift and urgency jump for two days after a purchase (a cross-sell moment)."""
 
@@ -260,15 +290,50 @@ def test_replanning_follows_a_purchase() -> None:
 
 
 def test_the_plan_is_made_again_every_day_from_the_state() -> None:
-    policy, planner = agent_group()
+    planner = FrequencyPlanner(priced())
     names = []
     for day in range(0, 9):
         now = NOW + timedelta(days=day)
-        # one message went out on day 0; it leaves the 7-day count on day 7
-        policy.decide(state(contacts_7d=1 if day < 7 else 0, as_of=now), ctx(now))
+        # one message went out on day 0; it counts for exp(-age / 10) of a message, day by day
+        s = state(contacts_7d=1 if day < 7 else 0, contacts_30d=1, as_of=now, recent_contacts=(NOW,))
+        planner.gate(s, [bid(uplift=0.03)], now)
         names.append(planner.last["c1"][1])
-    assert names[:7] == [WAIT_14D] * 7
-    assert names[7] == NOW_AND_10D  # the week is clear again: send
+    # held while the last message is fresh, then sent once it has faded enough (day 4 on this fixture),
+    # without waiting for the 7-day count to empty
+    assert names == [WAIT_14D] * 4 + [NOW_AND_10D] * 5
+
+
+def test_a_week_count_the_send_times_do_not_explain_counts_as_sent_today() -> None:
+    pricing = Linear()
+    FrequencyPlanner(pricing, PlanConfig(plans=(PlanSpec("now", (0.0,)),))).choose(
+        state(contacts_7d=1), [bid()]
+    )
+    assert pricing.calls == [(Channel.EMAIL, 1.0)]  # a pending send, say: age 0
+    pricing = Linear()
+    month = state(contacts_30d=2)  # two sends of the month the list does not explain: at least 7 days old
+    FrequencyPlanner(pricing, PlanConfig(plans=(PlanSpec("now", (0.0,)),))).choose(month, [bid()])
+    assert pricing.calls[0][1] == pytest.approx(2.0 * math.exp(-0.7))
+
+
+def test_the_plan_made_ten_days_later_charges_the_raised_hazard_the_first_plan_assumed() -> None:
+    cfg = PlanConfig(memory_days=10.0, weekly_discount=1.0)
+    first = dict(FrequencyPlanner(Linear(), cfg).choose(state(), [bid()], NOW).values)
+    second_message = first["now_and_10d"] - first["now"]  # the message on day 10, priced on day 0
+    later = NOW + timedelta(days=10)
+    sent = state(as_of=later, contacts_30d=1, recent_contacts=(NOW,))  # day 0's message went out
+    pricing = Linear()
+    again = dict(FrequencyPlanner(pricing, cfg).choose(sent, [bid()], later).values)
+    assert again["now"] == pytest.approx(second_message)  # the same price, now that the day has come
+    assert pricing.calls[0][1] == pytest.approx(math.exp(-1.0))
+
+
+def test_a_decision_prompted_by_an_event_is_not_planned() -> None:
+    policy, planner = agent_group()
+    sweep = policy.decide(state(contacts_7d=1), ctx())
+    assert rules.FREQUENCY_PLAN in sweep.blocked_by
+    cart = policy.decide(state(contacts_7d=1), ctx(), trigger="cart:e1")
+    assert rules.FREQUENCY_PLAN not in cart.blocked_by and cart.kind is DecisionKind.ACT
+    assert planner.chosen == {WAIT_14D: 1}  # the plan was asked about the sweep only
 
 
 def test_observe_false_changes_nothing() -> None:
@@ -304,7 +369,7 @@ def test_the_weekly_cap_still_holds_whatever_the_plan_says() -> None:
     assert calls == []  # the rules removed every bid before the plan was asked
 
 
-def test_quiet_hours_and_consent_still_hold() -> None:
+def test_consent_still_holds_and_the_plan_is_not_asked() -> None:
     policy, planner = agent_group()
     d = policy.decide(state(contacts_7d=0, channels={Channel.EMAIL: ChannelStats(address_known=True)}), ctx())
     assert d.kind is DecisionKind.NOTHING and rules.FREQUENCY_PLAN not in d.blocked_by

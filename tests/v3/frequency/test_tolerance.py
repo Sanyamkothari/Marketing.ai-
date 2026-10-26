@@ -39,13 +39,19 @@ def person(customer_id: str, group: str, **kw: object) -> CustomerState:
 
 
 def feed(
-    model: LookalikeHazard, *, tired_rate: float, calm_rate: float, n: int = 1500, seed: int = 0
+    model: LookalikeHazard,
+    *,
+    tired_rate: float,
+    calm_rate: float,
+    n: int = 1500,
+    seed: int = 0,
+    night: str = "",
 ) -> None:
     """Deliver `n` first-of-the-week messages to each group and let the planted rate cost the contact."""
     rng = np.random.default_rng(seed)
     for group, rate in (("tired", tired_rate), ("calm", calm_rate)):
         for i in range(n):
-            key = f"{group}{i}"
+            key = f"{night}{group}{i}"
             lost = bool(rng.random() < rate)
             model.observe_send(Channel.EMAIL, 0)
             if lost:
@@ -108,18 +114,19 @@ def test_the_weekly_count_in_the_profile_does_not_double_count() -> None:
 def test_a_customers_own_record_moves_them_off_their_neighbourhood() -> None:
     look = LookalikeHazard()
     feed(look, tired_rate=0.02, calm_rate=0.02)  # no difference between the groups
-    # "loyal" has been sent 400 messages and never left; "gone_soon" left after a few
+    # "loyal" has been sent 400 emails and never left. "soon" lost the email contact on the third
+    # email and is still reachable on WhatsApp: a lost contact stops that channel (the rules block
+    # it), so a customer has at most one loss per channel.
     for i in range(400):
         look.record_send(f"loyal{i}", "loyal", profile_of(person("loyal", "calm")), Channel.EMAIL, 0)
-    for i in range(30):
+    for i in range(3):
         key = f"soon{i}"
         look.record_send(key, "soon", profile_of(person("soon", "calm")), Channel.EMAIL, 0)
-        if i < 6:
-            look.record_loss(key)
+    look.record_loss("soon2")
     look.fit()
-    strangers = look.rate_for(person("stranger", "calm"), Channel.EMAIL, 0)
-    loyal = look.rate_for(person("loyal", "calm"), Channel.EMAIL, 0)
-    soon = look.rate_for(person("soon", "calm"), Channel.EMAIL, 0)
+    strangers = look.rate_for(person("stranger", "calm"), Channel.WHATSAPP, 0)
+    loyal = look.rate_for(person("loyal", "calm"), Channel.WHATSAPP, 0)
+    soon = look.rate_for(person("soon", "calm"), Channel.WHATSAPP, 0)
     assert loyal < strangers < soon
     # two messages barely move a customer
     look.record_send("thin0", "thin", profile_of(person("thin", "calm")), Channel.EMAIL, 0)
@@ -127,6 +134,23 @@ def test_a_customers_own_record_moves_them_off_their_neighbourhood() -> None:
     look.fit()
     thin = look.rate_for(person("thin", "calm"), Channel.EMAIL, 0)
     assert thin == pytest.approx(look.rate_for(person("stranger", "calm"), Channel.EMAIL, 0), rel=0.02)
+
+
+def test_a_full_store_keeps_refitting_as_the_crowd_changes() -> None:
+    cfg = ToleranceConfig(max_rows=1000, refit_min_new=50, min_events=5.0)
+    look = LookalikeHazard(cfg)
+    feed(look, tired_rate=0.12, calm_rate=0.002, n=500)
+    assert look.fit() is True
+
+    def gap() -> float:
+        return look.multiplier(person("t", "tired")) / look.multiplier(person("c", "calm"))
+
+    first = gap()
+    assert first > 4.0
+    for night in range(5):  # the store is full: each night's 1000 sends push the oldest out
+        feed(look, tired_rate=0.02, calm_rate=0.002, n=500, seed=night + 1, night=f"n{night}-")
+        assert look.fit() is True and look.rows == 1000
+    assert gap() < first / 2  # the tired group calmed down, and the crowd's picture followed
 
 
 def test_it_does_not_invent_a_difference_between_identical_groups() -> None:
