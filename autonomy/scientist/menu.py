@@ -205,7 +205,7 @@ def _np_dtype(name: str) -> np.dtype[Any]:
 def frame_from_preferences(preferences: Mapping[str, str], dtypes: Sequence[tuple[str, str]]) -> pd.DataFrame:
     """A one-row feature frame from a customer's preferences (text), cast to the fitted dtypes."""
     row: dict[str, object] = {}
-    cast: dict[str, str] = {}
+    cast: dict[str, Any] = {}
     for col, dtype in dtypes:
         raw = preferences.get(col)
         if pd.api.types.is_numeric_dtype(_np_dtype(dtype)):

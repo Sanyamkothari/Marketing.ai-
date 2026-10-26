@@ -408,7 +408,7 @@ class OraclePolicy(_Static):
                 better = v > best_v
                 best_v = np.where(better, v, best_v)
                 best_h = np.where(better, h, best_h)
-            reached: list[bool] = [bool(x) for x in probe_reach.any(axis=0)]
+            reached: list[bool] = [bool(x) for x in np.asarray(probe_reach.any(axis=0), dtype=bool)]
             for s, h, ok in zip(group, best_h.tolist(), reached, strict=True):
                 if ok:
                     self._best_hour[s.customer_id] = int(h)
