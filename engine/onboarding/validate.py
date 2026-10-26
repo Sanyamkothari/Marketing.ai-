@@ -22,9 +22,10 @@ transform failure, counted by `transforms.apply_transform` and reported by the m
 here a `NaT` and a date the client never filled in are the same thing and this module does not
 pretend to tell them apart.
 
-This module owns eighteen of the twenty-six codes in `ONBOARDING_VALIDATION_CODES`. The other eight
-belong to `labels.py` (LABEL_*), `snapshots.py` (SNAPSHOT_OUTSIDE_DATA_RANGE, TOO_LITTLE_HISTORY) and
-the mapping stage (MAPPING_*, VALUE_UNMAPPED), which raise them where the numbers are; `CHECK_ORDER`
+This module owns eighteen of the twenty-eight codes in `ONBOARDING_VALIDATION_CODES`. The other ten
+belong to `labels.py` (LABEL_*), `snapshots.py` (SNAPSHOT_OUTSIDE_DATA_RANGE, TOO_LITTLE_HISTORY),
+the mapping stage (MAPPING_*, VALUE_UNMAPPED) and the build's audience step (AUDIENCE_*, v3 phase 0
+B5), which raise them where the numbers are; `CHECK_ORDER`
 is the list of the eighteen and a test holds the registry to exactly it.
 
 Nothing here logs a data value (plan section 13.7): the logger sees a code and an exception class

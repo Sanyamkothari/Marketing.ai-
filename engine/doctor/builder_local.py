@@ -38,12 +38,14 @@ from engine.storage import Storage
 
 if TYPE_CHECKING:
     from fastapi import FastAPI, Request
+    from pydantic import BaseModel
 
     from engine.clients import ClientStore
 
 __all__ = ["BuiltDataset", "InlineJobs", "LocalBuilderPort"]
 
 T = TypeVar("T")
+M = TypeVar("M", bound="BaseModel")
 
 
 @dataclass(frozen=True)
@@ -290,7 +292,7 @@ class LocalBuilderPort:
         report_key = dataset_key(dataset_id, DATASET_REPORT_FILENAME)
         if not self.storage.exists(report_key):
             raise BuildDriveError("BUILD_STEP_FAILED", f"The build {dataset_id} left no report.")
-        report: BuildReport = self.storage.read_model(report_key, BuildReport)
+        report: BuildReport = self._read(report_key, BuildReport, dataset_id, "report")
         frame_key = dataset_key(dataset_id, DATASET_FRAME_FILENAME)
         manifest_key = dataset_key(dataset_id, DATASET_MANIFEST_FILENAME)
         if not report.passed or not self.storage.exists(frame_key) or not self.storage.exists(manifest_key):
@@ -300,7 +302,18 @@ class LocalBuilderPort:
                 errors[0].code if errors else "BUILD_STEP_FAILED",
                 f"The build {dataset_id} wrote no dataset. {said}",
             )
-        manifest: DatasetManifest = self.storage.read_model(manifest_key, DatasetManifest)
+        manifest: DatasetManifest = self._read(manifest_key, DatasetManifest, dataset_id, "manifest")
         return BuiltDataset(
             manifest=manifest, frame=LocalDatasetRegistry(self.storage).read_frame(dataset_id), report=report
         )
+
+    def _read(self, key: str, model: type[M], dataset_id: str, what: str) -> M:
+        """`storage.read_model`, with a document that does not read as `model` (pydantic's `ValidationError` is a
+        `ValueError`) as `BUILD_STEP_FAILED`."""
+        try:
+            read: M = self.storage.read_model(key, model)
+        except ValueError as exc:
+            raise BuildDriveError(
+                "BUILD_STEP_FAILED", f"The {what} of the build {dataset_id} cannot be read back."
+            ) from exc
+        return read

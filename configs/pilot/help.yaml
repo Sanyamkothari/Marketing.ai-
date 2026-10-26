@@ -201,6 +201,15 @@ codes:
     title: Too many tables
     meaning: More tables were uploaded than one dataset can combine.
     fix: Remove the tables this use case does not need, or combine tables that hold the same kind of row.
+  # v3 phase 0, B5: who the table is built for (the customers who have gone quiet).
+  AUDIENCE_ROLE_MISSING:
+    title: The table that decides who is included is missing
+    meaning: The table is built only for customers who have gone quiet, and that is read from one table (for example the orders) with its dates. That table was not uploaded, or its date column was not chosen.
+    fix: Upload that table and choose its date column, or build the table for every customer instead.
+  AUDIENCE_EMPTY:
+    title: No customer has gone quiet for long enough
+    meaning: The table is built only for customers whose last order (or other activity) was long enough ago. On the dates looked at, nobody was, so there is nothing to build.
+    fix: Wait until some customers have been quiet for that long, send a longer history, or build the table for every customer instead.
 
   # --- Phase 3b: uplift (uplift_validation.json) ---------------------------------------------------
   TREATMENT_COLUMN_MISSING:
