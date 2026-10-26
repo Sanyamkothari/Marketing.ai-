@@ -106,7 +106,7 @@ def adapt_retailrocket(frame: pd.DataFrame, grain: str = "line") -> pd.DataFrame
     out["ts"] = pd.to_datetime(out["timestamp"], unit="ms", utc=True)
     is_tx = out["event"] == "transaction"
     out["value"] = pd.Series(float("nan"), index=out.index).where(~is_tx, 0.0)
-    out["value_placeholder"] = is_tx.where(is_tx, other=pd.NA).astype("boolean")
+    out["value_placeholder"] = is_tx.astype("boolean").where(is_tx)
     out["transactionid"] = out["transactionid"].astype("Int64").astype("string")
     if grain == "order":
         key = out["timestamp"].astype("string") + "/" + out["itemid"].astype("string")
@@ -128,7 +128,8 @@ def _collapse_transactions(frame: pd.DataFrame) -> pd.DataFrame:
             items=("itemid", "size"),
         )
     )
-    rest = frame[~is_tx].assign(items=pd.NA)
+    rest = frame[~is_tx].copy()
+    rest["items"] = pd.NA
     return pd.concat([rest, orders[rest.columns]], ignore_index=True)
 
 

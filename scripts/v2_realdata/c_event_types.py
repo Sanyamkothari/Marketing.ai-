@@ -110,9 +110,9 @@ def as_published(clock: Clock) -> dict[str, Any]:
     return out
 
 
-def full_stream(clock: Clock, rows: int | None) -> tuple[dict[str, Any], list[Event]]:
+def full_stream(clock: Clock, max_rows: int | None) -> tuple[dict[str, Any], list[Event]]:
     with clock.step("rr_full_map") as s:
-        raw = read_retailrocket(rows)
+        raw = read_retailrocket(max_rows)
         rows_by_type = dict(raw["event"].value_counts())
         # One purchase per transaction id (an order), not per item line: `purchases` counts orders.
         frame = adapt_retailrocket(raw, grain="order")

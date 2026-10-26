@@ -158,7 +158,10 @@ class Economics:
     note: str
 
     def profit(self, revenue: np.ndarray, arm: np.ndarray) -> np.ndarray:
-        return self.margin_rate * np.asarray(revenue, dtype=np.float64) - self.cost_per_send * (arm != 0)
+        result: np.ndarray = self.margin_rate * np.asarray(revenue, dtype=np.float64) - self.cost_per_send * (
+            arm != 0
+        )
+        return result
 
 
 # --- simple features for the baselines -----------------------------------------------------------
@@ -459,10 +462,20 @@ def _est(e: Any) -> dict[str, float] | None:
     return {"point": e.point, "low": e.low, "high": e.high}
 
 
+def _constant_policy(pi: np.ndarray) -> Callable[[LoggedBandit], np.ndarray]:
+    """A policy function that ignores the log and returns the fixed probability matrix `pi`."""
+
+    def policy(_logged: LoggedBandit) -> np.ndarray:
+        return pi
+
+    return policy
+
+
 def dr_terms(logged: LoggedBandit, pi: np.ndarray, q: np.ndarray) -> np.ndarray:
     rows = np.arange(logged.n_rows)
     w = pi[rows, logged.actions] / logged.propensity
-    return (pi * q).sum(axis=1) + w * (logged.reward - q[rows, logged.actions])
+    terms: np.ndarray = (pi * q).sum(axis=1) + w * (logged.reward - q[rows, logged.actions])
+    return terms
 
 
 def best_blanket_arm(train: Rct, reward_train: np.ndarray) -> int:
@@ -490,7 +503,7 @@ def evaluate_policies(
     ref = dr_terms(logged, reference, q) if reference is not None else None
     out: list[dict[str, Any]] = []
     for name, pi in policies.items():
-        est = harness_evaluate(lambda _l, m=pi: m, logged, policy_name=name)
+        est = harness_evaluate(_constant_policy(pi), logged, policy_name=name)
         terms = dr_terms(logged, pi, q)
         assert abs(float(terms.mean()) - est.dr.point) < 1e-9, "DR terms disagree with the harness"
         gain = ope.mean_interval(terms - base)
@@ -554,7 +567,8 @@ def save(name: str, payload: Mapping[str, Any]) -> Path:
 
 def save_matrices(name: str, mats: Mapping[str, np.ndarray]) -> None:
     RESULTS.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(RESULTS / f"{name}_pi.npz", **{k.replace(" ", "_"): v for k, v in mats.items()})
+    arrays: dict[str, Any] = {k.replace(" ", "_"): v for k, v in mats.items()}
+    np.savez_compressed(RESULTS / f"{name}_pi.npz", **arrays)
 
 
 def fixed(n: int, k: int, arm: int) -> np.ndarray:

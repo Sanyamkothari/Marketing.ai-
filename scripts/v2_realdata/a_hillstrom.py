@@ -32,6 +32,7 @@ import argparse
 import sys
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -49,6 +50,7 @@ from autonomy.contracts import (
     Decision,
     DecisionKind,
     Envelope,
+    Event,
     EventType,
     Group,
     Objective,
@@ -117,7 +119,7 @@ def main() -> None:
     ap.add_argument("--variants", default="click,purchase")
     args = ap.parse_args()
     timings = C.Timings()
-    payload: dict[str, object] = {"dataset": "hillstrom", "command": " ".join(["python3 -I", *sys.argv])}
+    payload: dict[str, Any] = {"dataset": "hillstrom", "command": " ".join(["python3 -I", *sys.argv])}
 
     with timings.step("read csv"):
         frame = pd.read_csv(PATH)
@@ -152,7 +154,7 @@ def main() -> None:
         loaded = hillstrom_events(frame, campaign_at=T0, include_outcomes=True)
     payload["loader"] = {"events": len(loaded.events), "problems": len(loaded.problems)}
     print(f"    {len(loaded.events)} events, {len(loaded.problems)} problems")
-    by_c: dict[str, list] = {}
+    by_c: dict[str, list[Event]] = {}
     for e in loaded.events:
         by_c.setdefault(e.customer_id, []).append(e)
 
@@ -166,7 +168,7 @@ def main() -> None:
     }
     print(f"    loader SENDs as the warm start reads them: {payload['loader_send_check']}")
 
-    def is_outcome(e) -> bool:  # noqa: ANN001
+    def is_outcome(e: Event) -> bool:
         return bool(e.attrs.get("outcome"))
 
     pre = [e for e in loaded.events if e.type is not EventType.SEND and not is_outcome(e)]
@@ -180,7 +182,7 @@ def main() -> None:
 
     # --- the train log as the agent's learning API takes it ------------------------------------
     train_set = set(train.customer_ids)
-    history: dict[str, list] = {}
+    history: dict[str, list[Event]] = {}
     decisions: dict[str, Decision] = {}
     rewards: list[Reward] = []
     for i, cid in enumerate(train.customer_ids):

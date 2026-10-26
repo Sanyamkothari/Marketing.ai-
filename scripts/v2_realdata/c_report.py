@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
@@ -18,7 +19,7 @@ if str(HERE) not in sys.path:
 from c_common import RESULTS  # noqa: E402
 
 
-def load(pattern: str) -> list[tuple[str, dict]]:
+def load(pattern: str) -> list[tuple[str, dict[str, Any]]]:
     return [(p.stem, json.loads(p.read_text())) for p in sorted((RESULTS).glob(pattern))]
 
 
