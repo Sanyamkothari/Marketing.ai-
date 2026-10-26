@@ -18,6 +18,8 @@ reason is given so it can be argued with.
 | B-7 | Who is the Analyst on a single-user install? | The install's owner holds every role, as the existing single-user role rules already give; the exact-sentence approval is still required | Removing the approval step would loosen a safety rule; one person approving their own sentence keeps the record |
 | B-8 | Scoring next month: whole log again, or only new lines? | **The whole log again** for now. Appending new lines comes later, keyed on a content hash of the line | Re-uploading is idempotent and cannot double-count; appending needs row keys that survive a re-export (REAL_DATA_RESULTS failure 4) |
 
+| B-9 | B5-B8 after the owner's AI-first Data Doctor design (`docs/plans/DATA_DOCTOR_AI_FIRST.md`, 26 Oct) | **Build B5, B7 and the reusable part of B6** (an in-process builder port and one `build_from_order_log` entry point that the A3 tool will wrap). **Skip** B6's visit-state wiring and B8's visit/UI wording | The new design makes the order-log path one of the AI's workflows (milestone A3) rather than a rule path in the visit, and the owner's session is changing the visit and the Data Doctor UI now. The skipped parts would conflict with that work or be thrown away |
+
 ## v3
 
 | # | Question | Decision | Why |
