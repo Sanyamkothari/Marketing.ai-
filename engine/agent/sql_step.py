@@ -222,6 +222,12 @@ class SqlStepParams(StrictBase):
         description="The name the query gives the file the recipe prepares (a one-file case): that name is the "
         "table as it stands when the step runs, after the steps before it, exactly what the step was tried on.",
     )
+    tried_after: str | None = Field(
+        default=None,
+        max_length=64,
+        description="A digest of the fixes (accepted or waiting) the query was tried after. A plan whose earlier "
+        "fixes differ from it names that, when the query then cannot run, instead of a bare engine error.",
+    )
     reads_future: bool = Field(
         default=False,
         description="The query reads rows dated after `$as_of` on purpose (it builds the outcome); the "

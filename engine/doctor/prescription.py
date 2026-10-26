@@ -605,6 +605,16 @@ def case_tables(frames: Mapping[str, pd.DataFrame], parts: Sequence[FilePart]) -
     return tables
 
 
+def _off_own_table(step: RecipeStep) -> RecipeStep:
+    """A query step that runs after a build, or beside other files, reads each file by name from the prepared
+    tables the run gives it: the one-file shortcut (`this_table`, the working frame under the file's name) no longer
+    holds there, since the working frame is then the built table or another file."""
+    if step.kind is not RecipeStepKind.SQL_QUERY or "this_table" not in step.params:
+        return step
+    params = {k: v for k, v in step.params.items() if k not in ("this_table", "tried_after")}
+    return step.model_copy(update={"params": params})
+
+
 def _slots(case: Case, build: BuildRecord | None) -> list[tuple[str, tuple[str, ...]]]:
     """Each file slot and its uploads: a build's sources first (a stacked source is one slot), then the rest."""
     taken: set[str] = set()
@@ -940,7 +950,7 @@ def prescription_from_case(
             )
         )
     post_build = _recipe(
-        steps_by_upload.get(None, []),
+        [_off_own_table(s) for s in steps_by_upload.get(None, [])],
         use_case_id=use_case_id,
         fingerprint=f"case:{case.case_id}:post_build",
         primary_key=None,

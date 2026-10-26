@@ -8,11 +8,18 @@ description first, the rows read from each file and the rows and columns the new
 itself is carried as detail only. It is approved with the rest of the plan; nothing is applied here, and next
 month's files go through the same step (the prescription replays it).
 
-What the query reads (one rule, for the trial and for every run): each file AFTER the fixes the person has already
-accepted on it (a date already parsed, a currency already converted), because a query is a `post_build` step and
-runs after the steps before it. The trial applies those accepted steps to the sample first; a run does the same,
-and in a one-file case the step keeps the file's table name (`this_table`) so the run feeds the query that file as
-it stands at the step, never the raw upload and never a table it does not have.
+What the query reads (one rule, for the trial and for every run): each file AFTER the fixes in the plan for it
+(a date already parsed, a currency already converted), because a query is a `post_build` step and runs after the
+steps before it. The trial applies those steps to the sample first: the accepted ones, and the ones still waiting for
+a yes, counted as accepted (the plan as it stands if the person ticks what is proposed). A run applies the same
+steps, and in a one-file case the step keeps the file's table name (`this_table`) so the run feeds the query that
+file as it stands at the step, never the raw upload and never a table it does not have. In a case with several
+files or a build, the name is dropped and the query reads the prepared table of that name the run gives it.
+
+A fix accepted, unticked or proposed after the query changes what the run feeds it. The step keeps a digest of the
+fixes it was tried after (`tried_after`); when the plan check finds the query cannot run after other fixes, it says
+so (`PLAN_QUERY_TRIED_BEFORE_CHANGE`) and asks for the query again. The rules' own queries (the grain checks) are
+tried the same way, on the plan so far.
 """
 
 from __future__ import annotations
@@ -51,7 +58,7 @@ from engine.doctor.guards import (
     plan_findings,
     receipt_findings,
 )
-from engine.doctor.plan_check import guard_levels, recipe_steps_of
+from engine.doctor.plan_check import guard_levels, recipe_steps_of, steps_digest
 from engine.doctor.prescription import slot_name
 from engine.doctor.registry import (
     BY_EXPOSURE,
@@ -195,17 +202,23 @@ def _names(ctx: DataToolContext, upload_ids: tuple[str, ...]) -> dict[str, tuple
 
 
 def _prepared(
-    ctx: DataToolContext, named: dict[str, tuple[str, pd.DataFrame, str]]
-) -> dict[str, pd.DataFrame]:
-    """Each file's first rows after the case's accepted steps on it (what the query will read in a run).
+    ctx: DataToolContext, named: dict[str, tuple[str, pd.DataFrame, str]], *, whole: bool = False
+) -> tuple[dict[str, pd.DataFrame], dict[str, str]]:
+    """Each file's first rows (all of them when `whole`) after the case's accepted steps on it, with the digest
+    of the steps applied: what the query will read in a run.
 
-    The files not asked for stay as they are: they are the other tables an accepted step may read."""
+    The steps that are still waiting for a yes count as accepted (the plan as it stands if the person ticks what is
+    proposed); a fix accepted or unticked later changes the input, and the digest is how the step notices."""
     only = len(ctx.files) == 1
     raw = {n: f for n, (_, f, _) in named.items()}
     out: dict[str, pd.DataFrame] = {}
+    digests: dict[str, str] = {}
     for name, (upload_id, frame, file_name) in named.items():
-        base = consistent_types(frame.head(DRY_RUN_ROWS)).copy()
-        steps = [step for step, _ in recipe_steps_of(ctx.case_items or (), upload_id, only_file=only)]
+        base = consistent_types(frame if whole else frame.head(DRY_RUN_ROWS)).copy()
+        steps = [
+            step for step, _ in recipe_steps_of(ctx.case_items or (), upload_id, only_file=only, pending=True)
+        ]
+        digests[name] = steps_digest(steps)
         if not steps:
             out[name] = base
             continue
@@ -223,10 +236,10 @@ def _prepared(
         except RecipeError as exc:
             raise DataToolError(
                 "TOOL_INPUT_INVALID",
-                f"The fixes already accepted on {file_name} cannot be applied to it first: {exc.message}",
+                f"The fixes already in the plan for {file_name} cannot be applied to it first: {exc.message}",
                 status=409,
             ) from exc
-    return out
+    return out, digests
 
 
 def _as_of_rule(
@@ -257,7 +270,7 @@ def _two_valued(frame: pd.DataFrame) -> tuple[str, ...]:
 
 def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal:
     raw = _names(ctx, given.upload_ids)
-    prepared = _prepared(ctx, raw)
+    prepared, digests = _prepared(ctx, raw)
     named = {name: (upload_id, prepared[name], file_name) for name, (upload_id, _, file_name) in raw.items()}
     params: dict[str, Any] = {
         "sql": given.sql,
@@ -266,12 +279,16 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         "description": given.description,
     }
     if len(ctx.files) == 1 and len(named) == 1:
-        params["this_table"] = next(iter(named))  # a run reads its one file under this name, as tried
+        only = next(iter(named))
+        params["this_table"] = only  # a run reads its one file under this name, as tried
+        params["tried_after"] = digests[only]  # ... and after the fixes in the plan now
     as_of = given.as_of
     try:
         tried = {name: frame for name, (_, frame, _) in named.items()}
         if given.as_of_rule is not None:
-            as_of, rule = _as_of_rule(given, named)
+            # The rule reads the whole file, after the same fixes, as a run does (not the tried rows only).
+            whole = _prepared(ctx, raw, whole=True)[0]
+            as_of, rule = _as_of_rule(given, {n: (u, whole[n], f) for n, (u, _, f) in raw.items()})
             params["as_of_rule"] = rule
         if as_of is not None:
             params["as_of"] = as_of.isoformat()
@@ -293,7 +310,7 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         changed_cells = compared_cells = None
         findings.append(Finding(level="flag", code="STEP_NOT_MEASURED", message=f"{exc} It needs your yes."))
     inputs = tuple(
-        SqlTableSummary(name=name, file_name=file_name, rows=len(frame), columns=len(frame.columns))
+        SqlTableSummary(name=name, file_name=file_name, rows=len(raw[name][1]), columns=len(frame.columns))
         for name, (_, frame, file_name) in named.items()
     )
     sampled = any(len(frame) > DRY_RUN_ROWS for _, frame, _ in raw.values())
@@ -342,8 +359,8 @@ def register_sql_tools(registry: DataToolRegistry) -> tuple[str, ...]:
             kind=DataToolKind.PROPOSE,
             description=(
                 "Propose one read-only SQL query over the case's files that makes a new table (a join, a total "
-                "per customer, the latest row). The query reads each file after the accepted fixes (dates "
-                "already parsed). It is tried on the first rows and shown as a plain description "
+                "per customer, the latest row). The query reads each file after the plan's fixes, proposed ones "
+                "included (dates already parsed). It is tried on the first rows and shown as a plain description "
                 "with the rows read and made; nothing is changed until the person approves the plan."
             ),
             input_model=ProposeSqlStepArgs,

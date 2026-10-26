@@ -109,6 +109,8 @@ class _File:
     root: Path | None
     key: str | None
     outcome: str | None
+    items: tuple[CaseItem, ...] = ()
+    """The plan so far: a query is tried on the file after these fixes, as a run reads it."""
 
     @property
     def frame(self) -> pd.DataFrame:
@@ -130,6 +132,8 @@ class _File:
 def _file(
     case: Case, loaded: LoadedFile, brief: GoalBrief | None, files: tuple[LoadedFile, ...], root: Path | None
 ) -> list[Ask | CaseItem]:
+    from engine.doctor.visit import active_section
+
     f = _File(
         loaded,
         brief,
@@ -137,6 +141,7 @@ def _file(
         root,
         _decided(case, "key", loaded.upload_id),
         _decided(case, "outcome_column", loaded.upload_id),
+        tuple(active_section(case)[0]),
     )
     found: list[Ask | CaseItem] = []
     for check in (_one_row, _real_money, _holdout, _eligible):
@@ -259,7 +264,9 @@ def _sql_effect(f: _File, sql: str, table: str, title: str) -> OptionEffect | No
 
     registry = DataToolRegistry()
     register_sql_tools(registry)
-    ctx = DataToolContext(caller="rules", files=f.files, config_root=f.root, primary_key=f.key)
+    ctx = DataToolContext(
+        caller="rules", files=f.files, config_root=f.root, primary_key=f.key, case_items=f.items
+    )
     given = {"description": title, "sql": sql, "output_name": table, "upload_ids": [f.upload_id]}
     try:
         result = registry.call("propose_sql_step", given, ctx)
