@@ -2085,7 +2085,14 @@ def build_system(
         spend_fn=spend,
         assign_group=group_assigner(BUSINESS_ID, envelope=envelope),
         # Gym events never arrive late, so the nightly full rebuild of state would only cost time.
-        config=RuntimeConfig(sweep_hour=DECIDE_HOUR, seed=seed, worker="demo-runtime", nightly_rebuild=False),
+        # Nothing in the demo reads the customer profile yet, so it is not built either.
+        config=RuntimeConfig(
+            sweep_hour=DECIDE_HOUR,
+            seed=seed,
+            worker="demo-runtime",
+            nightly_rebuild=False,
+            nightly_profile=False,
+        ),
         **hooks,
     )
     cycle = DemoDay(
