@@ -22,6 +22,7 @@ from autonomy.gym.calibration import (
 )
 from autonomy.gym.scenarios import (
     COMPLAINT_COST,
+    EXPERIMENT_SCENARIOS,
     HISTORY_SENDS_PER_WEEK,
     REAL_EMAIL_FIT,
     REAL_EMAIL_LIKE,
@@ -71,7 +72,7 @@ def _spec_hash(spec: ScenarioSpec) -> str:
 
 
 def test_existing_scenarios_are_unchanged() -> None:
-    assert set(SCENARIOS) == {*OLD_SPECS, REAL_EMAIL_LIKE, REAL_SMS_LIKE}
+    assert set(SCENARIOS) == {*OLD_SPECS, REAL_EMAIL_LIKE, REAL_SMS_LIKE, *EXPERIMENT_SCENARIOS}
     for name, digest in OLD_SPECS.items():
         spec = SCENARIOS[name]
         assert _spec_hash(spec) == digest, f"{name} changed"

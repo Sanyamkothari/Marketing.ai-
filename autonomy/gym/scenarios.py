@@ -437,6 +437,11 @@ SCENARIOS: dict[str, ScenarioSpec] = _library()
 PLANTED_HARM: frozenset[str] = frozenset({"complaint_storm"})
 """Scenarios where contacts do clear harm; the breaker criterion is judged only on these."""
 
+# --- v3: scenarios for the agent's own live experiments (plan-v3 foundation C) -----------------------
+EXPERIMENT_SCENARIOS: frozenset[str] = frozenset({"better_offer_planted"})
+"""Scenarios planted for `autonomy.experiments`, judged by its own harness (`autonomy.experiments.gymrun`),
+not by the v2 per-stage Gym targets in docs/v2/TARGETS.json."""
+
 
 def get_scenario(name: str, **overrides: object) -> ScenarioSpec:
     """A scenario by name, optionally with knobs changed (e.g. fewer customers for a quick run)."""
