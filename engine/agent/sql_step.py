@@ -445,10 +445,33 @@ def _first_line(exc: Exception) -> str:
     return re.sub(r"'[^']*'", "'…'", line)[:240]
 
 
+_CONVERSION_HINTS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
+    (
+        re.compile(r"invalid (date|timestamp) field format"),
+        "a text value is not written as {0} YYYY-MM-DD; read it "
+        "with strptime(column, '<its format>') first",
+    ),
+    (re.compile(r"Could not convert string .* to ([A-Z0-9]{2,12})\b"), "a text value cannot be read as {0}"),
+)
+"""What a conversion error was about, in our words: the type it wanted, never the cell DuckDB quotes."""
+
+
 def _error_kind(exc: Exception) -> str:
-    """Only the kind of a run error ("Conversion Error"): its text may repeat a cell, quoted any way or not at all."""
-    kind = str(exc).split(":", 1)[0].strip()
-    return kind if re.fullmatch(r"[A-Za-z ]{1,40} Error", kind) else "an error"
+    """Only the kind of a run error ("Conversion Error"): its text may repeat a cell, quoted any way or not at all.
+
+    A conversion error also says what it could not read as (a date, INT32), from a closed list of patterns, so the
+    model can fix its query; the value itself never leaves.
+    """
+    text = str(exc)
+    kind = text.split(":", 1)[0].strip()
+    if not re.fullmatch(r"[A-Za-z ]{1,40} Error", kind):
+        return "an error"
+    for pattern, hint in _CONVERSION_HINTS:
+        found = pattern.search(text.splitlines()[0] if text else "")
+        if found is not None:
+            word = found.group(1)
+            return f"{kind}: " + hint.format(word if word.isupper() else f"a {word}")
+    return kind
 
 
 # ---------------------------------------------------------------------------
