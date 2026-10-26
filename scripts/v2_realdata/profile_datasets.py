@@ -19,6 +19,7 @@ finding, not a crash).
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import resource
 import sys
@@ -230,6 +231,7 @@ def p_online_retail_ii(r: str) -> dict[str, Any]:
         "exact_duplicate_rows": int(df.duplicated().sum()),
     }
     try:
+        importlib.import_module("openpyxl")  # its own ImportError, not pandas', if it is missing
         out["xlsx_sheets"] = pd.ExcelFile(f"{r}/online_retail_ii/online_retail_II.xlsx").sheet_names
     except Exception as e:  # pragma: no cover
         out["xlsx_error"] = repr(e)
