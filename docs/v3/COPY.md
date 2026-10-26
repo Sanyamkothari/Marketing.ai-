@@ -31,16 +31,31 @@ so 40 of them do not drown the nine base ones. Types come from k-means (k-means+
 - **Labels.** Plain words from where the type's typical member sits among all customers, in thirds:
   "lapsed, repeat buyer, low spend, deal seeker, mostly buys tea". Two types that would read the same get
   "last order about N days ago" added. The label is all the writer is told about the type; no customer data.
-- Type ids are only meaningful within a week, because the types are refitted. Past sends are therefore kept as
-  per-send rows and re-placed in this week's types (`tally_sends`), never keyed by an old type id.
+- Type ids are only meaningful within a week, because the types are refitted: next week's `ct000` is usually a
+  different group. Past sends are therefore kept as per-send rows and re-placed in this week's types (`tally_sends`),
+  never keyed by an old type id.
+- **Point in time.** Each past send is a `PastSend(item, state, sent_at, bought)` with the customer's state **as of
+  the send**, never today's: today's state already holds the purchase the send caused (one more order, recency near
+  zero), which would move buyers into "recent, frequent buyer" types and leak the outcome into the type. A row whose
+  `state.as_of` is after `sent_at` is skipped and counted in the plan's notes.
+- **Bad values.** A NaN or infinite base field (a blank or garbled amount in an upload) is read as a neutral value
+  (0, or 0.5 for offer sensitivity) instead of crashing the fit; non-finite profile values take the column median.
 
 ### 2. Drafting
 
 `Creative.write_for_type(brief, type_id=..., type_note=<label>, channel, offer, theme, n, ...)` is a small additive
 hook next to `build_library`. It reuses the same prompt, labels, slots, footer, length checks, brand kit and
-template fallback; it only adds the line `Customer type: <label>`, and puts the type id into the content id and the
-WhatsApp template name so two types never share either. `build_library` is unchanged (ids and prompts are the
-same as before; its existing tests pass).
+template fallback; it only adds the line `Customer type: <label>`. The content id and the WhatsApp template name
+carry the planner's key for the type (type id, ISO week, and a hash of the type's label and centre) plus a hash of
+the final subject and body. Meta approves a template by name, so a name must never be reused for different wording,
+and the scoring model pools past sends by content id, so one id must never cover two texts; a type id alone would
+break both, because type ids are refitted weekly. `test_ids_and_template_names_are_never_shared_between_weeks_or_between_different_types`
+checks it. `build_library` is unchanged: its prompts, and its content ids and template names (pinned in
+`test_the_default_library_is_unchanged_by_the_hooks` to the values printed at base commit 672602ea), are as before.
+
+Offers the brand kit says the shop never states are left out before anything is written (and noted); a goal with
+no offer and theme left is skipped with a note. `channel` must be one the goal's envelope allows (`ValueError`
+otherwise).
 
 The planner asks about `drafts_per_type / drafts_per_call` cells (8 drafts in calls of 2 means 4 calls), starting at a
 different cell for each type, one call per cell. Personal slots are the ones the dispatcher already fills:
@@ -84,8 +99,13 @@ A draft is cut only if all of these hold:
 - its Wilson band (3 standard errors wide) lies entirely below the leader's band (3 wide);
 - it is not the leader (so at least one draft always stays).
 
-This is deliberately slow: a draft only a little worse stays live. Results return as `DraftResult` cells
-(`LiveBoard.feedback`); store the per-send rows and pass them as `past_sends` next week.
+This is deliberately slow: a draft only a little worse stays live.
+
+A customer's slot is a hash over all the test's drafts, cut or not, so a cut never moves the customers of a
+surviving draft; only the cut draft's customers are re-split, by a second hash, over the drafts still live
+(`test_a_cut_moves_only_the_customers_of_the_cut_draft`). Results feed back only through per-send rows: store each
+send as a `PastSend` (state as of the send) and pass them as `past_sends` next week. `LiveBoard.feedback` is a
+same-week summary keyed by this week's type ids, not training data.
 
 ### 5. Cost guard
 
@@ -93,7 +113,9 @@ This is deliberately slow: a draft only a little worse stays live. Results retur
 300 x 10 = 3,000, the plan's figure, at the most). Drafts asked for count as writes, even if the model returns fewer.
 A type is written only if all its drafts fit under the cap; types are taken largest first, so when the cap is hit the
 smallest types are skipped (listed in `WeeklyPlan.skipped`) and keep the v2 library. Judge calls are on top of this:
-the Critic judges each draft twice, so 3,000 drafts mean 6,000 judge calls a week.
+the Critic judges each draft twice, so 3,000 drafts mean 6,000 judge calls a week. `WeeklyPlan.llm_calls` counts
+requests answered by the model; cells written from template copy while the model was down are not counted, and a
+JSON retry inside one request is not counted separately.
 
 ## Settings (`CopyConfig`)
 
@@ -110,9 +132,10 @@ none of it says how much money better copy makes.
 
 | Claim | Command | Result |
 |---|---|---|
-| Targeted tests, and the existing Creative/Critic tests, pass | `OMP_NUM_THREADS=1 pytest tests/v3/copy tests/v2/agents/test_creative_critic.py` | `69 passed in 1.55s` |
-| Planted signal (copy length matters, in opposite directions for opposite types; 6 types x 40 drafts x 2,000 sends): the model is used and beats theme labels | a loop over `tests.v3.copy.synth.synth_results(100+i, signal=True)` for i in 0..39, `ScoringModel(CopyConfig(seed=1)).fit` | used 40 of 40; mean held-out AUC 0.721 vs 0.491 for theme labels |
-| No signal (every draft in a type has the same true rate): the model falls back | same, `signal=False` | used 0 of 40; mean held-out AUC 0.499 vs 0.500 |
+| Targeted tests, and the existing Creative/Critic tests, pass | `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 pytest tests/v3/copy tests/v2/agents/test_creative_critic.py` | `76 passed` (after the review fixes) |
+| Planted signal (copy length matters, in opposite directions for opposite types; 6 types x 40 drafts x 2,000 sends): the model is used and beats theme labels | `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m tests.v3.copy.scoring_seeds 40` (seeds 100..139, `ScoringModel(CopyConfig(seed=1)).fit`) | `signal=True: used 40 of 40; mean held-out AUC 0.721 vs 0.491 for theme labels` |
+| No signal (every draft in a type has the same true rate): the model falls back | same command | `signal=False: used 0 of 40; mean held-out AUC 0.499 vs 0.500 for theme labels` |
+| With enough planted history the planner uses the model and its top drafts go live | `test_with_enough_history_the_scoring_model_is_used_and_picks_the_live_drafts` | passes |
 | Planted loser (rates 5%, 5%, 3%, 500 sends per arm per look, 20 looks) is cut and the equals stay | `test_a_planted_loser_is_cut_and_the_others_stay` | cut in all 12 seeds, equals never cut |
 | Planted equals (3 x 5%, 30 looks) are never cut | `test_a_planted_equal_is_never_cut_over_many_looks_and_seeds` | 0 cuts in 150 seeds |
 | Sizing sanity | 6,000 synthetic customers, `CopyConfig()` defaults, `CustomerTypes.fit` | 300 types, 0.3 s fit, 0.02 s to assign all (1 BLAS thread) |
@@ -133,12 +156,18 @@ has no data until the planner is wired in. The held-out-AUC bar for the scoring 
 
 ```python
 planner = CopyPlanner(CopyConfig(enabled=True), creative, critic)
+# rows: PastSend(item, state_as_of_the_send, sent_at, bought), one per earlier send of ours
 plan = planner.run(brief, states, rules=rules, brand_voice=voice, now=now, past_sends=rows, kit=kit)
-# plan.board.tests[type_id].assign(customer_id)  -> the draft to send
+# at send time, for an agent-group customer only:
+#   type_id = plan.customer_types.assign(state)
+#   content_id = plan.board.tests[type_id].assign(customer_id)  -> the draft to send
 # plan.board.record(type_id, content_id, sends, purchases); plan.board.review_all() -> cuts
 ```
 
-Open: choosing which type a live customer belongs to at send time (`CustomerTypes.assign`) and persisting the board;
-WhatsApp templates need Meta's approval, so they must be submitted as a weekly batch before the live test starts (only
+Only agent-group customers (`Group.AGENT`) may be passed to `LiveTest.assign`; the holdout never enters a live test.
+`states` given to `run` may include holdout and baseline customers (they shape the types and the write order, which
+is harmless), but no draft is ever sent to them from here.
+
+Open: persisting the fitted types and the board between the weekly run and the sends; WhatsApp templates need Meta's approval, so they must be submitted as a weekly batch before the live test starts (only
 the email path is ready to send as soon as it is approved); the planner uses one channel per run (default the
 envelope's first), because a draft count per channel would break the types x drafts cost line.
