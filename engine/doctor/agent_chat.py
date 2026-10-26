@@ -469,6 +469,9 @@ class _Chat(_Review):
         replaces = (
             self._own(given).item_id if isinstance(given, str) else None
         )  # refused before anything is made
+        self.replacing = tuple(
+            dict.fromkeys([*self.chosen.withdrawn, *self.chosen.replaces, *([replaces] if replaces else [])])
+        )  # the query's trial leaves these out: they are taken back at the end of the turn
         if name == "withdraw":
             self._withdraw(args)
         elif name == "suggest_answer":

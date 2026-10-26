@@ -125,3 +125,98 @@ def test_a_query_in_the_post_build_recipe_reads_the_prepared_table_by_name() -> 
     plain = _off_own_table(step)
     assert "this_table" not in plain.params and "tried_after" not in plain.params
     assert plain.params["inputs"] == ["log"]
+
+
+# ---------------------------------------------------------------------------
+# The trial never applies another waiting query, and a window past the data is named
+# ---------------------------------------------------------------------------
+PER_CUSTOMER = "SELECT Customer, count(*) AS n FROM t_log GROUP BY ALL"
+ON_LINES = "SELECT Customer, max(InvoiceDate) AS last_seen FROM t_log GROUP BY ALL"
+
+
+def pending_table(state: ProposalState, item_id: str = "item_c4") -> CaseItem:
+    """The AI's own earlier customer table: one row per customer, no InvoiceDate."""
+    step = RecipeStep.model_validate(propose(PER_CUSTOMER, ())["step"]).model_copy(update={"order": 2})
+    return item(item_id, {"step": step.model_dump(mode="json")}, state, upload_id=None)
+
+
+@pytest.mark.parametrize("state", [ProposalState.PENDING, ProposalState.ACCEPTED])
+def test_a_replacement_query_is_tried_on_the_lines_not_on_the_table_it_replaces(state: ProposalState) -> None:
+    earlier = pending_table(state)
+    parse = parse_date(ProposalState.PENDING)
+    ctx = DataToolContext(
+        files=(loaded(log()),),
+        caller="ai",
+        principal=Principal(user_id="u", username="u", roles=frozenset({Role.ANALYST}), kind="user"),
+        case_items=(parse, earlier),
+        replacing=("item_c4",),
+    )
+    given = {"description": "Last visit.", "sql": ON_LINES, "output_name": "last", "upload_ids": ["up-1"]}
+    proposal = dict(data_registry().call("propose_sql_step", given, ctx).output)
+    assert proposal["rows_out"] == 8
+    # The pending parse_date was applied (InvoiceDate is a time, as the query needs), the table was not.
+    step = RecipeStep.model_validate(proposal["step"])
+    parsed = RecipeStep.model_validate(parse_date(ProposalState.ACCEPTED).payload["step"])
+    assert sql_params(step.params).tried_after == steps_digest([parsed])
+
+
+def test_another_waiting_query_is_not_applied_even_when_nothing_is_replaced() -> None:
+    proposal = propose(ON_LINES, (parse_date(ProposalState.PENDING), pending_table(ProposalState.PENDING)))
+    assert proposal["rows_out"] == 8
+
+
+def ending(days_before_end: int, window: int = 90) -> dict[str, Any]:
+    days = pd.date_range("2025-01-01", "2025-12-09", freq="D")
+    frame = pd.DataFrame({"Customer": [f"C{n % 5}" for n in range(len(days))], "InvoiceDate": days})
+    sql = "SELECT Customer, count(*) FILTER (WHERE InvoiceDate > $as_of) AS again FROM t_log GROUP BY ALL"
+    as_of = (pd.Timestamp("2025-12-09") - pd.Timedelta(days=days_before_end)).date()
+    ctx = DataToolContext(
+        files=(loaded(frame),),
+        caller="ai",
+        principal=Principal(user_id="u", username="u", roles=frozenset({Role.ANALYST}), kind="user"),
+    )
+    given = {
+        "description": "Ordered again.",
+        "sql": sql,
+        "output_name": "outcome",
+        "upload_ids": ["up-1"],
+        "as_of": as_of.isoformat(),
+        "reads_future": True,
+        "outcome_window_days": window,
+    }
+    return dict(data_registry().call("propose_sql_step", given, ctx).output)
+
+
+def test_an_outcome_window_past_the_end_of_the_data_is_named() -> None:
+    late = ending(9)
+    (found,) = [f for f in late["findings"] if f["code"] == "OUTCOME_WINDOW_PAST_DATA"]
+    assert found["level"] == "stop" and late["needs_yes"]
+    assert "90 days past 2025-11-30" in found["message"] and "ends on 2025-12-09" in found["message"]
+    assert "for example 2025-09-10" in found["message"]
+    assert sql_params(late["step"]["params"]).outcome_window_days == 90
+
+
+def test_an_outcome_window_inside_the_data_is_not() -> None:
+    assert not [f for f in ending(100)["findings"] if f["code"] == "OUTCOME_WINDOW_PAST_DATA"]
+
+
+def test_a_query_reading_the_future_states_its_window() -> None:
+    from engine.doctor.registry import DataToolError
+
+    with pytest.raises(DataToolError) as caught:
+        data_registry().call(
+            "propose_sql_step",
+            {
+                "description": "d",
+                "sql": PER_CUSTOMER,
+                "output_name": "o",
+                "upload_ids": ["up-1"],
+                "reads_future": True,
+            },
+            DataToolContext(
+                files=(loaded(log()),),
+                caller="ai",
+                principal=Principal(user_id="u", username="u", roles=frozenset({Role.ANALYST}), kind="user"),
+            ),
+        )
+    assert "outcome_window_days" in caught.value.message

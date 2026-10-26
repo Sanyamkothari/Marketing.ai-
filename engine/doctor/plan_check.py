@@ -39,6 +39,7 @@ __all__ = [
     "plan_digest",
     "recipe_steps_of",
     "steps_digest",
+    "trial_steps_of",
 ]
 
 SAMPLE_ROWS: Final[int] = 1_000
@@ -74,6 +75,35 @@ def recipe_steps_of(
     found.sort(key=lambda pair: STEP_PHASE[pair[0].kind])
     return [
         (step.model_copy(update={"order": n}), item_id) for n, (step, item_id) in enumerate(found, start=1)
+    ]
+
+
+_SHAPING: Final[frozenset[RecipeStepKind]] = frozenset(
+    {
+        RecipeStepKind.SQL_QUERY,
+        RecipeStepKind.COMBINE_ROWS,
+        RecipeStepKind.UNPIVOT,
+        RecipeStepKind.KEEP_LATEST_PER_ID,
+    }
+)
+"""The steps that make other rows or another table: a query's trial never applies one that is only proposed."""
+
+
+def trial_steps_of(
+    items: Sequence[CaseItem], upload_id: str, *, only_file: bool, replacing: Collection[str] = ()
+) -> list[tuple[RecipeStep, str]]:
+    """What a new query is tried after: the accepted steps and the waiting per-column fixes (dates parsed, numbers
+    read), never a waiting query, combine or reshape, and never an item named in `replacing` (the chat swaps or
+    takes it back at the end of its turn). Numbered 1..n."""
+    state = {i.item_id: i.state for i in items}
+    kept = [
+        (step, item_id)
+        for step, item_id in recipe_steps_of(items, upload_id, only_file=only_file, pending=True)
+        if item_id not in replacing
+        and (state[item_id] is ProposalState.ACCEPTED or step.kind not in _SHAPING)
+    ]
+    return [
+        (step.model_copy(update={"order": n}), item_id) for n, (step, item_id) in enumerate(kept, start=1)
     ]
 
 
