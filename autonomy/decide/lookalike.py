@@ -49,7 +49,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 import numpy as np
@@ -142,6 +142,44 @@ def profile_of(state: CustomerState) -> Profile:
         row += [math.log1p(stats.delivers), stats.clicks / (stats.delivers + 5.0), math.log1p(idle)]
     extra = {k: float(v) for k, v in state.features.items() if math.isfinite(v)} if state.features else {}
     return Profile(as_of=now, base=np.asarray(row, dtype=np.float64), extra=extra)
+
+
+def history_profile(
+    customer_id: str,
+    at: datetime,
+    *,
+    first_seen: datetime | None,
+    purchases: Iterable[tuple[datetime, float]],
+    sends: Iterable[datetime] = (),
+    segment: Callable[[CustomerState], str | None] | None = None,
+) -> Profile:
+    """The profile of a customer as of `at`, rebuilt from their history alone: what they had bought
+    and been sent before `at`, nothing after. For past campaigns, whose customers' states exist only
+    as of today (and today's would hold the very purchases being predicted).
+
+    A rebuilt profile has no per-channel record or nightly features, only what purchases and sends
+    show; those columns read as the training average. `segment` labels the rebuilt state."""
+    bought = sorted((t, v) for t, v in purchases if t < at)
+    paid = [(t, v) for t, v in bought if v > 0]
+    week, month = at - timedelta(days=7), at - timedelta(days=30)
+    sent = [t for t in sends if month < t <= at]
+    state = CustomerState(
+        customer_id=customer_id,
+        as_of=at,
+        first_seen_at=first_seen if first_seen is not None and first_seen <= at else None,
+        last_purchase_at=paid[-1][0] if paid else None,
+        purchases=len(paid),
+        revenue=max(sum(v for _t, v in bought), 0.0),
+        contacts_7d=sum(1 for t in sent if t > week),
+        contacts_30d=len(sent),
+    )
+    label = segment(state) if segment is not None else None
+    return profile_of(state.model_copy(update={"segment": label}) if label is not None else state)
+
+
+def stamp(seconds: float) -> datetime:
+    """A time from seconds since the epoch (the form `HistoryDigest` keeps)."""
+    return datetime.fromtimestamp(seconds, UTC)
 
 
 # --- evidence -------------------------------------------------------------------------------------
@@ -860,6 +898,8 @@ __all__ = [
     "OutcomeBook",
     "Profile",
     "WindowLookup",
+    "history_profile",
     "precision_blend",
     "profile_of",
+    "stamp",
 ]

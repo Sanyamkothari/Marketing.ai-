@@ -134,7 +134,15 @@ from autonomy.contracts import (
 )
 from autonomy.decide import rules
 from autonomy.decide.bidders import AssetOf, GoalBidder, ItemLookup, contact_harm_of
-from autonomy.decide.lookalike import LookalikeConfig, LookalikeResponseModel, OutcomeBook, profile_of
+from autonomy.decide.lookalike import (
+    LookalikeConfig,
+    LookalikeResponseModel,
+    Outcome,
+    OutcomeBook,
+    history_profile,
+    profile_of,
+    stamp,
+)
 from autonomy.decide.models import (
     ANY,
     Beta,
@@ -2139,6 +2147,7 @@ class AgentPolicy:
                         s.customer_id, s.click_at.astimezone(zone_named(tz)).hour, segment.get(s.customer_id)
                     )
                 self._calibrate(states, now, every, segment, records)
+                self._warm_lookalike(now, every)
                 if SEND in self.calibration:
                     # Messages on channels without clicks taught the lift per message instead.
                     self.history_used += sum(1 for s in sends if not model.counts_clicks(s.action_key()))
@@ -2159,6 +2168,51 @@ class AgentPolicy:
             )
         self.digest = HistoryDigest()
         self._history_holdout = {}
+
+    def _warm_lookalike(self, now: datetime, sends: Sequence[LoggedSend]) -> None:
+        """With the look-alike model on, learn from past randomised campaigns too.
+
+        Each arm of a campaign with a randomised control (`randomised_arms`, the same test the
+        calibration uses) gives its recipients and its left-out customers as outcomes: did they
+        buy in the `learn_horizon_days` after the campaign started? Their profiles are rebuilt from
+        what the history shows before that moment (`history_profile`), never from today's states,
+        which hold the purchases being predicted. Campaigns without a usable control are skipped.
+        """
+        model = self.bundle.response
+        if not isinstance(model, LookalikeClickModel):
+            return
+        horizon = timedelta(days=self.learn_horizon_days)
+        arms, _notes = randomised_arms(
+            sends, self.digest, window=horizon, now=now, holdout=self._history_holdout or None
+        )
+        digest = self.digest
+        rows: list[Outcome] = []
+        controlled: set[tuple[str, datetime]] = set()
+
+        def outcome(customer: str, arm_start: datetime, key: str | None) -> Outcome:
+            row = digest.purchases.get(customer)
+            bought = [(stamp(row[i]), row[i + 1]) for i in range(0, len(row), 3)] if row is not None else []
+            first = digest.first_seen.get(customer)
+            profile = history_profile(
+                customer,
+                arm_start,
+                first_seen=stamp(first) if first is not None else None,
+                purchases=bought,
+                sends=[stamp(t) for t in digest.send_times.get(customer, ())],
+                segment=lambda st: self.segmenter.label(st, arm_start),
+            )
+            end = arm_start + horizon
+            converted = digest.money(customer, arm_start.timestamp(), end.timestamp(), None) > 0
+            return Outcome(customer, profile, key, converted, arm_start, end)
+
+        for arm in arms:
+            rows.extend(outcome(c, arm.start, arm.action_key) for c in arm.treated)
+            # the control is shared by a campaign's arms: one row per customer
+            rows.extend(outcome(c, arm.start, None) for c in arm.control if (c, arm.start) not in controlled)
+            controlled.update((c, arm.start) for c in arm.control)
+        if rows:
+            model.lookalike.observe(rows)
+            model.lookalike.fit(now)
 
     def _objective(self, channel: Channel) -> Objective:
         for brief in self.briefs.values():
