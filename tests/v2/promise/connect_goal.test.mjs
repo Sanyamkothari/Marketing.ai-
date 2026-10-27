@@ -258,8 +258,9 @@ test("Connect (sample data): how messages go out, and sending health explained l
   const lines = byClass(root, "cn-channel").map((n) => n.textContent);
   assert.equal(lines.length, channels.length);
   assert.ok(lines.includes("EmailReady"));
-  assert.ok(lines.some((l) => l.startsWith("WhatsAppComing next")), "WhatsApp is under Coming next above, so it is never Ready here");
-  assert.ok(!lines.some((l) => l.startsWith("WhatsApp") && /Ready|Paused/.test(l)));
+  const wa = channels.find((c) => c.channel === "whatsapp");
+  assert.ok(lines.includes(`WhatsAppPaused${wa.paused_reason}`), "a paused channel says why, WhatsApp included");
+  assert.ok(!lines.some((l) => l.startsWith("WhatsAppReady")), "WhatsApp is under Coming next above, so it is never Ready here");
   assert.ok(lines.includes("SMSNot set up yet") && lines.includes("Your own toolsNot set up yet"));
   assert.ok(text.includes("By hand-off") && text.includes("Sent by Autonomy"));
   // health: each line in words, and the goal's safety stops from /v2/health/limits
@@ -273,7 +274,7 @@ test("Connect (sample data): how messages go out, and sending health explained l
 
 const HEALTH = { as_of: "2026-10-20T00:00:00Z", delivery_rate: 1, complaint_rate: 0, unsubscribe_rate: 0.0089, block_rate: 0, contacts_per_customer_week: 0.2817, alerts: [] };
 
-test("WhatsApp is 'Coming next' in both places, even where a simulated sender is ready", async () => {
+test("WhatsApp is 'Coming next' in both places, even where a sender is ready, and a paused one says why", async () => {
   const channels = [
     { channel: "email", mode: "direct", ready: true, paused: false, paused_reason: null, words: "Email: Autonomy sends these itself." },
     { channel: "whatsapp", mode: "direct", ready: true, paused: false, paused_reason: null, words: "WhatsApp: Autonomy sends these itself." },
@@ -286,7 +287,15 @@ test("WhatsApp is 'Coming next' in both places, even where a simulated sender is
   assert.ok(lines.some((l) => l.startsWith("WhatsAppComing next")), lines.join(" | "));
   assert.ok(!lines.some((l) => l.startsWith("WhatsAppReady")));
   assert.ok(connect.COMING_NEXT.includes("WhatsApp"), "and the platforms card lists it under Coming next");
-  assert.ok(root.textContent.includes("You cannot connect your own WhatsApp account yet"));
+  assert.ok(root.textContent.includes("WhatsApp is not ready for production yet"));
+  assert.ok(!root.textContent.includes("nothing goes out through a real account"), "a set-up sender does send");
+  // paused (for example by delivery failures): Paused and its reason, not Coming next
+  const reason = "Paused: too many WhatsApp messages failed to deliver.";
+  const paused = [channels[0], { ...channels[1], paused: true, paused_reason: reason }];
+  const p = C.el("div");
+  await connect.render(p, makeCtx(liveApi({ "GET /v2/health": HEALTH, "GET /v2/channels": paused })).ctx);
+  const pausedLines = byClass(p, "cn-channel").map((n) => n.textContent);
+  assert.ok(pausedLines.includes(`WhatsAppPaused${reason}`), pausedLines.join(" | "));
 });
 
 test("Connect and Goal say Simulated shop when the shop is simulated, and only then", async () => {

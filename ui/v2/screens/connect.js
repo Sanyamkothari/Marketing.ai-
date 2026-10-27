@@ -661,16 +661,17 @@ function questionsCard(report, { primary = true } = {}) {
 // ---- 5. how messages go out -----------------------------------------------------------------------------------
 // A channel is its name and its state; a paused one's reason is the pill's description.
 /**
- * WhatsApp is listed under "Coming next" above: there is no way to connect your own WhatsApp account yet (Meta's
- * message templates are not synced, and its quality and per-person limit signals are not read). So this card never
- * says "Ready" for it, even where a simulated sender answers: one product, one answer.
+ * WhatsApp is listed under "Coming next" above: it is not ready for production (Meta's message templates are not
+ * synced, and its quality and per-person limit signals are not read), and this app has no way to connect an account.
+ * So this card never says "Ready" for it, even where a sender is set up: one product, one answer. A paused WhatsApp
+ * still says "Paused" and why, first: a safety pause is a fact about sends that did happen.
  */
 export const WHATSAPP_COMING_NEXT =
-  "You cannot connect your own WhatsApp account yet, so WhatsApp is under Coming next. In a simulated shop Autonomy can still decide WhatsApp messages, but nothing goes out through a real account.";
+  "WhatsApp is not ready for production yet: message templates are not synced with Meta, and its quality rating and per-person limit signals are not read. You cannot connect a WhatsApp account from this app yet. Where a WhatsApp sender is already set up, Autonomy does send through it.";
 
 function channelStatus(c) {
-  if (c.channel === "whatsapp") return withInfo(pill("Coming next", "neutral"), WHATSAPP_COMING_NEXT);
   if (c.paused) return withInfo(pill("Paused", "warning"), c.paused_reason || "Paused by a safety check.");
+  if (c.channel === "whatsapp") return withInfo(pill("Coming next", "neutral"), WHATSAPP_COMING_NEXT);
   if (c.ready) return pill("Ready", "good");
   return pill("Not set up yet", "neutral");
 }
@@ -695,7 +696,7 @@ function channelsCard(channels, error, retry) {
       el(
         "div",
         { class: "cn-channel-groups" },
-        block("direct", "Sent by Autonomy", "Email: Autonomy sends it itself. WhatsApp is coming next: your own WhatsApp account cannot be connected yet."),
+        block("direct", "Sent by Autonomy", "Email: Autonomy sends it itself. WhatsApp is coming next: it is not ready for production, and an account cannot be connected from this app yet."),
         block("handoff", "By hand-off", "SMS and your own tools: Autonomy decides who gets what, and hands each message to your tool to send."),
       ),
     ],
