@@ -1,0 +1,33 @@
+# Opt-out phrases for inbound replies (WhatsApp first; the Conversation agent reads the same list).
+#
+# A reply opts the customer out when, after lower-casing and dropping punctuation, it IS one of
+# these phrases or CONTAINS one as whole words ("please band karo ab" matches "band karo").
+# Add a language by adding a key under `languages` with its phrases: no code change is needed.
+# Romanised Hindi (Hinglish) is spelled the ways people type it; add variants freely.
+languages:
+  english:
+    - stop
+    - unsubscribe
+    - unsub
+    - opt out
+    - optout
+    - dnd
+  hinglish:
+    - band karo
+    - band kar do
+    - band kardo
+    - band kijiye
+    - mat bhejo
+    - mat bhejna
+    - nahi chahiye
+    - nahin chahiye
+    - roko
+  hindi:
+    - बंद करो
+    - बंद कर दो
+    - बंद कीजिए
+    - मत भेजो
+    - मत भेजना
+    - नहीं चाहिए
+    - नही चाहिए
+    - रोको

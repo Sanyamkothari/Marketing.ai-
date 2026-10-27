@@ -29,6 +29,7 @@ from typing import Literal, cast, get_args
 from pydantic import Field
 
 from autonomy.agents.base import load_prompt
+from autonomy.channels.optout import opt_out_phrase
 from autonomy.contracts import Channel, Contract, CustomerState, Event, EventType, stable_id
 from autonomy.interfaces import TextSignals
 
@@ -144,7 +145,7 @@ def stop_keyword(text: str) -> str | None:
         found = pattern.search(norm)
         if found:
             return found.group(0)
-    return None
+    return opt_out_phrase(text)  # Hindi, Hinglish and the other languages in configs/v4/optout_phrases.yaml
 
 
 def complaint_keyword(text: str) -> str | None:

@@ -33,6 +33,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from typing import Protocol
 
 from autonomy.channels.common import send_event_id
 from autonomy.channels.render import RenderError, render
@@ -70,6 +71,22 @@ ProfileBook = Callable[[str], Mapping[str, str]]
 """customer_id -> profile fields used to fill slots, e.g. {"first_name": "Priya"}."""
 
 
+class ChannelGuard(Protocol):
+    """A channel's own last checks before dispatch, beyond the ones every channel gets (WhatsApp:
+    approved templates, quality rating, Meta's per-user limits; see `whatsapp_guard`)."""
+
+    def check(
+        self, message: Message, weekly_cap: int, now: datetime, events: EventStore
+    ) -> tuple[SkipReason, str] | None:
+        """Why this message must not be sent, or None. `weekly_cap` is the strictest weekly contact
+        cap of the goal's briefs."""
+        ...
+
+    def failure_attrs(self, error: str, now: datetime) -> Mapping[str, AttrValue]:
+        """Extra attrs for the FAIL event of a send the provider refused with this error."""
+        ...
+
+
 class DispatchStatus(StrEnum):
     SENT = "sent"
     QUEUED = "queued"
@@ -103,6 +120,11 @@ class SkipReason(StrEnum):
     DECISION_NOT_FOUND = "decision_not_found"
     # v3 channel journeys
     BOUGHT_SINCE = "bought_since_decision"
+    # v4 WhatsApp readiness (`ChannelGuard`)
+    TEMPLATE_NOT_APPROVED = "template_not_approved"
+    QUALITY_PAUSED = "quality_paused"
+    QUALITY_BUDGET = "quality_budget"
+    PROVIDER_HOLD = "provider_hold"
 
 
 @dataclass(frozen=True)
@@ -205,8 +227,10 @@ class Dispatcher:
         profiles: ProfileBook | None = None,
         paused_goals: Iterable[str] = (),
         paused_channels: Iterable[Channel] = (),
+        guards: Mapping[Channel, ChannelGuard] | None = None,
     ) -> None:
         self.adapters = dict(adapters)
+        self.guards = dict(guards or {})
         self.address_book = address_book
         self.workspace = workspace
         self.events = events
@@ -386,6 +410,12 @@ class Dispatcher:
             template_params=rendered.template_params,
             send_at=action.send_at,
         )
+        guard = self.guards.get(channel)
+        if guard is not None:
+            cap = min(b.envelope.max_contacts_per_week for b in briefs)
+            refused = guard.check(message, cap, now, self.events)
+            if refused is not None:
+                raise _SkipError(refused[0], refused[1])
         attrs: dict[str, AttrValue] = {
             "message_id": message.message_id,
             "goal_id": action.goal_id,
@@ -476,6 +506,9 @@ class Dispatcher:
         else:
             error = (error or "the provider did not accept the message")[:MAX_ERROR_LEN]
             attrs["error"] = error
+            guard = self.guards.get(message.channel)
+            if guard is not None:
+                attrs.update(guard.failure_attrs(error, now))
             event = Event(
                 event_id=stable_id("ev", message.message_id, EventType.FAIL.value, now.isoformat()),
                 customer_id=message.customer_id,

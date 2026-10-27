@@ -71,6 +71,9 @@ NEGATIVE_LIFT_CODE = "proof.negative_lift"
 """The alert code of the negative-lift breaker (it is not a `StopMetric`: contracts stay as they are)."""
 
 COMPLAINT_TYPES: frozenset[EventType] = frozenset({EventType.COMPLAINT, EventType.BLOCK})
+BREAKER_IGNORE_ATTR = "breaker_ignore"
+"""A FAIL event carrying this attr as True is not the sender's failure (WhatsApp's 131049 per-user
+limit, 131026 recipient cannot receive: see `whatsapp_health`) and counts toward no rate."""
 QUALITY_ATTR_KEYS: tuple[str, ...] = ("quality_rating", "quality")
 """Where a WhatsApp adapter puts Meta's phone-number quality rating on an event's attrs."""
 
@@ -288,6 +291,7 @@ def _delivery_rate(rule: StopRule, events: Sequence[Event], now: datetime, guard
     for label, span in _windows(guards):
         since = now - span
         attempted: dict[Channel, set[str]] = defaultdict(set)
+        not_ours: set[tuple[Channel, str]] = set()
         accepted: set[tuple[Channel, str]] = set()
         delivered: set[tuple[Channel, str]] = set()
         bounced: set[tuple[Channel, str]] = set()
@@ -298,6 +302,9 @@ def _delivery_rate(rule: StopRule, events: Sequence[Event], now: datetime, guard
             if e.decision_id is None and quality_level(e) is not None:
                 continue  # an account-level quality report, not a message
             key = e.decision_id or e.event_id
+            if e.type is EventType.FAIL and e.attrs.get(BREAKER_IGNORE_ATTR) is True:
+                not_ours.add((e.channel, key))
+                continue
             if e.type in (EventType.SEND, EventType.FAIL) and e.ts <= now - guards.grace(e.channel):
                 attempted[e.channel].add(key)
             if e.type is EventType.SEND:
@@ -308,7 +315,7 @@ def _delivery_rate(rule: StopRule, events: Sequence[Event], now: datetime, guard
             elif e.type is EventType.BOUNCE:
                 bounced.add((e.channel, key))
         for ch in sorted(attempted):
-            sent = attempted[ch]
+            sent = {key for key in attempted[ch] if (ch, key) not in not_ours}
             if ch in trips or len(sent) < guards.min_sends:
                 continue
             if ch in has_receipts:
