@@ -369,3 +369,17 @@ def test_the_calibration_centres_on_the_scored_scale() -> None:
     assert model is not None
     averaged = model.raw(data.attributes)
     assert model.calibration[0].centre == pytest.approx(float(averaged[:, 0].mean()), abs=1e-12)
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_the_rule_it_falls_back_to_is_the_best_simple_rule_on_all_of_train(seed: int) -> None:
+    """With no signal and a free message every rule is close, so the fit part alone can name another one than
+    all of train (as Hillstrom did in CI: Womens on the fit part, Mens on train); the rule used is train's."""
+    data = planted(2_000, strong=False, seed=seed, cost=0.0)
+    candidates = (("noise",),)
+    policy = ut.fit_uplift_threshold(data, segment_candidates=candidates, seed=seed)
+    if policy.gate.chose == "model":
+        pytest.fail("the gate deployed a model on data with no signal")
+    best, cols, _ = ut._choose_rule(data, candidates, seed)
+    assert policy.gate.chose == f"rule:{best}"
+    assert (policy.rule_segment is not None) == (cols is not None)

@@ -50,6 +50,10 @@ def _at(document: Mapping[str, Any], path: str) -> Any:
 
 _MISSING = object()
 
+ABSENT_BY_DEFAULT = ("order_log_label", "order_log_features", "audience", "built_split")
+"""The order-log path's sections (`engine/config.py`): their default is None or empty and is left out of
+`engine.yaml:defaults`, so a use case that sets one is not restating a default."""
+
 
 @pytest.fixture(scope="module")
 def engine_defaults() -> dict[str, Any]:
@@ -65,6 +69,8 @@ def test_every_leaf_outside_the_identity_block_differs_from_the_engine_default(
         if path.startswith(IDENTITY_PREFIXES):
             continue
         default = _at(engine_defaults, path)
+        if default is _MISSING and path.startswith(ABSENT_BY_DEFAULT):
+            continue  # the engine's default is "not set", so any value the file gives differs from it
         assert default is not _MISSING, f"{use_case_id}: {path} has no engine default"
         assert value != default, f"{use_case_id}: {path} restates the engine default {default!r}"
 

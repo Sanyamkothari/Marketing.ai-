@@ -846,6 +846,8 @@ export function onboardingPanel(
       feature_spec: { features: tickedFeatures },
       label_spec: state.label,
       snapshot_spec: withoutBlanks(state.snapshot),
+      // The order-log path's lapsed-audience filter (docs/v3/ORDER_LOG.md); this panel does not offer it.
+      audience: null,
     };
   }
 

@@ -319,6 +319,7 @@
     ],
     "detectable": null,
     "margin_rate": null,
-    "margin_note": null
+    "margin_note": null,
+    "calibration": null
   }
 }

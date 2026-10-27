@@ -36,8 +36,9 @@ the segment rule's columns by its value on a 30% validation slice of the fit par
 rest. On the gate part, which nothing above saw, the model policy and that one rule are compared row by
 row: the doubly robust terms of the bench's estimator (`autonomy.proof.replay`, reward model
 `per_action_mean_model`) of the model minus those of the rule, with a 95% interval. The model is deployed
-only if the LOWER end of that paired difference is above 0. Otherwise the policy is the rule (a segment
-rule is refitted on all of train). `UpliftThresholdPolicy.gate` says which branch it took and why; the
+only if the LOWER end of that paired difference is above 0. Otherwise the policy is the best simple rule
+chosen again on all of train, as the bench's `choose_simple` chooses it (a segment rule refitted there): the
+fit part alone is noisier and can name a weaker rule. `UpliftThresholdPolicy.gate` says which branch it took and why; the
 model refitted on all of train is kept either way (`UpliftThresholdPolicy.ungated`), so the method itself
 can be scored next to the gated output.
 
@@ -625,7 +626,7 @@ def fit_uplift_threshold(
     q_gate = per_action_mean_model(log_gate)
 
     # the comparison rule, chosen on the fit part only
-    best_rule, best_cols, chosen_on = _choose_rule(fit_part, segment_candidates, seed)
+    best_rule, _cols, chosen_on = _choose_rule(fit_part, segment_candidates, seed)
 
     # every rule on the gate part, for the report (each segment rule fitted on the fit part)
     rule_terms: dict[str, FloatArray] = {}
@@ -694,9 +695,18 @@ def fit_uplift_threshold(
             return policy
         policy.notes.append(f"the model could not be refitted on all of train ({why_final}); using the rule")
         policy.gate = replace(gate, chose=f"rule:{best_rule}", reason=why_final)
-    # the best simple rule, on all of train
-    if best_cols is not None:
-        policy.rule_segment = fit_segment_policy(train.logged(), segment_columns=list(best_cols))
+    # the best simple rule, chosen again on all of train (as the bench's `choose_simple`) and fitted there: the
+    # fit part alone is noisier and can name a weaker rule (on Hillstrom it named Womens where all of train
+    # names Mens), and the rule deployed is what the policy is scored as
+    final_rule, final_cols, _ = _choose_rule(train, segment_candidates, seed)
+    if final_rule != best_rule:
+        policy.notes.append(
+            f"the gate compared the model with {best_rule!r} (best on the fit part); on all of train the best "
+            f"simple rule is {final_rule!r}, which is the one used"
+        )
+    policy.gate = replace(policy.gate, chose=f"rule:{final_rule}")
+    if final_cols is not None:
+        policy.rule_segment = fit_segment_policy(train.logged(), segment_columns=list(final_cols))
     else:
-        policy.rule_arm = next(a for a in range(actions) if simple_name(train.arm_names, a) == best_rule)
+        policy.rule_arm = next(a for a in range(actions) if simple_name(train.arm_names, a) == final_rule)
     return policy

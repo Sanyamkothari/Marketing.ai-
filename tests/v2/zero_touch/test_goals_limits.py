@@ -593,7 +593,9 @@ def test_api_autopilot_needs_proof_so_the_plan_starts_in_approve(client: TestCli
 
 
 def test_api_starting_on_autopilot_without_proof_is_an_explicit_email_only_choice(client: TestClient) -> None:
-    r = client.post("/v2/onboarding/accept", json={"autonomy": "autopilot", "start_without_proof": True, "margin_pct": 40})
+    r = client.post(
+        "/v2/onboarding/accept", json={"autonomy": "autopilot", "start_without_proof": True, "margin_pct": 40}
+    )
     assert r.status_code == 200, r.text
     out = r.json()
     channels = set(out["brief"]["envelope"]["channels"])
