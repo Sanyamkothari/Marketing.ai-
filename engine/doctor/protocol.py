@@ -49,6 +49,7 @@ from pydantic import JsonValue
 from engine.access.roles import Principal, Role
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.doctor.case import CaseDoubt, CaseItem, CaseOption, CaseQuestion, payload_digest
+from engine.doctor.decisions import Sets, sets_of_effect
 from engine.doctor.visit_contracts import OptionEffect
 
 if TYPE_CHECKING:
@@ -145,6 +146,8 @@ class AskOption:
     """What choosing it does, in a plain sentence with no numbers of its own (the screen puts the measured counts next)."""
     value_kind: Literal["date", "number", "text"] | None = None
     """Set when the answer needs a value typed with it (a date, a number or text); the route checks it."""
+    sets: Sets | None = None
+    """The decision choosing it sets (`engine.doctor.decisions`); `note` = it sets nothing, on purpose."""
 
 
 @dataclass(frozen=True)
@@ -274,6 +277,11 @@ NO_STEP: Final[str] = "Your answer is recorded; it does not change the data."
 """What an answer that adds no step says: never a claim about an outcome that nothing performs."""
 
 
+def _declared(option: AskOption) -> Sets | None:
+    """What choosing the option sets: what the catalogue declares, else what its effect adds (nothing = a note)."""
+    return option.sets if option.sets is not None else sets_of_effect(option.effect.kind)
+
+
 def _case_question(ask: Ask, question_id: str, options: tuple[AskOption, ...]) -> CaseQuestion:
     recommended = None if ask.meaning_bearing else ask.recommended
     return CaseQuestion(
@@ -293,9 +301,15 @@ def _case_question(ask: Ask, question_id: str, options: tuple[AskOption, ...]) -
                 effect=(
                     (option.says or _stated(option))
                     if option.effect.kind is not None
-                    else (option.says if option.value_kind is not None and option.says else NO_STEP)
+                    else (
+                        option.says
+                        if (option.value_kind is not None or _declared(option) not in (None, "note"))
+                        and option.says
+                        else NO_STEP
+                    )
                 ),
                 value_kind=option.value_kind,
+                sets=_declared(option),
                 rows_changed=option.rows_changed,
                 label_rate=option.label_rate,
                 safe=option.safe,

@@ -9,7 +9,7 @@ names only.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from datetime import date
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -30,7 +30,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "SAMPLE_ROWS",
-    "accepted_column",
     "acknowledged_codes",
     "check_plan",
     "guard_levels",
@@ -78,23 +77,6 @@ def recipe_steps_of(
     return [
         (step.model_copy(update={"order": n}), item_id) for n, (step, item_id) in enumerate(found, start=1)
     ]
-
-
-def accepted_column(
-    items: Sequence[CaseItem], kind: str, upload_id: str, columns: Collection[str]
-) -> str | None:
-    """The column an accepted item of `kind` names for this file (its ID, its outcome), if the file has it."""
-    for item in items:
-        column = item.payload.get("column")
-        if (
-            item.kind == kind
-            and item.state is ProposalState.ACCEPTED
-            and item.upload_id in (upload_id, None)
-            and isinstance(column, str)
-            and column in columns
-        ):
-            return column
-    return None
 
 
 def guard_levels(steps: Sequence[RecipeStep]) -> tuple[AgentLevel, ...]:

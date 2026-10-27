@@ -45,6 +45,7 @@ no AI; no row is stored - the contract holds counts, shares, percentiles and val
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -61,6 +62,7 @@ from engine.config import StrictBase
 from engine.contracts import Artefact
 from engine.doctor.build_driver import BuildRecord
 from engine.doctor.currency import MoneyBasis
+from engine.doctor.decisions import DecisionKind, Decisions, decisions_from
 from engine.doctor.locale import LocaleProfile
 from engine.doctor.outcome_definition import (
     OutcomeApproval,
@@ -108,6 +110,8 @@ __all__ = [
     "save_prescription",
     "slot_name",
 ]
+
+log = logging.getLogger(__name__)
 
 PRESCRIPTION_DRIFT: Final[str] = "PRESCRIPTION_DRIFT"
 """A replay saw a change it cannot prove safe (a column gone or changed, a new value, another locale or intake): it
@@ -516,12 +520,25 @@ def load_prescription(storage: Storage, client_id: str, case_id: str, hash_: str
 # From a case (PRESCRIBE)
 # ---------------------------------------------------------------------------
 _SLOT: Final[re.Pattern[str]] = re.compile(r"[^A-Za-z0-9_.-]+")
-_ROLE_KINDS: Final[Mapping[str, str]] = {
+_ROLE_OF_DECISION: Final[Mapping[DecisionKind, str]] = {
     "key": "key",
-    "outcome_column": "outcome",
+    "outcome": "outcome",
     "as_of_column": "as_of",
-    "consent_column": "consent",
+    "consent": "consent",
 }
+"""The prescription's names for the decisions it keeps as the goal's roles."""
+
+
+def _log_ignored(decided: Decisions, where: str) -> None:
+    """The prescription used to let the LAST accepted item for a role win; it reads the one decisions model now,
+    where the FIRST does (as the visit always read the key). Say so when that matters."""
+    if decided.ignored:
+        log.info(
+            "decisions: %d later accepted decision(s) for the same place left out of the prescription (%s); "
+            "the first accepted one holds",
+            decided.ignored,
+            where,
+        )
 
 
 def _accepted(items: Sequence[CaseItem]) -> list[CaseItem]:
@@ -536,6 +553,15 @@ def _step_of(item: CaseItem) -> RecipeStep | None:
         return RecipeStep.model_validate(step)
     except ValidationError:
         return None
+
+
+def _bound_as_of(step: RecipeStep, as_of: str | None) -> RecipeStep:
+    """A query step with the case's as-of date (`decisions(case).as_of`) in it: the plan keeps `$as_of` symbolic and
+    the materialiser binds the date when it runs the step, so the prescription (which a run replays on its own)
+    carries the very date the plan was checked with, however late the person answered."""
+    if as_of is None or step.kind is not RecipeStepKind.SQL_QUERY or step.params.get("as_of") == as_of:
+        return step
+    return step.model_copy(update={"params": {**step.params, "as_of": as_of}})
 
 
 def _column(item: CaseItem) -> str | None:
@@ -749,11 +775,11 @@ def _section(
     from engine.doctor.plan_check import readiness_acknowledged
 
     items = _accepted([item for item in case.items if item.goal_id == goal_id])
+    decided = decisions_from(items)
+    _log_ignored(decided, f"goal {goal_id}")
     roles: dict[str, str] = {}
-    for item in items:
-        role = _ROLE_KINDS.get(item.kind)
-        column = _column(item)
-        if role is not None and column is not None:
+    for kind, role in _ROLE_OF_DECISION.items():
+        if (column := next((r.column for r in decided.of(kind)), None)) is not None:
             roles[role] = column
     settings = tuple(
         SettingChoice(path=path, value=item.payload.get("value"))
@@ -934,26 +960,26 @@ def prescription_from_case(
     build = _build(approved)
     acked = acknowledged_codes(case.visit)
     # A decision made on a file goes on the table an approved join or stack made from it (the outcome, the date).
-    keys = {
-        current_upload(case, item.upload_id): column
-        for item in approved
-        if item.kind == "key" and item.upload_id and (column := _column(item))
-    }
-    targets = {
-        current_upload(case, item.upload_id): column
-        for item in approved
-        if item.kind == "outcome_column" and item.upload_id and (column := _column(item))
-    }
-    as_of = {
-        current_upload(case, item.upload_id): column
-        for item in approved
-        if item.kind == "as_of_column" and item.upload_id and (column := _column(item))
-    }
+    decided = decisions_from(approved, case.questions)
+    _log_ignored(decided, "plan")
+    keys: dict[str, str] = {}
+    for key_decision in decided.of("key"):
+        if key_decision.upload_id:
+            keys.setdefault(current_upload(case, key_decision.upload_id), key_decision.column)
+    targets: dict[str, str] = {}
+    for outcome_decision in decided.of("outcome"):
+        if outcome_decision.upload_id:
+            targets.setdefault(current_upload(case, outcome_decision.upload_id), outcome_decision.column)
+    as_of: dict[str, str] = {}
+    for time_decision in decided.of("as_of_column"):
+        if time_decision.upload_id:
+            as_of.setdefault(current_upload(case, time_decision.upload_id), time_decision.column)
     steps_by_upload: dict[str | None, list[RecipeStep]] = {}
     for item in approved:
         step = _step_of(item)
         if step is None:
             continue
+        step = _bound_as_of(step, decided.as_of_iso)
         where = None if item.payload.get("stage") == POST_BUILD else item.upload_id
         steps_by_upload.setdefault(where, []).append(step)
     slots = _slots(case, None if build is None else build.record)

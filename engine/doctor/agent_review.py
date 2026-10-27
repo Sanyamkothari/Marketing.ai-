@@ -30,7 +30,6 @@ import json
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import date
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import ValidationError
@@ -70,6 +69,7 @@ from engine.agent.loop import (
 )
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import for_prompt
+from engine.doctor.decisions import decisions
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL
 from engine.doctor.guards import ExpectationBook, Expectations, Finding
 from engine.doctor.protocol import DataRequest, ProtocolError, doubt_ask, express_doubt
@@ -268,6 +268,7 @@ class _Review:
         never touch them. No advisor runs."""
         now = ctx.clock()
         stub = ToolResult(evidence_id="decided", tool="get_profile", created_at=now)
+        decided = decisions(case)
         roles = [
             Proposal(
                 proposal_id=f"role-{path}",
@@ -282,8 +283,8 @@ class _Review:
                 decided_by=DecidedBy.USER,
             )
             for path, column in (
-                (ROLE_PRIMARY_KEY, _decided(case, "key", ctx.upload_id)),
-                (ROLE_TARGET, _decided(case, "outcome_column", ctx.upload_id)),
+                (ROLE_PRIMARY_KEY, decided.column_of_upload("key", ctx.upload_id)),
+                (ROLE_TARGET, decided.outcome_of_upload(ctx.upload_id)),
             )
             if column is not None
         ]
@@ -342,7 +343,6 @@ class _Review:
     def _context(self, index: int, **extra: Any) -> DataToolContext:
         from engine.doctor.visit import active_section
 
-        given = case_as_of(self.case)
         return DataToolContext(
             agent=self.ctxs[index],
             principal=self.principal,
@@ -350,7 +350,7 @@ class _Review:
             egress=self.gates[index],
             files=self.files,
             case_items=active_section(self.case)[0],  # the plan so far, for `preview_working_copy`
-            as_of=date.fromisoformat(given) if given is not None else None,
+            as_of=decisions(self.case).as_of_date,
             config_root=self.config_root,
             clock=self.clock,
             actor="agent:data-doctor",
@@ -573,10 +573,8 @@ class _Review:
         given["upload_ids"] = [upload[w] for w in wanted]
         if args.get("as_of_file") in upload:
             given["as_of_upload_id"] = upload[str(args["as_of_file"])]
-        if "as_of" not in given and "as_of_rule" not in given and (decided := case_as_of(self.case)):
-            given["as_of"] = (
-                decided  # the person's own as-of answer is `$as_of` unless the step names another
-            )
+        # the person's own as-of answer is `$as_of` for the step unless it names another: the trial and the run
+        # bind it (`DataToolContext.as_of`, `materialize`), so it is not frozen into the step
         name = str(given.get("output_name", ""))
         if name in turn.closed:
             raise AgentToolError(
@@ -584,7 +582,7 @@ class _Review:
                 f"'{name[:60]}' has failed its own checks too often; it is left for the person.",
             )
         first = next(i for i, ctx in enumerate(self.ctxs) if ctx.upload_id == given["upload_ids"][0])
-        key = _decided(self.case, "key", given["upload_ids"][0])
+        key = decisions(self.case).key(given["upload_ids"][0])
         result = self.registry.call(
             "propose_sql_step", given, self._context(first, primary_key=key, replacing=self.replacing)
         )
@@ -818,41 +816,6 @@ class _Review:
             )
             out.append(query.result)
         return items, out
-
-
-_ISO_DATE: Final = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
-
-
-def case_as_of(case: Case) -> str | None:
-    """The as-of date the person decided for this case, as `YYYY-MM-DD`, or None (then a query names its own).
-
-    The newest accepted item that carries one (leaving out an unfinished last period sets it), else the answer to
-    the as-of question (Q8): the date the person typed, else the one the chosen option names ("The latest date in
-    the file: 2011-12-09").
-    """
-    for item in reversed(case.items):
-        given = item.payload.get("as_of")
-        if item.state is ProposalState.ACCEPTED and isinstance(given, str) and _ISO_DATE.fullmatch(given):
-            return given
-    for question in case.questions:
-        if question.code != "Q08_AS_OF" or question.answer is None:
-            continue
-        typed = getattr(question, "answer_value", None)
-        if isinstance(typed, str) and _ISO_DATE.fullmatch(typed):
-            return typed  # the date the person typed beats the one an option names
-        chosen = next((o for o in question.options if o.option_id == question.answer), None)
-        found = _ISO_DATE.search(chosen.label) if chosen is not None else None
-        if found is not None:
-            return found.group(1)
-    return None
-
-
-def _decided(case: Case, kind: str, upload_id: str) -> str | None:
-    for item in case.items:
-        if item.kind == kind and item.upload_id == upload_id and item.state is ProposalState.ACCEPTED:
-            column = item.payload.get("column")
-            return column if isinstance(column, str) else None
-    return None
 
 
 def _gate(ctx: AgentContext) -> Egress:

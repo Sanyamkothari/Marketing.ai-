@@ -14,8 +14,12 @@ import duckdb
 
 from engine.agent.contracts import ProposalState
 from engine.agent.sql_step import _error_kind
-from engine.doctor.agent_review import case_as_of
 from engine.doctor.case import Case
+from engine.doctor.decisions import decisions
+
+
+def case_as_of(case: Case) -> str | None:
+    return decisions(case).as_of_iso
 
 
 def _case(items: list[Any] = (), questions: list[Any] = ()) -> Case:  # type: ignore[assignment]
@@ -23,15 +27,35 @@ def _case(items: list[Any] = (), questions: list[Any] = ()) -> Case:  # type: ig
 
 
 def _item(payload: dict[str, Any], state: ProposalState = ProposalState.ACCEPTED) -> Any:
-    return SimpleNamespace(payload=payload, state=state)
+    return SimpleNamespace(
+        payload=payload,
+        state=state,
+        kind="step",
+        item_id="i1",
+        decided_by=None,
+        decided_at=None,
+        upload_id=None,
+        goal_id=None,
+        proposed_at=None,
+    )
 
 
 def _as_of_question(answer: str | None, typed: str | None = None) -> Any:
     options = [
-        SimpleNamespace(option_id="c0", label="The latest date in the file: 2011-12-09"),
-        SimpleNamespace(option_id="c1", label="I will type a date"),
+        SimpleNamespace(option_id="c0", label="The latest date in the file: 2011-12-09", sets="as_of"),
+        SimpleNamespace(option_id="c1", label="I will type a date", sets="as_of"),
     ]
-    return SimpleNamespace(code="Q08_AS_OF", answer=answer, answer_value=typed, options=options)
+    return SimpleNamespace(
+        code="Q08_AS_OF",
+        question_id="q1",
+        answer=answer,
+        answer_value=typed,
+        options=options,
+        answered_by="u1",
+        answered_at=None,
+        upload_id=None,
+        goal_id=None,
+    )
 
 
 def test_leaving_out_the_unfinished_month_sets_the_as_of_date() -> None:

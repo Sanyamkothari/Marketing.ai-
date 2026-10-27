@@ -35,9 +35,10 @@ from engine.agent.dataset_recipe import consistent_types
 from engine.agent.formats import masked_cut
 from engine.agent.recipe import RecipeError, derive_names
 from engine.doctor.case import CaseFile, CaseItem
+from engine.doctor.decisions import decisions_from
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.materialize import Prepared, PreparedFile, Sample, materialize_plan, scoped
-from engine.doctor.plan_check import SAMPLE_ROWS, accepted_column, plan_digest
+from engine.doctor.plan_check import SAMPLE_ROWS, plan_digest
 from engine.utils.logging import get_logger
 
 __all__ = [
@@ -402,7 +403,7 @@ def _one_file(
     after = base
     note: str | None = None
     reshaped = False
-    key = accepted_column(items, "key", loaded.upload_id, {str(c) for c in base.columns})
+    key = decisions_from(items).column("key", loaded.upload_id, {str(c) for c in base.columns})
     if failure is not None:
         note = masked_cut(f"A step could not run on a sample of this file: {failure}", 300)
     elif done is not None and prepared is not None:

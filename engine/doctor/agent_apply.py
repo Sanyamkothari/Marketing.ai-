@@ -34,6 +34,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import ProposalSource, ProposalState
+from engine.doctor.decisions import role_columns
 from engine.doctor.guards import LOSS_STOP_PCT
 from engine.doctor.plan_check import check_plan
 from engine.doctor.protocol import AGENT, approve_class_of
@@ -82,7 +83,6 @@ _CONSENT_WORDS: Final = re.compile(
     re.IGNORECASE,
 )
 """Column names that read as who may be contacted, whatever the goal's settings say (no goal chosen yet)."""
-_ROLE_KINDS: Final[frozenset[str]] = frozenset({"outcome_column", "consent_column", "as_of_column"})
 _TOUCHES_MEANING: Final[str] = (
     "it touches who may be contacted or what the model learns; that is yours to tick"
 )
@@ -130,16 +130,10 @@ def roles_of(case: Case, config_root: Path | None = None) -> Roles:
     from engine.config import ConfigError, load_use_case
     from engine.doctor.goal_brief import load_goal_brief
 
-    protected: set[str] = set()
-    ids: set[str] = {c for f in case.files for c in f.key_columns}
-    for item in case.items:
-        column = item.payload.get("column")
-        if not isinstance(column, str):
-            continue
-        if item.kind == "key":
-            ids.add(column)
-        elif item.kind in _ROLE_KINDS:
-            protected.add(column)
+    named_ids, protected = role_columns(
+        case
+    )  # named in any state: a column once proposed is not the AI's to touch
+    ids: set[str] = {c for f in case.files for c in f.key_columns} | named_ids
     for goal in case.goals:
         try:
             config = load_use_case(goal.goal_id, config_root)

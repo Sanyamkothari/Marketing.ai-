@@ -27,7 +27,8 @@ from pydantic import JsonValue
 
 from engine.agent.contracts import AgentConfidence, RecipeStep, RecipeStepKind
 from engine.agent.sql_step import THIS_TABLE, table_alias
-from engine.doctor.detect_time_keys import CHECK_KIND, _decided, _outcome_meanings
+from engine.doctor.decisions import decisions
+from engine.doctor.detect_time_keys import CHECK_KIND, _outcome_meanings
 from engine.doctor.prescription import slot_name
 from engine.doctor.protocol import Ask
 from engine.doctor.questions import build_ask
@@ -134,13 +135,14 @@ def _file(
 ) -> list[Ask | CaseItem]:
     from engine.doctor.visit import active_section
 
+    decided = decisions(case)
     f = _File(
         loaded,
         brief,
         files,
         root,
-        _decided(case, "key", loaded.upload_id),
-        _decided(case, "outcome_column", loaded.upload_id),
+        decided.key(loaded.upload_id),
+        decided.outcome_of_upload(loaded.upload_id),
         tuple(active_section(case)[0]),
     )
     found: list[Ask | CaseItem] = []

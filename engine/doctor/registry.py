@@ -239,7 +239,7 @@ class DataToolContext:
     primary_key: str | None = None
     """The file's ID column as decided in the case or session (M238's and M241's tools never change it)."""
     as_of: date | None = None
-    """The case's as-of date (`agent_review.case_as_of`): a query is tried with the date a run gives it."""
+    """The case's as-of date (`decisions(case).as_of`): a query is tried with the date a run gives it."""
     locale_profile: LocaleProfile | None = None
     """The client's confirmed locale profile (M241), when there is one."""
     case_files: FormatToolContext | None = None
