@@ -4,8 +4,10 @@ Three things a WhatsApp sender must respect that email does not have (docs/v4/WH
 
 - **Quality rating** of the phone number (GREEN, YELLOW, RED), from `GET /{phone_number_id}` and the
   `phone_number_quality_update` webhook. YELLOW halves the weekly WhatsApp budget (messages per
-  customer per week); RED pauses WhatsApp for the shop and raises an alert. A rating we never heard
-  about is GREEN: nothing is cut on a guess.
+  customer per week); RED pauses WhatsApp for the shop and raises an alert. The pause holds until a
+  person resumes it (`WhatsAppHealth.reset`), even if Meta later reports a better rating: the cause
+  (blocks and reports) should be looked at first. A rating we never heard about is GREEN: nothing is
+  cut on a guess.
 - **Messaging-limit tier** (TIER_250, TIER_1K, ...): kept so the dashboard and the sender can see it;
   Meta enforces the tier itself.
 - **Error codes** that mean "this person, not our number": 131049 (Meta withheld a marketing
@@ -44,6 +46,11 @@ BREAKER_IGNORE_ATTR = "breaker_ignore"
 """Set (True) on a FAIL event that must not count toward a circuit breaker's delivery rate."""
 HOLD_UNTIL_ATTR = "hold_until"
 """ISO time on a FAIL event until which the customer is not retried on WhatsApp."""
+ACCOUNT_CUSTOMER = "whatsapp_account"
+"""The customer id of account-level events (quality reports): they belong to the number, not a person."""
+ACCOUNT_LEVEL_ATTR = "account_level"
+"""Set (True) on an event about the whole number (a quality report), not a customer: state rebuilds
+skip it (`autonomy.data.rebuild` reads the same key), the breakers still read it."""
 NOT_DELIVERED_ATTR = "not_delivered"
 """The plain-English label of a failure Meta's error code explains, e.g. "not delivered: Meta limit"."""
 
@@ -150,6 +157,10 @@ class WhatsAppHealth:
     rating: str = GREEN
     tier: str | None = None
     updated_at: datetime | None = None
+    paused_by_red: bool = False
+    """Set when the number turns RED (and the limits say RED pauses); only `reset` clears it."""
+    resumed_at: datetime | None = None
+    """When a person last resumed WhatsApp: a RED report from before then does not pause it again."""
     _alerts: list[Alert] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -167,6 +178,8 @@ class WhatsAppHealth:
             if new not in RATINGS:
                 return None
             before, self.rating = self.rating, new
+            if new == RED and self.limits.red_pauses and (self.resumed_at is None or at > self.resumed_at):
+                self.paused_by_red = True
             if new == RED and before != RED:
                 alert = Alert(
                     alert_id=stable_id("alert", QUALITY_ALERT_CODE, at.isoformat()),
@@ -192,8 +205,8 @@ class WhatsAppHealth:
 
     @property
     def paused(self) -> bool:
-        """True while the number is RED and the limits say RED pauses WhatsApp."""
-        return self.rating == RED and self.limits.red_pauses
+        """True from a RED report (when the limits say RED pauses WhatsApp) until a person resumes it."""
+        return self.paused_by_red
 
     def weekly_cap(self, base: int) -> int:
         """The weekly WhatsApp messages per customer allowed, given the shop's cap `base`: halved on
@@ -204,10 +217,17 @@ class WhatsAppHealth:
             return max(1, int(base * self.limits.yellow_budget_factor))
         return base
 
-    def reset(self) -> None:
-        """A person resumed WhatsApp after fixing the cause: forget the RED rating."""
+    def reset(self, at: datetime | None = None) -> None:
+        """A person resumed WhatsApp after fixing the cause: lift the pause and forget the RED rating.
+
+        `at` is when they did; a RED report from before then (read again from the event log) does not
+        pause it again."""
         with self._lock:
-            self.rating = GREEN
+            self.paused_by_red = False
+            if self.rating == RED:
+                self.rating = GREEN
+            if at is not None:
+                self.resumed_at = at if self.resumed_at is None else max(self.resumed_at, at)
 
     def describe(self) -> Mapping[str, str | None]:
-        return {"rating": self.rating, "tier": self.tier}
+        return {"rating": self.rating, "tier": self.tier, "paused": "yes" if self.paused else "no"}

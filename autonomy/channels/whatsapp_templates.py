@@ -33,6 +33,7 @@ __all__ = [
 
 USABLE_CATEGORIES: frozenset[str] = frozenset({"MARKETING", "UTILITY"})
 USABLE_STATUS = "APPROVED"
+"""The defaults; `configs/v4/whatsapp.yaml` (`templates`) sets the ones a catalogue uses."""
 
 _PARAM = re.compile(r"\{\{\s*(\d+)\s*\}\}")
 
@@ -53,8 +54,8 @@ class WhatsAppTemplate(Contract):
 
     @property
     def usable(self) -> bool:
-        """Approved, and of a category we may send."""
-        return self.status == USABLE_STATUS and self.category in USABLE_CATEGORIES
+        """Approved, and of a category we may send (the default rules)."""
+        return not self.refusal()
 
     @property
     def body(self) -> str:
@@ -69,12 +70,13 @@ class WhatsAppTemplate(Contract):
         """How many body parameters the template takes (its highest `{{n}}`)."""
         return max((int(n) for n in _PARAM.findall(self.body)), default=0)
 
-    def refusal(self) -> str:
+    def refusal(self, categories: frozenset[str] = USABLE_CATEGORIES, status: str = USABLE_STATUS) -> str:
         """Why this template may not be sent, or an empty string when it may."""
-        if self.status != USABLE_STATUS:
-            return f"template {self.name!r} ({self.language}) is {self.status}, not APPROVED"
-        if self.category not in USABLE_CATEGORIES:
-            return f"template {self.name!r} is {self.category}; only MARKETING and UTILITY may be sent"
+        if self.status != status:
+            return f"template {self.name!r} ({self.language}) is {self.status}, not {status}"
+        if self.category not in categories:
+            allowed = " and ".join(sorted(categories)) or "no category"
+            return f"template {self.name!r} is {self.category}; only {allowed} may be sent"
         return ""
 
 
@@ -112,7 +114,17 @@ class TemplateCatalogue:
     listed is refused too.
     """
 
-    def __init__(self, templates: Iterable[WhatsAppTemplate] = ()) -> None:
+    def __init__(
+        self,
+        templates: Iterable[WhatsAppTemplate] = (),
+        *,
+        categories: frozenset[str] = USABLE_CATEGORIES,
+        status: str = USABLE_STATUS,
+    ) -> None:
+        """`categories` and `status` are what may be sent (`WhatsAppLimits.usable_categories` and
+        `usable_status` from `configs/v4/whatsapp.yaml`)."""
+        self.categories = frozenset(c.upper() for c in categories)
+        self.status = status.upper()
         self._templates: dict[tuple[str, str], WhatsAppTemplate] = {}
         self.synced_at: datetime | None = None
         self.replace(templates)
@@ -134,7 +146,7 @@ class TemplateCatalogue:
         return sorted(self._templates.values(), key=lambda t: (t.name, t.language))
 
     def usable(self) -> list[WhatsAppTemplate]:
-        return [t for t in self.all() if t.usable]
+        return [t for t in self.all() if not t.refusal(self.categories, self.status)]
 
     def set_status(self, name: str, language: str | None, status: str) -> int:
         """Apply a `message_template_status_update`; returns how many templates changed.
@@ -156,7 +168,7 @@ class TemplateCatalogue:
         template = self.get(name, language)
         if template is None:
             return f"template {name!r} ({language}) is not in the business account's approved templates"
-        return template.refusal()
+        return template.refusal(self.categories, self.status)
 
     def drafts(
         self,

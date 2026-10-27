@@ -2349,6 +2349,8 @@ class AgentPolicy:
                 for s in sends:
                     if s.click_at is None or s.click_at - s.sent_at < LATE_CLICK:
                         continue
+                    if s.channel.value in NEVER_CLICK_CHANNELS:
+                        continue  # v4: a WhatsApp "click" says nothing about reading hours
                     st = states.get(s.customer_id)
                     tz = st.timezone if st is not None else self._timezones.get(s.customer_id, "UTC")
                     self.reading.observe(
@@ -3059,7 +3061,11 @@ class AgentPolicy:
                 self.hour_model.observe_click(
                     e.customer_id, send_at, e.ts, self._timezones.get(e.customer_id, "UTC"), seg
                 )
-        if e.type is EventType.CLICK and e.ts - send_at >= LATE_CLICK:
+        if (
+            e.type is EventType.CLICK
+            and e.ts - send_at >= LATE_CLICK
+            and channel.value not in NEVER_CLICK_CHANNELS  # v4: WhatsApp clicks mean nothing
+        ):
             hour = self._local_hour(e.customer_id, e.ts)
             self.reading.observe(e.customer_id, hour, seg)
 

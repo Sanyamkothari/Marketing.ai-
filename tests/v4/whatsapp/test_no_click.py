@@ -148,7 +148,7 @@ def decided(channel: Channel) -> tuple[AgentPolicy, DecisionContext]:
 
 
 def test_the_learner_counts_a_delivered_whatsapp_message_not_a_click() -> None:
-    results: dict[Channel, tuple[int, int]] = {}
+    results: dict[Channel, tuple[int, int, int]] = {}
     for channel in (Channel.WHATSAPP, Channel.EMAIL):
         policy, ctx = decided(channel)
         decision = policy.decide(state(channel), ctx)
@@ -166,6 +166,11 @@ def test_the_learner_counts_a_delivered_whatsapp_message_not_a_click() -> None:
             for kind, hours in ((EventType.DELIVER, 1), (EventType.CLICK, 2))
         ]
         policy.nightly([decision], {"c1": events}, NOW + timedelta(days=1))
-        results[channel] = (len(policy.lift.click_times), len(policy.lift.send_times))
-    assert results[Channel.WHATSAPP] == (0, 1)  # one delivered message, the click ignored
-    assert results[Channel.EMAIL] == (1, 0)  # unchanged: a clicked message
+        results[channel] = (
+            len(policy.lift.click_times),
+            len(policy.lift.send_times),
+            len(policy.reading.per_customer),
+        )
+    # WhatsApp: one delivered message; the click (two hours late) feeds neither lift nor reading hours
+    assert results[Channel.WHATSAPP] == (0, 1, 0)
+    assert results[Channel.EMAIL] == (1, 0, 1)  # unchanged: a clicked message, a reading hour

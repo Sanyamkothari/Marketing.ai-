@@ -80,7 +80,9 @@ def test_the_budget_is_halved_on_yellow_paused_on_red_and_never_below_one() -> N
     health.update("RED", None, NOW + timedelta(hours=1))
     assert health.paused and health.weekly_cap(4) == 0 and health.tier == "TIER_1K"
     health.update("GREEN", "TIER_10K", NOW + timedelta(hours=2))
-    assert health.weekly_cap(4) == 4 and health.tier == "TIER_10K"
+    assert health.paused and health.weekly_cap(4) == 0 and health.tier == "TIER_10K"  # until a person resumes
+    health.reset(NOW + timedelta(hours=3))
+    assert not health.paused and health.weekly_cap(4) == 4
 
 
 def test_an_older_report_does_not_undo_a_newer_one() -> None:
@@ -142,7 +144,7 @@ def test_the_rating_and_tier_can_be_read_from_the_api() -> None:
     assert wa.health.rating == "YELLOW" and wa.health.tier == "TIER_1K"
     assert (
         seen[0].url.path.endswith(f"/{PNID}")
-        and seen[0].url.params["fields"] == "quality_rating,messaging_limit_tier"
+        and seen[0].url.params["fields"] == "quality_rating,messaging_limit_tier,display_phone_number"
     )
 
 

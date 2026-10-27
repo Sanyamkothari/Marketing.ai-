@@ -49,6 +49,10 @@ KEPT_ON_REBUILD: tuple[str, ...] = ("group", "scores")
 rebuild would quietly re-randomise who is held out. `scores` come from models, not events.
 """
 
+ACCOUNT_LEVEL_ATTR = "account_level"
+"""An event carrying this attr as True is about the account, not a customer (the same key
+`autonomy.channels.whatsapp_health` sets on a WhatsApp quality report)."""
+
 
 def _check_batch(batch_size: int) -> None:
     if batch_size < 1:
@@ -111,6 +115,8 @@ def rebuild_states(
     built: dict[str, CustomerState] = {}
     currencies: dict[str, int] = {}
     for event in events.scan():
+        if is_account_level(event):
+            continue
         if event.value is not None:
             code = event.attrs.get(CURRENCY_ATTR)
             if isinstance(code, str) and code.strip():
@@ -129,6 +135,12 @@ def rebuild_states(
             yield folder.refresh(state, now)
 
     return _put_batches(states, finished(), batch_size)
+
+
+def is_account_level(event: Event) -> bool:
+    """True for an event about the account rather than a customer (a WhatsApp quality report):
+    it stays in the log for the breakers but is never folded into a customer state."""
+    return event.attrs.get(ACCOUNT_LEVEL_ATTR) is True
 
 
 def apply_events(
@@ -160,6 +172,8 @@ def apply_events(
         pending.clear()
 
     for event in events:
+        if is_account_level(event):
+            continue
         cid = event.customer_id
         current = pending[cid] if cid in pending else states.get(cid)
         pending[cid] = folder.fold(current, event)
