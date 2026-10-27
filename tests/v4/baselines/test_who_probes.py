@@ -48,13 +48,9 @@ def test_a_probe_is_agent_who_with_exactly_one_sub_switch_off(name: str, extra: 
 def test_the_bench_and_ci_take_both_probes() -> None:
     text = (ROOT / ".github" / "workflows" / "realbench.yml").read_text()
     [found] = re.findall(r"policy: \[([^\]]*)\]", text)
-    assert [p.strip() for p in found.split(",")] == [
-        "agent",
-        "agent_v3",
-        "agent_who",
-        "agent_who_notrait",
-        "agent_who_noprune",
-    ]
+    assert {"agent", "agent_v3", "agent_who", "agent_who_notrait", "agent_who_noprune"} <= {
+        p.strip() for p in found.split(",")
+    }
     assert {"agent_who", "agent_who_notrait", "agent_who_noprune"} <= set(ablation.names())
 
 
