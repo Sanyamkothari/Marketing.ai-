@@ -116,6 +116,11 @@ class PauseAllResult(Contract):
 
 class ApproveRequest(Contract):
     autonomy: AutonomyLevel
+    start_without_proof: bool = Field(
+        default=False,
+        description="The shop owner's explicit confirmation to start on Autopilot without proof. Only an "
+        "email-only plan approved for the first time may; it is written to the audit log",
+    )
 
 
 class ContentStatusRequest(Contract):
@@ -225,8 +230,11 @@ def goal_plan(goal_id: str, services: ServicesDep) -> PlanFacts:
 
 @router.post("/goals/{goal_id}/approve")
 def approve_goal(goal_id: str, body: ApproveRequest, services: ServicesDep) -> GoalWithBrief:
-    """Approve the plan and set the autonomy level; the goal becomes active."""
-    goal, brief = _run(services.approve, goal_id, body.autonomy)
+    """Approve the plan and set the autonomy level; the goal becomes active.
+
+    Autopilot is refused (409, with the reason) unless the holdout shows the goal pays and the agent's forecasts
+    hold up, or an email-only plan is started with the owner's explicit `start_without_proof`."""
+    goal, brief = _run(services.approve, goal_id, body.autonomy, start_without_proof=body.start_without_proof)
     return GoalWithBrief(goal=goal, brief=brief)
 
 

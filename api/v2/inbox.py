@@ -319,6 +319,7 @@ def local_inbox_services(services: Any) -> InboxServices:
             ledger=InMemoryAutonomyLedger(),
             alerts=alerts,
             data_trusted=watchdog.trusted,
+            require_evidence=True,
         )
         zt = ZeroTouch(
             inbox=inbox_,
@@ -337,7 +338,29 @@ def local_inbox_services(services: Any) -> InboxServices:
         )
     at = clock()
     zt.tick(at)
+    _audit_to_ledger(services, zt)
     return InboxServices(zero_touch=zt, clock=clock, alerts=services.alerts, last_sync=at)
+
+
+def _audit_to_ledger(services: Any, zt: Any) -> None:
+    """Also write the evidence gate's audit entries (`Services.audit_log`) to the autonomy ledger."""
+    guard = getattr(zt, "guard", None)
+    if guard is None:
+        return
+
+    def sink(entry: Any) -> None:
+        guard.record(
+            entry.goal_id,
+            entry.at,
+            from_level=entry.from_level,
+            to_level=entry.to_level,
+            actor=f"person:{entry.actor}",
+            reason=entry.reason,
+            words=entry.words,
+            evidence=entry.evidence,
+        )
+
+    services.audit_sink = sink
 
 
 def production_inbox_services(services: Any, *, engine: Any, wiring: Any = None) -> InboxServices:
@@ -355,6 +378,7 @@ def production_inbox_services(services: Any, *, engine: Any, wiring: Any = None)
     monitor = getattr(getattr(wiring, "engine", None), "monitor", None)
     if monitor is not None:
         monitor.watchdog = zt.watchdog
+    _audit_to_ledger(services, zt)
     return InboxServices(
         zero_touch=zt, clock=services.clock, alerts=services.alerts, sync_every=PRODUCTION_SYNC_EVERY
     )

@@ -306,6 +306,7 @@ class AutonomousPolicy:
         margin_fn: RestraintMargin | None = None,
         journeys: JourneyRunner | None = None,
         plan_fn: PlanGate | None = None,
+        value_scale_fn: Callable[[], float] | None = None,
     ) -> None:
         if exploration_floor is not None and not 0 <= exploration_floor <= 1:
             raise ValueError("exploration_floor is a probability")
@@ -330,6 +331,7 @@ class AutonomousPolicy:
         self.margin_fn = margin_fn
         self.journeys = journeys
         self.plan_fn = plan_fn
+        self.value_scale_fn = value_scale_fn
         # customer -> {decision_id: send_at} for ACT decisions whose SEND is not in the state yet
         self._scheduled: dict[str, dict[str, datetime]] = {}
 
@@ -381,8 +383,9 @@ class AutonomousPolicy:
         # A bid whose value or uncertainty is NaN or infinite is a bidder bug, not an opportunity:
         # numpy's argmax treats NaN as the largest value, so one such bid would always be sent.
         times: dict[tuple[str, datetime], datetime | None] = {}
+        scale = self._value_scale()
         offered = [
-            self._timed(b, state, ctx, times, hour_scores)
+            self._timed(self._scaled(b, scale), state, ctx, times, hour_scores)
             for bidder in self.bidders
             for b in bidder.bids(state, ctx)
             if math.isfinite(b.expected_net) and math.isfinite(b.uncertainty)
@@ -505,7 +508,7 @@ class AutonomousPolicy:
         planned = runner.plan(turn, state, ctx, self.bidders)
         if isinstance(planned, str):
             return None
-        bid = self._timed(planned, state, ctx)
+        bid = self._timed(self._scaled(planned, self._value_scale()), state, ctx)
         check = rules.check_bid(bid, state, ctx)
         if check.allowed and not gap.allowed:
             check = gap
@@ -823,6 +826,20 @@ class AutonomousPolicy:
         for key in [k for k, v in extra.items() if math.isinf(v) or v <= 0]:
             del extra[key]
         return kept
+
+    def _value_scale(self) -> float:
+        """The calibration factor (`autonomy.decide.calibration`): 1.0 when none is set or it is not a usable number."""
+        if self.value_scale_fn is None:
+            return 1.0
+        scale = float(self.value_scale_fn())
+        return scale if math.isfinite(scale) and scale > 0 else 1.0
+
+    @staticmethod
+    def _scaled(bid: Bid, scale: float) -> Bid:
+        """The bid with its expected value multiplied by the calibration factor (its uncertainty is left as it is)."""
+        if scale == 1.0 or not math.isfinite(bid.expected_net):
+            return bid
+        return bid.model_copy(update={"expected_net": bid.expected_net * scale})
 
     def _price(self, state: CustomerState) -> float:
         if self.attention_price_fn is None:

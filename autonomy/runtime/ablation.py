@@ -52,6 +52,7 @@ LEAVE_ONE_OUT = "leave_one_out"
 PART_ALONE = "part_alone"
 GUARD = "guard"
 REFERENCE = "reference"
+CALIBRATION = "calibration"
 
 
 @dataclass(frozen=True)
@@ -201,6 +202,14 @@ def _variants() -> dict[str, Variant]:
                 "attention_price": False,
             },
         ),
+        # calibration (docs/v4/CALIBRATION.md): the plain agent with its bids shrunk by the measured over-valuation
+        Variant(
+            "agent_calibrated",
+            CALIBRATION,
+            "does shrinking every bid by the holdout-measured over-valuation (1.14x to 1.52x, never inflating) "
+            "beat the plain agent",
+            lambda: {"calibrate": True},
+        ),
     ]
     return {x.name: x for x in v}
 
@@ -285,6 +294,7 @@ def switches(policy: AgentPolicy) -> dict[str, object]:
         "weekly_budget": inner.budget_fn is not None,
         "exploration_floor": inner.exploration_floor,
         "attention_price": inner.attention_price_fn is not None and inner.channel_price_fn is not None,
+        "calibrate": policy.value_calibration is not None,
         "weekly_cap": policy.contact_price.cap(),
     }
 

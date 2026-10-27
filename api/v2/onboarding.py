@@ -46,7 +46,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import Field
 from starlette.applications import Starlette
 
-from api.v2.deps import ServiceError, Services, get_services
+from api.v2.deps import ConflictError, ServiceError, Services, get_services
 from autonomy.contracts import (
     AutonomyLevel,
     Brief,
@@ -234,6 +234,12 @@ class AcceptRequest(Contract):
         default=(), description="With offers: prefixes of the per-customer unique codes for the offer"
     )
     autonomy: AutonomyLevel = AutonomyLevel.SHADOW
+    start_without_proof: bool = Field(
+        default=False,
+        description="With autonomy autopilot: the shop owner's explicit confirmation to start on Autopilot "
+        "without proof (an email-only plan only; written to the audit log). Otherwise Autopilot needs proof "
+        "and the plan runs in Approve each batch",
+    )
 
 
 class MandateRecord(Contract):
@@ -465,7 +471,17 @@ def accept(body: AcceptRequest, request: Request, services: ServicesDep, desk: D
             )
             level = AutonomyLevel.SHADOW
         try:
-            goal, plan = services.approve(goal.goal_id, level)
+            try:
+                goal, plan = services.approve(
+                    goal.goal_id, level, start_without_proof=body.start_without_proof
+                )
+            except ConflictError as exc:
+                if level is not AutonomyLevel.AUTOPILOT:
+                    raise
+                # Autopilot is gated on proof: the plan starts in Approve each batch, and says why.
+                notes.append(str(exc))
+                level = AutonomyLevel.APPROVE
+                goal, plan = services.approve(goal.goal_id, level)
         except ServiceError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         if not desk.persistent_key:

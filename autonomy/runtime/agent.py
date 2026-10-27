@@ -142,6 +142,7 @@ from autonomy.contracts.offer_codes import (
     unknown_tokens,
 )
 from autonomy.decide import rules
+from autonomy.decide.calibration import Calibration
 from autonomy.decide.bidders import AssetOf, GoalBidder, ItemLookup, contact_harm_of
 from autonomy.decide.frequency import FrequencyConfig, FrequencyPlanner, LookalikeHazard, lerp
 from autonomy.decide.journeys import JourneyConfig, JourneyRunner
@@ -1656,6 +1657,7 @@ class AgentPolicy:
         experiments: ExperimentBook | None = None,
         attention_price: bool = True,
         complaint_cost: float | None = None,
+        calibrate: bool = False,
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
@@ -1741,6 +1743,9 @@ class AgentPolicy:
         """With the look-alike model on: the profile each holdout or sent decision was made on, kept until its
         window closes and handed to the model as an outcome (`nightly`). None otherwise. It is filled only by
         `decide` in this process: decisions replayed through `nightly` after a rebuild do not reach it."""
+        self.value_calibration: Calibration | None = Calibration() if calibrate else None
+        """With `calibrate` (off by default): the factor every bid's expected value is multiplied by, refitted from the
+        holdout in `learn` (autonomy/decide/calibration.py). None leaves every bid as the bidders priced it."""
         self.briefs: dict[str, Brief] = {}
         self.bidders: dict[str, GoalBidder] = {}
         self.policy = AutonomousPolicy(
@@ -1759,6 +1764,7 @@ class AgentPolicy:
             margin_fn=self._margin if restraint else None,
             plan_fn=self.planner.gate if self.planner is not None else None,
             journeys=journeys,
+            value_scale_fn=self.value_calibration.scale if self.value_calibration is not None else None,
         )
         if journeys is not None and journeys.fade is None:
             journeys.fade = self._urgency_fade  # a later step is priced at the urgency left on its day
@@ -2096,6 +2102,8 @@ class AgentPolicy:
         decision = self.policy.decide(seen, eff, trigger=trigger)
         self._decision_segment[decision.decision_id] = seg
         decision = self._chosen(state, eff, decision, seg)
+        if self.value_calibration is not None:
+            self.value_calibration.note(decision)
         self._note_profile(seen, decision)
         self._remember(seen, decision)
         return decision
@@ -2702,6 +2710,8 @@ class AgentPolicy:
 
         A journey's later step is left out, as in `_keep`: it went to someone who did not buy after the step
         before it, so it is not a fresh draw for the response models."""
+        if self.value_calibration is not None:
+            self.value_calibration.observe(rewards, decisions)
         rewards = [r for r in rewards if not _later_step(decisions.get(r.decision_id))]
         if not rewards:
             return
@@ -3143,6 +3153,7 @@ def build_agent_policy(
     margin_rate: float | None = None,
     complaint_cost: float | None = None,
     default_order_value: float | None = None,
+    calibrate: bool = False,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -3207,6 +3218,12 @@ def build_agent_policy(
     default) leaves every number as it was. With a `bundle` given, build it with
     `build_bundle(margin_rate=...)`; one with another default margin is refused, and so is a `who` given
     as a `WhoBook` whose 90-day value label uses another margin.
+
+    `calibrate` (off by default, so every number above is unchanged) multiplies every bid's expected value by
+    a factor measured against the holdout (`autonomy.decide.calibration`, docs/v4/CALIBRATION.md): the
+    holdout's incremental profit per action over the agent's mean expected net per chosen action, shrunk
+    toward 1 while the holdout is small and kept in [0.25, 1.0], so it never inflates. It is 1.0 until the
+    holdout can be measured, and is refitted whenever `learn` is handed closed outcomes.
 
     Money is in the shop's currency. `costs`, `complaint_cost` (what one complaint costs beyond the lost
     contact) and `default_order_value` (the order value assumed before the shop's own purchases are
@@ -3293,4 +3310,5 @@ def build_agent_policy(
         experiments=parts.experiments,
         attention_price=attention_price,
         complaint_cost=complaint_cost,
+        calibrate=calibrate,
     )

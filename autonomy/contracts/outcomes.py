@@ -85,6 +85,11 @@ class ProofSummary(Contract):
     margin_note: str | None = Field(
         default=None, description="Says the margin was not set, or how much of the profit rests on it"
     )
+    calibration: Literal["ok", "over_2x", "over_1_5x", "not_enough_data"] | None = Field(
+        default=None,
+        description="Whether the agent's own expected value per action holds up against the holdout's measured "
+        "value per action (autonomy.decide.calibration); None: not worked out here",
+    )
 
 
 class PriorSource(StrEnum):

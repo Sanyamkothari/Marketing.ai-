@@ -34,7 +34,8 @@ jobs:
         scenario: [baseline_shop, sleeping_dogs_15, sleeping_dogs_hidden, discount_cannibalisation, whatsapp_fatigue, send_time_matters, drift_midway, small_business, null_effect, complaint_storm]
         # plan-v3 foundation B: the look-alike agent beside the plain one on the same seeds (docs/v3/LOOKALIKE.md)
         # agent_v3: every v3 piece together, the preset scored as a whole against agent (docs/v3/PRESET.md)
-        policy: [agent, agent_lookalike, agent_who, agent_frequency, agent_v3]
+        # agent_calibrated: bids shrunk by the holdout-measured over-valuation, never inflated (docs/v4/CALIBRATION.md)
+        policy: [agent, agent_lookalike, agent_who, agent_frequency, agent_v3, agent_calibrated]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

@@ -36,7 +36,7 @@ jobs:
       fail-fast: false
       matrix:
         dataset: [hillstrom, x5, criteo, megafon]
-        policy: [agent, agent_v3]
+        policy: [agent, agent_v3, agent_calibrated]
     env:
       DATA_DIR: ${{ github.workspace }}/.realbench-data   # inside the workspace: actions/cache rejects ".." paths
     steps:
@@ -116,7 +116,11 @@ jobs:
           python - <<'PY'
           import json, pathlib
           # parts/<dataset>-<policy>.json; realbench.json stays the agent's (the scoreboard of record)
-          for policy, out in (("agent", "realbench.json"), ("agent_v3", "realbench-agent_v3.json")):
+          for policy, out in (
+              ("agent", "realbench.json"),
+              ("agent_v3", "realbench-agent_v3.json"),
+              ("agent_calibrated", "realbench-agent_calibrated.json"),  # docs/v4/CALIBRATION.md
+          ):
               merged = None
               for p in sorted(pathlib.Path("parts").glob(f"*-{policy}.json")):
                   r = json.loads(p.read_text())
