@@ -2,24 +2,37 @@
 
 The one-shot bench fits the method once on a past randomised campaign. Here it has to learn its own data:
 
-* **Turns.** Every customer has a fixed weekday turn (a hash of the id). On their turn they are considered once;
-  nobody is contacted more than once a week by this policy.
-* **A randomised slice.** On a customer's turn, with probability `slice_share` (10%) they join the slice, if both
-  channels can reach them: they are given no message, an SMS or an e-mail with equal chance (propensity 1/3) and
-  then left alone for the 14-day outcome window, so the window is clean. Those rows are the only data the model is
-  fitted on, so it never learns from its own choices.
+* **A randomised slice.** Every customer has a fixed weekday turn (a hash of the id). On their turn, with probability
+  `slice_share` (10%), a reachable customer joins the slice: they are given no message or one of the messages that
+  can reach them, with equal chance (propensity 1/3 with both channels, 1/2 with one; the design probability is
+  stored per row), and then left alone for the 14-day outcome window, so the window is clean. Those rows are the
+  only data the model is fitted on, so it never learns from its own choices.
 * **Weekly refit.** On the first day of each week from the third on, the method is refitted on every slice row
   whose 14-day window has closed: a cross-fitted uplift model, a cost threshold, and the gate against the best
   simple rule (send none, send all of an arm, a segment rule) (`fit_uplift_threshold`). The model decides
-  only when the gate says its lower bound beats the best simple rule; otherwise that rule decides. Before the
-  first fit the policy sends nothing outside the slice.
+  only when the gate says its lower bound beats the best simple rule; otherwise that rule decides.
+* **Deployment, every day.** Outside the slice, every customer not in an outcome window and under the weekly cap is
+  given what the deployed model or rule says, every day (so "send all SMS" sends as often as the cap allows, like
+  `send_all_sms`). An arm the customer cannot receive is replaced by the best one they can (the model) or by no
+  message (a rule). Before the first fit, and while no fit has succeeded, the declared default is `weekly_sms`: one
+  SMS a week to everyone SMS reaches.
 * **Everything it uses is observed**: its features are read from the customer's folded state (purchases, spend,
   recency, tenure, age, gender, recent contacts), its outcomes from the purchase events it is shown.
 
-Choices the method did not ask for, stated so they can be questioned: the outcome is the number of purchases in
-the 14 days after the turn, capped at 4 and divided by 4 (the method's label is a probability, and a 0/1 label
-saturates for frequent buyers), priced at 4 x the customer's own mean margin per purchase; the cost of an arm is
-its channel price only. It knows nothing of fatigue or pull-forward, which is the point of the benchmark.
+Adapter choices the method did not ask for, stated so they can be questioned:
+
+* the label is the number of purchases in the 14 days after the turn, divided by a cap and capped at 1 (the
+  method's label is a probability; a 0/1 label saturates for frequent buyers). The cap is set at each refit to the
+  99th percentile of those counts in the rows fitted on (at least 4), so heavy buyers, who carry the largest effect
+  in roubles, are not cut off; a purchase is priced at cap x the customer's own mean margin per purchase;
+* an arm's cost is its channel price only;
+* it is fitted on the slice only, not on everything observed: the deployed sends are chosen by the policy itself
+  (propensity 0 or 1), so they cannot be reweighted into unconfounded data;
+* the e-mail arm is only ever randomised to customers e-mail reaches, so when the gate judges a rule or model that
+  would e-mail an SMS-only customer, it reads that customer's e-mail value from the model, not from data.
+
+It knows nothing of fatigue or pull-forward, which is the point of the benchmark (`contacts_30d` is a feature, so it
+can learn from the slice how recent contacts change the outcome).
 """
 
 from __future__ import annotations
@@ -27,7 +40,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import numpy.typing as npt
@@ -62,8 +75,12 @@ FloatArray = npt.NDArray[np.float64]
 SALT = "autonomy-waves-v1:uplift"
 ARM_CHANNELS: tuple[Channel | None, ...] = (None, Channel.SMS, Channel.EMAIL)
 ARM_NAMES: tuple[str, ...] = ("no message", "sms", "email")
-OUTCOME_CAP = 4.0
+MIN_OUTCOME_CAP = 4.0
+OUTCOME_QUANTILE = 0.99
 MIN_ROWS = 400
+DEFAULT_RULE = "weekly_sms"
+"""What is deployed before the first successful fit: one SMS a week to everyone SMS reaches."""
+DEFAULT_GAP = timedelta(days=7)
 SEGMENT_CANDIDATES: tuple[tuple[str, ...], ...] = (
     ("recency_days",),
     ("n_purchases",),
@@ -82,6 +99,7 @@ class _Row:
     cid: str
     day: int
     arm: int
+    propensity: float
     attrs: dict[str, str]
     feats: dict[str, float]
     margin_per_purchase: float
@@ -126,6 +144,7 @@ class UpliftWavesPolicy:
         self._plan_day = -1
         self._fit_day = -1
         self._fit: UpliftThresholdPolicy | None = None
+        self._cap = MIN_OUTCOME_CAP
         self._world_seed = 0
         self._margin_sum = 0.0
         self._margin_n = 0
@@ -215,29 +234,31 @@ class UpliftWavesPolicy:
         margin = np.zeros(len(closed))
         for k, r in enumerate(closed):
             counts[k], margin[k] = self._outcome(r)
+        cap = max(MIN_OUTCOME_CAP, float(math.ceil(np.quantile(counts, OUTCOME_QUANTILE))))
         frame = pd.DataFrame([r.feats for r in closed])
         data = UpliftData(
             customer_ids=np.array([r.cid for r in closed], dtype=object),
             arm=np.array([r.arm for r in closed], dtype=np.int64),
-            propensity=np.full(len(closed), 1.0 / len(ARM_NAMES)),
-            converted=np.minimum(counts, OUTCOME_CAP) / OUTCOME_CAP,
+            propensity=np.array([r.propensity for r in closed], dtype=np.float64),
+            converted=np.minimum(counts, cap) / cap,
             margin=margin,
             arm_cost=self.arm_cost,
             arm_names=ARM_NAMES,
             features=frame,
             attributes=tuple(r.attrs for r in closed),
-            conversion_value=OUTCOME_CAP * np.array([r.margin_per_purchase for r in closed]),
+            conversion_value=cap * np.array([r.margin_per_purchase for r in closed]),
         )
         try:
             fitted = fit_uplift_threshold(data, segment_candidates=SEGMENT_CANDIDATES, seed=0)
         except ValueError as exc:
             self.fits.append({"day": day, "rows": len(closed), "chose": "no fit", "reason": str(exc)})
             return
-        self._fit = fitted
+        self._fit, self._cap = fitted, cap
         self.fits.append(
             {
                 "day": day,
                 "rows": len(closed),
+                "outcome_cap": cap,
                 "chose": fitted.gate.chose,
                 "lb": fitted.gate.lb,
                 "model_contact": fitted.gate.model_contact,
@@ -270,7 +291,8 @@ class UpliftWavesPolicy:
         return None
 
     def prepare_day(self, states: Sequence[CustomerState], ctx: DecisionContext) -> None:
-        """Plan today for the customers whose turn it is: slice assignments and the deployed rule or model."""
+        """Plan today: slice assignments for the customers whose turn it is, and the deployed model or rule (the
+        default before the first fit) for everyone else who may be contacted today."""
         if self._start is None:
             self._start = ctx.now.replace(hour=0, minute=0, second=0, microsecond=0)
         day = math.floor((ctx.now - self._start).total_seconds() / 86_400.0)
@@ -281,52 +303,52 @@ class UpliftWavesPolicy:
             self._refit(day)
         cap = weekly_cap(ctx.briefs)
         week = day // self.cadence
-        batch: list[tuple[CustomerState, dict[str, str], dict[str, float], float]] = []
+        batch: list[tuple[CustomerState, dict[str, str], dict[str, float], float, tuple[int, ...]]] = []
         for s in states:
             cid = s.customer_id
-            if self._turn_of(cid) != day % self.cadence:
-                continue
             if s.group is Group.HOLDOUT or s.open_complaint or s.contacts_7d >= cap:
-                continue
-            reach = set(s.contactable_channels())
-            if not (Channel.SMS in reach or Channel.EMAIL in reach):
                 continue
             if day < self._quarantine.get(cid, -1):
                 continue
+            channels = s.contactable_channels()
+            reach = tuple(a for a in (1, 2) if ARM_CHANNELS[a] in channels)
+            if not reach:
+                continue
             attrs, feats, per_purchase = self._featurize(s, ctx.now)
-            both = Channel.SMS in reach and Channel.EMAIL in reach
-            draw = unit_hash([cid, cid], f"{SALT}:slice:{self._world_seed}:{week}")
-            if both and draw[0] < self.slice_share:
-                arm = int(unit_hash([cid], f"{SALT}:arm:{self._world_seed}:{week}")[0] * len(ARM_NAMES))
-                arm = min(arm, len(ARM_NAMES) - 1)
-                self._rows.append(_Row(cid, day, arm, attrs, feats, per_purchase))
-                self.slice_rows += 1
-                self._quarantine[cid] = day + self.outcome_days + 1
-                self._plan[cid] = self._action(arm, s, ctx)
-            elif self._fit is not None:
-                batch.append((s, attrs, feats, per_purchase))
-        if not batch or self._fit is None:
+            if self._turn_of(cid) == day % self.cadence:
+                draw = float(unit_hash([cid], f"{SALT}:slice:{self._world_seed}:{week}")[0])
+                if draw < self.slice_share:
+                    arms = (0, *reach)
+                    pick = float(unit_hash([cid], f"{SALT}:arm:{self._world_seed}:{week}")[0])
+                    arm = arms[min(int(pick * len(arms)), len(arms) - 1)]
+                    self._rows.append(_Row(cid, day, arm, 1.0 / len(arms), attrs, feats, per_purchase))
+                    self.slice_rows += 1
+                    self._quarantine[cid] = day + self.outcome_days + 1
+                    self._plan[cid] = self._action(arm, s, ctx)
+                    continue
+            batch.append((s, attrs, feats, per_purchase, reach))
+        if not batch:
+            return
+        if self._fit is None:
+            for s, _a, _f, _p, reach in batch:
+                recent = s.last_contact_at is not None and ctx.now - s.last_contact_at < DEFAULT_GAP
+                if 1 in reach and not recent:
+                    self._plan[s.customer_id] = self._action(1, s, ctx)
             return
         attributes = [b[1] for b in batch]
         frame = pd.DataFrame([b[2] for b in batch])
-        conv = OUTCOME_CAP * np.array([b[3] for b in batch], dtype=np.float64)
+        conv = self._cap * np.array([b[3] for b in batch], dtype=np.float64)
         if self._fit.model is not None:
             nets = self._fit.net(attributes, conv)
             assert nets is not None
-            reach_mask = np.array(
-                [
-                    [Channel.SMS in b[0].contactable_channels(), Channel.EMAIL in b[0].contactable_channels()]
-                    for b in batch
-                ]
-            )
+            reach_mask = np.array([[1 in b[4], 2 in b[4]] for b in batch], dtype=np.bool_)
             nets = np.where(reach_mask, nets, -np.inf)
             best = nets.argmax(axis=1)
-            arms = np.where(nets[np.arange(len(batch)), best] > 0, best + 1, 0)
+            arms_out = np.where(nets[np.arange(len(batch)), best] > 0, best + 1, 0)
         else:
-            arms = self._fit.arms(attributes, frame, conv)
-        for (s, _a, _f, _p), arm in zip(batch, arms.tolist(), strict=True):
-            channel = ARM_CHANNELS[int(arm)]
-            if channel is not None and channel in s.contactable_channels():
+            arms_out = self._fit.arms(attributes, frame, conv)
+        for (s, _a, _f, _p, reach), arm in zip(batch, arms_out.tolist(), strict=True):
+            if int(arm) in reach:
                 self._plan[s.customer_id] = self._action(int(arm), s, ctx)
 
     def decide(self, state: CustomerState, ctx: DecisionContext) -> Decision:
@@ -343,14 +365,14 @@ class UpliftWavesPolicy:
             reason=(
                 f"Wave: {action.channel.value}."
                 if acting and action is not None
-                else "Not this customer's turn, or no send chosen."
+                else "In an outcome window, at the cap, or no send chosen."
             ),
             policy_version=self.version,
         )
 
     def diagnostics(self) -> dict[str, object]:
-        """What the policy did, for the report: slice size, every refit and what the gate chose."""
-        return {"slice_rows": self.slice_rows, "fits": list(self.fits)}
+        """What the policy did, for the report: slice size, the default rule, every refit and what the gate chose."""
+        return {"slice_rows": self.slice_rows, "default_rule": DEFAULT_RULE, "fits": list(self.fits)}
 
 
 def uplift_waves_factory(brief: Brief, content: Sequence[ContentItem]) -> PolicyFactory:

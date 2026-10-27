@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,13 @@ def test_paired_difference_uses_the_per_customer_gaps() -> None:
     noisy = {0: base + rng.normal(0.5, 1, 500)}
     diff, se, _ = paired_difference(noisy, {0: base})
     assert se is not None and se > 5
+    # seeds share their customers: repeating the same per-customer gaps in three seeds is no narrower than one
+    _, se3, _ = paired_difference(dict.fromkeys(range(3), noisy[0]), dict.fromkeys(range(3), base))
+    assert se3 is not None and abs(se3 - se) < 1e-9
+    # and the spread between worlds adds to it
+    worlds = {s: base + 0.5 + 0.2 * s for s in range(3)}
+    _, se_w, _ = paired_difference(worlds, dict.fromkeys(range(3), base))
+    assert se_w is not None and se_w > 50
 
 
 def test_summary_ranks_against_the_oracle_the_agent_and_the_best_simple_policy() -> None:
@@ -68,6 +76,47 @@ def test_summary_ranks_against_the_oracle_the_agent_and_the_best_simple_policy()
         and "| uplift_waves |" in text
         and text.index("| oracle |") > text.index("| agent |")
     )
+    assert "84 decision days" in text and "(sd " in text
+
+
+def test_the_table_says_how_many_days_ran_and_lists_the_refits() -> None:
+    fits = [{"day": 21, "chose": "rule:send to none", "lb": -12.5, "model_contact": 1.0}]
+    rows = [
+        row("heterogeneous", "send_none", 0, 0.0, days=28),
+        row("heterogeneous", "uplift_waves", 0, 5.0, days=28, policy_diagnostics={"fits": fits}),
+    ]
+    text = render_markdown(summarize(rows))
+    assert "28 decision days" in text and "84 decision days" not in text
+    assert "`uplift_waves` seed 0 refits: day 21: rule:send to none (lb -12.5, model contacts 1)" in text
+
+
+def test_the_summary_counts_a_run_found_twice_once(tmp_path: Path, capsys: Any) -> None:
+    report = {"benchmark": "waves", "runs": [row("null", "send_none", 0, 0.0), row("null", "agent", 0, -3.0)]}
+    for folder in ("a", "b"):  # a re-run's artifacts hold copies of the same runs
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "part.json").write_text(json.dumps(report))
+    assert cli.main(["--summarize", str(tmp_path)]) == 0
+    text = capsys.readouterr().out
+    assert "seeds [0]" in text and text.count("| agent |") == 1
+
+
+def test_the_ci_matrix_names_only_known_worlds_and_policies() -> None:
+    import yaml
+
+    from autonomy.gym.waves.config import WORLDS
+    from autonomy.gym.waves.policies import policy_names
+
+    path = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "waves.yml"
+    workflow = yaml.safe_load(path.read_text())
+    matrix = workflow["jobs"]["waves"]["strategy"]["matrix"]
+    assert matrix["world"] and all(isinstance(w, str) and w in WORLDS for w in matrix["world"])
+    assert set(matrix["world"]) == set(WORLDS)
+    assert all(isinstance(p, str) and p in policy_names() for p in matrix["policy"])
+    assert all(isinstance(s, int) for s in matrix["seed"])
+    summary = workflow["jobs"]["summary"]["steps"]
+    pattern = next(s["with"]["pattern"] for s in summary if "download-artifact" in str(s.get("uses")))
+    names = [s["with"]["name"] for s in summary if "upload-artifact" in str(s.get("uses"))]
+    assert all(not fnmatch(n, pattern) for n in names)
 
 
 def test_the_fixture_command_runs_end_to_end_and_the_summary_reads_its_files(
@@ -120,8 +169,19 @@ def test_the_x5_loader_reads_the_files_the_bench_downloads(tmp_path: Path, table
     lines = receipts.assign(regular_points_spent=0.0, express_points_spent=0.0)
     lines.to_csv(root / "purchases.csv.gz", index=False)
     clients.assign(first_redeem_date=None).to_csv(root / "clients.csv.gz", index=False)
+    late = clients["client_id"].iloc[:7].tolist()
+    clients = clients.assign(
+        first_issue_date=[
+            "2019-01-10 10:00:00" if c in late else d
+            for c, d in zip(clients["client_id"], clients["first_issue_date"], strict=True)
+        ]
+    )
+    clients.assign(first_redeem_date=None).to_csv(root / "clients.csv.gz", index=False)
     data = cli.load_x5(tmp_path, 120, Timings(quiet=True))
     assert data.n == 120 and len(data.post_idx) > 0
+    assert not set(late) & set(data.customer_ids)  # issued after the cutoff: not customers yet
+    assert data.eligibility["dropped_issued_after_cutoff"] == 7
+    assert cli.describe(data, "x5")["eligibility"]["sampled"] == 120
     assert data.start.date().isoformat() == "2018-12-25"
     assert float(data.features["n_receipts"].sum()) == len(data.hist_idx)
     assert cli.load_x5(tmp_path, 120, Timings(quiet=True)).customer_ids == data.customer_ids

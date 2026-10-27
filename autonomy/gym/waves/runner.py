@@ -8,12 +8,13 @@ non-holdout customer per day, decisions acted on, time moved on. This module add
   window, less the pull-forward payback in the following 30 days, less message costs, less the expected opt-out cost.
   It is computed from the contact ledger, so it counts the whole tail beyond day 84, and it has no sampling noise.
   It is the same expectation the oracle maximises and every policy is ranked on.
-* **Measured value** (`measured_*`): what a business could read off its own books at day 84: the contacted
-  customers' mean realised net minus the holdout's, times the contacted group's size, with a 95% interval. It
-  sees only the 84 days, so late sends and the payback are missing, and it is noisy. Putting it beside the true
-  value shows over-claiming.
+* **Measured value** (`measured_*`): what a business could read off its own books on the last decision day: the
+  intention-to-treat difference between the policy's group (every non-holdout customer, contacted or not) and the
+  holdout, in mean realised net per customer (raw, with no pre-period adjustment), times the policy group's size,
+  with a 95% interval. It sees only the decision days, so late sends and the payback are missing, and it is noisy.
+  Putting it beside the true value shows over-claiming.
 
-Common random numbers: the world draws every purchase, thinning, click and opt-out roll from `(seed, customer,
+Common random numbers: the world draws every purchase, removal, click and opt-out roll from `(seed, customer,
 day)` alone, so policies in the same world and seed face the same luck. The customers and their real receipts
 are the same in every world and seed.
 """
@@ -98,8 +99,9 @@ def exact_score(world: WavesWorld, groups: list[Group]) -> dict[str, Any]:
 
 
 def measured_value(world: WavesWorld, groups: list[Group], seed: int) -> dict[str, float]:
-    """The holdout comparison at day 84: contacted group's mean realised net minus the holdout's, scaled to the
-    contacted group's size, with a normal 95% interval (the Gym's `difference_interval`)."""
+    """The holdout comparison on the last decision day, intention to treat: the policy group's mean realised net
+    (every non-holdout customer, contacted or not) minus the holdout's, scaled to the policy group's size, with a
+    normal 95% interval (the Gym's `difference_interval`)."""
     net = world.measured_net()
     agent = np.array([g is Group.AGENT for g in groups], dtype=np.bool_)
     holdout = np.array([g is Group.HOLDOUT for g in groups], dtype=np.bool_)

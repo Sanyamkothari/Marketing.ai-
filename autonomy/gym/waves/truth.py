@@ -1,9 +1,14 @@
 """The hidden truth of a world: what a message really does to each customer's buying.
 
-A message sent on day D changes the customer's daily purchase probability on days D+1 .. D+14 by an
-**additive** amount: `rel x base_rate x weight_j`, where `base_rate` is the customer's own purchases per day
-(shrunk toward the population's), `weight_j` the front-loaded day weights (`EFFECT_WEIGHTS`) and `rel` the
-customer's relative lift. Nothing is multiplied onto a click rate and no click enters the formula.
+A message sent on day D changes the customer's buying on days D+1 .. D+14. `rel` is the customer's relative lift
+(+0.07: +7% of their 14-day purchase rate) after channel and fatigue, and `weight_j` the front-loaded day weights
+(`EFFECT_WEIGHTS`). Nothing is multiplied onto a click rate and no click enters the formula.
+
+* A **positive** lift adds `rel x base_rate x 14 x weight_j` to the customer's daily chance of an extra purchase
+  (additive; `base_rate` is the customer's own purchases per day before the cutoff, shrunk toward the population's).
+  An extra purchase is worth the customer's own mean receipt before the cutoff.
+* A **negative** lift (sleeping dogs) removes each of the customer's real receipts on day D+j with probability
+  `|rel| x 14 x weight_j`, so a dog who buys more loses more and a dog who buys nothing after the cutoff loses nothing.
 
 `rel` comes from a **small random tree** over the customer's real, point-in-time features
 (`plant_effect`): depth-3 splits at random features and random quantiles, one lift per leaf, scaled so the
@@ -16,12 +21,16 @@ Three repeated-send effects sit on top, none of them in the agent's model family
 * **fatigue**: a positive lift is multiplied by `fatigue ** k`, `k` = messages in the previous 14 days;
 * **opt-outs**: the chance a message ends in an unsubscribe is `base x (1 + slope x messages in the previous 7
   days)`, and costs `UNSUBSCRIBE_COST` (plus the complaint share);
-* **pull-forward**: `pull_forward` of a positive effect's purchases are missing again from the 30 days after
-  the window, so a 7-day or 14-day reading of a message overstates what it earned.
+* **pull-forward**: after a positive effect, each real receipt on the 30 days after the window is removed with
+  probability `pull_forward x rel x 14 / 30`, so a 7-day or 14-day reading of a message overstates what it earned.
 
-The true value of a contact is `margin x own mean receipt x (net purchases)` minus the channel cost and the
-expected opt-out cost, exactly (no sampling): the world's realised purchases are draws around the same
-expectation. `WavesTruth` is a `GroundTruth` and a `BatchTruth`, so the Gym's oracle runs on it unchanged.
+The truth holds the two per-customer, per-day arrays the world draws from (`incremental`: the chance of an extra
+purchase; `removal`: the chance a real receipt is taken out), and values a contact by what it adds to them: the
+margin of its extra purchases, less the margin of the real receipts it is expected to remove (`at_stake`: the margin
+of the customer's real receipts that day; past the end of the data, `base_rate x own mean receipt x margin`).
+Both chances are capped at 1 (0.95 for extra purchases) the way the world caps them, so the world's realised
+purchases are draws whose expectation is exactly the truth, customer by customer, with no sampling in the score.
+`WavesTruth` is a `GroundTruth` and a `BatchTruth`, so the Gym's oracle runs on it unchanged.
 """
 
 from __future__ import annotations
@@ -44,6 +53,7 @@ from autonomy.gym.waves.config import (
     HORIZON_DAYS,
     MARGIN,
     PULL_FORWARD_DAYS,
+    TAIL_DAYS,
     UNSUBSCRIBE_COST,
     WorldSpec,
 )
@@ -58,6 +68,11 @@ CHANNEL_INDEX: dict[Channel, int] = {c: i for i, c in enumerate(CHANNELS)}
 CUM_WEIGHTS: FloatArray = np.concatenate([[0.0], np.cumsum(EFFECT_WEIGHTS)])
 """`CUM_WEIGHTS[h]`: share of a message's effect that has landed h days after the send (h = 0..14)."""
 MAX_UNSUBSCRIBE = 0.5
+MAX_INCREMENTAL_PROB = 0.95
+"""The world draws at most one extra purchase a day, with at most this chance."""
+WEIGHTS: FloatArray = np.array(EFFECT_WEIGHTS, dtype=np.float64)
+OFFSETS: IntArray = np.arange(1, TAIL_DAYS + 1, dtype=np.int64)
+"""Days after the send a contact can touch: 1..14 (the window), then 15..44 (the pull-forward payback)."""
 
 
 # --- the hidden function ---------------------------------------------------------------------------
@@ -149,13 +164,19 @@ class ContactEffects:
     rel_eff: FloatArray
     """Relative lift after channel and fatigue."""
     purchases: FloatArray
-    """Expected incremental purchases over the 14-day window (negative: purchases lost)."""
-    net_purchases: FloatArray
-    """The same after the pull-forward payback of a positive effect."""
+    """The nominal effect: `rel_eff x base_rate x 14` purchases over the window (negative for a sleeping dog)."""
+    extra: FloatArray
+    """Change in the daily chance of an extra purchase, per day after the send (contacts x 44; 0 for a dog)."""
+    removal: FloatArray
+    """Change in the daily chance a real receipt is removed, per day after the send (contacts x 44)."""
+    gain: FloatArray
+    """Expected margin of the extra purchases the contact adds (RUB)."""
+    loss: FloatArray
+    """Expected margin of the real receipts it removes: inside the window for a dog, the payback otherwise."""
     gross: FloatArray
-    """Margin of `net_purchases` (RUB)."""
+    """`gain - loss` (RUB)."""
     gross_7d: FloatArray
-    """Margin of the first 7 days of the window alone (what a 7-day reading of the contact would credit)."""
+    """The same over the first 7 days after the send alone (what a 7-day reading of the contact would credit)."""
     cost: FloatArray
     p_unsubscribe: FloatArray
     unsubscribe_cost: FloatArray
@@ -205,7 +226,8 @@ class ContactLedger:
 
 
 def cumulative_net_purchases(purchases: float, pull_forward: float, h: int) -> float:
-    """Net incremental purchases of one contact `h` days after its send, from its 14-day total.
+    """Net incremental purchases of one contact `h` days after its send, from its 14-day total, for a customer who
+    buys at exactly their base rate (the nominal shape; the truth itself prices the payback on real receipts).
 
     Days 1..14 follow the front-loaded weights; a positive effect then loses `pull_forward` of its purchases,
     spread evenly over the next 30 days. So the 7-day reading is bigger than the 44-day truth."""
@@ -215,6 +237,26 @@ def cumulative_net_purchases(purchases: float, pull_forward: float, h: int) -> f
     if h <= EFFECT_DAYS or purchases <= 0:
         return inside
     return inside - pull_forward * purchases * min(h - EFFECT_DAYS, PULL_FORWARD_DAYS) / PULL_FORWARD_DAYS
+
+
+def margin_at_stake(data: WavesData, width: int) -> FloatArray:
+    """Per customer and day (0 .. width-1), the margin a fully removed day of buying would cost: the margin of the
+    customer's real receipts that day while there is data, then `base_rate x own mean receipt x margin` a day.
+    """
+    out = np.zeros((data.n, width), dtype=np.float64)
+    known = min(data.horizon_days, width)
+    day = np.floor(data.post_s / SECONDS_PER_DAY).astype(np.int64)
+    keep = day < known
+    np.add.at(out, (data.post_idx[keep], day[keep]), MARGIN * data.post_value[keep])
+    if known < width:
+        out[:, known:] = (MARGIN * data.base_rate * data.value)[:, None]
+    return out
+
+
+def _capped_gain(current: FloatArray, added: FloatArray, cap: float) -> FloatArray:
+    """How much `min(current + added, cap)` exceeds `min(current, cap)`, element by element."""
+    out: FloatArray = np.minimum(current + added, cap) - np.minimum(current, cap)
+    return out
 
 
 class WavesTruth:
@@ -238,6 +280,9 @@ class WavesTruth:
         self._index = data.index_of()
         self.unit_margin = MARGIN * data.value
         self.base = data.base_rate
+        self.width = days + TAIL_DAYS + 7
+        """Days the effect arrays cover: every day a contact sent in the run can still touch."""
+        self.at_stake = margin_at_stake(data, self.width)
         self.plant(seed)
 
     def plant(self, seed: int) -> None:
@@ -246,6 +291,10 @@ class WavesTruth:
         self.effect = plant_effect(self.world, self.data.features, seed)
         self.rel = self.effect.rel
         self.counts = np.zeros((self.n, self.days + 3), dtype=np.uint8)
+        self.incremental = np.zeros((self.n, self.width), dtype=np.float64)
+        """Chance of one extra purchase, per customer and day (the world draws it, capped at 0.95)."""
+        self.removal = np.zeros((self.n, self.width), dtype=np.float64)
+        """Chance a real receipt is removed, per customer and day (the world draws it, capped at 1)."""
         self.ledger = ContactLedger()
 
     # --- the GroundTruth surface ---------------------------------------------------------------
@@ -288,10 +337,20 @@ class WavesTruth:
         rel = r * np.where(ch == CHANNEL_INDEX[Channel.EMAIL], w.email_effect, 1.0)
         rel_eff = np.where(rel > 0, rel * w.fatigue**k14, rel)
         purchases = rel_eff * self.base[idx] * EFFECT_DAYS
-        net_purchases = np.where(purchases > 0, purchases * (1.0 - w.pull_forward), purchases)
+        pos, neg = np.maximum(rel_eff, 0.0), np.maximum(-rel_eff, 0.0)
+        extra = np.zeros((idx.size, OFFSETS.size))
+        removal = np.zeros((idx.size, OFFSETS.size))
+        extra[:, :EFFECT_DAYS] = (pos * self.base[idx] * EFFECT_DAYS)[:, None] * WEIGHTS[None, :]
+        removal[:, :EFFECT_DAYS] = (neg * EFFECT_DAYS)[:, None] * WEIGHTS[None, :]
+        removal[:, EFFECT_DAYS:] = (w.pull_forward * pos * EFFECT_DAYS / PULL_FORWARD_DAYS)[:, None]
+        rows = idx[:, None]
+        cols = np.minimum(days[:, None] + OFFSETS[None, :], self.width - 1)
         unit = self.unit_margin[idx]
-        gross = net_purchases * unit
-        gross_7d = purchases * float(CUM_WEIGHTS[7]) * unit
+        gain_by_day = _capped_gain(self.incremental[rows, cols], extra, MAX_INCREMENTAL_PROB) * unit[:, None]
+        loss_by_day = _capped_gain(self.removal[rows, cols], removal, 1.0) * self.at_stake[rows, cols]
+        gain, loss = gain_by_day.sum(axis=1), loss_by_day.sum(axis=1)
+        gross = gain - loss
+        gross_7d = gain_by_day[:, :7].sum(axis=1) - loss_by_day[:, :7].sum(axis=1)
         p_unsub = np.minimum(
             w.unsubscribe_base
             * (1.0 + w.unsubscribe_per_contact * k7)
@@ -303,7 +362,10 @@ class WavesTruth:
         return ContactEffects(
             rel_eff,
             purchases,
-            net_purchases,
+            extra,
+            removal,
+            gain,
+            loss,
             gross,
             gross_7d,
             cost,
@@ -335,9 +397,14 @@ class WavesTruth:
         self, idx: IntArray, channel: IntArray, delivered: BoolArray, day: IntArray
     ) -> ContactEffects:
         """Record a round of contacts (at most one per customer) and return their exact effects, computed
-        before this round's own contacts are counted. Undelivered contacts cost their channel price only."""
+        before this round's own contacts are counted. A delivered contact is added to the arrays the world draws
+        from; an undelivered one costs its channel price only."""
         eff = self.effects(idx, channel, day)
         self.ledger.add(idx, channel, delivered, day, eff)
         live = np.flatnonzero(delivered)
         np.add.at(self.counts, (idx[live], np.minimum(day[live], self.counts.shape[1] - 1)), 1)
+        rows = idx[live][:, None]
+        cols = np.minimum(day[live][:, None] + OFFSETS[None, :], self.width - 1)
+        np.add.at(self.incremental, (rows, cols), eff.extra[live])
+        np.add.at(self.removal, (rows, cols), eff.removal[live])
         return eff

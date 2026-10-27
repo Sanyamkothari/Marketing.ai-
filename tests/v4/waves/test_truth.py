@@ -93,7 +93,8 @@ def test_a_negative_lift_costs_margin_and_is_not_helped_by_the_channel_price(dat
     dogs = np.flatnonzero(w.truth.rel < 0)
     assert dogs.size
     eff = w.truth.effects(dogs.astype(np.int64), Channel.SMS, 3)
-    assert (eff.gross < 0).all() and (eff.net < 0).all()
+    # a dog loses what it would have bought in the window: nothing if it buys nothing then
+    assert (eff.gross <= 0).all() and (eff.gross < 0).any() and (eff.net < 0).all()
     assert (
         eff.p_unsubscribe
         >= w.truth.effects(
@@ -107,10 +108,15 @@ def test_the_value_of_a_contact_is_margin_times_own_receipt_less_costs(data) -> 
     w.reset(0)
     t: WavesTruth = w.truth
     i = np.array([int(np.argmax(t.rel * data.base_rate))], dtype=np.int64)
-    eff = t.effects(i, Channel.SMS, 2)
+    eff = t.effects(i, Channel.SMS, 0)
     purchases = t.rel[i[0]] * data.base_rate[i[0]] * EFFECT_DAYS
     assert abs(eff.purchases[0] - purchases) < 1e-12
-    assert abs(eff.gross[0] - purchases * 0.6 * 0.25 * data.value[i[0]]) < 1e-9
+    # the extra purchases at the customer's own mean receipt, less the payback taken from their real receipts on
+    # days 15..44 after the send (day 0), each removed with chance 0.4 x rel x 14 / 30
+    gain = purchases * 0.25 * data.value[i[0]]
+    payback = 0.4 * t.rel[i[0]] * EFFECT_DAYS / 30 * t.at_stake[i[0], 15:45].sum()
+    assert abs(eff.gain[0] - gain) < 1e-9 and abs(eff.loss[0] - payback) < 1e-9
+    assert abs(eff.gross[0] - (gain - payback)) < 1e-9
     assert eff.cost[0] == CHANNEL_COST[Channel.SMS]
     assert abs(eff.net[0] - (eff.gross[0] - eff.cost[0] - eff.unsubscribe_cost[0])) < 1e-12
     # the Gym's GroundTruth surface agrees with the batch one
@@ -119,3 +125,23 @@ def test_the_value_of_a_contact_is_margin_times_own_receipt_less_costs(data) -> 
     action = Action(goal_id="g", channel=Channel.SMS, send_at=at)
     assert abs(t.expected_net(cid, action, w.start) - eff.net[0]) < 1e-12
     assert t.best_action(cid, [action], w.start) == (action if eff.net[0] > 0 else None)
+
+
+def test_the_margin_at_stake_is_the_real_receipts_then_the_base_rate(data) -> None:
+    w = make_world(data, "heterogeneous", days=84)
+    stake = w.truth.at_stake
+    day = np.floor(data.post_s / 86_400).astype(np.int64)
+    by_customer = np.bincount(data.post_idx, weights=0.25 * data.post_value, minlength=data.n)
+    assert np.allclose(stake[:, : data.horizon_days].sum(axis=1), by_customer)
+    assert (stake[:, data.horizon_days :] == (0.25 * data.base_rate * data.value)[:, None]).all()
+    assert day.max() < data.horizon_days
+
+
+def test_a_second_contact_on_the_same_days_cannot_remove_more_than_every_receipt(data) -> None:
+    w = make_world(data, "sleeping_dogs", days=28, mean_lift=0.07)
+    w.reset(0)
+    t = w.truth
+    dog = np.array([int(np.flatnonzero(t.rel < 0)[0])], dtype=np.int64)
+    t.removal[dog[0], :] = 1.0  # every receipt is already gone
+    eff = t.effects(dog, Channel.SMS, 0)
+    assert eff.loss[0] == 0.0 and eff.gross[0] == 0.0

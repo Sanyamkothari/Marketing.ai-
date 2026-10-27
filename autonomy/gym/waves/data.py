@@ -6,9 +6,13 @@ table of the same shape in tests) into what the world needs:
 * every customer's **features**, computed only from receipts before the cutoff (recency, frequency,
   monetary, mean receipt, active days) plus the client file's age, gender and card age. Receipts at or after the
   cutoff never touch them (`tests/v4/waves/test_data.py` changes them and checks nothing moves);
-* the customer's **base purchase rate** per day, shrunk toward the population's, which the hidden effect scales;
+* the customer's **base purchase rate** per day over their own time as a cardholder before the cutoff, shrunk
+  toward the population's, which the hidden effect scales;
 * the customer's **real receipts after the cutoff**, in time order, which the world replays day by day as the
   no-message world.
+
+`eligible_clients` picks the customers point in time: card holders at the cutoff (a card issued before it, or, with
+no issue date, a receipt before it). Who buys after the cutoff plays no part in it.
 
 `fixture_tables` makes a small synthetic table of the same shape so tests and smoke runs need no download. Its
 numbers are not evidence about anything.
@@ -20,8 +24,8 @@ days are UTC days starting at 00:00 UTC on the cutoff date.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -81,11 +85,12 @@ class WavesData:
     base_rate: FloatArray
     """Purchases per day, shrunk toward the population's (the hidden effect is a lift of this)."""
     value: FloatArray
-    """The customer's own mean receipt before the cutoff (the population median where they had none)."""
+    """The customer's own mean receipt before the cutoff (the population's mean receipt where they had none)."""
     sms_consent: BoolArray
     email_consent: BoolArray
     signup_s: FloatArray
-    """Card issue time in seconds from `start` (negative, never later than a day before it)."""
+    """Card issue time in seconds from `start` (negative, never later than a day before it: `eligible_clients`
+    drops the customers whose card came later)."""
     hist_idx: IntArray
     hist_s: FloatArray
     hist_value: FloatArray
@@ -97,6 +102,8 @@ class WavesData:
     post_id: tuple[str, ...]
     age: FloatArray
     gender: tuple[str, ...]
+    eligibility: Mapping[str, int] = field(default_factory=dict)
+    """How the customers were chosen (`eligible_clients` counts), for the run's `data:` line."""
 
     @property
     def n(self) -> int:
@@ -116,6 +123,34 @@ def default_cutoff(receipts: pd.DataFrame, horizon_days: int = HORIZON_DAYS) -> 
 def _to_utc(local: pd.Series, tz: str) -> pd.Series:
     stamped = pd.to_datetime(local).dt.tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward")
     return stamped.dt.tz_convert("UTC")
+
+
+def eligible_clients(
+    receipts: pd.DataFrame, clients: pd.DataFrame, cutoff: pd.Timestamp, *, tz: str = SHOP_TZ
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """The clients who were customers at the cutoff, and the counts of who was kept and dropped.
+
+    Kept: a card issued before 00:00 UTC on the cutoff date, or no issue date and a receipt before that instant.
+    Dropped: a card issued at or after it (they were not customers yet, whatever they bought later), and clients
+    with no issue date and no receipt before it. Receipts after the cutoff are never read."""
+    start = pd.Timestamp(datetime(cutoff.year, cutoff.month, cutoff.day, tzinfo=UTC))
+    issue = _to_utc(pd.to_datetime(clients["first_issue_date"], errors="coerce"), tz)
+    ids = clients["client_id"].astype(str)
+    issued_before = (issue < start).fillna(False).to_numpy(dtype=np.bool_)
+    no_date = issue.isna().to_numpy()
+    undated = set(ids[no_date])
+    rec = receipts[receipts["client_id"].astype(str).isin(undated)] if undated else receipts.iloc[:0]
+    ts = _to_utc(rec["transaction_datetime"], tz)
+    bought_before = set(rec.loc[(ts < start).to_numpy(), "client_id"].astype(str))
+    with_receipt = ids.isin(bought_before).to_numpy()
+    keep = issued_before | (no_date & with_receipt)
+    counts = {
+        "clients": len(clients),
+        "kept": int(keep.sum()),
+        "dropped_issued_after_cutoff": int((~issued_before & ~no_date).sum()),
+        "dropped_no_issue_date_no_receipt_before": int((no_date & ~with_receipt).sum()),
+    }
+    return clients[keep].reset_index(drop=True), counts
 
 
 def build_waves_data(
@@ -164,7 +199,7 @@ def build_waves_data(
     f = pd.DataFrame(index=range(n))
     for col in ("n_receipts", "total", "active_days"):
         f[col] = stats[col].fillna(0.0).to_numpy(dtype=np.float64)
-    pop_mean = float(pre["purchase_sum"].median()) if len(pre) else 1.0
+    pop_mean = float(pre["purchase_sum"].mean()) if len(pre) else 1.0
     f["mean_receipt"] = stats["mean_receipt"].fillna(0.0).to_numpy(dtype=np.float64)
     f["recency_days"] = stats["recency_days"].fillna(999.0).to_numpy(dtype=np.float64)
     c = clients.reset_index(drop=True)
@@ -179,9 +214,15 @@ def build_waves_data(
     f["tenure_days"] = tenure.clip(lower=0.0).to_numpy(dtype=np.float64)
     f = f[list(FEATURE_COLUMNS)]
 
+    # exposure: the customer's own days as a card holder before the cutoff (or since their first receipt, if
+    # earlier), within the history the receipts cover
     n_pre = f["n_receipts"].to_numpy()
-    prior_rate = float(n_pre.mean() / pre_days)
-    base = (n_pre + BASE_PRIOR_DAYS * prior_rate) / (pre_days + BASE_PRIOR_DAYS)
+    first_days = (
+        (start_ts - g["ts"].min()).dt.total_seconds().div(SECONDS_PER_DAY).reindex(list(ids)).fillna(0.0)
+    ).to_numpy(dtype=np.float64)
+    exposure = np.clip(np.maximum(f["tenure_days"].to_numpy(), first_days), 1.0, pre_days)
+    prior_rate = float(n_pre.sum() / exposure.sum()) if exposure.sum() > 0 else 0.0
+    base = (n_pre + BASE_PRIOR_DAYS * prior_rate) / (exposure + BASE_PRIOR_DAYS)
     base = np.clip(base, 1e-4, MAX_DAILY_PROB)
     value = np.where(n_pre > 0, f["mean_receipt"].to_numpy(), pop_mean)
     signup = np.minimum(
@@ -221,18 +262,24 @@ def build_waves_data(
 
 
 def fixture_tables(
-    n: int = 600, seed: int = 0, *, pre_days: int = 60, horizon_days: int = HORIZON_DAYS
+    n: int = 600,
+    seed: int = 0,
+    *,
+    pre_days: int = 60,
+    horizon_days: int = HORIZON_DAYS,
+    rate_mean: float = 0.07,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Timestamp]:
     """A tiny synthetic X5-shaped table: `(receipts, clients, cutoff)`.
 
-    Customers differ in how often they buy (gamma), how much a receipt is (log-normal) and age/gender/card age;
+    `rate_mean` is the mean receipts per customer-day (0.07; X5 has about 0.17) and `pre_days` the history before
+    the cutoff (60; X5 about 34). Customers differ in how often they buy (gamma), how much a receipt is (log-normal) and age/gender/card age;
     receipts are Poisson per day. It exists so tests and smoke runs need no download. Its numbers say nothing
     about real shoppers."""
     rng = np.random.default_rng([seed, 90210])
     cut = pd.Timestamp("2018-12-25")
     first_day = cut - pd.Timedelta(days=pre_days)
     total_days = pre_days + horizon_days
-    rate = rng.gamma(1.2, 0.07 / 1.2, n)  # receipts per day, mean 0.07
+    rate = rng.gamma(1.2, rate_mean / 1.2, n)  # receipts per day, mean `rate_mean`
     scale = np.exp(rng.normal(6.0, 0.5, n))  # a customer's typical receipt, RUB
     rows: list[dict[str, Any]] = []
     counts = rng.poisson(rate[:, None] * np.ones((1, total_days)))

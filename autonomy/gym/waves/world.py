@@ -5,14 +5,18 @@
 
 * **No-message world = the real data.** `advance` replays each customer's real receipts after the cutoff, day by
   day, with their real times and amounts. If nobody is ever contacted, the events are exactly those receipts.
-* **A contact** (`act`) is a SEND, then a DELIVER or a FAIL, sometimes a click, sometimes an unsubscribe. It adds
-  to the customer's incremental purchase probability on the 14 days after the send (`WavesTruth.effects`); a
-  positive effect also removes some real receipts from the 30 days after that (pull-forward), and a negative one
-  removes real receipts inside the window. Every random number is drawn per customer and day from the world's
-  seed alone, so two policies in the same world and seed see the same underlying luck (common random numbers).
-* **Clicks are decoupled from the effect.** The click chance depends on the customer's base buying rate and a
-  personal engagement, never on how much a message moves them. A click model therefore learns who clicks, not who
-  is moved.
+* **A contact** (`act`) is a SEND, then a DELIVER or a FAIL, sometimes a click, sometimes an unsubscribe. The truth
+  (`WavesTruth.register`) adds it to two arrays the world draws from each day: the chance of an extra purchase (a
+  positive effect) and the chance each real receipt is removed (a sleeping dog's window, or the pull-forward payback
+  after a positive effect). Every random number is drawn per customer and day from the world's seed alone, so two
+  policies in the same world and seed see the same underlying luck (common random numbers), and the expectation
+  of what the world realises is exactly what the truth scores.
+* **An extra purchase looks like a real one.** Its event id is a hash like a real receipt's, and its amount and
+  time of day are those of one of the customer's own receipts before the cutoff, drawn at random (a random
+  receipt of the population for a customer with none), so its expected amount is the customer's mean receipt.
+* **Clicks do not depend on the effect.** The click chance depends on the customer's rank in base buying rate and a
+  personal engagement, never on how much a message moves them. Because the effect in roubles is proportional to the
+  base rate, clicks still rank the value of a contact somewhat (docs/v4/WAVES.md says how much).
 
 The customer's effect starts the day after the send (UTC days) so every day's purchases are fixed before any
 decision that could change them is made; `advance` can then simulate whole days.
@@ -35,16 +39,12 @@ from autonomy.gym.baselines import in_quiet_hours
 from autonomy.gym.waves.config import (
     COMPLAINT_COST,
     COMPLAINT_SHARE,
-    EFFECT_DAYS,
-    EFFECT_WEIGHTS,
     MARGIN,
-    PULL_FORWARD_DAYS,
-    TAIL_DAYS,
     UNSUBSCRIBE_COST,
     WorldSpec,
 )
 from autonomy.gym.waves.data import SECONDS_PER_DAY, SHOP_TZ, WavesData, unit_hash
-from autonomy.gym.waves.truth import CHANNEL_INDEX, CHANNELS, WavesTruth
+from autonomy.gym.waves.truth import CHANNEL_INDEX, CHANNELS, MAX_INCREMENTAL_PROB, WavesTruth
 
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
@@ -55,15 +55,26 @@ UNSUBSCRIBE_DELAY = timedelta(hours=2)
 ENGAGE_SALT = "autonomy-waves-v1:engage"
 CLICK_FLOOR = {Channel.SMS: 0.01, Channel.EMAIL: 0.02}
 CLICK_SPAN = {Channel.SMS: 0.07, Channel.EMAIL: 0.12}
-MAX_INCREMENTAL_PROB = 0.95
-_WEIGHTS = np.array(EFFECT_WEIGHTS, dtype=np.float64)
+CLICK_BASE_WEIGHT = 0.35
+"""Share of the click engagement that is the customer's rank in base buying rate (the rest is a personal hash)."""
+PURCHASE_PREFIX = "wpur"
+
+
+def receipt_event_id(transaction_id: str) -> str:
+    """The event id of a real receipt: a hash, the same in every world, seed and policy."""
+    return stable_id(PURCHASE_PREFIX, "receipt", transaction_id)
+
+
+def extra_event_id(seed: int, customer_id: str, day: int) -> str:
+    """The event id of an extra (message-caused) purchase: a hash of the same shape as a real receipt's."""
+    return stable_id(PURCHASE_PREFIX, "extra", seed, customer_id, day)
 
 
 def click_probability(base_rate: FloatArray, engagement_latent: FloatArray, channel: Channel) -> FloatArray:
     """Chance a delivered message is clicked: a floor plus a share that grows with the customer's rank in
     base buying rate and with a personal engagement. The hidden effect is not an input."""
     rank = np.argsort(np.argsort(base_rate)) / max(len(base_rate) - 1, 1)
-    engagement = 0.35 * rank + 0.65 * engagement_latent
+    engagement = CLICK_BASE_WEIGHT * rank + (1.0 - CLICK_BASE_WEIGHT) * engagement_latent
     return np.asarray(CLICK_FLOOR[channel] + CLICK_SPAN[channel] * engagement**2, dtype=np.float64)
 
 
@@ -96,8 +107,13 @@ class WavesWorld:
         latent = unit_hash(data.customer_ids, ENGAGE_SALT)
         self.p_click = np.vstack([click_probability(data.base_rate, latent, c) for c in CHANNELS])
         self._cost = {c: float(spec.channel_cost.get(c, 0.0)) for c in CHANNELS}
-        self._width = self.days + TAIL_DAYS + 6
+        self._width = self.truth.width
         self._end_s = self.days * SECONDS_PER_DAY
+        # each customer's own receipts before the cutoff, to draw an extra purchase's amount and time of day from
+        self._hist_order = np.argsort(data.hist_idx, kind="stable").astype(np.int64)
+        self._hist_start = np.searchsorted(
+            data.hist_idx[self._hist_order], np.arange(self.n + 1), side="left"
+        )
         self._start_run(spec.seed)
 
     # --- set-up ----------------------------------------------------------------------------------
@@ -110,8 +126,6 @@ class WavesWorld:
         self._pending: list[Event] = []
         self._violations: list[str] = []
         self._act_calls = 0
-        self._inc = np.zeros((n, self._width), dtype=np.float32)
-        self._rem = np.zeros((n, self._width), dtype=np.float32)
         self._unsub_s = np.full((n, len(CHANNELS)), np.inf)
         self._thin = np.random.default_rng([seed, 12]).random(len(self.data.post_idx))
         self._post_day_edges = np.searchsorted(
@@ -216,7 +230,7 @@ class WavesWorld:
             d.hist_idx.tolist(), d.hist_s.tolist(), d.hist_value.tolist(), d.hist_id, strict=True
         ):
             ts = self.start + timedelta(seconds=s)
-            out.append(self._purchase(f"wr_{rid}", d.customer_ids[i], ts, v))
+            out.append(self._purchase(receipt_event_id(rid), d.customer_ids[i], ts, v))
         out.sort(key=lambda e: (e.ts, e.event_id))
         return out
 
@@ -252,7 +266,7 @@ class WavesWorld:
             rows = np.arange(lo, hi)
             if rows.size:
                 owners = data.post_idx[rows]
-                removed = self._thin[rows] < self._rem[owners, d]
+                removed = self._thin[rows] < self.truth.removal[owners, d]
                 self.real_receipts_removed += int(removed.sum())
                 for r, gone in zip(rows.tolist(), removed.tolist(), strict=True):
                     if gone:
@@ -260,27 +274,39 @@ class WavesWorld:
                     i = int(data.post_idx[r])
                     ts = self.start + timedelta(seconds=float(data.post_s[r]))
                     ev = self._purchase(
-                        f"wr_{data.post_id[r]}", data.customer_ids[i], ts, float(data.post_value[r])
+                        receipt_event_id(data.post_id[r]), data.customer_ids[i], ts, float(data.post_value[r])
                     )
                     out.append(ev)
                     if data.post_s[r] < self._end_s:
                         self.margin_in_run[i] += ev.margin or 0.0
         if d < self._width:
-            p = np.minimum(self._inc[:, d].astype(np.float64), MAX_INCREMENTAL_PROB)
+            p = np.minimum(self.truth.incremental[:, d], MAX_INCREMENTAL_PROB)
             for i in np.flatnonzero(u < p).tolist():
                 cid = data.customer_ids[i]
-                secs = d * SECONDS_PER_DAY + int(second[i] * SECONDS_PER_DAY)
+                value, time_of_day = self._extra_receipt(i, float(second[i]))
+                secs = d * SECONDS_PER_DAY + time_of_day
                 ev = self._purchase(
-                    stable_id("winc", self.seed, cid, d),
-                    cid,
-                    self.start + timedelta(seconds=secs),
-                    float(data.value[i]),
+                    extra_event_id(self.seed, cid, d), cid, self.start + timedelta(seconds=secs), value
                 )
                 out.append(ev)
                 self.incremental_purchases += 1
                 if secs < self._end_s:
                     self.margin_in_run[i] += ev.margin or 0.0
         return out
+
+    def _extra_receipt(self, i: int, draw: float) -> tuple[float, float]:
+        """Amount and second of the UTC day of an extra purchase by customer `i`: those of one of their own receipts
+        before the cutoff, picked by `draw` in [0, 1) (of any customer's, when they had none; then the amount is
+        the population's mean receipt, which is the customer's `value`)."""
+        d = self.data
+        lo, hi = int(self._hist_start[i]), int(self._hist_start[i + 1])
+        if hi > lo:
+            k = int(self._hist_order[lo + min(int(draw * (hi - lo)), hi - lo - 1)])
+        elif len(d.hist_s):
+            k = min(int(draw * len(d.hist_s)), len(d.hist_s) - 1)
+        else:
+            return float(d.value[i]), float(int(draw * SECONDS_PER_DAY))
+        return float(d.hist_value[k]), float(int(d.hist_s[k] % SECONDS_PER_DAY))
 
     # --- acting ------------------------------------------------------------------------------------
 
@@ -320,8 +346,6 @@ class WavesWorld:
         unsubscribed = self._unsub_s[idx, ch] <= secs
         delivered = consent & ~unsubscribed
         eff = t.register(idx, ch, delivered, day)
-        live = np.flatnonzero(delivered)
-        self._apply_effects(idx[live], day[live], eff.purchases[live])
         rolls = draws[idx]
         for k, (dec, i, sent) in enumerate(batch):
             action = dec.action
@@ -370,23 +394,6 @@ class WavesWorld:
                     )
                     if t.seconds(at) < self._end_s:
                         self.lost_in_run[i] += COMPLAINT_COST
-
-    def _apply_effects(self, idx: IntArray, day: IntArray, purchases: FloatArray) -> None:
-        """Put each contact's effect on the days it lands: incremental purchase probability for a positive
-        effect, a share of real receipts removed for a negative one, and the pull-forward payback."""
-        if idx.size == 0:
-            return
-        pf = self.world.pull_forward
-        base = self.data.base_rate[idx]
-        pos = np.maximum(purchases, 0.0)
-        neg = np.maximum(-purchases, 0.0)
-        window = day[:, None] + np.arange(1, EFFECT_DAYS + 1)[None, :]
-        rows = idx[:, None]
-        self._inc[rows, window] += (pos[:, None] * _WEIGHTS[None, :]).astype(np.float32)
-        self._rem[rows, window] += (neg[:, None] * _WEIGHTS[None, :] / base[:, None]).astype(np.float32)
-        tail = day[:, None] + EFFECT_DAYS + 1 + np.arange(PULL_FORWARD_DAYS)[None, :]
-        payback = pf * pos / (PULL_FORWARD_DAYS * base)
-        self._rem[rows, tail] += np.repeat(payback[:, None], PULL_FORWARD_DAYS, axis=1).astype(np.float32)
 
     def _outbound(
         self, d: Decision, channel: Channel, kind: EventType, ts: datetime, attrs: dict[str, AttrValue]

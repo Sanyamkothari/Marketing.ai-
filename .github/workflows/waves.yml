@@ -7,10 +7,10 @@
 # message contains "[waves]", or by hand (workflow_dispatch). Report-only: the job turns red only when the
 # benchmark itself crashes. One table per world lands in the run's step summary.
 #
-# Sizing (measured on the 4-CPU dev box with the synthetic fixture, see docs/v4/WAVES.md "How the CI job is sized"):
-# the plain agent is the slow policy, about 1 ms per customer-day, so 3 seeds of 84 days must fit in 60 minutes.
-# CUSTOMERS below is what that allows, not the 30,000 of the spec; raise it by hand (workflow_dispatch input) for a
-# bigger run on a bigger machine.
+# One job per world x policy x seed (150 jobs), so a slow agent run costs one seed, not three, and each job
+# rewrites its JSON after the run it finishes. Sizing: see docs/v4/WAVES.md "How the CI job is sized". The plain
+# agent is the slow policy; CUSTOMERS below is what one seed of it at X5's purchase density fits in 60 minutes
+# with a wide margin, not the 30,000 of the spec. Raise it by hand (workflow_dispatch input) for a bigger run.
 #
 # X5 is downloaded and cached exactly as realbench.yml does it (scripts/v2_realbench/fetch.py, fixed SHA-256),
 # once in a `data` job, so the matrix only restores caches. The receipts table the bench derives from the 670 MB
@@ -37,7 +37,7 @@ permissions:
 
 env:
   DATA_DIR: ${{ github.workspace }}/.realbench-data   # inside the workspace: actions/cache rejects ".." paths
-  DEFAULT_CUSTOMERS: "10000"
+  DEFAULT_CUSTOMERS: "20000"   # one seed of the agent: about 22 minutes on the dev box, see WAVES.md
 
 jobs:
   data:
@@ -91,15 +91,17 @@ jobs:
           PY
 
   waves:
-    name: waves ${{ matrix.world }} ${{ matrix.policy }}
+    name: waves ${{ matrix.world }} ${{ matrix.policy }} seed ${{ matrix.seed }}
     needs: data
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        world: [null, homogeneous_small, heterogeneous, sleeping_dogs, fatigue_heavy]
+        # "null" must stay quoted: a bare null is YAML's null, which would run `--world ` with no name
+        world: ["null", homogeneous_small, heterogeneous, sleeping_dogs, fatigue_heavy]
         policy: [send_none, send_all_sms, send_all_email, weekly_sms, best_fixed, oracle, uplift_waves, agent, agent_greedy, agent_uplift_only]
+        seed: [0, 1, 2]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -138,14 +140,15 @@ jobs:
         run: |
           CUSTOMERS="${INPUT_CUSTOMERS:-$DEFAULT_CUSTOMERS}"
           mkdir -p waves-report
-          python -m scripts.v2_realbench.waves --world ${{ matrix.world }} --policy ${{ matrix.policy }} \
-            --seeds 3 --customers "$CUSTOMERS" --data-dir "$DATA_DIR" \
-            --json waves-report/${{ matrix.world }}-${{ matrix.policy }}.json \
-            | tee waves-report/${{ matrix.world }}-${{ matrix.policy }}.md
+          PART="${{ matrix.world }}-${{ matrix.policy }}-${{ matrix.seed }}"
+          python -m scripts.v2_realbench.waves --world "${{ matrix.world }}" --policy "${{ matrix.policy }}" \
+            --seeds 1 --first-seed "${{ matrix.seed }}" --customers "$CUSTOMERS" --data-dir "$DATA_DIR" \
+            --json "waves-report/$PART.json" \
+            | tee "waves-report/$PART.md"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: waves-${{ matrix.world }}-${{ matrix.policy }}
+          name: waves-part-${{ matrix.world }}-${{ matrix.policy }}-${{ matrix.seed }}
           path: waves-report/
           if-no-files-found: ignore
 
@@ -164,7 +167,7 @@ jobs:
         run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54" "pyyaml==6.0.3"
       - uses: actions/download-artifact@v4
         with:
-          pattern: waves-*
+          pattern: waves-part-*   # not `waves-*`: that would also match this job's own `waves-report`
           path: parts
           merge-multiple: true
       - name: One table per world
@@ -173,7 +176,7 @@ jobs:
           {
             echo "## Waves benchmark (docs/v4/WAVES.md)"
             echo
-            echo "True value is RUB per run over 84 days plus the 30-day tail, mean of 3 seeds; paired differences use the same customers and the same luck in every policy."
+            echo "True value is RUB per run: every contact made in the decision days, each counted with its full 14-day effect and 30-day payback; mean of the seeds, one CI job per seed. Paired differences use the same customers and the same luck in every policy."
             echo
             python -m scripts.v2_realbench.waves --summarize parts
           } | tee waves-summary.md >> "$GITHUB_STEP_SUMMARY"

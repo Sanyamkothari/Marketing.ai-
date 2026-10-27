@@ -6,7 +6,14 @@ import numpy as np
 import pandas as pd
 
 from autonomy.gym.waves.config import EFFECT_WEIGHTS, HORIZON_DAYS
-from autonomy.gym.waves.data import FEATURE_COLUMNS, SHOP_TZ, build_waves_data, default_cutoff, unit_hash
+from autonomy.gym.waves.data import (
+    FEATURE_COLUMNS,
+    SHOP_TZ,
+    build_waves_data,
+    default_cutoff,
+    eligible_clients,
+    unit_hash,
+)
 
 
 def test_features_never_read_a_receipt_at_or_after_the_cutoff(
@@ -99,3 +106,66 @@ def test_effect_weights_sum_to_one_and_are_front_loaded() -> None:
 
 def test_the_features_are_exactly_the_documented_columns(data) -> None:
     assert tuple(data.features.columns) == FEATURE_COLUMNS
+
+
+def test_customers_are_chosen_point_in_time(tables: tuple[pd.DataFrame, pd.DataFrame, pd.Timestamp]) -> None:
+    """A card issued after the cutoff is not a customer yet, whatever they buy later; a client with no issue date
+    counts only with a receipt before the cutoff."""
+    receipts, clients, cutoff = tables
+    c = clients.copy()
+    late, undated_buyer, undated_silent = c["client_id"].iloc[:3].tolist()
+    c.loc[0, "first_issue_date"] = f"{cutoff + pd.Timedelta(days=10):%Y-%m-%d %H:%M:%S}"
+    c.loc[1, "first_issue_date"] = None
+    c.loc[2, "first_issue_date"] = None
+    # the third client buys only after the cutoff, the second before it
+    r = receipts[receipts["client_id"] != undated_silent]
+    r = r[~((r["client_id"] == undated_buyer) & (pd.to_datetime(r["transaction_datetime"]) >= cutoff))]
+    after = pd.DataFrame(
+        {
+            "client_id": [undated_silent, late, undated_buyer],
+            "transaction_id": ["late_1", "late_2", "early_1"],
+            "transaction_datetime": [
+                f"{cutoff + pd.Timedelta(days=3):%Y-%m-%d} 12:00:00",
+                f"{cutoff + pd.Timedelta(days=3):%Y-%m-%d} 12:00:00",
+                f"{cutoff - pd.Timedelta(days=3):%Y-%m-%d} 12:00:00",
+            ],
+            "purchase_sum": [500.0, 500.0, 300.0],
+        }
+    )
+    r = pd.concat([r, after], ignore_index=True)
+    kept, counts = eligible_clients(r, c, cutoff)
+    ids = set(kept["client_id"])
+    assert late not in ids and undated_silent not in ids
+    assert undated_buyer in ids
+    assert counts["dropped_issued_after_cutoff"] == 1
+    assert counts["dropped_no_issue_date_no_receipt_before"] == 1
+    assert counts["kept"] == len(clients) - 2
+    # what is bought after the cutoff never changes who is chosen
+    more = pd.concat([r, after.iloc[:2].assign(transaction_id=["late_3", "late_4"])], ignore_index=True)
+    assert set(eligible_clients(more, c, cutoff)[0]["client_id"]) == ids
+
+
+def test_base_rate_counts_each_customers_own_time_as_a_card_holder(
+    tables: tuple[pd.DataFrame, pd.DataFrame, pd.Timestamp],
+) -> None:
+    receipts, clients, cutoff = tables
+    c = clients.copy()
+    before = build_waves_data(receipts, c, cutoff=cutoff)
+    i = int(np.argmax(before.features["n_receipts"].to_numpy()))
+    cid = before.customer_ids[i]
+    own = receipts[
+        (receipts["client_id"] == cid) & (pd.to_datetime(receipts["transaction_datetime"]) < cutoff)
+    ]
+    # the same receipts, but the card (and every receipt) only in the last 10 days
+    first = pd.to_datetime(own["transaction_datetime"]).min()
+    shifted = receipts[~receipts.index.isin(own.index)]
+    moved = own.assign(
+        transaction_datetime=[
+            f"{cutoff - pd.Timedelta(days=10) + pd.Timedelta(hours=10 + k % 9):%Y-%m-%d %H:%M:%S}"
+            for k in range(len(own))
+        ]
+    )
+    c.loc[i, "first_issue_date"] = f"{cutoff - pd.Timedelta(days=10):%Y-%m-%d %H:%M:%S}"
+    after = build_waves_data(pd.concat([shifted, moved], ignore_index=True), c, cutoff=cutoff)
+    assert len(own) > 0 and first < cutoff - pd.Timedelta(days=10)
+    assert after.base_rate[i] > 2 * before.base_rate[i]

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 import pytest
 
+from autonomy.contracts import Brief, ContentItem
 from autonomy.gym.waves.config import get_world
+from autonomy.gym.waves.data import WavesData
 from autonomy.gym.waves.policies import (
     BEST_FIXED,
     ORACLE,
@@ -146,6 +150,32 @@ def test_uplift_waves_randomises_a_slice_refits_weekly_and_never_touches_the_hol
     row = result.row
     assert row["holdout_contacted"] == 0 and row["violations"] == 0
     diag = row["policy_diagnostics"]
-    assert diag["slice_rows"] > 100
+    assert diag["slice_rows"] > 100 and diag["default_rule"] == "weekly_sms"
     assert all(f["day"] % 7 == 0 and f["day"] >= 21 for f in diag["fits"])
     assert row["contacts"] > 0
+
+
+def test_uplift_waves_randomises_every_reachable_customer_and_sends_its_default_before_the_first_fit(
+    data: WavesData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import autonomy.gym.waves.uplift as uplift
+
+    made: list[uplift.UpliftWavesPolicy] = []
+    original = uplift.UpliftWavesPolicy
+
+    def build(brief: Brief, content: Sequence[ContentItem]) -> uplift.UpliftWavesPolicy:
+        policy = original(brief, content, slice_share=0.5)  # a big slice, so a short run fills it
+        made.append(policy)
+        return policy
+
+    monkeypatch.setattr(uplift, "UpliftWavesPolicy", build)
+    row = run(data, "heterogeneous", "uplift_waves", days=14).row
+    policy = made[-1]
+    one_channel = [r for r in policy._rows if r.propensity == 0.5]
+    both = [r for r in policy._rows if abs(r.propensity - 1 / 3) < 1e-12]
+    assert one_channel and both  # SMS-only customers are randomised too, between no message and an SMS
+    assert {r.arm for r in one_channel} <= {0, 1} and {r.arm for r in both} == {0, 1, 2}
+    # no fit before day 21: the default rule (one SMS a week) is what runs outside the slice
+    assert not policy.fits and row["sms_contacts"] > len(policy._rows)
+    assert row["contacts_per_customer_week"] > 0.5
+    assert row["holdout_contacted"] == 0 and row["violations"] == 0
