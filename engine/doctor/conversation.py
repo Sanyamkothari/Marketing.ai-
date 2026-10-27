@@ -851,7 +851,7 @@ def build_conversation(
         if q.code in _REQUEST_CODES:
             add(in_reply(asked_at.get(q.question_id, case.created_at)), 5, _request(q, goal_ids))
     for doubt in case.doubts:
-        if doubt.upload_id is not None and doubt.upload_id not in here:
+        if doubt.status != "open" or (doubt.upload_id is not None and doubt.upload_id not in here):
             continue
         add(
             in_reply(

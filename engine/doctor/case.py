@@ -373,6 +373,36 @@ class CaseItem(StrictBase):
         "them. Separation of duties reads this, not the order of the chat; an item the rules or the review "
         "proposed on their own has none.",
     )
+    # DEC-F5 (`engine.doctor.reconcile`): who made it and what it is about; added, defaulted and left out of a dump
+    # while unset, so a case written before reads and dumps exactly as it did (the subject is derived on read).
+    subject: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="What it is about (`outcome@goal`, `sql@name`, `key@file`, `fix@column:kind`); derived from "
+        "`kind` and `payload` while unset (`engine.doctor.subjects`).",
+    )
+    producer: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Who emitted it (`rules`, `detectors`, `review`, `chat`); a producer that stops emitting a "
+        "waiting change takes it back. Unset: never taken back.",
+    )
+    replaces: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="The change of the person's it would swap for: waits for a yes shown as a swap, and the "
+        "replaced one is left out when it is ticked.",
+    )
+    superseded_by: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="The newer proposal about the same subject that took its place.",
+    )
+    withdrawn_because: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Why the Doctor took it back itself (left out, not by the person's choice).",
+    )
 
 
 class CaseOption(StrictBase):
@@ -462,6 +492,12 @@ class CaseQuestion(StrictBase):
         exclude_if=lambda value: value is None,
         description="Plan O M246: answered by this client's standing answer; revoking it asks it again.",
     )
+    producer: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="DEC-F5: who asked it (`rules`, `detectors`, `review`, `chat`); an unanswered question its "
+        "producer no longer asks is taken back. Unset: never taken back.",
+    )
 
 
 class CaseDoubt(StrictBase):
@@ -474,6 +510,22 @@ class CaseDoubt(StrictBase):
     upload_id: str | None = Field(default=None, description="The file it is about, if one.")
     item_id: str | None = Field(default=None, description="The item it is attached to, if one.")
     evidence_ids: tuple[str, ...] = Field(default=(), description="Evidence every number in it rests on.")
+    producer: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="DEC-F5: who raised it (`rules`, `detectors`, `review`, `chat`).",
+    )
+    status: Literal["open", "resolved", "superseded"] = Field(
+        default="open",
+        exclude_if=lambda value: value == "open",
+        description="DEC-F5: `open` while it holds; `resolved` once its producer no longer finds it; `superseded` "
+        "by a newer doubt about the same subject or once the change it was about is gone.",
+    )
+    closed_because: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="DEC-F5: why it is no longer open.",
+    )
 
 
 class CaseApproval(StrictBase):

@@ -158,6 +158,9 @@ def person_owns(case: Case, item: CaseItem) -> bool:
 
 
 _WORDING: Final[frozenset[str]] = frozenset({"reason", "order", "proposal_id", "decided_by"})
+_VOLATILE_PARAMS: Final[frozenset[str]] = frozenset({"tried_after", "as_of"})
+"""Step parameters that record when or on what it was tried (the rows a trial counted after, the date it read), not
+what the step does: the same query re-proposed after a tick has another `tried_after` and is the same change."""
 
 
 def meaning_key(item: CaseItem) -> str:
@@ -168,6 +171,9 @@ def meaning_key(item: CaseItem) -> str:
     if not isinstance(step, dict):
         return item.item_id
     body = {k: v for k, v in step.items() if k not in _WORDING}
+    params = body.get("params")
+    if isinstance(params, dict):  # what a trial found when it was made is not what the step does
+        body["params"] = {k: v for k, v in params.items() if k not in _VOLATILE_PARAMS}
     return f"{item.kind}|{item.upload_id}|{json.dumps(body, sort_keys=True, default=str)}"
 
 
@@ -175,7 +181,12 @@ def twin_of(items: Sequence[CaseItem], item: CaseItem) -> CaseItem | None:
     """The change already in the case that is this same change (same id, or the same step in other words); a
     waiting or accepted one before a left-out one."""
     key = meaning_key(item)
-    same = [i for i in items if i.item_id == item.item_id or meaning_key(i) == key]
+    same = [
+        i
+        for i in items
+        if (i.item_id == item.item_id or meaning_key(i) == key)
+        and (i.withdrawn_because is None or i.item_id == item.item_id)  # taken back by the Doctor: not a "no"
+    ]
     same.sort(key=lambda i: i.state is ProposalState.REJECTED)
     return same[0] if same else None
 
