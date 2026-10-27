@@ -58,6 +58,8 @@ __all__ = [
     "FittedUplift",
     "UpliftReport",
     "fit_uplift",
+    "grouped_slope",
+    "shrunk_slope",
 ]
 
 FloatArray = npt.NDArray[np.float64]
@@ -231,6 +233,19 @@ def _grouped_slope(c: FloatArray, phi: FloatArray) -> tuple[float, float]:
     return b, 1.0 / math.sqrt(sxx)
 
 
+grouped_slope = _grouped_slope
+"""Public name of `_grouped_slope`, for callers that cross-fit with their own number of folds
+(`autonomy.decide.uplift_threshold`)."""
+
+
+def shrunk_slope(b: float, b_se: float) -> float:
+    """`b` shrunk towards zero by its own noise (positive-part James-Stein), 0 when it is not positive or
+    its error is unknown, capped at `MAX_SLOPE`: the slope `fit_uplift` uses for an arm."""
+    if b > 0 and math.isfinite(b_se):
+        return min(b * max(0.0, 1.0 - (b_se * b_se) / (b * b)), MAX_SLOPE)
+    return 0.0
+
+
 def _effective(w: FloatArray) -> float:
     s = float(w.sum())
     return s * s / float((w * w).sum()) if s > 0 else 0.0
@@ -323,9 +338,7 @@ def fit_uplift(
         low, high = (float(v) for v in np.quantile(tau - centre, [WINSOR, 1.0 - WINSOR]))
         c = np.clip(tau - centre, low, high)
         b, b_se = _grouped_slope(c, phi)
-        used = 0.0
-        if b > 0 and math.isfinite(b_se):
-            used = min(b * max(0.0, 1.0 - (b_se * b_se) / (b * b)), MAX_SLOPE)
+        used = shrunk_slope(b, b_se)
         used_se = b_se * used / b if used > 0 else 0.0
         arms.append(
             ArmReport(

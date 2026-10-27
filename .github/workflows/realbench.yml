@@ -7,6 +7,9 @@
 # JSON, not enforced; the job turns red only when the bench itself crashes or a dataset errors.
 # Each dataset runs twice, on a policy axis: `agent` (the scoreboard of record) and `agent_v3` (the same agent
 # built with the plan-v3 preset, docs/v3/PRESET.md), so v3 is scored as a whole against v2 on the same split.
+# docs/v4/METHOD.md adds three more on the same split: `uplift_threshold` (a cross-fitted uplift model with a cost
+# threshold, gated against the best simple rule), and the agent ablations `agent_greedy` (no exploration) and
+# `agent_uplift_only` (the click model detached).
 # The datasets (about 1.27 GB) are downloaded from public mirrors with fixed SHA-256 checksums
 # (scripts/v2_realbench/fetch.py) and cached between runs; nothing is written into the repository.
 
@@ -36,7 +39,7 @@ jobs:
       fail-fast: false
       matrix:
         dataset: [hillstrom, x5, criteo, megafon]
-        policy: [agent, agent_v3]
+        policy: [agent, agent_v3, uplift_threshold, agent_greedy, agent_uplift_only]
     env:
       DATA_DIR: ${{ github.workspace }}/.realbench-data   # inside the workspace: actions/cache rejects ".." paths
     steps:
@@ -116,7 +119,13 @@ jobs:
           python - <<'PY'
           import json, pathlib
           # parts/<dataset>-<policy>.json; realbench.json stays the agent's (the scoreboard of record)
-          for policy, out in (("agent", "realbench.json"), ("agent_v3", "realbench-agent_v3.json")):
+          for policy, out in (
+              ("agent", "realbench.json"),
+              ("agent_v3", "realbench-agent_v3.json"),
+              ("uplift_threshold", "realbench-uplift_threshold.json"),
+              ("agent_greedy", "realbench-agent_greedy.json"),
+              ("agent_uplift_only", "realbench-agent_uplift_only.json"),
+          ):
               merged = None
               for p in sorted(pathlib.Path("parts").glob(f"*-{policy}.json")):
                   r = json.loads(p.read_text())
@@ -156,6 +165,13 @@ jobs:
               print(f"| {name} | {cell(u)} | {cell(v)} | {v['point'] - u['point']:+.4f} |")
           PY
           fi
+          for policy in uplift_threshold agent_greedy agent_uplift_only; do   # docs/v4/METHOD.md
+            if [ -f "realbench-$policy.json" ]; then
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "## $policy (docs/v4/METHOD.md)" >> "$GITHUB_STEP_SUMMARY"
+              python -m scripts.v2_realbench.run --render "realbench-$policy.json" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: realbench-report
