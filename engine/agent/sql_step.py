@@ -62,7 +62,7 @@ __all__ = [
 THIS_TABLE: Final[str] = "this"
 """The table a step reads when it names `this`: the table being prepared when the step runs."""
 
-MAX_SQL_CHARS: Final[int] = 2500
+MAX_SQL_CHARS: Final[int] = 6000
 MAX_INPUTS: Final[int] = 10
 TIMEOUT_SECONDS: Final[float] = 20.0
 MEMORY_LIMIT: Final[str] = "512MB"

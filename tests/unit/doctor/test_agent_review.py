@@ -780,3 +780,37 @@ def test_the_plan_view_lists_the_ais_own_waiting_query(world: World, storage: Lo
     _review(_guard(client))(case, _files(world), None)
     shown = next(c for c in client.calls if c.kind == "complete").prompt
     assert '"by": "ai"' in shown and '"state": "pending"' in shown and "all files" in shown
+
+
+def test_the_ai_proposes_behaviour_features_and_they_are_a_pending_never_ticked_item(
+    world: World, storage: LocalStorage
+) -> None:
+    orders = _orders(world)
+    days = pd.date_range("2025-01-01", periods=len(orders.frame), freq="h")
+    dated = orders.frame.assign(order_date=[d.strftime("%Y-%m-%d") for d in days])
+    files = (world.files[FIRST], vs.loaded("up-orders", "orders.csv", dated, world.offers[0].config))
+    action = {
+        "action": "propose_features",
+        "file": "F2",
+        "args": {
+            "entity_key": "customer_id",
+            "time_column": "order_date",
+            "as_of": "2025-04-01",
+            "preset": "rfm",
+            "amount_column": "amount",
+            "order_column": "order_id",
+        },
+    }
+    client = Script([action, {"action": "finish", "text": "I added behaviour features."}])
+    case = vs.open_case(storage, world)
+    found = _review(_guard(client))(case, files, None)
+    assert len(found.items) == 1
+    item = found.items[0]
+    assert item.source is ProposalSource.AI and item.state is ProposalState.PENDING
+    assert item.payload["step"]["kind"] == "sql_query" and item.payload["needs_yes"] in (True, False)
+    assert [f["name"] for f in item.payload["features"]][:2] == ["days_since_last_order", "orders_90d"]
+    assert "as_of" not in item.payload and item.payload["features_as_of"] == "2025-04-01"
+    assert not any(
+        f["code"].startswith("FEATURE_") and f["level"] == "stop" for f in item.payload["findings"]
+    )
+    assert any(r.tool == "propose_features" for r in found.evidence)

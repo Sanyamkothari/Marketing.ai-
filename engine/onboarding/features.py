@@ -63,7 +63,10 @@ __all__ = [
     "build_features",
     "compile_feature_sql",
     "compile_role_query",
+    "feature_expression",
+    "filter_clause",
     "point_in_time_join_clause",
+    "quote_identifier",
     "render_sql_file",
     "suggested_features",
 ]
@@ -278,6 +281,22 @@ def _feature_expression(feature: FeatureDef) -> str:
         # fabricated zero: dividing by NULL is NULL, all the way out to the built column.
         return f"({_part(feature.of)}) / NULLIF({_part(feature.over)}, 0)"
     return _aggregate(feature.function, feature.column, feature.window_days, feature.where)
+
+
+def feature_expression(feature: FeatureDef) -> str:
+    """The aggregate expression of one feature (the public face of the builder, for callers that write their own
+    point-in-time query around it, as the Data Doctor's `propose_features` does)."""
+    return _feature_expression(feature)
+
+
+def filter_clause(window_days: int | None, where: WhereClause | None) -> str:
+    """The `FILTER (WHERE ...)` of an aggregate, for a custom expression that must follow the same rules."""
+    return _filter_clause(window_days, where)
+
+
+def quote_identifier(name: str, *, what: str) -> str:
+    """A plain name, quoted, or `FeatureError`."""
+    return _identifier(name, what=what)
 
 
 # ---------------------------------------------------------------------------

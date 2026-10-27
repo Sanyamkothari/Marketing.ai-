@@ -81,6 +81,7 @@ from engine.doctor.registry import (
     Exposure,
     evidence_id_of,
 )
+from engine.doctor.tools_features import parse_query_output
 from engine.doctor.tools_preview import M_PREVIEW_TOOLS
 from engine.doctor.tools_sql import SqlStepProposal
 from engine.generative.contracts import GenerativePurpose
@@ -472,6 +473,8 @@ class _Review:
             self._step(action, args)
         elif name == "propose_sql":
             self._sql(args)
+        elif name == "propose_features":
+            self._features(action, args)
         elif name == "ask_question":
             self._ask(action, args)
         elif name == "express_doubt":
@@ -617,6 +620,12 @@ class _Review:
         }
         self.checker.grounded = self.checker.grounded | grounded_numbers([shown["result"]])
         turn.feedback.append(shown)
+
+    def _features(self, action: dict[str, Any], args: dict[str, Any]) -> None:
+        from engine.doctor.agent_features import run_features
+
+        index = self._index(action, args)
+        run_features(self, index, dict(self.gates[index].unalias_args(args)))
 
     def _ask(self, action: dict[str, Any], args: dict[str, Any]) -> None:
         turn = self.turn
@@ -800,7 +809,7 @@ class _Review:
             )
         out = list(evidence.values())
         for query in turn.queries.values():
-            made = SqlStepProposal.model_validate(query.result.output)
+            made = parse_query_output(query.result.output)
             payload = made.payload()
             payload["findings"] = [f.model_dump(mode="json") for f in query.findings]
             payload["needs_yes"] = made.needs_yes or any(f.level == "stop" for f in query.findings)
