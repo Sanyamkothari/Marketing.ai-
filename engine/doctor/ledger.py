@@ -45,6 +45,9 @@ _ORDER: Final[dict[str, int]] = {"hard": 0, "stop": 1, "flag": 2}
 _DOUBTS_KEPT: Final[int] = 20
 _TRIAL_ONLY: Final[frozenset[str]] = frozenset({"OUTCOME_WINDOW_PAST_DATA"})
 """The trial's stops the count of every row does not measure again: they stay while the step is accepted."""
+_PLAN_LEVEL: Final[frozenset[str]] = frozenset({"PLAN_LOSES_TOO_MUCH", "PLAN_MOVES_OUTCOME_RATE"})
+"""Stops about the plan as a whole: a trial that says one is saying it about subject `plan`, the same as the
+guards' count, so there is one finding for it however many trials (or steps) said it."""
 
 
 class Resolution(StrictBase):
@@ -163,13 +166,14 @@ def _from_trials(
             hard = code in HARD_CODES or entry.get("hard") is True
             count = entry.get("count")
             number = count if isinstance(count, int) and not isinstance(count, bool) else None
-            key = _key(code, item.item_id)
+            subject = "plan" if code in _PLAN_LEVEL else item.item_id
+            key = _key(code, subject)
             detail = entry.get("detail")
             out.append(
                 Finding(
                     key=key,
                     code=code,
-                    subject=item.item_id,
+                    subject=subject,
                     level="hard" if hard else "stop",
                     source="sql_trial",
                     count=number,
@@ -182,6 +186,17 @@ def _from_trials(
                 )
             )
     return out
+
+
+def _one_per_key(found: list[Finding]) -> list[Finding]:
+    """One finding per subject, updated in place: a later trial's replaces an earlier trial's, and the plan's own
+    count (the first, if there is one) is never replaced by a trial."""
+    by_key: dict[str, Finding] = {}
+    for f in found:
+        had = by_key.get(f.key)
+        if had is None or had.source == "sql_trial":
+            by_key[f.key] = f
+    return list(by_key.values())
 
 
 def findings_of(
@@ -200,10 +215,13 @@ def findings_of(
     if counted is not None and counted.digest != plan_digest(case.files, items):
         counted = None
     out = [_from_plan(f, said) for f in counted.findings] if counted is not None else []
-    told = {(f.code, f.item_id) for f in out}
+    told = {(f.code, f.item_id) for f in out} | {
+        (f.code, item.item_id) for f in out if f.subject == "plan" for item in items
+    }
     # a count of every row supersedes what a trial saw, except the stops it does not measure again
     only = None if counted is None or counted.basis is None else _TRIAL_ONLY
     out.extend(_from_trials(items, said, told, only=only))
+    out = _one_per_key(out)
     # a doubt the reconcile store resolved or superseded (`CaseDoubt.status`) is no longer the person's to clear
     for doubt in [d for d in case.doubts if d.status == "open"][-_DOUBTS_KEPT:]:
         key = _key("DOUBT", doubt.doubt_id)
