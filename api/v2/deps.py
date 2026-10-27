@@ -202,8 +202,10 @@ class Services:
     data_doctor: Callable[[], Mapping[str, Any] | None] | None = None
     """The Data Doctor's latest report (`fixes`, `problems`, `questions`), when one is wired in."""
     follow_ups_run: bool = False
-    """Whether the running agent sends a plan's follow-up steps. Only the v3 journeys do; the plain agent makes
-    one decision per customer and never sends a later step, so the Plan screen must not promise one."""
+    """Whether the running agent sends a plan's follow-up steps (`Brief.follow_ups`). Nothing does yet, so every
+    entry point leaves it False: the plain agent makes one decision per customer and never sends a later step, and
+    the v3 journeys (AUTONOMY_V3) run the steps of configs/v3/journeys.yaml, not the brief's. Set it only once a
+    sender reads `Brief.follow_ups`; until then the Plan screen must not promise one."""
     _tick_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     # goals and briefs ---------------------------------------------------------------------------
@@ -746,7 +748,17 @@ def template_strategist(goal: Goal) -> Brief:
 
 
 STARTING_PLAN_CHANNELS: tuple[Channel, ...] = (Channel.EMAIL, Channel.WHATSAPP)
-"""The channels of the starting plan (`template_strategist`); a suggested budget is costed on the dearest of them."""
+"""The channels of the starting plan (`template_strategist`). A suggested budget without history is costed on the
+dearest of them that the shop can send through (`budget_channels`), or of all of them when that is not known."""
+
+
+def budget_channels(ready: Iterable[Channel]) -> tuple[Channel, ...]:
+    """The starting plan's channels a suggested budget is costed on: those in `ready` (the channels with a sender,
+    as `GET /v2/channels` reports them), or the whole starting plan when none of them is ready or nothing is known.
+    """
+    have = set(ready)
+    return tuple(c for c in STARTING_PLAN_CHANNELS if c in have) or STARTING_PLAN_CHANNELS
+
 
 # --- the demo -------------------------------------------------------------------------------------
 
@@ -975,8 +987,12 @@ class _DemoReadModels:
         )
 
     def opportunities(self) -> list[Goal]:
-        """Goals the agent would suggest, sized from customer state. Drafts: nothing runs until approved."""
-        return suggest_opportunities(self.states.scan(), self.business_id, self.now)
+        """Goals the agent would suggest, sized from customer state. Drafts: nothing runs until approved.
+
+        The fake demo has a sender for email and for WhatsApp, so the budget is costed on both."""
+        return suggest_opportunities(
+            self.states.scan(), self.business_id, self.now, cost_channels=STARTING_PLAN_CHANNELS
+        )
 
 
 def suggest_opportunities(
@@ -986,6 +1002,7 @@ def suggest_opportunities(
     *,
     taken: frozenset[GoalKind] = frozenset(),
     events: Iterable[Event] | None = None,
+    cost_channels: Sequence[Channel] = STARTING_PLAN_CHANNELS,
 ) -> list[Goal]:
     """Draft goals for the shop; kinds in `taken` (already being worked on) are left out.
 
@@ -997,11 +1014,12 @@ def suggest_opportunities(
     `GET /v2/onboarding/proposals` returns the full proposals (why, basis, ranges).
 
     Without `events`, only counts from customer state are possible: one-time buyers and sign-ups who
-    never bought, each budgeted at what two messages to every one of them cost on the dearest channel
-    the starting plan may use (`STARTING_PLAN_CHANNELS`: email and WhatsApp), never a made-up amount.
-    Costing them at the email price alone suggested $1.00 for a few hundred people, a budget a
-    plan that may use WhatsApp spends in about 30 messages; the costs are `DEFAULT_CHANNEL_COSTS`, in
-    the shop's currency units until the per-shop costs of ARCHITECTURE_REVIEW section 8 "Fix first" 2 land.
+    never bought, each budgeted at what two messages to every one of them cost on the dearest of
+    `cost_channels`, never a made-up amount. `cost_channels` defaults to the whole starting plan
+    (`STARTING_PLAN_CHANNELS`: email and WhatsApp); the API passes the plan's channels that have a sender
+    (`budget_channels`), so an email-only shop is costed at the email price and a shop that may use WhatsApp
+    at the WhatsApp price. The costs are `DEFAULT_CHANNEL_COSTS`, in the shop's currency units until the
+    per-shop costs of ARCHITECTURE_REVIEW section 8 "Fix first" 2 land.
     """
     rows = list(states)
     if events is not None:
@@ -1011,7 +1029,7 @@ def suggest_opportunities(
         return [proposal_goal(p, business_id, now) for p in scan.proposals if p.kind not in taken]
     from autonomy.onboarding.priors import CHANNEL_COSTS
 
-    per_message = max((CHANNEL_COSTS.get(c, 0.0) for c in STARTING_PLAN_CHANNELS), default=0.0)
+    per_message = max((CHANNEL_COSTS.get(c, 0.0) for c in cost_channels), default=0.0)
     ideas = [
         (
             "opp_repeat_purchase",
@@ -1063,20 +1081,44 @@ def editor_passed(item: ContentItem) -> bool:
     return bool(item.critic_notes) and item.critic_notes[-1].startswith("approved")
 
 
+DEMO_DRAFT_SUBJECT = "New in {{top_category}}, {{first_name}}"
+DEMO_DRAFT_BODY = (
+    "Hi {{first_name}}, there are new {{top_category}} picks since your last visit. Unsubscribe any time."
+)
+"""The fake demo's draft: a plain reminder with no urgency or scarcity claim, which the editor can honestly pass."""
+
+
 def _demo_content(start: datetime, goal_id: str) -> list[ContentItem]:
-    """The sample library plus one draft waiting for review, so the content screen has work to show."""
+    """The sample library plus one draft waiting for a person's yes, so the content screen has work to show.
+
+    The draft's notes are the real Critic's (ARCHITECTURE_REVIEW C12: no hand-written verdict). The fake world has
+    no judge model, so the brand's rules allow the rules alone (`judge_optional`), and the notes say exactly that:
+    "judge unavailable ..." then "approved on the rules alone (judge optional)". No judge score is claimed.
+    """
+    from autonomy.agents.base import ScriptedLLM
+    from autonomy.agents.critic import BrandRules, Critic
+    from engine.llm import LLMError
+
+    def no_judge(_system: str, _prompt: str) -> str:
+        raise LLMError("LLM_UNAVAILABLE", "the fake demo has no judge model")
+
     items = sample_content(start, goal_id)
     draft = items[0].model_copy(
         update={
             "content_id": "ci_draft_1",
-            "theme": Theme.URGENCY,
-            "subject": "Your favourites are going fast",
-            "body": "Hi {{first_name}}, a few {{top_category}} picks are almost gone.",
-            "status": ContentStatus.DRAFT,  # passed the editor; waiting for a person's yes
-            "critic_notes": ("rules: all passed", "judge: brand voice 5, honesty 5", "approved"),
+            "theme": Theme.REMINDER,
+            "subject": DEMO_DRAFT_SUBJECT,
+            "body": DEMO_DRAFT_BODY,
+            "status": ContentStatus.DRAFT,
+            "critic_notes": (),
         }
     )
-    return [*items, draft]
+    rules = BrandRules.from_brief(
+        sample_brief(start, goal_id), brand_voice="Warm and brief.", allowed_domains=()
+    ).model_copy(update={"judge_optional": True})
+    [reviewed] = Critic(ScriptedLLM(no_judge)).review([draft], rules)
+    # The editor's verdict is kept; the status stays DRAFT, so it waits for a person's yes.
+    return [*items, reviewed.model_copy(update={"status": ContentStatus.DRAFT})]
 
 
 def build_demo_services(
@@ -1213,6 +1255,8 @@ class StoreReadModels:
     briefings_log: list[Briefing] = field(default_factory=list)
     notes: tuple[str, ...] = ()
     """Added to every proof summary, e.g. that the data is simulated."""
+    cost_channels: tuple[Channel, ...] = STARTING_PLAN_CHANNELS
+    """What a suggested budget without history is costed on (`budget_channels` of the senders that exist)."""
     seed: int = 0
     alert_store: Any = None
     """Anything with `list(...) -> Sequence[Alert]`, e.g. `autonomy.runtime.stores`' alert store."""
@@ -1292,7 +1336,9 @@ class StoreReadModels:
     def opportunities(self) -> list[Goal]:
         """Suggestions for kinds of goal nobody is working on yet."""
         taken = frozenset(g.kind for g in self.workspace.goals() if g.status is not GoalStatus.DONE)
-        return suggest_opportunities(self.states.scan(), self.business_id, self.clock(), taken=taken)
+        return suggest_opportunities(
+            self.states.scan(), self.business_id, self.clock(), taken=taken, cost_channels=self.cost_channels
+        )
 
 
 def _call_with(fn: Callable[..., Any], **kwargs: Any) -> Any:
@@ -1417,6 +1463,7 @@ def build_services_from_runtime(
     )
     if adapters is None:
         adapters = dict(runtime.dispatcher.adapters) if runtime.dispatcher is not None else {}
+    reads.cost_channels = budget_channels(adapters)  # the same senders `GET /v2/channels` calls ready
     events = runtime.events
 
     def ingest(batch: Sequence[Event]) -> int:

@@ -238,7 +238,7 @@ class PlanFacts(Contract):
     follow_ups_run: bool = Field(
         default=False,
         description=(
-            "Whether this server sends the plan's follow-up steps. False (the plain agent): the brief lists "
+            "Whether this server sends the plan's follow-up steps. False today, v3 on or off: the brief lists "
             "them, nothing sends them, and the Plan screen does not promise them"
         ),
     )

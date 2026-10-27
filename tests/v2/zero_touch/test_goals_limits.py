@@ -399,26 +399,25 @@ def test_suggest_opportunities_with_history_returns_the_sized_goals(
     assert plain and all(g.budget < 1000 for g in plain)
 
 
-def test_a_suggested_budget_without_history_covers_the_dearest_channel_of_the_starting_plan(
-    shop: tuple[InMemoryEventStore, InMemoryStateStore],
-) -> None:
-    """Two messages to everyone at the email price alone suggested $1.00; the starting plan may use WhatsApp."""
-    from api.v2.deps import STARTING_PLAN_CHANNELS
-    from autonomy.onboarding.priors import CHANNEL_COSTS
+def test_a_suggested_budget_without_history_is_costed_on_the_channels_the_shop_can_send_through() -> None:
+    """400 one-time buyers, two messages each: $24.00 on a plan that may use WhatsApp (0.03 a message), not the
+    $1.00 the email price gave; an email-only shop is costed at the email price (800 x 0.001, so the $1 floor).
+    """
+    from api.v2.deps import STARTING_PLAN_CHANNELS, budget_channels
 
-    _events, states = shop
-    rows = list(states.scan())
-    dearest = max(CHANNEL_COSTS.get(c, 0.0) for c in STARTING_PLAN_CHANNELS)
-    assert dearest > CHANNEL_COSTS[Channel.EMAIL]
-    counts = {
-        GoalKind.REPEAT_PURCHASE: sum(1 for s in rows if s.purchases == 1),
-        GoalKind.ONBOARDING: sum(1 for s in rows if s.purchases == 0),
+    rows = [CustomerState(customer_id=f"c{i}", as_of=NOW, purchases=1) for i in range(400)]
+    rows += [CustomerState(customer_id=f"n{i}", as_of=NOW, purchases=0) for i in range(5000)]
+    plan = {g.kind: g.budget for g in suggest_opportunities(rows, "biz", NOW)}
+    assert plan == {GoalKind.REPEAT_PURCHASE: 24.0, GoalKind.ONBOARDING: 300.0}
+    email_only = suggest_opportunities(rows, "biz", NOW, cost_channels=budget_channels({Channel.EMAIL}))
+    assert {g.kind: g.budget for g in email_only} == {
+        GoalKind.REPEAT_PURCHASE: 1.0,
+        GoalKind.ONBOARDING: 10.0,
     }
-    plain = suggest_opportunities(rows, "biz", NOW)
-    assert plain
-    for goal in plain:
-        assert goal.budget == float(max(1, math.ceil(counts[goal.kind] * 2 * dearest)))
-        assert goal.budget >= math.ceil(counts[goal.kind] * 2 * CHANNEL_COSTS[Channel.EMAIL])
+    # which channels: the starting plan's that have a sender, or the whole plan when none is known
+    assert budget_channels({Channel.EMAIL, Channel.SMS}) == (Channel.EMAIL,)
+    assert budget_channels({Channel.EMAIL, Channel.WHATSAPP}) == STARTING_PLAN_CHANNELS
+    assert budget_channels(()) == STARTING_PLAN_CHANNELS
 
 
 # --- limits ---------------------------------------------------------------------------------------

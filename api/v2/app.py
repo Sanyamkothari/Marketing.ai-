@@ -202,7 +202,8 @@ def _production_parts(
     runtime = build_runtime(settings, environ=env, engine=db, run_send_jobs=False, connectors=wiring)
     public = (settings.public_url or env.get("AUTONOMY_PUBLIC_URL") or "").strip().rstrip("/") or None
     services, connector_services = _services_for(runtime, wiring, now, public, settings.business_id)
-    services.follow_ups_run = settings.v3  # the journeys are what send a follow-up; off, none is sent
+    # `services.follow_ups_run` stays False, v3 on or off: nothing sends a brief's follow-up steps. The v3 journeys
+    # come from configs/v3/journeys.yaml (JourneyRunner), not from `Brief.follow_ups`.
     return services, connector_services, wiring, db
 
 

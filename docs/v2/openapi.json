@@ -11997,7 +11997,7 @@
           "follow_ups_run": {
             "type": "boolean",
             "title": "Follow Ups Run",
-            "description": "Whether this server sends the plan's follow-up steps. False (the plain agent): the brief lists them, nothing sends them, and the Plan screen does not promise them",
+            "description": "Whether this server sends the plan's follow-up steps. False today, v3 on or off: the brief lists them, nothing sends them, and the Plan screen does not promise them",
             "default": false
           }
         },

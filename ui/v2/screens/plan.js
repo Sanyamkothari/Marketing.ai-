@@ -307,7 +307,7 @@ function channelsFact(env) {
 }
 
 /**
- * The follow-up steps, only when this server sends them (`facts.follow_ups_run`, true only with the v3 journeys on).
+ * The follow-up steps, only when this server sends them (`facts.follow_ups_run`; no server does yet, v3 included).
  * The plain agent decides once per customer and never sends a later step, so listing "After 3 days, follow up" would
  * promise a message that never goes out. Without the plan facts (an older API) nothing is promised either.
  */

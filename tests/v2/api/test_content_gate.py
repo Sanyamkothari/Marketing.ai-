@@ -93,19 +93,45 @@ def test_editor_passed_reads_the_critics_last_word(content_id: str, passed: bool
     assert editor_passed(_reviewed()[content_id]) is passed
 
 
+def _judge_then_down() -> ScriptedLLM:
+    """A judge that answers its first run and is down for the second."""
+    verdict = json.dumps({"scores": [{"criterion": c, "score": 5, "reason": "ok"} for c in RUBRIC]})
+    calls: list[int] = []
+
+    def answer(_system: str, _prompt: str) -> str:
+        calls.append(1)
+        if len(calls) > 1:
+            raise LLMError("unavailable", "the judge went down between its two runs")
+        return verdict
+
+    return ScriptedLLM(answer, model_id="other-family")
+
+
 def test_the_screen_never_calls_a_held_message_passed() -> None:
     """A judge outage between two runs leaves a half-scored DRAFT; the screen must not offer Approve on it."""
-    half = _item("ci_half").model_copy(
-        update={
-            "critic_notes": (
-                "judge run 1 [honesty, brand_voice]: honesty 5 (ok); brand_voice 5 (ok)",
-                "judge unavailable (run 2: unavailable)",
-                "held as a draft until the judge is back",
-            )
-        }
-    )
+    [half] = Critic(_judge_then_down()).review([_item("ci_half")], RULES)
+    assert half.status is ContentStatus.DRAFT
+    assert half.critic_notes[0].startswith("judge run 1")  # it was scored once
+    assert half.critic_notes[-1] == "held as a draft until the judge is back"
     assert editor_passed(half) is False
-    assert review_content(half).passed is not True
+    assert review_content(half).passed is None  # not finished: neither a pass nor a fail
+
+
+def test_the_fake_demos_draft_carries_the_critics_own_notes_on_honest_copy() -> None:
+    """ARCHITECTURE_REVIEW C12: no hand-written judge verdict on urgency copy. The draft is reviewed by the real
+    Critic on the rules alone (the fake world has no judge model), and its notes say so."""
+    built = build_demo_services(NOW, n_customers=30, days=3)
+    draft = next(c for c in built.workspace.content(approved_only=False) if c.content_id == "ci_draft_1")
+    assert draft.status is ContentStatus.DRAFT and draft.theme is not Theme.URGENCY
+    assert draft.critic_notes[0].startswith("judge unavailable")
+    assert draft.critic_notes[-1] == "approved on the rules alone (judge optional)"
+    assert not any(
+        n.startswith(("judge:", "judge run")) for n in draft.critic_notes
+    ), "no judge score is claimed"
+    assert not any(
+        w in f"{draft.subject} {draft.body}".lower() for w in ("going fast", "almost gone", "last chance")
+    )
+    assert editor_passed(draft) and review_content(draft).passed is True
 
 
 @pytest.fixture
