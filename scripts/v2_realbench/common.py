@@ -19,6 +19,9 @@ would hand Autonomy (events, briefs, content, channel costs). This module then:
 3. **Baselines fitted on TRAIN**: send to none, send to all (each arm), the best segment rule (repo
    `fit_segment_policy`, columns chosen on a validation slice of train) and a T-learner (one numpy
    logistic regression of conversion per arm, on one-hot binned features; bench only).
+   Two stronger learned baselines (a DR-learner and a depth-2 policy tree, `learners.py`) are fitted on
+   TRAIN too and printed in the same table; they are not in "best simple", and the report names the better
+   of them on its own line ("best learned baseline").
 4. **Scores on TEST** with `autonomy.proof` (`replay.harness.evaluate`: IPS, SNIPS, DR with 95%
    intervals; reward model `per_action_mean_model`, cross-fitted) and paired DR differences
    (`ope.mean_interval`) of the agent against every baseline.
@@ -852,12 +855,19 @@ def multiplicity(comparisons: Mapping[str, Mapping[str, float]], alpha: float = 
     return out
 
 
+LEARNED_BASELINES: tuple[str, str] = ("DR-learner (ridge)", "Policy tree (depth 2)")
+"""The two learned baselines of `scripts/v2_realbench/learners.py`, as their rows are named in the policy
+table. They are printed with CIs but kept out of the Holm family below, so the corrected intervals and the
+pre-registered verdicts stay what they were before these rows existed."""
+
+
 def agent_comparisons(block: Mapping[str, Any]) -> dict[str, dict[str, float]]:
-    """'Agent minus P' (paired DR difference) for every policy P on one dataset's scoreboard."""
+    """'Agent minus P' (paired DR difference) for every policy P on one dataset's scoreboard, except the
+    learned baselines (`LEARNED_BASELINES`)."""
     return {
         f"agent minus {name}": dict(p["agent_minus_this"])
         for name, p in block["policies"].items()
-        if name != "AGENT"
+        if name != "AGENT" and name not in LEARNED_BASELINES
     }
 
 
@@ -971,11 +981,18 @@ def evaluate_dataset(
         log_te = data.logged(test, profit, "profit")
         rule_pi = rule(log_te)
         t_pi, t_info = t_learner(data, train, test)
+    with timings.step("learned baselines on train (DR-learner, depth-2 policy tree)"):
+        from scripts.v2_realbench import learners  # imports this module, so not at the top
+
+        dr_pi, dr_info = learners.dr_learner(data, train, test)
+        tree_pi, tree_info = learners.policy_tree(data, train, test)
     k, nt = data.n_arms, len(test)
     rule_name = "segment rule (" + "+".join(rule.columns) + ")"
     policies: dict[str, FloatArray] = {simple_name(data, a): fixed(nt, k, a) for a in range(k)}
     policies[rule_name] = rule_pi
     policies["T-learner (logistic)"] = t_pi
+    policies[LEARNED_BASELINES[0]] = dr_pi
+    policies[LEARNED_BASELINES[1]] = tree_pi
     policies["AGENT"] = agent.pi
     best_policy = rule_name if best_name == "segment rule" else best_name
     # send to all: the sent arm with the best mean profit on TRAIN (a randomised trial: plain means)
@@ -993,6 +1010,7 @@ def evaluate_dataset(
     vs_best = paired(terms["AGENT"], terms[best_policy])
     vs_all = paired(terms["AGENT"], terms[all_name])
     vs_test_best = paired(terms["AGENT"], terms[best_on_test])
+    best_learned = max(LEARNED_BASELINES, key=lambda n: table[n]["dr"]["point"])
     calib = calibration(
         agent.expected_net_per_contact, table["AGENT"]["dr_vs_none"], table["AGENT"]["contact_rate"]
     )
@@ -1053,6 +1071,17 @@ def evaluate_dataset(
             "note": "diagnostic only: chosen on TEST, so it flatters the baseline",
         },
         "t_learner": t_info,
+        "learned_baselines": {
+            LEARNED_BASELINES[0]: dr_info,
+            LEARNED_BASELINES[1]: tree_info,
+        },
+        "best_learned_baseline": {
+            "name": best_learned,
+            "chosen_on": "TEST, among the two learned baselines: a diagnostic yardstick that flatters the "
+            "baseline. Not part of best simple, whose meaning is unchanged (docs/v4/BASELINES.md)",
+            "agent_minus": paired(terms["AGENT"], terms[best_learned]),
+            "dr": table[best_learned]["dr"],
+        },
         "feature_signal": {
             "best_blanket_on_train": blanket_name,
             "segment_rule_minus_best_blanket": paired(terms[rule_name], terms[blanket_name]),

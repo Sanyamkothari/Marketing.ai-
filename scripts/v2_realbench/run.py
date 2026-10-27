@@ -133,6 +133,14 @@ def render(report: Mapping[str, Any]) -> str:
                 f"| {pname} | {p['contact_rate']:.1%} | {p['ips']['point']:.{d}f} | {sn:.{d}f} | "
                 f"{_fmt(p['dr'], d)} | {_fmt(p['dr_vs_none'], d)} | {_fmt(p['agent_minus_this'], d)} |"
             )
+        learned = b.get("best_learned_baseline")
+        if learned:
+            lines += [
+                "",
+                f"Best learned baseline (DR-learner or depth-2 policy tree; chosen on TEST, so it flatters it; "
+                f"not part of best simple): {learned['name']}, DR {_fmt(learned['dr'], d)}; "
+                f"agent minus it {_fmt(learned['agent_minus'], d)}.",
+            ]
         a = b["agent"]
         lines.append("")
         lines.append(
