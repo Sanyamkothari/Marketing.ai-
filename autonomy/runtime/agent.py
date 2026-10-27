@@ -134,6 +134,12 @@ from autonomy.contracts import (
     Reward,
     StopMetric,
 )
+from autonomy.contracts.offer_codes import (
+    OfferCodeTable,
+    UnattributedBook,
+    UnattributedDiscount,
+    redemption_tokens,
+)
 from autonomy.decide import rules
 from autonomy.decide.bidders import AssetOf, GoalBidder, ItemLookup, contact_harm_of
 from autonomy.decide.frequency import FrequencyConfig, FrequencyPlanner, LookalikeHazard, lerp
@@ -1655,6 +1661,8 @@ class AgentPolicy:
         self._offer_spend: dict[str, float] = {}
         self._channel_spend: dict[str, float] = {}
         self._offer_goal: dict[tuple[str, str], str] = {}
+        self._code_tables: dict[str, tuple[Brief, OfferCodeTable]] = {}
+        self._unattributed = UnattributedBook()
         self._priced_sends: set[str] = set()
         self._priced_day: date | None = None
         self.version = version
@@ -2861,13 +2869,27 @@ class AgentPolicy:
 
     def _price_redemption(self, e: Event) -> None:
         """Charge a purchase that used one of our offers to the goal that sent it: the cost the shop
-        reported (`attrs["offer_cost"]`), else the offer's own `cost_per_redemption`."""
-        offer_id = e.attrs.get("offer_id")
-        if not isinstance(offer_id, str) or offer_id == NO_OFFER.offer_id:
+        reported (`attrs["offer_cost"]`), else the offer's own `cost_per_redemption`.
+
+        The shop reports the code the customer typed, so the purchase is traced to our offer through
+        the offers' codes (`autonomy.contracts.offer_codes`). A code no brief's offers name is
+        counted in `unattributed_discounts()`."""
+        tokens = redemption_tokens(e.attrs)
+        if not tokens:
             return
-        goal = self._offer_goal.get((e.customer_id, offer_id))
-        if goal is None:
-            return
+        offers: dict[str, None] = dict.fromkeys(tokens)  # our own ids, as the Gym and some shops report them
+        tables = [self._code_table(g, b) for g, b in self.briefs.items()]
+        for table in tables:
+            offers.update(dict.fromkeys(table.offers_for(e.attrs)))
+        for offer_id in offers:
+            sent_by = self._offer_goal.get((e.customer_id, offer_id))
+            if sent_by is not None:
+                self._charge_redemption(e, sent_by, offer_id)
+                return
+        if not any(table.offer_for(t) is not None for table in tables for t in tokens):
+            self._unattributed.add(tokens[0], e.attrs)
+
+    def _charge_redemption(self, e: Event, goal: str, offer_id: str) -> None:
         reported = e.attrs.get("offer_cost")
         if isinstance(reported, int | float) and not isinstance(reported, bool):
             cost = max(float(reported), 0.0)
@@ -2878,6 +2900,16 @@ class AgentPolicy:
             )
             cost = found.cost_per_redemption if found is not None else 0.0
         self._offer_spend[goal] = self._offer_spend.get(goal, 0.0) + cost
+
+    def _code_table(self, goal: str, brief: Brief) -> OfferCodeTable:
+        known = self._code_tables.get(goal)
+        if known is None or known[0] is not brief:
+            known = self._code_tables[goal] = (brief, OfferCodeTable(brief.envelope.offers))
+        return known[1]
+
+    def unattributed_discounts(self) -> list[UnattributedDiscount]:
+        """Discount codes seen on purchases that none of the briefs' offers name (offer pricing on)."""
+        return self._unattributed.rows()
 
     def _roll_offer_prices(self, now: datetime) -> None:
         """Close the day for every goal's budget price, once per calendar day (UTC) of `now`."""

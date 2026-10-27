@@ -10,7 +10,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from autonomy.contracts.base import Channel, Contract
 
@@ -113,6 +113,29 @@ class OfferOption(Contract):
         description="loyalty: share of granted points that are ever redeemed",
         exclude_if=lambda v: v == 1.0,
     )
+
+    # How a purchase's discount code is traced back to this offer (autonomy.contracts.offer_codes).
+    # The shop's checkout reports the typed code ("COMEBACK10"), never the agent's offer id
+    # ("pct10"), so the offer names the code(s) or code prefix(es) that identify it. Empty by default
+    # and then left out of every dump, so an offer that does not use them hashes as before.
+    codes: tuple[str, ...] = Field(
+        default=(),
+        description="Exact discount codes (any case) that redeem this offer, e.g. COMEBACK10",
+        exclude_if=lambda v: not v,
+    )
+    code_prefixes: tuple[str, ...] = Field(
+        default=(),
+        description="Prefixes (any case) of per-send unique discount codes that redeem this offer",
+        exclude_if=lambda v: not v,
+    )
+
+    @field_validator("codes", "code_prefixes")
+    @classmethod
+    def _clean_codes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(dict.fromkeys(c.strip() for c in value))
+        if any(not c for c in cleaned):
+            raise ValueError("a discount code or prefix cannot be empty")
+        return cleaned
 
     @model_validator(mode="after")
     def _price_from_cost_model(self) -> OfferOption:
