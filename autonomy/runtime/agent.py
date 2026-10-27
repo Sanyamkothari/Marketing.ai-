@@ -1645,6 +1645,7 @@ class AgentPolicy:
         frequency: FrequencyConfig | None = None,
         journeys: JourneyRunner | None = None,
         experiments: ExperimentBook | None = None,
+        attention_price: bool = True,
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
@@ -1728,7 +1729,7 @@ class AgentPolicy:
         self.bidders: dict[str, GoalBidder] = {}
         self.policy = AutonomousPolicy(
             [],
-            self.contact_price.floor,
+            self.contact_price.floor if attention_price else None,
             exploration_floor,
             baseline_policy,
             mc_draws=mc_draws,
@@ -1737,7 +1738,7 @@ class AgentPolicy:
             plausible_z=PLAUSIBLE_Z,
             min_gap=MIN_GAP,
             pacer=self.pacer,
-            channel_price_fn=self.contact_price.prices,
+            channel_price_fn=self.contact_price.prices if attention_price else None,
             budget_fn=self.contact_price.budget if weekly_budget else None,
             margin_fn=self._margin if restraint else None,
             plan_fn=self.planner.gate if self.planner is not None else None,
@@ -3094,6 +3095,7 @@ def build_agent_policy(
     frequency: bool | FrequencyConfig | None = None,
     journeys: bool | JourneyConfig | JourneyRunner | None = None,
     v3: bool | V3Preset = False,
+    attention_price: bool = True,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -3145,6 +3147,11 @@ def build_agent_policy(
     also passed by name here wins over the preset's, False included (`journeys=False`, `moments=False`, a
     `journeys=` runner...); `lookalike`, `who`, `frequency` and `journeys` default to None, "not given",
     which is off without the preset. Offer pricing is switched off only with `V3Preset(offers=False)`.
+
+    `attention_price=False` (a measuring switch for the ablation variants of docs/v3/DIAGNOSE.md, never a
+    setting) takes the unsubscribe-and-complaint price out of the auction: every bid then only has to beat
+    zero. The weekly budget's own rhythm still prices messages (switch it off with `weekly_budget=False`),
+    and every hard rule applies as before.
     """
     parts = resolve_v3(
         v3,
@@ -3204,4 +3211,5 @@ def build_agent_policy(
         ),
         journeys=parts.journeys,
         experiments=parts.experiments,
+        attention_price=attention_price,
     )

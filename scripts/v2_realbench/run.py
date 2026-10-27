@@ -6,6 +6,7 @@
     python -m scripts.v2_realbench.run --render out.json          # the markdown tables of a report
     python -m scripts.v2_realbench.run --dataset hillstrom --policy scientist ...   # the Scientist's pick
     python -m scripts.v2_realbench.run --dataset hillstrom --policy agent_v3 ...    # the plan-v3 preset
+    python -m scripts.v2_realbench.run --dataset x5 --policy v3_no_journeys ...     # an ablation variant
     python -m scripts.v2_realbench.run --dataset lenta --sealed-final ...   # SEALED: once, at the end
 
 The sealed datasets (lenta, starbucks) are refused unless `--sealed-final` is passed, are never part of
@@ -36,6 +37,7 @@ from typing import Any
 import numpy as np
 
 from autonomy.agents.llm_exchange import AnswerPending, RecordingLLM
+from autonomy.runtime import ablation
 from scripts.v2_realbench.adapters import DATASETS, SIZES, load
 from scripts.v2_realbench.ai_loop import AiSetup, CountingReplay
 from scripts.v2_realbench.common import (
@@ -201,12 +203,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--json", type=Path, help="write the report here")
     ap.add_argument(
         "--policy",
-        choices=("agent", "agent_v3", "scientist"),
+        choices=(*ablation.names(), "scientist"),
         default="agent",
+        metavar="POLICY",
         help="agent: score the learning agent (the scoreboard of record); agent_v3: the same agent built "
         "with the plan-v3 preset (docs/v3/PRESET.md), its who book handed every customer's pre-campaign "
         "events, scored the same way; scientist: the policy the Scientist selects on TRAIN from the fixed "
-        "menu (autonomy/scientist), scored on TEST",
+        "menu (autonomy/scientist), scored on TEST; any other name is an ablation variant of the agent "
+        "(v3_no_<part>, agent_<part>, agent_no_<guard>, agent_loose_caps; docs/v3/DIAGNOSE.md), scored the "
+        "same way, with a DIAG block of how it decided. One of: "
+        + ", ".join(ablation.names())
+        + ", scientist",
     )
     ap.add_argument(
         "--ai-answers",
@@ -338,6 +345,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     with_decision_log=args.with_decision_log,
                     attach_features=not args.no_features,
                     v3=args.policy == "agent_v3",
+                    variant=args.policy,
                 )
             del data
         except MemoryError as err:  # keep the other datasets' numbers
@@ -352,7 +360,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         block["peak_rss_mb"] = round(peak_rss_mb(), 1)
         block["timings"] = timings.rows
         report["datasets"][name] = block
-        if args.policy in ("agent", "agent_v3"):
+        if args.policy != "scientist":
             add_multiplicity(report)  # raw and Holm-corrected, over the datasets finished so far
         gc.collect()
         if "error" not in block and args.policy == "scientist":
@@ -372,6 +380,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{block['calibration'].get('ratio')}; verdict {v}",
                 flush=True,
             )
+            if block["agent"].get("diag_text"):
+                print(block["agent"]["diag_text"], flush=True)
         if args.json:  # write after every dataset, so a crash keeps what finished
             args.json.write_text(json.dumps(report, indent=1, default=_default))
     report["seconds"] = round(time.perf_counter() - started, 1)

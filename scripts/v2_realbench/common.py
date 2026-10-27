@@ -73,6 +73,7 @@ from autonomy.proof.estimate import Z_95
 from autonomy.proof.replay import LoggedBandit, fit_segment_policy
 from autonomy.proof.replay import evaluate as harness_evaluate
 from autonomy.proof.replay.harness import SegmentPolicy, per_action_mean_model
+from autonomy.runtime.diagnostics import DecisionTally, format_block, journeys_of, part_snapshot
 
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
@@ -312,6 +313,13 @@ class AgentResult:
     seeds: int
     learned: tuple[str, ...] = ()
     """What the agent's warm start says it learned (calibration and uplift notes), as plain text."""
+    tally: DecisionTally | None = None
+    """Every decision counted by reason and blocked_by code (`autonomy.runtime.diagnostics`, the DIAG block)."""
+    variant: str = "agent"
+    changed: dict[str, object] | None = None
+    """The switches that differ from the plain agent (`autonomy.runtime.ablation.changed_switches`)."""
+    snapshot: dict[str, object] = field(default_factory=dict)
+    """The v3 parts' own counters after the run (`autonomy.runtime.diagnostics.part_snapshot`)."""
 
 
 def _learned(policy: object) -> tuple[str, ...]:
@@ -388,6 +396,7 @@ def run_agent(
     with_decision_log: bool = False,
     attach_features: bool = True,
     v3: bool = False,
+    variant: str | None = None,
 ) -> AgentResult:
     """Build the production agent, warm-start it on TRAIN as the runtime does, decide for TEST.
 
@@ -396,10 +405,18 @@ def run_agent(
     TRAIN customers' history (`nightly` gets no more), so a TEST customer would have no profile, no score
     and no trait group, and decision 1 would not be measured at all. These are the events the bench folds
     the TEST states from, from before the campaign starts and so point in time; the campaign events of TEST
-    customers are never handed over (the check below still refuses them)."""
-    from autonomy.runtime.agent import build_agent_policy
+    customers are never handed over (the check below still refuses them).
+
+    `variant` names an ablation variant (`autonomy.runtime.ablation`, docs/v3/DIAGNOSE.md) to build in the
+    agent's place; None is the plain agent, or the preset with `v3`. A variant that uses the who book is handed
+    the pre-campaign events like the preset. `agent_loose_caps` raises the briefs' weekly contact cap, in the
+    build and in the decision context."""
+    from autonomy.runtime import ablation
 
     inp = data.agent
+    name = variant or ("agent_v3" if v3 else "agent")
+    briefs = tuple(ablation.variant_briefs(name, inp.briefs))
+    needs_who = ablation.uses_who(name)
     ids = [str(c) for c in data.customer_ids]
     train_ids = [ids[i] for i in train]
     test_ids = [ids[i] for i in test]
@@ -424,19 +441,19 @@ def run_agent(
             raise AssertionError("campaign events of a TEST customer reached the agent")
         history = {c: [*pre.get(c, []), *camp.get(c, [])] for c in train_ids}
         n_events = sum(len(v) for v in history.values())
-        held = pre if v3 else None
+        held = pre if needs_who else None
         del pre, camp
         gc.collect()
     log = decision_log(data, train) if with_decision_log else []
     with timings.step(f"agent: build (product path) and warm start on {len(train_ids)} train customers"):
-        policy = build_agent_policy(list(inp.briefs), list(inp.content), costs=dict(inp.costs), v3=v3)
+        policy = ablation.build_variant(name, briefs, inp.content, costs=dict(inp.costs))
         policy.nightly(log, history, inp.now)
         del history
         if held is not None and policy.who is not None:
             policy.who.ingest(held, inp.now)  # before the campaign, every customer's: point in time
         held = None
         gc.collect()
-        ctx0 = DecisionContext(now=inp.now, briefs=inp.briefs, content=inp.content, seed=1)
+        ctx0 = DecisionContext(now=inp.now, briefs=briefs, content=inp.content, seed=1)
         policy.prepare_day(train_states, ctx0)
     pi = np.zeros((len(test_states), data.n_arms), dtype=np.float64)
     kinds: Counter[str] = Counter()
@@ -444,6 +461,8 @@ def run_agent(
     blocked: Counter[str] = Counter()
     reasons: list[str] = []
     nets: list[float] = []
+    tally = DecisionTally()
+    runner = journeys_of(policy)  # splits journeys' never-read filter out of `no_bids`
     n_dec = 0
     t0 = time.perf_counter()
     with timings.step(f"agent: decide for {len(test_states)} test customers x {seeds} seeds"):
@@ -452,6 +471,7 @@ def run_agent(
             for j, st in enumerate(test_states):
                 d = policy.decide(st, ctx)
                 n_dec += 1
+                tally.add(d, st, ctx, journeys=runner)
                 a = inp.arm_of(d)
                 pi[j, a] += 1.0
                 arms[a] += 1
@@ -466,7 +486,12 @@ def run_agent(
     pi /= float(seeds)
     used = int(getattr(policy, "history_used", 0))
     learned = _learned(policy)
-    del policy
+    snapshot = part_snapshot(policy)
+    plain = ablation.build_variant("agent", briefs, inp.content, costs=dict(inp.costs))
+    changed = ablation.changed_switches(policy, plain)
+    if ablation.VARIANTS[name].cap_factor != 1:
+        changed["weekly_contact_cap"] = f"x{ablation.VARIANTS[name].cap_factor}"
+    del policy, plain
     gc.collect()
     return AgentResult(
         pi=pi,
@@ -482,6 +507,10 @@ def run_agent(
         decision_log=len(log),
         seeds=seeds,
         learned=learned,
+        tally=tally,
+        variant=name,
+        changed=changed,
+        snapshot=snapshot,
     )
 
 
@@ -884,6 +913,33 @@ def corrected_verdict(block: Mapping[str, Any], family: Mapping[str, Any], name:
     }
 
 
+def diag_text(
+    dataset: str, agent: AgentResult, scored: Mapping[str, Any], calib: Mapping[str, Any], n_test: int
+) -> str:
+    """The DIAG block for one dataset (docs/v3/DIAGNOSE.md): the agent's decisions counted by reason and
+    blocked_by code, which v3 part held customers, and its own expected net per contact against the measured
+    one (the DR gain over send-to-none per contact; the same figures as the calibration row of the table).
+    The bench decides once per test customer and seed, so contacts per customer-week is the contact rate."""
+    if agent.tally is None:
+        return ""
+    measured = calib.get("measured_per_contact")
+    extra: dict[str, object] = {
+        "contacts_per_customer_week": f"{scored['contact_rate']:.4f}",
+        "expected_net_per_contact": (
+            "n/a" if calib.get("expected_per_contact") is None else f"{calib['expected_per_contact']:.4g}"
+        ),
+        "measured_net_per_contact": (
+            "n/a (contacts nobody)"
+            if measured is None
+            else f"{measured['point']:.4g} [{measured['low']:.4g}, {measured['high']:.4g}]"
+        ),
+        "expected_over_measured": "n/a" if calib.get("ratio") is None else f"x{calib['ratio']:.2f}",
+        "arm_shares": [round(float(v), 4) for v in scored["arm_shares"]],
+    }
+    label = f"bench dataset={dataset} policy={agent.variant} seeds={agent.seeds} test_customers={n_test}"
+    return format_block(label, agent.tally, changed=agent.changed, snapshot=agent.snapshot, extra=extra)
+
+
 def evaluate_dataset(
     data: BenchData,
     *,
@@ -892,9 +948,11 @@ def evaluate_dataset(
     with_decision_log: bool = False,
     attach_features: bool = True,
     v3: bool = False,
+    variant: str | None = None,
 ) -> dict[str, Any]:
     """The whole scoreboard for one dataset: split, agent, baselines, scores, calibration, verdict.
-    `v3` scores the plan-v3 preset in the agent's place (`run_agent`); the report still calls it AGENT."""
+    `v3` scores the plan-v3 preset in the agent's place (`run_agent`), `variant` an ablation variant of it
+    (docs/v3/DIAGNOSE.md); the report still calls it AGENT."""
     train, test = split_by_hash(data.customer_ids)
     profit = data.profit()
     agent = run_agent(
@@ -906,6 +964,7 @@ def evaluate_dataset(
         with_decision_log=with_decision_log,
         attach_features=attach_features,
         v3=v3,
+        variant=variant,
     )
     with timings.step("baselines on train (segment rule, T-learner, best simple policy)"):
         rule, best_name, val_table = choose_simple(data, train, profit)
@@ -937,6 +996,7 @@ def evaluate_dataset(
     calib = calibration(
         agent.expected_net_per_contact, table["AGENT"]["dr_vs_none"], table["AGENT"]["contact_rate"]
     )
+    diag = diag_text(data.name, agent, table["AGENT"], calib, len(test))
     return {
         "dataset": data.name,
         "rows": data.n,
@@ -970,7 +1030,10 @@ def evaluate_dataset(
             "seeds": agent.seeds,
             "features_attached": attach_features,
             "v3": v3,
+            "variant": agent.variant,
             "learned": list(agent.learned),
+            "diag": agent.tally.to_dict() if agent.tally is not None else None,
+            "diag_text": diag,
         },
         "policies": table,
         "conversion": conv_table,
