@@ -320,6 +320,12 @@ class AgentResult:
     """The switches that differ from the plain agent (`autonomy.runtime.ablation.changed_switches`)."""
     snapshot: dict[str, object] = field(default_factory=dict)
     """The v3 parts' own counters after the run (`autonomy.runtime.diagnostics.part_snapshot`)."""
+    gate_line: str | None = None
+    """The `UPLIFT_GATE ...` log line of the uplift_threshold policy (scripts/v2_realbench/uplift_policy.py)."""
+    gate: dict[str, Any] | None = None
+    """The uplift_threshold gate's numbers (which branch, the model's lower bound, the best simple rule)."""
+    extra_policies: dict[str, FloatArray] = field(default_factory=dict)
+    """More rows for the scoreboard, scored like every other policy (uplift_threshold: the ungated model)."""
 
 
 def _learned(policy: object) -> tuple[str, ...]:
@@ -955,17 +961,24 @@ def evaluate_dataset(
     (docs/v3/DIAGNOSE.md); the report still calls it AGENT."""
     train, test = split_by_hash(data.customer_ids)
     profit = data.profit()
-    agent = run_agent(
-        data,
-        train,
-        test,
-        seeds=seeds,
-        timings=timings,
-        with_decision_log=with_decision_log,
-        attach_features=attach_features,
-        v3=v3,
-        variant=variant,
-    )
+    if (
+        variant == "uplift_threshold"
+    ):  # docs/v4/METHOD.md: the cost-threshold policy, scored in the agent's place
+        from scripts.v2_realbench.uplift_policy import run_uplift_threshold
+
+        agent = run_uplift_threshold(data, train, test, timings=timings, attach_features=attach_features)
+    else:
+        agent = run_agent(
+            data,
+            train,
+            test,
+            seeds=seeds,
+            timings=timings,
+            with_decision_log=with_decision_log,
+            attach_features=attach_features,
+            v3=v3,
+            variant=variant,
+        )
     with timings.step("baselines on train (segment rule, T-learner, best simple policy)"):
         rule, best_name, val_table = choose_simple(data, train, profit)
         log_te = data.logged(test, profit, "profit")
@@ -977,6 +990,7 @@ def evaluate_dataset(
     policies[rule_name] = rule_pi
     policies["T-learner (logistic)"] = t_pi
     policies["AGENT"] = agent.pi
+    policies.update(agent.extra_policies)  # docs/v4/METHOD.md: uplift_threshold's ungated model row
     best_policy = rule_name if best_name == "segment rule" else best_name
     # send to all: the sent arm with the best mean profit on TRAIN (a randomised trial: plain means)
     tr_means = [float(profit[train][data.arm[train] == a].mean()) for a in range(1, k)]
@@ -997,6 +1011,8 @@ def evaluate_dataset(
         agent.expected_net_per_contact, table["AGENT"]["dr_vs_none"], table["AGENT"]["contact_rate"]
     )
     diag = diag_text(data.name, agent, table["AGENT"], calib, len(test))
+    if agent.gate_line:
+        diag = f"{diag}\n{agent.gate_line}" if diag else agent.gate_line
     return {
         "dataset": data.name,
         "rows": data.n,
@@ -1034,6 +1050,7 @@ def evaluate_dataset(
             "learned": list(agent.learned),
             "diag": agent.tally.to_dict() if agent.tally is not None else None,
             "diag_text": diag,
+            "uplift_gate": agent.gate,
         },
         "policies": table,
         "conversion": conv_table,

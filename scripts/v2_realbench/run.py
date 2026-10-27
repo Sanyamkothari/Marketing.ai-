@@ -7,6 +7,7 @@
     python -m scripts.v2_realbench.run --dataset hillstrom --policy scientist ...   # the Scientist's pick
     python -m scripts.v2_realbench.run --dataset hillstrom --policy agent_v3 ...    # the plan-v3 preset
     python -m scripts.v2_realbench.run --dataset x5 --policy v3_no_journeys ...     # an ablation variant
+    python -m scripts.v2_realbench.run --dataset x5 --policy uplift_threshold ...   # docs/v4/METHOD.md
     python -m scripts.v2_realbench.run --dataset lenta --sealed-final ...   # SEALED: once, at the end
 
 The sealed datasets (lenta, starbucks) are refused unless `--sealed-final` is passed, are never part of
@@ -51,6 +52,7 @@ from scripts.v2_realbench.scientist import evaluate_scientist, render_scientist
 from scripts.v2_realbench.sealed import DEFAULT_LOG, SEALED_DATASETS, record_sealed_run, refusal
 
 REPO = Path(__file__).resolve().parents[2]
+UPLIFT_POLICY = "uplift_threshold"
 
 
 def _git(*args: str) -> str | None:
@@ -203,7 +205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--json", type=Path, help="write the report here")
     ap.add_argument(
         "--policy",
-        choices=(*ablation.names(), "scientist"),
+        choices=(*ablation.names(), UPLIFT_POLICY, "scientist"),
         default="agent",
         metavar="POLICY",
         help="agent: score the learning agent (the scoreboard of record); agent_v3: the same agent built "
@@ -213,7 +215,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "(v3_no_<part>, agent_<part>, agent_no_<guard>, agent_loose_caps; docs/v3/DIAGNOSE.md), scored the "
         "same way, with a DIAG block of how it decided. One of: "
         + ", ".join(ablation.names())
-        + ", scientist",
+        + f", {UPLIFT_POLICY} (a cross-fitted uplift model with a cost threshold, gated against the best simple "
+        "rule: docs/v4/METHOD.md), scientist",
     )
     ap.add_argument(
         "--ai-answers",

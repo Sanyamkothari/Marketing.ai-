@@ -276,7 +276,10 @@ class AutonomousPolicy:
     send by a Thompson draw of the customer's reading hours. `pacer` (None: off) slows a channel
     down, then holds it, as the goal nears a stop rule. `channel_price_fn`, `budget_fn` and
     `margin_fn` (None: off) price each channel apart, hold a customer whose weekly budget is spent
-    and keep uncertain options out of the Thompson draw (see the module docstring).
+    and keep uncertain options out of the Thompson draw (see the module docstring). `greedy` (False: off) is
+    an ablation: the final choice takes the option with the best net after price, with no Thompson draw (set
+    `exploration_floor=0` with it for a policy that never explores; docs/v4/METHOD.md). Every option's spread
+    still counts upstream (restraint, pruning).
 
     `decide(state, ctx, trigger=None)`: `trigger` names what prompted the decision when it is not the
     daily sweep (a cart, a reply). The decision id is fixed by (customer, `ctx.now`, trigger), so
@@ -306,6 +309,7 @@ class AutonomousPolicy:
         margin_fn: RestraintMargin | None = None,
         journeys: JourneyRunner | None = None,
         plan_fn: PlanGate | None = None,
+        greedy: bool = False,
     ) -> None:
         if exploration_floor is not None and not 0 <= exploration_floor <= 1:
             raise ValueError("exploration_floor is a probability")
@@ -314,6 +318,7 @@ class AutonomousPolicy:
         self.bidders = list(bidders)
         self.attention_price_fn = attention_price_fn
         self.exploration_floor = exploration_floor
+        self.greedy = greedy
         self.baseline_policy = baseline_policy
         self.mc_draws = mc_draws
         self.max_options = max_options
@@ -405,7 +410,7 @@ class AutonomousPolicy:
         market = self.auction(state, ctx, survivors, blocked, plan=trigger in (None, SWEEP))
         survivors, options, cost = market.survivors, market.options, market.cost
         means = [0.0] + [b.expected_net - cost(b) for b in options]  # option 0 is "do nothing"
-        sds = [0.0] + [b.uncertainty for b in options]
+        sds = [0.0] + [0.0 if self.greedy else b.uncertainty for b in options]
         pick = thompson_with_floor(
             means,
             sds,

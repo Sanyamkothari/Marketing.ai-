@@ -41,6 +41,8 @@ __all__ = [
     "attach_uplift",
     "blend",
     "detach_uplift",
+    "score_only",
+    "set_score_only",
     "uplift_of",
 ]
 
@@ -97,6 +99,31 @@ def uplift_of(model: object) -> UpliftScorer | None:
         return _SCORERS.get(model)
     except TypeError:
         return None
+
+
+_SCORE_ONLY: weakref.WeakSet[object] = weakref.WeakSet()
+
+
+def set_score_only(model: object, on: bool = True) -> bool:
+    """Make the bidders that share `model` read the uplift score alone, without blending it with the
+    response model's reading (an ablation: the click model detached, docs/v4/METHOD.md). Where no
+    score exists for an option the response model still prices it. False if the model cannot be keyed."""
+    try:
+        if on:
+            _SCORE_ONLY.add(model)
+        else:
+            _SCORE_ONLY.discard(model)
+    except TypeError:  # not weak-referenceable or not hashable
+        return False
+    return True
+
+
+def score_only(model: object) -> bool:
+    """Whether `set_score_only` was switched on for the response model `model`."""
+    try:
+        return model in _SCORE_ONLY
+    except TypeError:
+        return False
 
 
 _TINY_VAR = 1e-18

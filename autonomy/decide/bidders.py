@@ -141,7 +141,7 @@ from autonomy.decide.models import (
     ValueModel,
     action_key,
 )
-from autonomy.uplift.score import UpliftScorer, blend, uplift_of
+from autonomy.uplift.score import UpliftScorer, blend, score_only, uplift_of
 
 if TYPE_CHECKING:
     from autonomy.decide.moments import MomentBook
@@ -1927,7 +1927,12 @@ class GoalBidder:
                     mean, std = self.response_model.predict(state, key)
                     found = scorer.score(state, key, now) if scorer is not None and now is not None else None
                     if found is not None:
-                        mean, std = blend(mean, std, found)
+                        # score_only (an ablation): the campaign-measured score alone, no click-model blend
+                        mean, std = (
+                            (found.mean, found.sd)
+                            if score_only(self.response_model)
+                            else blend(mean, std, found)
+                        )
                         if self.own_spread and found.own_sd is not None and found.sd > 0:
                             # Sample on the option's own noise, not the control group's that all of
                             # the customer's options share (as `_option_std` does for the model).
