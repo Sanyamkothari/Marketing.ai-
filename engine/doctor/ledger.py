@@ -166,7 +166,13 @@ def _from_trials(
             hard = code in HARD_CODES or entry.get("hard") is True
             count = entry.get("count")
             number = count if isinstance(count, int) and not isinstance(count, bool) else None
-            subject = "plan" if code in _PLAN_LEVEL else item.item_id
+            # the subject the guards key a plan's own stop by (`materialize._finding`): per file, so a yes carries over
+            # to the counted plan's stop and never to another file's
+            subject = (
+                (f"plan:{item.upload_id}" if item.upload_id else "plan")
+                if code in _PLAN_LEVEL
+                else item.item_id
+            )
             key = _key(code, subject)
             detail = entry.get("detail")
             out.append(

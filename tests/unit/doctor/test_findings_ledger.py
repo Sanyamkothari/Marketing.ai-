@@ -120,7 +120,7 @@ def test_a_stop_in_a_trials_payload_is_in_the_ledger_and_blocks_until_the_plan_i
     case = _edit(storage, case, items=(*case.items, item), visit=None)  # the plan is not counted yet
     found = [f for f in findings_of(case) if f.source == "sql_trial"]
     assert [(f.code, f.level, f.count, f.subject) for f in found] == [
-        ("PLAN_LOSES_TOO_MUCH", "stop", 343, "plan")
+        ("PLAN_LOSES_TOO_MUCH", "stop", 343, f"plan:{FIRST}")
     ]
     assert found[0].measured == {"count": 343} and found[0].acknowledgeable
     assert {r.kind for r in found[0].resolutions} >= {"acknowledge", "fix"}
@@ -156,7 +156,9 @@ def test_a_plan_stop_said_by_every_trial_is_one_finding(tmp_path: Path) -> None:
         )
     case = _edit(storage, case, items=(*case.items, *items), visit=None)
     found = [f for f in findings_of(case) if f.code == "PLAN_LOSES_TOO_MUCH"]
-    assert [(f.subject, f.count) for f in found] == [("plan", 360)], "one per subject, the newest count"
+    assert [(f.subject, f.count) for f in found] == [
+        (f"plan:{FIRST}", 360)
+    ], "one per subject, the newest count"
 
 
 def test_the_refusal_that_stopped_the_visit_is_a_finding_the_screen_shows(tmp_path: Path) -> None:
@@ -450,3 +452,43 @@ def test_a_plan_step_that_cannot_run_in_a_trial_is_hard(tmp_path: Path) -> None:
     case = _edit(storage, case, items=(*case.items, item), visit=None)
     (found,) = [f for f in findings_of(case) if f.source == "sql_trial"]
     assert found.level == "hard" and not found.acknowledgeable
+
+
+def test_a_trials_plan_stop_has_the_guards_key_and_two_files_stay_two_findings(tmp_path: Path) -> None:
+    from engine.doctor.guards import Finding as GuardFinding
+    from engine.doctor.materialize import _finding
+
+    storage, _deps, case = _at_approve(tmp_path)
+    items = []
+    for n, (upload, count) in enumerate(((FIRST, 343), ("up-2", 50))):
+        payload: dict[str, Any] = {
+            "step": {"kind": "sql_query", "order": n + 1, "params": {}},
+            "findings": [
+                {"level": "stop", "code": "PLAN_LOSES_TOO_MUCH", "message": f"Loses {count}.", "count": count}
+            ],
+        }
+        items.append(
+            CaseItem(
+                item_id=f"sql.base.q{n}",
+                kind="recipe_step",
+                title="Total per customer",
+                source=ProposalSource.AI,
+                confidence=AgentConfidence.CHECK,
+                state=ProposalState.ACCEPTED,
+                upload_id=upload,
+                payload=payload,
+                payload_digest=digest_of(payload),
+                proposed_at=T0,
+            )
+        )
+    case = _edit(storage, case, items=(*case.items, *items), visit=None)
+    found = {f.count: f for f in findings_of(case) if f.code == "PLAN_LOSES_TOO_MUCH"}
+    assert set(found) == {343, 50} and found[343].key != found[50].key
+    guard = _finding(
+        GuardFinding(code="PLAN_LOSES_TOO_MUCH", level="stop", message="x", count=343),
+        None,
+        "file",
+        {},
+        file=FIRST,
+    )
+    assert found[343].key == guard.key
