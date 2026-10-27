@@ -47,3 +47,10 @@ Mapped from the owner's feature-engineering guide; 7b follows Step 7 on the same
 | Interactions | Only business-meaningful products or flags (e.g. discount-sensitive x high historical spend), proposed with a reason, approved by the person. Trees learn the rest. |
 | Binning | Business buckets from the use case (win-back: 0-30 days active, 31-90 at risk, 90+ lapsed), proposed by the AI, approved by the person; the raw number is kept beside the bucket. |
 | Leakage | Enforced in code (Step 7): point-in-time to the snapshot, the leak probe in every scope, features never read the outcome. |
+
+## The agent's knowledge (Step 7b)
+
+The agent reads `configs/doctor/guides/features.md` before proposing features, through a read-only tool
+`read_guide(name)` (guides live in `configs/doctor/guides/`, each loaded on demand so the system prompt stays under its
+word limit). The prompt gains one line: "Before proposing features, read_guide('features')." Later guides (joins,
+outcomes, time) and approved lessons (experience memory, AI-first design A5) use the same tool.
