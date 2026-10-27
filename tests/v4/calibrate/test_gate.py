@@ -21,13 +21,15 @@ from autonomy.contracts import (
     Decision,
     DecisionKind,
     Estimate,
-    Group,
     GoalStatus,
+    Group,
     ProofSummary,
 )
 from autonomy.decide.calibration import calibration_status, proof_calibration
+from autonomy.fakes import InMemoryDecisionLog
 from autonomy.runtime.evidence_gate import MIN_WINDOW_DAYS, autopilot_gate, unproven_start
-from autonomy.runtime.promotion import PromotionRule
+from autonomy.runtime.promotion import AUTO_PROMOTE_CLAUSE, PromotionRule
+from tests.v2.zero_touch.test_inbox_autopilot import GOAL, T0, World, active_mandate, world
 
 NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
 
@@ -42,7 +44,13 @@ NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
         (1.14, 1.0, (0.8, 1.2), "ok"),  # DIAGNOSE_RESULTS H5: Gym whatsapp_fatigue, 1.14x
         (1.37, 1.0, (0.8, 1.2), "ok"),  # baseline_shop, 1.37x
         (1.52, 1.0, (0.8, 1.2), "over_1_5x"),  # discount_cannibalisation, 1.52x
-        (2.0, 1.0, (0.8, 1.2), "over_1_5x"),  # exactly 2x is not more than 2x
+        (
+            2.0,
+            1.0,
+            (1.0, 1.2),
+            "over_1_5x",
+        ),  # the whole range is at or above half the expectation: not 2x over
+        (1.99, 1.0, (0.8, 1.2), "not_enough_data"),  # the range cannot rule 2x over out
         (2.1, 1.0, (0.8, 1.2), "over_2x"),
         (1.0, 0.0, (-0.2, 0.2), "over_2x"),  # it expects a gain and the holdout shows none
         (1.0, -0.4, (-0.6, -0.2), "over_2x"),
@@ -52,6 +60,12 @@ NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
         (1.0, None, (0.8, 1.2), "not_enough_data"),
         (1.0, 1.0, None, "not_enough_data"),
         (1.0, 1.0, (-2.0, 4.0), "not_enough_data"),  # a range that cannot tell zero from double
+        (
+            1.0,
+            0.1,
+            (-9.0, 9.0),
+            "not_enough_data",
+        ),  # a point under half, but the range is far too wide to say
         (1.0, 1.0, (float("nan"), 1.0), "not_enough_data"),
     ],
 )
@@ -91,7 +105,9 @@ def _proof(profit: Estimate | None, calibration: str | None = "ok") -> ProofSumm
 
 
 def test_proof_calibration_divides_the_incremental_profit_by_the_actions() -> None:
-    acts = [_act(i, 1.0) for i in range(100)] + [_act(1000, 9.0, Group.BASELINE)]  # the baseline's are not the agent's
+    acts = [_act(i, 1.0) for i in range(100)] + [
+        _act(1000, 9.0, Group.BASELINE)
+    ]  # the baseline's are not the agent's
     steady = _proof(Estimate(point=90.0, low=70.0, high=110.0))  # 0.9 per action against an expected 1.0
     assert proof_calibration(steady, acts) == "ok"
     inflated = _proof(Estimate(point=30.0, low=10.0, high=50.0))  # 0.3 per action: 3.3x
@@ -106,7 +122,7 @@ PAYS = Estimate(point=500.0, low=120.0, high=880.0)
 
 
 def test_the_window_is_the_promotion_rules_minimum() -> None:
-    assert MIN_WINDOW_DAYS == PromotionRule().min_days
+    assert PromotionRule().min_days == MIN_WINDOW_DAYS
 
 
 def test_gate_permits_on_planted_evidence() -> None:
@@ -129,7 +145,9 @@ def test_gate_permits_on_planted_evidence() -> None:
         (_proof(PAYS, None), 30.0, "cannot yet check"),
     ],
 )
-def test_gate_refuses_on_planted_evidence_and_says_why(proof: ProofSummary | None, days: float | None, words: str) -> None:
+def test_gate_refuses_on_planted_evidence_and_says_why(
+    proof: ProofSummary | None, days: float | None, words: str
+) -> None:
     verdict = autopilot_gate(proof, days)
     assert not verdict.allowed
     assert words in verdict.reason
@@ -244,3 +262,50 @@ def test_the_confirmation_is_for_a_start_not_for_a_goal_already_running() -> Non
     with pytest.raises(ConflictError, match="first time"):
         services.approve(goal_id, AutonomyLevel.AUTOPILOT, start_without_proof=True)
     assert services.get_goal(goal_id).autonomy is AutonomyLevel.APPROVE
+
+
+# --- the zero-touch guard (the inbox button and the mandate's pre-authorisation) --------------------------
+
+
+def _proven_world() -> tuple[World, datetime]:
+    """A goal in Approve for 30 days whose sent messages beat the holdout by a wide margin."""
+    return world(AutonomyLevel.APPROVE, sent=True, agent_buys_every=2, holdout_buys_every=3), T0 + timedelta(
+        days=30
+    )
+
+
+def test_the_guard_is_ungated_by_default_and_a_proven_goal_still_turns_on_with_the_gate() -> None:
+    w, now = _proven_world()
+    assert w.guard().require_evidence is False
+    gated = w.guard(require_evidence=True)
+    verdict = gated.evidence(w.workspace.goals()[0], now)
+    assert verdict.allowed, verdict.reason
+    assert [r.goal_id for r in gated.offers(now)] == [GOAL]
+    assert gated.promote(GOAL, now, by="owner").to_level is AutonomyLevel.AUTOPILOT
+
+
+def test_the_guard_refuses_and_stops_offering_when_the_agent_expects_far_more_than_the_holdout_shows() -> (
+    None
+):
+    w, now = _proven_world()
+    inflated = InMemoryDecisionLog()
+    inflated.record([d.model_copy(update={"expected_net": d.expected_net * 50}) for d in w.decisions.scan()])
+    w.decisions = inflated
+    assert [r.goal_id for r in w.guard().offers(now)] == [GOAL]  # the old bar alone offers it
+    gated = w.guard(require_evidence=True)
+    assert gated.offers(now) == []
+    with pytest.raises(ValueError, match="more than twice"):
+        gated.promote(GOAL, now, by="owner")
+    assert w.workspace.goals()[0].autonomy is AutonomyLevel.APPROVE
+
+
+def test_a_shadow_goal_cannot_be_promoted_on_its_own_forecast_alone() -> None:
+    now = T0 + timedelta(days=20)
+    w = world(AutonomyLevel.SHADOW)
+    signed = active_mandate(note=AUTO_PROMOTE_CLAUSE)
+    assert w.guard(mandate_for=lambda gid: signed).evidence is not None
+    gated = w.guard(mandate_for=lambda gid: signed, require_evidence=True)
+    assert gated.run(now).promoted == []  # the open guard promotes this goal; nothing was sent to measure
+    assert w.workspace.goals()[0].autonomy is AutonomyLevel.SHADOW
+    with pytest.raises(ValueError, match="not clearly above zero"):
+        gated.promote(GOAL, now, by="owner")

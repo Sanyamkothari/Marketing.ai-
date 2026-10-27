@@ -23,8 +23,7 @@ shrunk on noise. The interval is the one `autonomy.proof` already reports; nothi
 **The gate** (`calibration_status`). A plain verdict on expected against measured per action, shown on the
 proof (`ProofSummary.calibration`) and read by the Autopilot gate (`autonomy.runtime.evidence_gate`):
 `ok` (the agent expects at most 1.5x what the holdout shows), `over_1_5x`, `over_2x` (more than twice), or
-`not_enough_data` (no expectation to check, no interval, or an interval too wide to tell zero from
-double the forecast).
+`not_enough_data` (no expectation to check, no interval, or an interval that cannot rule 2x over in or out).
 
 Opt-in: `build_agent_policy(calibrate=True)` multiplies every bid's `expected_net` by the factor before
 the attention price is taken off and the send/no-send choice is made. The bid's uncertainty is left as it
@@ -37,7 +36,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Final, Literal
 
 import numpy as np
@@ -83,9 +82,7 @@ def measured_per_action(profit: Estimate | None, actions: int) -> Estimate | Non
     return Estimate(point=profit.point / n, low=profit.low / n, high=profit.high / n)
 
 
-def shrink_factor(
-    measured: Estimate | None, expected: float | None, *, prior_sd: float = PRIOR_SD
-) -> float:
+def shrink_factor(measured: Estimate | None, expected: float | None, *, prior_sd: float = PRIOR_SD) -> float:
     """The factor to multiply the agent's expected value by: measured / expected, shrunk toward 1, in [0.25, 1].
 
     `measured` is the measured incremental value per action with its 95% range, `expected` the agent's mean
@@ -108,20 +105,25 @@ def calibration_status(
 ) -> CalibrationStatus:
     """Whether the agent's expected value per action holds up against the measured value per action.
 
-    `expected` and `measured` are per action, `ci` is the 95% range of `measured`. `not_enough_data` when there
-    is no positive expectation to check, no measurement, or a range wider than twice the expectation (it could
-    not tell zero from double the forecast). Otherwise by expected / measured: above 2 is `over_2x`, above 1.5
-    `over_1_5x`, else `ok`; a measured value of zero or less is `over_2x`."""
+    `expected` and `measured` are per action, `ci` is the 95% range of `measured`. With t = expected / 2:
+
+    * the whole range is at or above t: it cannot be more than 2x over, so `over_1_5x` if expected / measured
+      is above 1.5, else `ok`;
+    * otherwise 2x over is possible: `over_2x` when the point itself is below t (a measured value of zero or
+      less is) and the range is not wider than twice the expectation, or when the whole range is below t;
+    * anything else, a range that cannot rule 2x over in or out, and any missing or unusable input, is
+      `not_enough_data`."""
     if expected is None or measured is None or ci is None:
         return "not_enough_data"
     low, high = ci
     if not all(math.isfinite(v) for v in (expected, measured, low, high)) or expected <= 0 or low > high:
         return "not_enough_data"
-    if high - low > 2.0 * expected:
-        return "not_enough_data"
-    if measured <= 0 or expected / measured > OVER_2X:
+    half = expected / OVER_2X
+    if low >= half:
+        return "over_1_5x" if expected / measured > OVER_1_5X else "ok"
+    if high < half or (measured < half and high - low <= 2.0 * expected):
         return "over_2x"
-    return "over_1_5x" if expected / measured > OVER_1_5X else "ok"
+    return "not_enough_data"
 
 
 def proof_calibration(summary: ProofSummary, decisions: Iterable[Decision]) -> CalibrationStatus:
@@ -137,14 +139,25 @@ def proof_calibration(summary: ProofSummary, decisions: Iterable[Decision]) -> C
 
 
 class Calibration:
-    """The agent's running factor, refitted from the closed outcomes it is handed (`observe`).
+    """The agent's running factor, refitted from the holdout it can see.
 
-    It keeps, per customer, the sum of margin less cost over closed windows and the group of their earliest
-    decision (as `autonomy.proof` does), and over the agent group's contact decisions their count and the sum
-    of their expected nets before the factor. `observe` refits `factor` from the whole history so far. The
-    logged `expected_net` already carries the factor in force when a decision was made (`note`), so it is
-    divided back out; a decision this process did not make is taken to have been made at the current factor.
+    Two feeds reach the same fit, so a caller uses whichever it has:
+
+    * **the agent's own events** (`record` for every decision it makes, `purchase` for every purchase it sees,
+      `refit` once a week): per customer, the margin of purchases since the agent started less the cost of the
+      messages sent in closed windows, and the group of their first decision. This is how the Gym and the
+      runtime's nightly loop feed it, because the agent is handed events and decisions but not the holdout's
+      rewards. A window is closed when its decision is at least `horizon_days` old, as in `autonomy.proof`:
+      purchases up to now count for a customer with a closed decision, the cost of messages only up to the
+      cutoff, and the number of actions and their expected nets are those closed ones.
+    * **closed rewards** (`observe`), for a caller that already has the proof's rewards for every group.
+
+    The logged `expected_net` of a decision already carries the factor in force when it was made, so it is
+    divided back out (`record` knows the factor; `note` records it for `observe`; a decision this process
+    did not make is taken to have been made at the current factor).
     """
+
+    REFIT_EVERY = timedelta(days=7)
 
     def __init__(self, *, prior_sd: float = PRIOR_SD, min_group: int = MIN_GROUP) -> None:
         if prior_sd <= 0:
@@ -158,15 +171,63 @@ class Calibration:
         self.expected: float | None = None
         """The agent's mean expected net per chosen action (before the factor) at the last refit, or None."""
         self.actions = 0
+        self.refit_at: datetime | None = None
         self._applied: dict[str, float] = {}
+        # the closed-rewards feed
         self._seen: set[str] = set()
         self._first: dict[str, tuple[datetime, Group]] = {}
         self._profit: dict[str, float] = {}
         self._expected_sum = 0.0
+        # the event feed
+        self._start: datetime | None = None
+        self._group: dict[str, tuple[datetime, Group]] = {}
+        self._margin: dict[str, float] = {}
+        self._sent: list[tuple[datetime, str, float, float]] = []
+        """(made_at, customer, message cost, expected net before the factor) of each contact decision."""
 
     def scale(self) -> float:
         """The factor to multiply every bid's expected value by (the policy's hook)."""
         return self.factor
+
+    # --- the event feed ---------------------------------------------------------------------------
+
+    def record(self, decision: Decision, cost: float = 0.0) -> None:
+        """A decision the agent has just made at the current factor, with the cost of the message it sends."""
+        c = decision.customer_id
+        if self._start is None or decision.made_at < self._start:
+            self._start = decision.made_at
+        first = self._group.get(c)
+        if first is None or decision.made_at < first[0]:
+            self._group[c] = (decision.made_at, decision.group)
+        if decision.group is Group.AGENT and decision.kind is DecisionKind.ACT:
+            raw = decision.expected_net / self.factor if self.factor > 0 else decision.expected_net
+            self._sent.append((decision.made_at, c, max(cost, 0.0), raw))
+
+    def purchase(self, customer_id: str, ts: datetime, margin: float, offer_cost: float = 0.0) -> None:
+        """A purchase seen (its margin, less the cost of the offer it redeemed); only those after the start count."""
+        if self._start is not None and ts > self._start:
+            self._margin[customer_id] = self._margin.get(customer_id, 0.0) + margin - offer_cost
+
+    def refit(self, now: datetime, horizon_days: float, *, force: bool = False) -> float:
+        """Refit from the events so far (at most once a week unless `force`) and return the factor."""
+        if not force and self.refit_at is not None and now - self.refit_at < self.REFIT_EVERY:
+            return self.factor
+        self.refit_at = now
+        cutoff = now - timedelta(days=horizon_days)
+        cost: dict[str, float] = {}
+        actions, expected_sum = 0, 0.0
+        for made_at, c, spent, raw in self._sent:
+            if made_at <= cutoff:
+                cost[c] = cost.get(c, 0.0) + spent
+                actions += 1
+                expected_sum += raw
+        by_group: dict[Group, list[float]] = {Group.AGENT: [], Group.HOLDOUT: []}
+        for c, (first_at, group) in self._group.items():
+            if first_at <= cutoff and group in by_group:
+                by_group[group].append(self._margin.get(c, 0.0) - cost.get(c, 0.0))
+        return self._fit(by_group[Group.AGENT], by_group[Group.HOLDOUT], actions, expected_sum)
+
+    # --- the closed-rewards feed ------------------------------------------------------------------
 
     def note(self, decision: Decision) -> None:
         """Remember the factor a contact decision was made at, so its logged expected net can be undone."""
@@ -174,7 +235,7 @@ class Calibration:
             self._applied[decision.decision_id] = self.factor
 
     def observe(self, rewards: Sequence[Reward], decisions: Mapping[str, Decision]) -> float:
-        """Take newly closed rewards (each counted once), refit and return the factor."""
+        """Take newly closed rewards of every group (each counted once), refit and return the factor."""
         changed = False
         for r in rewards:
             d = decisions.get(r.decision_id)
@@ -191,22 +252,26 @@ class Calibration:
                 self.actions += 1
                 self._expected_sum += d.expected_net / applied if applied > 0 else d.expected_net
         if changed:
-            self._refit()
+            by_group: dict[Group, list[float]] = {Group.AGENT: [], Group.HOLDOUT: []}
+            for customer, (_, group) in self._first.items():
+                if group in by_group:
+                    by_group[group].append(self._profit.get(customer, 0.0))
+            self._fit(by_group[Group.AGENT], by_group[Group.HOLDOUT], self.actions, self._expected_sum)
         return self.factor
 
-    def _refit(self) -> None:
-        by_group: dict[Group, list[float]] = {Group.AGENT: [], Group.HOLDOUT: []}
-        for customer, (_, group) in self._first.items():
-            if group in by_group:
-                by_group[group].append(self._profit.get(customer, 0.0))
-        agent, holdout = by_group[Group.AGENT], by_group[Group.HOLDOUT]
-        self.measured, self.expected = None, None
-        if len(agent) < self.min_group or len(holdout) < self.min_group or self.actions == 0:
+    # --- the fit ----------------------------------------------------------------------------------
+
+    def _fit(self, agent: list[float], holdout: list[float], actions: int, expected_sum: float) -> float:
+        self.measured, self.expected, self.actions = None, None, actions
+        if len(agent) < self.min_group or len(holdout) < self.min_group or actions == 0:
             self.factor = FACTOR_MAX
-            return
+            return self.factor
         total = welch_difference(
-            np.asarray(agent, dtype=np.float64), np.asarray(holdout, dtype=np.float64), scale=float(len(agent))
+            np.asarray(agent, dtype=np.float64),
+            np.asarray(holdout, dtype=np.float64),
+            scale=float(len(agent)),
         )
-        self.measured = measured_per_action(total, self.actions)
-        self.expected = self._expected_sum / self.actions
+        self.measured = measured_per_action(total, actions)
+        self.expected = expected_sum / actions
         self.factor = shrink_factor(self.measured, self.expected, prior_sd=self.prior_sd)
+        return self.factor

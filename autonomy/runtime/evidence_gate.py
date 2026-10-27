@@ -73,7 +73,8 @@ def autopilot_gate(
         have = 0 if window_days is None else int(max(window_days, 0.0))
         return GateVerdict(
             False,
-            f"Autopilot needs at least {min_days:.0f} days of measured results; this goal has {have}. " + stay,
+            f"Autopilot needs at least {min_days:.0f} days of measured results; this goal has {have}. "
+            + stay,
         )
     if profit.low <= 0:
         return GateVerdict(
@@ -102,7 +103,9 @@ def unproven_start(channels: Collection[Channel], *, confirmed: bool) -> GateVer
 
     Allowed only for a goal that sends by email alone and only with the owner's explicit confirmation."""
     if not channels or set(channels) != {Channel.EMAIL}:
-        return GateVerdict(False, "Only a goal that sends by email alone may start on Autopilot without proof.")
+        return GateVerdict(
+            False, "Only a goal that sends by email alone may start on Autopilot without proof."
+        )
     if not confirmed:
         return GateVerdict(
             False,

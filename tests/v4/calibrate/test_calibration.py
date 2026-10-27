@@ -83,13 +83,17 @@ def test_shrink_never_exceeds_one_and_never_goes_under_the_floor() -> None:
 def test_no_holdout_data_means_no_correction() -> None:
     assert shrink_factor(None, 1.0) == 1.0
     assert shrink_factor(Estimate(point=0.1, low=0.0, high=0.2), None) == 1.0
-    assert shrink_factor(Estimate(point=0.1, low=0.0, high=0.2), 0.0) == 1.0  # nothing expected, nothing to check
+    assert (
+        shrink_factor(Estimate(point=0.1, low=0.0, high=0.2), 0.0) == 1.0
+    )  # nothing expected, nothing to check
     assert measured_per_action(None, 10) is None
     assert measured_per_action(Estimate(point=1, low=0, high=2), 0) is None
     cal = Calibration()
     assert cal.factor == 1.0 and cal.scale() == 1.0
     assert cal.observe([], {}) == 1.0
-    rewards, decisions = _world(20, expected=1.0, true_per_action=0.2)  # 20 per group: under the proof's minimum of 30
+    rewards, decisions = _world(
+        20, expected=1.0, true_per_action=0.2
+    )  # 20 per group: under the proof's minimum of 30
     assert cal.observe(rewards, decisions) == 1.0
     assert cal.measured is None
 
@@ -146,10 +150,64 @@ def test_default_build_is_unchanged_and_calibration_is_opt_in() -> None:
 
 def test_the_policy_multiplies_every_bid_by_the_factor() -> None:
     action = Action(goal_id="g", channel=Channel.EMAIL, send_at=NOW)
-    bid = Bid(goal_id="g", action=action, uplift=0.1, value_if_converted=10, expected_net=1.0, uncertainty=0.3)
+    bid = Bid(
+        goal_id="g", action=action, uplift=0.1, value_if_converted=10, expected_net=1.0, uncertainty=0.3
+    )
     on = build_agent_policy([default_brief()], default_content(), calibrate=True)
     assert on.value_calibration is not None
     on.value_calibration.factor = 0.5
     scaled = on.policy._scaled(bid, on.policy._value_scale())
     assert scaled.expected_net == pytest.approx(0.5) and scaled.uncertainty == 0.3
     assert on.policy._scaled(bid, 1.0) is bid
+
+
+def test_the_event_feed_recovers_a_planted_over_valuation_and_waits_for_closed_windows() -> None:
+    """What the Gym and the nightly loop hand the agent: decisions, purchases, a refit (a week apart at most)."""
+    n, rng = 3000, np.random.default_rng(1)
+    cal = Calibration()
+    for i in range(n):
+        agent, holdout = _decision(i, Group.AGENT, 1.0), _decision(i, Group.HOLDOUT, 0.0)
+        cal.record(agent, cost=0.1)
+        cal.record(holdout)
+        cal.purchase(
+            agent.customer_id, NOW + timedelta(days=3), float(rng.normal(2.0, 0.5)) + 0.6
+        )  # +0.5 net of the 0.1 cost
+        cal.purchase(holdout.customer_id, NOW + timedelta(days=3), float(rng.normal(2.0, 0.5)))
+        cal.purchase(
+            holdout.customer_id, NOW - timedelta(days=30), 99.0
+        )  # before the agent started: not counted
+    assert cal.refit(NOW + timedelta(days=5), 14) == 1.0  # the windows have not closed yet
+    assert cal.measured is None
+    f = cal.refit(NOW + timedelta(days=15), 14)
+    assert 0.44 < f < 0.58
+    assert cal.expected == pytest.approx(1.0) and cal.actions == n
+    assert cal.measured is not None and cal.measured.point == pytest.approx(0.5, abs=0.05)
+    cal.factor = 0.5
+    assert cal.refit(NOW + timedelta(days=16), 14) == 0.5  # inside the week: not refitted
+
+
+@pytest.mark.slow
+def test_in_a_small_gym_world_the_calibrated_agent_is_the_plain_agent_until_the_holdout_can_be_measured() -> (
+    None
+):
+    """200 customers have fewer than the proof's 30 holdout customers, so the factor stays 1.0 and every
+    number is the plain agent's. The calibration is still fed: it has seen the agent's contacts."""
+    from autonomy.gym import get_scenario
+    from autonomy.gym.run import POLICIES
+    from autonomy.gym.score import run_policy
+
+    spec = get_scenario("baseline_shop", n_customers=200, days=40)
+    built: list[AgentPolicy] = []
+
+    def calibrated(world: object) -> AgentPolicy:
+        agent = POLICIES["agent_calibrated"](world)  # type: ignore[arg-type]
+        assert isinstance(agent, AgentPolicy)
+        built.append(agent)
+        return agent
+
+    on = run_policy(spec, calibrated, 0, with_oracle=False)
+    off = run_policy(spec, POLICIES["agent"], 0, with_oracle=False)
+    cal = built[0].value_calibration
+    assert cal is not None and cal.factor == 1.0 and cal.refit_at is not None and cal._sent
+    assert on.violations == 0
+    assert on.true_value == off.true_value and on.actions == off.actions

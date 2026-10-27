@@ -966,7 +966,12 @@ class AutopilotGuard:
         out: list[Readiness] = []
         for goal in self.workspace.goals():
             r = self.readiness(goal.goal_id, now)
-            if r is not None and r.ready and not self._auto_allowed(goal, now) and self._evidence_ok(goal, now):
+            if (
+                r is not None
+                and r.ready
+                and not self._auto_allowed(goal, now)
+                and self._evidence_ok(goal, now)
+            ):
                 out.append(r)
         return out
 

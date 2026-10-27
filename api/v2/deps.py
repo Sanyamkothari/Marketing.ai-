@@ -449,7 +449,9 @@ class Services:
             raise ConflictError(f"{exempt.reason} {verdict.reason}")
         self._audit(goal, now, REASON_UNPROVEN_START, exempt.reason, {"confirmed": 1.0})
 
-    def _audit(self, goal: Goal, now: datetime, reason: str, words: str, evidence: Mapping[str, float]) -> None:
+    def _audit(
+        self, goal: Goal, now: datetime, reason: str, words: str, evidence: Mapping[str, float]
+    ) -> None:
         entry = AutonomyAuditEntry(
             at=now,
             goal_id=goal.goal_id,

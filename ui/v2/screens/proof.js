@@ -225,6 +225,17 @@ export function notesGloss(notes) {
 }
 
 /**
+ * One plain sentence for the API's `calibration` verdict: whether the agent's own forecast per message holds up
+ * against what the people we never contact show. "" for no verdict or not enough data (nothing to say yet).
+ */
+export function calibrationSentence(status) {
+  if (status === "ok") return "The agent's own forecasts hold up against the people we never contact.";
+  if (status === "over_1_5x") return "The agent expects up to twice what the people we never contact show it really earns, so treat its forecasts as optimistic.";
+  if (status === "over_2x") return "The agent expects more than twice what the people we never contact show it really earns, so Autopilot stays closed.";
+  return "";
+}
+
+/**
  * Two cautions that sit under the headline number, both worded by the API: the smallest gain this size of
  * comparison could see at all (so a flat result is not read as "no effect"), and a warning when the shop's
  * margin is not set (so the profit is overstated). Empty when the API sends neither.
@@ -232,6 +243,8 @@ export function notesGloss(notes) {
 export function proofCaveats(proof) {
   const out = [];
   if (proof?.detectable?.sentence) out.push(h("p", { class: "pf-caveat pf-mde" }, String(proof.detectable.sentence)));
+  const calibration = calibrationSentence(proof?.calibration);
+  if (calibration) out.push(h("p", { class: "pf-caveat pf-calibration" }, calibration));
   if (proof?.margin_note) out.push(h("p", { class: "notice pf-caveat pf-margin" }, String(proof.margin_note)));
   return out;
 }
@@ -288,6 +301,8 @@ export function proofSummaryText(proof, goal, { simulated = false } = {}) {
   out.push(`Spend so far: ${m(proof.spend)}.`);
   if (proof.detectable?.sentence) out.push(String(proof.detectable.sentence));
   if (proof.margin_note) out.push(String(proof.margin_note));
+  const forecastCheck = calibrationSentence(proof.calibration);
+  if (forecastCheck) out.push(forecastCheck);
   const gloss = notesGloss(proof.notes);
   if (gloss) out.push(gloss);
   for (const note of proof.notes || []) out.push(String(note));
