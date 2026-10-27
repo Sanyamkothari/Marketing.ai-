@@ -218,3 +218,12 @@ These behaviours follow Meta's public documentation as I know it, not an observe
    raises its own alert when its guard applies that event.
 10. **Quality webhook number.** That `display_phone_number` in `phone_number_quality_update` is the same
     number `GET /{phone_number_id}?fields=display_phone_number` returns (compared as digits).
+
+
+## Change after the Gym runs (27 Oct)
+
+Valuing WhatsApp from purchases only, for every shop, cost the agent 39% of its value in the Gym's
+`whatsapp_fatigue` and 16% in `baseline_shop` (docs/v4/RESULTS.md). It is now an option:
+`build_agent_policy(never_click_channels=UNTRACKED_WHATSAPP)`, for shops whose WhatsApp links carry no click
+tracking. By default WhatsApp counts tracked clicks like email. A WhatsApp number that reports none is found
+by the existing rule: 200 delivered messages without a click, and the channel is then valued per message.

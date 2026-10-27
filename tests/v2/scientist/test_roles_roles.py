@@ -540,7 +540,7 @@ def test_judge_fallback_keeps_the_default_when_code_flags_the_pick(big: DataProf
 
 
 def test_judge_sees_only_inputs_and_evidence(big: DataProfile) -> None:
-    secret = "ZZ-PROPOSER-REASONING-ZZ"
+    secret = "ZZ-PROPOSER-REASONING-ZZ"  # secret-scan: allow (fake test value)
     spec = PROPOSAL.candidates[0].model_copy(update={"rationale": secret})
     proposal_with_secret = Proposal(candidates=(spec, *PROPOSAL.candidates[1:]))
     llm = scripted(report(IDS[1]))

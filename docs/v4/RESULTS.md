@@ -57,9 +57,12 @@ that slice named "send all Womens" (0.4685 on TEST), while all of TRAIN names Me
 `choose_simple` chooses it. The test `test_the_rule_it_falls_back_to_is_the_best_simple_rule_on_all_of_train`
 fails on the old code and passes on the new.
 
-Expected after the fix, pending the CI run this commit starts:
-- Hillstrom becomes Mens, 0.6766.
-- X5 becomes the segment rule, 72.33.
+After the fix (CI run 40496337176, commit 9db6ad13) the gated policy falls back to the rule all of TRAIN names:
+- Hillstrom: the segment rule (history_segment), 0.6090 [0.4657, 0.7522], minus best simple -0.0676 [-0.2207, +0.0854].
+  That is no longer significantly worse, but it is still not Mens: this module's rule choice on TRAIN and the
+  bench's `choose_simple` disagree when the rules are within noise of each other.
+- X5: still send-to-all SMS, 72.10.
+- MegaFon: the model again, 4.2239.
 
 ### Learned baselines
 
@@ -129,5 +132,12 @@ briefing numbers (the `calibration` status the API now returns), not in the deci
   messaged again.
 - **Any further real gain needs repeated campaigns and real shops.** The planned semi-synthetic multi-wave benchmark
   and a pilot (ROOT_CAUSE.md T5 and T6) are the next tests, not more one-shot tuning.
-- **WhatsApp changed after these runs.** The merge after them changed how WhatsApp is valued: purchases, never
-  clicks. The Gym run this commit starts will show what that does to `whatsapp_fatigue`.
+- **WhatsApp purchase-only valuation is reverted to an option.** The merge after these runs valued WhatsApp from
+  purchases only, never clicks. Gym run 40496337323 (commit 9db6ad13) measured the cost:
+  - `whatsapp_fatigue`: the agent fell from 39,707 to 24,112 (-39%) and dropped below Stage 1.
+  - `baseline_shop`: it fell from 32,460 to 27,272 (-16%).
+  - A 200-customer smoke on `whatsapp_fatigue` gave 1,284 with the switch on and 2,425 with it off.
+
+  The agent already finds a channel that logs no clicks from its own sends (200 deliveries without a click). So the
+  default is back to that, and `build_agent_policy(never_click_channels=UNTRACKED_WHATSAPP)` keeps the
+  purchase-only mode for shops whose WhatsApp links are not click-tracked.

@@ -207,7 +207,7 @@ def test_subscriptions_are_created_once_renewed_daily_and_moved_when_the_address
 
 
 def test_a_custom_app_connection_is_polled_only_and_raises_no_webhook_warning() -> None:
-    fake = FakeShopify(app_api_key="their_own_custom_app")
+    fake = FakeShopify(app_api_key="their_own_custom_app")  # secret-scan: allow (fake test value)
     rig, _ = make_shopify_rig(fake)
     connection = connect_token(rig)
     rig.engine.daily(connection.connection_id, T0, rig.queue)

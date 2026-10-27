@@ -46,7 +46,7 @@ T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 REVISION = "2026-10-15"
 HOST = "a.klaviyo.com"
 ACCOUNT_ID = "AbC123"
-API_KEY = "pk_live_secret_0123456789abcdef"
+API_KEY = "pk_live_secret_0123456789abcdef"  # secret-scan: allow (fake test value)
 APP = AppCredentials(client_id="kl_client", client_secret="kl_secret")
 _FILTER = re.compile(
     r"(equals|greater-than|less-than|greater-or-equal|less-or-equal|starts-with)\(([a-z_.]+),(\"?)([^\"),]*)\3\)"

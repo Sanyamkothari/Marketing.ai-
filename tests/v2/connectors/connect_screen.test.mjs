@@ -380,7 +380,7 @@ test("Connect: without our app on the server, a pasted key connects and the card
   assert.equal(byClass(form, "field-error")[0].textContent, "Shopify did not accept this key. Check it and try again.");
   keyInput.value = "shpat_good_token";
   await form.dispatch("submit");
-  assert.deepEqual(JSON.parse(seen.find(([k, b]) => k === "POST /v2/connectors/shopify/key" && b.includes("good"))[1]), { api_key: "shpat_good_token", config: { shop: "acme" } });
+  assert.deepEqual(JSON.parse(seen.find(([k, b]) => k === "POST /v2/connectors/shopify/key" && b.includes("good"))[1]), { api_key: "shpat_good_token", config: { shop: "acme" } });  // secret-scan: allow (fake test value)
   assert.deepEqual(calls.toast.at(-1), ["Shopify is connected. The first sync has started.", "good"]);
   const redrawn = rowFor(root, "shopify");
   assert.equal(byClass(redrawn, "cn-p-words")[0].textContent, "First sync running");

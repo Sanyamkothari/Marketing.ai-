@@ -71,12 +71,9 @@ def test_v3_false_is_the_default() -> None:
     assert decisions(build(v3=False)) == decisions(build())
 
 
-DEFAULT_FINGERPRINT = (120, 60, "8e0bf0563cf284cd")
+DEFAULT_FINGERPRINT = (120, 60, "310d8f3efaf90f03")
 """`fingerprint(build())` on the commit the preset was built on (20db0504, the merge of v3/frequency), before
-any of the preset's edits to the shared code (the auction, journey options, `_keep`, `learn`), re-taken once
-when v4 made WhatsApp a channel valued from purchases, never clicks (`NEVER_CLICK_CHANNELS`,
-docs/v4/WHATSAPP.md): these customers are reachable on WhatsApp. With `NEVER_CLICK_CHANNELS` empty the
-digest is the original "310d8f3efaf90f03", so no other change moved it."""
+any of the preset's edits to the shared code (the auction, journey options, `_keep`, `learn`)."""
 
 
 def fingerprint(agent: AgentPolicy) -> tuple[int, int, str]:

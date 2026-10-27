@@ -264,17 +264,25 @@ def test_a_shopify_custom_app_token_connects_with_a_loosely_typed_shop_address()
     rig, fake = make_shopify_rig()
     client = _client(_services(rig))
     bad = client.post(
-        "/v2/connectors/shopify/key", json={"api_key": "shpat_live_1", "config": {"shop": "acme.com"}}
+        "/v2/connectors/shopify/key",
+        json={
+            "api_key": "shpat_live_1",  # secret-scan: allow (fake test value)
+            "config": {"shop": "acme.com"},
+        },
     )
     assert bad.status_code == 400
     assert (
         bad.json()["detail"]
         == "Shop address is not valid. Your shop's permanent address, ending in .myshopify.com."
     )
-    missing = client.post("/v2/connectors/shopify/key", json={"api_key": "shpat_live_1", "config": {}})
+    missing = client.post(
+        "/v2/connectors/shopify/key",
+        json={"api_key": "shpat_live_1", "config": {}},  # secret-scan: allow (fake test value)
+    )
     assert missing.json()["detail"] == "Shop address is needed to connect Shopify."
     wrong = client.post(
-        "/v2/connectors/shopify/key", json={"api_key": "shpat_wrong_1", "config": {"shop": "Acme"}}
+        "/v2/connectors/shopify/key",
+        json={"api_key": "shpat_wrong_1", "config": {"shop": "Acme"}},  # secret-scan: allow (fake test value)
     )
     assert (
         wrong.status_code == 400
@@ -284,7 +292,10 @@ def test_a_shopify_custom_app_token_connects_with_a_loosely_typed_shop_address()
 
     ok = client.post(
         "/v2/connectors/shopify/key",
-        json={"api_key": "shpat_live_1", "config": {"shop": "https://Acme.myshopify.com/admin"}},
+        json={
+            "api_key": "shpat_live_1",  # secret-scan: allow (fake test value)
+            "config": {"shop": "https://Acme.myshopify.com/admin"},
+        },
     )
     assert ok.status_code == 200, ok.text
     view = ok.json()
@@ -479,12 +490,14 @@ def test_a_mistyped_token_for_a_connected_shop_keeps_the_working_connection() ->
     rig, _fake = make_shopify_rig()
     client = _client(_services(rig))
     ok = client.post(
-        "/v2/connectors/shopify/key", json={"api_key": "shpat_live_1", "config": {"shop": "acme"}}
+        "/v2/connectors/shopify/key",
+        json={"api_key": "shpat_live_1", "config": {"shop": "acme"}},  # secret-scan: allow (fake test value)
     )
     assert ok.status_code == 200, ok.text
     connection_id = ok.json()["connection_id"]
     wrong = client.post(
-        "/v2/connectors/shopify/key", json={"api_key": "shpat_wrong_1", "config": {"shop": "acme"}}
+        "/v2/connectors/shopify/key",
+        json={"api_key": "shpat_wrong_1", "config": {"shop": "acme"}},  # secret-scan: allow (fake test value)
     )
     assert wrong.status_code == 400
     kept = rig.engine.tokens.vault.load(connection_id)
@@ -497,7 +510,11 @@ def test_identity_settings_cannot_be_smuggled_in_as_free_settings() -> None:
     rig = make_rig()
     client = _client(_services(rig))
     refused = client.post(
-        "/v2/connectors/demo/key", json={"api_key": "key_12345678", "config": {"account_id": "x"}}
+        "/v2/connectors/demo/key",
+        json={
+            "api_key": "key_12345678",  # secret-scan: allow (fake test value)
+            "config": {"account_id": "x"},
+        },
     )
     assert refused.status_code == 400 and "not one Autonomy knows" in refused.json()["detail"]
 
@@ -511,7 +528,10 @@ def test_a_refused_key_is_never_echoed_back() -> None:
     )
     assert short.status_code == 400 and "sk_12" not in short.text
     app = create_app(build_demo_services(T0, n_customers=5, days=1), connectors=_services(make_rig()))
-    typed = TestClient(app).post("/v2/connectors/demo/key", json={"api_key": "sk_live_secret_1", "config": 5})
+    typed = TestClient(app).post(
+        "/v2/connectors/demo/key",
+        json={"api_key": "sk_live_secret_1", "config": 5},  # secret-scan: allow (fake test value)
+    )
     assert typed.status_code == 422 and "sk_live_secret_1" not in typed.text
     as_string = TestClient(app).post("/v2/connectors/demo/key", json="sk_live_secret_2")
     assert as_string.status_code == 422 and "sk_live_secret_2" not in as_string.text

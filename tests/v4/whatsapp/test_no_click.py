@@ -1,9 +1,11 @@
-"""WhatsApp is valued from purchases, never from clicks (item 1); email and SMS are unchanged.
+"""An untracked WhatsApp is valued from purchases, never from clicks (item 1); email and SMS are unchanged.
 
 The WhatsApp Cloud API reports sent, delivered, read and failed, never a click. Before v4 a WhatsApp
 send counted as a clickable send that never got a click, so its predicted value decayed toward zero.
-Now WhatsApp starts as a channel that logs no clicks: its lift is per delivered message, measured
-against the holdout's purchases.
+With `never_click_channels=UNTRACKED_WHATSAPP` WhatsApp starts as a channel that logs no clicks: its lift
+is per delivered message, measured against the holdout's purchases. By default no channel is forced
+click-less (docs/v4/RESULTS.md: forcing it halved the Gym's whatsapp_fatigue value where clicks are
+tracked); a channel whose sends show no click is found by `NO_CLICK_MIN_SENDS`.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from autonomy.contracts import (
 from autonomy.data.folder import StateFolder
 from autonomy.runtime.agent import (
     NEVER_CLICK_CHANNELS,
+    UNTRACKED_WHATSAPP,
     AgentPolicy,
     ClickResponseModel,
     build_agent_policy,
@@ -103,9 +106,11 @@ def model_of(policy: AgentPolicy) -> ClickResponseModel:
 
 
 def test_whatsapp_is_a_no_click_channel_from_the_first_send() -> None:
-    policy = build_agent_policy([brief(Channel.WHATSAPP)], [content(Channel.WHATSAPP)])
+    policy = build_agent_policy(
+        [brief(Channel.WHATSAPP)], [content(Channel.WHATSAPP)], never_click_channels=UNTRACKED_WHATSAPP
+    )
     model = model_of(policy)
-    assert "whatsapp" in NEVER_CLICK_CHANNELS
+    assert not NEVER_CLICK_CHANNELS and "whatsapp" in UNTRACKED_WHATSAPP
     assert Channel.WHATSAPP.value in model.no_click
     assert not model.counts_clicks("whatsapp|none|reminder")
     # Email and SMS still count clicks until they have shown 200 deliveries and no click.
@@ -114,7 +119,11 @@ def test_whatsapp_is_a_no_click_channel_from_the_first_send() -> None:
 
 
 def test_a_click_reported_on_whatsapp_never_turns_the_click_model_on() -> None:
-    model = model_of(build_agent_policy([brief(Channel.WHATSAPP)], [content(Channel.WHATSAPP)]))
+    model = model_of(
+        build_agent_policy(
+            [brief(Channel.WHATSAPP)], [content(Channel.WHATSAPP)], never_click_channels=UNTRACKED_WHATSAPP
+        )
+    )
     model.observe_click("c1", None, "whatsapp|none|reminder")
     assert Channel.WHATSAPP.value in model.no_click
     # An email click still clears a channel the model had taken to log no clicks.
@@ -124,7 +133,11 @@ def test_a_click_reported_on_whatsapp_never_turns_the_click_model_on() -> None:
 
 
 def test_whatsapp_value_is_per_message_not_per_click() -> None:
-    policy = build_agent_policy([brief(Channel.WHATSAPP, Channel.EMAIL)], [content(Channel.WHATSAPP)])
+    policy = build_agent_policy(
+        [brief(Channel.WHATSAPP, Channel.EMAIL)],
+        [content(Channel.WHATSAPP)],
+        never_click_channels=UNTRACKED_WHATSAPP,
+    )
     model = model_of(policy)
     wa, email = "whatsapp|none|reminder", "email|none|reminder"
     wa_before, email_before = model._unit(None, wa), model._unit(None, email)
@@ -139,7 +152,11 @@ def test_whatsapp_value_is_per_message_not_per_click() -> None:
 
 def decided(channel: Channel) -> tuple[AgentPolicy, DecisionContext]:
     policy = build_agent_policy(
-        [brief(channel)], [content(channel)], costs={channel: 0.01}, exploration_floor=0.0
+        [brief(channel)],
+        [content(channel)],
+        costs={channel: 0.01},
+        exploration_floor=0.0,
+        never_click_channels=UNTRACKED_WHATSAPP,
     )
     policy.nightly([], {}, NOW)
     ctx = DecisionContext(now=NOW, briefs=(brief(channel),), content=(content(channel),), seed=1)
@@ -174,3 +191,9 @@ def test_the_learner_counts_a_delivered_whatsapp_message_not_a_click() -> None:
     # WhatsApp: one delivered message; the click (two hours late) feeds neither lift nor reading hours
     assert results[Channel.WHATSAPP] == (0, 1, 0)
     assert results[Channel.EMAIL] == (1, 0, 1)  # unchanged: a clicked message, a reading hour
+
+
+def test_by_default_whatsapp_counts_clicks_like_any_other_channel() -> None:
+    model = model_of(build_agent_policy([brief(Channel.WHATSAPP)], [content(Channel.WHATSAPP)]))
+    assert Channel.WHATSAPP.value not in model.no_click
+    assert model.counts_clicks("whatsapp|none|reminder")

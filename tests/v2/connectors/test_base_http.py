@@ -278,7 +278,9 @@ def test_errors_are_secret_free() -> None:
         assert secret not in clean
     http, _ = client(lambda r: httpx.Response(500))
     with pytest.raises(TransientFailure) as caught:
-        http.send("GET", "orders", params={"api_key": "k_supersecret"})
+        http.send(
+            "GET", "orders", params={"api_key": "k_supersecret"}  # secret-scan: allow (fake test value)
+        )
     assert "k_supersecret" not in str(caught.value)
 
 

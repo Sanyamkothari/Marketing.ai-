@@ -39,7 +39,7 @@ from .base_support import Rig, iso, make_rig, parse_ts
 SHOP = "acme.myshopify.com"
 STORAGE = "storage.example"
 CLIENT_ID = "shp_client_1"
-CLIENT_SECRET = "shp_secret_1"
+CLIENT_SECRET = "shp_secret_1"  # secret-scan: allow (fake test value)
 APP = AppCredentials(client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 GQL_PATH = f"/admin/api/{VERSION}/graphql.json"

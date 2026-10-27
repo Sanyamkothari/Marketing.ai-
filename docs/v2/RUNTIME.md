@@ -145,7 +145,7 @@ claim, retries (1, 2, 4 ... minutes, at most an hour, 5 attempts) and re-check o
 
 ```bash
 # Production: settings from AUTONOMY_* variables, Postgres in production.
-export AUTONOMY_DATABASE_URL=postgresql+psycopg://user:pass@host/autonomy
+export AUTONOMY_DATABASE_URL=postgresql+psycopg://user:<password>@host/autonomy
 export AUTONOMY_TIMEZONE=Europe/London        # the business's time zone
 python -m autonomy.runtime.worker              # loop forever on the wall clock
 python -m autonomy.runtime.worker --once       # drain what is due now, then exit

@@ -503,11 +503,15 @@ LIFT_PER_SEND_PRIOR = (
 """On a channel that logs no clicks (SMS, direct mail, coupons), extra purchases per delivered
 message before purchases say otherwise: what the two priors above imply for a message whose clicks
 we cannot see (a quarter purchase per click x 5% clicks = 1.25%, give or take as much)."""
-NEVER_CLICK_CHANNELS: frozenset[str] = frozenset({Channel.WHATSAPP.value})
-"""Channels whose messages carry no reliable click signal, from the first send (v4): the WhatsApp
-Cloud API reports sent, delivered, read and failed, never a click. They start in `no_click`, stay
-there however many clicks an outside system reports, and are valued per delivered message from
-the purchases attributed in the window (`LiftPerClick` with `kind=SEND`). Read receipts are not
+NEVER_CLICK_CHANNELS: frozenset[str] = frozenset()
+"""Channels taken to log no clicks from the first send, by default none: a channel that logs no clicks is
+found from its own sends (`NO_CLICK_MIN_SENDS` delivered without one) and then valued per message. Pass
+`never_click_channels=UNTRACKED_WHATSAPP` to `build_agent_policy` when the shop's WhatsApp links carry no
+click tracking: the WhatsApp Cloud API itself reports sent, delivered, read and failed, never a click.
+Forcing WhatsApp click-less for everyone (v4's first cut) halved the agent's value in the Gym's
+`whatsapp_fatigue` (docs/v4/RESULTS.md), where tracked clicks do carry signal."""
+UNTRACKED_WHATSAPP: frozenset[str] = frozenset({Channel.WHATSAPP.value})
+"""`never_click_channels` for a shop whose WhatsApp messages carry no tracked links. Read receipts are never
 used as a click: a read says the message was seen, not that it moved anyone."""
 NO_CLICK_MIN_SENDS = 200
 """Delivered past messages a channel needs, all without a click, before it is taken to log no clicks:
@@ -604,8 +608,11 @@ class ClickResponseModel(BetaResponseModel):
         click_pool: float = CLICK_POOL,
         lift_per_click: tuple[float, float] = LIFT_PER_CLICK_PRIOR,
         people: PersonalEffects | None = None,
+        never_click: frozenset[str] = NEVER_CLICK_CHANNELS,
     ) -> None:
         super().__init__(priors)
+        self.never_click = never_click
+        """Channels valued per message from the first send, whatever clicks are reported on them."""
         self.click_prior = click_prior
         self.click_pool = click_pool
         self.lift: tuple[float, float] = lift_per_click
@@ -617,9 +624,9 @@ class ClickResponseModel(BetaResponseModel):
         self._rates: dict[tuple[str, str], Beta] = {}
         self._fatigue: dict[int, list[float]] = {}  # contacts this week (capped) -> [clicks, expected]
         self._hours: dict[tuple[str, int], list[float]] = {}  # (segment or ANY, local send hour) -> same
-        self.no_click: set[str] = set(NEVER_CLICK_CHANNELS)
+        self.no_click: set[str] = set(never_click)
         """Channels (their values) that log no clicks: their uplift is lift per message, not per click.
-        `NEVER_CLICK_CHANNELS` are in it from the start and are never taken out."""
+        `never_click` channels are in it from the start and are never taken out."""
         self.send_lift: tuple[float, float] = LIFT_PER_SEND_PRIOR
         """Extra purchases per delivered message on a channel that logs no clicks (set by the agent)."""
         self.send_lift_by_segment: dict[str, tuple[float, float]] = {}
@@ -673,7 +680,7 @@ class ClickResponseModel(BetaResponseModel):
         local_hour: int | None = None,
     ) -> None:
         del offer_id
-        if _channel_value(action_key) not in NEVER_CLICK_CHANNELS:
+        if _channel_value(action_key) not in self.never_click:
             self.no_click.discard(_channel_value(action_key))
         self._fatigue.setdefault(_bucket(contacts_7d), [0.0, 0.0])[0] += 1.0
         if local_hour is not None:
@@ -2388,7 +2395,7 @@ class AgentPolicy:
                 for s in sends:
                     if s.click_at is None or s.click_at - s.sent_at < LATE_CLICK:
                         continue
-                    if s.channel.value in NEVER_CLICK_CHANNELS:
+                    if s.channel.value in self._never_click():
                         continue  # v4: a WhatsApp "click" says nothing about reading hours
                     st = states.get(s.customer_id)
                     tz = st.timezone if st is not None else self._timezones.get(s.customer_id, "UTC")
@@ -3060,7 +3067,7 @@ class AgentPolicy:
         first_click = (
             e.type is EventType.CLICK
             and e.decision_id not in self._clicked
-            and channel.value not in NEVER_CLICK_CHANNELS  # WhatsApp: no click means anything
+            and channel.value not in self._never_click()  # e.g. untracked WhatsApp: a click means nothing
         )
         if first_click:
             self._clicked.add(e.decision_id)
@@ -3107,7 +3114,7 @@ class AgentPolicy:
         if (
             e.type is EventType.CLICK
             and e.ts - send_at >= LATE_CLICK
-            and channel.value not in NEVER_CLICK_CHANNELS  # v4: WhatsApp clicks mean nothing
+            and channel.value not in self._never_click()
         ):
             hour = self._local_hour(e.customer_id, e.ts)
             self.reading.observe(e.customer_id, hour, seg)
@@ -3139,6 +3146,10 @@ class AgentPolicy:
         model = price.complaints if complaint else price.hazard
         if isinstance(model, LookalikeHazard):
             model.record_loss(decision_id)
+
+    def _never_click(self) -> frozenset[str]:
+        """The channels the response model values per message whatever clicks arrive (`never_click`)."""
+        return getattr(self.bundle.response, "never_click", NEVER_CLICK_CHANNELS)
 
     def _local_hour(self, customer_id: str, at: datetime) -> int:
         return at.astimezone(zone_named(self._timezones.get(customer_id, "UTC"))).hour
@@ -3207,6 +3218,7 @@ def build_agent_policy(
     complaint_cost: float | None = None,
     default_order_value: float | None = None,
     calibrate: bool = False,
+    never_click_channels: frozenset[str] = NEVER_CLICK_CHANNELS,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -3278,6 +3290,10 @@ def build_agent_policy(
     toward 1 while the holdout is small and kept in [0.25, 1.0], so it never inflates. It is 1.0 until the
     holdout can be measured, and is refitted whenever `learn` is handed closed outcomes.
 
+    `never_click_channels` (none by default) are valued per delivered message from the first send, whatever
+    clicks are reported on them: `UNTRACKED_WHATSAPP` for a shop whose WhatsApp links are not click-tracked.
+    Otherwise a channel is taken to log no clicks only once its own sends show none (`NO_CLICK_MIN_SENDS`).
+
     Money is in the shop's currency. `costs`, `complaint_cost` (what one complaint costs beyond the lost
     contact) and `default_order_value` (the order value assumed before the shop's own purchases are
     learned; it also sizes the journeys' value bars) default to the dollar-sized figures every built-in
@@ -3322,11 +3338,13 @@ def build_agent_policy(
             margin_rate=margin_rate,
         )
         if not lookalike:
-            response: ClickResponseModel = ClickResponseModel()
+            response: ClickResponseModel = ClickResponseModel(never_click=never_click_channels)
         else:
             response = LookalikeClickModel(
                 config=lookalike if isinstance(lookalike, LookalikeConfig) else None
             )
+            response.never_click = never_click_channels
+            response.no_click |= never_click_channels
         bundle = ModelBundle(response=response, value=fresh.value, fatigue=fresh.fatigue)
     elif lookalike and not isinstance(bundle.response, LookalikeClickModel):
         raise ValueError("lookalike needs a bundle whose response model is a LookalikeClickModel")

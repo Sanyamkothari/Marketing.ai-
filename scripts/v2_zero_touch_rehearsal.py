@@ -106,7 +106,7 @@ ENV = {
     "AUTONOMY_KLAVIYO_CLIENT_SECRET": "kl_secret",
     "AUTONOMY_SHOPIFY_CLIENT_ID": CLIENT_ID,
     "AUTONOMY_SHOPIFY_CLIENT_SECRET": CLIENT_SECRET,
-    "AUTONOMY_MANDATE_SECRET": "rehearsal-mandate-secret",
+    "AUTONOMY_MANDATE_SECRET": "rehearsal-mandate-secret",  # secret-scan: allow (fake test value)
 }
 EMAIL_DOMAIN = "customers.example.com"
 TICK_MINUTES = 60
