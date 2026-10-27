@@ -67,6 +67,13 @@ def item_subject(item: CaseItem) -> str:
         return f"{_GOAL_KINDS[item.kind]}@{goal}"
     if item.kind == "key":
         return f"key@{item.upload_id or _text(payload.get('upload_id')) or 'case'}"
+    if item.kind == "data_check" and _text(payload.get("code")):
+        numbers = payload.get("numbers")
+        named = numbers.get("file") if isinstance(numbers, dict) else None
+        where = _text(payload.get("upload_id")) or _text(named) or "case"
+        return f"data_check@{payload['code']}:{where}" + (
+            f":{payload['column']}" if _text(payload.get("column")) else ""
+        )
     step = payload.get("step")
     if isinstance(step, dict):
         kind = str(step.get("kind"))

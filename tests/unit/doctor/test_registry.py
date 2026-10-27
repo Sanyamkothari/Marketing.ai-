@@ -466,6 +466,8 @@ def test_every_tool_gets_the_budget_of_its_exposure() -> None:
         elif tool.name == "propose_features":
             # its answer carries the compiled query (up to 12,000 characters) and up to 40 feature lines
             assert tool.budget == MAX_OUTPUT_CHARS > ROW_LEVEL_BUDGET, tool.name
+        elif tool.name == "propose_sql_step":
+            assert tool.budget == 12_000 > ROW_LEVEL_BUDGET, tool.name
         elif tool.exposure is Exposure.SESSION_ONLY:
             assert tool.budget == ROW_LEVEL_BUDGET == 5_500, tool.name
         else:

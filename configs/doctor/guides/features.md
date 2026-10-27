@@ -7,7 +7,7 @@
 - Count orders, not lines (sum lines per order first). Division by zero gives blank, never 0.
 - Never target-encode: it leaks.
 - A feature that almost perfectly predicts the outcome is a leak until proven otherwise: say so and ask.
-- Give the person the feature list in plain words with the snapshot date; wait for yes.
+- Give the feature list in plain words with the snapshot date; wait for yes.
 
 ## What to build
 1. Recency: days since last order, the strongest churn signal. Keep the number; buckets only if asked.
@@ -19,6 +19,7 @@
 Start with 1-3, then 4-6 (preset `rfm_ratios` has recency, ratios, velocity and the bucket); remove what the data cannot support, explaining why.
 
 ## Returns and guests
+- No amount column: `quantity_column` + `price_column` (quantity x price).
 - Net returns against spend unless told otherwise; return count and amount are own features.
 - No customer ID: leave out, with count. Exact duplicate lines: ask; drop double scans before counting.
 

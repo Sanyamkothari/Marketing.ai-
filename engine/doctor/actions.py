@@ -100,6 +100,8 @@ class ProposeFeaturesArgs(_Args):
         default_factory=list, description="your own: name, agg, column, window_days, where"
     )
     amount_column: str | None = Field(default=None)
+    quantity_column: str | None = Field(default=None)
+    price_column: str | None = Field(default=None)
     order_column: str | None = Field(default=None)
     product_column: str | None = Field(default=None)
     output_name: str | None = Field(default=None)
@@ -216,7 +218,7 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
     ActionSpec(
         "propose_features",
         ProposeFeaturesArgs,
-        "behaviour features per customer from orders, up to `$as_of`.",
+        "customer behaviour features, up to `$as_of`.",
         _BOTH,
         needs_file=True,
     ),

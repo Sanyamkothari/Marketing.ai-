@@ -54,7 +54,6 @@ from engine.doctor.materialize import (
     tried_step,
 )
 from engine.doctor.registry import (
-    BY_EXPOSURE,
     DataTool,
     DataToolContext,
     DataToolError,
@@ -69,6 +68,9 @@ if TYPE_CHECKING:
 
 __all__ = ["M_SQL_TOOLS", "ProposeSqlStepArgs", "SqlStepProposal", "register_sql_tools"]
 
+MAX_OUTPUT_CHARS: Final[int] = 12_000
+"""The answer's own cap through the registry (as `propose_features` has): the step, the column lists and the findings
+of an ordinary customer table were 5,856 characters, more than the default 5,500. Names and counts only, no cells."""
 M_SQL_TOOLS: Final[tuple[str, ...]] = ("propose_sql_step",)
 # A query is tried on at most `data_doctor.limits.trial.dry_run_rows` rows of each file (a seeded random sample, drawn as the plan check draws its
 # own); a bigger file is said to be sampled. It is larger than the plan check's sample on purpose: the checks the writer
@@ -552,7 +554,7 @@ def register_sql_tools(registry: DataToolRegistry) -> tuple[str, ...]:
             run=_propose,
             callers=frozenset({"rules", "ai"}),
             needs=("files",),
-            max_output_bytes=BY_EXPOSURE,
+            max_output_bytes=MAX_OUTPUT_CHARS,
             policy_kind="data.propose_sql_step",
             wraps="engine/agent/sql_step.py run_sql (DuckDB, sandboxed); the sql_query recipe step",
         )

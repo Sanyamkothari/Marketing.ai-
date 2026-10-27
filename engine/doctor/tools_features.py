@@ -113,6 +113,8 @@ MAX_OUTPUT_CHARS: Final[int] = 22_000
 `MAX_FEATURES` lines and their words are in the proposal; the default 5,500 fits neither."""
 MOSTLY_BLANK_SHARE: Final[float] = 0.95
 """A feature blank for more than this share of customers is reported."""
+LINE_AMOUNT: Final[str] = "line_amount"
+"""The amount made from `quantity_column` x `price_column`, a column of the query's own `ev` table."""
 _ROLE: Final[str] = "events"
 _ENTITY: Final[str] = "entity_key"
 _EVENT_TIME: Final[str] = "event_time"
@@ -228,6 +230,12 @@ class ProposeFeaturesArgs(BaseModel):
     )
     amount_column: str | None = Field(
         default=None, max_length=128, description="What an order is worth (presets)."
+    )
+    quantity_column: str | None = Field(
+        default=None, max_length=128, description="Units per line; with price_column it makes the amount."
+    )
+    price_column: str | None = Field(
+        default=None, max_length=128, description="Price per unit; amount = quantity x price per line."
     )
     order_column: str | None = Field(
         default=None,
@@ -435,7 +443,8 @@ def _preset(given: ProposeFeaturesArgs) -> tuple[list[_Col], list[str]]:
     if not amount:
         raise _refuse(
             "FEATURE_NEEDS_COLUMN",
-            f"The preset '{given.preset}' needs `amount_column`: what an order is worth.",
+            f"The preset '{given.preset}' needs `amount_column`: what an order is worth. If the file has a "
+            "quantity and a unit price instead, give `quantity_column` and `price_column`.",
         )
     notes: list[str] = []
     short, long = _WINDOWS
@@ -533,8 +542,21 @@ def compile_features(given: ProposeFeaturesArgs, table: str, *, outcome: str | N
     """
     cols: list[_Col] = []
     notes: list[str] = []
+    line: tuple[str, str] | None = None
+    if bool(given.quantity_column) != bool(given.price_column):
+        raise _refuse("FEATURE_NEEDS_COLUMN", "Give both `quantity_column` and `price_column`, or neither.")
+    if given.quantity_column and given.price_column:
+        if given.amount_column:
+            raise _refuse(
+                "FEATURE_NOT_VALID",
+                "Give `amount_column` or `quantity_column` with `price_column`, not both.",
+            )
+        line = (given.quantity_column, given.price_column)
+        given = given.model_copy(update={"amount_column": LINE_AMOUNT})
+        notes.append(f"The amount of a line is {line[0]} x {line[1]}.")
     if given.preset:
-        cols, notes = _preset(given)
+        cols, more = _preset(given)
+        notes.extend(more)
     for arg in given.features:
         if not _NAME.match(arg.name):
             raise _refuse(
@@ -566,6 +588,8 @@ def compile_features(given: ProposeFeaturesArgs, table: str, *, outcome: str | N
     if len(set(names)) != len(names) or key in names:
         raise _refuse("FEATURE_NAME_REPEATED", "Each feature needs its own name, and not the ID column's.")
     reads = {key, given.time_column, *(r for c in cols for r in c.reads)}
+    if line:
+        reads = (reads - {LINE_AMOUNT}) | set(line)
     if outcome is not None and any(r.lower() == outcome.lower() for r in reads):
         raise _refuse(
             "FEATURE_READS_OUTCOME",
@@ -577,6 +601,10 @@ def compile_features(given: ProposeFeaturesArgs, table: str, *, outcome: str | N
         raise _refuse("FEATURE_NOT_VALID", "Rename the columns called entity_key or event_time first.")
     source = ", ".join(_col(c) for c in sorted(reads - {key, given.time_column}))
     shown = f"{_col(key)} AS {_ENTITY}, TRY_CAST({_col(given.time_column)} AS DATE) AS {_EVENT_TIME}"
+    if line:
+        shown += (
+            f", TRY_CAST({_col(line[0])} AS DOUBLE) * TRY_CAST({_col(line[1])} AS DOUBLE) AS {LINE_AMOUNT}"
+        )
     sql = (
         f"WITH ev AS (SELECT {shown}{', ' + source if source else ''} FROM {table} "
         f"WHERE NULLIF(TRIM(CAST({_col(key)} AS VARCHAR)), '') IS NOT NULL AND TRY_CAST({_col(given.time_column)} AS DATE) <= CAST($as_of AS DATE)), "
