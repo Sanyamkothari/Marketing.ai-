@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeAlias
 from starlette.applications import Starlette
 from starlette.requests import Request
 
+from api.v2.honest_proof import unpriced_channels, withhold_proof_profit
 from autonomy.contracts import (
     NO_OFFER,
     Alert,
@@ -205,6 +206,9 @@ class Services:
     margin_rate: float | None = None
     """The shop's contribution margin (`RuntimeSettings.margin_rate`), which every proof figure counts a
     purchase with no margin at. None: the shop has not set it and the proof says so."""
+    channel_costs: Mapping[Channel, float] | None = None
+    """Per-message prices for a Services without a runtime that has `ShopPrices` (the demos). A real shop's
+    prices are the runtime's (`shop_prices`); with neither, no channel has a price and the proof says so."""
     follow_ups_run: bool = False
     """Whether the running agent sends a plan's follow-up steps (`Brief.follow_ups`). Nothing does yet, so every
     entry point leaves it False: the plain agent makes one decision per customer and never sends a later step, and
@@ -328,6 +332,25 @@ class Services:
 
         prices = getattr(self.runtime, "prices", None)
         return prices if isinstance(prices, ShopPrices) else None
+
+    def send_prices(self) -> Mapping[Channel, float]:
+        """What one message costs per channel, in the shop's currency: the runtime's `ShopPrices`, else the
+        demo's `channel_costs`, else nothing. A channel that is absent has no known price: callers say so
+        (`api.v2.honest_proof`) and never fill in a dollar-sized number."""
+        prices = self.shop_prices()
+        if prices is not None:
+            return prices.costs()
+        from autonomy.runtime.prices import FREE_CHANNELS
+
+        return {**dict.fromkeys(FREE_CHANNELS, 0.0), **(self.channel_costs or {})}
+
+    def set_margin_rate(self, rate: float) -> None:
+        """Keep the shop's answer to the margin question: the proof, the measurement ledger and the runtime's
+        nightly checks count purchases with no margin of their own at `rate` from the next request on."""
+        self.margin_rate = rate
+        inner: Any = getattr(self.runtime, "inner", self.runtime)
+        if inner is not None and hasattr(inner, "margin_rate"):
+            inner.margin_rate = rate
 
     def check_new_goal_prices(self, currency: str, channels: Iterable[Channel]) -> None:
         """Refuse, before anything is written, a goal in `currency` that may use `channels` and that the shop
@@ -806,10 +829,11 @@ def budget_channels(ready: Iterable[Channel]) -> tuple[Channel, ...]:
 DEMO_SECRET = "test-secret"
 """The webhook secret of the demo's fake adapters (send it as the `x-fake-signature` header)."""
 
-SEND_COST: dict[Channel, float] = {Channel.EMAIL: 0.001, Channel.WHATSAPP: 0.04, Channel.SMS: 0.0075}
-"""Rough per-message costs, so the demo's proof has a spend to set against profit: about $1 per
-thousand emails, a WhatsApp marketing-template message (Meta prices them by country, mostly
-$0.01-0.10), and a US text message. The simulated demo uses `autonomy.runtime.demo.DEMO_CHANNEL_COST`."""
+DEMO_SEND_COST: dict[Channel, float] = {Channel.EMAIL: 0.001, Channel.WHATSAPP: 0.04, Channel.SMS: 0.0075}
+"""A demo fixture, never a shop's prices: rough dollar-sized per-message costs, so the fake demo's proof has a
+spend to set against profit (about $1 per thousand emails, a WhatsApp marketing-template message, a US text
+message). Only `build_demo_services` uses it, and says so through `Services.channel_costs`. The simulated demo
+uses `autonomy.runtime.demo.DEMO_CHANNEL_COST`; a real shop's proof uses its own prices (`Services.send_prices`)."""
 
 
 def _demo_group(customer_id: str) -> Group:
@@ -917,7 +941,7 @@ class _DemoReadModels:
                 revenue[e.customer_id] += e.value or 0.0
                 margin[e.customer_id] += e.margin or 0.0
             elif e.type is EventType.SEND and e.channel is not None:
-                cost[e.customer_id] += SEND_COST.get(e.channel, 0.0)
+                cost[e.customer_id] += DEMO_SEND_COST.get(e.channel, 0.0)
         rev: dict[Group, list[float]] = defaultdict(list)
         prof: dict[Group, list[float]] = defaultdict(list)
         spend = 0.0
@@ -1267,6 +1291,7 @@ def build_demo_services(
         ingest=make_ingest(events, states, folder),
         clock=clock if clock is not None else (lambda: now),
         business_id=goal.business_id,
+        channel_costs=DEMO_SEND_COST,
     )
 
 
@@ -1302,13 +1327,15 @@ class StoreReadModels:
     clock: Clock
     business_id: str
     costs: Costs | None = None
-    """Channel and offer costs for the proof; by default `SEND_COST` and the briefs' offer costs."""
+    """Channel and offer costs for the proof; by default the shop's prices (`prices`) and the briefs' offer costs."""
     alerts_log: list[Alert] = field(default_factory=list)
     briefings_log: list[Briefing] = field(default_factory=list)
     notes: tuple[str, ...] = ()
     """Added to every proof summary, e.g. that the data is simulated."""
     margin_rate: float | None = None
     """The shop's contribution margin for the proof (`RuntimeSettings.margin_rate`); None: not set."""
+    margin_rate_fn: Callable[[], float | None] | None = None
+    """Read the margin live instead (`Services.margin_rate`, which the onboarding answer sets)."""
     cost_channels: tuple[Channel, ...] = STARTING_PLAN_CHANNELS
     """What a suggested budget without history is costed on (`budget_channels` of the senders that exist)."""
     seed: int = 0
@@ -1318,6 +1345,12 @@ class StoreReadModels:
     """Anything with `latest(goal_id) -> Briefing | None` (or `list(...)`), e.g. the briefing store."""
     prices: Any = None
     """The runtime's `autonomy.runtime.prices.ShopPrices`: suggestions are budgeted at the shop's prices."""
+
+    def channel_prices(self) -> dict[Channel, float]:
+        """The shop's price of one message per channel: its `ShopPrices`; none known: empty (never a default)."""
+        from autonomy.runtime.prices import ShopPrices
+
+        return self.prices.costs() if isinstance(self.prices, ShopPrices) else {}
 
     def record(self, report: TickOutcome) -> None:
         self.alerts_log.extend(report.alerts)
@@ -1344,14 +1377,22 @@ class StoreReadModels:
         by_customer = {
             c: self.events.for_customer(c, until=now) for c in sorted({d.customer_id for d in closed})
         }
+        margin_rate = self.margin_rate_fn() if self.margin_rate_fn is not None else self.margin_rate
         costs = self.costs or Costs(
-            channel=SEND_COST,
+            channel=self.channel_prices(),
             offer={o.offer_id: o.cost_per_redemption for b in briefs for o in b.envelope.offers},
-            margin_rate=self.margin_rate,
+            margin_rate=margin_rate,
             codes=OfferCodeTable(o for b in briefs for o in b.envelope.offers),  # typed code -> offer id
         )
         rewards = proof_rewards(closed, by_customer, horizon, objective, costs, now=now)
         summary = proof_summary(rewards, closed, now, goal_id, seed=self.seed, costs=costs)
+        summary = withhold_proof_profit(
+            summary,
+            margin_rate=costs.margin_rate,
+            unpriced=unpriced_channels(
+                closed, (e for evs in by_customer.values() for e in evs), costs.channel
+            ),
+        )
         if not closed:
             wait = f"Outcomes count once a decision's {horizon}-day window has closed; none has yet."
             summary = summary.model_copy(update={"notes": (*summary.notes, wait)})
@@ -1560,7 +1601,7 @@ def build_services_from_runtime(
     def ingest(batch: Sequence[Event]) -> int:
         return events.append(batch)
 
-    return Services(
+    services = Services(
         workspace=runtime.workspace,
         events=runtime.events,
         states=runtime.states,
@@ -1580,7 +1621,10 @@ def build_services_from_runtime(
         allow_tick=allow_tick,
         catalogue=dict(catalogue or {}),
         margin_rate=margin_rate,
+        channel_costs=dict(costs.channel) if costs is not None else None,
     )
+    reads.margin_rate_fn = lambda: services.margin_rate  # the onboarding answer changes it live
+    return services
 
 
 # --- the simulation-backed demo -----------------------------------------------------------------------

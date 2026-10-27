@@ -536,7 +536,7 @@ def test_api_proposals_limits_and_one_click_accept(client: TestClient) -> None:
     assert r.status_code == 200 and r.json()["opportunity_id"] == best
     terms = r.json()["terms"]
 
-    r = client.post("/v2/onboarding/accept", json={})
+    r = client.post("/v2/onboarding/accept", json={"margin_pct": 40})
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["goal"]["status"] == "active" and out["goal"]["autonomy"] == AutonomyLevel.SHADOW.value
@@ -552,7 +552,7 @@ def test_api_proposals_limits_and_one_click_accept(client: TestClient) -> None:
     assert mandate["mandate"]["goal_ids"] == [out["goal"]["goal_id"]]
     assert "single-owner path" in out["words"] and "sends nothing" in out["words"]
     # One goal per kind: accepting the same kind again is refused.
-    again = client.post("/v2/onboarding/accept", json={"opportunity_id": best})
+    again = client.post("/v2/onboarding/accept", json={"opportunity_id": best, "margin_pct": 40})
     assert again.status_code == 409
     listed = client.get("/v2/onboarding/mandates").json()
     assert [m["mandate"]["mandate_id"] for m in listed] == [mandate["mandate"]["mandate_id"]]
@@ -566,7 +566,12 @@ def test_api_two_person_path_waits_and_keeps_shadow(client: TestClient) -> None:
     pick = next(p for p in proposals if p["monthly_profit"] is not None and not p["preselected"])
     r = client.post(
         "/v2/onboarding/accept",
-        json={"opportunity_id": pick["opportunity_id"], "single_owner": False, "autonomy": "autopilot"},
+        json={
+            "opportunity_id": pick["opportunity_id"],
+            "single_owner": False,
+            "autonomy": "autopilot",
+            "margin_pct": 40,
+        },
     )
     assert r.status_code == 200, r.text
     out = r.json()
@@ -591,7 +596,12 @@ def test_api_margin_is_asked_once_and_used_after(client: TestClient) -> None:
 
 
 def test_api_refuses_unknown_proposals(client: TestClient) -> None:
-    assert client.post("/v2/onboarding/accept", json={"opportunity_id": "opp_nope"}).status_code == 404
+    assert (
+        client.post(
+            "/v2/onboarding/accept", json={"opportunity_id": "opp_nope", "margin_pct": 40}
+        ).status_code
+        == 404
+    )
     assert client.post("/v2/onboarding/answers", json={"margin_pct": 120}).status_code == 422
 
 
@@ -668,8 +678,8 @@ def test_api_a_draft_goal_of_the_same_kind_does_not_block_accept(
         assert draft.status is GoalStatus.DRAFT
         listed = c.get("/v2/onboarding/proposals").json()["proposals"]
         assert not next(p for p in listed if p["opportunity_id"] == best["opportunity_id"])["already_running"]
-        assert c.post("/v2/onboarding/accept", json={}).status_code == 200
+        assert c.post("/v2/onboarding/accept", json={"margin_pct": 40}).status_code == 200
         # A paused goal of that kind does hold it: a new goal must not get around a pause.
         services.pause(draft.goal_id)
-        r = c.post("/v2/onboarding/accept", json={"opportunity_id": best["opportunity_id"]})
+        r = c.post("/v2/onboarding/accept", json={"opportunity_id": best["opportunity_id"], "margin_pct": 40})
         assert r.status_code == 409

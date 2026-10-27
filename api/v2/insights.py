@@ -611,15 +611,15 @@ def _day_bounds(day: dt.date, tz: tzinfo) -> tuple[datetime, datetime]:
 
 
 def goal_spend(services: Services, goal_id: str, now: datetime) -> float | None:
-    """Spent on a goal so far: the runtime's own ledger when there is one, else send costs from the log."""
+    """Spent on a goal so far: the runtime's own ledger when there is one, else send costs from the log at the
+    shop's prices; None when a send was on a channel with no known price."""
     spend_fn = getattr(inner_runtime(services), "spend_fn", None)
     if callable(spend_fn):
         try:
             return round(float(spend_fn(goal_id, now)), 2)
         except Exception:  # a ledger that cannot answer: fall back to the log
             pass
-    from api.v2.deps import SEND_COST
-
+    prices = services.send_prices()
     total = 0.0
     for e in services.events.scan(until=now + _TICK):
         if e.type is not EventType.SEND or e.channel is None:
@@ -629,7 +629,9 @@ def goal_spend(services: Services, goal_id: str, now: datetime) -> float | None:
             d = services.decisions.get(e.decision_id)
             gid = d.action.goal_id if d is not None and d.action is not None else None
         if gid == goal_id:
-            total += SEND_COST.get(e.channel, 0.0)
+            if e.channel not in prices:
+                return None  # a send on a channel with no known price: the spend is unknown, not a default
+            total += prices[e.channel]
     return round(total, 2)
 
 

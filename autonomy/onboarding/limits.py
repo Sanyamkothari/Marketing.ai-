@@ -92,6 +92,9 @@ TWO_PERSON_NOTE: Final[str] = "Proposed from the shop's own history at setup; ne
 
 LimitKey = Literal["cadence", "discount_depth", "discount_frequency", "margin", "quiet_hours", "budget"]
 
+MARGIN_QUESTION = "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?"
+"""The one question onboarding must have answered (docs/v4/ONBOARDING_MARGIN.md): the shop's contribution margin."""
+
 
 class LearnedLimit(Contract):
     key: LimitKey
@@ -272,6 +275,9 @@ def _margin(reading: MarginReading, depth: float | None) -> tuple[LearnedLimit, 
                 "respect: your margin less your usual discount.",
                 source=reading.source,
                 from_data=True,
+                # Asked even when the orders carry margins: the proof counts every other purchase at the
+                # shop's own answer, so it is required until given (docs/v4/ONBOARDING_MARGIN.md).
+                question=None if reading.source == "your answer" else MARGIN_QUESTION,
             ),
             floor,
         )
@@ -281,11 +287,11 @@ def _margin(reading: MarginReading, depth: float | None) -> tuple[LearnedLimit, 
             label="Margin",
             found="Your orders do not carry product costs, so we cannot see your margin.",
             use=f"Assume {reading.rate:.0%} until you tell us; {use_floor}.",
-            description="40% is the default the decision engine uses for a customer with no margin data. "
-            "Answer once and every number on this page updates.",
+            description="40% is only what these proposals are sized at until you answer; it is not used as your "
+            "margin anywhere else. Answer once and every number on this page updates, and the proof can show profit.",
             source=reading.source,
             from_data=False,
-            question="What is your typical gross margin, as a percentage of the order value?",
+            question=MARGIN_QUESTION,
         ),
         floor,
     )

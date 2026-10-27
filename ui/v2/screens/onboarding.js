@@ -743,10 +743,12 @@ function limitRow(l, s, env, folded = []) {
   const extra = [];
   if (!l.from_data) extra.push(withInfo(el("span", { class: "pill pill-neutral zt-default" }, "Safe default"), "Your data could not tell us this, so we start with a safe default. It is part of what you sign, and you can change it later."));
   if (l.key === "margin" && present(l.question)) {
-    const [field, input] = setupField("margin_pct", "Your margin, %", l.question, { placeholder: "40" });
+    const [field, input] = setupField("margin_pct", "Left after costs, out of every 100 of sales", `${l.question} Count what the products cost you, shipping and payment fees (and refused cash-on-delivery parcels and returns). We use it to turn extra sales into extra profit; until you answer, the proof shows revenue only. Required: there is no default.`, { placeholder: "40" });
     input.setAttribute("type", "number");
-    input.setAttribute("min", "1");
-    input.setAttribute("max", "99");
+    input.setAttribute("min", "0.1");
+    input.setAttribute("max", "99.9");
+    input.setAttribute("step", "any");
+    input.setAttribute("required", "true");
     input.setAttribute("inputmode", "decimal");
     if (present(s.marginPct)) input.value = String(s.marginPct);
     input.addEventListener("change", () => env.margin(input.value));
@@ -979,12 +981,19 @@ async function renderSetup(root, ctx, setup, goals, report, brand) {
       s.marginPct = v;
       try {
         if (typeof api.answerMargin === "function") s.scan = (await api.answerMargin(v)) || s.scan;
+        const kept = typeof api.getMargin === "function" ? await api.getMargin() : null;
+        if (kept && kept.warning) say(kept.warning, "warning");
       } catch (err) {
         say(`Couldn't keep your margin. ${err.message || ""}`.trim(), "critical");
       }
       loadLimits();
     },
     sign: async (btn) => {
+      const asking = s.limits && (s.limits.limits || []).find((l) => l.key === "margin" && present(l.question));
+      if (asking && !present(s.marginPct)) {
+        say(`Answer this first: ${asking.question}`, "critical");
+        return;
+      }
       btn.disabled = true;
       try {
         const body = { opportunity_id: s.chosen, offers: s.offers };

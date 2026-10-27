@@ -705,6 +705,8 @@ export function createApi(options = {}) {
       }
       case "GET /onboarding/mandates":
         return clone(s.mandates);
+      case "GET /onboarding/margin":
+        return { question: "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?", explanation: "", answered: true, margin_pct: null, margin_rate: null, source: "sample shop", min_pct: 0, max_pct: 100, warn_below_pct: 5, warn_above_pct: 80, warning: null, note: "The sample shop's orders carry their margins." };
       case "POST /onboarding/answers":
         // The sample shop's orders carry their margins, so an answer changes nothing here.
         return mockProposals(s);
@@ -956,6 +958,8 @@ export function createApi(options = {}) {
       optional(`/onboarding/limits${query({ opportunity_id: opportunityId, offers: opts.offers ? "true" : null, margin_pct: opts.marginPct })}`),
     /** POST /v2/onboarding/answers {margin_pct} -> OpportunityScan: the margin, asked once and kept. */
     answerMargin: (marginPct) => post("/onboarding/answers", { margin_pct: Number(marginPct) }),
+    /** GET /v2/onboarding/margin -> MarginStatus: {question, explanation, answered, margin_pct, warning, note, ...}. */
+    getMargin: () => optional("/onboarding/margin"),
     /**
      * POST /v2/onboarding/accept {opportunity_id?, margin_pct?, offers?} -> {goal, brief, proposal, limits, mandate, words,
      * notes}: the proposal becomes a goal, the limits a signed mandate, and the plan runs in Shadow.

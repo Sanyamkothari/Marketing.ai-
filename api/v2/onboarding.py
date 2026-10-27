@@ -4,7 +4,9 @@
 |---|---|
 | `GET /v2/onboarding/proposals` | The goal proposals sized in money from the shop's own history, ranked, the best preselected (`autonomy.onboarding.scan_opportunities`) |
 | `GET /v2/onboarding/limits?opportunity_id=` | The limits learned from history, "what we found -> what we will use", sized for that proposal (the preselected one by default) |
-| `POST /v2/onboarding/answers` | The one question only the shop can answer (its margin); stored, and every number after uses it |
+| `GET /v2/onboarding/margin` | The required margin question in plain words, the shop's answer so far, and a warning when it looks unusual |
+| `POST /v2/onboarding/margin` | Answer it (percent, above 0 and below 100); stored as the shop's margin, which the proof counts profit with |
+| `POST /v2/onboarding/answers` | The same answer, returned with the proposals sized by it |
 | `POST /v2/onboarding/accept` | One call: the proposal becomes a goal, the limits a signed mandate, and the plan runs in Shadow |
 | `GET /v2/onboarding/mandates` | The mandates signed here, with their body hash, what is unmet and the ledger head |
 
@@ -27,6 +29,10 @@ upgrade path), one key per person derived from `AUTONOMY_MANDATE_SECRET`. Withou
 random secret is drawn when the process starts, so signatures verify only while it runs, which
 matches the in-memory ledger here; the answer says so. Set the variable in production.
 
+**The margin is required.** `accept` answers 409 until the shop has answered the margin question (or set
+`AUTONOMY_MARGIN_RATE`): there is no hidden default. Until it is answered, the proof shows revenue only
+and says profit needs the margin (`api.v2.honest_proof`; docs/v4/ONBOARDING_MARGIN.md).
+
 The routes are published in `docs/v2/openapi.json` (`IN_SCHEMA`), and `tests/v2/api/test_api.py`'s
 route list names them.
 """
@@ -47,6 +53,7 @@ from pydantic import Field
 from starlette.applications import Starlette
 
 from api.v2.deps import ServiceError, Services, get_services
+from api.v2.honest_proof import MARGIN_EXPLANATION, MARGIN_QUESTION
 from autonomy.contracts import (
     AutonomyLevel,
     Brief,
@@ -79,6 +86,8 @@ __all__ = [
     "REFILL_UNREACHABLE",
     "AcceptRequest",
     "AcceptResult",
+    "MarginAnswer",
+    "MarginStatus",
     "OnboardingDesk",
     "attach_onboarding",
     "get_desk",
@@ -211,8 +220,35 @@ ServicesDep = Annotated[Services, Depends(get_services)]
 # --- bodies --------------------------------------------------------------------------------------
 
 
+MARGIN_WARN_BELOW_PCT = 5.0
+"""An answer under this is probably a fraction typed as a percent (0.4 for 40%) or a mistake: warned, kept."""
+MARGIN_WARN_ABOVE_PCT = 80.0
+"""An answer over this is rare outside digital goods: it is warned about, and kept."""
+
+
 class MarginAnswer(Contract):
-    margin_pct: float = Field(gt=0, lt=100, description="Typical gross margin, percent of the order value")
+    margin_pct: float = Field(
+        gt=0,
+        lt=100,
+        description="Out of every 100 of sales, how much is left after product cost, shipping and payment fees",
+    )
+
+
+class MarginStatus(Contract):
+    """The margin question, the shop's answer so far, and what to say about it."""
+
+    question: str = MARGIN_QUESTION
+    explanation: str = MARGIN_EXPLANATION
+    answered: bool
+    margin_pct: float | None = Field(default=None, description="The answer, 0-100; None until answered")
+    margin_rate: float | None = Field(default=None, description="The same as stored: 0-1")
+    source: str = Field(description="`your answer`, `settings` (AUTONOMY_MARGIN_RATE) or `not set`")
+    min_pct: float = 0.0
+    max_pct: float = 100.0
+    warn_below_pct: float = MARGIN_WARN_BELOW_PCT
+    warn_above_pct: float = MARGIN_WARN_ABOVE_PCT
+    warning: str | None = None
+    note: str = Field(description="What the answer changes, or what is missing until it is given")
 
 
 class AcceptRequest(Contract):
@@ -270,8 +306,55 @@ def _shop_costs(services: Services) -> dict[Channel, float] | None:
     return prices.costs() if prices is not None else None
 
 
-def _rate(margin_pct: float | None, desk: OnboardingDesk) -> float | None:
-    return round(margin_pct / 100.0, 4) if margin_pct is not None else desk.margin_rate
+def _rate(margin_pct: float | None, desk: OnboardingDesk, services: Services) -> float | None:
+    """The margin to size with: the one given now, else the desk's answer, else the setting."""
+    if margin_pct is not None:
+        return round(margin_pct / 100.0, 4)
+    return desk.margin_rate if desk.margin_rate is not None else services.margin_rate
+
+
+def _margin_warning(margin_pct: float) -> str | None:
+    if margin_pct < MARGIN_WARN_BELOW_PCT:
+        return (
+            f"{margin_pct:g}% is very low. If you meant {margin_pct * 100:g}%, type it as {margin_pct * 100:g}, "
+            "not as a fraction. Keep it only if only that much is left of each sale."
+        )
+    if margin_pct > MARGIN_WARN_ABOVE_PCT:
+        return (
+            f"{margin_pct:g}% is very high. After product cost, shipping and payment fees most shops keep "
+            "much less; a margin set too high makes the proof show more profit than there is."
+        )
+    return None
+
+
+def _store_margin(desk: OnboardingDesk, services: Services, margin_pct: float) -> float:
+    """Keep the answer on the desk and on the services (the proof reads it from there); returns the 0-1 rate."""
+    rate = round(margin_pct / 100.0, 4)
+    if not 0.0 < rate < 1.0:
+        raise HTTPException(status_code=422, detail="The margin must be above 0 and below 100 (percent).")
+    desk.margin_rate = rate
+    services.set_margin_rate(rate)
+    return rate
+
+
+def _margin_status(desk: OnboardingDesk, services: Services) -> MarginStatus:
+    rate = desk.margin_rate if desk.margin_rate is not None else services.margin_rate
+    if rate is None:
+        return MarginStatus(
+            answered=False,
+            source="not set",
+            note="Not answered yet. Until it is, the proof shows revenue only and says profit needs your margin.",
+        )
+    pct = round(rate * 100.0, 2)
+    return MarginStatus(
+        answered=True,
+        margin_pct=pct,
+        margin_rate=rate,
+        source="your answer" if desk.margin_rate is not None else "settings",
+        warning=_margin_warning(pct),
+        note="The proof counts every purchase that carries no margin of its own at this margin. "
+        "Set AUTONOMY_MARGIN_RATE to keep it after a restart.",
+    )
 
 
 def _pick(found: OpportunityScan, opportunity_id: str | None) -> Proposal:
@@ -342,7 +425,7 @@ def proposals(
 ) -> OpportunityScan:
     """Goal proposals sized in money from the shop's own history, best first, one preselected."""
     with desk.lock:
-        found, _ = desk.scan(services, _rate(margin_pct, desk))
+        found, _ = desk.scan(services, _rate(margin_pct, desk, services))
     return found
 
 
@@ -355,7 +438,7 @@ def limits(
     margin_pct: Annotated[float | None, Query(gt=0, lt=100)] = None,
 ) -> LearnedLimits:
     """The limits learned from history, as found -> used, sized for one proposal."""
-    rate = _rate(margin_pct, desk)
+    rate = _rate(margin_pct, desk, services)
     with desk.lock:
         found, history = desk.scan(services, rate)
     proposal = None
@@ -371,12 +454,27 @@ def limits(
     )
 
 
+@router.get("/margin")
+def get_margin(services: ServicesDep, desk: DeskDep) -> MarginStatus:
+    """The required margin question, the answer so far (if any) and a warning when it looks unusual."""
+    with desk.lock:
+        return _margin_status(desk, services)
+
+
+@router.post("/margin")
+def set_margin(body: MarginAnswer, services: ServicesDep, desk: DeskDep) -> MarginStatus:
+    """Answer the margin question. 0 < margin < 100 (else 422); under 5 or over 80 is kept with a warning."""
+    with desk.lock:
+        _store_margin(desk, services, body.margin_pct)
+        return _margin_status(desk, services)
+
+
 @router.post("/answers")
 def answer(body: MarginAnswer, services: ServicesDep, desk: DeskDep) -> OpportunityScan:
     """Store the shop's margin (asked once); the proposals come back sized with it."""
     with desk.lock:
-        desk.margin_rate = round(body.margin_pct / 100.0, 4)
-        found, _ = desk.scan(services, desk.margin_rate)
+        rate = _store_margin(desk, services, body.margin_pct)
+        found, _ = desk.scan(services, rate)
     return found
 
 
@@ -396,8 +494,14 @@ def accept(body: AcceptRequest, request: Request, services: ServicesDep, desk: D
     runs at the level asked for (Shadow by default)."""
     with desk.lock:
         if body.margin_pct is not None:
-            desk.margin_rate = round(body.margin_pct / 100.0, 4)
-        rate = desk.margin_rate
+            _store_margin(desk, services, body.margin_pct)
+        rate = _rate(None, desk, services)
+        if rate is None:  # no hidden default: the proof's profit rests on it (docs/v4/ONBOARDING_MARGIN.md)
+            raise HTTPException(
+                status_code=409,
+                detail=f"Answer this first: {MARGIN_QUESTION} (margin_pct, above 0 and below 100). "
+                "Nothing was written.",
+            )
         found, history = desk.scan(services, rate)
         proposal = _pick(found, body.opportunity_id)
         if proposal.already_running:

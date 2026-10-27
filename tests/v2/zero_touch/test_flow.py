@@ -215,7 +215,8 @@ def test_the_setup_answers_carry_what_the_screens_read(client: TestClient) -> No
     }
     assert used <= set(terms), used - set(terms)
     out = client.post(
-        "/v2/onboarding/accept", json={"opportunity_id": scan["preselected_id"], "offers": False}
+        "/v2/onboarding/accept",
+        json={"opportunity_id": scan["preselected_id"], "offers": False, "margin_pct": 40},
     )
     assert out.status_code == 200, out.text
     body = out.json()

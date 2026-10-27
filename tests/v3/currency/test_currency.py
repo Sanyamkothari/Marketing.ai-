@@ -651,7 +651,7 @@ def test_an_inr_shops_accepted_proposal_is_budgeted_at_the_inr_price() -> None:
         proposals = client.get("/v2/onboarding/proposals").json()["proposals"]
         win_back = next(p for p in proposals if p["opportunity_id"] == "opp_win_back")
         assert win_back["currency"] == "INR" and win_back["message_cost"] is not None
-        r = client.post("/v2/onboarding/accept", json={"opportunity_id": "opp_win_back"})
+        r = client.post("/v2/onboarding/accept", json={"opportunity_id": "opp_win_back", "margin_pct": 40})
     assert r.status_code == 200, r.text
     out = r.json()
     reached = out["proposal"]["reached_in_month"]
@@ -675,7 +675,7 @@ def test_onboarding_without_the_shops_prices_quotes_no_money_and_writes_nothing(
         win_back = next(p for p in proposals if p["opportunity_id"] == "opp_win_back")
         assert win_back["budget"] == 0.0 and win_back["message_cost"] is None
         assert "No INR price per message for email" in win_back["not_enough"]
-        r = client.post("/v2/onboarding/accept", json={"opportunity_id": "opp_win_back"})
+        r = client.post("/v2/onboarding/accept", json={"opportunity_id": "opp_win_back", "margin_pct": 40})
     assert r.status_code == 409 and "no INR price for email" in r.json()["detail"]
     assert {g.goal_id for g in services.workspace.goals()} == before
     assert desk.signed == {} and desk.ledger.head == head

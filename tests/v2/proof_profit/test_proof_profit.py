@@ -559,11 +559,17 @@ def test_the_api_proof_prices_a_purchase_with_no_margin_at_the_setting(
     )
     services = build_services_from_runtime(runtime, clock=lambda: day(60))
     proof = services.proof(None)
-    assert proof is not None and proof.incremental_profit is not None
-    assert proof.incremental_profit.point == pytest.approx(30 * per_order)
+    assert proof is not None
     assert proof.margin_rate == rate
     assert proof.margin_note is not None
-    assert proof.margin_note.startswith("No shop margin is set") is (rate is None)
+    if rate is None:  # no hidden default: profit is withheld and revenue stays (docs/v4/ONBOARDING_MARGIN.md)
+        assert proof.incremental_profit is None
+        assert proof.margin_note.startswith("Profit needs your margin")
+        assert proof.incremental_revenue is not None
+        return
+    assert proof.incremental_profit is not None
+    assert proof.incremental_profit.point == pytest.approx(30 * per_order)
+    assert not proof.margin_note.startswith("No shop margin is set")
 
 
 def test_a_who_book_with_another_margin_is_refused() -> None:

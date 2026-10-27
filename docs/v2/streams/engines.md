@@ -77,7 +77,7 @@ join the light v2 CI install; the current endpoints parse multipart with the sta
   p-value and a note flags conversions up with money down). The lift % interval (delta method) can
   disagree slightly with the p-value in borderline cases. DR with `q_act` is an approximation for
   policies that choose among several actions. The per-goal summary loads every decision into
-  memory and uses `SEND_COST`.
+  memory and prices sends at the shop's own prices (`Services.send_prices`, docs/v4/ONBOARDING_MARGIN.md).
 - P1: personal-data detection samples the first 1,000 non-empty cells per column in file order;
   `snapshot` must carry a zone offset. Column mapping proposals, identity linking and drift alerts
   are not in the API yet.

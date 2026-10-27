@@ -2323,6 +2323,68 @@
         }
       }
     },
+    "/v2/onboarding/margin": {
+      "get": {
+        "tags": [
+          "onboarding"
+        ],
+        "summary": "Get Margin",
+        "description": "The required margin question, the answer so far (if any) and a warning when it looks unusual.",
+        "operationId": "get_margin_v2_onboarding_margin_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarginStatus"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "onboarding"
+        ],
+        "summary": "Set Margin",
+        "description": "Answer the margin question. 0 < margin < 100 (else 422); under 5 or over 80 is kept with a warning.",
+        "operationId": "set_margin_v2_onboarding_margin_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarginAnswer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarginStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v2/onboarding/answers": {
       "post": {
         "tags": [
@@ -2777,6 +2839,10 @@
                   "use_v1": {
                     "type": "boolean",
                     "default": true
+                  },
+                  "known_after": {
+                    "type": "string",
+                    "description": "Comma-separated columns recorded after the outcome"
                   }
                 },
                 "type": "object",
@@ -2835,6 +2901,16 @@
                   "delimiter": {
                     "type": "string",
                     "default": ","
+                  },
+                  "ask": {
+                    "type": "boolean",
+                    "description": "Refuse with plain questions (422) instead of guessing",
+                    "default": true
+                  },
+                  "snapshot": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Latest plausible time; default the upload's moment"
                   }
                 },
                 "type": "object",
@@ -3697,7 +3773,7 @@
           "engines: P6 incrementality ledger"
         ],
         "summary": "Get Goal Summary",
-        "description": "The summary for one goal of the running programme, from the attached `Services`.\n\nReads every decision up to now from the decision log and each decided customer's events. The\nhorizon is the goal's brief's; channel costs are the API's `SEND_COST` and offer costs the\nbrief's. 503 when the app runs without services, 404 for an unknown goal.",
+        "description": "The summary for one goal of the running programme, from the attached `Services`.\n\nReads every decision up to now from the decision log and each decided customer's events. The\nhorizon is the goal's brief's; channel costs are the shop's prices (`Services.send_prices`) and offer\ncosts the brief's. Profit is withheld, with a note, while the shop's margin or the price of a channel it\nuses is unknown. 503 when the app runs without services, 404 for an unknown goal.",
         "operationId": "get_goal_summary_v2_engines_measurement_goals__goal_id__summary_get",
         "parameters": [
           {
@@ -3892,6 +3968,24 @@
             "description": "Allow offers up to the shop's usual discount depth",
             "default": false
           },
+          "offer_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Offer Codes",
+            "description": "With offers: the shop's discount code(s) for the offer, e.g. WELCOME10",
+            "default": []
+          },
+          "offer_code_prefixes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Offer Code Prefixes",
+            "description": "With offers: prefixes of the per-customer unique codes for the offer",
+            "default": []
+          },
           "autonomy": {
             "$ref": "#/components/schemas/AutonomyLevel",
             "default": "shadow"
@@ -4054,6 +4148,18 @@
             ],
             "title": "Asset Id",
             "description": "The approved image/video used, when the format needs one"
+          },
+          "journey_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journey Id",
+            "description": "The channel journey this message belongs to (v3), None for a single message"
           }
         },
         "additionalProperties": false,
@@ -5936,6 +6042,18 @@
               }
             ],
             "description": "Treated rate minus holdout rate, with its 95% interval"
+          },
+          "minimum_detectable_lift_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum Detectable Lift Pct",
+            "description": "Smallest lift in percent that this many customers at this holdout rate could see (95% confidence, 80% power); a lift below it reads as noise"
           }
         },
         "additionalProperties": false,
@@ -7361,6 +7479,125 @@
               }
             ],
             "title": "Segment"
+          },
+          "features": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Features",
+            "description": "The nightly profile (plan-v3 foundation A): feature name -> value, as of features_as_of"
+          },
+          "features_as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Features As Of",
+            "description": "The instant the profile was built for; no event after it was read"
+          },
+          "last_view_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last View At",
+            "description": "Their latest product view"
+          },
+          "last_cart_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Cart At",
+            "description": "Their latest add-to-cart; a later purchase closes the cart"
+          },
+          "viewed_items": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ItemViews"
+            },
+            "type": "object",
+            "title": "Viewed Items",
+            "description": "Products viewed but not bought since: item id -> views and latest view; at most 8, the least recently viewed dropped first"
+          },
+          "usual_gap_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usual Gap Days",
+            "description": "Their usual days away between two days of activity (a running average of gaps of a day or more)"
+          },
+          "purchase_gap_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purchase Gap Days",
+            "description": "Their usual days between two purchases (a running average)"
+          },
+          "purchase_gaps": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Purchase Gaps",
+            "description": "How many gaps of a day or more went into purchase_gap_days",
+            "default": 0
+          },
+          "bought_items": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ItemPurchases"
+            },
+            "type": "object",
+            "title": "Bought Items",
+            "description": "Products bought: item id -> purchase days, latest purchase and usual gap; at most 8, the least recently bought dropped first"
+          },
+          "last_return_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Return At",
+            "description": "Their latest visit, view or cart after a gap much longer than usual"
+          },
+          "last_return_gap_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Return Gap Days",
+            "description": "How long the gap before last_return_at was, in days"
           }
         },
         "additionalProperties": false,
@@ -7623,6 +7860,36 @@
               }
             ],
             "title": "Latest"
+          },
+          "ambiguous_day_month": {
+            "type": "integer",
+            "title": "Ambiguous Day Month",
+            "description": "Values such as 03/04 that read as two different days (d/m or m/d)",
+            "default": 0
+          },
+          "day_first_evidence": {
+            "type": "integer",
+            "title": "Day First Evidence",
+            "description": "Values that read only day first (13/04)",
+            "default": 0
+          },
+          "month_first_evidence": {
+            "type": "integer",
+            "title": "Month First Evidence",
+            "description": "Values that read only month first (04/13)",
+            "default": 0
+          },
+          "placeholder_dates": {
+            "type": "integer",
+            "title": "Placeholder Dates",
+            "description": "1900-01-01, 1970-01-01 and the like at midnight",
+            "default": 0
+          },
+          "two_digit_years": {
+            "type": "integer",
+            "title": "Two Digit Years",
+            "description": "Values written with a two-digit year",
+            "default": 0
           }
         },
         "additionalProperties": false,
@@ -7715,6 +7982,44 @@
           "policy_version": {
             "type": "string",
             "title": "Policy Version"
+          },
+          "journey_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journey Id",
+            "description": "The journey this decision starts, continues or holds (v3), else None"
+          },
+          "journey_probability": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journey Probability",
+            "description": "Chance the policy had of choosing this journey, summed over its offers and content (v3). A later step of a journey carries the value its first step logged."
+          },
+          "journey_ended": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journey Ended",
+            "description": "The journey that ended while this decision was made, and why, as '<journey id>:<code>' (v3), so the runs rebuilt from the log stay ended"
           }
         },
         "additionalProperties": false,
@@ -7792,6 +8097,69 @@
         ],
         "title": "Delivery",
         "description": "What really happened to an ACT decision."
+      },
+      "Detectable": {
+        "properties": {
+          "profit": {
+            "type": "number",
+            "title": "Profit",
+            "description": "Smallest true incremental profit it could tell from zero"
+          },
+          "revenue": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revenue",
+            "description": "The same, for incremental revenue"
+          },
+          "lift_vs_baseline": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lift Vs Baseline",
+            "description": "The same, for profit per customer against the simple rule"
+          },
+          "relative": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative",
+            "description": "Smallest lift in profit per customer, as a share of the holdout's (0.5 is 50%); None when the holdout earned nothing per customer"
+          },
+          "period_days": {
+            "type": "integer",
+            "title": "Period Days",
+            "description": "Days the closed windows behind the figures span",
+            "default": 0
+          },
+          "sentence": {
+            "type": "string",
+            "title": "Sentence",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "profit"
+        ],
+        "title": "Detectable",
+        "description": "What this comparison could see at all: the minimum detectable effect, next to the numbers it\nqualifies (`autonomy.proof.power`, 95% confidence, 80% power). Same units as the figure beside it."
       },
       "DltRegistration": {
         "properties": {
@@ -8727,6 +9095,30 @@
               }
             ],
             "description": "Net incremental profit / spend"
+          },
+          "minimum_detectable_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum Detectable Profit",
+            "description": "Smallest net incremental profit this comparison could tell from zero"
+          },
+          "margin_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Note",
+            "description": "Says the shop margin is not set, or how much profit rests on it"
           }
         },
         "additionalProperties": false,
@@ -9113,11 +9505,18 @@
             "description": "Optional end of the goal"
           },
           "currency": {
-            "type": "string",
-            "maxLength": 3,
-            "minLength": 3,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 3,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Currency",
-            "default": "USD"
+            "description": "Optional: the currency in the words, else the shop's, else USD"
           },
           "kind": {
             "anyOf": [
@@ -9915,6 +10314,40 @@
         ],
         "title": "InboxView"
       },
+      "ItemPurchases": {
+        "properties": {
+          "days": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Days",
+            "default": 1
+          },
+          "last_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last At"
+          },
+          "gap_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Days",
+            "description": "Running average of days between buying it"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "last_at"
+        ],
+        "title": "ItemPurchases",
+        "description": "How often one product was bought, when last, and the usual days between (see\n`CustomerState.bought_items`). `days` counts distinct purchase days: several lines of one order\nare one purchase of the product."
+      },
       "ItemRef": {
         "properties": {
           "item_id": {
@@ -9940,6 +10373,28 @@
           "item_id"
         ],
         "title": "ItemRef"
+      },
+      "ItemViews": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Count",
+            "default": 1
+          },
+          "last_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "last_at"
+        ],
+        "title": "ItemViews",
+        "description": "How often one product was looked at, and when last (see `CustomerState.viewed_items`)."
       },
       "JudgeAudit": {
         "properties": {
@@ -11030,6 +11485,15 @@
             },
             "type": "object",
             "title": "Problem Counts"
+          },
+          "inferred": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Inferred",
+            "description": "What the file itself settled (a decimal comma, the date order), in words",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -11089,7 +11553,7 @@
             "exclusiveMaximum": 100.0,
             "exclusiveMinimum": 0.0,
             "title": "Margin Pct",
-            "description": "Typical gross margin, percent of the order value"
+            "description": "Out of every 100 of sales, how much is left after product cost, shipping and payment fees"
           }
         },
         "additionalProperties": false,
@@ -11134,6 +11598,98 @@
           "from_data"
         ],
         "title": "MarginReading"
+      },
+      "MarginStatus": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "title": "Question",
+            "default": "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?"
+          },
+          "explanation": {
+            "type": "string",
+            "title": "Explanation",
+            "default": "This is your contribution margin. Say the shop sells 100 in a week and 60 goes on what the products cost you, shipping and payment fees: the answer is 40. Count refused cash-on-delivery parcels and returns in it too. We use it to turn extra sales into extra profit, so the proof never shows a profit we made up. Until you answer, the proof shows revenue only."
+          },
+          "answered": {
+            "type": "boolean",
+            "title": "Answered"
+          },
+          "margin_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Pct",
+            "description": "The answer, 0-100; None until answered"
+          },
+          "margin_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Rate",
+            "description": "The same as stored: 0-1"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "`your answer`, `settings` (AUTONOMY_MARGIN_RATE) or `not set`"
+          },
+          "min_pct": {
+            "type": "number",
+            "title": "Min Pct",
+            "default": 0.0
+          },
+          "max_pct": {
+            "type": "number",
+            "title": "Max Pct",
+            "default": 100.0
+          },
+          "warn_below_pct": {
+            "type": "number",
+            "title": "Warn Below Pct",
+            "default": 5.0
+          },
+          "warn_above_pct": {
+            "type": "number",
+            "title": "Warn Above Pct",
+            "default": 80.0
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "description": "What the answer changes, or what is missing until it is given"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "answered",
+          "source",
+          "note"
+        ],
+        "title": "MarginStatus",
+        "description": "The margin question, the shop's answer so far, and what to say about it."
       },
       "MeasurementStatus": {
         "type": "string",
@@ -11462,7 +12018,9 @@
           "free_shipping",
           "gift",
           "loyalty",
-          "content"
+          "content",
+          "bundle",
+          "early_access"
         ],
         "title": "OfferKind"
       },
@@ -11497,6 +12055,69 @@
             "type": "boolean",
             "title": "Needs Approval",
             "default": false
+          },
+          "shipping_cost": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Shipping Cost",
+            "description": "free_shipping: what shipping one order costs us",
+            "default": 0.0
+          },
+          "bundle_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Bundle Item Ids",
+            "description": "bundle: the items sold together",
+            "default": []
+          },
+          "bundle_discount": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Bundle Discount",
+            "description": "bundle: money off the bundle",
+            "default": 0.0
+          },
+          "points": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Points",
+            "description": "loyalty: points granted per redemption",
+            "default": 0.0
+          },
+          "point_value": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Point Value",
+            "description": "loyalty: what one point is worth in money",
+            "default": 0.0
+          },
+          "redemption_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Redemption Rate",
+            "description": "loyalty: share of granted points that are ever redeemed",
+            "default": 1.0
+          },
+          "codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Codes",
+            "description": "Exact discount codes (any case) that redeem this offer, e.g. COMEBACK10",
+            "default": []
+          },
+          "code_prefixes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Code Prefixes",
+            "description": "Prefixes (any case) of per-send unique discount codes that redeem this offer",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -12410,6 +13031,41 @@
             "type": "array",
             "title": "Notes",
             "default": []
+          },
+          "detectable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Detectable"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The smallest effect this size of comparison can see; None: not enough data"
+          },
+          "margin_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Rate",
+            "description": "The shop's contribution margin used for purchases with no margin of their own"
+          },
+          "margin_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Note",
+            "description": "Says the margin was not set, or how much of the profit rests on it"
           }
         },
         "additionalProperties": false,
@@ -14152,12 +14808,18 @@
             "description": "None: the whole programme"
           },
           "margin_rate": {
-            "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Margin Rate",
-            "description": "Margin share when a purchase has none",
-            "default": 1.0
+            "description": "The shop's contribution margin, used when a purchase has none; unset: full value, and the summary says so"
           },
           "value_per_conversion": {
             "anyOf": [
