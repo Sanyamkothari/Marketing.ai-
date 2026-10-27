@@ -212,6 +212,7 @@ def _combine_and_approve(client: TestClient, upload_id: str) -> dict[str, Any]:
         f"/uploads/{upload_id}/agent-session/decisions",
         json={"decisions": [{"proposal_id": pid, "state": "rejected"} for pid in pending]},
     )
+    client.post(f"/uploads/{upload_id}/agent-session/preview")  # Approve checks that the preview was shown
     applied = client.post(f"/uploads/{upload_id}/agent-session/apply")
     assert applied.status_code == 200, applied.text
     return dict(applied.json())

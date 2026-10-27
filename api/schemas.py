@@ -867,12 +867,11 @@ class MeResponse(StrictBase):
         default_factory=BrandView,
         description="The deployment's name, logo and accent colour; today's product with nothing set.",
     )
-    # PLAN-O (M247, DEC-1817): added field only, left out of the answer while unset, so with `data_doctor.unified`
-    # off `GET /auth/me` answers byte for byte as before (noted in the PLAN-O block below).
+    # PLAN-O (M247, DEC-1817): added field only, left out of the answer while unset (noted in the PLAN-O block below).
     data_doctor: bool | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
-        description="True when the one Data Doctor screen is on here (`data_doctor.unified`); absent otherwise.",
+        description="True: the one Data Doctor screen is always on.",
     )
 
 
@@ -1471,5 +1470,5 @@ class PilotFeedbackResponse(StrictBase):
 # ---- END PLAN-M ----
 # ---- PLAN-O (Data Doctor) — append only below this line ----
 # In-place additions elsewhere in this file (a field must live in its model):
-# - MeResponse.data_doctor (M247, DEC-1817): present only while `data_doctor.unified` is on.
+# - MeResponse.data_doctor (M247, DEC-1817): always present (true).
 # ---- END PLAN-O ----

@@ -199,3 +199,15 @@ def test_a_file_too_small_says_what_is_short_what_to_do_and_what_to_collect(
     assert steps["data_request_use_case"] == USE_CASE
     request = client.get("/pilot/data-request", params={"use_case": USE_CASE})
     assert request.status_code == 200, "the data request the screen links to is there"
+
+
+def test_no_trainable_goal_is_left_out_and_one_that_repeats_a_home_goal_says_which(config_root: Path) -> None:
+    from api.routes.doctor import offers
+
+    found = {offer.config.id: offer for offer in offers(config_root)}
+    assert "telco-churn" in found, "no skip list: Telco Churn is offered"
+    assert (
+        found["telco-churn"].also_fits == found["rca"].config.name
+    ), "and says it also fits Home's churn goal"
+    assert found["rca"].also_fits is None, "a Home goal is not marked"
+    assert "hillstrom-email" not in found, "only goals the engine trains today are offered"

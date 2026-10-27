@@ -75,7 +75,7 @@ check-generated: ## fail if templates/, docs/API.md or infra/observability/ are 
 	$(BIN)/python -m scripts.gen_dashboard --check
 
 run: ## serve the API on :8000 (with the new look)
-	MARKETING_AI_UI_LAYOUT=campaigns MARKETING_AI_DATA_DOCTOR_UNIFIED=true $(BIN)/uvicorn api.main:app --reload --port 8000
+	MARKETING_AI_UI_LAYOUT=campaigns $(BIN)/uvicorn api.main:app --reload --port 8000
 
 clean:
 	rm -rf $(VENV) .pytest_cache .mypy_cache .ruff_cache
@@ -244,14 +244,14 @@ demo: demo-seed ## seed the demo if needed, then serve it on :8000 with demo mod
 	@echo ""
 	@echo "  Marketing AI demo: open http://localhost:8000 in your browser. Press Ctrl+C here to stop it."
 	@echo ""
-	MARKETING_AI_UI_LAYOUT=campaigns MARKETING_AI_DATA_DOCTOR_UNIFIED=true MARKETING_AI_DEMO_MODE=true $(BIN)/uvicorn api.main:app --port 8000
+	MARKETING_AI_UI_LAYOUT=campaigns MARKETING_AI_DEMO_MODE=true $(BIN)/uvicorn api.main:app --port 8000
 
 demo-signin: demo-seed ## the demo with sign-in on and one demo user per role (local demo only; passwords printed)
 	MARKETING_AI_AUTH_MODE=local $(BIN)/python -m scripts.demo_users
 	@echo ""
 	@echo "  Marketing AI demo with sign-in: open http://localhost:8000 and sign in as one of the users above. Ctrl+C stops it."
 	@echo ""
-	MARKETING_AI_UI_LAYOUT=campaigns MARKETING_AI_DATA_DOCTOR_UNIFIED=true MARKETING_AI_DEMO_MODE=true MARKETING_AI_AUTH_MODE=local $(BIN)/uvicorn api.main:app --port 8000
+	MARKETING_AI_UI_LAYOUT=campaigns MARKETING_AI_DEMO_MODE=true MARKETING_AI_AUTH_MODE=local $(BIN)/uvicorn api.main:app --port 8000
 # ---- END PLAN-E ----
 # ---- PLAN-G (agents) — append only below this line ----
 # ---- END PLAN-G ----

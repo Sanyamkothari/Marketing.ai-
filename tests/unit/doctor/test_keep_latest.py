@@ -329,8 +329,7 @@ def test_it_needs_the_reshape_level_which_data_doctor_turns_on_for_every_goal() 
     plain = (AgentLevel.CLEAN, AgentLevel.DERIVE)
     with pytest.raises(RecipeError, match="may not use keep_latest_per_id"):
         check([step()], levels=plain)
-    assert doctor_levels(plain, unified=False) == plain
-    check([step()], levels=doctor_levels(plain, unified=True))
+    check([step()], levels=doctor_levels(plain))
 
 
 def test_rows_are_made_one_per_id_once_only() -> None:

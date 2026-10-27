@@ -14,8 +14,6 @@ from fastapi.testclient import TestClient
 from api.access_policy import all_policies
 from api.main import create_app
 from api.routes import case_visit, data_protocol
-from engine.doctor import case as doctor_case
-from engine.doctor import registry as registry_module
 from engine.doctor.case import CaseQuestion
 from engine.doctor.standing import StandingAnswerStore, meaning_of
 from engine.storage import LocalStorage
@@ -27,40 +25,18 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def unified(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(doctor_case, "data_doctor_unified", lambda root=None: True)
-    monkeypatch.setattr(registry_module, "unified_on", lambda _config: True)
-
-
-@pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
     return tmp_path / "data"
 
 
 @pytest.fixture
-def client(unified: None, config_root: Path, data_dir: Path) -> Iterator[TestClient]:
+def client(config_root: Path, data_dir: Path) -> Iterator[TestClient]:
     with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as test_client:
         yield test_client
 
 
 def _code(response: Any) -> str:
     return str(response.json()["detail"]["code"])
-
-
-def test_with_the_switch_off_there_is_no_path(config_root: Path, data_dir: Path) -> None:
-    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as off:
-        assert off.get("/clients/default/standing-answers").status_code == 404
-        assert off.get("/clients/default/facts").status_code == 404
-        assert off.get("/uploads/up_1/agent-session/approval").status_code == 404
-        assert off.post("/uploads/up_1/agent-session/approve", json={"sentence": "x"}).status_code in {
-            404,
-            405,
-        }
-        assert off.get("/data-doctor/candidate-rules").status_code == 404
-        confirm = off.post(
-            "/cases/case_0000000000000000/confirmations", json={"version": 1, "item_id": "i", "sentence": "s"}
-        )
-        assert confirm.status_code == 404
 
 
 def test_every_route_has_its_policy() -> None:

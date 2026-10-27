@@ -234,20 +234,3 @@ def test_the_route_keeps_the_chat_routes_access_rule() -> None:
     assert assist.role is chat.role is Role.ANALYST
     assert json.loads(assist.model_dump_json())["object_param"] == "upload_id"
     assert assist.action == "agent.assist"
-
-
-def test_with_plan_k_off_the_second_opinion_is_refused_before_anything_is_read(
-    repo_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """DEC-1409 (g): the route is opt-in per request and needs `agentic.enabled`; off (the shipped default) it is
-    404 `AGENTIC_DISABLED`, the AI service is never reached and the session is as it was."""
-    fake = AssistClient()
-    monkeypatch.setattr(ai_service, "build_client", lambda *_a, **_k: fake)
-    with TestClient(create_app(config_root=repo_root / "configs", data_dir=data_dir)) as shipped:
-        upload_id = _upload(shipped, _two_outcomes())
-        before = _start(shipped, upload_id)
-        response = shipped.post(f"/uploads/{upload_id}/agent-session/assist")
-        assert response.status_code == 404
-        assert response.json()["detail"]["code"] == "AGENTIC_DISABLED"
-        assert fake.calls == ()
-        assert shipped.get(f"/uploads/{upload_id}/agent-session").json()["session"] == before

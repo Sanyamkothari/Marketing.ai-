@@ -3,7 +3,7 @@
 **The 22 existing tools.** Plan G's 18 look tools (`engine.agent.tools.TOOLS`, in that order), the chat's two
 PROPOSE actions (`propose_setting`, `propose_step`), the person's `edit_by_hand`, and the conversation loop
 itself, which is not a tool: it is the caller (`engine.agent.loop.chat_turn` calls every tool through this
-registry behind `data_doctor.unified`).
+registry).
 
 **The first wrappers** (#10, #29, #32-34, #36-38, #40, #71): functions Plan G and Plan L already have, made tools
 with typed inputs and outputs. Each output is the wrapped function's own model, unchanged, so a wrapper can never
@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel
 from api.access_policy import RoutePolicy
 from engine.access.roles import Role
 from engine.agent.contracts import Proposal, ProposalSource, RecipeStepKind
-from engine.agent.tools import TOOLS, AgentToolError, NoArgs, Tool, ToolKind, tool_available
+from engine.agent.tools import TOOLS, AgentToolError, NoArgs, Tool, ToolKind
 from engine.config import ConfigError, StrictBase
 from engine.doctor.contracts import FileDiagnosis, FileLink, FileStack, UseCaseReadiness
 from engine.doctor.diagnose import ADVISE_ROWS
@@ -170,7 +170,7 @@ def _look_run(name: str) -> Callable[[BaseModel, DataToolContext], LookOutput]:
 
 def _look_available(name: str) -> Callable[[DataToolContext], bool]:
     def available(ctx: DataToolContext) -> bool:
-        return ctx.agent is not None and tool_available(ctx.agent, name)
+        return ctx.agent is not None and name in TOOLS
 
     return available
 

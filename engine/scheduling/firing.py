@@ -375,7 +375,7 @@ def _prescribed(
             )
         if version is None:
             return None
-        checked = check_for_scoring(storage, config, version.run_id, capped)
+        checked = check_for_scoring(storage, version.run_id, capped)
     except PrescriptionError as exc:
         raise FiringError(exc.code, exc.message, dataset_id=dataset_id) from exc
     except RecipeError as exc:
@@ -460,7 +460,7 @@ def start_dataset_run(
             raise FiringError(exc.code, exc.message, dataset_id=dataset_id) from exc
         prepared = (recipe, ready)
         frame_key, profile, capped = ready.source_key, ready.profile, ready.frame
-    # Plan O M243 (DEC-1813): with `data_doctor.unified` on, a dataset bound to a prescription trains with its
+    # Plan O M243 (DEC-1813): a dataset bound to a prescription trains with its
     # post-build recipe, and a model trained under one checks every dataset it scores; None otherwise.
     prescribed = _prescribed(storage, config, manifest, mode, version, capped)
     if prescribed is not None and prescribed.rows is not None:

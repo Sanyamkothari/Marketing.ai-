@@ -34,6 +34,7 @@ from engine.agent.session import start_session
 from engine.agent.tools import TOOLS, AgentContext, NoArgs, Tool, ToolKind, call_tool
 from engine.llm import FakeLLMClient, FakeLLMMode
 from engine.pii import REDACTION_MARKER_PATTERN
+from tests.unit.agent.analyst import ANALYST
 from tests.unit.agent.egress_canary import (
     ADDRESS,
     CARD,
@@ -46,6 +47,7 @@ from tests.unit.agent.egress_canary import (
     IP,
     NAME,
     ToolingClient,
+    add_look_tool,
     after,
     canary_context,
     every_call,
@@ -334,10 +336,7 @@ def _weird_tool(monkeypatch: pytest.MonkeyPatch) -> None:
         del ctx, args
         return {"weird_key": f"{NAME}, {CARD}, {IP}", "nested": [{"another": "call 9876543210"}], "rows": 3}
 
-    tools = dict(TOOLS)
-    tools["weird_tool"] = Tool("weird_tool", "A tool added later.", ToolKind.READ, NoArgs, run)
-    monkeypatch.setattr("engine.agent.tools.TOOLS", tools)
-    monkeypatch.setattr("engine.agent.loop.TOOLS", tools)
+    add_look_tool(monkeypatch, Tool("weird_tool", "A tool added later.", ToolKind.READ, NoArgs, run))
 
 
 def _weird_run(monkeypatch: pytest.MonkeyPatch, mode: str) -> tuple[ToolingClient, list[TurnResult]]:
@@ -392,10 +391,7 @@ def test_a_new_tool_returning_a_dict_keyed_by_cells_is_caught_and_still_not_sent
         del ctx, args
         return {"counts": {"zelda": 3, "quill roe": 2}, "rows": 5}
 
-    tools = dict(TOOLS)
-    tools["keyed_tool"] = Tool("keyed_tool", "A tool added later.", ToolKind.READ, NoArgs, run)
-    monkeypatch.setattr("engine.agent.tools.TOOLS", tools)
-    monkeypatch.setattr("engine.agent.loop.TOOLS", tools)
+    add_look_tool(monkeypatch, Tool("keyed_tool", "A tool added later.", ToolKind.READ, NoArgs, run))
     ctx = canary_context(mode="summaries_only", rows=1_200)
     client = ToolingClient([{"action": "keyed_tool", "args": {}}], per_turn=1)
     session, _ = run_session(ctx, client)
@@ -420,7 +416,9 @@ def test_the_persons_message_is_masked_with_every_scanner_before_it_is_sent() ->
     client = ToolingClient([])
     session = start_session(ctx, session_id="s1")
     message = f"My card is {CARD} and my server is {IP}, see {HEADER_EMAIL}"
-    turn = chat_turn(ctx, session, message, meter=meter_for(client), guardrails=guardrails())
+    turn = chat_turn(
+        ctx, session, message, meter=meter_for(client), guardrails=guardrails(), principal=ANALYST
+    )
     text = "\n".join(client.sent_text)
     assert CARD not in text and IP not in text and HEADER_EMAIL not in text
     assert "[REDACTED:card]" in text
@@ -460,7 +458,12 @@ def test_the_model_can_use_an_alias_as_an_argument_and_the_tool_gets_the_real_na
     client = _AliasReplyClient(alias)
     session = start_session(ctx, session_id="s1")
     turn = chat_turn(
-        ctx, session, "What is in that column?", meter=meter_for(client), guardrails=guardrails()
+        ctx,
+        session,
+        "What is in that column?",
+        meter=meter_for(client),
+        guardrails=guardrails(),
+        principal=ANALYST,
     )
     assert turn.tool_results[0].args == {"column": HEADER_NUMBER}  # the real column, resolved from the alias
     assert turn.tool_results[0].result["column"] == HEADER_NUMBER
@@ -485,7 +488,9 @@ def test_the_ordinary_fake_asking_about_each_column_leaks_nothing(mode: str) -> 
         name = str(column)
         if not all(ch.isalnum() or ch in "_ .-" for ch in name) or sum(ch.isdigit() for ch in name) >= 7:
             continue  # the fake can only quote simple names, and a long number in a message is masked
-        turn = chat_turn(ctx, session, f"What about '{name}'?", meter=meter, guardrails=guardrails())
+        turn = chat_turn(
+            ctx, session, f"What about '{name}'?", meter=meter, guardrails=guardrails(), principal=ANALYST
+        )
         session = after(session, f"What about '{name}'?", turn)
         asked += 1
         assert turn.tool_results, name

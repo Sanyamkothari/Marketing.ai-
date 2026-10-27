@@ -141,11 +141,11 @@ def _clean(
 
 
 def _never_ticked(config: UseCaseConfig | None, root: Path | None) -> frozenset[RecipeStepKind]:
-    """The step kinds only the person may tick: Guided setup's list, and the data policy's when it is on."""
+    """The step kinds only the person may tick: Guided setup's list, and the data policy's."""
     from engine.agent.advisor import NEVER_TICKED_STEPS
     from engine.doctor.policy import never_ticked_steps
 
-    return NEVER_TICKED_STEPS if config is None else never_ticked_steps(config, root)
+    return NEVER_TICKED_STEPS if config is None else never_ticked_steps(root)
 
 
 def _step_of(item: CaseItem) -> RecipeStep | None:

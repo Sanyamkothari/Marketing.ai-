@@ -5,7 +5,7 @@ What is pinned here:
 
 * every code the wave's modules raise is in `PLAN_O_CODES` (and so has a help entry, `test_help.py`);
 * the wave's tools are registered by their catalogue rows, for the rules and the screen only - never the AI, so
-  the chat's tool list is the same with `data_doctor.unified` on - and a row-level tool needs an Analyst;
+  the chat's tool list is the same - and a row-level tool needs an Analyst;
 * a module's own coded refusal reaches the caller with its code;
 * M240's tools run on M231's case: a file outside the case is refused, and a workbook's two sheets become two
   files of one case (M240's acceptance, through the real case store);

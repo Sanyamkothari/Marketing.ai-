@@ -54,8 +54,7 @@ session or a Doctor diagnosis as a case, without writing anything: `read_only` i
 change is refused with `CASE_READ_ONLY`. They let the Data Doctor screen (M247) show old work in one
 shape until the switch-over (M249).
 
-Nothing here is reachable while `data_doctor.unified` is off: the routes are not mounted
-(`api/routes/cases.py`), so no case is ever written and every existing output is byte-identical.
+The routes are in `api/routes/cases.py`.
 Nothing here logs a value or a column name: counts, ids and codes only.
 """
 
@@ -72,17 +71,15 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from enum import StrEnum
-from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, Field, JsonValue, ValidationError, model_validator
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
-from engine.config import ConfigError, StrictBase, load_engine_config
+from engine.config import StrictBase
 from engine.contracts import Artefact
 from engine.doctor.decisions import Sets
 from engine.doctor.visit_contracts import CaseVisit
-from engine.settings import SettingsError, settings
 from engine.storage import LocalStorage, Storage, StorageError
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -126,7 +123,6 @@ __all__ = [
     "case_from_diagnosis",
     "case_from_session",
     "case_key",
-    "data_doctor_unified",
     "evidence_key",
     "forget_upload",
     "is_valid_case",
@@ -172,29 +168,6 @@ class CaseError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
-
-
-# ---------------------------------------------------------------------------
-# The switch
-# ---------------------------------------------------------------------------
-def data_doctor_unified(config_root: Path | None = None) -> bool:
-    """Whether `data_doctor.unified` is on (`configs/engine.yaml` defaults; Plan O M230, default false).
-
-    `MARKETING_AI_DATA_DOCTOR_UNIFIED=true` turns it on too, which is how the test installation's entry points
-    (make run / demo, docker compose) show it without a copy of the configuration.
-    Read leniently: a configuration that does not name the switch, or cannot be read, is off.
-    """
-    try:
-        if settings().data_doctor_unified:
-            return True
-    except SettingsError:
-        pass  # the app checks its own settings at start; this switch alone never stops it
-    try:
-        defaults = load_engine_config(config_root).defaults
-    except ConfigError:
-        return False
-    section = defaults.get("data_doctor")
-    return isinstance(section, Mapping) and section.get("unified") is True
 
 
 # ---------------------------------------------------------------------------

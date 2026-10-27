@@ -11,10 +11,9 @@ The plan's acceptance, where runs start:
   currency the prescription never saw stops with a 409 and its question.
 * **Scoring checks the file against the prescription** the model was trained under: a new value in a closed column
   is a 409 `PRESCRIPTION_DRIFT` naming the column (and a firing's failure with that code); nothing is re-learnt.
-* **Scoring with a single-file recipe is byte-identical to today**, with the switch on, and with a one-part
-  prescription bound to the model.
-* **With `data_doctor.unified` off nothing changes**: a bound dataset trains as built and the run holds no reference,
-  and a training upload is read no extra time.
+* **Scoring with a single-file recipe is byte-identical to today**, and with a one-part prescription bound to the
+  model.
+* **A training upload with nothing bound** is read no extra time.
 
 The review fixes (DEC-1813 (q)-(w)):
 
@@ -24,7 +23,7 @@ The review fixes (DEC-1813 (q)-(w)):
   of the prescribed spec, and next month's upload of a use case whose champion was trained under one.
 * **Rows no recipe prepares are checked against the contract at training** (a dataset with no post-build recipe, a
   file with no recipe), as at scoring.
-* **A switch-on run a Guided-setup recipe prepared keeps that recipe's money basis** (a conversion's frozen rate).
+* **A run a Guided-setup recipe prepared keeps that recipe's money basis** (a conversion's frozen rate).
 """
 
 from __future__ import annotations
@@ -54,7 +53,6 @@ from engine.agent.contracts import (
 )
 from engine.config import RunMode, get_catalog, load_use_case, resolve_config
 from engine.contracts import RunRecord
-from engine.doctor import registry as doctor_registry
 from engine.doctor.currency import MoneyBasis, MoneyColumn, load_money_basis
 from engine.doctor.outcome_definition import OutcomeDefinition, ValueMeaning, approval_for
 from engine.doctor.prescription import (
@@ -105,12 +103,6 @@ def built(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, str]:
     _, dataset_id, report = _build(root)
     assert report.passed
     return root, dataset_id
-
-
-@pytest.fixture
-def unified(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`data_doctor.unified: true` for every use case (the switch is read at call time)."""
-    monkeypatch.setattr(doctor_registry, "unified_on", lambda _config: True)
 
 
 def _frame(storage: LocalStorage, key: str) -> pd.DataFrame:
@@ -219,7 +211,7 @@ def _assert_trained_prepared(
 # ---------------------------------------------------------------------------
 # Training from a built dataset
 # ---------------------------------------------------------------------------
-def test_a_built_dataset_trains_with_its_post_build_recipe(built: tuple[Path, str], unified: None) -> None:
+def test_a_built_dataset_trains_with_its_post_build_recipe(built: tuple[Path, str]) -> None:
     root, dataset_id = built
     storage = LocalStorage(root / "data")
     ref, _ = _prescribe(storage, post_build=_recipe())
@@ -232,9 +224,7 @@ def test_a_built_dataset_trains_with_its_post_build_recipe(built: tuple[Path, st
         _unbind(storage, dataset_id)
 
 
-def test_a_scheduled_training_firing_trains_with_the_post_build_recipe(
-    built: tuple[Path, str], unified: None
-) -> None:
+def test_a_scheduled_training_firing_trains_with_the_post_build_recipe(built: tuple[Path, str]) -> None:
     root, dataset_id = built
     storage = LocalStorage(root / "data")
     ref, _ = _prescribe(storage, post_build=_recipe())
@@ -246,26 +236,7 @@ def test_a_scheduled_training_firing_trains_with_the_post_build_recipe(
         _unbind(storage, dataset_id)
 
 
-def test_with_the_switch_off_a_bound_dataset_trains_as_built(built: tuple[Path, str]) -> None:
-    root, dataset_id = built
-    storage = LocalStorage(root / "data")
-    ref, _ = _prescribe(storage, post_build=_recipe())
-    bind_dataset(storage, dataset_id, ref)
-    try:
-        run_id = _train(root, dataset_id).json()["run_id"]
-        spec = read_job_spec(storage, job_spec_key(run_id))
-        assert spec.upload_key == dataset_key(dataset_id, DATASET_FRAME_FILENAME)
-        for name in (PRESCRIPTION_REF_FILENAME, DATA_RECIPE_FILENAME, "money_basis.json"):
-            assert not storage.exists(run_key(run_id, name)), name
-        fired = _fire(root, dataset_id, RunMode.TRAIN)
-        assert read_job_spec(storage, job_spec_key(fired.run_id)).upload_key == spec.upload_key
-    finally:
-        _unbind(storage, dataset_id)
-
-
-def test_a_post_build_recipe_on_a_column_that_is_gone_is_prescription_drift(
-    built: tuple[Path, str], unified: None
-) -> None:
+def test_a_post_build_recipe_on_a_column_that_is_gone_is_prescription_drift(built: tuple[Path, str]) -> None:
     root, dataset_id = built
     storage = LocalStorage(root / "data")
     approved = _frame(storage, dataset_key(dataset_id, DATASET_FRAME_FILENAME)).assign(city="Pune")
@@ -307,7 +278,7 @@ def _model_under(root: Path, ref: PrescriptionRef | None, recipe: DataRecipe) ->
 
 
 def test_scoring_a_dataset_with_a_value_the_prescription_never_saw_stops_with_prescription_drift(
-    built: tuple[Path, str], unified: None
+    built: tuple[Path, str],
 ) -> None:
     root, dataset_id = built
     storage = LocalStorage(root / "data")
@@ -330,7 +301,7 @@ def test_scoring_a_dataset_with_a_value_the_prescription_never_saw_stops_with_pr
 
 
 def test_scoring_a_dataset_that_matches_its_prescription_keeps_the_reference_and_the_basis(
-    built: tuple[Path, str], unified: None
+    built: tuple[Path, str],
 ) -> None:
     root, dataset_id = built
     storage = LocalStorage(root / "data")
@@ -359,14 +330,11 @@ def _prepared_bytes(root: Path, dataset_id: str) -> tuple[bytes, dict[str, Any]]
     return storage.read_bytes(spec.upload_key), receipt.model_dump(exclude={"created_at"})
 
 
-def test_scoring_with_a_single_file_recipe_is_byte_identical_with_the_switch_on(
-    built: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_scoring_with_a_single_file_recipe_is_byte_identical(built: tuple[Path, str]) -> None:
     root, dataset_id = built
     recipe = _recipe()
     _model_under(root, None, recipe)
     today = _prepared_bytes(root, dataset_id)
-    monkeypatch.setattr(doctor_registry, "unified_on", lambda _config: True)
     assert _prepared_bytes(root, dataset_id) == today, "a model with no prescription scores exactly as today"
     storage = LocalStorage(root / "data")
     single = one_part(recipe)
@@ -427,7 +395,7 @@ def _file_part(upload_id: str) -> FilePart:
 
 
 def test_an_upload_trains_on_its_prescriptions_prepared_copy(
-    api: tuple[TestClient, Path], built: tuple[Path, str], unified: None
+    api: tuple[TestClient, Path], built: tuple[Path, str]
 ) -> None:
     client, data_dir = api
     storage = LocalStorage(data_dir)
@@ -459,7 +427,7 @@ def test_an_upload_trains_on_its_prescriptions_prepared_copy(
 
 
 def test_an_upload_in_a_currency_its_prescription_never_saw_stops_and_asks(
-    api: tuple[TestClient, Path], built: tuple[Path, str], unified: None
+    api: tuple[TestClient, Path], built: tuple[Path, str]
 ) -> None:
     client, data_dir = api
     storage = LocalStorage(data_dir)
@@ -483,33 +451,8 @@ def test_an_upload_in_a_currency_its_prescription_never_saw_stops_and_asks(
     assert not storage.list_keys("runs/"), "a stopped run leaves nothing behind"
 
 
-def test_with_the_switch_off_a_bound_upload_trains_as_sent(
-    api: tuple[TestClient, Path], built: tuple[Path, str]
-) -> None:
-    client, data_dir = api
-    storage = LocalStorage(data_dir)
-    upload_id = _upload(client, _history(built, "$"))
-    ref, _ = _prescribe(storage, files=(_file_part(upload_id),))
-    bind_upload(storage, upload_id, ref)
-    response = client.post(
-        "/runs",
-        json={
-            "use_case": USE_CASE,
-            "mode": "train",
-            "upload_id": upload_id,
-            "primary_key": KEY,
-            "target": TARGET,
-        },
-    )
-    assert response.status_code == 202, response.text
-    run_id = response.json()["run_id"]
-    assert storage.read_model(run_key(run_id, "run.json"), RunRecord).upload_id == upload_id
-    assert not storage.exists(run_key(run_id, PRESCRIPTION_REF_FILENAME))
-    assert load_use_case(USE_CASE).data_doctor.unified is False
-
-
 def test_an_upload_whose_prepared_rows_break_the_contract_stops_and_leaves_no_copy(
-    api: tuple[TestClient, Path], built: tuple[Path, str], unified: None
+    api: tuple[TestClient, Path], built: tuple[Path, str]
 ) -> None:
     client, data_dir = api
     storage = LocalStorage(data_dir)
@@ -570,7 +513,7 @@ def _with_status(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def test_an_upload_trains_on_its_approved_outcome_with_the_left_out_rows_removed(
-    api: tuple[TestClient, Path], built: tuple[Path, str], unified: None
+    api: tuple[TestClient, Path], built: tuple[Path, str]
 ) -> None:
     client, data_dir = api
     storage = LocalStorage(data_dir)
@@ -604,7 +547,7 @@ def test_an_upload_trains_on_its_approved_outcome_with_the_left_out_rows_removed
 
 
 def test_a_dataset_trains_on_its_approved_outcome_and_carries_only_the_post_build_recipe(
-    tmp_path: Path, unified: None
+    tmp_path: Path,
 ) -> None:
     storage = LocalStorage(tmp_path / "data")
     dataset_id = "ds_outcome"
@@ -665,7 +608,7 @@ class _Case:
 
 
 def test_a_scheduled_training_firing_on_a_fresh_build_of_the_prescribed_spec_follows_the_prescription(
-    built: tuple[Path, str], unified: None, monkeypatch: pytest.MonkeyPatch
+    built: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, dataset_id = built
     storage = LocalStorage(root / "data")
@@ -697,7 +640,7 @@ def test_a_scheduled_training_firing_on_a_fresh_build_of_the_prescribed_spec_fol
 
 
 def test_next_months_upload_follows_the_prescription_its_champion_was_trained_under(
-    api: tuple[TestClient, Path], built: tuple[Path, str], unified: None
+    api: tuple[TestClient, Path], built: tuple[Path, str]
 ) -> None:
     client, data_dir = api
     storage = LocalStorage(data_dir)
@@ -739,7 +682,7 @@ def test_next_months_upload_follows_the_prescription_its_champion_was_trained_un
 # Review fixes: rows no recipe prepares are checked at training
 # ---------------------------------------------------------------------------
 def test_a_bound_dataset_with_no_post_build_recipe_is_checked_against_its_contract(
-    built: tuple[Path, str], unified: None
+    built: tuple[Path, str],
 ) -> None:
     root, dataset_id = built
     storage = LocalStorage(root / "data")
@@ -769,7 +712,7 @@ def test_a_bound_dataset_with_no_post_build_recipe_is_checked_against_its_contra
 
 
 def test_a_bound_upload_with_no_recipe_is_checked_against_its_contract(
-    api: tuple[TestClient, Path], built: tuple[Path, str], unified: None
+    api: tuple[TestClient, Path], built: tuple[Path, str]
 ) -> None:
     client, data_dir = api
     storage = LocalStorage(data_dir)
@@ -798,9 +741,9 @@ def test_a_bound_upload_with_no_recipe_is_checked_against_its_contract(
 
 
 # ---------------------------------------------------------------------------
-# Review fixes: switch off reads nothing more; a Guided run keeps its money basis
+# Review fixes: nothing bound reads nothing more; a Guided run keeps its money basis
 # ---------------------------------------------------------------------------
-def test_with_the_switch_off_a_training_upload_is_not_read_again(
+def test_a_training_upload_with_nothing_bound_is_not_read_again(
     api: tuple[TestClient, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from api.routes import run_prescriptions
@@ -820,13 +763,11 @@ def test_with_the_switch_off_a_training_upload_is_not_read_again(
 
     monkeypatch.setattr(ingest, "read_upload", counted)
     config = load_use_case(USE_CASE)
-    for switch in (False, True):  # off; on with nothing bound
-        monkeypatch.setattr(doctor_registry, "unified_on", lambda _config, on=switch: on)
-        found = run_prescriptions.prescribed_training(
-            storage, config, upload=record, dataset_id=None, primary_key=KEY, target=TARGET
-        )
-        assert found is None
-    assert reads == [], "the file is read only once the switch and a binding are confirmed"
+    found = run_prescriptions.prescribed_training(
+        storage, config, upload=record, dataset_id=None, primary_key=KEY, target=TARGET
+    )
+    assert found is None
+    assert reads == [], "the file is read only once a binding is confirmed"
 
 
 def _money_recipe(upload: Any) -> DataRecipe:
@@ -860,18 +801,14 @@ def _money_recipe(upload: Any) -> DataRecipe:
     )
 
 
-@pytest.mark.parametrize("switch", [True, False])
-def test_a_guided_run_with_a_conversion_keeps_its_money_basis_with_the_switch_on(
+def test_a_guided_run_with_a_conversion_keeps_its_money_basis(
     api: tuple[TestClient, Path],
     built: tuple[Path, str],
     config_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    switch: bool,
 ) -> None:
     from api.routes.agent_recipes import write_derived_upload
     from api.routes.uploads import load_upload
 
-    monkeypatch.setattr(doctor_registry, "unified_on", lambda _config: switch)
     client, data_dir = api
     storage = LocalStorage(data_dir)
     sent = load_upload(storage, _upload(client, _history(built, "$")))
@@ -891,9 +828,6 @@ def test_a_guided_run_with_a_conversion_keeps_its_money_basis_with_the_switch_on
     run_id = response.json()["run_id"]
     assert not storage.exists(run_key(run_id, PRESCRIPTION_REF_FILENAME)), "no stored prescription"
     basis = load_money_basis(storage, run_id)
-    if not switch:
-        assert basis is None, "with the switch off the run is as before"
-        return
     assert basis is not None
     (money,) = basis.columns
     assert (money.column, money.written_in, money.reported_in) == ("amount", ("USD",), "INR")
@@ -943,7 +877,7 @@ def _accepted_parse_date(upload_id: str) -> Any:
 
 
 def test_an_approved_query_on_one_upload_runs_on_the_file_as_it_was_tried(
-    api: tuple[TestClient, Path], built: tuple[Path, str], unified: None
+    api: tuple[TestClient, Path], built: tuple[Path, str]
 ) -> None:
     from typing import cast
 

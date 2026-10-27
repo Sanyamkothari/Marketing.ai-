@@ -2,8 +2,7 @@
 
 M233 (DEC-1803) wrote the approval-time half of the data policy - the exact sentence, the role, separation of
 duties and decision O3's reshape guards (`engine.doctor.policy.ApprovalFacts`) - but Plan G's Approve route did
-not call it: the session did not record whether a preview was shown or which sentence was read. Behind
-`data_doctor.unified` it now does:
+not call it: the session did not record whether a preview was shown or which sentence was read. It now does:
 
 * **Preview shown.** `POST /uploads/{id}/agent-session/preview` records what it showed (:func:`record_preview`:
   the accepted steps' `recipe_hash` and the preview's receipt, counts only) beside the session. A preview of

@@ -1,8 +1,7 @@
 """What the Data Doctor screen reads, through the API (Plan O M247, DEC-1817).
 
 `GET /cases/{case_id}/screen` and `GET /data-doctor/cases` on a real upload and a real visit, their policies and
-refusals; `GET /auth/me` says the screen is on only while `data_doctor.unified` is; and with the switch off neither
-path exists and `/auth/me` answers exactly as before.
+refusals; `GET /auth/me` says the screen is on.
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ from api.access_policy import all_policies
 from api.main import create_app
 from api.routes import case_screen
 from engine.access.roles import Role
-from engine.doctor import case as doctor_case
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.integration.production.access_support import bearer, local_app, make_user
 
@@ -27,12 +25,7 @@ GOAL = "targeted-advertisement"
 
 
 @pytest.fixture
-def unified(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(doctor_case, "data_doctor_unified", lambda root=None: True)
-
-
-@pytest.fixture
-def client(unified: None, config_root: Path, tmp_path: Path) -> Iterator[TestClient]:
+def client(config_root: Path, tmp_path: Path) -> Iterator[TestClient]:
     with TestClient(create_app(config_root=config_root, data_dir=tmp_path / "data")) as test_client:
         yield test_client
 
@@ -116,7 +109,7 @@ def test_the_routes_have_their_policies(client: TestClient) -> None:
     assert {path for _method, path in case_screen.POLICIES} <= paths
 
 
-def test_a_viewer_reads_the_screen(unified: None, tmp_path: Path) -> None:
+def test_a_viewer_reads_the_screen(tmp_path: Path) -> None:
     app = local_app(tmp_path)
     viewer = make_user(app, "vera", [Role.VIEWER])
     analyst = make_user(app, "asha", [Role.ANALYST])
@@ -127,17 +120,7 @@ def test_a_viewer_reads_the_screen(unified: None, tmp_path: Path) -> None:
         assert client.get("/data-doctor/cases", headers=bearer(app, viewer)).status_code == 200
 
 
-def test_with_the_switch_off_nothing_changes(config_root: Path, tmp_path: Path) -> None:
-    app = create_app(config_root=config_root, data_dir=tmp_path / "data")
-    paths = app.openapi()["paths"]
-    assert "/cases/{case_id}/screen" not in paths and "/data-doctor/cases" not in paths
-    with TestClient(app) as client:
-        me = client.get("/auth/me").json()
-        assert "data_doctor" not in me, "with the switch off /auth/me answers exactly as before"
-        assert client.get("/data-doctor/cases").status_code == 404
-
-
-def test_the_screen_names_the_goal_and_says_who_may_agree(unified: None, tmp_path: Path) -> None:
+def test_the_screen_names_the_goal_and_says_who_may_agree(tmp_path: Path) -> None:
     """M247 review: the sentence Approve records names the goal as the screens do, and each change that needs its
     own yes says whether the person reading may give it - a viewer is not offered a yes the server refuses."""
     app = local_app(tmp_path)

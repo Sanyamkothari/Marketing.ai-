@@ -24,6 +24,7 @@ from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name, res
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.utils.time import utc_now
 from tests.fixtures.agent_bench.make_messy import messy_frame
+from tests.unit.agent.analyst import ANALYST
 from tests.unit.agent.helpers import context_for, synthetic
 from tests.unit.agent.test_session_and_loop import ScriptedMeter
 
@@ -57,7 +58,7 @@ def test_a_suggestion_reason_with_an_invented_number_is_replaced(started: tuple[
     ctx, session = started
     propose = _act("propose_setting", path="model_search.strategy", value="fast", reason="Churn is 73% here.")
     meter = ScriptedMeter([propose, _reply("Churn is 73%.")])
-    turn = chat_turn(ctx, session, "faster please", meter=meter, guardrails=_guardrails())
+    turn = chat_turn(ctx, session, "faster please", meter=meter, guardrails=_guardrails(), principal=ANALYST)
     (proposal,) = turn.proposals
     assert proposal.reason == CHAT_REASON
     assert turn.blocked_by == "numbers_grounded"  # the reply may not repeat it either
@@ -68,7 +69,12 @@ def test_a_number_in_an_earlier_chat_suggestion_is_not_evidence(started: tuple[A
     ctx, session = started
     propose = _act("propose_setting", path="model_search.strategy", value="fast", reason="Churn is 73% here.")
     first = chat_turn(
-        ctx, session, "faster", meter=ScriptedMeter([propose, _reply("Done.")]), guardrails=_guardrails()
+        ctx,
+        session,
+        "faster",
+        meter=ScriptedMeter([propose, _reply("Done.")]),
+        guardrails=_guardrails(),
+        principal=ANALYST,
     )
     # Simulate an older session that stored the model's reason as it was written.
     laundered = first.proposals[0].model_copy(update={"reason": "Churn is 73% here."})
@@ -80,7 +86,12 @@ def test_a_number_in_an_earlier_chat_suggestion_is_not_evidence(started: tuple[A
         }
     )
     turn = chat_turn(
-        ctx, later, "what is churn?", meter=ScriptedMeter([_reply("Churn is 73%.")]), guardrails=_guardrails()
+        ctx,
+        later,
+        "what is churn?",
+        meter=ScriptedMeter([_reply("Churn is 73%.")]),
+        guardrails=_guardrails(),
+        principal=ANALYST,
     )
     assert turn.blocked_by == "numbers_grounded"
     assert turn.reply.text.startswith(FALLBACK)
@@ -147,7 +158,9 @@ def test_injected_headers_and_cells_reach_the_prompt_cleaned_and_cut() -> None:
             loosen,
         ]
     )
-    turn = chat_turn(ctx, session, "what is in the file?", meter=meter, guardrails=_guardrails())
+    turn = chat_turn(
+        ctx, session, "what is in the file?", meter=meter, guardrails=_guardrails(), principal=ANALYST
+    )
     assert turn.proposals == ()  # the only change the model can make is still a validated setting
     assert turn.blocked_by == "AGENT_SETTING_NOT_ALLOWED"
     assert turn.tool_results[2].result["column"] == LONG  # resolved back to the real column
@@ -180,6 +193,7 @@ def test_the_persons_message_is_masked_in_the_prompt(started: tuple[Any, Any]) -
         "Email asha.rao@example.com or call +91 98765 43210 about her row.",
         meter=meter,
         guardrails=_guardrails(),
+        principal=ANALYST,
     )
     (prompt,) = _prompts(meter)
     assert "asha.rao@example.com" not in prompt and "98765 43210" not in prompt
@@ -194,7 +208,7 @@ def test_each_reply_carries_a_turn_log(started: tuple[Any, Any]) -> None:
     meter = ScriptedMeter(
         [_act("delete_rows"), _act("describe_outcome", column="converted_30d"), _reply("It is 12345.")]
     )
-    turn = chat_turn(ctx, session, "how many?", meter=meter, guardrails=_guardrails())
+    turn = chat_turn(ctx, session, "how many?", meter=meter, guardrails=_guardrails(), principal=ANALYST)
     log = turn.reply.turn
     assert log is not None
     assert log.llm_calls == 3
@@ -249,7 +263,9 @@ def test_a_wide_file_is_paged_and_keeps_the_prompt_bounded(wide: tuple[Any, Agen
             _reply("Looked."),
         ]
     )
-    turn = chat_turn(ctx, session, "tell me about the columns", meter=meter, guardrails=_guardrails())
+    turn = chat_turn(
+        ctx, session, "tell me about the columns", meter=meter, guardrails=_guardrails(), principal=ANALYST
+    )
     assert turn.reply.text == "Looked."
     assert all(len(prompt) <= MAX_PROMPT_CHARS for prompt in _prompts(meter))
     assert all("h" * 100 not in prompt for prompt in _prompts(meter))
@@ -263,7 +279,7 @@ def test_a_prompt_that_cannot_fit_ends_the_turn_plainly(
     ctx, session = wide
     monkeypatch.setattr(loop, "MAX_PROMPT_CHARS", 500)
     meter = ScriptedMeter([_reply("never sent")])
-    turn = chat_turn(ctx, session, "hi", meter=meter, guardrails=_guardrails())
+    turn = chat_turn(ctx, session, "hi", meter=meter, guardrails=_guardrails(), principal=ANALYST)
     assert (turn.reply.text, turn.blocked_by, meter.calls) == (FALLBACK, "prompt_too_large", 0)
 
 

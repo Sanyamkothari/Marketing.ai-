@@ -116,7 +116,13 @@ def test_starting_suggests_and_changes_nothing(client: TestClient, data_dir: Pat
     assert all(p["state"] == "pending" for p in session["proposals"])
     assert response.json()["chat"]["backend"] == "fake"
     after = sorted(storage.list_keys("uploads/"))
-    assert after == sorted([*before, f"uploads/{upload_id}/agent/agent_session.json"])
+    written = {
+        f"uploads/{upload_id}/agent/agent_session.json",
+        f"uploads/{upload_id}/time_offers/targeted-advertisement.json",
+    }
+    assert after == sorted(
+        [*before, *written]
+    )  # the session, and the training-time offer kept beside the file
     assert client.get(f"/uploads/{upload_id}/agent-session").json()["session"] == session
 
 

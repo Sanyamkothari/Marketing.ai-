@@ -608,21 +608,6 @@ def _assist_case(
     return ctx, client, saved
 
 
-def test_second_opinion_is_off_with_agentic_enabled_off_as_the_assist_route() -> None:
-    """DEC-1409 (g): with `agentic.enabled` off (the shipped default) the AI is never asked for a second
-    opinion; the registry does not offer the tool and a direct run is `404 AGENTIC_DISABLED`."""
-    ctx, client, saved = _assist_case(None)
-    assert data_registry().find("second_opinion", ctx) is None
-    with pytest.raises(DataToolError) as caught:
-        _call("second_opinion", {}, ctx)
-    assert caught.value.status == 404
-    tool = data_registry().get("second_opinion")
-    with pytest.raises(DataToolError) as direct:
-        tool.run(tool.input_model(), ctx)
-    assert (direct.value.code, direct.value.status) == ("AGENTIC_DISABLED", 404)
-    assert not client.calls and not saved, "no AI call, nothing saved"
-
-
 def test_second_opinion_refuses_an_applied_session_as_the_assist_route() -> None:
     ctx, client, saved = _assist_case(header_help_root(), status=SessionStatus.APPLIED)
     with pytest.raises(DataToolError) as caught:

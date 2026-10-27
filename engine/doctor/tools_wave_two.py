@@ -14,8 +14,7 @@ AI as a caller.
   they are not registered (:data:`UNCATALOGUED`); the visit can still call `engine.doctor.currency` directly. Giving
   them rows is a design change (`docs/CROSS_BRANCH_REQUESTS.md`), as M236 did for M240's #82 and #83.
 
-Nothing here changes what the product does while `data_doctor.unified` is off: the registry is reached only through
-its callers, and none of these tools is offered to the AI.
+The registry is reached only through its callers, and none of these tools is offered to the AI.
 """
 
 from __future__ import annotations

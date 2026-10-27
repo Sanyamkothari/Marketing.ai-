@@ -40,8 +40,7 @@ proposals:
 
 # Plan O M233 (DEC-1803): Data Doctor's rule sets, one per PROPOSE kind (engine/doctor/policy.py; the design
 # §5.4, §6.2, §6.6). Default deny, as above: a kind with no rule set is refused (POLICY_NO_RULES), and a rule set
-# allows a proposal only when every rule that applies allows it. Read only behind `data_doctor.unified` (off by
-# default); Plan G's own checks stay in the code as a second check. Rule names: data.step_kind,
+# allows a proposal only when every rule that applies allows it. Plan G's own checks stay in the code as a second check. Rule names: data.step_kind,
 # data.step_params, data.spellings, data.protected_columns, data.personal_data, data.level, data.grounded,
 # data.tried, data.never_ticked, data.change_share, data.setting, data.approve_class, data.reshape_guard.
 data:

@@ -74,7 +74,8 @@ def _upload(client: TestClient, frame: Any) -> Any:
 
 
 def _as_ticked(session: dict[str, Any], *, untick: str | None = None) -> list[dict[str, str]]:
-    """What the screen sends for the boxes as they start: pending `sure` accepted, the rest rejected.
+    """What the screen sends for the boxes as they start: pending `sure` accepted, the rest rejected, except the
+    training time, which the person takes (it is offered to check, not ticked).
 
     `untick` names a role path (`target`) whose box the person cleared."""
     return [
@@ -82,7 +83,8 @@ def _as_ticked(session: dict[str, Any], *, untick: str | None = None) -> list[di
             "proposal_id": p["proposal_id"],
             "state": (
                 "accepted"
-                if p["confidence"] == "sure" and not (untick and p["path"] == untick)
+                if (p["confidence"] == "sure" or p["path"] == "model_search.time_limit_minutes")
+                and not (untick and p["path"] == untick)
                 else "rejected"
             ),
         }

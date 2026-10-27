@@ -26,8 +26,7 @@ M240's `read_workbook_sheets` and `find_excel_serial_dates` had no row in the de
 `find_excel_serial_dates` declares the step kind it proposes (`parse_date`), so the registry decides its steps by
 M233's `data.excel_serial_dates` rule set.
 
-Nothing here changes what the product does while `data_doctor.unified` is off: the registry is reached only
-through its callers, and none of these tools is offered to the AI.
+The registry is reached only through its callers, and none of these tools is offered to the AI.
 """
 
 from __future__ import annotations

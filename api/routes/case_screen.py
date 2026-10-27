@@ -1,7 +1,6 @@
 """What the Data Doctor screen reads (Plan O M247, DEC-1817): a case with its view, and the client's cases.
 
-Mounted only when `data_doctor.unified` is on (the `PLAN-O (M247)` hook in `api/main.py`, beside M231's, M235's and
-M246's): with it off - the default - neither path exists and docs/API.md is unchanged.
+Mounted by the `PLAN-O (M247)` hook in `api/main.py`, beside M231's, M235's and M246's.
 
 | Method and path | Role | Does |
 |---|---|---|

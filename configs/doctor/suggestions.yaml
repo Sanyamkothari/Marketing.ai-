@@ -1,4 +1,0 @@
-# Data Doctor campaign suggestions: trainable use cases left out of "Your data can run".
-# The owners took Telco Churn off the list (Home's churn goal covers it).
-skip:
-  - telco-churn

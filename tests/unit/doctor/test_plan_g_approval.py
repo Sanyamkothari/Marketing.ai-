@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -56,17 +55,6 @@ from tests.unit.doctor.test_policy_runtime import (
 NOW = datetime(2026, 10, 12, 9, 0, tzinfo=UTC)
 
 
-@pytest.fixture
-def switch(monkeypatch: pytest.MonkeyPatch) -> Callable[[bool], None]:
-    """`data_doctor.unified`, switched where it is read (as M233's runtime tests do)."""
-    from engine.doctor import registry as registry_module
-
-    def set_to(on: bool) -> None:
-        monkeypatch.setattr(registry_module, "unified_on", lambda _config: on)
-
-    return set_to
-
-
 ASHA = Principal(user_id="u-asha", username="asha", roles=frozenset({Role.ANALYST}), kind="user")
 VIEWER = Principal(user_id="u-vic", username="vic", roles=frozenset({Role.VIEWER}), kind="user")
 
@@ -84,9 +72,8 @@ def plans() -> pd.DataFrame:
 # O10 through the chat
 # ---------------------------------------------------------------------------
 def test_an_ai_step_changing_70_percent_is_refused_and_one_at_40_percent_carries_a_warning(
-    plans: pd.DataFrame, switch: Callable[[bool], None]
+    plans: pd.DataFrame,
 ) -> None:
-    switch(True)
     heavy = _step("map_values", "plan", mapping={"PP": "Prepaid"})
     refused = _chat(plans, _look("plan"), heavy, heavy)
     assert refused.proposals == () and refused.blocked_by == "AI_STEP_CHANGES_TOO_MANY"
@@ -96,16 +83,11 @@ def test_an_ai_step_changing_70_percent_is_refused_and_one_at_40_percent_carries
     assert made.state is ProposalState.PENDING and made.source is ProposalSource.AI
     (step_result,) = [r for r in turn.tool_results if r.evidence_id == made.evidence_ids[0]]
     assert step_result.result["warnings"] == ["AI_STEP_CHANGES_MANY"]
-    switch(False)
-    off = _chat(plans, _look("plan_b"), light)
-    (plain,) = [r for r in off.tool_results if r.evidence_id == off.proposals[0].evidence_ids[0]]
-    assert "warnings" not in plain.result, "with the switch off nothing changes"
 
 
 def test_approve_lists_the_warning_of_an_accepted_ai_step(
-    plans: pd.DataFrame, switch: Callable[[bool], None]
+    plans: pd.DataFrame,
 ) -> None:
-    switch(True)
     turn = _chat(plans, _look("plan_b"), _step("map_values", "plan_b", mapping={"PP": "Prepaid"}))
     ctx = context_for(plans)
     session = start_session(ctx, session_id="s1")

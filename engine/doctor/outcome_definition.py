@@ -29,8 +29,7 @@ nothing is recorded and `APPROVAL_SENTENCE_CHANGED` is raised (:func:`check_outc
 (next month's file) needs only the approved definition's hash: its counts may change, its meaning may not, and a
 value the approved map does not place stops the builder (`OUTCOME_VALUE_NOT_MAPPED`) rather than being guessed.
 
-Nothing here reaches the AI service, and nothing here runs unless a caller of the Data Doctor registry (behind
-`data_doctor.unified`) or a test calls it.
+Nothing here reaches the AI service, and nothing here runs unless a caller of the Data Doctor registry or a test calls it.
 """
 
 from __future__ import annotations

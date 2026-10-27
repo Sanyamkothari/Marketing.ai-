@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 
 from engine.agent.contracts import ProposalState
-from engine.doctor import registry as doctor_registry
 from engine.doctor.plan_check import check_plan
 from engine.storage import LocalStorage
 from tests.fixtures.doctor_eval.chat_model import ChatScript, Seen
@@ -20,11 +19,6 @@ from tests.unit.doctor.visit_support import FIRST, World
 PER_CUSTOMER = "SELECT customer_id, count(*) AS orders FROM t_orders GROUP BY ALL"
 ON_LINES = "SELECT customer_id, max(order_date) AS last_order FROM t_orders GROUP BY ALL"
 BAD_CODES = {"PLAN_QUERY_TRIED_BEFORE_CHANGE", "PLAN_STEP_CANNOT_RUN"}
-
-
-@pytest.fixture(autouse=True)
-def unified(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(doctor_registry, "unified_on", lambda _config: True)
 
 
 @pytest.fixture

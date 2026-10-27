@@ -1,7 +1,6 @@
 """Data Doctor's protocol outside a case (Plan O M246, DEC-1816): Guided setup's Approve, standing answers, patterns.
 
-Mounted only when `data_doctor.unified` is on (the `PLAN-O (M246)` hook in `api/main.py`): with it off - the
-default - none of these paths exists and docs/API.md is unchanged.
+Mounted by the `PLAN-O (M246)` hook in `api/main.py`.
 
 | Method and path | Role | Does |
 |---|---|---|

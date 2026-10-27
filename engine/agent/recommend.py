@@ -75,10 +75,6 @@ NEVER_RECOMMENDED: Final[frozenset[str]] = frozenset(
 )
 """Paths the helper never suggests: each would loosen a safeguard rather than fit the data."""
 
-SMALL_FILE_ROWS: Final[int] = 5_000
-LARGE_FILE_ROWS: Final[int] = 500_000
-SMALL_FILE_MINUTES: Final[int] = 10
-LARGE_FILE_MINUTES: Final[int] = 60
 RARE_OUTCOME_RATE: Final[float] = 0.05
 
 
@@ -315,37 +311,10 @@ def _metric_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecomm
     ]
 
 
-def _time_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecommendation]:
-    minutes = config.model_search.time_limit_minutes
-    if facts.rows < SMALL_FILE_ROWS and minutes > SMALL_FILE_MINUTES:
-        return [
-            SettingRecommendation(
-                "model_search.time_limit_minutes",
-                SMALL_FILE_MINUTES,
-                f"Limit the model search to {SMALL_FILE_MINUTES} minutes",
-                f"The file has {facts.rows:,} rows; a longer search would not find a better model.",
-                AgentConfidence.SURE,
-                facts.evidence_ids,
-            )
-        ]
-    if facts.rows > LARGE_FILE_ROWS and minutes < LARGE_FILE_MINUTES:
-        return [
-            SettingRecommendation(
-                "model_search.time_limit_minutes",
-                LARGE_FILE_MINUTES,
-                f"Give the model search {LARGE_FILE_MINUTES} minutes",
-                f"The file has {facts.rows:,} rows; each model takes longer to train.",
-                AgentConfidence.SURE,
-                facts.evidence_ids,
-            )
-        ]
-    return []
-
-
 def _budget_rules(
     config: UseCaseConfig, facts: DataFacts, budget: TrainingBudget | None
 ) -> list[SettingRecommendation]:
-    """Plan O M244 (DEC-1814), behind `data_doctor.unified`: `_time_rules` replaced by Data Doctor's budget.
+    """Plan O M244 (DEC-1814): Data Doctor's budget for the search's time limit.
 
     The search's limit is Balanced, the point of diminishing returns, offered as a plain choice ("Balanced (about
     15 min, recommended)") with Quick and Thorough beside it; never a raw number of minutes to type. Without a
@@ -582,8 +551,7 @@ def recommend_settings(
 
     `holdout` is the planner's reading (`holdout_advice`) when the caller has it already, so it is worked out
     once per setup pass; left out (`...`), it is worked out here. `None` means there is nothing to plan.
-    `training_budget` is Data Doctor's budget worked out on this deployment's runs (Plan O M244); it is read only
-    while `data_doctor.unified` is on, when it replaces the file-size rule.
+    `training_budget` is Data Doctor's budget worked out on this deployment's runs (Plan O M244); it sets the time limit.
     """
     advice = holdout_advice(config, facts) if isinstance(holdout, EllipsisType) else holdout
     fields = settings_fields(schema)
@@ -598,14 +566,7 @@ def recommend_settings(
     groups: Sequence[Sequence[SettingRecommendation]] = [
         _split_rules(config, facts, resolves),  # one group: a split and its column go together
         *([rec] for rec in _metric_rules(config, facts)),
-        *(
-            [rec]
-            for rec in (
-                _budget_rules(config, facts, training_budget)
-                if config.data_doctor.unified
-                else _time_rules(config, facts)
-            )
-        ),
+        *([rec] for rec in _budget_rules(config, facts, training_budget)),
         *([rec] for rec in _consent_rules(config, facts)),
         *([rec] for rec in _value_rules(config, facts)),
         *([rec] for rec in _holdout_rules(advice, facts)),

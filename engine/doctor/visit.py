@@ -47,7 +47,6 @@ defaults are the honest minimum today: PREVIEW counts what would change; PRESCRI
 answers and the brief (M243 writes the prescription itself); VERIFY runs M234's `check_readiness` on the file that
 holds the goal's outcome (:func:`readiness_verify`); HAND_OFF records where the data goes and starts nothing.
 
-Nothing here is reachable while `data_doctor.unified` is off (`api/routes/case_visit.py` is mounted only with it on).
 Nothing here logs a value or a column name: counts, ids and codes only.
 """
 

@@ -758,7 +758,7 @@ def decide_agent_session(
         except SessionError as exc:
             raise _session_error(exc) from exc
         saved = _save(storage, session)
-        _note_proposers(storage, ctx.config, request, before, saved)
+        _note_proposers(storage, request, before, saved)
         return _response(saved, ctx.config, storage, request)
 
 
@@ -789,7 +789,7 @@ def edit_agent_session(
         except SessionError as exc:
             raise _session_error(exc) from exc
         saved = _save(storage, session)
-        _note_proposers(storage, ctx.config, request, before, saved)
+        _note_proposers(storage, request, before, saved)
         return _response(saved, ctx.config, storage, request)
 
 
@@ -843,7 +843,7 @@ def answer_agent_session(
         except SessionError as exc:
             raise _session_error(exc) from exc
         saved = _save(storage, session)
-        _note_proposers(storage, ctx.config, request, before, saved)
+        _note_proposers(storage, request, before, saved)
         return _response(saved, ctx.config, storage, request)
 
 
@@ -921,23 +921,7 @@ def assist_agent_session(
     a better order, and may add questions about columns that may be recorded after the outcome, beside the
     rule-based leak check. It adds no suggestion and ticks nothing; what left is recorded under "What the AI
     looked at" like a chat turn. No AI service connected is `409 AI_NOT_CONNECTED` and a session exactly as
-    it was: the rules' suggestions and questions never need one. It is part of Plan K: with `agentic.enabled`
-    off (the default) the route answers `404 AGENTIC_DISABLED` and reads nothing (DEC-1409 (g))."""
-    from engine.agentic.config import agentic_enabled
-    from engine.agentic.errors import AgenticError
-
-    try:
-        enabled = agentic_enabled(root)
-    except (
-        AgenticError
-    ):  # an agentic.yaml that does not read leaves Plan K off here, as in Guided setup itself
-        enabled = False
-    if not enabled:
-        raise _refuse(
-            404,
-            "AGENTIC_DISABLED",
-            "Second opinions on the columns are switched off for this deployment (agentic.enabled is false).",
-        )
+    it was: the rules' suggestions and questions never need one."""
     with _session_lock(upload_id):
         session = _load_session(storage, upload_id)
         if session.status is SessionStatus.APPLIED:
@@ -1095,18 +1079,17 @@ def preview_agent_session(
         except RecipeError as exc:
             raise _refuse(409, exc.code, exc.message) from exc
         after, receipt = run.frame, run.receipt
-    if _doctor_on(ctx.config):
-        # Plan O M246 (DEC-1816): with Data Doctor on, Approve checks that this preview was shown.
-        from engine.doctor.plan_g_approval import record_preview
+    # Plan O M246 (DEC-1816): Approve checks that this preview was shown.
+    from engine.doctor.plan_g_approval import record_preview
 
-        record_preview(
-            storage,
-            upload_id,
-            recipe_hash=recipe.recipe_hash if recipe is not None else None,
-            receipt=receipt,
-            actor=requested_by(request),
-            at=utc_now(),
-        )
+    record_preview(
+        storage,
+        upload_id,
+        recipe_hash=recipe.recipe_hash if recipe is not None else None,
+        receipt=receipt,
+        actor=requested_by(request),
+        at=utc_now(),
+    )
     columns_before = tuple(str(c) for c in before.columns)
     columns_after = tuple(str(c) for c in after.columns)
     return PreviewResponse(
@@ -1170,7 +1153,7 @@ def _apply_agent_session(
     key, target = roles_of(session)
     recipe = _accepted_recipe(session, upload, requested_by(request), ctx.config)
     approval = None
-    if ctx.mode is RunMode.TRAIN and _doctor_on(ctx.config):
+    if ctx.mode is RunMode.TRAIN:
         # Plan O M246 (DEC-1816): M233's approval-time facts - the preview shown, the reshape guards, the exact
         # sentence and the role - before anything is written.
         approval = _approval_gate(storage, session, upload, ctx.config, request, recipe, approved_sentence)
@@ -1241,13 +1224,6 @@ def _apply_agent_session(
     )
 
 
-def _doctor_on(config: UseCaseConfig) -> bool:
-    """Plan O M246: `data_doctor.unified` (read lazily: with it off nothing of Data Doctor is imported here)."""
-    from engine.doctor.policy import data_policy_on
-
-    return data_policy_on(config)
-
-
 def _approver(request: Request) -> Any:
     from engine.access.roles import LOCAL_OPERATOR, Principal
 
@@ -1289,13 +1265,9 @@ def _approval_gate(
     return approval
 
 
-def _note_proposers(
-    storage: Storage, config: UseCaseConfig, request: Request, before: AgentSession, after: AgentSession
-) -> None:
-    """Plan O M246 (O17): with Data Doctor on, who ticked, answered or added each suggestion, for separation of
-    duties at Approve (`engine.doctor.plan_g_approval.record_proposers`). Nothing with the switch off."""
-    if not _doctor_on(config):
-        return
+def _note_proposers(storage: Storage, request: Request, before: AgentSession, after: AgentSession) -> None:
+    """Plan O M246 (O17): who ticked, answered or added each suggestion, for separation of
+    duties at Approve (`engine.doctor.plan_g_approval.record_proposers`)."""
     from engine.doctor.plan_g_approval import record_proposers
 
     record_proposers(storage, after.upload_id, before, after, requested_by(request))

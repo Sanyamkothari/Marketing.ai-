@@ -20,7 +20,7 @@ from tests.fixtures.agent_bench.make_hinglish import hinglish_frame
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.fixtures.agent_bench.make_multirow import multirow_frame
 from tests.fixtures.make_data import GenerationSpec, generate
-from tests.unit.agent.helpers import context_for, header_help_context
+from tests.unit.agent.helpers import context_for
 
 EXPECTED: Final[Path] = Path(__file__).with_name("expected.json")
 USE_CASE: Final[str] = "targeted-advertisement"
@@ -168,15 +168,12 @@ def header_reading(advice: Advice) -> dict[str, list[str]]:
 HEADER_HELP_CASES: Final[frozenset[str]] = frozenset(
     name for name in CASES if name.startswith(HINGLISH_PREFIX) or name.startswith("other_use_case_")
 )
-"""M142's cases, run with Plan K's `agentic.enabled` on: its setup help reads headers only then (DEC-1409 (f)).
-Every other case runs with the shipped configuration (the switch off), as it did before M142."""
+"""M142's cases: the Hinglish exports and the other-use-case files. Every case runs with the setup help on."""
 
 
-def run_case(name: str, *, header_help: bool | None = None) -> dict[str, Any]:
-    """The digest of one case; `header_help` overrides whether it runs with M142's setup help on."""
-    on = name in HEADER_HELP_CASES if header_help is None else header_help
-    build = header_help_context if on else context_for
-    advice = advise(build(CASES[name](), CASE_USE_CASES.get(name, USE_CASE)))
+def run_case(name: str) -> dict[str, Any]:
+    """The digest of one case."""
+    advice = advise(context_for(CASES[name](), CASE_USE_CASES.get(name, USE_CASE)))
     result = digest(advice)
     if name.startswith(HINGLISH_PREFIX):
         result["headers"] = header_reading(advice)

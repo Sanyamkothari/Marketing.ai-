@@ -51,12 +51,11 @@ An *Ask your data* session (`AgentSession.explore`, Plan I DEC-1250/1251) runs t
 no setting is listed, the state block is one fixed sentence, and `propose_setting` is refused with
 `AGENT_EXPLORE_READ_ONLY` like any other refused action.
 
-Plan O M232 (DEC-1802): with `data_doctor.unified` on, the turn calls every tool through Data Doctor's registry
+Plan O M232 (DEC-1802): the turn calls every tool through Data Doctor's registry
 (`engine.doctor.registry`): the tools listed to the model are the registry's READ tools for the AI in this
 session, a read is `session_call` and a suggestion is `call`, with the turn's own handlers bound to it
 (`_RegistryTurn`). The registry checks the person's role on every call (`TOOL_ROLE_REQUIRED`) when the route
 passes who is asking (`principal`). Everything else - the ids, the prompts, the results - is what it was.
-With the switch off (the default) the registry is not reached.
 """
 
 from __future__ import annotations
@@ -98,7 +97,7 @@ from engine.agent.explore import EXPLORE_NOTE
 from engine.agent.grounding import evidence_numbers, grounded_numbers, ungrounded_numbers
 from engine.agent.recommend import setting_allowed, settings_fields
 from engine.agent.session import roles_of
-from engine.agent.tools import TOOLS, AgentContext, AgentToolError, ToolKind, call_tool, tool_available
+from engine.agent.tools import TOOLS, AgentContext, AgentToolError, ToolKind
 from engine.agent.untrusted import display_name, for_prompt, resolve_column
 from engine.config import ConfigError, advanced_settings_schema, resolve_config
 from engine.doctor.limits import limits
@@ -351,14 +350,11 @@ def _settings(ctx: AgentContext, session: AgentSession) -> tuple[list[dict[str, 
     return listed, fields
 
 
-def _tools(ctx: AgentContext | None = None) -> list[dict[str, str]]:
-    """Each read tool of this session with its whole argument schema: properties *and* which are required.
-
-    M142's tools are listed only while Plan K's switch is on for `ctx` (`tool_available`), so with it off the
-    prompt is what it was before them. Without a session (`ctx` None, the static checks) every read tool."""
+def _tools() -> list[dict[str, str]]:
+    """Each read tool with its whole argument schema: properties *and* which are required."""
     tools: list[dict[str, str]] = []
     for tool in TOOLS.values():
-        if tool.kind is not ToolKind.READ or (ctx is not None and not tool_available(ctx, tool.name)):
+        if tool.kind is not ToolKind.READ:
             continue
         schema = tool.args_model.model_json_schema()
         args = {"properties": schema.get("properties", {}), "required": schema.get("required", [])}
@@ -409,8 +405,8 @@ def chat_turn(
 ) -> TurnResult:
     """Answer one message. Never raises for a model's mistake; the reply says what happened.
 
-    `principal` is who is asking; with `data_doctor.unified` on, the registry checks their role on every
-    tool call (Plan O M232). Unused with the switch off. `case_files` are the case's other files, each already
+    `principal` is who is asking; the registry checks their role on every
+    tool call (Plan O M232). `case_files` are the case's other files, each already
     made safe by its own gate (`engine.doctor.ai_guard.file_overviews`) with the note of what it sends.
     """
     agent = ctx.config.agent
@@ -525,7 +521,7 @@ def chat_turn(
             "goal": agent.goal_for(ctx.config.target.definition),
             "entity": ctx.config.entity,
             "knowledge": knowledge,
-            "tools": _tools(ctx) if doctor is None else doctor.tools(),
+            "tools": doctor.tools(),
             "settings": shown_settings,
             "state": prompt_state,
             "column_choices": column_choices,
@@ -583,7 +579,7 @@ def chat_turn(
                     EXPLORE_READ_ONLY,
                     "This chat only answers questions about the data; it cannot suggest a setting. Reply instead.",
                 )
-            if doctor is not None and name in {PROPOSE_TOOL, STEP_TOOL}:
+            if name in {PROPOSE_TOOL, STEP_TOOL}:
                 result, proposal = doctor.propose(name, args)
                 results.append(result)
                 proposals.append(proposal)
@@ -625,20 +621,12 @@ def chat_turn(
                 proposals.append(proposal)
                 _record(gate, names, feedback, items, result, STEP_TEXT_KEYS)
                 continue
-            if doctor is None:
-                tool = TOOLS.get(name)
-                if tool is None or tool.kind is not ToolKind.READ or not tool_available(ctx, name):
-                    raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name[:40]!r}.")
-            elif not doctor.reads(name):
+            if not doctor.reads(name):
                 raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name[:40]!r}.")
             if name == "find_values":
                 _limit_searches(ctx, session, results, args)
             evidence_id = f"{prefix}e{len(results) + 1}"
-            result = (
-                call_tool(ctx, name, args, evidence_id=evidence_id)
-                if doctor is None
-                else doctor.read(name, args, evidence_id)
-            )
+            result = doctor.read(name, args, evidence_id)
             results.append(result)
             checker.grounded = checker.grounded | evidence_numbers(result.result, result.typed_args)
             _record(gate, names, feedback, items, result, frozenset())
@@ -660,7 +648,7 @@ def chat_turn(
 
 @dataclass
 class _RegistryTurn:
-    """One chat turn's binding to Data Doctor's registry (Plan O M232), behind `data_doctor.unified`.
+    """One chat turn's binding to Data Doctor's registry (Plan O M232).
 
     The registry decides which tools the model may use here and whether `principal` may call them; Plan G's
     look tools run exactly as `call_tool` runs them, and the two suggestions run this turn's own handlers
@@ -766,12 +754,10 @@ def _registry_turn(
     prefix: str,
     config_root: Path | None,
     clock: Callable[[], datetime],
-) -> _RegistryTurn | None:
-    """The turn's registry binding when `data_doctor.unified` is on; None (Plan G as it was) when off."""
+) -> _RegistryTurn:
+    """The turn's binding to Data Doctor's registry."""
     from engine.doctor import registry as doctor_registry
 
-    if not doctor_registry.unified_on(ctx.config):
-        return None
     context = doctor_registry.DataToolContext(
         agent=ctx,
         principal=principal,
@@ -855,11 +841,10 @@ def _propose(
             f"{path[:80]} = {value!r:.80} is not a setting the helper may suggest.",
         )
     gate = _policy_gate(ctx, None, "data.setting", settings=fields)
-    if gate is not None:
-        # Plan O M233 (DEC-1803): the setting allow-list, read from the data policy as well (same code).
-        from engine.doctor.policy import SETTING, SettingChange
+    # Plan O M233 (DEC-1803): the setting allow-list, read from the data policy as well (same code).
+    from engine.doctor.policy import SETTING, SettingChange
 
-        gate(SETTING, setting=SettingChange(path=path, value=value))
+    gate(SETTING, setting=SettingChange(path=path, value=value))
     try:
         resolve_config(ctx.use_case_id, {path: value}, root=ctx.config_root)
     except ConfigError as exc:
@@ -897,11 +882,11 @@ STEP_TEXT_KEYS: Final[frozenset[str]] = frozenset({"kind", "column"})
 
 def _policy_gate(
     ctx: AgentContext, session: AgentSession | None, kind: str, *, settings: dict[str, Any] | None = None
-) -> Callable[..., tuple[Any, ...]] | None:
-    """Plan O M233 (DEC-1803): the data policy's check of `kind` for an AI suggestion, behind `data_doctor.unified`.
+) -> Callable[..., tuple[Any, ...]]:
+    """Plan O M233 (DEC-1803): the data policy's check of `kind` for an AI suggestion.
 
-    None with the switch off (nothing is read). With it on, each of this module's own checks is followed by the
-    same rule read from `configs/agentic/policy.yaml`, raising the same code; a kind with no rule set is refused.
+    Each of this module's own checks is followed by the same rule read from `configs/agentic/policy.yaml`,
+    raising the same code; a kind with no rule set is refused.
     """
     from engine.doctor.policy import agent_gate
 
@@ -961,19 +946,17 @@ def _propose_step(
             f"{str(args.get('kind'))[:40]!r} is not a fix the chat may suggest. Allowed: "
             + ", ".join(sorted(k.value for k in kinds)),
         )
-    # Plan O M233 (DEC-1803): behind `data_doctor.unified`, each check below is followed by the same rule of the
-    # data policy (`configs/agentic/policy.yaml`, `data.recipe_step`), with the same code; None when it is off.
+    # Plan O M233 (DEC-1803): each check below is followed by the same rule of the data policy
+    # (`configs/agentic/policy.yaml`, `data.recipe_step`), with the same code.
     gate = _policy_gate(ctx, session, "data.recipe_step")
-    if gate is not None:
-        gate(data_policy.STEP_KIND, steps=(data_policy.StepFacts(kind, str(args.get("column", ""))),))
+    gate(data_policy.STEP_KIND, steps=(data_policy.StepFacts(kind, str(args.get("column", ""))),))
     column = ctx.resolve(str(args.get("column", "")))
     personal = {c.name for c in ctx.profile.columns if c.pii_kinds} | set(
         ctx.config.agent.always_hide_columns
     )
     if column in personal and kind is not RecipeStepKind.DROP_COLUMN:
         raise AgentToolError("AGENT_STEP_NOT_ALLOWED", "A column holding personal data can only be hidden.")
-    if gate is not None:
-        gate(data_policy.PERSONAL, steps=(data_policy.StepFacts(kind, column),))
+    gate(data_policy.PERSONAL, steps=(data_policy.StepFacts(kind, column),))
     cited = (
         [str(e) for e in args.get("evidence_ids", []) if isinstance(e, str)]
         if isinstance(args.get("evidence_ids"), list)
@@ -988,8 +971,7 @@ def _propose_step(
             "AGENT_STEP_UNGROUNDED",
             f"Look at '{display_name(column)}' with a tool first, and cite that result in evidence_ids.",
         )
-    if gate is not None:
-        gate(data_policy.GROUNDED, steps=(data_policy.StepFacts(kind, column),), looked_at=bool(looks))
+    gate(data_policy.GROUNDED, steps=(data_policy.StepFacts(kind, column),), looked_at=bool(looks))
     raw_params = args.get("params")
     params: dict[str, Any] = dict(raw_params) if isinstance(raw_params, dict) else {}
     gated = sorted(EXCEL_SERIAL_PARAMS & params.keys())
@@ -998,14 +980,13 @@ def _propose_step(
         # the chat has no such parameter: M233's `data.recipe_step` rule set does not allow it either (DEC-1803).
         raise AgentToolError("RECIPE_STEP_INVALID", f"Step 1 ({kind.value}): unknown parameter {gated[0]!r}")
     new_column = args.get("new_column")
-    if gate is not None:
-        facts = data_policy.StepFacts(
-            kind,
-            column,
-            params,
-            str(new_column) if isinstance(new_column, str) and new_column.strip() else None,
-        )
-        gate(data_policy.STEP_PARAMS, data_policy.SPELLINGS, steps=(facts,), looked_at=True)
+    facts = data_policy.StepFacts(
+        kind,
+        column,
+        params,
+        str(new_column) if isinstance(new_column, str) and new_column.strip() else None,
+    )
+    gate(data_policy.STEP_PARAMS, data_policy.SPELLINGS, steps=(facts,), looked_at=True)
     try:
         step = RecipeStep(
             order=1,
@@ -1031,13 +1012,12 @@ def _propose_step(
             target=target,
             levels=agent.levels,
         )
-        if gate is not None:
-            gate(
-                data_policy.PROTECTED,
-                data_policy.LEVEL,
-                steps=(data_policy.StepFacts.of(step),),
-                looked_at=True,
-            )
+        gate(
+            data_policy.PROTECTED,
+            data_policy.LEVEL,
+            steps=(data_policy.StepFacts.of(step),),
+            looked_at=True,
+        )
         trial = run_recipe(
             ctx.frame.head(STEP_SAMPLE_ROWS),
             [step],
@@ -1056,23 +1036,20 @@ def _propose_step(
             f"That fix changes nothing in the first {min(STEP_SAMPLE_ROWS, len(ctx.frame))} rows of "
             f"'{display_name(column)}'. Look again, or reply instead.",
         )
-    if gate is not None:
-        # Tried on the first rows (the trial above), held to decision O10, never ticked: the approval's
-        # "new patterns, with permission" for an AI's fix.
-        effect = data_policy.effect_of(
-            step, ctx.frame.head(STEP_SAMPLE_ROWS), changed=receipt.changed, failed=receipt.failed
-        )
-        # Plan O M246 (DEC-1816): O10's warning (above 30% of the column) travels with the suggestion.
-        warned = gate(
-            data_policy.TRIED,
-            data_policy.CHANGE_SHARE,
-            data_policy.NEVER_TICKED,
-            steps=(data_policy.StepFacts.of(step),),
-            looked_at=True,
-            effect=effect,
-        )
-    else:
-        warned = ()
+    # Tried on the first rows (the trial above), held to decision O10, never ticked: the approval's
+    # "new patterns, with permission" for an AI's fix.
+    effect = data_policy.effect_of(
+        step, ctx.frame.head(STEP_SAMPLE_ROWS), changed=receipt.changed, failed=receipt.failed
+    )
+    # Plan O M246 (DEC-1816): O10's warning (above 30% of the column) travels with the suggestion.
+    warned = gate(
+        data_policy.TRIED,
+        data_policy.CHANGE_SHARE,
+        data_policy.NEVER_TICKED,
+        steps=(data_policy.StepFacts.of(step),),
+        looked_at=True,
+        effect=effect,
+    )
     reason = str(args.get("reason") or CHAT_REASON).strip()[:MAX_REASON_CHARS] or CHAT_REASON
     if checker.failure(reason, target="helper suggestion", max_chars=MAX_REASON_CHARS) is not None:
         reason = CHAT_REASON

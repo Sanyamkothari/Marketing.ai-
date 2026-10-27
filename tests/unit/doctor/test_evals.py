@@ -63,7 +63,6 @@ from engine.doctor.evals import (
     silent_rows,
     ticked_by_rules,
     ticked_harms,
-    unified_switch,
     write_report,
 )
 from engine.doctor.registry import DataTool, DataToolKind, DataToolRegistry, Exposure, data_registry
@@ -111,15 +110,6 @@ def test_a_tool_registered_later_is_picked_up_with_no_change_to_the_harness() ->
     )
     drift = next(s for s in discover_tools(registry) if s.name == "drift_check")
     assert drift.built and drift.built_by is None
-
-
-def test_the_switch_is_on_inside_the_harness_and_restored_after() -> None:
-    from engine.doctor import registry as registry_module
-
-    before = registry_module.unified_on
-    with unified_switch():
-        assert registry_module.unified_on(None) is True
-    assert registry_module.unified_on is before and registry_module.unified_on(None) is False
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +284,6 @@ def test_accept_recommended_must_never_tick_an_ai_step() -> None:
 
 def test_the_o10_rule_of_the_policy_decides_an_ai_step_on_the_whole_file() -> None:
     """M233's counting: a re-typing step counts the values it could not read; a rewrite counts what it changed."""
-    from tests.fixtures.doctor_eval.world import unified
     from tests.unit.agent.helpers import context_for
 
     frame = pd.DataFrame(
@@ -305,7 +294,7 @@ def test_the_o10_rule_of_the_policy_decides_an_ai_step_on_the_whole_file() -> No
             "notes_amount": ["n/a"] * 80 + ["1,200"] * 20,
         }
     )
-    ctx = unified(context_for(frame))
+    ctx = context_for(frame)
 
     def step(kind: RecipeStepKind, column: str, **params: Any) -> Proposal:
         return _proposal(step=RecipeStep(order=1, kind=kind, column=column, params=params))

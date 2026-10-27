@@ -10,7 +10,7 @@ import pytest
 from engine.agent.advisor import ROLE_PRIMARY_KEY, advise, recipe_steps, summarise
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import ProposalKind, ProposalState, RecipeStepKind, SessionStatus
-from engine.agent.session import accept_recommended, answer, reshape_of, start_session
+from engine.agent.session import accept_recommended, answer, decide, reshape_of, start_session
 from engine.agent.tools import AgentContext
 from tests.fixtures.agent_bench.make_multirow import multirow_frame
 from tests.unit.agent.helpers import context_for
@@ -106,7 +106,9 @@ def test_the_session_combines_on_the_answer_and_approves_on_the_combined_file(ct
     assert combined.stop_reason is None
     decided = accept_recommended(combined, ctx)
     pending = [p for p in decided.proposals if p.state is ProposalState.PENDING]
-    assert pending == []
+    assert [p.path for p in pending] == ["model_search.time_limit_minutes"]  # offered to check, not ticked
+    decided = decide(decided, ctx, [(p.proposal_id, ProposalState.ACCEPTED, None) for p in pending])
+    assert not [p for p in decided.proposals if p.state is ProposalState.PENDING]
     assert decided.status is SessionStatus.READY
     steps = recipe_steps(p for p in decided.proposals if p.state is ProposalState.ACCEPTED)
     assert [s.kind for s in steps] == [RecipeStepKind.COMBINE_ROWS]

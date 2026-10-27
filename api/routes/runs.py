@@ -490,7 +490,7 @@ def start_run(
     source_id: str = dataset.manifest.dataset_id if dataset is not None else upload_id
 
     version: ModelVersion | None = None
-    # Plan O M243 (DEC-1813): the prescription the run follows; None unless `data_doctor.unified` binds one.
+    # Plan O M243 (DEC-1813): the prescription the run follows; None unless one is bound.
     prescribed: Prescribed | None = None
     if body.mode is RunMode.TRAIN:
         if upload is not None:

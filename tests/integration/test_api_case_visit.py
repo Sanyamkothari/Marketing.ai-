@@ -35,17 +35,12 @@ ROUTES = set(case_visit.POLICIES)
 
 
 @pytest.fixture
-def unified(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(doctor_case, "data_doctor_unified", lambda root=None: True)
-
-
-@pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
     return tmp_path / "data"
 
 
 @pytest.fixture
-def client(unified: None, config_root: Path, data_dir: Path) -> Iterator[TestClient]:
+def client(config_root: Path, data_dir: Path) -> Iterator[TestClient]:
     with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as test_client:
         yield test_client
 
@@ -141,7 +136,7 @@ class _DiesOnce(FakeLLMClient):
 
 
 def test_a_chat_whose_process_died_during_the_ai_call_is_answered_by_the_ai_on_resume(
-    unified: None, config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The process is killed while the AI service is answering a chat (the case rests in CONVERSE). A new process
     on the same data resumes the visit with the AI service still connected: the AI answers the message."""
@@ -187,7 +182,7 @@ class _KeyExpired(FakeLLMClient):
 
 
 def test_a_chat_the_ai_service_could_not_answer_says_why_in_the_response_and_the_timeline(
-    unified: None, config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(ai_service, "build_client", lambda *_a, **_k: _KeyExpired(mode=FakeLLMMode.GROUNDED))
     with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as client:
@@ -216,7 +211,7 @@ def test_a_chat_the_ai_service_could_not_answer_says_why_in_the_response_and_the
 
 
 def test_the_chat_through_the_api_applies_a_filter_for_the_person_who_can_undo_it(
-    unified: None, config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The scripted model drives the real route: a look, a filter the guards pass (applied by the agent with its counts,
     decided by `agent:data-doctor`), a reply; the person unticks it and it is theirs from then on. Evidence of the look
@@ -357,7 +352,7 @@ def test_the_routes_have_their_policies(client: TestClient) -> None:
     assert {path for _method, path in ROUTES} <= paths
 
 
-def test_a_viewer_reads_a_brief_but_cannot_move_a_visit(unified: None, tmp_path: Path) -> None:
+def test_a_viewer_reads_a_brief_but_cannot_move_a_visit(tmp_path: Path) -> None:
     app = local_app(tmp_path)
     viewer = make_user(app, "vera", [Role.VIEWER])
     analyst = make_user(app, "asha", [Role.ANALYST])
@@ -376,14 +371,6 @@ def test_a_viewer_reads_a_brief_but_cannot_move_a_visit(unified: None, tmp_path:
             "events"
         ]
         assert {e["actor"] for e in events} == {analyst}, "the timeline records the user id"
-
-
-def test_with_the_switch_off_there_is_no_visit_path(config_root: Path, tmp_path: Path) -> None:
-    app = create_app(config_root=config_root, data_dir=tmp_path / "data")
-    paths = app.openapi()["paths"]
-    assert not [path for path in paths if path.startswith(("/cases", "/goal-briefs"))]
-    with TestClient(app) as client:
-        assert client.get(f"/goal-briefs/{GOAL}").status_code == 404
 
 
 def test_an_answer_value_is_refused_where_the_option_takes_none(client: TestClient, data_dir: Path) -> None:
@@ -437,7 +424,7 @@ def test_a_typed_date_is_accepted_over_http(client: TestClient, data_dir: Path) 
 
 
 def test_an_invoice_log_with_an_ai_query_reaches_a_computed_readiness_verdict_on_the_prepared_table(
-    unified: None, config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The replay blocker end to end: an invoice log (key = invoice line), the AI's query makes one row per customer
     with `ordered_again_90d`; the person says yes to the table and to the outcome; the readiness check is computed

@@ -24,10 +24,12 @@ from engine.agent.loop import TurnResult, chat_turn
 from engine.agent.session import start_session
 from engine.agent.tools import TOOLS, AgentContext, Tool, ToolKind
 from engine.config import BudgetConfig, LlmConfig
+from engine.doctor.registry import data_registry
 from engine.generative.budget import Meter
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.llm import FakeLLMClient, FakeLLMMode, _helper_sections
 from engine.utils.time import utc_now
+from tests.unit.agent.analyst import ANALYST
 from tests.unit.agent.helpers import context_for, header_help_root
 
 EMAIL = "jane.roe@example.test"
@@ -313,7 +315,7 @@ def run_session(
     for _ in range(max_turns):
         if not client.queue:
             break
-        turn = chat_turn(ctx, session, message, meter=meter, guardrails=guardrails())
+        turn = chat_turn(ctx, session, message, meter=meter, guardrails=guardrails(), principal=ANALYST)
         turns.append(turn)
         if on_turn is not None:
             on_turn(turn)
@@ -358,3 +360,24 @@ def stray_keys(value: Any, columns: Iterable[str] = ()) -> list[str]:
 
     walk(value)
     return found
+
+
+def add_look_tool(monkeypatch: Any, tool: Tool) -> None:
+    """A look tool nobody has written yet: in Plan G's tools and, as the registry lists them, in Data Doctor's."""
+    tools = dict(TOOLS)
+    tools[tool.name] = tool
+    monkeypatch.setattr("engine.agent.tools.TOOLS", tools)
+    monkeypatch.setattr("engine.agent.loop.TOOLS", tools)
+    registry = data_registry()
+    template = registry.get("get_profile")
+    from engine.doctor.tools import _look_run
+
+    added = dataclasses.replace(
+        template,
+        name=tool.name,
+        description=tool.description,
+        input_model=tool.args_model,
+        run=_look_run(tool.name),
+        available=lambda ctx: ctx.agent is not None,
+    )
+    monkeypatch.setitem(registry._tools, tool.name, added)

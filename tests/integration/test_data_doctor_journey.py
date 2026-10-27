@@ -1,6 +1,6 @@
 """Plan O M247 (DEC-1817): one flow from the Data page to the campaign, on ONE Data Doctor case, in a real browser.
 
-The real app runs under uvicorn with `data_doctor.unified` on and the campaigns layout, on an empty store with no AI
+The real app runs under uvicorn with the campaigns layout, on an empty store with no AI
 service connected. Chromium opens the Data page's "Check my data" (no goal), and a marketer goes:
 
     choose the file -> [1] answer the one question (which column names each customer?)
@@ -72,11 +72,6 @@ def workdir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def config_root(workdir: Path) -> Path:
     root = workdir / "configs"
     shutil.copytree(REPO_ROOT / "configs", root)
-    engine = root / "engine.yaml"
-    text = engine.read_text(encoding="utf-8")
-    switch = "    unified: false"
-    assert text.count(switch) == 1
-    engine.write_text(text.replace(switch, "    unified: true"), encoding="utf-8")
     path = root / "use_cases" / f"{GOAL.replace('-', '_')}.yaml"
     assert "model_search" not in yaml.safe_load(path.read_text(encoding="utf-8"))
     path.write_text(path.read_text(encoding="utf-8") + TEST_BUDGET, encoding="utf-8")

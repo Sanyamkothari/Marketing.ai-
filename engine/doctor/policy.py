@@ -16,9 +16,9 @@ Plan K `Decision` or nothing, the context is computed by the server, never taken
   approval (an AI's fix cites a look at the column, is tried on the first 1,000 rows, and is never ticked).
 * **The code keeps its own checks.** Plan G's hard-coded rules (`loop.CHAT_STEP_KINDS`, the personal-data
   refusal, `setting_allowed`, `advisor.NEVER_TICKED_STEPS`, `check_recipe`'s ID and outcome rule) stay where they
-  are. Behind `data_doctor.unified` the callers (`engine.agent.loop`, `engine.agent.edits`, the advisor and the
+  are. The callers (`engine.agent.loop`, `engine.agent.edits`, the advisor and the
   registry) also ask the policy, at the same place and with the same refusal code, so a refusal today is still
-  one, with the same code; with the switch off nothing here is read.
+  one, with the same code.
 
 Every rule is mutation-tested: removing it from :data:`DATA_RULES`, or from any rule set that names it, changes
 the decision on at least one fixture (`tests/unit/doctor/test_policy_mutation.py`, after Plan K's
@@ -71,7 +71,6 @@ __all__ = [
     "agent_policy_context",
     "allowed",
     "check_tool_output",
-    "data_policy_on",
     "effect_of",
     "evaluate",
     "first_refusal",
@@ -319,14 +318,6 @@ def _load(path: str, size: int, mtime_ns: int) -> DataPolicyConfig:
         ) from exc
 
 
-def data_policy_on(config: Any) -> bool:
-    """Whether the data policy is asked: `data_doctor.unified` (M230; default off), read on the registry module
-    at call time so a test that switches it on there switches it on here too."""
-    from engine.doctor import registry
-
-    return registry.unified_on(config)
-
-
 # ---------------------------------------------------------------------------
 # What a rule reads: the proposal and the context
 # ---------------------------------------------------------------------------
@@ -410,7 +401,7 @@ class DataPolicyContext:
     target: str | None = None
     personal_columns: frozenset[str] = frozenset()
     levels: tuple[AgentLevel, ...] = (AgentLevel.CLEAN,)
-    """The use case's levels, with decision O3's reshape when Data Doctor is on (`reshape_guard.doctor_levels`)."""
+    """The use case's levels, with decision O3's reshape (`reshape_guard.doctor_levels`)."""
     settings: Mapping[str, FieldSpec] | None = None
     """The settings listed for this session (`recommend.settings_fields`), for `data.setting`."""
     approval: ApprovalFacts | None = None
@@ -1010,7 +1001,7 @@ def agent_policy_context(
     """The facts the rules read for one file of Plan G's runtime, computed from its context, never from a model.
 
     Personal columns as the chat and the edits read them (profiled personal data and `agent.always_hide_columns`);
-    the use case's levels with decision O3's reshape (`reshape_guard.doctor_levels`, Data Doctor on).
+    the use case's levels with decision O3's reshape (`reshape_guard.doctor_levels`).
     """
     from engine.doctor.reshape_guard import doctor_levels
 
@@ -1022,7 +1013,7 @@ def agent_policy_context(
         primary_key=primary_key,
         target=target,
         personal_columns=frozenset(personal),
-        levels=doctor_levels(tuple(ctx.config.agent.levels), unified=True),
+        levels=doctor_levels(tuple(ctx.config.agent.levels)),
         settings=settings,
     )
 
@@ -1047,15 +1038,13 @@ def agent_gate(
     target: str | None,
     raise_as: Callable[[str, str], Exception],
     settings: Mapping[str, FieldSpec] | None = None,
-) -> Gate | None:
-    """A check of `kind`'s rules for Plan G's handlers, behind `data_doctor.unified`; None when it is off.
+) -> Gate:
+    """A check of `kind`'s rules for Plan G's handlers.
 
     The handler calls it where its own check of the same thing is, after that check, so a proposal its own code
     refuses is refused exactly as today and the policy can only refuse more (default deny: a kind with no rule
     set, or a policy that cannot be read, refuses every proposal with `POLICY_NO_RULES`).
     """
-    if not data_policy_on(ctx.config):
-        return None
     policy_ctx = agent_policy_context(ctx, primary_key=primary_key, target=target, settings=settings)
 
     def gate(*names: str, **facts: Any) -> tuple[Decision, ...]:
@@ -1068,16 +1057,14 @@ def agent_gate(
     return gate
 
 
-def never_ticked_steps(config: Any, config_root: Path | None) -> frozenset[RecipeStepKind]:
-    """The kinds only the person may tick: Plan G's own list, and - with Data Doctor on - the policy's too.
+def never_ticked_steps(config_root: Path | None) -> frozenset[RecipeStepKind]:
+    """The kinds only the person may tick: Plan G's own list, and the policy's too.
 
     The code's list (`advisor.NEVER_TICKED_STEPS`) always holds, so the policy can only add to it; a policy that
     cannot be read adds nothing here (proposals are refused by default deny where they are made).
     """
     from engine.agent.advisor import NEVER_TICKED_STEPS
 
-    if not data_policy_on(config):
-        return NEVER_TICKED_STEPS
     try:
         extra = load_data_policy(config_root).never_ticked_steps
     except AgenticError:
@@ -1442,7 +1429,7 @@ def tool_policy_context(ctx: Any, kind: str) -> DataPolicyContext:
         primary_key=None if kind in FILES_KINDS else key,
         target=getattr(agent, "target", None) or target,
         personal_columns=frozenset(personal),
-        levels=doctor_levels(tuple(agent.config.agent.levels), unified=True),
+        levels=doctor_levels(tuple(agent.config.agent.levels)),
     )
 
 

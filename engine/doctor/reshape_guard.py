@@ -2,7 +2,7 @@
 
 Today the reshape level - `combine_rows`, `unpivot`, and now `keep_latest_per_id` - is on only where a use case
 lists it (one shipped use case does; the default is `[clean, derive]`, `configs/engine.yaml` `defaults.agent.levels`).
-Decision O3 turns it on for every goal once Data Doctor is the data agent (`data_doctor.unified`), and only with
+Decision O3 turns it on for every goal as Data Doctor is the data agent, and only with
 four guards, which this module states as code so the planner and Approve can hold every reshape step to them:
 
 1. **A blocking question.** A reshape step changes what one row means. It is offered only through one blocking
@@ -13,7 +13,7 @@ four guards, which this module states as code so the planner and Approve can hol
    (`leak_check="full"`); a scoring file with the narrow one. A preview runs neither and is never approved.
 4. **The receipt.** The preview's receipt (rows in, rows out) is shown before the question is answered.
 
-With the switch off nothing here is called and every use case keeps its own levels (`doctor_levels`).
+Every use case gets it through `doctor_levels`.
 """
 
 from __future__ import annotations
@@ -61,11 +61,9 @@ class ReshapeGuardError(Exception):
         super().__init__(f"{self.code}: {self.message}")
 
 
-def doctor_levels(levels: Sequence[AgentLevel], *, unified: bool) -> tuple[AgentLevel, ...]:
-    """The levels a recipe may use: the use case's own, plus `reshape` for every goal when Data Doctor is on."""
-    wanted = set(levels) | ({AgentLevel.RESHAPE} if unified else set())
-    if not unified:
-        return tuple(levels)
+def doctor_levels(levels: Sequence[AgentLevel]) -> tuple[AgentLevel, ...]:
+    """The levels a recipe may use: the use case's own, plus `reshape` for every goal."""
+    wanted = set(levels) | {AgentLevel.RESHAPE}
     return tuple(level for level in _ORDER if level in wanted)
 
 

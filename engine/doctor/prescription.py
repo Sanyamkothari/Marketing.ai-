@@ -38,8 +38,7 @@ approved items (:func:`prescription_from_case`), writes it, binds the case's upl
 (`engine.doctor.prescription_runs`), and returns the hash; its :meth:`CasePrescriber.digest` gives the same hash without
 writing, which M246's approval record carries as `prescription_hash`.
 
-Everything here runs only behind `data_doctor.unified`: the visit's routes are not mounted while it is off. Rules only;
-no AI; no row is stored - the contract holds counts, shares, percentiles and values held by at least ten rows.
+Rules only; no AI; no row is stored - the contract holds counts, shares, percentiles and values held by at least ten rows.
 """
 
 from __future__ import annotations
