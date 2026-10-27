@@ -394,12 +394,12 @@ defaults:
         effect_chars: 160               # int 40..1000; longest "what this choice does" sentence
         question_chars: 400             # int 100..2000; longest question or doubt text
         description_chars: 300          # int 50..2000; longest query description
-        history_turns: 12               # int 0..100; earlier chat messages the model reads
+        history_turns: 12               # int 1..100; earlier chat messages the model reads
         state_items: 40                 # int 1..500; latest changes of the case the model reads
         state_questions: 12             # int 1..200; questions of the case the model reads
-        state_doubts: 5                 # int 0..100; doubts of the case the model reads
+        state_doubts: 5                 # int 1..100; doubts of the case the model reads
         made_columns: 20                # int 1..200; columns of a query's table the model is shown
-        reloaded_looks: 6               # int 0..50; looks of earlier turns the model may cite again
+        reloaded_looks: 6               # int 1..50; looks of earlier turns the model may cite again
         short_chars: 220                # int 40..2000; longest piece of text the case state shows
         prompt_chars: 60000             # int 5000..400000; longest prompt that is sent
       asks:
@@ -410,15 +410,14 @@ defaults:
         doubts: 5                       # int 0..50; doubts in one review
         requests: 3                     # int 0..20; requests for more data in one review
         request_columns: 8              # int 1..50; columns one request may name
-        suggestions_per_question: 1     # int 1..1; a later suggestion for a question replaces the earlier
-      trial:
+      trial:                            # engine-wide; a use case's own trial/gates are not read
         sample_rows: 1000               # int 1..1000000; rows of the Sample a plan is checked on
         dry_run_rows: 100000            # int 1..10000000; rows of each file a query is tried on
       gates:
         retries: 2                      # int 0..10; tries of a failing step before a person is asked
-        loss_stop_pct: 5.0              # float 0..100; share of customers a plan may lose without a yes
-        rate_stop_points: 1.0           # float 0..100; points the outcome rate may move without a yes
-        approve_drop_share: 0.02        # float 0..1; share of rows a join, stack or removal may drop without a yes
+        loss_stop_pct: 5.0              # float 0..5 (tighten only); share of customers a plan may lose without a yes
+        rate_stop_points: 1.0           # float 0..1 (tighten only); points the outcome rate may move without a yes
+        approve_drop_share: 0.02        # float 0..0.02 (tighten only); share of rows a join, stack or removal may drop without a yes
         change_warn_pct: 30.0           # float 0..100; share of a column a value fix may change before a warning
-        change_refuse_pct: 60.0         # float 0..100; share of a column a value fix may change before it is refused
+        change_refuse_pct: 60.0         # float 0..60 (tighten only); share of a column a value fix may change before it is refused
   # ---- END PLAN-O ----

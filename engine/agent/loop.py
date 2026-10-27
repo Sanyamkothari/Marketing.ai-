@@ -101,7 +101,7 @@ from engine.agent.session import roles_of
 from engine.agent.tools import TOOLS, AgentContext, AgentToolError, ToolKind, call_tool, tool_available
 from engine.agent.untrusted import display_name, for_prompt, resolve_column
 from engine.config import ConfigError, advanced_settings_schema, resolve_config
-from engine.doctor.config import TurnLimits
+from engine.doctor.limits import limits
 from engine.generative.contracts import GenerativePurpose
 from engine.generative.errors import GenerativeError
 from engine.generative.guardrails import CheckContext, Guardrails
@@ -171,7 +171,7 @@ CHAT_STEP_TITLES: Final[dict[RecipeStepKind, str]] = {
     RecipeStepKind.DROP_COLUMN: "Hide '{c}'",
     RecipeStepKind.REMOVE_ROWS: "Leave out rows by '{c}'",
 }
-_TURN: Final = TurnLimits()  # the limits' defaults (`data_doctor.limits.turn`): Guided setup shares them
+_TURN: Final = limits().turn  # `data_doctor.limits.turn` of the engine config: Guided setup shares them
 MAX_REPLY_CHARS: Final[int] = _TURN.guided_reply_chars
 MAX_MESSAGE_CHARS: Final[int] = 1_000
 MAX_REASON_CHARS: Final[int] = 200

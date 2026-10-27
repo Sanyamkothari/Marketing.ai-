@@ -42,7 +42,6 @@ from engine.doctor.guards import NotMeasurableError, cell_change, grouping_key, 
 
 __all__ = [
     "CHANGE_SHARE_CODES",
-    "DEFAULT_LIMITS",
     "ChangeShareLimits",
     "ChangeShareVerdict",
     "NotMeasurableError",
@@ -75,9 +74,6 @@ class ChangeShareLimits:
     def __post_init__(self) -> None:
         if not 0.0 <= self.warn_pct <= self.refuse_pct <= 100.0:
             raise ValueError("limits must satisfy 0 <= warn_pct <= refuse_pct <= 100")
-
-
-DEFAULT_LIMITS: Final[ChangeShareLimits] = ChangeShareLimits()
 
 
 @dataclass(frozen=True)

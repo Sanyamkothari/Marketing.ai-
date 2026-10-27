@@ -78,7 +78,10 @@ class ProposeSqlArgs(_Args):
         default=False,
         description="outcome built from rows after `$as_of`; set `outcome_window_days`",
     )
-    outcome_window_days: int | None = Field(default=None, description="days after `$as_of` the outcome looks")
+    outcome_window_days: int | None = Field(
+        default=None,
+        description="days after `$as_of` the outcome looks; the as-of date must be at least this many days before the data ends",
+    )
     replaces: str | None = Field(
         default=None,
         description="the id of your change this swaps out",
@@ -257,12 +260,14 @@ def _type_of(annotation: Any) -> str:
     args = [a for a in get_args(annotation) if a is not type(None)]
     if origin is not None and len(args) == 1 and origin is not list and origin is not dict:
         return _type_of(args[0])  # Optional[X]
-    if origin is list:
+    if origin is list or origin is tuple:
         return "[" + _type_of(args[0]) + ", ...]"
     if origin is dict or annotation is dict:
         return "{...}"
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        return "{" + ", ".join(annotation.model_fields) + "}"
+        return (
+            "{" + ", ".join(f"{n} {_type_of(i.annotation)}" for n, i in annotation.model_fields.items()) + "}"
+        )
     if len(args) > 1:
         return "|".join(_type_of(a) for a in args)
     return "text"

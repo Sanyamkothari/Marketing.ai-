@@ -134,19 +134,19 @@ class TurnLimits(BaseModel):
     description_chars: int = Field(
         default=300, ge=50, le=2000, description="The longest description of a query."
     )
-    history_turns: int = Field(default=12, ge=0, le=100, description="Earlier chat messages the model reads.")
+    history_turns: int = Field(default=12, ge=1, le=100, description="Earlier chat messages the model reads.")
     state_items: int = Field(
         default=40, ge=1, le=500, description="The latest changes of the case the model reads."
     )
     state_questions: int = Field(
         default=12, ge=1, le=200, description="Questions of the case the model reads."
     )
-    state_doubts: int = Field(default=5, ge=0, le=100, description="Doubts of the case the model reads.")
+    state_doubts: int = Field(default=5, ge=1, le=100, description="Doubts of the case the model reads.")
     made_columns: int = Field(
         default=20, ge=1, le=200, description="Columns of a query's table the model is shown."
     )
     reloaded_looks: int = Field(
-        default=6, ge=0, le=50, description="Looks of earlier turns the model may cite again."
+        default=6, ge=1, le=50, description="Looks of earlier turns the model may cite again."
     )
     short_chars: int = Field(
         default=220, ge=40, le=2000, description="The longest piece of text the case state shows."
@@ -176,12 +176,6 @@ class AsksLimits(BaseModel):
         default=3, ge=0, le=20, description="Requests for more data the AI may make in one review."
     )
     request_columns: int = Field(default=8, ge=1, le=50, description="Columns one request for data may name.")
-    suggestions_per_question: int = Field(
-        default=1,
-        ge=1,
-        le=1,
-        description="Answers suggested for one question; a later one replaces the earlier.",
-    )
 
 
 class TrialLimits(BaseModel):
@@ -201,7 +195,9 @@ class TrialLimits(BaseModel):
 
 
 class GateLimits(BaseModel):
-    """`data_doctor.limits.gates`: where a plan needs the person's yes."""
+    """`data_doctor.limits.gates`: where a plan needs the person's yes. These gates may only be tightened: no value
+    is looser than the one the Doctor always had. They are engine-wide (`configs/engine.yaml`); a use case's own
+    `gates` and `trial` are not read (see `engine.doctor.limits.limits`)."""
 
     model_config = _SETTINGS
 
@@ -211,19 +207,19 @@ class GateLimits(BaseModel):
     loss_stop_pct: float = Field(
         default=5.0,
         ge=0.0,
-        le=100.0,
+        le=5.0,
         description="A plan that loses a larger share of customers (%) needs a yes.",
     )
     rate_stop_points: float = Field(
         default=1.0,
         ge=0.0,
-        le=100.0,
+        le=1.0,
         description="A plan that moves the outcome rate by more points needs a yes.",
     )
     approve_drop_share: float = Field(
         default=0.02,
         ge=0.0,
-        le=1.0,
+        le=0.02,
         description="Rows a join, a stack or a row removal drops (share) before it needs a yes.",
     )
     change_warn_pct: float = Field(
@@ -235,7 +231,7 @@ class GateLimits(BaseModel):
     change_refuse_pct: float = Field(
         default=60.0,
         ge=0.0,
-        le=100.0,
+        le=60.0,
         description="A value fix changing a larger share (%) of a column is refused.",
     )
 

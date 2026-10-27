@@ -201,3 +201,91 @@ def test_every_limit_a_prompt_states_is_the_one_in_the_limits(name: str, numbers
         assert str(value) in text, (name, value)
     default = _render(name)
     assert default != text
+
+
+# ---------------------------------------------------------------------------
+# One source for every limit; the handlers read what the registry lists
+# ---------------------------------------------------------------------------
+def test_the_gates_and_trials_are_engine_wide_so_a_prompt_states_what_the_gates_enforce() -> None:
+    engine = limits()
+    case = DataDoctorConfig(
+        limits=DataDoctorLimits(
+            gates=GateLimits(retries=0, loss_stop_pct=1.0), trial={"dry_run_rows": 5, "sample_rows": 7}
+        ),
+    )
+    found = limits(case)
+    assert found.gates == engine.gates and found.trial == engine.trial
+    assert prompt_limits(case)["retries"] == engine.gates.retries == limits().gates.retries
+
+
+def test_a_case_still_sets_what_the_model_reads_and_asks() -> None:
+    case = DataDoctorConfig(limits=DataDoctorLimits(turn=TurnLimits(strikes=5), asks=AsksLimits(blocking=1)))
+    assert (limits(case).turn.strikes, limits(case).asks.blocking) == (5, 1)
+    assert prompt_limits(case)["strikes"] == 5
+
+
+def test_a_gate_may_only_be_tightened() -> None:
+    for field, loose in (
+        ("loss_stop_pct", 6.0),
+        ("rate_stop_points", 2.0),
+        ("approve_drop_share", 0.5),
+        ("change_refuse_pct", 61.0),
+    ):
+        with pytest.raises(ValueError):
+            GateLimits(**{field: loose})
+    assert GateLimits(loss_stop_pct=1.0, approve_drop_share=0.0).loss_stop_pct == 1.0
+
+
+@pytest.mark.parametrize("field", ["history_turns", "state_doubts", "reloaded_looks"])
+def test_what_the_model_reads_cannot_be_zero_because_zero_would_slice_everything(field: str) -> None:
+    with pytest.raises(ValueError):
+        TurnLimits(**{field: 0})
+
+
+def _read_keys(module: str, function: str) -> set[str]:
+    tree = ast.parse((ROOT / "engine" / "doctor" / f"{module}.py").read_text(encoding="utf-8"))
+    keys: set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == function):
+            continue
+        for part in ast.walk(node):
+            call = (
+                isinstance(part, ast.Call)
+                and isinstance(part.func, ast.Attribute)
+                and part.func.attr == "get"
+            )
+            target = part.func.value if call else getattr(part, "value", None)  # type: ignore[union-attr]
+            if not (isinstance(target, ast.Name) and target.id == "args"):
+                continue
+            key = part.args[0] if call else getattr(part, "slice", None)  # type: ignore[union-attr]
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                keys.add(key.value)
+    return keys
+
+
+def _fields(model: type) -> set[str]:
+    return set(model.model_fields)  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("module", "function", "model", "all_read"),
+    [
+        ("agent_review", "_sql", actions.ProposeSqlArgs, False),
+        ("agent_review", "_ask", actions.AskReviewArgs, False),
+        ("agent_review", "_doubt", actions.ExpressDoubtArgs, False),
+        ("agent_review", "_request", actions.RequestDataArgs, False),
+        ("agent_chat", "_quick", actions.AskChatArgs, False),
+        ("agent_chat", "_suggest", actions.SuggestAnswerArgs, True),
+        ("agent_chat", "_withdraw", actions.WithdrawArgs, True),
+        ("agent_chat", "_combine", actions.CombineArgs, False),
+    ],
+)
+def test_a_handler_reads_only_keys_the_registry_lists(
+    module: str, function: str, model: type, all_read: bool
+) -> None:
+    read = _read_keys(module, function)
+    assert read, f"{module}.{function} reads no argument; this test no longer reads it"
+    read -= {"reason"} if function == "_sql" else set()  # an older name of `description`, still accepted
+    assert read <= _fields(model), (function, read - _fields(model))
+    if all_read:
+        assert read == _fields(model), (function, _fields(model) - read)

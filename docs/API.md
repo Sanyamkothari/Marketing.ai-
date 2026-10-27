@@ -1059,7 +1059,6 @@ The cross-use-case default feature library (plan section 5.1).  A use case's own
 | `doubts` | integer | no | Doubts the AI may state in one review. |
 | `requests` | integer | no | Requests for more data the AI may make in one review. |
 | `request_columns` | integer | no | Columns one request for data may name. |
-| `suggestions_per_question` | integer | no | Answers suggested for one question; a later one replaces the earlier. |
 
 #### TrialLimits
 
@@ -1072,7 +1071,7 @@ The cross-use-case default feature library (plan section 5.1).  A use case's own
 
 #### GateLimits
 
-`data_doctor.limits.gates`: where a plan needs the person's yes.
+`data_doctor.limits.gates`: where a plan needs the person's yes. These gates may only be tightened: no value is looser than the one the Doctor always had. They are engine-wide (`configs/engine.yaml`); a use case's own `gates` and `trial` are not read (see `engine.doctor.limits.limits`).
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
@@ -2271,12 +2270,12 @@ Keys of the default document that no advanced-settings field renders, with their
 | `data_doctor.limits.turn.effect_chars` | int 40..1000; longest "what this choice does" sentence |
 | `data_doctor.limits.turn.question_chars` | int 100..2000; longest question or doubt text |
 | `data_doctor.limits.turn.description_chars` | int 50..2000; longest query description |
-| `data_doctor.limits.turn.history_turns` | int 0..100; earlier chat messages the model reads |
+| `data_doctor.limits.turn.history_turns` | int 1..100; earlier chat messages the model reads |
 | `data_doctor.limits.turn.state_items` | int 1..500; latest changes of the case the model reads |
 | `data_doctor.limits.turn.state_questions` | int 1..200; questions of the case the model reads |
-| `data_doctor.limits.turn.state_doubts` | int 0..100; doubts of the case the model reads |
+| `data_doctor.limits.turn.state_doubts` | int 1..100; doubts of the case the model reads |
 | `data_doctor.limits.turn.made_columns` | int 1..200; columns of a query's table the model is shown |
-| `data_doctor.limits.turn.reloaded_looks` | int 0..50; looks of earlier turns the model may cite again |
+| `data_doctor.limits.turn.reloaded_looks` | int 1..50; looks of earlier turns the model may cite again |
 | `data_doctor.limits.turn.short_chars` | int 40..2000; longest piece of text the case state shows |
 | `data_doctor.limits.turn.prompt_chars` | int 5000..400000; longest prompt that is sent |
 | `data_doctor.limits.asks.blocking` | int 0..20; blocking questions in one review |
@@ -2286,15 +2285,15 @@ Keys of the default document that no advanced-settings field renders, with their
 | `data_doctor.limits.asks.doubts` | int 0..50; doubts in one review |
 | `data_doctor.limits.asks.requests` | int 0..20; requests for more data in one review |
 | `data_doctor.limits.asks.request_columns` | int 1..50; columns one request may name |
-| `data_doctor.limits.asks.suggestions_per_question` | int 1..1; a later suggestion for a question replaces the earlier |
+| `data_doctor.limits.trial` | engine-wide; a use case's own trial/gates are not read |
 | `data_doctor.limits.trial.sample_rows` | int 1..1000000; rows of the Sample a plan is checked on |
 | `data_doctor.limits.trial.dry_run_rows` | int 1..10000000; rows of each file a query is tried on |
 | `data_doctor.limits.gates.retries` | int 0..10; tries of a failing step before a person is asked |
-| `data_doctor.limits.gates.loss_stop_pct` | float 0..100; share of customers a plan may lose without a yes |
-| `data_doctor.limits.gates.rate_stop_points` | float 0..100; points the outcome rate may move without a yes |
-| `data_doctor.limits.gates.approve_drop_share` | float 0..1; share of rows a join, stack or removal may drop without a yes |
+| `data_doctor.limits.gates.loss_stop_pct` | float 0..5 (tighten only); share of customers a plan may lose without a yes |
+| `data_doctor.limits.gates.rate_stop_points` | float 0..1 (tighten only); points the outcome rate may move without a yes |
+| `data_doctor.limits.gates.approve_drop_share` | float 0..0.02 (tighten only); share of rows a join, stack or removal may drop without a yes |
 | `data_doctor.limits.gates.change_warn_pct` | float 0..100; share of a column a value fix may change before a warning |
-| `data_doctor.limits.gates.change_refuse_pct` | float 0..100; share of a column a value fix may change before it is refused |
+| `data_doctor.limits.gates.change_refuse_pct` | float 0..60 (tighten only); share of a column a value fix may change before it is refused |
 
 ### Catalog keys
 
