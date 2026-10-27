@@ -26,6 +26,13 @@ docs/v3/PRESET.md (look-alike, who, frequency, moments, journeys, offer pricing,
 none running), for CI to compare with `agent`. Another stream adds its own with
 `register_policy("name", lambda world: MyPolicy(...))`; the factory gets the world so a fresh
 policy is built for every run (the oracle uses the world's truth; nothing else may).
+
+The ablation variants of docs/v3/DIAGNOSE.md (`v3_no_<part>`, `agent_<part>`, `agent_no_<guard>`,
+`agent_loose_caps`, `autonomy.runtime.ablation`) are registered too, for CI to find which mechanism costs
+money. Every run of the policy under test also prints a compact block of lines starting "DIAG " (decisions,
+act against nothing, every blocked_by and reason code, which v3 part held customers, expected against realised
+value per action), from `autonomy.runtime.diagnostics`. `agent_loose_caps` also multiplies the weekly
+contact cap of the run's brief (for every policy of that run, the references too).
 """
 
 from __future__ import annotations
@@ -64,6 +71,8 @@ from autonomy.gym.score import (
     staged_criteria,
 )
 from autonomy.interfaces import Policy, StateFolder
+from autonomy.runtime import ablation
+from autonomy.runtime.diagnostics import DecisionTally, RecordingPolicy, format_block, part_snapshot
 
 AGENT = "agent"
 AGENT_NO_MOMENTS = "agent_no_moments"
@@ -101,6 +110,59 @@ def no_moments_agent_factory(world: SimWorld) -> Policy:  # noqa: ARG001
     from autonomy.runtime.agent import build_agent_policy
 
     return build_agent_policy([default_brief()], default_content(), moments=False)
+
+
+def recording_factory(factory: PolicyFactory, sink: list[RecordingPolicy]) -> PolicyFactory:
+    """`factory` with each policy it builds wrapped in a `RecordingPolicy` that is also appended to `sink`
+    (one per run, in seed order). The wrapper counts the agent group's decisions and changes none."""
+
+    def make(world: SimWorld) -> Policy:
+        recorder = RecordingPolicy(factory(world))
+        sink.append(recorder)
+        return recorder  # type: ignore[return-value]
+
+    return make
+
+
+def diag_block(
+    spec: ScenarioSpec,
+    policy: str,
+    seeds: Sequence[int],
+    cards: Sequence[ScoreCard],
+    recorders: Sequence[RecordingPolicy],
+    briefs: Sequence[Brief] | None,
+) -> str:
+    """The "DIAG " lines for one policy over all its seeds: the decisions summed, the figures the scorecards
+    carry (true value per action is the Gym truth's, incremental per action the realised one), and the
+    parts' own counters from the last seed's agent."""
+    tally = DecisionTally()
+    for r in recorders:
+        tally.merge(r.tally)
+    mine = [c for c in cards if c.policy == policy]
+    actions = sum(c.actions for c in mine)
+    true_value = sum(c.true_value for c in mine)
+    incremental = sum(c.incremental_profit.point for c in mine)
+    cpw = [c.contacts_per_customer_week for c in mine]
+    unsub = [c.unsubscribe_rate for c in mine]
+    extra: dict[str, object] = {
+        "contacts_per_customer_week": f"{sum(cpw) / len(cpw):.3f}" if cpw else "n/a",
+        "unsubscribe_rate": f"{sum(unsub) / len(unsub):.4f}" if unsub else "n/a",
+        "true_value_per_action": f"{true_value / actions:.4f}" if actions else "n/a",
+        "realised_incremental_per_action": f"{incremental / actions:.4f}" if actions else "n/a",
+        "true_value_sum": f"{true_value:,.0f}",
+        "scorecard_actions": actions,
+    }
+    changed: dict[str, object] | None = None
+    snapshot: dict[str, object] = {}
+    first = recorders[0].inner if recorders else None
+    if first is not None and hasattr(first, "contact_price"):  # an AgentPolicy
+        plain = ablation.build_variant("agent", briefs or [default_brief()], default_content())
+        changed = ablation.changed_switches(first, plain)
+        if policy in ablation.VARIANTS and ablation.VARIANTS[policy].cap_factor != 1:
+            changed["weekly_contact_cap"] = f"x{ablation.VARIANTS[policy].cap_factor}"
+        snapshot = {"last_seed": seeds[-1], **part_snapshot(recorders[-1].inner)}
+    label = f"gym scenario={spec.name} policy={policy} seeds={len(seeds)} customers={spec.n_customers} days={spec.days}"
+    return format_block(label, tally, changed=changed, snapshot=snapshot, extra=extra)
 
 
 def full_folder() -> StateFolder:
@@ -171,6 +233,16 @@ def v3_no_moments_agent_factory(world: SimWorld) -> Policy:  # noqa: ARG001
     return build_agent_policy([default_brief()], default_content(), v3=V3Preset(moments=False))
 
 
+def variant_factory(name: str) -> PolicyFactory:
+    """A fresh ablation variant (`autonomy.runtime.ablation`) on the Gym's brief and library for each run."""
+
+    def factory(world: SimWorld) -> Policy:  # noqa: ARG001
+        briefs = ablation.variant_briefs(name, [default_brief()])
+        return ablation.build_variant(name, briefs, default_content())
+
+    return factory
+
+
 POLICIES: dict[str, PolicyFactory] = {
     EVERYONE: everyone_factory,
     RULE: rule_factory,
@@ -184,6 +256,7 @@ POLICIES: dict[str, PolicyFactory] = {
     BEST_FIXED: best_fixed_factory,
     SEGMENT_ORACLE: segment_oracle_factory,
 }
+POLICIES.update({n: variant_factory(n) for n in ablation.names() if n not in POLICIES})
 
 REFERENCES: tuple[str, ...] = (EVERYONE, RULE, BEST_FIXED, SEGMENT_ORACLE, ORACLE)
 """What every policy is compared with, in the order the scoreboard lists them."""
@@ -324,7 +397,15 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
             parser.error("--moments is for --policy agent or agent_v3")
         if args.policy == AGENT:
             registry[AGENT] = moments_agent_factory  # agent_v3 has its moments on already
+    recorders: list[RecordingPolicy] = []
+    if args.policy not in REFERENCES:  # a reference is judged by its type (the oracle), so it is not wrapped
+        registry[args.policy] = recording_factory(registry[args.policy], recorders)
     factory = registry[args.policy]
+    run_briefs = (
+        ablation.variant_briefs(args.policy, [default_brief()])
+        if args.policy in ablation.VARIANTS and ablation.VARIANTS[args.policy].cap_factor != 1
+        else None
+    )
     folders = full_folder if args.moments else None
     seeds = list(range(args.first_seed, args.first_seed + args.seeds))
     worlds = world_factory or make_world
@@ -344,12 +425,14 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
         "days": spec.days,
         "moments_on": bool(args.moments),
     }
+    scored: Sequence[ScoreCard]
     if args.no_compare:
         cards = [
             run_policy(
                 spec,
                 factory,
                 seed,
+                run_briefs,
                 policy_name=args.policy,
                 world_factory=worlds,
                 learn=learn,
@@ -360,6 +443,7 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
         for card in cards:
             print(describe(card))
         report["cards"] = [c.model_dump(mode="json") for c in cards]
+        scored = cards
     else:
         names = [args.policy, *REFERENCES]
         policies = {n: registry[n] for n in dict.fromkeys(names)}
@@ -367,13 +451,16 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
             policies[AGENT_NO_MOMENTS] = (
                 v3_no_moments_agent_factory if args.policy == AGENT_V3 else no_moments_agent_factory
             )
-        result = compare(spec, policies, seeds, world_factory=worlds, learn=learn, folder_factory=folders)
+        result = compare(
+            spec, policies, seeds, run_briefs, world_factory=worlds, learn=learn, folder_factory=folders
+        )
         for card in result.cards:
             if card.policy == args.policy:
                 print(describe(card))
         print("\nAverages over seeds:")
         print(result.summary().to_string(index=False, float_format=lambda x: f"{x:,.3f}"))
         report["cards"] = [c.model_dump(mode="json") for c in result.cards]
+        scored = result.cards
         if args.policy in REFERENCES:
             print(f"\n{args.policy} is a baseline itself; the pass bar is for the policy under test.")
         else:
@@ -393,6 +480,9 @@ def main(argv: Sequence[str] | None = None, *, world_factory: WorldFactory | Non
             mean = gain["mean_gain"]
             if isinstance(mean, float):
                 print(f"\nMoments: {money(mean)} a seed against the same agent with moments off.")
+    if recorders:
+        block = diag_block(spec, args.policy, seeds, scored, recorders, run_briefs)
+        print("\n" + block)
     elapsed = time.perf_counter() - started
     report["seconds"] = round(elapsed, 1)
     if args.report_json is not None:
