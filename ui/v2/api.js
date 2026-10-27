@@ -50,6 +50,7 @@ export const MOCK_FILES = Object.freeze({
   // Zero-touch setup (api/v2/onboarding.py, onboarding_brand.py) and the exceptions-only inbox (api/v2/inbox.py).
   onboardingProposals: "onboarding_proposals.json",
   onboardingLimits: "onboarding_limits.json",
+  onboardingMargin: "onboarding_margin.json",
   onboardingBrand: "onboarding_brand.json",
   inbox: "inbox.json",
   autopilot: "autopilot.json",
@@ -318,6 +319,8 @@ export function createApi(options = {}) {
       batches: null,
       // Zero-touch writes in this page load: signed mandates, the voice approval, inbox items handled.
       mandates: [],
+      // The margin question's answer (percent); null until answered, as on a real shop (api/v2/onboarding.py).
+      marginPct: null,
       brandApproval: null,
       handled: new Set(),
     };
@@ -430,7 +433,40 @@ export function createApi(options = {}) {
   }
 
   /** POST /onboarding/accept in mock mode: the proposal becomes a goal in Shadow with a signed (sample) mandate. */
+  // The margin as the real API keeps it: checked (0 < m < 100, else 422) and stored once answered.
+  function mockKeepMargin(s, value) {
+    const pct = Number(value);
+    if (!Number.isFinite(pct) || pct <= 0 || pct >= 100) throw new ApiError(422, "INVALID", "The margin must be above 0 and below 100 (percent).", null);
+    s.marginPct = Math.round(pct * 100) / 100;
+  }
+
+  async function mockMargin(s) {
+    const status = clone((await loadMock(MOCK_FILES.onboardingMargin)) || null);
+    if (!status || s.marginPct === null) return status;
+    const pct = s.marginPct;
+    const warning = pct < status.warn_below_pct
+      ? `${pct}% is very low. If you meant ${pct * 100}%, type it as ${pct * 100}, not as a fraction. Keep it only if only that much is left of each sale.`
+      : pct > status.warn_above_pct
+        ? `${pct}% is very high. After product cost, shipping and payment fees most shops keep much less; a margin set too high makes the proof show more profit than there is.`
+        : null;
+    return { ...status, answered: true, margin_pct: pct, margin_rate: Math.round(pct * 100) / 10000, source: "your answer", warning, note: "The proof counts every purchase that carries no margin of its own at this margin. Set AUTONOMY_MARGIN_RATE to keep it after a restart." };
+  }
+
+  // The sample shop's orders carry their margins: they still size the goal; the answer only stops the question.
+  function mockLimitsAnswered(limits, pct) {
+    if (!limits || pct === null) return limits;
+    const rows = (limits.limits || []).map((l) => (l.key === "margin" && l.question
+      ? { ...l, question: null, found: `${l.found} ${pct}% from your answer counts only the purchases with no margin of their own, in the proof; sizing and the offer floor use your orders' margin.` }
+      : l));
+    return { ...limits, limits: rows, questions: rows.map((l) => l.question).filter((q) => q) };
+  }
+
   async function mockAccept(s, body) {
+    if (body.margin_pct !== undefined && body.margin_pct !== null) mockKeepMargin(s, body.margin_pct);
+    if (s.marginPct === null) {
+      const status = await mockMargin(s);
+      throw new ApiError(409, "CONFLICT", `Answer this first: ${(status && status.question) || "your margin"} (margin_pct, above 0 and below 100). Nothing was written.`, null);
+    }
     const scan = await mockProposals(s);
     const id = body.opportunity_id || (scan && scan.preselected_id);
     const proposal = scan && (scan.proposals || []).find((p) => p.opportunity_id === id);
@@ -701,14 +737,18 @@ export function createApi(options = {}) {
         const id = q.get("opportunity_id") || (scan && scan.preselected_id);
         const all = (await loadMock(MOCK_FILES.onboardingLimits)) || {};
         if (!id || !all[id]) throw notFound(`Proposal ${id}`);
-        return all[id];
+        return mockLimitsAnswered(all[id], s.marginPct);
       }
       case "GET /onboarding/mandates":
         return clone(s.mandates);
       case "GET /onboarding/margin":
-        return { question: "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?", explanation: "", answered: true, margin_pct: null, margin_rate: null, source: "sample shop", min_pct: 0, max_pct: 100, warn_below_pct: 5, warn_above_pct: 80, warning: null, note: "The sample shop's orders carry their margins." };
+        return mockMargin(s);
+      case "POST /onboarding/margin":
+        mockKeepMargin(s, body && body.margin_pct);
+        return mockMargin(s);
       case "POST /onboarding/answers":
-        // The sample shop's orders carry their margins, so an answer changes nothing here.
+        // Kept; the sample shop's orders carry their margins, so the proposals are sized as before.
+        mockKeepMargin(s, body && body.margin_pct);
         return mockProposals(s);
       case "POST /onboarding/accept":
         return mockAccept(s, body || {});

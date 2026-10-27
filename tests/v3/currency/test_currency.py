@@ -679,3 +679,4 @@ def test_onboarding_without_the_shops_prices_quotes_no_money_and_writes_nothing(
     assert r.status_code == 409 and "no INR price for email" in r.json()["detail"]
     assert {g.goal_id for g in services.workspace.goals()} == before
     assert desk.signed == {} and desk.ledger.head == head
+    assert services.margin_rate is None and desk.margin_rate is None  # a refused accept keeps no margin

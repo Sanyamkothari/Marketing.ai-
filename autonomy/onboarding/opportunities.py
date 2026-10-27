@@ -81,10 +81,12 @@ from autonomy.onboarding.priors import (
 )
 
 __all__ = [
+    "ANSWER_SOURCE",
     "LOOKBACK_DAYS",
     "MIN_BASE_SAMPLE",
     "MIN_BUYERS",
     "MIN_HISTORY_DAYS",
+    "ORDERS_SOURCE",
     "Basis",
     "MarginReading",
     "OpportunityScan",
@@ -195,11 +197,21 @@ class OpportunityScan(Contract):
 # --- the shop's margin --------------------------------------------------------------------------------
 
 
-def margin_reading(history: ShopHistory, given: float | None = None) -> MarginReading:
-    """The margin rate to size with: the shop's answer, its orders' margins, else the default (flagged)."""
+ANSWER_SOURCE: Final[str] = "your answer"
+"""`MarginReading.source` of a margin the shop typed in onboarding."""
+ORDERS_SOURCE: Final[str] = "your orders' margins"
+"""`MarginReading.source` of a margin read from the orders' own margins."""
+
+
+def margin_reading(
+    history: ShopHistory, given: float | None = None, *, given_source: str = ANSWER_SOURCE
+) -> MarginReading:
+    """The margin rate to size with: the shop's answer, its orders' margins, else the default (flagged).
+
+    `given_source` names where `given` came from (the shop's answer by default, or its settings)."""
     rows = history.all_purchases()
     if given is not None:
-        return MarginReading(rate=given, source="your answer", from_data=True, orders=len(rows))
+        return MarginReading(rate=given, source=given_source, from_data=True, orders=len(rows))
     known = [p for p in rows if p.margin is not None and p.value > 0]
     if rows and len(known) >= MIN_MARGIN_COVERAGE * len(rows):
         revenue = sum(p.value for p in known)
@@ -208,7 +220,7 @@ def margin_reading(history: ShopHistory, given: float | None = None) -> MarginRe
             rate = min(max(margin / revenue, 0.0), 1.0)
             return MarginReading(
                 rate=round(rate, 4),
-                source="your orders' margins",
+                source=ORDERS_SOURCE,
                 from_data=True,
                 orders_with_margin=len(known),
                 orders=len(rows),
@@ -808,10 +820,11 @@ def scan_opportunities(
     lift_prior: CitedNumber = MESSAGE_LIFT,
     history: ShopHistory | None = None,
     unreachable: Mapping[str, str] | None = None,
+    margin_source: str = ANSWER_SOURCE,
 ) -> OpportunityScan:
     """Every opportunity in the shop's history, sized and ranked; see the module docstring.
 
-    `margin_rate` is the shop's own answer when it gave one. `taken` marks goal kinds already
+    `margin_rate` is the shop's own answer when it gave one (`margin_source` says where it came from). `taken` marks goal kinds already
     running (not preselected). `unreachable` maps an opportunity id to why this deployment cannot
     reach its audience yet (e.g. refill reminders without refill scores on each customer): it is
     still sized and shown, never preselected, and the reason is a note. Pass a prebuilt `history`
@@ -820,7 +833,7 @@ def scan_opportunities(
     blocked = dict(unreachable or {})
     h = history if history is not None else ShopHistory.build(events, states, now)
     money = currency or h.currency()
-    margin = margin_reading(h, margin_rate)
+    margin = margin_reading(h, margin_rate, given_source=margin_source)
     shop_gap = _not_enough_shop(h)
     ctx = _Context.of(h)
     skipped: list[str] = []

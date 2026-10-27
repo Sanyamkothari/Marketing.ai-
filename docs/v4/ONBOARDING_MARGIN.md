@@ -43,7 +43,7 @@ proof shows revenue only.
 | `GET /v2/onboarding/margin` | `MarginStatus`: the question, the explanation, `answered`, `margin_pct`, `margin_rate`, `source` (`your answer`, `settings` or `not set`), the bounds and warn limits, `warning`, `note` |
 | `POST /v2/onboarding/margin` `{margin_pct}` | answers it; returns `MarginStatus` |
 | `POST /v2/onboarding/answers` `{margin_pct}` | the older route, same effect, returns the proposals sized by it |
-| `POST /v2/onboarding/accept` | answers 409 until the margin is answered (in the body, earlier, or by `AUTONOMY_MARGIN_RATE`); nothing is written before that |
+| `POST /v2/onboarding/accept` | answers 409 until the margin is answered (in the body, earlier, or by `AUTONOMY_MARGIN_RATE`); nothing is written before that, and a margin in the body is kept only once every refusal check has passed |
 
 **Validation.** The answer is a percent, above 0 and below 100 (so the stored rate satisfies 0 < m < 1); anything
 else is 422 and nothing is kept. Below 5% or above 80% is kept and warned about ("very low": probably a fraction typed
@@ -51,10 +51,26 @@ as a percent, 0.4 for 40%; "very high": the proof would show more profit than th
 `MARGIN_WARN_BELOW_PCT` and `MARGIN_WARN_ABOVE_PCT` in `api/v2/onboarding.py`.
 
 **Where it is stored.** The answer is stored as a rate (0-1) on `Services.margin_rate` (what the proof and the
-measurement ledger read, live, on the next request) and on the running runtime's `margin_rate` (what its nightly proof
-checks read), through `Services.set_margin_rate`. It is the same value as `RuntimeSettings.margin_rate`
-(`AUTONOMY_MARGIN_RATE`), and a value from the setting counts as answered. See "Not done here" for what a restart
-does.
+measurement ledger read, live, on the next request) and on the running runtime's `margin_rate` (what its nightly
+negative-lift check reads), through `Services.set_margin_rate`, and on the Autopilot guard when the inbox services are
+attached (`AutopilotGuard.set_margin_rate`, which also drops the guard's cached judgements, since they are keyed by goal
+and level and not by margin). It is the same value as `RuntimeSettings.margin_rate` (`AUTONOMY_MARGIN_RATE`), and a
+value from the setting counts as answered (the limits row then says "from your settings (AUTONOMY_MARGIN_RATE)", not
+"from your answer"). See "Not done here" for what a restart does.
+
+**The orders' own margins come first for sizing and the offer floor.** When at least half of the shop's orders carry
+a margin (`margin_reading` finds one), those margins still size the proposals and set the mandate's margin
+(`terms.margin_rate`) and offer floor (margin less the deepest offer), as before this change. The answer is then used
+only by the proof, for purchases that carry no margin of their own, and the limits row shows both ("30% gross margin
+across N orders that carry one. 70% from your answer counts only the purchases with no margin of their own, in the
+proof; sizing and the offer floor use your orders' margin."). A typed answer that is too high can therefore never
+loosen the offer floor.
+
+**After a mandate is signed, the margin can only be lowered.** `POST /v2/onboarding/margin`, `/answers` and a later
+`accept` with a higher `margin_pct` answer 409 and change nothing once a mandate has been signed here: a higher margin
+shows more profit and would loosen the nightly demotion check without a new signature. A lower one only makes the proof
+and the checks more cautious, so it is kept. The mandate ledger has no entry kind for a margin change, so none is
+written.
 
 **No hidden default.** Until it is answered:
 
@@ -80,8 +96,12 @@ now described as only that) is unchanged: it never reaches the proof, the mandat
   (tests, `scripts/v2_zero_touch_rehearsal.py`) now do.
 * `docs/v2/openapi.json` is regenerated (`python -m api.v2.app --openapi`): the two new routes and `MarginStatus`;
   the file also picked up other drift from the generator at this commit.
-* `ui/v2/mock/*.json`: no contract that a mock holds changed (`LearnedLimit.question` is still a nullable string and
-  the mocks have it null), so none was rewritten. The mock API answers `GET /onboarding/margin` for the sample shop.
+* `ui/v2/mock/onboarding_limits.json`: the sample shop's margin row now asks the question (and `questions` lists it),
+  as the real API does for a shop whose orders carry margins and that has not answered; rewritten through
+  `LearnedLimits` (validate, dump). `ui/v2/mock/onboarding_margin.json` is new: the unanswered `MarginStatus`, dumped
+  from the model. The mock API keeps an answer like the server (`POST /onboarding/margin` and `/answers`, 422 outside
+  0-100, the same warnings), refuses `accept` without one (409), and drops the margin question from the limits once
+  answered. `tests/v2/zero_touch/flow.test.mjs` types the margin before signing.
 
 ## Evidence
 
@@ -112,13 +132,45 @@ All run in this worktree.
   `autonomy/onboarding/limits.py`: no issues.
 * Pending CI: the full v2 suite (`pytest tests/v2`) and the UI test suites, which were not run here.
 
+## Review fixes
+
+After review (verdict fix_then_ship), in this order:
+
+| Finding | Fix |
+|---|---|
+| A required answer replaced the orders' margins for sizing and the mandate floor | the orders' margins win when they exist (`api/v2/onboarding.py` `_sizing_rate`); the answer is shown on the row and used by the proof only |
+| After signing, the margin could be changed with no signature | raising is refused (409) once a mandate is signed; lowering is kept and also reaches the Autopilot guard |
+| An unpriced channel of goal B withheld goal A's profit | the unpriced check reads only the goal's own decisions (`honest_proof.goal_decisions`) in the proof and the ledger |
+| A refused `accept` still stored its margin | the margin is checked first and stored only after every refusal check passed |
+| The demo's proof used a fixed margin and its own prices, the ledger the live ones | the proof replaces `costs`' margin and prices with the live margin and `channel_prices()` (the same reading as `Services.send_prices`); a demo with no setting starts at its own `costs.margin_rate` |
+| Mock out of step | see "What moves" |
+| A withheld ledger still said "net incremental profit is below zero" | `withhold_measurement_profit` drops that note (`PROFIT_LOSS_NOTE`) |
+| The setting was labelled "your answer" on the limits row | the row names the setting |
+
+Evidence (run in this worktree after the fixes):
+
+* `pytest --co -q tests/v4/onboard`: 42 tests (29 in `test_onboard_margin.py`, 13 in `test_onboard_review_fixes.py`).
+* `pytest -n 2 tests/v4/onboard tests/v2/api/test_api.py tests/v2/engines/test_ledger_doctor_api.py
+  tests/v2/polish/test_api_demo.py tests/v2/proof_profit/test_proof_profit.py tests/v2/zero_touch/test_goals_limits.py
+  tests/v2/zero_touch/test_flow.py tests/v2/connectors/test_shopify_offer_codes.py tests/v3/currency
+  tests/v2/api/test_api_runtime.py tests/v2/polish/test_runtime_gaps.py tests/v2/ui_finish/test_briefing.py
+  tests/v2/zero_touch/test_wiring_production.py --junitxml=...`: the JUnit file reports tests="260", failures="0",
+  errors="0", skipped="0".
+* `node --test tests/v2/zero_touch/flow.test.mjs tests/v2/promise/shell_onboarding.test.mjs`: 16 passed, 0 failed.
+* `ruff check`, `black` and `mypy --strict` on the changed Python files: clean. `python -m api.v2.app --openapi`
+  changed two route descriptions in `docs/v2/openapi.json`.
+* Pending CI: the full v2 suite (`pytest tests/v2`) and the UI test suites.
+
 ## Not done here
 
 * The answer lives in memory (the services and the onboarding desk). A restart loses it unless
   `AUTONOMY_MARGIN_RATE` is set; the answer says so. There is no settings store to write `RuntimeSettings` to yet.
 * The agent's value model and the Shadow/Approve value check take the margin when the policy and the controller are
-  built (at start, from the setting). An answer given in onboarding reaches the proof, the measurement ledger and the
-  runtime's nightly negative-lift check at once, and the agent's own start margin at the next restart with the setting.
+  built (at start, from the setting). An answer given in onboarding reaches the proof, the measurement ledger, the
+  runtime's nightly negative-lift check and the Autopilot guard at once, and the agent's own start margin at the next
+  restart with the setting.
+* Lowering the margin after signing is not written to the mandate ledger (it has no entry kind for it); raising it
+  needs a new deployment setting and restart, not a route.
 * The measurement ledger's `dispatch_costs` and the proof's `spend` still count an unpriced channel as 0 (the note
   says so); only the profit figures are withheld.
 * The UI was changed (margin field wording, required, warning toast, no signing without an answer) and checked only

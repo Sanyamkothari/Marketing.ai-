@@ -28,14 +28,14 @@ import statistics
 import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, TypeAlias
 
 from starlette.applications import Starlette
 from starlette.requests import Request
 
-from api.v2.honest_proof import unpriced_channels, withhold_proof_profit
+from api.v2.honest_proof import goal_decisions, unpriced_channels, withhold_proof_profit
 from autonomy.contracts import (
     NO_OFFER,
     Alert,
@@ -346,7 +346,10 @@ class Services:
 
     def set_margin_rate(self, rate: float) -> None:
         """Keep the shop's answer to the margin question: the proof, the measurement ledger and the runtime's
-        nightly checks count purchases with no margin of their own at `rate` from the next request on."""
+        nightly negative-lift check count purchases with no margin of their own at `rate` from the next request
+        on. The Autopilot guard keeps its own copy (`AutopilotGuard.set_margin_rate`, which the onboarding route
+        updates). Whether a change is allowed at all (only lowering once a mandate is signed) is that route's
+        rule."""
         self.margin_rate = rate
         inner: Any = getattr(self.runtime, "inner", self.runtime)
         if inner is not None and hasattr(inner, "margin_rate"):
@@ -1347,10 +1350,22 @@ class StoreReadModels:
     """The runtime's `autonomy.runtime.prices.ShopPrices`: suggestions are budgeted at the shop's prices."""
 
     def channel_prices(self) -> dict[Channel, float]:
-        """The shop's price of one message per channel: its `ShopPrices`; none known: empty (never a default)."""
-        from autonomy.runtime.prices import ShopPrices
+        """The shop's price of one message per channel, as `Services.send_prices` reads it: its `ShopPrices`,
+        else the free channels and the demo's `costs.channel`; a paid channel absent has no known price."""
+        from autonomy.runtime.prices import FREE_CHANNELS, ShopPrices
 
-        return self.prices.costs() if isinstance(self.prices, ShopPrices) else {}
+        if isinstance(self.prices, ShopPrices):
+            return self.prices.costs()
+        return {**dict.fromkeys(FREE_CHANNELS, 0.0), **(self.costs.channel if self.costs is not None else {})}
+
+    def live_margin_rate(self) -> float | None:
+        """The margin the proof counts with: the live answer (`margin_rate_fn`), else `margin_rate`, else the
+        demo's `costs.margin_rate`."""
+        if self.margin_rate_fn is not None:
+            return self.margin_rate_fn()
+        if self.margin_rate is not None:
+            return self.margin_rate
+        return self.costs.margin_rate if self.costs is not None else None
 
     def record(self, report: TickOutcome) -> None:
         self.alerts_log.extend(report.alerts)
@@ -1377,20 +1392,27 @@ class StoreReadModels:
         by_customer = {
             c: self.events.for_customer(c, until=now) for c in sorted({d.customer_id for d in closed})
         }
-        margin_rate = self.margin_rate_fn() if self.margin_rate_fn is not None else self.margin_rate
-        costs = self.costs or Costs(
-            channel=self.channel_prices(),
-            offer={o.offer_id: o.cost_per_redemption for b in briefs for o in b.envelope.offers},
-            margin_rate=margin_rate,
-            codes=OfferCodeTable(o for b in briefs for o in b.envelope.offers),  # typed code -> offer id
-        )
+        # The same margin and message prices as the measurement ledger (`Services.margin_rate`,
+        # `Services.send_prices`), also for the demo's fixed `costs`, so both pages count profit alike.
+        margin_rate, channel = self.live_margin_rate(), self.channel_prices()
+        if self.costs is not None:
+            costs = replace(self.costs, channel=channel, margin_rate=margin_rate)
+        else:
+            costs = Costs(
+                channel=channel,
+                offer={o.offer_id: o.cost_per_redemption for b in briefs for o in b.envelope.offers},
+                margin_rate=margin_rate,
+                codes=OfferCodeTable(o for b in briefs for o in b.envelope.offers),  # typed code -> offer id
+            )
         rewards = proof_rewards(closed, by_customer, horizon, objective, costs, now=now)
         summary = proof_summary(rewards, closed, now, goal_id, seed=self.seed, costs=costs)
         summary = withhold_proof_profit(
             summary,
             margin_rate=costs.margin_rate,
-            unpriced=unpriced_channels(
-                closed, (e for evs in by_customer.values() for e in evs), costs.channel
+            unpriced=unpriced_channels(  # only this goal's sends: another goal's channel never hides its profit
+                goal_decisions(closed, goal_id),
+                (e for evs in by_customer.values() for e in evs),
+                costs.channel,
             ),
         )
         if not closed:
@@ -1566,10 +1588,13 @@ def build_services_from_runtime(
     `runtime.briefing_store`, when it has them); `alerts` and `briefings` are served alongside.
     `catalogue` (item_id -> product name) is what product ids are shown as; none: names come from events.
     `margin_rate` is the shop's contribution margin for the proof, by default the runtime's own
-    (`runtime.margin_rate`, from `RuntimeSettings.margin_rate`); None: not set, and the proof says so.
+    (`runtime.margin_rate`, from `RuntimeSettings.margin_rate`), else the demo's `costs.margin_rate`; None:
+    not set, and the proof says so.
     """
     if margin_rate is None:
         margin_rate = getattr(runtime, "margin_rate", None)
+    if margin_rate is None and costs is not None:  # the demo's own margin, so the ledger and proof agree
+        margin_rate = costs.margin_rate
     if alert_store is None:
         alert_store = _runtime_store(runtime, ("alert_store", "alerts_store"), "list")
     if briefing_store is None:

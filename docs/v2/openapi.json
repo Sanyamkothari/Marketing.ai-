@@ -2349,7 +2349,7 @@
           "onboarding"
         ],
         "summary": "Set Margin",
-        "description": "Answer the margin question. 0 < margin < 100 (else 422); under 5 or over 80 is kept with a warning.",
+        "description": "Answer the margin question. 0 < margin < 100 (else 422); under 5 or over 80 is kept with a warning.\nOnce a mandate is signed here it can only be lowered (409).",
         "operationId": "set_margin_v2_onboarding_margin_post",
         "requestBody": {
           "content": {
@@ -2391,7 +2391,7 @@
           "onboarding"
         ],
         "summary": "Answer",
-        "description": "Store the shop's margin (asked once); the proposals come back sized with it.",
+        "description": "Store the shop's margin (asked once); the proposals come back sized with it (or with the orders' own\nmargins when they carry them).",
         "operationId": "answer_v2_onboarding_answers_post",
         "requestBody": {
           "content": {

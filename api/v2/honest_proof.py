@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from api.v2.engines.measurement import FinancialImpact, MeasurementSummary
+from api.v2.engines.measurement import PROFIT_LOSS_NOTE, FinancialImpact, MeasurementSummary
 from autonomy.contracts import Channel, Decision, Event, ProofSummary
 from autonomy.onboarding.limits import MARGIN_QUESTION
 from autonomy.proof.rewards import sent_decisions
@@ -26,6 +26,7 @@ from autonomy.runtime.prices import PAID_CHANNELS
 __all__ = [
     "MARGIN_EXPLANATION",
     "MARGIN_QUESTION",
+    "goal_decisions",
     "margin_missing_note",
     "unpriced_channels",
     "unpriced_note",
@@ -47,6 +48,12 @@ def margin_missing_note() -> str:
         "Profit needs your margin, and it is not set, so this page shows revenue only. "
         f"{MARGIN_QUESTION} Answer it in onboarding (or set AUTONOMY_MARGIN_RATE) and profit appears."
     )
+
+
+def goal_decisions(decisions: Iterable[Decision], goal_id: str | None) -> list[Decision]:
+    """The decisions whose action belongs to `goal_id` (every decision when it is None): a proof for one goal
+    asks only about the channels that goal sent on."""
+    return [d for d in decisions if goal_id is None or (d.action is not None and d.action.goal_id == goal_id)]
 
 
 def unpriced_channels(
@@ -106,7 +113,8 @@ def withhold_proof_profit(
 def withhold_measurement_profit(
     summary: MeasurementSummary, *, margin_rate: float | None, unpriced: tuple[Channel, ...] = ()
 ) -> MeasurementSummary:
-    """`withhold_proof_profit` for the measurement ledger's summary."""
+    """`withhold_proof_profit` for the measurement ledger's summary; a note that reads the withheld profit
+    (`PROFIT_LOSS_NOTE`) is dropped with it."""
     reason = _reason(margin_rate, summary.financial_impact.margin_note is not None, unpriced)
     if reason is None:
         return summary
@@ -119,4 +127,5 @@ def withhold_measurement_profit(
             "margin_note": reason,
         }
     )
-    return summary.model_copy(update={"financial_impact": money})
+    notes = tuple(n for n in summary.notes if n != PROFIT_LOSS_NOTE)
+    return summary.model_copy(update={"financial_impact": money, "notes": notes})
