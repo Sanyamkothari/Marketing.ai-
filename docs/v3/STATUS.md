@@ -10,6 +10,8 @@ and the plain (v2) agent is what the product runs and what is sold ([ARCHITECTUR
 section 8, "Park" and "Stop now"). No new v3 features are being built. A part comes back on only with the evidence
 the review lists for it (section 8, "Evidence that would justify turning each v3 part back on").
 
+The first foundation fix, telling the truth in the product and the docs, is described in [HONEST.md](HONEST.md).
+
 ## Built, wired, proven
 
 Every stream was built by one agent, reviewed by a second (adversarial) agent and fixed by a third, then merged.

@@ -365,6 +365,10 @@ test("Plan (sample data): products it may suggest, and the product fact labelled
     assert.ok(factBox.textContent.includes(n), n);
     assert.ok(!outside.includes(n), `${n} outside the product fact`);
   }
+  // the result is quoted with its losses, not only its best case (docs/v2/REAL_DATA_RESULTS.md "Recommender lift")
+  for (const n of ["-1.3 points", "-2.1 points", "+8.8 points", "+4.6", "+1.2", "Olist"]) assert.ok(factBox.textContent.includes(n), n);
+  assert.ok(factBox.textContent.includes("That was the best case"));
+  assert.ok(factBox.textContent.indexOf("about 58% more") < factBox.textContent.indexOf("Ta-Feng"));
 });
 
 test("Plan (sample data): you approve once, with the dial and Shadow recommended", async () => {

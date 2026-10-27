@@ -442,6 +442,11 @@ const PRODUCT_TEST_ABOUT =
   "A fact about Autonomy, not a result from your shop. Tested on a public real shop's order history (the UCI Online Retail data, 2010 to 2011): it learned from about nine months of orders, then was checked on the next 90 days, on the 1,858 customers who went on to buy something new to them. Nobody was sent a message. Your own results will differ; Proof shows your real numbers. Source: " +
   `${CATALOG_DOC} (Recommendations, Evaluation).`;
 
+/** The recommender result, best case first and then the rest of the table (docs/v2/REAL_DATA_RESULTS.md, "Recommender lift"). */
+export const RECOMMENDER_BEST_CASE = "On one public shop's orders, 34.7% bought one of its 5 suggestions, against 22.0% for the shop's 5 best-sellers: about 58% more.";
+export const RECOMMENDER_LOSSES =
+  "That was the best case. On six other public order histories the gain was smaller or negative: +8.8 points on Online Retail II, +4.6 on Instacart and +1.2 on Dunnhumby (both with invented dates), no difference we could measure on Olist, and worse than best-sellers on Ta-Feng (-1.3 points) and Superstore (-2.1 points). Where best-sellers do better, these suggestions do worse. Source: docs/v2/REAL_DATA_RESULTS.md.";
+
 /** Products it may suggest: what this shop's data allows, and the product test, labelled as a fact about Autonomy. */
 function productsCard(data) {
   const products = data && present(data.products) ? Number(data.products) : null;
@@ -466,7 +471,8 @@ function productsCard(data) {
         "aside",
         { class: "product-fact", "aria-label": "How we tested this: a fact about Autonomy, not about your shop" },
         el("p", { class: "product-fact-label" }, described("How we tested this", PRODUCT_TEST_ABOUT), el("span", { class: "product-fact-tag" }, "About Autonomy, not your shop.")),
-        el("p", {}, "34.7% bought one of its 5 suggestions, against 22.0% for the shop's 5 best-sellers: about 58% more.", source ? [" ", source] : null),
+        el("p", {}, RECOMMENDER_BEST_CASE, source ? [" ", source] : null),
+        el("p", { class: "product-fact-losses" }, RECOMMENDER_LOSSES),
       ),
     ],
   });

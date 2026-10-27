@@ -19,6 +19,33 @@ shape. Money always comes with its range, and a range that includes zero reads "
 the product in general (58% more purchases than best-sellers, 3-10% typical) appear only as labelled product
 facts ("How we tested this", with a link to the source doc), never as numbers about this business.
 
+## Update: the honesty pass (27 Oct 2026)
+
+The pitch was rewritten to lead with proof, not autonomy ([PITCH.md](PITCH.md)), and the demo was stripped of numbers
+it had not earned (docs/v3/ARCHITECTURE_REVIEW.md section 8 "Fix first" 1; docs/v3/CMO_REVIEW.md change 2). What moved
+in the table below, in the same row numbers (the audit further down is left as it was):
+
+- **Row 23 is now present.** The server refuses to approve a message the editor did not pass
+  (`Services.set_content_status`, 409). The Plan screen offers Approve only on a message the editor passed, and
+  the sample API answers 409 the same way. A held draft (the judge went down between its two runs) is no
+  longer called "passed". Test: `tests/v2/api/test_content_gate.py`.
+- **Row 56 is out of the pitch.** "Paid in results" is dropped until pricing exists; there are 60 promises, not 61.
+- **Rows 24, 25, 31, 42** stay partial, with row 25 now quoted with its losses: 34.7% against 22.0% is the best
+  case; Ta-Feng (-1.3 points) and Superstore (-2.1 points) lose to best-sellers
+  ([REAL_DATA_RESULTS.md](REAL_DATA_RESULTS.md) "Recommender lift").
+- **Row 43** ("What it learned"): the sample no longer carries a lesson the engine cannot write, so the card says
+  "Nothing new yet" there as it does on the demo. The briefing sample is the Analyst's own template output
+  (extra profit, the simple rule, customer health) and no longer has "would buy anyway", "What it is learning" or a
+  return-on-spend line.
+- **Row 47** (spend): Proof's "Spend so far" and Live's "Spent on messages" count different sets (Proof: the agent
+  group's contacts whose results are in, messages and discounts; Live: every message sent, as the budget limit counts
+  it). Each says what it counts, and Proof names Live's number when they differ.
+- **Every screen that shows numbers** says "Simulated shop" when the shop is simulated (the sample files, or a server
+  whose only data source is the Gym), Proof first; the top bar says it for the demo server.
+- **Follow-ups** (plan): the Plan screen lists a follow-up step only when the server sends it
+  (`PlanFacts.follow_ups_run`, true only with the v3 journeys). The plain agent sends none.
+- **WhatsApp**: "Coming next" on the platforms card and on the channels card; never "Ready".
+
 ## Final status (after the promise work, 20 Oct 2026)
 
 **After the declutter pass (20 Oct 2026).** The screens now show numbers first and move every explanation into a
@@ -27,8 +54,8 @@ the page or in the description of the thing it is about, and its words stay in t
 The "Where" column below says where each moved promise lives now.
 
 Checked against the simulated demo API (`python3 -m api.v2.app`) and the mock files (`?mock=1`), with the
-screenshots in [screenshots/](screenshots/README.md) retaken afterwards. Totals: **49 present, 11 partial,
-1 missing** out of 61.
+screenshots in [screenshots/](screenshots/README.md) retaken afterwards. Totals before the honesty pass: **49 present, 11 partial,
+1 missing** out of 61; after it (row 23 present, row 56 dropped): **50 present, 10 partial, 0 missing** out of 60.
 
 | # | Promise (short) | Screen | Status | Where you see it, or why it is not fully kept |
 | --- | --- | --- | --- | --- |
@@ -54,7 +81,7 @@ screenshots in [screenshots/](screenshots/README.md) retaken afterwards. Totals:
 | 20 | Hard rules it can never break | plan | present | "Rules it can never break": consent, unsubscribes, quiet hours, weekly limit, budget, complaints, no-discount requests, people we never contact, each name with its words and the plan's value in its description. |
 | 21 | It pauses itself (the limits) | plan | present | "When it pauses itself" card: the rows grouped under "Pauses the goal" and "Pauses that channel" (each said once), each row's full sentence in its description. |
 | 22 | Copywriter plus strict editor | plan | present | "✓ Checked by the editor" said ONCE, over the group of messages the editor passed on every check, with the checklist (on brand, no false claims, no made-up numbers, unsubscribe line, channel rules) in its description; any other message keeps its own line (one that needs a look comes first, and none that needs a look is ever folded), and the failed check shows on the page; raw notes folded on each message. |
-| 23 | Nothing goes out without passing | plan | partial | The screen never offers Approve on a message the editor failed, and counts "N passed the editor; M failed and will never be sent". But the server does not enforce it: `POST /v2/content/{id}/status` can still approve a failed message, and a person may approve one the editor never checked (it is then labelled "approved by a person, not checked by the editor"). |
+| 23 | Nothing goes out without passing | plan | present | The screen offers Approve only on a message the editor passed, and counts "N passed the editor; M failed and will never be sent". The server enforces it: `POST /v2/content/{id}/status` answers 409 to an approval of a message the editor failed, held or never checked (the Plan screen no longer offers that approval either). A person can still reject or retire any message. |
 | 24 | ...which image | plan | partial | Cards draw a thumbnail with alt text when a message has `asset_url`, but no demo or mock message has one, so every real card says "Picture: None, text only". Seen only in the node test. |
 | 25 | It knows your products; 58% more than best-sellers | plan | partial | The 58% (34.7% vs 22.0%) appears only in a labelled "How we tested this" box, a fact about the product. This shop's product count shows only in mock mode: the demo's orders name no products, so the card says suggestions are off. The CATALOG.md source is text, not a link, because the app does not serve `docs/`. |
 | 26 | A random group is never contacted | plan | present | "10% are people we never contact" (Proof built in), with the method in its description. The word "holdout" is no longer shown (Live's briefing and Proof's API notes are reworded on screen). |
@@ -87,7 +114,7 @@ screenshots in [screenshots/](screenshots/README.md) retaken afterwards. Totals:
 | 53 | Switch to Autopilot when Proof shows real extra profit | proof | present | "Ready for Autopilot" only when the low end is above zero; other cards for Shadow, Approve, losing money, paused and Autopilot without proof. |
 | 54 | What it expects to earn before a message goes out | proof | present | "What it expects to earn" from `GET /v2/expected`, chip "Its own forecast, not proof", with its range, under one sentence: "Its forecast covers the N days after each contact it decided on since <date>." |
 | 55 | Typically 3-10%; we'll show the real number | proof | present | A "General guidance" pill whose description says "General guidance about AI marketing, not a result from your business", with its source. |
-| 56 | Paid in results | proof | missing | No pricing terms exist in the API, so nothing is shown (on purpose). When they exist they must be tied to the low end of the proof range. |
+| 56 | ~~Paid in results~~ | proof | dropped from the pitch | There are no pricing terms in the API or the pitch. When a price list exists it must be tied to the low end of the proof range. |
 | 57 | Week 1: connect and run in Shadow | onboarding | present | `#/start` "Getting started is safe: it watches before it sends.", five steps whose states come from data (the current one's pill says where you are; no "Step n of 5"); Plan marks Shadow "Recommended to start". |
 | 58 | Two weeks of Shadow: what, why, what it expects | onboarding | present | "Shadow: day N of 14" in the badge, the note and step 3, with what it would have done, its reasons and the forecast. |
 | 59 | Then Approve for one goal, small budget | onboarding | present | Step 4 lowers the budget (`PATCH /v2/goals/{id}`, the server's 409 words when raising above an approved plan) and turns on Approve. |
@@ -96,8 +123,7 @@ screenshots in [screenshots/](screenshots/README.md) retaken afterwards. Totals:
 
 What would turn the partial rows into present ones, and who owns it:
 
-- **Server-side guard for the editor** (row 23): `POST /v2/content/{id}/status` should refuse to approve a
-  message the Critic failed (API / workspace).
+- ~~Server-side guard for the editor (row 23)~~: done, see the update above.
 - **Real data with names, products, images and a Data Doctor report** (rows 7, 8, 24, 25, 31, 42): the screens
   already draw them from the API; the simulated demo has none of them. Answering the Doctor's questions in v2
   needs a new endpoint.
