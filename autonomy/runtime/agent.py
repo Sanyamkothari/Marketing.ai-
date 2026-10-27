@@ -1143,7 +1143,8 @@ COMPLAINT_BASE_RATE = 0.0005
 sender at about 0.1%)."""
 COMPLAINT_COST = 2.0
 """What one complaint costs beyond the lost contact: deliverability for every other customer. A
-rough figure in the goal's currency; a business that knows its own should set it."""
+dollar-sized default; production passes the shop's own (`complaint_cost`, else a share of its usual order
+value: `autonomy.runtime.prices.COMPLAINT_SHARE_OF_ORDER`)."""
 
 
 @dataclass(frozen=True)
@@ -1654,6 +1655,7 @@ class AgentPolicy:
         journeys: JourneyRunner | None = None,
         experiments: ExperimentBook | None = None,
         attention_price: bool = True,
+        complaint_cost: float | None = None,
     ) -> None:
         if learn_horizon_days < 1:
             raise ValueError("learn_horizon_days must be at least 1")
@@ -1701,15 +1703,18 @@ class AgentPolicy:
         # 3-week plans. With it off the hazard models are the plain ones and no gate is installed.
         self.frequency = frequency
         tolerance = frequency.tolerance if frequency is not None else None
+        # The shop's own cost of one complaint (None: the dollar-sized `COMPLAINT_COST`).
+        owed = COMPLAINT_COST if complaint_cost is None else complaint_cost
         self.contact_price = (
             ContactPrice(
                 self._click_fatigue,
                 self._weekly_cap,
                 hazard=LookalikeHazard(tolerance),
                 complaints=LookalikeHazard(tolerance, base_rate=COMPLAINT_BASE_RATE),
+                complaint_cost=owed,
             )
             if tolerance is not None
-            else ContactPrice(self._click_fatigue, self._weekly_cap)
+            else ContactPrice(self._click_fatigue, self._weekly_cap, complaint_cost=owed)
         )
         self.planner: FrequencyPlanner | None = (
             FrequencyPlanner(self.contact_price, frequency.plans, fade=self._urgency_fade)
@@ -3136,6 +3141,8 @@ def build_agent_policy(
     v3: bool | V3Preset = False,
     attention_price: bool = True,
     margin_rate: float | None = None,
+    complaint_cost: float | None = None,
+    default_order_value: float | None = None,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -3200,6 +3207,12 @@ def build_agent_policy(
     default) leaves every number as it was. With a `bundle` given, build it with
     `build_bundle(margin_rate=...)`; one with another default margin is refused, and so is a `who` given
     as a `WhoBook` whose 90-day value label uses another margin.
+
+    Money is in the shop's currency. `costs`, `complaint_cost` (what one complaint costs beyond the lost
+    contact) and `default_order_value` (the order value assumed before the shop's own purchases are
+    learned; it also sizes the journeys' value bars) default to the dollar-sized figures every built-in
+    number was written for. The production runtime always passes them (`autonomy.runtime.prices`); the
+    Gym and the bench leave them at those defaults, so their numbers do not move.
     """
     if (
         margin_rate is not None
@@ -3215,6 +3228,7 @@ def build_agent_policy(
         moments=moments,
         journeys=journeys,
         offer_pricing=offer_pricing,
+        order_value=default_order_value,
     )
     lookalike, who, frequency = parts.lookalike, parts.who, parts.frequency
     moments, offer_pricing = parts.moments, parts.offer_pricing
@@ -3233,7 +3247,10 @@ def build_agent_policy(
         else WhoBook(who if isinstance(who, WhoConfig) else None) if who else None
     )
     if bundle is None:
-        fresh = build_bundle(margin_rate=margin_rate)
+        fresh = build_bundle(
+            None if default_order_value is None else {"value/order_value": default_order_value},
+            margin_rate=margin_rate,
+        )
         if not lookalike:
             response: ClickResponseModel = ClickResponseModel()
         else:
@@ -3275,4 +3292,5 @@ def build_agent_policy(
         journeys=parts.journeys,
         experiments=parts.experiments,
         attention_price=attention_price,
+        complaint_cost=complaint_cost,
     )

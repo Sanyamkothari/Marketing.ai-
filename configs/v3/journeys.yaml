@@ -7,8 +7,13 @@
 #   not_opened   run it while the customer has not clicked or replied since the step before
 # A journey is one option in the daily auction, priced over the whole plan (autonomy/decide/journeys.py).
 # `value_bar` (in the shop's own currency, optional) offers the journey only to customers worth at least
-# that much if they buy; it is a starting value to replace per shop (JourneyConfig.with_value_bar).
-# C and D both send WhatsApp first, so both carry the bar. A goal for which no journey fits a customer
+# that much if they buy. The shipped bars are `value_bar_order_multiple`: a multiple of the shop's usual order
+# value (RuntimeSettings.typical_order_value), turned into a bar by JourneyConfig.for_shop, so the bar is the
+# same size in rupees as in dollars. 1.0 is a customer worth as much as one usual order. load_journeys leaves
+# the multiple unresolved unless given the shop's order value; the Gym and the bench resolve it with the
+# reference order of 50, which gives the 50 this file used to hold. To set an exact
+# bar for one shop use JourneyConfig.with_value_bar. C and D both send WhatsApp first, so both carry the bar.
+# A goal for which no journey fits a customer
 # (WhatsApp only and below the bar, say) keeps its single messages, as without journeys.
 
 settings:
@@ -35,13 +40,13 @@ journeys:
 
   - id: C
     name: WhatsApp now, high value only
-    value_bar: 50
+    value_bar_order_multiple: 1.0
     steps:
       - channel: whatsapp
 
   - id: D
     name: WhatsApp, then an email reminder (high value only, like C)
-    value_bar: 50
+    value_bar_order_multiple: 1.0
     steps:
       - channel: whatsapp
       - channel: email

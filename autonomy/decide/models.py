@@ -266,6 +266,12 @@ def _segment(state: CustomerState) -> str:
 # --- value ------------------------------------------------------------------------------------
 
 
+REFERENCE_ORDER_VALUE = 50.0
+"""The order value every built-in money default was written for (a dollar-sized shop). A shop in
+another currency states its own (`autonomy.runtime.prices.ShopPrices`); the defaults that scale with an
+order (the complaint cost, the journeys' value bars) are set as shares of it."""
+
+
 @dataclass(frozen=True)
 class ValueModel:
     """What a conversion is worth for this customer, and what their future is worth.
@@ -276,7 +282,7 @@ class ValueModel:
     `future_orders` orders' worth of margin.
     """
 
-    default_order_value: float = 50.0
+    default_order_value: float = REFERENCE_ORDER_VALUE
     default_margin_rate: float = 0.4
     future_orders: float = 2.0
 

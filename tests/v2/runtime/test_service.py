@@ -726,7 +726,13 @@ def test_build_runtime_runs_on_sql_stores() -> None:
     engine = memory_engine()
     adapter = FakeChannelAdapter(Channel.EMAIL)
     runtime = build_runtime(
-        RuntimeSettings(database_url="sqlite://"),
+        # The sample goal is in dollars: the shop's money is set in them (docs/v3/CURRENCY.md).
+        RuntimeSettings(
+            database_url="sqlite://",
+            currency="USD",
+            channel_costs={Channel.EMAIL: 0.001, Channel.WHATSAPP: 0.03},
+            typical_order_value=50.0,
+        ),
         engine=engine,
         policy_factory=lambda briefs, content: ContactEveryonePolicy(),
         adapters={Channel.EMAIL: adapter},

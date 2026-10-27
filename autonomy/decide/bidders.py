@@ -157,7 +157,8 @@ DEFAULT_CHANNEL_COSTS: Mapping[Channel, float] = MappingProxyType(
         Channel.WEBHOOK: 0.0,
     }
 )
-"""Rough cost of one message per channel, in the goal's currency. Override per business."""
+"""Rough cost of one message per channel in DOLLARS: the Gym's and the bench's default. Production never
+uses it: the shop's own prices are required (`autonomy.runtime.prices.ShopPrices`, docs/v3/CURRENCY.md)."""
 
 DEFAULT_CART_HALF_LIFE_DAYS = 1.0
 """A cart is worth half as much a day later and an eighth after three days."""

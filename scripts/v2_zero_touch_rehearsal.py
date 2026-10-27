@@ -366,6 +366,10 @@ class Rehearsal:
             connectors=True,
             public_url=PUBLIC_URL,
             tick_every_minutes=TICK_MINUTES,
+            # The rehearsed shop sells in dollars; the shop's money is always set (docs/v3/CURRENCY.md).
+            currency="USD",
+            channel_costs={Channel.EMAIL: 0.001, Channel.WHATSAPP: 0.03},
+            typical_order_value=50.0,
         )
 
         def wiring(holder: str) -> Any:

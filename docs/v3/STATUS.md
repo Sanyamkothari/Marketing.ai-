@@ -70,6 +70,13 @@ contacting anyone and lost where they can (Hillstrom, X5). The cause of that col
 bench records `blocked_by` per decision; reading it is the next step). **Decision: v3 stays off; see the review's
 section 8 for the fix order.** Full numbers: [redteam/bench_results.md](redteam/bench_results.md).
 
+## Foundation fixes (review section 8, "Fix first")
+
+- **2. Money in the shop's currency:** done on branch `v3/f-currency`, see [CURRENCY.md](CURRENCY.md). Channel costs,
+  the usual order value and the complaint cost are required per-shop settings (or the mandate catalogue's provider
+  prices); a goal that cannot be priced does not run (the process still starts). The Gym smoke is identical to
+  the base commit.
+
 ## The proof runs
 
 Nothing here shows yet that v3 beats the plain agent or the best simple rule. That is the job of the CI runs this

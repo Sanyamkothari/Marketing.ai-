@@ -4,7 +4,8 @@ A journey is an ordered list of steps, each a channel, a wait since the step bef
 (`configs/v3/journeys.yaml`): "A: email only", "B: email, wait 3 days, WhatsApp if no purchase",
 "C: WhatsApp now, only for customers above a value bar", "D: WhatsApp, then an email reminder".
 
-Opt-in. `AutonomousPolicy(journeys=JourneyRunner(load_journeys()))` switches the layer on; with
+Opt-in. `AutonomousPolicy(journeys=JourneyRunner(load_journeys(order_value=...)))` switches the layer on
+(the shop's usual order value sizes the value bars); with
 `journeys=None` (the default) the policy does exactly what it did before.
 
 **Choosing a journey.** `JourneyRunner.expand` turns the bids the goal bidders offered into journey
@@ -159,6 +160,14 @@ class Journey(Contract):
     value_bar: float | None = Field(
         default=None, ge=0, description="Only offered to customers worth at least this if they buy"
     )
+    value_bar_order_multiple: float | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "The bar as a multiple of the shop's usual order value, so it is the same size in any currency; "
+            "`JourneyConfig.for_shop` turns it into `value_bar`. An explicit `value_bar` wins"
+        ),
+    )
 
     @model_validator(mode="after")
     def _first_step_goes_now(self) -> Journey:
@@ -238,14 +247,46 @@ class JourneyConfig(Contract):
     def get(self, journey_id: str) -> Journey | None:
         return next((j for j in self.journeys if j.journey_id == journey_id), None)
 
+    def for_shop(self, order_value: float) -> JourneyConfig:
+        """The same config with every `value_bar_order_multiple` turned into a `value_bar` of
+        multiple x `order_value`, the shop's usual order value in its own currency. A journey with an
+        explicit `value_bar` keeps it."""
+        if not math.isfinite(order_value) or order_value <= 0:
+            raise ValueError(f"the shop's usual order value must be a positive number, not {order_value!r}")
+        return self.model_copy(
+            update={
+                "journeys": tuple(
+                    (
+                        j.model_copy(update={"value_bar": j.value_bar_order_multiple * order_value})
+                        if j.value_bar is None and j.value_bar_order_multiple is not None
+                        else j
+                    )
+                    for j in self.journeys
+                )
+            }
+        )
+
+    def unresolved(self) -> tuple[str, ...]:
+        """Ids of journeys whose bar is still a multiple of the order value (`for_shop` not applied)."""
+        return tuple(
+            j.journey_id
+            for j in self.journeys
+            if j.value_bar is None and j.value_bar_order_multiple is not None
+        )
+
     def with_value_bar(self, journey_id: str, bar: float | None) -> JourneyConfig:
-        """The same config with one journey's value bar replaced (the bar is in the shop's currency)."""
+        """The same config with one journey's value bar replaced (the bar is in the shop's currency; None
+        is no bar). Its order multiple is dropped, so the bar given here always wins over `for_shop`."""
         if self.get(journey_id) is None:
             raise KeyError(journey_id)
         return self.model_copy(
             update={
                 "journeys": tuple(
-                    j.model_copy(update={"value_bar": bar}) if j.journey_id == journey_id else j
+                    (
+                        j.model_copy(update={"value_bar": bar, "value_bar_order_multiple": None})
+                        if j.journey_id == journey_id
+                        else j
+                    )
                     for j in self.journeys
                 )
             }
@@ -268,12 +309,20 @@ def parse_journeys(raw: Mapping[str, Any]) -> JourneyConfig:
     return JourneyConfig.model_validate({"settings": raw.get("settings") or {}, "journeys": journeys})
 
 
-def load_journeys(path: Path | None = None) -> JourneyConfig:
-    """The journeys in `path` (default: the shipped `configs/v3/journeys.yaml`)."""
+def load_journeys(path: Path | None = None, *, order_value: float | None = None) -> JourneyConfig:
+    """The journeys in `path` (default: the shipped `configs/v3/journeys.yaml`).
+
+    With `order_value` (the shop's usual order, in its own currency) their value bars are set for that shop.
+    Without it a bar given as a multiple of the order value is left unresolved: `JourneyRunner` refuses
+    such a config until `JourneyConfig.for_shop` is applied, so no fixed (dollar-sized) bar is ever applied
+    to a shop by default. `autonomy.runtime.v3` resolves it with the shop's value, or with
+    `autonomy.decide.models.REFERENCE_ORDER_VALUE` (the bars the file always had) for the Gym and the bench.
+    """
     raw = yaml.safe_load((path or DEFAULT_PATH).read_text(encoding="utf-8"))
     if not isinstance(raw, Mapping):
         raise ValueError("journeys.yaml must hold a mapping")
-    return parse_journeys(raw)
+    config = parse_journeys(raw)
+    return config if order_value is None else config.for_shop(order_value)
 
 
 # --- one customer's journey in progress -------------------------------------------------------
@@ -357,6 +406,12 @@ class JourneyRunner:
     """Prices journeys as auction options and carries each customer's journey from step to step."""
 
     def __init__(self, config: JourneyConfig, *, history: int = 50_000) -> None:
+        loose = config.unresolved()
+        if loose:
+            raise ValueError(
+                f"journeys {', '.join(loose)} have a value bar that is a multiple of the shop's order value; "
+                "call JourneyConfig.for_shop(order_value) first"
+            )
         self.config = config
         self.settings = config.settings
         self._runs: dict[str, JourneyRun] = {}

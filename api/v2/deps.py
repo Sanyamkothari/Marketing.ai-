@@ -95,6 +95,7 @@ if TYPE_CHECKING:  # imported lazily below, so `import api.v2.deps` stays light
     from api.v2 import insights
     from autonomy.proof import Costs
     from autonomy.runtime.batches import BatchStore
+    from autonomy.runtime.prices import ShopPrices
     from autonomy.runtime.service import AutonomyRuntime
 
 ProofProvider: TypeAlias = Callable[[str | None], ProofSummary | None]
@@ -237,7 +238,7 @@ class Services:
         self,
         text: str,
         budget: float | None,
-        currency: str = "USD",
+        currency: str | None = None,
         kind: GoalKind | None = None,
         objective: Objective | None = None,
         ends_at: datetime | None = None,
@@ -246,7 +247,8 @@ class Services:
 
         With no `budget`, the amount (and the period, unless `ends_at` is given) are read from the
         words, e.g. "$5,000 this month"; words that name no amount are refused. A given budget is
-        used as it is and the words are not read.
+        used as it is and the words are not read. Without a `currency` the goal is in the one the words
+        name, else the shop's (the runtime's prices), else USD.
         """
         text = text.strip()
         if not text:
@@ -259,7 +261,7 @@ class Services:
             if reading.budget is None:
                 raise BadRequestError("say how much you want to spend, e.g. '$2,000 this month'")
             budget = reading.budget
-            if reading.currency is not None and currency.upper() == "USD":
+            if reading.currency is not None and (currency is None or currency.upper() == "USD"):
                 currency = reading.currency
             if ends_at is None:
                 ends_at = reading.ends_at
@@ -269,6 +271,7 @@ class Services:
             raise BadRequestError("the budget must be a finite amount of zero or more")
         if ends_at is not None and (ends_at.tzinfo is None or ends_at <= now):
             raise BadRequestError("the end date must include a time zone and be in the future")
+        currency = currency or self._shop_currency() or "USD"
         taken = {g.goal_id for g in self.workspace.goals()}
         n = len(taken)
         goal_id = stable_id("goal", self.business_id, text, now.isoformat(), n)
@@ -318,6 +321,39 @@ class Services:
         self.workspace.put_goal(updated)
         return updated, brief
 
+    def shop_prices(self) -> ShopPrices | None:
+        """The runtime's `autonomy.runtime.prices.ShopPrices` (the shop's money in its own currency), or None
+        when the runtime has none (the demo, the fakes): then the documented dollar-sized defaults apply."""
+        from autonomy.runtime.prices import ShopPrices
+
+        prices = getattr(self.runtime, "prices", None)
+        return prices if isinstance(prices, ShopPrices) else None
+
+    def check_new_goal_prices(self, currency: str, channels: Iterable[Channel]) -> None:
+        """Refuse, before anything is written, a goal in `currency` that may use `channels` and that the shop
+        cannot price (the same reasons `approve` would refuse it for)."""
+        prices = self.shop_prices()
+        found = prices.problems_for(currency, channels) if prices is not None else []
+        if found:
+            raise ConflictError(
+                "this goal cannot run until the shop's money is set: " + "; ".join(found) + "."
+            )
+
+    def _shop_currency(self) -> str | None:
+        """The shop's currency when the runtime knows its prices (`autonomy.runtime.prices.ShopPrices`)."""
+        prices = self.shop_prices()
+        return prices.shop_currency() if prices is not None else None
+
+    def _check_prices(self, goal: Goal) -> None:
+        """Refuse to start a goal the runtime cannot price in the shop's currency (a clear error saying what to set)."""
+        check = getattr(self.runtime, "check_goal_prices", None)
+        if not callable(check):
+            return
+        try:
+            check(goal)
+        except ValueError as err:  # MissingShopMoneyError
+            raise ConflictError(str(err)) from err
+
     def pause_all(self) -> list[Goal]:
         """The one big Pause button: pause every active goal; returns the goals it paused."""
         return [self.pause(g.goal_id) for g in self.list_goals() if g.status is GoalStatus.ACTIVE]
@@ -330,6 +366,7 @@ class Services:
         brief = self.latest_brief(goal_id)
         if brief is None:
             raise ConflictError("this goal has no plan to approve yet")
+        self._check_prices(goal)
         now = self.clock()
         approved: Brief = brief.model_copy(update={"approved_by": APPROVER, "approved_at": now})
         active: Goal = goal.model_copy(update={"autonomy": autonomy, "status": GoalStatus.ACTIVE})
@@ -354,6 +391,7 @@ class Services:
         brief = self.latest_brief(goal_id)
         if brief is None or not brief.approved:
             raise ConflictError("approve the plan before the agent can run it")
+        self._check_prices(goal)
         resumed: Goal = goal.model_copy(update={"status": GoalStatus.ACTIVE})
         self.workspace.put_goal(resumed)
         return resumed
@@ -1006,8 +1044,14 @@ def suggest_opportunities(
     taken: frozenset[GoalKind] = frozenset(),
     events: Iterable[Event] | None = None,
     cost_channels: Sequence[Channel] = STARTING_PLAN_CHANNELS,
+    channel_costs: Mapping[Channel, float] | None = None,
+    currency: str | None = None,
 ) -> list[Goal]:
     """Draft goals for the shop; kinds in `taken` (already being worked on) are left out.
+
+    `channel_costs` and `currency` are the shop's prices of one message and their currency (the runtime's
+    `ShopPrices`); None: the documented dollar-sized defaults. A channel with no price gets no money: the
+    goal's budget is 0, never a dollar figure read as the shop's currency.
 
     With `events` (the shop's history), these are the money-sized proposals of
     `autonomy.onboarding.scan_opportunities`, best first: refill due, first to second purchase,
@@ -1028,11 +1072,15 @@ def suggest_opportunities(
     if events is not None:
         from autonomy.onboarding import proposal_goal, scan_opportunities
 
-        scan = scan_opportunities(events, rows, now, taken=taken)
+        priced: dict[str, Any] = {} if channel_costs is None else {"channel_costs": channel_costs}
+        scan = scan_opportunities(events, rows, now, taken=taken, currency=currency, **priced)
         return [proposal_goal(p, business_id, now) for p in scan.proposals if p.kind not in taken]
     from autonomy.onboarding.priors import CHANNEL_COSTS
 
-    per_message = max((CHANNEL_COSTS.get(c, 0.0) for c in cost_channels), default=0.0)
+    table = CHANNEL_COSTS if channel_costs is None else channel_costs
+    channel_prices = [table[c] for c in cost_channels if c in table]
+    per_message = max(channel_prices) if channel_prices else None  # an unpriced channel gets no money
+    money: dict[str, Any] = {} if currency is None else {"currency": currency}
     ideas = [
         (
             "opp_repeat_purchase",
@@ -1053,9 +1101,10 @@ def suggest_opportunities(
             business_id=business_id,
             text=text.format(n=n),
             kind=kind,
-            budget=float(max(1, math.ceil(n * 2 * per_message))),
+            budget=0.0 if per_message is None else float(max(1, math.ceil(n * 2 * per_message))),
             starts_at=now,
             created_at=now,
+            **money,
         )
         for goal_id, kind, n, text in ideas
         if n > 0 and kind not in taken
@@ -1267,6 +1316,8 @@ class StoreReadModels:
     """Anything with `list(...) -> Sequence[Alert]`, e.g. `autonomy.runtime.stores`' alert store."""
     briefing_store: Any = None
     """Anything with `latest(goal_id) -> Briefing | None` (or `list(...)`), e.g. the briefing store."""
+    prices: Any = None
+    """The runtime's `autonomy.runtime.prices.ShopPrices`: suggestions are budgeted at the shop's prices."""
 
     def record(self, report: TickOutcome) -> None:
         self.alerts_log.extend(report.alerts)
@@ -1344,8 +1395,22 @@ class StoreReadModels:
     def opportunities(self) -> list[Goal]:
         """Suggestions for kinds of goal nobody is working on yet."""
         taken = frozenset(g.kind for g in self.workspace.goals() if g.status is not GoalStatus.DONE)
+        if self.prices is None:
+            return suggest_opportunities(
+                self.states.scan(),
+                self.business_id,
+                self.clock(),
+                taken=taken,
+                cost_channels=self.cost_channels,
+            )
         return suggest_opportunities(
-            self.states.scan(), self.business_id, self.clock(), taken=taken, cost_channels=self.cost_channels
+            self.states.scan(),
+            self.business_id,
+            self.clock(),
+            taken=taken,
+            cost_channels=self.cost_channels,
+            channel_costs=self.prices.costs(),
+            currency=self.prices.shop_currency(),
         )
 
 
@@ -1419,6 +1484,17 @@ class _RecordingRuntime:
         self.reads.record(report)
         return report
 
+    @property
+    def prices(self) -> object:
+        """The runtime's `ShopPrices` (None when it has none): what a new goal's currency defaults to."""
+        return getattr(self.inner, "prices", None)
+
+    def check_goal_prices(self, goal: Goal) -> None:
+        """The runtime's refusal of a goal it cannot price in the shop's currency (nothing without prices)."""
+        check = getattr(self.inner, "check_goal_prices", None)
+        if callable(check):
+            check(goal)
+
 
 def build_services_from_runtime(
     runtime: AutonomyRuntime,
@@ -1474,6 +1550,7 @@ def build_services_from_runtime(
         seed=seed,
         alert_store=alert_store,
         briefing_store=briefing_store,
+        prices=getattr(runtime, "prices", None),
     )
     if adapters is None:
         adapters = dict(runtime.dispatcher.adapters) if runtime.dispatcher is not None else {}

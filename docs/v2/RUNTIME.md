@@ -164,7 +164,11 @@ command prints `cannot start the worker: ...` and exits with status 2.
 The main settings (`AUTONOMY_<NAME>`): `DATABASE_URL`, `TIMEZONE`, `SWEEP_HOUR` (10), `NIGHTLY_HOUR`
 (2), `WEEKLY_WEEKDAY` (0, Monday), `WEEKLY_HOUR` (7), `TICK_EVERY_MINUTES` (5), `SEED`, `SPLIT_SALT`,
 `HOLDOUT_SHARE` and `BASELINE_SHARE` (0.10 each), `PLAN_DAYS` (30), `LATE_WINDOW_HOURS` (48),
-`TRIGGER_WINDOW_HOURS` (24), `BATCH_MAX_AGE_HOURS` (72), `SWEEP_BATCH` (5,000), `REPORT_DECISIONS` (1,000), plus each channel's settings (SES,
+`TRIGGER_WINDOW_HOURS` (24), `BATCH_MAX_AGE_HOURS` (72), `SWEEP_BATCH` (5,000), `REPORT_DECISIONS` (1,000), the shop's money
+(`CURRENCY`, `CHANNEL_COSTS=email=0.12,whatsapp=0.85`, `TYPICAL_ORDER_VALUE`, optional `COMPLAINT_COST`: **required**; a
+goal that cannot be priced in the shop's currency does not run: the tick refuses it with a critical
+`prices.missing` alert and the API refuses to approve or resume it, while the process itself starts, see
+[v3/CURRENCY.md](../v3/CURRENCY.md)), plus each channel's settings (SES,
 WhatsApp, the client's webhook or CSV export). Secrets are never in settings: `*_REF` names the
 environment variable that holds each one.
 
