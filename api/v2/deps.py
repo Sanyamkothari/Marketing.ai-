@@ -410,16 +410,24 @@ class Services:
             raise ConflictError("this goal has no plan to approve yet")
         self._check_prices(goal)
         now = self.clock()
+        allowed: AutonomyAuditEntry | None = None
         if autonomy is AutonomyLevel.AUTOPILOT and goal.autonomy is not AutonomyLevel.AUTOPILOT:
-            self._gate_autopilot(goal, brief, now, start_without_proof=start_without_proof)
+            allowed = self._gate_autopilot(goal, brief, now, start_without_proof=start_without_proof)
         approved: Brief = brief.model_copy(update={"approved_by": APPROVER, "approved_at": now})
         active: Goal = goal.model_copy(update={"autonomy": autonomy, "status": GoalStatus.ACTIVE})
         self.workspace.put_brief(approved)
         self.workspace.put_goal(active)
+        if (
+            allowed is not None
+        ):  # logged only once the switch is stored: the ledger never shows one that failed
+            self._audit(allowed)
         return active, approved
 
-    def _gate_autopilot(self, goal: Goal, brief: Brief, now: datetime, *, start_without_proof: bool) -> None:
-        """Let Autopilot through or raise `ConflictError` with the plain reason; log what was allowed."""
+    def _gate_autopilot(
+        self, goal: Goal, brief: Brief, now: datetime, *, start_without_proof: bool
+    ) -> AutonomyAuditEntry:
+        """Let Autopilot through or raise `ConflictError` with the plain reason; return the audit entry for
+        what was allowed, for the caller to log once the switch is stored."""
         window = None if brief.approved_at is None else (now - brief.approved_at).total_seconds() / 86400
         proof = self.proof(goal.goal_id)
         verdict = autopilot_gate(
@@ -436,8 +444,7 @@ class Services:
                     incremental_profit_low=proof.incremental_profit.low,
                     incremental_profit_high=proof.incremental_profit.high,
                 )
-            self._audit(goal, now, REASON_PROOF_GATE, verdict.reason, evidence)
-            return
+            return self._entry(goal, now, REASON_PROOF_GATE, verdict.reason, evidence)
         if not start_without_proof:
             raise ConflictError(verdict.reason)
         if brief.approved_at is not None:
@@ -447,12 +454,13 @@ class Services:
         exempt = unproven_start(brief.envelope.channels, confirmed=True)
         if not exempt.allowed:
             raise ConflictError(f"{exempt.reason} {verdict.reason}")
-        self._audit(goal, now, REASON_UNPROVEN_START, exempt.reason, {"confirmed": 1.0})
+        return self._entry(goal, now, REASON_UNPROVEN_START, exempt.reason, {"confirmed": 1.0})
 
-    def _audit(
-        self, goal: Goal, now: datetime, reason: str, words: str, evidence: Mapping[str, float]
-    ) -> None:
-        entry = AutonomyAuditEntry(
+    @staticmethod
+    def _entry(
+        goal: Goal, now: datetime, reason: str, words: str, evidence: Mapping[str, float]
+    ) -> AutonomyAuditEntry:
+        return AutonomyAuditEntry(
             at=now,
             goal_id=goal.goal_id,
             from_level=goal.autonomy,
@@ -462,6 +470,8 @@ class Services:
             words=words,
             evidence=dict(evidence),
         )
+
+    def _audit(self, entry: AutonomyAuditEntry) -> None:
         self.audit_log.append(entry)
         if self.audit_sink is not None:
             self.audit_sink(entry)
@@ -1419,6 +1429,7 @@ class StoreReadModels:
         from autonomy.contracts.offer_codes import OfferCodeTable
         from autonomy.decide.calibration import proof_calibration
         from autonomy.proof import Costs, proof_rewards, proof_summary
+        from autonomy.proof.rewards import sent_decisions
 
         now = self.clock()
         briefs = self.workspace.briefs()
@@ -1446,7 +1457,8 @@ class StoreReadModels:
         rewards = proof_rewards(closed, by_customer, horizon, objective, costs, now=now)
         summary = proof_summary(rewards, closed, now, goal_id, seed=self.seed, costs=costs)
         acted = closed if goal_id is None else [d for d in closed if _touches_goal(d, goal_id)]
-        summary = summary.model_copy(update={"calibration": proof_calibration(summary, acted)})
+        sent = {i for events in by_customer.values() for i in sent_decisions(events)}
+        summary = summary.model_copy(update={"calibration": proof_calibration(summary, acted, sent)})
         if not closed:
             wait = f"Outcomes count once a decision's {horizon}-day window has closed; none has yet."
             summary = summary.model_copy(update={"notes": (*summary.notes, wait)})

@@ -25,9 +25,11 @@ proof (`ProofSummary.calibration`) and read by the Autopilot gate (`autonomy.run
 `ok` (the agent expects at most 1.5x what the holdout shows), `over_1_5x`, `over_2x` (more than twice), or
 `not_enough_data` (no expectation to check, no interval, or an interval that cannot rule 2x over in or out).
 
-Opt-in: `build_agent_policy(calibrate=True)` multiplies every bid's `expected_net` by the factor before
-the attention price is taken off and the send/no-send choice is made. The bid's uncertainty is left as it
-is. With it off nothing in this module is called and every number is unchanged.
+Opt-in: `build_agent_policy(calibrate=True)` shrinks every bid's value by the factor before the attention
+price is taken off and the send/no-send choice is made (`scaled_net`). Only the value part, urgency x uplift
+x value if converted, is shrunk; the channel and offer costs stay whole, and a bid whose value part is not
+positive is left as it is, so a bid's net only ever goes down. The bid's uncertainty is left as it is. With
+it off nothing in this module is called and every number is unchanged.
 
 Pure maths and in-memory sums: no clock, no I/O, numpy only through `autonomy.proof`.
 """
@@ -35,13 +37,13 @@ Pure maths and in-memory sums: no clock, no I/O, numpy only through `autonomy.pr
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Final, Literal
 
 import numpy as np
 
-from autonomy.contracts import Decision, DecisionKind, Estimate, Group, ProofSummary, Reward
+from autonomy.contracts import Bid, Decision, DecisionKind, Estimate, Group, ProofSummary, Reward
 from autonomy.proof.estimate import MIN_GROUP, Z_95, welch_difference
 
 __all__ = [
@@ -56,7 +58,10 @@ __all__ = [
     "calibration_status",
     "measured_per_action",
     "proof_calibration",
+    "scaled_net",
     "shrink_factor",
+    "unscaled_net",
+    "value_part",
 ]
 
 CalibrationStatus = Literal["ok", "over_2x", "over_1_5x", "not_enough_data"]
@@ -72,6 +77,34 @@ OVER_2X: Final[float] = 2.0
 """`calibration_status` calls an expectation above 1.5x the measured value `over_1_5x`, above 2x `over_2x`."""
 
 _MIN_SE: Final[float] = 1e-9
+
+
+def value_part(bid: Bid) -> float:
+    """What a bid expects the message to earn before any cost: urgency x uplift x value if converted.
+
+    0.0 when it is not a positive, finite number: there is then nothing for the factor to shrink."""
+    v = bid.urgency * bid.uplift * bid.value_if_converted
+    return v if math.isfinite(v) and v > 0 else 0.0
+
+
+def scaled_net(bid: Bid, factor: float) -> float:
+    """The bid's expected net with its value part shrunk by `factor` and its costs left whole.
+
+    expected_net - (1 - factor) x value part: with a factor in [0.25, 1] the net never goes up, a loss-making
+    bid never looks less bad, and a factor of 1 gives the bid's own expected net exactly."""
+    if factor >= 1.0 or not math.isfinite(bid.expected_net):
+        return bid.expected_net
+    return bid.expected_net - (1.0 - factor) * value_part(bid)
+
+
+def unscaled_net(decision: Decision, factor: float) -> float:
+    """A contact decision's expected net as it was before `factor` shrank its chosen bid (`scaled_net` undone)."""
+    if factor >= 1.0:
+        return decision.expected_net
+    chosen = next((b for b in decision.bids if b.action == decision.action), None)
+    if chosen is None:
+        return decision.expected_net
+    return decision.expected_net + (1.0 - factor) * value_part(chosen)
 
 
 def measured_per_action(profit: Estimate | None, actions: int) -> Estimate | None:
@@ -126,11 +159,20 @@ def calibration_status(
     return "not_enough_data"
 
 
-def proof_calibration(summary: ProofSummary, decisions: Iterable[Decision]) -> CalibrationStatus:
+def proof_calibration(
+    summary: ProofSummary, decisions: Iterable[Decision], sent: Collection[str] | None = None
+) -> CalibrationStatus:
     """The status for a proof: `decisions` are the agent-group contact decisions whose windows the proof counted.
 
-    Expected is their mean `expected_net`, measured is the summary's incremental profit over their number."""
-    acts = [d for d in decisions if d.group is Group.AGENT and d.kind is DecisionKind.ACT]
+    `sent` is the ids of the decisions whose message actually went out (`autonomy.proof.sent_decisions`);
+    when given, only those count as actions, so a Shadow decision, a rejected or expired batch or a failed
+    send does not dilute the measured value per action. Expected is their mean `expected_net`, measured is
+    the summary's incremental profit over their number."""
+    acts = [
+        d
+        for d in decisions
+        if d.group is Group.AGENT and d.kind is DecisionKind.ACT and (sent is None or d.decision_id in sent)
+    ]
     per = measured_per_action(summary.incremental_profit, len(acts))
     if per is None:
         return "not_enough_data"
@@ -147,13 +189,14 @@ class Calibration:
       `refit` once a week): per customer, the margin of purchases since the agent started less the cost of the
       messages sent in closed windows, and the group of their first decision. This is how the Gym and the
       runtime's nightly loop feed it, because the agent is handed events and decisions but not the holdout's
-      rewards. A window is closed when its decision is at least `horizon_days` old, as in `autonomy.proof`:
-      purchases up to now count for a customer with a closed decision, the cost of messages only up to the
-      cutoff, and the number of actions and their expected nets are those closed ones.
+      rewards. The period is the one `autonomy.proof`'s last touch measures: the cutoff is `horizon_days`
+      before now, and only purchases before the cutoff count, for every customer alike, with the cost, the
+      number and the expected nets of the contact decisions made at or before it. Purchases after the cutoff,
+      which the later (still open) sends helped cause, wait for the next refit.
     * **closed rewards** (`observe`), for a caller that already has the proof's rewards for every group.
 
     The logged `expected_net` of a decision already carries the factor in force when it was made, so it is
-    divided back out (`record` knows the factor; `note` records it for `observe`; a decision this process
+    undone (`unscaled_net`) (`record` knows the factor; `note` records it for `observe`; a decision this process
     did not make is taken to have been made at the current factor).
     """
 
@@ -181,7 +224,8 @@ class Calibration:
         # the event feed
         self._start: datetime | None = None
         self._group: dict[str, tuple[datetime, Group]] = {}
-        self._margin: dict[str, float] = {}
+        self._purchases: list[tuple[datetime, str, float]] = []
+        """(when, customer, margin less offer cost) of each purchase after the start."""
         self._sent: list[tuple[datetime, str, float, float]] = []
         """(made_at, customer, message cost, expected net before the factor) of each contact decision."""
 
@@ -200,13 +244,12 @@ class Calibration:
         if first is None or decision.made_at < first[0]:
             self._group[c] = (decision.made_at, decision.group)
         if decision.group is Group.AGENT and decision.kind is DecisionKind.ACT:
-            raw = decision.expected_net / self.factor if self.factor > 0 else decision.expected_net
-            self._sent.append((decision.made_at, c, max(cost, 0.0), raw))
+            self._sent.append((decision.made_at, c, max(cost, 0.0), unscaled_net(decision, self.factor)))
 
     def purchase(self, customer_id: str, ts: datetime, margin: float, offer_cost: float = 0.0) -> None:
         """A purchase seen (its margin, less the cost of the offer it redeemed); only those after the start count."""
         if self._start is not None and ts > self._start:
-            self._margin[customer_id] = self._margin.get(customer_id, 0.0) + margin - offer_cost
+            self._purchases.append((ts, customer_id, margin - offer_cost))
 
     def refit(self, now: datetime, horizon_days: float, *, force: bool = False) -> float:
         """Refit from the events so far (at most once a week unless `force`) and return the factor."""
@@ -221,10 +264,14 @@ class Calibration:
                 cost[c] = cost.get(c, 0.0) + spent
                 actions += 1
                 expected_sum += raw
+        margin: dict[str, float] = {}
+        for ts, c, m in self._purchases:
+            if ts < cutoff:  # as autonomy.proof's last touch: the same cutoff for every customer
+                margin[c] = margin.get(c, 0.0) + m
         by_group: dict[Group, list[float]] = {Group.AGENT: [], Group.HOLDOUT: []}
         for c, (first_at, group) in self._group.items():
             if first_at <= cutoff and group in by_group:
-                by_group[group].append(self._margin.get(c, 0.0) - cost.get(c, 0.0))
+                by_group[group].append(margin.get(c, 0.0) - cost.get(c, 0.0))
         return self._fit(by_group[Group.AGENT], by_group[Group.HOLDOUT], actions, expected_sum)
 
     # --- the closed-rewards feed ------------------------------------------------------------------
@@ -250,7 +297,7 @@ class Calibration:
             if d.group is Group.AGENT and d.kind is DecisionKind.ACT:
                 applied = self._applied.pop(d.decision_id, self.factor)
                 self.actions += 1
-                self._expected_sum += d.expected_net / applied if applied > 0 else d.expected_net
+                self._expected_sum += unscaled_net(d, applied)
         if changed:
             by_group: dict[Group, list[float]] = {Group.AGENT: [], Group.HOLDOUT: []}
             for customer, (_, group) in self._first.items():

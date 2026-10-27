@@ -1060,7 +1060,8 @@ class AutopilotGuard:
         summary = proof_summary(rewards, decisions, now, goal.goal_id, min_group=self.rule.min_group)
         cutoff = now - timedelta(days=brief.horizon_days)
         closed = [d for d in decisions if d.made_at <= cutoff]
-        summary = summary.model_copy(update={"calibration": proof_calibration(summary, closed)})
+        sent = {i for events in by_customer.values() for i in sent_decisions(events)}
+        summary = summary.model_copy(update={"calibration": proof_calibration(summary, closed, sent)})
         return autopilot_gate(summary, (now - since).total_seconds() / 86400, min_days=self.rule.min_days)
 
     def _evidence_ok(self, goal: Goal, now: datetime) -> bool:

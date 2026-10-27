@@ -9,7 +9,19 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 import pytest
 
-from autonomy.contracts import Action, Bid, Channel, Decision, DecisionKind, Estimate, Group, Reward
+from autonomy.contracts import (
+    Action,
+    Bid,
+    Channel,
+    ChannelStats,
+    CustomerState,
+    Decision,
+    DecisionContext,
+    DecisionKind,
+    Estimate,
+    Group,
+    Reward,
+)
 from autonomy.decide.calibration import (
     FACTOR_MAX,
     FACTOR_MIN,
@@ -21,6 +33,7 @@ from autonomy.gym import default_brief, default_content
 from autonomy.runtime.agent import AgentPolicy, build_agent_policy
 
 NOW = datetime(2026, 3, 1, 10, tzinfo=UTC)
+REACHABLE = ChannelStats(address_known=True, consent=True)
 
 
 def _decision(i: int, group: Group, expected: float) -> Decision:
@@ -125,9 +138,14 @@ def test_an_accurate_agent_is_left_alone() -> None:
     assert 0.85 <= cal.factor <= 1.0
 
 
-def test_the_factor_in_force_is_divided_out_of_the_logged_expectation() -> None:
-    """A calibrated agent logs expected_net x factor; the next fit must still compare the agent's raw view."""
-    rewards, decisions = _world(3000, expected=0.5, true_per_action=0.5)  # logged 0.5 = raw 1.0 x factor 0.5
+def test_the_factor_in_force_is_taken_out_of_the_logged_expectation() -> None:
+    """A calibrated agent logs its net with the value shrunk; the next fit must still compare the agent's raw view."""
+    rewards, decisions = _world(3000, expected=0.5, true_per_action=0.5)
+    for key, d in decisions.items():
+        if d.kind is DecisionKind.ACT and d.action is not None:
+            # raw: 1.0 of value (uplift 0.1 x 10), no cost; logged at factor 0.5: 0.5
+            chosen = Bid(goal_id="g", action=d.action, uplift=0.1, value_if_converted=10, expected_net=0.5)
+            decisions[key] = d.model_copy(update={"bids": (chosen,)})
     cal = Calibration()
     cal.factor = 0.5
     for d in decisions.values():
@@ -148,17 +166,67 @@ def test_default_build_is_unchanged_and_calibration_is_opt_in() -> None:
     assert on.policy._value_scale() == 1.0  # nothing measured yet
 
 
-def test_the_policy_multiplies_every_bid_by_the_factor() -> None:
+def _bid(uplift: float, value: float, costs: float = 0.0, urgency: float = 1.0) -> Bid:
     action = Action(goal_id="g", channel=Channel.EMAIL, send_at=NOW)
-    bid = Bid(
-        goal_id="g", action=action, uplift=0.1, value_if_converted=10, expected_net=1.0, uncertainty=0.3
+    return Bid(
+        goal_id="g",
+        action=action,
+        uplift=uplift,
+        value_if_converted=value,
+        channel_cost=costs,
+        urgency=urgency,
+        expected_net=urgency * (uplift * value - costs),
+        uncertainty=0.3,
     )
+
+
+def test_the_policy_shrinks_every_bids_value_by_the_factor() -> None:
+    bid = _bid(0.1, 10)
     on = build_agent_policy([default_brief()], default_content(), calibrate=True)
     assert on.value_calibration is not None
     on.value_calibration.factor = 0.5
     scaled = on.policy._scaled(bid, on.policy._value_scale())
     assert scaled.expected_net == pytest.approx(0.5) and scaled.uncertainty == 0.3
     assert on.policy._scaled(bid, 1.0) is bid
+
+
+def test_only_the_value_is_shrunk_and_a_bid_never_goes_up() -> None:
+    """Costs stay whole: a loss-making bid is never moved toward zero, a costly one keeps its full cost."""
+    on = build_agent_policy([default_brief()], default_content(), calibrate=True)
+    losing = _bid(0.02, 10, costs=1.0)  # 0.2 of value against 1.0 of cost: -0.8
+    assert on.policy._scaled(losing, 0.25).expected_net == pytest.approx(0.25 * 0.2 - 1.0)
+    harmful = _bid(-0.05, 10, costs=0.3)  # negative uplift: nothing to shrink
+    assert on.policy._scaled(harmful, 0.25) is harmful
+    costly = _bid(0.2, 10, costs=1.0, urgency=0.5)  # 0.5 x (2.0 - 1.0) = 0.5
+    assert on.policy._scaled(costly, 0.5).expected_net == pytest.approx(0.5 * (0.5 * 2.0 - 1.0))
+    for bid in (losing, harmful, costly, _bid(0.3, 4, 0.2)):
+        for f in (0.25, 0.5, 0.9, 1.0, 3.0):
+            assert on.policy._scaled(bid, f).expected_net <= bid.expected_net
+
+
+def _state(i: int, **kw: object) -> CustomerState:
+    base: dict[str, object] = {
+        "customer_id": f"s{i}",
+        "as_of": NOW,
+        "channels": {Channel.EMAIL: REACHABLE, Channel.WHATSAPP: REACHABLE},
+    }
+    base.update(kw)
+    return CustomerState.model_validate(base)
+
+
+def test_decisions_are_identical_without_calibration_and_at_factor_one() -> None:
+    """The default build and a calibrated build whose factor is 1.0 decide exactly alike on fixed states."""
+    ctx = DecisionContext(now=NOW, briefs=(default_brief(),), content=tuple(default_content()), seed=7)
+    states = [
+        _state(0),
+        _state(1, purchases=1, revenue=80.0, last_purchase_at=NOW - timedelta(days=60)),
+        _state(2, purchases=4, revenue=80.0, last_purchase_at=NOW - timedelta(days=20)),
+        _state(3, purchases=2, revenue=80.0, last_purchase_at=NOW - timedelta(days=200)),
+    ]
+    plain = build_agent_policy([default_brief()], default_content())
+    on = build_agent_policy([default_brief()], default_content(), calibrate=True)
+    for state in states:
+        assert plain.decide(state, ctx) == on.decide(state, ctx)
 
 
 def test_the_event_feed_recovers_a_planted_over_valuation_and_waits_for_closed_windows() -> None:
@@ -178,12 +246,32 @@ def test_the_event_feed_recovers_a_planted_over_valuation_and_waits_for_closed_w
         )  # before the agent started: not counted
     assert cal.refit(NOW + timedelta(days=5), 14) == 1.0  # the windows have not closed yet
     assert cal.measured is None
-    f = cal.refit(NOW + timedelta(days=15), 14)
+    # Day 18: the cutoff (day 4) is past the day-3 purchases, the same period autonomy.proof measures.
+    f = cal.refit(NOW + timedelta(days=18), 14, force=True)
     assert 0.44 < f < 0.58
     assert cal.expected == pytest.approx(1.0) and cal.actions == n
     assert cal.measured is not None and cal.measured.point == pytest.approx(0.5, abs=0.05)
     cal.factor = 0.5
-    assert cal.refit(NOW + timedelta(days=16), 14) == 0.5  # inside the week: not refitted
+    assert cal.refit(NOW + timedelta(days=19), 14) == 0.5  # inside the week: not refitted
+
+
+def test_the_event_feed_ignores_purchases_from_sends_that_are_still_open() -> None:
+    """Sends go on after the cutoff and earn too: those purchases are not set against the closed sends."""
+    n, rng = 3000, np.random.default_rng(2)
+    cal = Calibration()
+    for i in range(n):
+        agent, holdout = _decision(i, Group.AGENT, 1.0), _decision(i, Group.HOLDOUT, 0.0)
+        cal.record(agent)
+        cal.record(holdout)
+        cal.purchase(agent.customer_id, NOW + timedelta(days=2), float(rng.normal(2.0, 0.5)) + 0.5)
+        cal.purchase(holdout.customer_id, NOW + timedelta(days=2), float(rng.normal(2.0, 0.5)))
+        late = agent.model_copy(update={"decision_id": f"late{i}", "made_at": NOW + timedelta(days=20)})
+        cal.record(late)  # a second send, still open at the refit
+        cal.purchase(agent.customer_id, NOW + timedelta(days=21), 3.0)  # what the open send earned
+    f = cal.refit(NOW + timedelta(days=26), 14)  # cutoff day 12: only the first sends are closed
+    assert cal.actions == n
+    assert cal.measured is not None and cal.measured.point == pytest.approx(0.5, abs=0.05)
+    assert 0.44 < f < 0.58
 
 
 @pytest.mark.slow

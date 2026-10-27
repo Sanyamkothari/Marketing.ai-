@@ -91,6 +91,7 @@ from autonomy.contracts import (
     stable_id,
 )
 from autonomy.decide import explain, rules
+from autonomy.decide.calibration import scaled_net
 from autonomy.decide.journeys import (
     EXPIRED,
     LEFT_AGENT_GROUP,
@@ -836,10 +837,12 @@ class AutonomousPolicy:
 
     @staticmethod
     def _scaled(bid: Bid, scale: float) -> Bid:
-        """The bid with its expected value multiplied by the calibration factor (its uncertainty is left as it is)."""
-        if scale == 1.0 or not math.isfinite(bid.expected_net):
+        """The bid with its value part shrunk by the calibration factor and its costs left whole
+        (`autonomy.decide.calibration.scaled_net`; its uncertainty is left as it is)."""
+        if scale >= 1.0 or not math.isfinite(bid.expected_net):
             return bid
-        return bid.model_copy(update={"expected_net": bid.expected_net * scale})
+        net = scaled_net(bid, scale)
+        return bid if net == bid.expected_net else bid.model_copy(update={"expected_net": net})
 
     def _price(self, state: CustomerState) -> float:
         if self.attention_price_fn is None:

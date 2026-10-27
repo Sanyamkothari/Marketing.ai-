@@ -116,6 +116,16 @@ def test_proof_calibration_divides_the_incremental_profit_by_the_actions() -> No
     assert proof_calibration(steady, []) == "not_enough_data"
 
 
+def test_proof_calibration_counts_only_the_decisions_that_were_sent() -> None:
+    """A goal half in Shadow (logged ACT, never sent) and half in Approve with exact forecasts stays ok."""
+    acts = [_act(i, 1.0) for i in range(200)]
+    sent = {d.decision_id for d in acts[100:]}
+    exact = _proof(Estimate(point=100.0, low=80.0, high=120.0))  # 1.0 per sent action, as expected
+    assert proof_calibration(exact, acts, sent) == "ok"
+    assert proof_calibration(exact, acts) != "ok"  # every ACT counted: 0.5 per action
+    assert proof_calibration(exact, acts, set()) == "not_enough_data"
+
+
 # --- the gate ---------------------------------------------------------------------------------------
 
 PAYS = Estimate(point=500.0, low=120.0, high=880.0)
@@ -221,6 +231,23 @@ def test_autopilot_is_allowed_on_proof_and_logged() -> None:
     assert entry.reason == REASON_PROOF_GATE and entry.goal_id == goal_id
     assert entry.from_level is AutonomyLevel.APPROVE and entry.to_level is AutonomyLevel.AUTOPILOT
     assert entry.evidence["incremental_profit_low"] == PAYS.low
+
+
+def test_a_failed_save_leaves_no_autopilot_entry_in_the_log() -> None:
+    services, goal_id, clock = _services()
+    services.approve(goal_id, AutonomyLevel.APPROVE)
+    clock[0] = NOW + timedelta(days=20)
+    _with_proof(services, _proof(PAYS))
+    sunk: list[object] = []
+    services.audit_sink = sunk.append
+
+    def broken(goal: object) -> None:
+        raise RuntimeError("the database is down")
+
+    services.workspace.put_goal = broken  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError):
+        services.approve(goal_id, AutonomyLevel.AUTOPILOT)
+    assert services.audit_log == [] and sunk == []
 
 
 def test_other_levels_are_never_gated() -> None:
