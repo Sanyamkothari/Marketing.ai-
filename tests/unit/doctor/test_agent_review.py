@@ -29,11 +29,12 @@ from engine.agent.loop import UNAVAILABLE
 from engine.agent.tools import AgentContext
 from engine.config import BudgetConfig, LlmConfig, RunMode, load_use_case
 from engine.doctor import visit
-from engine.doctor.agent_review import MAX_BLOCKING, agent_review, lazy_review
+from engine.doctor.agent_review import agent_review, lazy_review
 from engine.doctor.ai_guard import AiGuard
 from engine.doctor.case import Case, CaseStore, TimelineKind, VisitState
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.diagnose import LoadedFile
+from engine.doctor.limits import limits
 from engine.llm import FakeLLMClient, FakeLLMMode, LLMCompletion
 from engine.llm_http import PROBLEMS, LLMHttpError
 from engine.storage import LocalStorage
@@ -264,7 +265,7 @@ def test_a_fourth_blocking_question_is_dropped(world: World, storage: LocalStora
     columns = ["customer_id", "account_no", "age", "visits_90d"]
     client = Script([_ask(c) for c in columns])
     found, _ = _run(world, storage, client)
-    assert MAX_BLOCKING == 3
+    assert limits().asks.blocking == 3
     assert len(found.asks) == 3 and all(a.blocking for a in found.asks)
     assert [a.column for a in found.asks] == columns[:3]
     assert all(a.proven is None for a in found.asks), "the AI can never prove an answer"
@@ -557,7 +558,7 @@ def test_a_doubt_about_meaning_also_asks_and_blocks_but_changes_nothing(
 def test_a_meaning_doubt_counts_against_the_blocking_limit(world: World, storage: LocalStorage) -> None:
     script = [_LOOK, *(_doubt(meaning=True, because=f"column {n} may mean something else") for n in range(4))]
     found, _ = _run(world, storage, Script(script))
-    assert len(found.asks) == MAX_BLOCKING == len(found.doubts)
+    assert len(found.asks) == limits().asks.blocking == len(found.doubts)
 
 
 def test_a_request_for_more_data_names_what_the_file_and_whom(world: World, storage: LocalStorage) -> None:

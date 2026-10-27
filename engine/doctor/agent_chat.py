@@ -39,8 +39,9 @@ from engine.agent.grounding import evidence_numbers, grounded_numbers
 from engine.agent.loop import MAX_MESSAGE_CHARS, UNAVAILABLE, _parse
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import clean_text, for_prompt
+from engine.doctor.actions import prompt_variables
 from engine.doctor.agent_apply import person_owns
-from engine.doctor.agent_review import STRIKES, _NoAnswerError, _Review
+from engine.doctor.agent_review import _NoAnswerError, _Review
 from engine.doctor.protocol import DONT_KNOW, Ask, AskOption, question_id_of
 from engine.doctor.questions import catalogue_lines
 from engine.doctor.visit_contracts import OptionEffect
@@ -68,21 +69,6 @@ __all__ = ["CHAT_PROMPT", "ChatTurn", "doctor_converse"]
 _LOG = get_logger(__name__)
 
 CHAT_PROMPT: Final[str] = "data_doctor_chat"
-HISTORY_TURNS: Final[int] = 12
-"""How many earlier messages of the conversation the model reads."""
-DOCTOR_REPLY_CHARS: Final[int] = 2000
-"""The longest reply the Data Doctor chat accepts: room to explain a plan (a table, its numbers, what it needs from
-the person). Guided setup keeps the shorter `MAX_REPLY_CHARS`. The history shows a reply of this length whole."""
-STATE_ITEMS: Final[int] = 40
-MADE_COLUMNS: Final[int] = 20
-"""Columns of a query's table the model is shown."""
-STATE_QUESTIONS: Final[int] = 12
-STATE_DOUBTS: Final[int] = 5
-RELOADED_LOOKS: Final[int] = 6
-"""How many looks of earlier turns the model may cite again."""
-MAX_QUICK: Final[int] = 2
-"""The most quick questions (with the model's own options) one message may raise."""
-SHORT: Final[int] = 220
 QUICK_CODE: Final[str] = "CHAT_ASK"
 _DIGIT: Final = re.compile(r"\d")
 _MEANING_TOPICS: Final = re.compile(
@@ -189,7 +175,7 @@ class _Chat(_Review):
 
         items, questions = active_section(self.case)
         plan: list[dict[str, Any]] = []
-        for number, item in enumerate(items[-STATE_ITEMS:], start=1):
+        for number, item in enumerate(items[-self.limits.turn.state_items :], start=1):
             self.handles[f"c{number}"] = item.item_id
             decided = (
                 "you" if item.decided_by == AGENT else ("the person" if item.decided_by is not None else None)
@@ -205,7 +191,7 @@ class _Chat(_Review):
             plan.append(
                 {
                     "id": f"c{number}",
-                    "what": self._text(item.upload_id, clean_text(item.title, SHORT)),
+                    "what": self._text(item.upload_id, clean_text(item.title, self.limits.turn.short_chars)),
                     "made_by": {"rules": "the rules", "ai": "you", "person": "the person"}[item.source.value],
                     "state": shown,
                     **({"decided_by": decided} if decided else {}),
@@ -214,9 +200,13 @@ class _Chat(_Review):
                     **(
                         {
                             "makes_table": {
-                                "name": self._text(item.upload_id, str(step.get("column", ""))[:SHORT]),
+                                "name": self._text(
+                                    item.upload_id,
+                                    str(step.get("column", ""))[: self.limits.turn.short_chars],
+                                ),
                                 "columns": [
-                                    self._text(item.upload_id, str(c)[:SHORT]) for c in made[:MADE_COLUMNS]
+                                    self._text(item.upload_id, str(c)[: self.limits.turn.short_chars])
+                                    for c in made[: self.limits.turn.made_columns]
                                 ],
                             }
                         }
@@ -229,26 +219,30 @@ class _Chat(_Review):
             )
         asked: list[dict[str, Any]] = []
         for number, q in enumerate(
-            sorted(questions, key=lambda q: q.answer is not None)[:STATE_QUESTIONS], start=1
+            sorted(questions, key=lambda q: q.answer is not None)[: self.limits.turn.state_questions], start=1
         ):
             self.handles[f"k{number}"] = q.question_id
             options = [
-                {"id": o.option_id, "label": self._text(q.upload_id, clean_text(o.label, SHORT))}
+                {
+                    "id": o.option_id,
+                    "label": self._text(q.upload_id, clean_text(o.label, self.limits.turn.short_chars)),
+                }
                 for o in q.options
             ]
             chosen = next((o["label"] for o in options if o["id"] == q.answer), None)
             if chosen is not None and q.answer_value is not None:
-                chosen = f"{chosen}: {self._text(q.upload_id, clean_text(q.answer_value, SHORT))}"
+                chosen = f"{chosen}: {self._text(q.upload_id, clean_text(q.answer_value, self.limits.turn.short_chars))}"
             asked.append(
                 {
                     "id": f"k{number}",
-                    "text": self._text(q.upload_id, clean_text(q.text, SHORT)),
+                    "text": self._text(q.upload_id, clean_text(q.text, self.limits.turn.short_chars)),
                     "options": options,
                     "answer": chosen,
                 }
             )
         doubts = [
-            self._text(d.upload_id, clean_text(d.because, SHORT)) for d in self.case.doubts[-STATE_DOUBTS:]
+            self._text(d.upload_id, clean_text(d.because, self.limits.turn.short_chars))
+            for d in self.case.doubts[-self.limits.turn.state_doubts :]
         ]
         return {"plan": plan, "questions": asked, "doubts": doubts}
 
@@ -263,7 +257,7 @@ class _Chat(_Review):
             return []
         shown: list[dict[str, Any]] = []
         refs = [r for r in self.case.evidence if r.tool in TOOLS and r.upload_id is not None]
-        for ref in refs[-RELOADED_LOOKS:]:
+        for ref in refs[-self.limits.turn.reloaded_looks :]:
             index = next((i for i, ctx in enumerate(self.ctxs) if ctx.upload_id == ref.upload_id), None)
             if index is None:
                 continue
@@ -298,13 +292,15 @@ class _Chat(_Review):
 
     def _history(self) -> str:
         """The last turns of the conversation before the message now being answered."""
-        earlier = self.case.chat[:-1][-HISTORY_TURNS:]
+        earlier = self.case.chat[:-1][-self.limits.turn.history_turns :]
         if not earlier:
             return "(this is the first message)"
         turns = [
             {
                 "who": "person" if entry.role == "user" else "you",
-                "text": self._text(None, clean_text(entry.text, max(DOCTOR_REPLY_CHARS, MAX_MESSAGE_CHARS))),
+                "text": self._text(
+                    None, clean_text(entry.text, max(self.limits.turn.chat_reply_chars, MAX_MESSAGE_CHARS))
+                ),
             }
             for entry in earlier
         ]
@@ -334,6 +330,7 @@ class _Chat(_Review):
             return {
                 "goal": goal,
                 "tools": tools,
+                **prompt_variables("chat", self.ctxs[0].config),
                 "questions": catalogue_lines(chat=True),
                 "state": json.dumps(self.state, ensure_ascii=False),
                 "conversation": history,
@@ -361,7 +358,7 @@ class _Chat(_Review):
                 # The message goes into the feedback even when this is the last strike: the last word reads it, so
                 # a reply refused for its number is not written again with the same number.
                 turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
-                if strikes >= STRIKES:
+                if strikes >= self.limits.turn.strikes:
                     blocked = exc.code
                     break
             except Exception as exc:  # a model's odd input must never cost a paid turn that nobody records
@@ -440,9 +437,13 @@ class _Chat(_Review):
         said = str(action.get("text") or "").strip()
         if not said:
             raise AgentToolError("AGENT_TEXT_REFUSED", "Say something to the person in `text`.")
-        failure = self.checker.failure(said, target="doctor reply", max_chars=DOCTOR_REPLY_CHARS)
+        failure = self.checker.failure(
+            said, target="doctor reply", max_chars=self.limits.turn.chat_reply_chars
+        )
         if failure is not None:
-            if len(said) > DOCTOR_REPLY_CHARS:  # too long: the model is told the limit so that it can shorten
+            if (
+                len(said) > self.limits.turn.chat_reply_chars
+            ):  # too long: the model is told the limit so that it can shorten
                 other = self.checker.failure(said, target="doctor reply", max_chars=len(said))
                 also = (
                     f" It also failed a check ({other}); use only numbers from a tool result or the person's words."
@@ -451,7 +452,7 @@ class _Chat(_Review):
                 )
                 raise AgentToolError(
                     "AGENT_TEXT_REFUSED",
-                    f"The reply is {len(said)} characters; the most allowed is {DOCTOR_REPLY_CHARS}. Say the same "
+                    f"The reply is {len(said)} characters; the most allowed is {self.limits.turn.chat_reply_chars}. Say the same "
                     f"in fewer words, with the result first.{also}",
                 )
             raise AgentToolError(
@@ -534,7 +535,7 @@ class _Chat(_Review):
                 self.chosen.applied.append(item)
                 said["result"] = "I will apply it for the person, who can undo it with one click."
             else:
-                why = self._text(item.upload_id, clean_text(waits, SHORT))
+                why = self._text(item.upload_id, clean_text(waits, self.limits.turn.short_chars))
                 self.checker.grounded = self.checker.grounded | grounded_numbers([why])
                 said["result"] = f"It waits for the person's tick, because {why}"
             self.turn.feedback.append(said)
@@ -618,15 +619,20 @@ class _Chat(_Review):
         text, why = str(args.get("text") or "").strip(), str(args.get("why") or "").strip()
         given = args.get("options")
         options = [o.strip() for o in given if isinstance(o, str)] if isinstance(given, list) else []
-        if not text or not 2 <= len(options) <= 4 or len(set(options)) != len(options) or not all(options):
+        if (
+            not text
+            or not self.limits.asks.quick_options_min <= len(options) <= self.limits.asks.quick_options_max
+            or len(set(options)) != len(options)
+            or not all(options)
+        ):
             raise AgentToolError(
                 "AGENT_QUESTION_INVALID",
-                "A quick question needs `text` and 2 to 4 different `options`, each a short sentence.",
+                f"A quick question needs `text` and {self.limits.asks.quick_options_min} to {self.limits.asks.quick_options_max} different `options`, each a short sentence.",
             )
-        if self.chosen.quick >= MAX_QUICK:
+        if self.chosen.quick >= self.limits.asks.quick:
             raise AgentToolError("AGENT_BLOCKING_LIMIT", "That is enough quick questions for one message.")
         for part in (text, why, *options):
-            if len(part) > SHORT:
+            if len(part) > self.limits.turn.short_chars:
                 raise AgentToolError("AGENT_QUESTION_INVALID", "Keep the question and its options short.")
             if _MEANING_TOPICS.search(part):
                 raise AgentToolError(
@@ -639,7 +645,13 @@ class _Chat(_Review):
                     "AGENT_QUESTION_REFUSED",
                     "A quick question states no numbers. For what counts as a yes use the question list.",
                 )
-            failure = self.checker.failure(part, target="doctor question", max_chars=400) if part else None
+            failure = (
+                self.checker.failure(
+                    part, target="doctor question", max_chars=self.limits.turn.question_chars
+                )
+                if part
+                else None
+            )
             if failure is not None:
                 raise AgentToolError(
                     "AGENT_QUESTION_REFUSED", f"The question failed a check ({failure}); reword it."

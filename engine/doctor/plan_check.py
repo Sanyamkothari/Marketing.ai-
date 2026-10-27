@@ -22,6 +22,7 @@ from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.doctor.case import CaseFile, CaseItem
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.guards import Receipt, holds, names_a_log_row
+from engine.doctor.limits import limits
 from engine.doctor.materialize import Sample, materialize_plan
 from engine.doctor.visit_contracts import Acknowledgement, CaseVisit, PlanCheck, PlanFinding
 
@@ -29,7 +30,6 @@ if TYPE_CHECKING:
     from engine.doctor.materialize import Prepared
 
 __all__ = [
-    "SAMPLE_ROWS",
     "accepted_column",
     "acknowledged_codes",
     "check_plan",
@@ -44,8 +44,6 @@ __all__ = [
     "with_full_findings",
 ]
 
-SAMPLE_ROWS: Final[int] = 1_000
-"""Rows of each file the plan is tried on."""
 _TOTALS_SHOWN: Final[int] = 10
 _ORDER: Final[dict[str, int]] = {"stop": 0, "flag": 1, "note": 2}
 
@@ -172,8 +170,11 @@ def check_plan(
     as_of: date | None = None,
 ) -> PlanCheck:
     """Run the accepted steps on a seeded sample of each file under the guards (run twice) and keep what was
-    counted: :func:`materialize_plan` at :class:`Sample` of `SAMPLE_ROWS`, as a stored check."""
-    return plan_check_of(materialize_plan(case_files, items, files, Sample(SAMPLE_ROWS), as_of=as_of))
+    counted: :func:`materialize_plan` at :class:`Sample` of `data_doctor.limits.trial.sample_rows`, as a stored check.
+    """
+    return plan_check_of(
+        materialize_plan(case_files, items, files, Sample(limits().trial.sample_rows), as_of=as_of)
+    )
 
 
 def stop_is_open(found: PlanFinding, acknowledged: Sequence[Acknowledgement]) -> bool:

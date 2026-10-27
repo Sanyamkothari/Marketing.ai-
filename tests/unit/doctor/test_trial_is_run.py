@@ -135,9 +135,17 @@ def agree(
     assert proposal["columns_out"] == len(schema(sample))
 
 
+def _dry_run_rows(monkeypatch: pytest.MonkeyPatch, rows: int) -> None:
+    from engine.doctor.config import DataDoctorLimits, TrialLimits
+
+    monkeypatch.setattr(
+        "engine.doctor.limits._ACTIVE", [DataDoctorLimits(trial=TrialLimits(dry_run_rows=rows))]
+    )
+
+
 @pytest.fixture(autouse=True)
 def _trial_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("engine.doctor.tools_sql.DRY_RUN_ROWS", SAMPLE)
+    _dry_run_rows(monkeypatch, SAMPLE)
 
 
 def test_a_parsed_date_read_by_a_query_with_an_as_of_agrees() -> None:
@@ -300,7 +308,7 @@ def test_a_trial_on_a_bigger_file_reads_the_rows_a_run_samples_not_the_first_one
         {"Customer": [f"C{n // 100}" for n in range(rows)], "Amount": [float(n % 7) for n in range(rows)]}
     )  # the first 1,000 rows hold 10 of the 30 customers
     files = (loaded("up-1", "orders.csv", big),)
-    monkeypatch.setattr("engine.doctor.tools_sql.DRY_RUN_ROWS", 1_000)
+    _dry_run_rows(monkeypatch, 1_000)
     proposal = propose(files, (), "SELECT Customer, count(*) AS n FROM t_orders GROUP BY ALL", ["up-1"])
     assert proposal["rows_out"] > 10
     agree([query_item(proposal)], files, proposal, n=1_000)

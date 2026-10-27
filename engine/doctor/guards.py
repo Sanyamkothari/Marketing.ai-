@@ -49,11 +49,9 @@ from engine.agent.sql_step import (
 )
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import StrictBase
+from engine.doctor.limits import limits
 
 __all__ = [
-    "LOSS_STOP_PCT",
-    "RATE_STOP_POINTS",
-    "RETRY_CAP",
     "ExpectationBook",
     "ExpectationOutcome",
     "Expectations",
@@ -80,12 +78,6 @@ __all__ = [
 
 Level = Literal["stop", "flag", "note"]
 
-LOSS_STOP_PCT: Final[float] = 5.0
-"""A plan that loses more than this share of its customers needs a yes."""
-RATE_STOP_POINTS: Final[float] = 1.0
-"""A plan that moves the outcome rate by more than this many points needs a yes."""
-RETRY_CAP: Final[int] = 2
-"""A step whose expectations fail may be tried again twice; then a person is asked."""
 MAX_STOPS_SHOWN: Final[int] = 5
 MAX_TOTAL_COLUMNS: Final[int] = 25
 _TOP_STEPS: Final[int] = 3
@@ -811,7 +803,10 @@ def plan_findings(ledger: Ledger | None, *, side_table: bool = False) -> list[Fi
     if ledger is None:
         return []
     found: list[Finding] = []
-    if ledger.lost_pct > LOSS_STOP_PCT and not side_table:
+    gates = (
+        limits().gates
+    )  # a plan that loses more of its customers than this, or moves the rate more, needs a yes
+    if ledger.lost_pct > gates.loss_stop_pct and not side_table:
         by = ", ".join(f"{k}: {v:,}" for k, v in ledger.lost_by_outcome.items())
         who = (
             "This step leaves"
@@ -824,13 +819,13 @@ def plan_findings(ledger: Ledger | None, *, side_table: bool = False) -> list[Fi
                 code="PLAN_LOSES_TOO_MUCH",
                 count=ledger.lost_total,
                 message=f"{who} out {ledger.lost_total:,} of {ledger.start:,} {ledger.unit} "
-                f"({ledger.lost_pct:.1f}%), more than the {LOSS_STOP_PCT:g}% we allow without asking."
+                f"({ledger.lost_pct:.1f}%), more than the {gates.loss_stop_pct:g}% we allow without asking."
                 + (_who_were_lost(ledger.lost_by_outcome) if ledger.rate_start is not None else ""),
                 detail=f"Most from {_naming(ledger.top_loss_steps)}." + (f" By outcome, {by}." if by else ""),
             )
         )
-    if ledger.rate_move is not None and abs(ledger.rate_move) > RATE_STOP_POINTS:
-        points = f"{RATE_STOP_POINTS:g} point" + ("" if RATE_STOP_POINTS == 1 else "s")
+    if ledger.rate_move is not None and abs(ledger.rate_move) > gates.rate_stop_points:
+        points = f"{gates.rate_stop_points:g} point" + ("" if gates.rate_stop_points == 1 else "s")
         found.append(
             Finding(
                 level="stop",
@@ -947,16 +942,19 @@ class ExpectationBook:
 
     def check(self, order: int, receipt: Receipt) -> ExpectationOutcome:
         """Check the receipt against what was locked; all failures at once. Two retries, then ask."""
+        retry_cap = (
+            limits().gates.retries
+        )  # a step whose checks fail may be tried again this often; then a person is asked
         exp = self._locked.get(order)
         attempt = self._attempts.get(order, 0) + 1
         self._attempts[order] = attempt
         failures = tuple(_expectation_failures(receipt, exp)) if exp is not None else ()
         if not failures:
-            return ExpectationOutcome(order, (), attempt, RETRY_CAP, False)
+            return ExpectationOutcome(order, (), attempt, retry_cap, False)
         failed = self._failed.get(order, 0) + 1
         self._failed[order] = failed
-        retries_left = max(0, RETRY_CAP - (failed - 1))
-        must_ask = failed > RETRY_CAP
+        retries_left = max(0, retry_cap - (failed - 1))
+        must_ask = failed > retry_cap
         words = (
             "It has failed too often; a person must say what to do."
             if must_ask

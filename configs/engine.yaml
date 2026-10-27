@@ -384,4 +384,41 @@ defaults:
       max_tokens_per_case: 2000000      # int >= 1; tokens read plus written
       max_calls_per_case: 200           # int >= 1; calls to the AI service
       max_chat_steps: 8                 # int 1..30; actions (looks, changes, questions) the chat may take to answer one message
+    limits:                             # every number the Doctor's AI or a gate obeys that a prompt may state; hard floors (rows, positives, leakage, consent) are not here
+      turn:
+        review_steps: 12                # int 1..30; actions the review may take in one visit
+        strikes: 2                      # int 1..10; bad replies before the AI stops
+        chat_reply_chars: 2000          # int 200..8000; longest chat reply
+        guided_reply_chars: 800         # int 200..8000; longest Guided setup reply
+        summary_chars: 800              # int 100..4000; longest review summary
+        effect_chars: 160               # int 40..1000; longest "what this choice does" sentence
+        question_chars: 400             # int 100..2000; longest question or doubt text
+        description_chars: 300          # int 50..2000; longest query description
+        history_turns: 12               # int 0..100; earlier chat messages the model reads
+        state_items: 40                 # int 1..500; latest changes of the case the model reads
+        state_questions: 12             # int 1..200; questions of the case the model reads
+        state_doubts: 5                 # int 0..100; doubts of the case the model reads
+        made_columns: 20                # int 1..200; columns of a query's table the model is shown
+        reloaded_looks: 6               # int 0..50; looks of earlier turns the model may cite again
+        short_chars: 220                # int 40..2000; longest piece of text the case state shows
+        prompt_chars: 60000             # int 5000..400000; longest prompt that is sent
+      asks:
+        blocking: 3                     # int 0..20; blocking questions in one review
+        quick: 2                        # int 0..10; quick questions in one message
+        quick_options_min: 2            # int 2..6; fewest options of a quick question
+        quick_options_max: 4            # int 2..6; most options of a quick question
+        doubts: 5                       # int 0..50; doubts in one review
+        requests: 3                     # int 0..20; requests for more data in one review
+        request_columns: 8              # int 1..50; columns one request may name
+        suggestions_per_question: 1     # int 1..1; a later suggestion for a question replaces the earlier
+      trial:
+        sample_rows: 1000               # int 1..1000000; rows of the Sample a plan is checked on
+        dry_run_rows: 100000            # int 1..10000000; rows of each file a query is tried on
+      gates:
+        retries: 2                      # int 0..10; tries of a failing step before a person is asked
+        loss_stop_pct: 5.0              # float 0..100; share of customers a plan may lose without a yes
+        rate_stop_points: 1.0           # float 0..100; points the outcome rate may move without a yes
+        approve_drop_share: 0.02        # float 0..1; share of rows a join, stack or removal may drop without a yes
+        change_warn_pct: 30.0           # float 0..100; share of a column a value fix may change before a warning
+        change_refuse_pct: 60.0         # float 0..100; share of a column a value fix may change before it is refused
   # ---- END PLAN-O ----

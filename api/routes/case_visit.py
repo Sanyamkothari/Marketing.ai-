@@ -459,10 +459,12 @@ def _load_full(storage: Storage, upload_ids: Sequence[str], root: Path) -> tuple
 
 
 def first_rows_loader(storage: Storage) -> Callable[[Case], tuple[LoadedFile, ...]]:
-    """The screen's loader of a case's files: only each file's FIRST `SAMPLE_ROWS` rows (the rows the plan is tried
+    """The screen's loader of a case's files: only each file's FIRST `data_doctor.limits.trial.sample_rows` rows (the rows the plan is tried
     on and the preview shows), never the Doctor's whole-file read or random sample. An O(1,000) read per file.
     """
-    from engine.doctor.plan_check import SAMPLE_ROWS
+    from engine.doctor.limits import limits
+
+    sample_rows = limits().trial.sample_rows
     from engine.stages import ingest
 
     def load_files(case: Case) -> tuple[LoadedFile, ...]:
@@ -474,8 +476,8 @@ def first_rows_loader(storage: Storage) -> Callable[[Case], tuple[LoadedFile, ..
                 storage,
                 record.source_key,
                 file_format=record.file_format,
-                max_rows=SAMPLE_ROWS,
-                row_cap=SAMPLE_ROWS,
+                max_rows=sample_rows,
+                row_cap=sample_rows,
                 keep_leading_zeros=True,
             ).frame
             loaded.append(

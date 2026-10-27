@@ -550,6 +550,34 @@ the live chat's `propose_step` refuses them until the Data Doctor switch is on a
 rule for them exists (`engine.agent.loop`): a model must not gain a new proposable behaviour on the default path."""
 
 
+STEP_PARAMETERS: Final[dict[RecipeStepKind, frozenset[str]]] = {
+    RecipeStepKind.DROP_COLUMN: frozenset(),
+    RecipeStepKind.PARSE_NUMBER: frozenset({"decimal", "percent_to_fraction", "indian_scale_words", "unit"}),
+    RecipeStepKind.PARSE_DATE: frozenset({"dayfirst", "excel_serial", "date_1904"}),
+    RecipeStepKind.MAP_BOOLEAN: frozenset({"true_values", "false_values"}),
+    RecipeStepKind.NORMALISE_TEXT: frozenset({"strip", "merge"}),
+    RecipeStepKind.SET_MISSING: frozenset({"values"}),
+    RecipeStepKind.DERIVE: frozenset({"expression"}),
+    RecipeStepKind.COMBINE_ROWS: frozenset(
+        {"time_column", "snapshot_column", "dayfirst", "outcome", "features"}
+    ),
+    RecipeStepKind.MAP_VALUES: frozenset({"mapping"}),
+    RecipeStepKind.SET_MISSING_TEXT: frozenset({"values"}),
+    RecipeStepKind.CONVERT_UNITS: frozenset({"units", "bare"}),
+    RecipeStepKind.CORRECT_CELLS: frozenset({"key_column", "cells"}),
+    RecipeStepKind.SPLIT_COLUMN: frozenset({"separator", "part"}),
+    RecipeStepKind.VALID_RANGE: frozenset({"minimum", "maximum"}),
+    RecipeStepKind.FILL_MISSING: frozenset({"value"}),
+    RecipeStepKind.REMOVE_ROWS: frozenset({"operator", "values"}),
+    RecipeStepKind.RENAME_COLUMN: frozenset(),
+    RecipeStepKind.NORMALISE_KEY: frozenset({"prefix", "zeros", "case", "spaces", "phone"}),
+    RecipeStepKind.CONVERT_CURRENCY: frozenset(
+        {"from", "to", "rate", "rate_date", "source", "rows", "decimal", "indian_scale_words"}
+    ),
+}
+"""The parameters each kind of step takes (the prompts list them from here; a parameter not here is refused)."""
+
+
 def _check_params(step: RecipeStep) -> None:
     params = _params(step)
     kind = step.kind
@@ -559,33 +587,7 @@ def _check_params(step: RecipeStep) -> None:
             "RECIPE_STEP_INVALID", f"Step {step.order} ({kind.value}): {what}", order=step.order
         )
 
-    allowed: dict[RecipeStepKind, frozenset[str]] = {
-        RecipeStepKind.DROP_COLUMN: frozenset(),
-        RecipeStepKind.PARSE_NUMBER: frozenset(
-            {"decimal", "percent_to_fraction", "indian_scale_words", "unit"}
-        ),
-        RecipeStepKind.PARSE_DATE: frozenset({"dayfirst", "excel_serial", "date_1904"}),
-        RecipeStepKind.MAP_BOOLEAN: frozenset({"true_values", "false_values"}),
-        RecipeStepKind.NORMALISE_TEXT: frozenset({"strip", "merge"}),
-        RecipeStepKind.SET_MISSING: frozenset({"values"}),
-        RecipeStepKind.DERIVE: frozenset({"expression"}),
-        RecipeStepKind.COMBINE_ROWS: frozenset(
-            {"time_column", "snapshot_column", "dayfirst", "outcome", "features"}
-        ),
-        RecipeStepKind.MAP_VALUES: frozenset({"mapping"}),
-        RecipeStepKind.SET_MISSING_TEXT: frozenset({"values"}),
-        RecipeStepKind.CONVERT_UNITS: frozenset({"units", "bare"}),
-        RecipeStepKind.CORRECT_CELLS: frozenset({"key_column", "cells"}),
-        RecipeStepKind.SPLIT_COLUMN: frozenset({"separator", "part"}),
-        RecipeStepKind.VALID_RANGE: frozenset({"minimum", "maximum"}),
-        RecipeStepKind.FILL_MISSING: frozenset({"value"}),
-        RecipeStepKind.REMOVE_ROWS: frozenset({"operator", "values"}),
-        RecipeStepKind.RENAME_COLUMN: frozenset(),
-        RecipeStepKind.NORMALISE_KEY: frozenset({"prefix", "zeros", "case", "spaces", "phone"}),
-        RecipeStepKind.CONVERT_CURRENCY: frozenset(
-            {"from", "to", "rate", "rate_date", "source", "rows", "decimal", "indian_scale_words"}
-        ),
-    }
+    allowed = STEP_PARAMETERS
     unknown = set(params) - allowed[kind]
     if unknown:
         raise refuse(f"unknown parameter {sorted(unknown)[0]!r}")

@@ -54,7 +54,7 @@ from engine.agent.recipe import RecipeError, run_recipe
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import AggFunction, FeatureDef, LabelDefinition, SnapshotDefinition, StrictBase
 from engine.doctor.contracts import Diagnosis, FileDiagnosis, FileStack
-from engine.doctor.join_files import APPROVE_DROP_SHARE
+from engine.doctor.limits import limits
 from engine.doctor.stack_files import (
     ConflictRule,
     StackError,
@@ -510,7 +510,7 @@ def plan_build(
     reasons: list[str] = []
     if _rewrites(base_rule, events):
         reasons.append("BUILD_REWRITES_IDS")
-    if any((source.dropped_share or 0.0) > APPROVE_DROP_SHARE for source in events):
+    if any((source.dropped_share or 0.0) > limits().gates.approve_drop_share for source in events):
         reasons.append("JOIN_DROPS_ROWS")
     for receipt in receipts:
         reasons += [reason for reason in receipt.approval_reasons if reason not in reasons]
@@ -567,7 +567,7 @@ def _approval_sentence(
             + f") and written as {list_name} writes them; {list_name} keeps its IDs as they are."
         )
     for event in events:
-        if (event.dropped_share or 0.0) > APPROVE_DROP_SHARE and event.rows:
+        if (event.dropped_share or 0.0) > limits().gates.approve_drop_share and event.rows:
             parts.append(
                 f"Joining {event.source_name} to {list_name} leaves out {event.rows_dropped} of {event.rows} rows "
                 f"({event.dropped_share:.1%}): they have no customer ID, or their customer is not in {list_name}."

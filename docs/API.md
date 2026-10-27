@@ -645,6 +645,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `unified` | boolean | no | Plan O (DEC-1800): when true, Guided setup and the Doctor page are the one Data Doctor agent. Off until the parity checklist is met (M249); while off, nothing changes. |
 | `workspace_currency` | string | no | Plan O M242 (DEC-1812): the currency this workspace's reports use, as a code (INR, USD, EUR). A client's confirmed locale profile overrides it for that client. Read only while `unified` is on; INR, the default, is left out of a dump so nothing moves. |
 | `time_settings` | TimeSettingsConfig | no | Plan O M244 (DEC-1814): the training budget's diminishing-returns step and the ratios of its three choices. Read only while `unified` is on; the defaults are left out of a dump so nothing moves. |
+| `limits` | DataDoctorLimits | no | Every number the Doctor's AI or a gate obeys that a prompt may state (reply lengths, steps, strikes, questions, trial rows, where a plan needs a yes). Read through `engine.doctor.limits`; the defaults are left out of a dump so nothing moves. |
 | `ai_limits` | AiLimitsConfig | no | The most tokens and calls the Doctor's AI may use on one case. Read only while `unified` is on; the defaults are left out of a dump so nothing moves. |
 
 #### ThresholdConfig
@@ -956,6 +957,17 @@ Extra column-name hints the helper uses on top of the use case's own detection h
 | `thorough_ratio` | number | no | Thorough's time limit as a multiple of Balanced's. |
 | `sure_min_runs` | integer | no | Balanced is pre-selected (`sure`) only when at least this many past runs were close in size. |
 
+#### DataDoctorLimits
+
+`data_doctor.limits`: every number the Doctor's AI or a gate obeys that a prompt may state. The hard floors (minimum rows and positives, leakage, consent) are not here and cannot be loosened by any of these.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `turn` | TurnLimits | no | Length of a turn and what the model reads. |
+| `asks` | AsksLimits | no | What the AI may ask of the person. |
+| `trial` | TrialLimits | no | Rows a trial reads. |
+| `gates` | GateLimits | no | Where a plan needs a yes. |
+
 #### AiLimitsConfig
 
 `data_doctor.ai_limits`: what the Doctor's AI may spend on one case. When either is used up the Doctor says so and carries on with its rules alone.
@@ -1010,6 +1022,66 @@ The cross-use-case default feature library (plan section 5.1).  A use case's own
 | `enabled` | boolean | no |  |
 | `windows_days` | list[integer] | no |  |
 | `functions` | list[AggFunction ("count" \| "sum" \| "mean" \| "min" \| "max" \| "std" \| "nunique" \| "latest" \| "first" \| "days_since_last" \| "days_since_first" \| "exists" \| "ratio" \| "derive")] | no |  |
+
+#### TurnLimits
+
+`data_doctor.limits.turn`: how long one turn of the Doctor's AI may run and how much of the case it reads.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `review_steps` | integer | no | Actions (looks, changes, questions) the review may take in one visit. |
+| `strikes` | integer | no | Bad replies (malformed, unknown action, refused argument) before the AI stops. |
+| `chat_reply_chars` | integer | no | The longest reply the Doctor's chat accepts. |
+| `guided_reply_chars` | integer | no | The longest reply Guided setup's helper accepts. |
+| `summary_chars` | integer | no | The longest summary the review ends with. |
+| `effect_chars` | integer | no | The longest sentence saying what one choice of a question does. |
+| `question_chars` | integer | no | The longest question or doubt text. |
+| `description_chars` | integer | no | The longest description of a query. |
+| `history_turns` | integer | no | Earlier chat messages the model reads. |
+| `state_items` | integer | no | The latest changes of the case the model reads. |
+| `state_questions` | integer | no | Questions of the case the model reads. |
+| `state_doubts` | integer | no | Doubts of the case the model reads. |
+| `made_columns` | integer | no | Columns of a query's table the model is shown. |
+| `reloaded_looks` | integer | no | Looks of earlier turns the model may cite again. |
+| `short_chars` | integer | no | The longest piece of text the case state shows. |
+| `prompt_chars` | integer | no | The longest prompt that is sent. |
+
+#### AsksLimits
+
+`data_doctor.limits.asks`: how much the AI may ask of the person.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `blocking` | integer | no | Blocking questions the AI may ask in one review. |
+| `quick` | integer | no | Quick questions (with its own options) in one message. |
+| `quick_options_min` | integer | no | The fewest options of a quick question. |
+| `quick_options_max` | integer | no | The most options of a quick question. |
+| `doubts` | integer | no | Doubts the AI may state in one review. |
+| `requests` | integer | no | Requests for more data the AI may make in one review. |
+| `request_columns` | integer | no | Columns one request for data may name. |
+| `suggestions_per_question` | integer | no | Answers suggested for one question; a later one replaces the earlier. |
+
+#### TrialLimits
+
+`data_doctor.limits.trial`: how many rows a trial reads.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `sample_rows` | integer | no | Rows of the Sample a plan is checked on. |
+| `dry_run_rows` | integer | no | Rows of each file a query is tried on before it runs. |
+
+#### GateLimits
+
+`data_doctor.limits.gates`: where a plan needs the person's yes.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `retries` | integer | no | Tries of a step whose checks fail before a person is asked. |
+| `loss_stop_pct` | number | no | A plan that loses a larger share of customers (%) needs a yes. |
+| `rate_stop_points` | number | no | A plan that moves the outcome rate by more points needs a yes. |
+| `approve_drop_share` | number | no | Rows a join, a stack or a row removal drops (share) before it needs a yes. |
+| `change_warn_pct` | number | no | A value fix changing a larger share (%) of a column is shown as a warning. |
+| `change_refuse_pct` | number | no | A value fix changing a larger share (%) of a column is refused. |
 
 ### `profile.json`
 
@@ -2190,6 +2262,39 @@ Keys of the default document that no advanced-settings field renders, with their
 | `data_doctor.ai_limits.max_tokens_per_case` | int >= 1; tokens read plus written |
 | `data_doctor.ai_limits.max_calls_per_case` | int >= 1; calls to the AI service |
 | `data_doctor.ai_limits.max_chat_steps` | int 1..30; actions (looks, changes, questions) the chat may take to answer one message |
+| `data_doctor.limits` | every number the Doctor's AI or a gate obeys that a prompt may state; hard floors (rows, positives, leakage, consent) are not here |
+| `data_doctor.limits.turn.review_steps` | int 1..30; actions the review may take in one visit |
+| `data_doctor.limits.turn.strikes` | int 1..10; bad replies before the AI stops |
+| `data_doctor.limits.turn.chat_reply_chars` | int 200..8000; longest chat reply |
+| `data_doctor.limits.turn.guided_reply_chars` | int 200..8000; longest Guided setup reply |
+| `data_doctor.limits.turn.summary_chars` | int 100..4000; longest review summary |
+| `data_doctor.limits.turn.effect_chars` | int 40..1000; longest "what this choice does" sentence |
+| `data_doctor.limits.turn.question_chars` | int 100..2000; longest question or doubt text |
+| `data_doctor.limits.turn.description_chars` | int 50..2000; longest query description |
+| `data_doctor.limits.turn.history_turns` | int 0..100; earlier chat messages the model reads |
+| `data_doctor.limits.turn.state_items` | int 1..500; latest changes of the case the model reads |
+| `data_doctor.limits.turn.state_questions` | int 1..200; questions of the case the model reads |
+| `data_doctor.limits.turn.state_doubts` | int 0..100; doubts of the case the model reads |
+| `data_doctor.limits.turn.made_columns` | int 1..200; columns of a query's table the model is shown |
+| `data_doctor.limits.turn.reloaded_looks` | int 0..50; looks of earlier turns the model may cite again |
+| `data_doctor.limits.turn.short_chars` | int 40..2000; longest piece of text the case state shows |
+| `data_doctor.limits.turn.prompt_chars` | int 5000..400000; longest prompt that is sent |
+| `data_doctor.limits.asks.blocking` | int 0..20; blocking questions in one review |
+| `data_doctor.limits.asks.quick` | int 0..10; quick questions in one message |
+| `data_doctor.limits.asks.quick_options_min` | int 2..6; fewest options of a quick question |
+| `data_doctor.limits.asks.quick_options_max` | int 2..6; most options of a quick question |
+| `data_doctor.limits.asks.doubts` | int 0..50; doubts in one review |
+| `data_doctor.limits.asks.requests` | int 0..20; requests for more data in one review |
+| `data_doctor.limits.asks.request_columns` | int 1..50; columns one request may name |
+| `data_doctor.limits.asks.suggestions_per_question` | int 1..1; a later suggestion for a question replaces the earlier |
+| `data_doctor.limits.trial.sample_rows` | int 1..1000000; rows of the Sample a plan is checked on |
+| `data_doctor.limits.trial.dry_run_rows` | int 1..10000000; rows of each file a query is tried on |
+| `data_doctor.limits.gates.retries` | int 0..10; tries of a failing step before a person is asked |
+| `data_doctor.limits.gates.loss_stop_pct` | float 0..100; share of customers a plan may lose without a yes |
+| `data_doctor.limits.gates.rate_stop_points` | float 0..100; points the outcome rate may move without a yes |
+| `data_doctor.limits.gates.approve_drop_share` | float 0..1; share of rows a join, stack or removal may drop without a yes |
+| `data_doctor.limits.gates.change_warn_pct` | float 0..100; share of a column a value fix may change before a warning |
+| `data_doctor.limits.gates.change_refuse_pct` | float 0..100; share of a column a value fix may change before it is refused |
 
 ### Catalog keys
 

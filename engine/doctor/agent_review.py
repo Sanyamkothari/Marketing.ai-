@@ -14,7 +14,7 @@ registry's look tools, and answers with one JSON action per call (the `data_doct
 * `finish` ends the review with a short summary.
 
 Held in code, not in the prompt: the review does not run unless the client has allowed the AI and the case has
-spending left (`AiGuard.ask`); at most `MAX_BLOCKING` blocking questions; a query's own checks (`expect`) are
+spending left (`AiGuard.ask`); at most `data_doctor.limits.asks.blocking` blocking questions; a query's own checks (`expect`) are
 locked at the first try and it may be retried twice (`guards.ExpectationBook`), after which it is shown with a stop
 finding instead of dropped; at most `agent.max_tool_steps_per_turn` actions; two bad replies end the review.
 Nothing the model writes is evidence: numbers in what the person reads must be in a tool result.
@@ -57,7 +57,6 @@ from engine.agent.egress import (
 )
 from engine.agent.grounding import evidence_numbers, grounded_numbers
 from engine.agent.loop import (
-    MAX_PROMPT_CHARS,
     STEP_TEXT_KEYS,
     UNAVAILABLE,
     _Checker,
@@ -70,8 +69,10 @@ from engine.agent.loop import (
 )
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import for_prompt
+from engine.doctor.actions import prompt_variables
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL
 from engine.doctor.guards import ExpectationBook, Expectations, Finding
+from engine.doctor.limits import limits
 from engine.doctor.protocol import DataRequest, ProtocolError, doubt_ask, express_doubt
 from engine.doctor.questions import QuestionError, build_ask, catalogue_lines
 from engine.doctor.registry import (
@@ -100,20 +101,11 @@ if TYPE_CHECKING:
     from engine.doctor.protocol import Ask
     from engine.doctor.visit import Detected, DetectorPort
 
-__all__ = ["MAX_BLOCKING", "PROMPT", "agent_review", "lazy_review"]
+__all__ = ["PROMPT", "agent_review", "lazy_review"]
 
 _LOG = get_logger(__name__)
 
 PROMPT: Final[str] = "data_doctor_agent"
-MAX_BLOCKING: Final[int] = 3
-"""The most blocking questions the AI may ask in one review; the next is dropped."""
-STRIKES: Final[int] = 2
-"""Bad replies (malformed, unknown action, refused argument) before the review ends."""
-MAX_DOUBTS: Final[int] = 5
-MAX_REQUESTS: Final[int] = 3
-"""The most doubts and requests for more data the AI may add in one review; the next is refused."""
-SUMMARY_CHARS: Final[int] = 800
-EFFECT_CHARS: Final[int] = 160
 _DIGIT: Final = re.compile(r"\d")
 SQL_ARGS: Final[frozenset[str]] = frozenset(
     {"sql", "output_name", "as_of", "as_of_rule", "as_of_column", "reads_future", "outcome_window_days"}
@@ -254,12 +246,13 @@ class _Review:
             "files": self.overviews,
             "plan_so_far": self._decided(),
             "open_questions": [q.code for q in case.questions if q.answer is None],
-            "left": {"blocking_questions": MAX_BLOCKING},
+            "left": {"blocking_questions": limits(self.ctxs[0].config).asks.blocking},
         }
         self.checker = _Checker(
             grounded=grounded_numbers([self.state]), names=tuple(names), guardrails=guardrails
         )
-        self.max_steps = self.ctxs[0].config.agent.max_tool_steps_per_turn
+        self.limits = limits(self.ctxs[0].config)
+        self.max_steps = self.limits.turn.review_steps
 
     # -- the files -------------------------------------------------------------------------------------
     @staticmethod
@@ -399,7 +392,7 @@ class _Review:
         if masked_system or masked_user:
             _LOG.warning("%s: a review prompt was masked late", EGRESS_LATE_MASK)
             rendered = dataclasses.replace(rendered, system=system, user=user)
-        if len(rendered.system) + len(rendered.user) > MAX_PROMPT_CHARS:
+        if len(rendered.system) + len(rendered.user) > self.limits.turn.prompt_chars:
             raise _NoAnswerError("prompt_too_large")
         try:
             return self.meter.complete(rendered, self.purpose).text
@@ -420,6 +413,7 @@ class _Review:
             variables = {
                 "goal": goal,
                 "tools": tools,
+                **prompt_variables("review", self.ctxs[0].config),
                 "questions": catalogue_lines(),
                 "state": json.dumps(self.state, ensure_ascii=False),
                 "turn_results": (
@@ -440,7 +434,7 @@ class _Review:
                 self._act(action)
             except AgentToolError as exc:
                 strikes += 1
-                if strikes >= STRIKES:
+                if strikes >= self.limits.turn.strikes:
                     break
                 turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
             except Exception as exc:  # a model's odd input must never cost a paid review that nobody records
@@ -569,7 +563,9 @@ class _Review:
         except ValidationError as exc:
             raise AgentToolError("AGENT_EXPECT_INVALID", str(exc).splitlines()[-1][:200]) from exc
         given: dict[str, Any] = {k: v for k, v in args.items() if k in SQL_ARGS}
-        given["description"] = str(args.get("description") or args.get("reason") or "")[:300]
+        given["description"] = str(args.get("description") or args.get("reason") or "")[
+            : self.limits.turn.description_chars
+        ]
         given["upload_ids"] = [upload[w] for w in wanted]
         if args.get("as_of_file") in upload:
             given["as_of_upload_id"] = upload[str(args["as_of_file"])]
@@ -639,18 +635,22 @@ class _Review:
                 evidence_ids=tuple(_hashed(turn, cited)),
             )
         except QuestionError as exc:
-            raise AgentToolError("AGENT_QUESTION_INVALID", str(exc)[:300]) from exc
+            raise AgentToolError(
+                "AGENT_QUESTION_INVALID", str(exc)[: self.limits.turn.description_chars]
+            ) from exc
         for text in (ask.text, ask.why, *(o.label for o in ask.options)):
-            failure = self.checker.failure(text, target="doctor question", max_chars=400)
+            failure = self.checker.failure(
+                text, target="doctor question", max_chars=self.limits.turn.question_chars
+            )
             if failure is not None:
                 raise AgentToolError(
                     "AGENT_QUESTION_REFUSED",
                     f"The question failed a check ({failure}); use only numbers you looked up.",
                 )
-        if ask.blocking and turn.blocking >= MAX_BLOCKING:
+        if ask.blocking and turn.blocking >= self.limits.asks.blocking:
             raise AgentToolError(
                 "AGENT_BLOCKING_LIMIT",
-                f"You may ask {MAX_BLOCKING} blocking questions in one review; this one is dropped.",
+                f"You may ask {self.limits.asks.blocking} blocking questions in one review; this one is dropped.",
             )
         turn.blocking += int(ask.blocking)
         turn.asks.append(ask)
@@ -659,7 +659,11 @@ class _Review:
     def _checked(self, texts: Sequence[str], target: str, index: int) -> list[str]:
         """The model's own words for the person, each through the number and guardrail checks."""
         for text in texts:
-            failure = self.checker.failure(text, target=target, max_chars=400) if text else None
+            failure = (
+                self.checker.failure(text, target=target, max_chars=self.limits.turn.question_chars)
+                if text
+                else None
+            )
             if failure is not None:
                 raise AgentToolError(
                     "AGENT_TEXT_REFUSED",
@@ -673,7 +677,9 @@ class _Review:
         ctx = self.ctxs[index]
         args = dict(self.gates[index].unalias_args(args))
         meaning = args.get("meaning") is True
-        if len(turn.doubts) >= MAX_DOUBTS or (meaning and turn.blocking >= MAX_BLOCKING):
+        if len(turn.doubts) >= self.limits.asks.doubts or (
+            meaning and turn.blocking >= self.limits.asks.blocking
+        ):
             raise AgentToolError(
                 "AGENT_DOUBT_LIMIT", "That is enough doubts for one review; this one is dropped."
             )
@@ -710,13 +716,17 @@ class _Review:
         turn = self.turn
         index = self._index(action, args)
         args = dict(self.gates[index].unalias_args(args))
-        if len(turn.requests) >= MAX_REQUESTS:
+        if len(turn.requests) >= self.limits.asks.requests:
             raise AgentToolError(
                 "AGENT_REQUEST_LIMIT", "That is enough requests for one review; this is dropped."
             )
         kind = args.get("kind", "more_data")
         columns = args.get("columns")
-        named = [str(c).strip() for c in columns[:8]] if isinstance(columns, list) else []
+        named = (
+            [str(c).strip() for c in columns[: self.limits.asks.request_columns]]
+            if isinstance(columns, list)
+            else []
+        )
         given = [str(args.get(k) or "").strip() for k in ("what", "why", "per", "ask_whom")]
         if kind not in {"more_data", "different_file"} or not given[0] or not given[1]:
             raise AgentToolError(
@@ -748,7 +758,13 @@ class _Review:
         for item in given:
             text = item.strip() if isinstance(item, str) else ""
             ok = bool(text) and not _DIGIT.search(text)
-            ok = ok and self.checker.failure(text, target="doctor question", max_chars=EFFECT_CHARS) is None
+            ok = (
+                ok
+                and self.checker.failure(
+                    text, target="doctor question", max_chars=self.limits.turn.effect_chars
+                )
+                is None
+            )
             kept.append(self.gates[index].person_text(text) if ok else "")
         return kept
 
@@ -756,7 +772,8 @@ class _Review:
         text = str(action.get("text") or "").strip()
         if (
             not text
-            or self.checker.failure(text, target="doctor summary", max_chars=SUMMARY_CHARS) is not None
+            or self.checker.failure(text, target="doctor summary", max_chars=self.limits.turn.summary_chars)
+            is not None
         ):
             return ""  # the review's own sentence is used instead
         return self.gates[0].person_text(text)

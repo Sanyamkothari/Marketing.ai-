@@ -36,8 +36,9 @@ from engine.agent.formats import masked_cut
 from engine.agent.recipe import RecipeError, derive_names
 from engine.doctor.case import CaseFile, CaseItem
 from engine.doctor.diagnose import LoadedFile
+from engine.doctor.limits import limits
 from engine.doctor.materialize import Prepared, PreparedFile, Sample, materialize_plan, scoped
-from engine.doctor.plan_check import SAMPLE_ROWS, accepted_column, plan_digest
+from engine.doctor.plan_check import accepted_column, plan_digest
 from engine.utils.logging import get_logger
 
 __all__ = [
@@ -357,7 +358,7 @@ def _personal_columns(loaded: LoadedFile, frame: pd.DataFrame) -> set[str]:
 
 
 def _base_of(loaded: LoadedFile) -> pd.DataFrame:
-    base = consistent_types(scoped(loaded.frame, Sample(SAMPLE_ROWS))).copy()
+    base = consistent_types(scoped(loaded.frame, Sample(limits().trial.sample_rows))).copy()
     base.columns = [str(c) for c in base.columns]
     kept: pd.DataFrame = base.loc[:, ~base.columns.duplicated()]
     return kept
@@ -466,7 +467,7 @@ def preview_rows(
     lost = "A step could not run."
     try:
         prepared = materialize_plan(
-            (), items, files, Sample(SAMPLE_ROWS), as_of=as_of, twice=False, watch=watch
+            (), items, files, Sample(limits().trial.sample_rows), as_of=as_of, twice=False, watch=watch
         )
     except Exception as exc:  # a bug, not a step: still no failing screen
         _LOG.warning("preview_step_failed", exc_info=True)

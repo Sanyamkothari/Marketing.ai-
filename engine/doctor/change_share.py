@@ -22,8 +22,8 @@ customers but changes what a row is (combine, latest row, unpivot) is measured b
 that cannot be measured (no ID to line the rows up by) is `NotMeasurableError`, and :func:`unmeasured_verdict` makes it
 "needs a yes" - it is never counted as 0%.
 
-This module has no state and reads no configuration: the limits are passed in (`ChangeShareLimits`), defaulting
-to the decision's 30% and 60%, so M233's policy and a use case's settings can carry them later.
+This module has no state: the limits are passed in (`ChangeShareLimits`), defaulting
+to `data_doctor.limits.gates` (the decision's 30% and 60%).
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ import pandas as pd
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import ProposalSource, RecipeStep, RecipeStepKind
 from engine.agent.recipe import run_recipe
+from engine.doctor.config import GateLimits as _GateLimits
 from engine.doctor.guards import NotMeasurableError, cell_change, grouping_key, infer_key, make_receipt
 
 __all__ = [
@@ -91,14 +92,23 @@ class ChangeShareVerdict:
     message: str
 
 
+def _gates() -> _GateLimits:
+    from engine.doctor.limits import limits as configured
+
+    return configured().gates
+
+
 def change_share_verdict(
     *,
     changed: int,
     out_of: int,
     source: ProposalSource,
-    limits: ChangeShareLimits = DEFAULT_LIMITS,
+    limits: ChangeShareLimits | None = None,
 ) -> ChangeShareVerdict:
     """The verdict for a step that changes `changed` of `out_of` values (or rows), proposed by `source`."""
+    if limits is None:
+        gates = _gates()
+        limits = ChangeShareLimits(gates.change_warn_pct, gates.change_refuse_pct)
     share = 0.0 if out_of <= 0 else changed / out_of * 100.0
     if source is not ProposalSource.AI or share <= limits.warn_pct:
         return ChangeShareVerdict("ok", share, changed, out_of, None, "")
