@@ -146,7 +146,7 @@ class WhatsAppHealth:
     Thread-safe: webhooks arrive on request threads while the dispatcher reads it.
     """
 
-    limits: WhatsAppLimits = field(default_factory=WhatsAppLimits)
+    limits: WhatsAppLimits = field(default_factory=load_limits)
     rating: str = GREEN
     tier: str | None = None
     updated_at: datetime | None = None

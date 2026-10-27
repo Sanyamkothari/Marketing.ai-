@@ -12,6 +12,8 @@ Safety first, in this order:
    anything sent after the customer asked shows up as a breach. A reply that says "stop" in passing
    ("can't stop wearing these") is also treated as stop: a missed opt-out is a legal problem, a
    wrong one costs one customer's messages.
+   Opt-outs in Hindi, Hinglish and other languages come from `configs/v4/optout_phrases.yaml`
+   (`autonomy.channels.optout`): add a language there, not in code.
 2. **Complaint words** (spam, scam, harassment, "report you") always mean complaint, unless stop won.
 3. Only then the swappable **text classifier** (`autonomy.interfaces.TextSignals`). A low-confidence
    answer or a classifier failure is handed to a person.

@@ -459,8 +459,10 @@ def test_whatsapp_replies_use_the_lookups() -> None:
     assert text.text == "Yes please, do you have it in blue?"
     assert text.customer_id == CUST and text.decision_id == DEC
     assert text.attrs["context_message_id"] == WAMID and text.attrs["message_type"] == "text"
-    (button,) = adapter.parse_webhook({}, fixture("whatsapp", "message_button.json"))
+    # "Stop promotions" is an opt-out: the reply comes with an UNSUBSCRIBE and a CONSENT_REVOKED (v4).
+    button, unsubscribe, revoked = adapter.parse_webhook({}, fixture("whatsapp", "message_button.json"))
     assert button.type is EventType.REPLY and button.text == "Stop promotions"
+    assert (unsubscribe.type, revoked.type) == (EventType.UNSUBSCRIBE, EventType.CONSENT_REVOKED)
     assert button.event_id != text.event_id
 
 

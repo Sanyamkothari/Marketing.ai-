@@ -18,6 +18,8 @@ How each metric is measured:
   delivery receipts, getting through means a DELIVER event. On one that does not (a webhook to the
   client's tool, or SES set up with bounce notices only), it means the provider accepted the send
   and no bounce came back, so a dead endpoint still trips the breaker while silence alone does not.
+  A FAIL carrying `breaker_ignore` (WhatsApp's 131049 per-user limit, 131026) is not the sender's
+  failure and leaves its message out of the count.
 - `spend_pace`: spend so far divided by planned spend so far.
 - `whatsapp_quality`: the latest quality rating Meta reported, read from WhatsApp events' attrs
   (`quality_rating` or `quality`: GREEN/YELLOW/RED or 0/1/2). 1 means yellow, 2 means red. Meta

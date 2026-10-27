@@ -20,6 +20,9 @@ got it right already:
 - **Envelope.** The channel and offer must be ones the goal's brief allows.
 - **Content.** Only approved content for the decision's channel and offer is sent, and a message
   that cannot be rendered safely is skipped.
+- **Channel guards (v4).** A channel may add checks of its own (`ChannelGuard`): for WhatsApp, an
+  approved template, a quality rating that is not RED, the weekly budget (halved on YELLOW) and
+  Meta's per-user holds (`whatsapp_guard`).
 
 Anything skipped is reported with a short reason code; nothing is skipped silently. Time is passed
 in: a decision whose `send_at` is still in the future is queued as a `send_message` job when a
