@@ -1006,6 +1006,10 @@ def register_all(registry: DataToolRegistry) -> None:
     from engine.doctor.tools_features import register_feature_tools
 
     register_feature_tools(registry)
+    # Is the dated history long enough for the goal (#87): a read tool for the rules and the AI.
+    from engine.doctor.tools_history import register_history_tools
+
+    register_history_tools(registry)
     # The agent looks at its own work (#85): the first rows before and after the plan, the AI only.
     from engine.doctor.tools_preview import register_preview_tools
 

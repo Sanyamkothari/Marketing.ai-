@@ -24,5 +24,10 @@
 - (R8) Last 1-2 months of a 0/1 outcome over 40% below earlier are not final: ask to drop (`rate_by` month).
 - (R28) A month over twice the median (Diwali, sale): ask; offer a festival flag, leave it out, or use data after the change.
 
+## Short history
+- `check_history` (date column, outcome window) before the as-of is approved: the dates must hold a look-back before the training date and a full outcome window after it (`HISTORY_TOO_SHORT`).
+- Under a year with most rows in three months is one season (`HISTORY_ONE_SEASON`): the model learns that season only. Say it plainly and ask for 12 months; never hide it.
+- The same warnings show on the plan; the person reads them before approving.
+
 ## Ask when
 - Q8: dates disagree (latest date, file name, days-since) (default: last complete month). Q7: several "when known" dates (default: leave out). Q9: current-state columns without history. Q18: dates like 03/04 unprovable, or year start and zone unknown.

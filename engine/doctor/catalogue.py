@@ -146,6 +146,8 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     _R(85, "preview_working_copy", "read", "ai", "new"),
     # P. Behaviour features from the point-in-time library (Step 7)
     _R(86, "propose_features", "propose", "rules + ai", "new"),
+    # Q. Is the dated history long enough for the goal
+    _R(87, "check_history", "read", "rules", "new"),
 )
 """The design §5.5, row by row."""
 

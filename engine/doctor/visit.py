@@ -2491,6 +2491,27 @@ def _is_hard_readiness(code: str, acknowledgeable: bool) -> bool:
     return not acknowledgeable or code in _HARD_READINESS or code.startswith("CONSENT_")
 
 
+def _history_findings(case: Case, goal_id: str, files: Sequence[LoadedFile]) -> tuple[PlanFinding, ...]:
+    """Warnings when the dated history is short for the goal (:mod:`engine.doctor.history`): the file holding the
+    goal's event date, read as the plan's rows with the goal's outcome window and the training snapshot. None without
+    a decided event date column."""
+    from engine.doctor.history import history_plan_findings
+
+    decided = decisions(case)
+    dated = decided.as_of_column(goal_id)
+    if dated is None:
+        return ()
+    for loaded in files:
+        if (dated.upload_id in (None, loaded.upload_id)) and dated.column in loaded.frame.columns:
+            return history_plan_findings(
+                loaded.frame[dated.column],
+                outcome_window_days=decided.window_days(goal_id),
+                training_as_of=decided.training_as_of_date,
+                column=dated.column,
+            )
+    return ()
+
+
 def _readiness_findings(report: Any) -> tuple[PlanFinding, ...]:
     """Each requirement of the readiness report that fails, as a whole-file stop for the ledger.
 
@@ -2598,7 +2619,10 @@ def readiness_verify(
             case, items, full_files(case) if full_files is not None else files, Full(), twice=False
         )  # repeatability was checked at approval
         said = () if visit is None else visit.acknowledged
-        found = prepared.findings
+        found = (
+            *prepared.findings,
+            *_history_findings(case, brief.goal_id, full_files(case) if full_files is not None else files),
+        )
         stops = [f for f in found if stop_is_open(f, said)]
         if stops:
             return VerifyResult(
