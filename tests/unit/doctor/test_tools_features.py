@@ -192,6 +192,28 @@ def test_no_as_of_date_is_asked_for_not_guessed() -> None:
     assert data_registry().call("propose_features", given, ctx).output["rows_out"] == 2  # the case's date
 
 
+def test_the_cases_date_is_bound_by_the_run_not_frozen_into_the_step() -> None:
+    """Step 2: `$as_of` is `decisions(case).as_of_date`, bound by the trial and every run (`materialize`), so a later
+    change of the case's date moves the features; only a date the model was given is kept in the step."""
+    given = {
+        "upload_id": "up-1",
+        "entity_key": "Customer",
+        "time_column": "InvoiceDate",
+        "preset": "rfm",
+        "amount_column": "Amount",
+    }
+    ctx = DataToolContext(files=(loaded(invoices()),), caller="ai", principal=PRINCIPAL, as_of=AS_OF)
+    out = data_registry().call("propose_features", given, ctx).output
+    assert "as_of" not in out["step"]["params"] and out["features_as_of"] == AS_OF.isoformat()
+    step = RecipeStep.model_validate(out["step"])
+    later = materialize_plan(
+        (), (), (loaded(invoices()),), Full(), candidate=("up-1", step), as_of=date(2025, 8, 31)
+    )
+    assert len(next(iter(later.tables.values()))) == 3  # C3 first orders in August: counted at the later date
+    named = data_registry().call("propose_features", {**given, "as_of": "2025-06-30"}, ctx).output
+    assert named["step"]["params"]["as_of"] == "2025-06-30"
+
+
 def test_the_trial_is_the_run() -> None:
     files = (loaded(invoices()),)
     out = ask(preset="rfm")
@@ -219,6 +241,32 @@ def test_the_trial_is_the_run() -> None:
     pd.testing.assert_frame_equal(full.tables[table].reset_index(drop=True), expected)
     ran = next(r for item_id, r in full.receipts if item_id == "feat")
     assert out["receipt"]["rows_out"] == ran.rows_out
+
+
+def test_a_feature_table_is_one_matter_with_any_query_that_makes_a_table_of_its_name() -> None:
+    """Step 3: the reconcile store keys a proposal by subject. A feature step makes the table `output_name`, as a
+    query does, so a second proposal for that table (features or SQL) supersedes the first, never stands beside it.
+    """
+    from engine.doctor.subjects import item_subject
+
+    def item(step: dict[str, Any]) -> CaseItem:
+        return CaseItem.model_validate(
+            {
+                "item_id": "x",
+                "kind": "recipe_step",
+                "source": "ai",
+                "confidence": "check",
+                "state": ProposalState.PENDING.value,
+                "upload_id": None,
+                "payload": {"step": step},
+                "payload_digest": "x",
+                "proposed_at": NOW,
+            }
+        )
+
+    features = ask(preset="rfm")["step"]
+    query = {**features, "params": {"sql": "SELECT 1", "output_name": "customer_features"}}
+    assert item_subject(item(features)) == item_subject(item(query)) == "sql@customer_features"
 
 
 def test_the_one_materialisation_refuses_a_feature_step_that_reads_the_future() -> None:
