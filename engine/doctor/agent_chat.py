@@ -223,6 +223,7 @@ class _Chat(_Review):
                         if isinstance(made, list)
                         and isinstance(step, dict)
                         and step.get("kind") == "sql_query"
+                        and str(step.get("column", "")) not in {b.name for b in self.built}
                         else {}
                     ),
                 }
@@ -692,6 +693,8 @@ class _Chat(_Review):
         wanted = args.get("files")
         taken = [str(f) for f in wanted] if isinstance(wanted, list) else []
         indexes = [self._index({}, {"file": f}) for f in taken]
+        for index in indexes:
+            self._file_only(index)  # a join or a stack is of files, never of a table a query built
         if len(set(indexes)) < 2:
             raise AgentToolError(
                 "AGENT_FILE_UNKNOWN", 'Name two or more different files, such as ["F1", "F2"].'

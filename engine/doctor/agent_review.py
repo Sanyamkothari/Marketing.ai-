@@ -235,19 +235,35 @@ class _Review:
         registry: Any,
     ) -> None:
         from engine.doctor.ai_guard import file_overviews
+        from engine.doctor.current_tables import current_for, labels_for
 
         self.case, self.brief, self.meter, self.registry = case, brief, meter, registry
         self.principal, self.config_root = principal, config_root
-        self.ctxs = [context_for(case, (f,)) for f in files]
-        overviews = file_overviews(self.ctxs)  # a file past the prompt's room is left out, and so unreachable
-        self.files = files[: len(overviews)]
+        # The AI looks at the current tables: F1..Fn are the files as the plan's accepted fixes leave them, T1..Tn the
+        # tables its queries build. The uploads (`self.files`) stay what the tools that read a file by id are given.
+        current = current_for(case, files, context_for)
+        self.built = current.built
+        self.labels = labels_for(current)
+        self.ctxs = [context_for(case, (t,)) for t in current.tables]
+        overviews = file_overviews(
+            self.ctxs, self.labels
+        )  # a table past the prompt's room is left out, and so unreachable
+        self.nfiles = min(len(overviews), len(files))
+        self.files = files[: self.nfiles]
         self.ctxs = self.ctxs[: len(overviews)]
+        self.labels = self.labels[: len(overviews)]
+        self.built = self.built[: max(0, len(overviews) - self.nfiles)]
         self.gates = [_gate(ctx) for ctx in self.ctxs]
         self.sessions = [self._session(case, ctx) for ctx in self.ctxs]
         self.clock = self.ctxs[0].clock
         self.turn = _Turn()
         self.turn.sent.extend(sent for _overview, sent in overviews)
         self.overviews = [overview for overview, _sent in overviews]
+        for built, overview in zip(self.built, self.overviews[self.nfiles :], strict=False):
+            gate = self.gates[self.nfiles + self.built.index(built)]
+            overview["built_by_your_query"] = True
+            overview["key"] = gate.label(built.key) if built.key else None
+            overview["time_column"] = gate.label(built.time_column) if built.time_column else None
         names = [str(c) for ctx in self.ctxs for c in ctx.frame.columns]
         names += [g.label(c) for g, ctx in zip(self.gates, self.ctxs, strict=True) for c in ctx.frame.columns]
         self.state = {
@@ -304,12 +320,14 @@ class _Review:
         """What the rules already put in the plan, by file and column (names through the file's gate)."""
         found: list[dict[str, str]] = []
         for item in self.case.items[:60]:
-            index = next((i for i, c in enumerate(self.ctxs) if c.upload_id == item.upload_id), None)
+            index = next(
+                (i for i, c in enumerate(self.ctxs[: self.nfiles]) if c.upload_id == item.upload_id), None
+            )
             step = item.payload.get("step")
             column = item.payload.get("column") or (step.get("column") if isinstance(step, dict) else None)
             whole = item.upload_id is None and isinstance(step, dict)  # the AI's queries are over the files
             if whole:
-                index = 0 if len(self.ctxs) == 1 else None
+                index = 0 if self.nfiles == 1 else None
                 column = (
                     column if isinstance(column, str) else str(item.payload.get("output_name") or item.title)
                 )
@@ -318,7 +336,7 @@ class _Review:
             kind = step.get("kind") if isinstance(step, dict) else item.kind
             found.append(
                 {
-                    "file": f"F{index + 1}" if index is not None else "all files",
+                    "file": self.labels[index] if index is not None else "all files",
                     "kind": str(kind),
                     "column": self.gates[index].label(column) if index is not None else column[:60],
                     "by": item.source.value,  # the AI sees its own items too, and whether each still waits
@@ -328,16 +346,32 @@ class _Review:
         return found
 
     def _index(self, action: dict[str, Any], args: dict[str, Any]) -> int:
-        """The file an action is about (`F1`, `F2`, ...); with one file it may be left out."""
+        """The table an action is about: a file (`F1`, `F2`, ...) or a table a query built (`T1`, ...); with one
+        table it may be left out."""
         given = args.pop("file", None) or action.get("file")
         if given is None and len(self.ctxs) == 1:
             return 0
-        text = str(given or "")
-        if text[:1] not in {"F", "f"} or not text[1:].isdigit() or not 1 <= int(text[1:]) <= len(self.ctxs):
+        text = str(given or "").strip().upper()
+        if text not in self.labels:
             raise AgentToolError(
-                "AGENT_FILE_UNKNOWN", f"Name a file as F1 to F{len(self.ctxs)}, not {text[:20]!r}."
+                "AGENT_FILE_UNKNOWN",
+                f"Name a table among {', '.join(self.labels)}, not {str(given or '')[:20]!r}.",
             )
-        return int(text[1:]) - 1
+        return self.labels.index(text)
+
+    def _file_only(self, index: int) -> None:
+        """A change is made to a file; a table a query built changes only by changing its query."""
+        if index >= self.nfiles:
+            raise AgentToolError(
+                "AGENT_TABLE_BUILT",
+                f"{self.labels[index]} is a table a query built; change the query, or fix its source file.",
+            )
+
+    def _upload_of(self, index: int) -> str | None:
+        """The upload a table's changes and questions are recorded against (a built table: the file it is made from)."""
+        if index < self.nfiles:
+            return self.ctxs[index].upload_id
+        return self.built[index - len(self.files)].origin.upload_id
 
     def _context(self, index: int, **extra: Any) -> DataToolContext:
         from engine.doctor.visit import active_section
@@ -371,7 +405,7 @@ class _Review:
                 "args": json.dumps(
                     {
                         "properties": t.input_model.model_json_schema().get("properties", {}),
-                        "file": "F1..F" + str(len(self.ctxs)),
+                        "file": "/".join(self.labels),
                     }
                 ),
             }
@@ -527,12 +561,13 @@ class _Review:
         sent: list[SentItem | None] = []
         gate, feedback = self.gates[index], self.turn.feedback
         _record(gate, {}, feedback, sent, result, keys)
-        feedback[-1]["file"] = f"F{index + 1}"
+        feedback[-1]["file"] = self.labels[index]
         self.turn.sent.extend(s for s in sent if s is not None)
 
     def _step(self, action: dict[str, Any], args: dict[str, Any]) -> None:
         turn = self.turn
         index = self._index(action, args)
+        self._file_only(index)
         args = dict(self.gates[index].unalias_args(args))
         mine = [r for r in turn.looks if turn.files_of[r.evidence_id] == index]
         result, proposal = _propose_step(
@@ -552,8 +587,10 @@ class _Review:
 
     def _sql(self, args: dict[str, Any]) -> None:
         turn = self.turn
-        names = [f"F{i + 1}" for i in range(len(self.ctxs))]
-        upload = {name: ctx.upload_id for name, ctx in zip(names, self.ctxs, strict=True)}
+        names = self.labels[
+            : self.nfiles
+        ]  # a query reads the files; a table another query built is not its input
+        upload = {name: ctx.upload_id for name, ctx in zip(names, self.ctxs, strict=False)}
         wanted = args.get("files") or names[:1]
         if not isinstance(wanted, list) or not all(w in upload for w in wanted):
             raise AgentToolError("AGENT_FILE_UNKNOWN", f"`files` lists tables among {', '.join(names)}.")
@@ -634,7 +671,7 @@ class _Review:
                 rows=len(ctx.frame),
                 choices=[str(c) for c in choices] if isinstance(choices, list) else (),
                 choice_says=self._says(index, args),
-                upload_id=ctx.upload_id,
+                upload_id=self._upload_of(index),
                 column=ctx.resolve(str(args["column"])) if isinstance(args.get("column"), str) else None,
                 evidence_ids=tuple(_hashed(turn, cited)),
             )
@@ -670,7 +707,6 @@ class _Review:
     def _doubt(self, action: dict[str, Any], args: dict[str, Any]) -> None:
         turn = self.turn
         index = self._index(action, args)
-        ctx = self.ctxs[index]
         args = dict(self.gates[index].unalias_args(args))
         meaning = args.get("meaning") is True
         if len(turn.doubts) >= MAX_DOUBTS or (meaning and turn.blocking >= MAX_BLOCKING):
@@ -694,7 +730,7 @@ class _Review:
                 if_not=if_not,
                 evidence=cited,
                 names=self.checker.names,
-                upload_id=ctx.upload_id,
+                upload_id=self._upload_of(index),
             )
         except ProtocolError as exc:
             raise AgentToolError("AGENT_DOUBT_REFUSED", exc.message) from exc
@@ -732,7 +768,7 @@ class _Review:
                 columns=tuple(shape),
                 per=per or "one row per customer",
                 ask_whom=whom or None,
-                upload_id=self.ctxs[index].upload_id,
+                upload_id=self._upload_of(index),
             )
         )
         turn.feedback.append({"requested": kind})

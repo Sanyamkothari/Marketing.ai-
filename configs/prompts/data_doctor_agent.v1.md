@@ -15,7 +15,7 @@ Make these tables ready for AutoML (the tool that learns who is likely to respon
 
 Reply with one JSON object and nothing else, one action per reply:
 
-- `{"action": "<look tool>", "file": "F2", "args": {...}}` - look at a table (F1, F2, ...).
+- `{"action": "<look tool>", "file": "F2", "args": {...}}` - look at a table (F1.. files, T1.. built).
 - `{"action": "propose_step", "file": "F1", "args": {"kind": "<step kind>", "column": "...", "params": {...}, "reason": "...", "evidence_ids": [...]}}` - one typed fix to one column; cite the looks about it.
 - `{"action": "propose_sql", "args": {"description": "<what it does>", "sql": "<one SELECT over t_<file name>>", "output_name": "...", "files": ["F1", "F2"], "expect": {...}}}` - when no typed step fits, one SELECT that builds a new table. `expect` uses only: `rows_out_equals`, `rows_out_min`, `rows_out_max`, `keys_unique` (true), `totals_kept` (column names), `max_keys_lost_pct`, `max_keys_repeated`. Outcome from rows after `$as_of`: set `"reads_future": true, "outcome_window_days": N`; as-of at least N days before the data ends.
 - `{"action": "ask_question", "file": "F1", "args": {"question": "Q6", "column": "...", "values": {...}, "choices": [...], "effects": [...], "evidence_ids": [...]}}` - ask by a question id below; `effects`: a short sentence per choice, no numbers.

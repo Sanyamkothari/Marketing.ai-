@@ -112,6 +112,7 @@ def time_keys_detector(*, clock: Callable[[], datetime] = utc_now) -> DetectorPo
             on_page.add(item.title)
         return Detected(asks=tuple(kept), items=tuple(items), requests=tuple(requests))
 
+    detect.reads_current = True  # type: ignore[attr-defined]  # a fix already in the plan is not found again
     return detect
 
 
