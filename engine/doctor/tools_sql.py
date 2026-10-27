@@ -10,58 +10,40 @@ month's files go through the same step (the prescription replays it).
 
 What the query reads (one rule, for the trial and for every run): each file AFTER the fixes in the plan for it
 (a date already parsed, a currency already converted), because a query is a `post_build` step and runs after the
-steps before it. The trial applies those steps to the sample first: the accepted ones, and the ones still waiting for
-a yes, counted as accepted (the plan as it stands if the person ticks what is proposed). A run applies the same
-steps, and in a one-file case the step keeps the file's table name (`this_table`) so the run feeds the query that
-file as it stands at the step, never the raw upload and never a table it does not have. In a case with several
-files or a build, the name is dropped and the query reads the prepared table of that name the run gives it.
-
-A fix accepted, unticked or proposed after the query changes what the run feeds it. The step keeps a digest of the
-fixes it was tried after (`tried_after`); when the plan check finds the query cannot run after other fixes, it says
-so (`PLAN_QUERY_TRIED_BEFORE_CHANGE`) and asks for the query again. The rules' own queries (the grain checks) are
-tried the same way, on the plan so far.
+steps before it. The trial is not a second implementation of that: it is :func:`engine.doctor.materialize
+.materialize_plan` with the query as the `candidate` step, on a seeded sample of every file - the same steps, order,
+table names, key, as-of date and guards the plan check and the run use - so a query that cannot run later fails
+here, with the same code. The trial applies the accepted fixes and the per-column fixes still waiting for a yes,
+counted as accepted (the plan as it stands if the person ticks what is proposed); a waiting query, combine or
+reshape, and an item the chat is swapping, are left out (:func:`_trial_items`). The rules' own queries (the grain
+checks) are tried the same way, on the plan so far.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from datetime import date, timedelta
-from pathlib import Path
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.access_policy import RoutePolicy
 from engine.access.roles import Role
-from engine.agent.config import AgentConfig
-from engine.agent.contracts import RecipeStep, RecipeStepKind
-from engine.agent.dataset_recipe import consistent_types
-from engine.agent.recipe import RecipeError, run_recipe
+from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind
+from engine.agent.recipe import STEP_PHASE
 from engine.agent.sql_step import (
     MAX_INPUTS,
     MAX_SQL_CHARS,
     AsOfRule,
     SqlStepError,
     resolve_as_of_rule,
-    run_sql,
     sql_params,
 )
 from engine.config import StrictBase
-from engine.doctor.guards import (
-    Finding,
-    NotMeasurableError,
-    Receipt,
-    build_ledger,
-    cell_change,
-    infer_key,
-    make_receipt,
-    plan_findings,
-    receipt_findings,
-)
-from engine.doctor.plan_check import guard_levels, steps_digest, trial_steps_of
-from engine.doctor.prescription import slot_name
+from engine.doctor.guards import Finding, NotMeasurableError, Receipt, cell_change, infer_key
+from engine.doctor.materialize import CANDIDATE, Full, Prepared, Sample, materialize_plan, table_names
 from engine.doctor.registry import (
     BY_EXPOSURE,
     DataTool,
@@ -72,11 +54,27 @@ from engine.doctor.registry import (
     Exposure,
 )
 
+if TYPE_CHECKING:
+    from engine.doctor.case import CaseItem
+    from engine.doctor.diagnose import LoadedFile
+
 __all__ = ["DRY_RUN_ROWS", "M_SQL_TOOLS", "ProposeSqlStepArgs", "SqlStepProposal", "register_sql_tools"]
 
 M_SQL_TOOLS: Final[tuple[str, ...]] = ("propose_sql_step",)
 DRY_RUN_ROWS: Final[int] = 100_000
-"""A query is tried on at most this many rows of each file; a bigger file is said to be sampled."""
+"""A query is tried on at most this many rows of each file (a seeded random sample, drawn as the plan check draws its
+own); a bigger file is said to be sampled. It is larger than the plan check's sample on purpose: the checks the writer
+states about the table (`rows_out_equals`, the customers kept) are about the file, so the trial reads as much of it
+as it can. On the same rows the trial's receipt is the plan check's (`tests/unit/doctor/test_trial_is_run.py`)."""
+_SHAPING: Final[frozenset[RecipeStepKind]] = frozenset(
+    {
+        RecipeStepKind.SQL_QUERY,
+        RecipeStepKind.COMBINE_ROWS,
+        RecipeStepKind.UNPIVOT,
+        RecipeStepKind.KEEP_LATEST_PER_ID,
+    }
+)
+"""The steps that make other rows or another table: a query's trial never applies one that is only proposed."""
 MAX_COLUMNS_LISTED: Final[int] = 40
 MAX_COLUMNS_KEPT: Final[int] = 500
 """Names kept for the goal check (the display above shows fewer): a wide table's outcome may come last."""
@@ -193,77 +191,62 @@ class SqlStepProposal(StrictBase):
         }
 
 
-def _names(ctx: DataToolContext, upload_ids: tuple[str, ...]) -> dict[str, tuple[str, pd.DataFrame, str]]:
-    """Table name -> (upload id, frame, file name) for the files asked for, named by file as a prescription does."""
-    loaded = {f.upload_id: f for f in ctx.files}
-    out: dict[str, tuple[str, pd.DataFrame, str]] = {}
-    for upload_id in upload_ids:
-        file = loaded.get(upload_id)
-        if file is None:
-            raise DataToolError("TOOL_INPUT_INVALID", "That file is not in this case.", status=422)
-        file_name = str(file.file_name or "").strip() or upload_id
-        base = slot_name(Path(file_name).stem)
-        name, n = base, 2
-        while name in out:
-            name, n = f"{base}_{n}", n + 1
-        out[name] = (upload_id, file.frame, file_name)
-    return out
+def _step_of(item: CaseItem) -> RecipeStep | None:
+    raw = item.payload.get("step")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return RecipeStep.model_validate(raw)
+    except ValueError:
+        return None
 
 
-def _prepared(
-    ctx: DataToolContext, named: dict[str, tuple[str, pd.DataFrame, str]], *, whole: bool = False
-) -> tuple[dict[str, pd.DataFrame], dict[str, str]]:
-    """Each file's first rows (all of them when `whole`) after the case's accepted steps on it, with the digest
-    of the steps applied: what the query will read in a run.
-
-    The per-column fixes still waiting for a yes count as accepted (the plan as it stands if the person ticks what is
-    proposed); a fix accepted or unticked later changes the input, and the digest is how the step notices. Another
-    waiting query, combine or reshape is never applied (a run puts the query last, on the file's rows), and neither
-    is an item being replaced or taken back."""
-    only = len(ctx.files) == 1
-    raw = {n: f for n, (_, f, _) in named.items()}
-    out: dict[str, pd.DataFrame] = {}
-    digests: dict[str, str] = {}
-    for name, (upload_id, frame, file_name) in named.items():
-        base = consistent_types(frame if whole else frame.head(DRY_RUN_ROWS)).copy()
-        steps = [
-            step
-            for step, _ in trial_steps_of(
-                ctx.case_items or (), upload_id, only_file=only, replacing=ctx.replacing
-            )
-        ]
-        digests[name] = steps_digest(steps)
-        if not steps:
-            out[name] = base
+def _trial_items(items: Sequence[CaseItem], replacing: Collection[str] = ()) -> list[CaseItem]:
+    """The plan a new query is tried on: the accepted items, and the waiting per-column fixes (dates parsed, numbers
+    read) counted as accepted. Never a waiting query, combine or reshape (a run puts the query last, on the file's
+    rows), never an item named in `replacing` (the chat swaps or takes it back at the end of its turn), and never a
+    waiting fix that reads what a left-out step makes (it would not run). Items that are no step pass through.
+    """
+    live = (ProposalState.ACCEPTED, ProposalState.PENDING)
+    steps = {i.item_id: s for i in items if i.state in live and (s := _step_of(i)) is not None}
+    left_out: dict[str | None, int] = {}
+    for item in items:
+        step = steps.get(item.item_id)
+        if (
+            step is not None
+            and step.kind in _SHAPING
+            and (item.item_id in replacing or item.state is not ProposalState.ACCEPTED)
+        ):
+            phase = STEP_PHASE[step.kind]
+            left_out[item.upload_id] = min(phase, left_out.get(item.upload_id, phase))
+    kept: list[CaseItem] = []
+    for item in items:
+        step = steps.get(item.item_id)
+        if step is None:
+            kept.append(item)
             continue
-        try:
-            out[name] = run_recipe(
-                base,
-                steps,
-                upload_id=upload_id,
-                primary_key=None,
-                target=None,
-                levels=guard_levels(steps),
-                max_failure_pct=AgentConfig().max_conversion_failure_pct,
-                tables=raw,
-            ).frame
-        except RecipeError as exc:
-            raise DataToolError(
-                "TOOL_INPUT_INVALID",
-                f"The fixes already in the plan for {file_name} cannot be applied to it first: {exc.message}",
-                status=409,
-            ) from exc
-    return out, digests
+        cut = left_out.get(item.upload_id, left_out.get(None))
+        if item.item_id in replacing or (
+            item.state is not ProposalState.ACCEPTED
+            and (step.kind in _SHAPING or (cut is not None and STEP_PHASE[step.kind] > cut))
+        ):
+            continue
+        kept.append(
+            item
+            if item.state is ProposalState.ACCEPTED
+            else item.model_copy(update={"state": ProposalState.ACCEPTED})
+        )
+    return kept
 
 
 def _as_of_rule(
-    given: ProposeSqlStepArgs, named: dict[str, tuple[str, pd.DataFrame, str]]
+    given: ProposeSqlStepArgs, tables: dict[str, pd.DataFrame], names: dict[str, str]
 ) -> tuple[date, dict[str, Any]]:
-    """The rule as the step keeps it, and the date it gives on these files now."""
-    table = next((n for n, (upload_id, _, _) in named.items() if upload_id == given.as_of_upload_id), None)
+    """The rule as the step keeps it, and the date it gives on these files (as the plan leaves them) now."""
+    table = names.get(given.as_of_upload_id or "")
     if table is None or given.as_of_column is None or given.as_of_rule is None:
         raise SqlStepError("SQL_NOT_VALID", "An as-of date rule names the file and the date column it reads.")
-    frame = named[table][1]
+    frame = tables[table]
     if given.as_of_column not in frame.columns:
         raise SqlStepError("SQL_NOT_VALID", f"There is no column '{given.as_of_column}' in that file.")
     rule = AsOfRule(rule=given.as_of_rule, table=table, column=given.as_of_column)
@@ -360,6 +343,28 @@ def _window_finding(
     )
 
 
+def _refused(prepared: Prepared, reads: Collection[str], files: Sequence[LoadedFile]) -> DataToolError | None:
+    """Why the plan could not be run with the query: the query's own failure (its engine code, 422), or a fix already
+    in the plan that cannot be applied to a file the query reads (409, naming the file). A failure in a file the
+    query does not read is not the query's: the plan check reports it as the plan's own stop. None when the query
+    can be tried. `reads` are the uploads the query reads."""
+    own = next((f for f in prepared.failures if f.item_id == CANDIDATE), None)
+    if own is not None:
+        return DataToolError(own.code, own.message, status=422)
+    other = next((f for f in prepared.failures if f.upload_id in reads), None)
+    if other is None:
+        return None
+    name = (
+        next((str(f.file_name or "").strip() for f in files if f.upload_id == other.upload_id), "")
+        or "the file"
+    )
+    return DataToolError(
+        "TOOL_INPUT_INVALID",
+        f"The fixes already in the plan cannot be applied to {name} first: {other.message}",
+        status=409,
+    )
+
+
 def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal:
     if given.reads_future and given.outcome_window_days is None:
         raise DataToolError(
@@ -367,26 +372,35 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
             "A query that reads the outcome after `$as_of` states how many days it looks: set outcome_window_days.",
             status=422,
         )
-    raw = _names(ctx, given.upload_ids)
-    prepared, digests = _prepared(ctx, raw)
-    named = {name: (upload_id, prepared[name], file_name) for name, (upload_id, _, file_name) in raw.items()}
+    loaded = {f.upload_id: f for f in ctx.files}
+    if any(u not in loaded for u in given.upload_ids):
+        raise DataToolError("TOOL_INPUT_INVALID", "That file is not in this case.", status=422)
+    names = table_names(ctx.files)
+    asked = {names[u]: loaded[u] for u in given.upload_ids}
+    items = _trial_items(ctx.case_items or (), ctx.replacing)
     params: dict[str, Any] = {
         "sql": given.sql,
-        "inputs": list(named),
+        "inputs": list(asked),
         "output_name": given.output_name,
         "description": given.description,
     }
-    if len(ctx.files) == 1 and len(named) == 1:
-        only = next(iter(named))
-        params["this_table"] = only  # a run reads its one file under this name, as tried
-        params["tried_after"] = digests[only]  # ... and after the fixes in the plan now
+    if len(ctx.files) == 1 and len(asked) == 1:
+        # an older recipe runner (a replay's file recipe) is given no tables: the query names its one file
+        params["this_table"] = next(iter(asked))
+
+    def plan_so_far() -> Prepared:
+        """Every row of every file as the plan leaves it, before the query (the as-of rule and the window read it)."""
+        whole = materialize_plan((), items, ctx.files, Full(), twice=False, as_of=ctx.as_of)
+        if (refusal := _refused(whole, given.upload_ids, ctx.files)) is not None:
+            raise refusal
+        return whole
+
     as_of = given.as_of
+    whole: Prepared | None = None
     try:
-        tried = {name: frame for name, (_, frame, _) in named.items()}
         if given.as_of_rule is not None:
-            # The rule reads the whole file, after the same fixes, as a run does (not the tried rows only).
-            whole = _prepared(ctx, raw, whole=True)[0]
-            as_of, rule = _as_of_rule(given, {n: (u, whole[n], f) for n, (u, _, f) in raw.items()})
+            whole = plan_so_far()  # the rule reads the whole file, after the same fixes, as a run does
+            as_of, rule = _as_of_rule(given, whole.tables, names)
             params["as_of_rule"] = rule
         if as_of is not None:
             params["as_of"] = as_of.isoformat()
@@ -394,35 +408,8 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
             params["reads_future"] = True
             params["outcome_window_days"] = given.outcome_window_days
         sql_params(params)
-        run = run_sql(given.sql, tried, output_name=given.output_name, as_of=as_of)
     except SqlStepError as exc:
         raise DataToolError(exc.code, exc.message, status=422) from exc
-    first = next(iter(tried.values()))
-    key = ctx.primary_key
-    receipt = make_receipt(1, RecipeStepKind.SQL_QUERY.value, tried, run.frame, key=key, sql=given.sql)
-    findings = receipt_findings(receipt) + plan_findings(build_ledger([receipt]))
-    if given.reads_future and (late := _window_finding(given, as_of, _prepared(ctx, raw, whole=True)[0])):
-        findings.append(late)
-    changed_cells: int | None
-    compared_cells: int | None
-    try:
-        changed_cells, compared_cells = cell_change(first, run.frame, key=key or infer_key(first, run.frame))
-    except NotMeasurableError as exc:
-        changed_cells = compared_cells = None
-        findings.append(Finding(level="flag", code="STEP_NOT_MEASURED", message=f"{exc} It needs your yes."))
-    inputs = tuple(
-        SqlTableSummary(name=name, file_name=file_name, rows=len(raw[name][1]), columns=len(frame.columns))
-        for name, (_, frame, file_name) in named.items()
-    )
-    sampled = any(len(frame) > DRY_RUN_ROWS for _, frame, _ in raw.values())
-    read = ", ".join(f"{t.file_name} ({t.rows:,} rows)" for t in inputs)
-    sentence = (
-        f"{given.description.rstrip('.')}. Reads {read}; the new table '{given.output_name}' would have "
-        f"{run.receipt.rows_out:,} rows and {run.receipt.columns_out:,} columns"
-        + (f" (tried on the first {DRY_RUN_ROWS:,} rows of each file)." if sampled else ".")
-    )
-    if receipt.keys_in is not None:
-        sentence += f" Customers: {receipt.keys_in:,} before, {receipt.keys_out:,} after ({receipt.keys_lost:,} lost, {receipt.keys_repeated:,} repeated)."
     step = RecipeStep(
         order=1,
         kind=RecipeStepKind.SQL_QUERY,
@@ -430,6 +417,70 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         params=params,
         reason=given.description,
     )
+    # The trial is the plan's own materialisation with the query as one more step. It is given the date the rule
+    # gives on the whole file, so a sample cannot move it.
+    tried = step.model_copy(update={"params": {k: v for k, v in params.items() if k != "as_of_rule"}})
+    first_upload = given.upload_ids[0]
+    seen: dict[str, pd.DataFrame] = {}
+
+    def watch(
+        _upload: str, item_id: str, _step: RecipeStep, was: pd.DataFrame, _became: pd.DataFrame
+    ) -> None:
+        if item_id == CANDIDATE:
+            seen["before"] = was  # the rows the query started from: the first table, after the plan's fixes
+
+    prepared = materialize_plan(
+        (),
+        items,
+        ctx.files,
+        Sample(DRY_RUN_ROWS),
+        candidate=(first_upload, tried),
+        as_of=ctx.as_of,
+        watch=watch,
+    )
+    if (refusal := _refused(prepared, given.upload_ids, ctx.files)) is not None:
+        raise refusal
+    table = names[first_upload]
+    made = prepared.tables[table]
+    done = next(f for f in prepared.files if f.upload_id == first_upload)
+    receipt = next(r for item_id, r in done.receipts if item_id == CANDIDATE)
+    findings = [
+        Finding(level=f.level, code=f.code, message=f.text, count=f.count, detail=f.detail)
+        for f in done.findings
+        if f.item_id in (CANDIDATE, None)
+    ]
+    if given.reads_future:
+        whole = whole or plan_so_far()
+        if late := _window_finding(given, as_of, {n: whole.tables[n] for n in asked}):
+            findings.append(late)
+    first = seen["before"]
+    key = ctx.primary_key
+    changed_cells: int | None
+    compared_cells: int | None
+    try:
+        changed_cells, compared_cells = cell_change(first, made, key=key or infer_key(first, made))
+    except NotMeasurableError as exc:
+        changed_cells = compared_cells = None
+        findings.append(Finding(level="flag", code="STEP_NOT_MEASURED", message=f"{exc} It needs your yes."))
+    inputs = tuple(
+        SqlTableSummary(
+            name=name,
+            file_name=str(file.file_name or "").strip() or file.upload_id,
+            rows=len(file.frame),
+            columns=len((first if file.upload_id == first_upload else prepared.tables[name]).columns),
+        )
+        for name, file in asked.items()
+    )
+    sampled = any(len(file.frame) > DRY_RUN_ROWS for file in asked.values())
+    read = ", ".join(f"{t.file_name} ({t.rows:,} rows)" for t in inputs)
+    columns = tuple(str(c) for c in made.columns)
+    sentence = (
+        f"{given.description.rstrip('.')}. Reads {read}; the new table '{given.output_name}' would have "
+        f"{receipt.rows_out:,} rows and {len(columns):,} columns"
+        + (f" (tried on {DRY_RUN_ROWS:,} sampled rows of each file)." if sampled else ".")
+    )
+    if receipt.keys_in is not None:
+        sentence += f" Customers: {receipt.keys_in:,} before, {receipt.keys_out:,} after ({receipt.keys_lost:,} lost, {receipt.keys_repeated:,} repeated)."
     return SqlStepProposal(
         source="ai" if ctx.caller == "ai" else "rules",
         title=given.description.rstrip("."),
@@ -437,11 +488,11 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         step=step.model_dump(mode="json", exclude={"proposal_id"}),
         inputs=inputs,
         rows_in=len(first),
-        rows_out=run.receipt.rows_out,
-        columns_out=run.receipt.columns_out,
-        columns=run.receipt.columns[:MAX_COLUMNS_LISTED],
-        all_columns=run.receipt.columns[:MAX_COLUMNS_KEPT],
-        two_valued=_two_valued(run.frame)[:MAX_COLUMNS_KEPT],
+        rows_out=receipt.rows_out,
+        columns_out=len(columns),
+        columns=columns[:MAX_COLUMNS_LISTED],
+        all_columns=columns[:MAX_COLUMNS_KEPT],
+        two_valued=_two_valued(made)[:MAX_COLUMNS_KEPT],
         sampled=sampled,
         receipt=receipt,
         changed_cells=changed_cells,

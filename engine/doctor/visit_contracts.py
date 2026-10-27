@@ -66,29 +66,64 @@ class PlanFinding(StrictBase):
     """One thing the guards found when the accepted steps ran on the case's sample (`engine.doctor.plan_check`)."""
 
     key: str = Field(
-        description="What a person's yes is tied to: this finding, at this step, with this count."
+        description="What a person's yes is tied to: this kind of finding about this subject (a step, or the whole "
+        "plan), never its count. The count is data: a yes holds while the count stays at or below the one said yes to."
     )
     level: Literal["stop", "flag", "note"]
     code: str
     text: str = Field(description="Plain words with counts; never a cell value.")
     item_id: str | None = Field(default=None, description="The step it is about; none for the whole plan.")
     detail: str | None = Field(default=None, description="The expert's side of `text`, shown behind a click.")
+    count: int | None = Field(
+        default=None, description="How many (customers, rows) it is about, when it counts something."
+    )
+    column: str | None = Field(default=None, description="The column it is about, when it is about one.")
+    scope: Literal["sample", "full"] = Field(
+        default="sample", description="Measured on a sample of the files, or on every row of them."
+    )
+    hard: bool = Field(
+        default=False,
+        description="A rule nobody may say yes to (too few rows or positives, future data, consent, a step that "
+        "cannot run): shown, never acknowledgeable.",
+    )
+    source: Literal["guard", "readiness"] = Field(
+        default="guard",
+        description="Which check found it: the plan's guards, or the readiness check at VERIFY.",
+    )
 
 
 class PlanCheck(StrictBase):
     """What our code counted when the plan was built: stored once per plan, read by the screen and by Approve."""
 
     digest: str = Field(description="The plan it was counted for (`plan_check.plan_digest`).")
+    basis: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="The plan digest with the as-of date it was counted under, when every row of the files was "
+        "counted (`engine.doctor.materialize.Full`): counted again only when this changes. None: a sample only.",
+    )
     ledger: dict[str, JsonValue] = Field(
         default_factory=dict, description="The screen's ledger (rows, customers, rates, per-step receipts)."
     )
     findings: tuple[PlanFinding, ...] = ()
+    verified: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+        description="True once VERIFY (the whole-file readiness check) wrote what it found into `findings` and the "
+        "visit rested at APPROVE with them: the screen then shows those as the reasons.",
+    )
 
 
 class Acknowledgement(StrictBase):
     """A person's explicit yes to one stop, by its key; it holds only for the plan it was given on."""
 
     key: str
+    count: int | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="The count of the stop when the person said yes. The yes holds while a new count is at or below "
+        "it; a bigger loss needs a new yes.",
+    )
     by: str = Field(description="The user id.")
     at: AwareDatetime
     reason: str = Field(default="", description="Why, in the person's words (logged).")

@@ -320,7 +320,7 @@ def test_a_step_that_breaks_in_an_unexpected_way_is_a_note_not_an_error(
     def boom(*_: Any, **__: Any) -> Any:
         raise RuntimeError("unexpected")
 
-    monkeypatch.setattr(preview, "run_guarded", boom)
+    monkeypatch.setattr(preview, "materialize_plan", boom)
     shown = preview_rows([_file(_frame())], [_item(STRIP, "i-strip")]).files[0]
     assert shown.note and shown.before == shown.after
 

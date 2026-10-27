@@ -251,6 +251,10 @@ class MessageCard(StrictBase):
 class ReadyStop(StrictBase):
     key: str = Field(description="What `POST /cases/{id}/acknowledgements` takes.")
     text: str
+    acknowledgeable: bool = Field(
+        default=True,
+        description="False for a rule nobody may say yes to (a hard stop): change the plan or the file.",
+    )
     detail: str | None = Field(
         default=None, description="The expert's side of the text, shown behind a click."
     )
@@ -570,7 +574,9 @@ def _ready(
         stops: tuple[ReadyStop, ...] = ()
         if visit is not None and check is not None and _current(case, check.digest):
             stops = tuple(
-                ReadyStop(key=f.key, text=f.text, detail=f.detail, item_id=f.item_id)
+                ReadyStop(
+                    key=f.key, text=f.text, detail=f.detail, item_id=f.item_id, acknowledgeable=not f.hard
+                )
                 for f in open_stops(check, visit.acknowledged)
             )
         return ReadyCard(

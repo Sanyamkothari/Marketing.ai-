@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -383,8 +383,12 @@ def prescription_hash(prescription: Prescription) -> str:
     )
 
 
-def query_makes(items: Sequence[CaseItem], column: str) -> bool:
-    """True when an accepted query step's table has `column`."""
+def _query_tables(
+    items: Sequence[CaseItem], also: Sequence[Sequence[str]], uploads: Collection[str] | None = None
+) -> list[list[str]]:
+    """The columns of each accepted query step's table, then those of a query being tried (`also`). With `uploads`,
+    only the queries of those files (and the ones that belong to no single file)."""
+    found: list[list[str]] = []
     for item in items:
         made, step = item.payload.get("columns"), item.payload.get("step")
         if (
@@ -392,33 +396,44 @@ def query_makes(items: Sequence[CaseItem], column: str) -> bool:
             and isinstance(made, list)
             and isinstance(step, dict)
             and step.get("kind") == "sql_query"
-            and column in made
+            and (uploads is None or item.upload_id is None or item.upload_id in uploads)
         ):
-            return True
-    return False
+            found.append([str(c) for c in made])
+    found.extend([str(c) for c in made] for made in also)
+    return found
 
 
-def prepared_key(items: Sequence[CaseItem], target: str | None, key: str | None) -> str | None:
-    """The ID column a run reads when the outcome comes from an accepted query's table: the file's key where the
-    table keeps it, else the table's own ID-named column (a table of one row per customer has no invoice id).
+def query_makes(items: Sequence[CaseItem], column: str, *, also: Sequence[Sequence[str]] = ()) -> bool:
+    """True when an accepted query step's table (or one being tried, `also`) has `column`."""
+    return any(column in made for made in _query_tables(items, also))
+
+
+def prepared_key(
+    items: Sequence[CaseItem],
+    target: str | None,
+    key: str | None,
+    *,
+    also: Sequence[Sequence[str]] = (),
+    uploads: Collection[str] | None = None,
+) -> str | None:
+    """The ID column a run reads when the plan makes a table by a query: the file's key where the table keeps it,
+    else the table's own ID-named column (a table of one row per customer has no invoice id).
+
+    The table is the one that has the outcome `target`; with `uploads` (the file or slot being counted) and no such
+    table, the last table a query of those files makes, since the file is that table when the steps have run. One
+    rule for an accepted query (a run) and a query being tried (`also`): a trial and the run agree.
     """
     from engine.doctor.visit import _ID_NAMED
 
-    for item in items:
-        made = item.payload.get("columns")
-        step = item.payload.get("step")
-        if (
-            target is not None
-            and isinstance(made, list)
-            and isinstance(step, dict)
-            and step.get("kind") == "sql_query"
-            and item.state is ProposalState.ACCEPTED
-            and target in made
-        ):
-            if key in made:
-                return key
-            return next((str(c) for c in made if _ID_NAMED.search(str(c).strip())), key)
-    return key
+    tables = _query_tables(items, also, uploads)
+    chosen = next((m for m in tables if target is not None and target in m), None)
+    if chosen is None and uploads is not None and tables:
+        chosen = tables[-1]
+    if chosen is None:
+        return key
+    if key in chosen:
+        return key
+    return next((str(c) for c in chosen if _ID_NAMED.search(str(c).strip())), key)
 
 
 def make_prescription(
@@ -605,6 +620,29 @@ def case_tables(frames: Mapping[str, pd.DataFrame], parts: Sequence[FilePart]) -
     return tables
 
 
+def _slot_tables(
+    files: Sequence[LoadedFile],
+    upload_ids: Sequence[str],
+    prepared_by_slot: Mapping[str, pd.DataFrame],
+    parts: Sequence[FilePart],
+) -> dict[str, pd.DataFrame]:
+    """What a file's query may read besides its own rows: every other file by its name (as uploaded), and a slot
+    already prepared as it was prepared (:func:`case_tables`). A file is named by the one namer
+    (:func:`engine.doctor.materialize.table_names`), so a name two files share is told apart as the plan check
+    tells it."""
+    from engine.agent.dataset_recipe import consistent_types
+    from engine.doctor.materialize import table_names
+
+    names = table_names(files)
+    tables = {
+        names[f.upload_id]: consistent_types(f.frame)
+        for f in files
+        if f.upload_id not in upload_ids and f.file_name
+    }
+    tables.update(case_tables(prepared_by_slot, parts))
+    return tables
+
+
 def _off_own_table(step: RecipeStep) -> RecipeStep:
     """A query step that runs after a build, or beside other files, reads each file by name from the prepared
     tables the run gives it: the one-file shortcut (`this_table`, the working frame under the file's name) no longer
@@ -708,6 +746,8 @@ def _section(
     brief_hash: str | None,
     brief: GoalBrief | None,
 ) -> GoalSection:
+    from engine.doctor.plan_check import readiness_acknowledged
+
     items = _accepted([item for item in case.items if item.goal_id == goal_id])
     roles: dict[str, str] = {}
     for item in items:
@@ -729,7 +769,11 @@ def _section(
         settings=settings,
         split=_brief_dump(brief, "split"),
         time_settings=_brief_dump(brief, "time_settings"),
-        acknowledgements=_acknowledged(settings),
+        # a yes the person gave at APPROVE to a readiness stop goes into the approved prescription with the settings'
+        # own, so the file VERIFY called ready is the file the run is let through with (the active goal's only)
+        acknowledgements=tuple(
+            sorted({*_acknowledged(settings), *(readiness_acknowledged(case.visit) if active else ())})
+        ),
         item_digests=tuple(sorted(item.payload_digest for item in items)),
     )
 
@@ -763,8 +807,13 @@ def _learn(
     target: str | None,
     tables: Mapping[str, pd.DataFrame] | None = None,
     guards: list[GuardedRun] | None = None,
+    part: str | None = None,
 ) -> tuple[pd.DataFrame | None, DataContract | None]:
-    """The prepared sample and its contract; none when the approved recipe cannot run on the sample.
+    """The prepared sample and its contract; none when there are no rows to learn from.
+
+    An approved recipe that cannot run on the sample is a :class:`PrescriptionError` (naming `part`), never a missing
+    contract nobody is told about: the plan check stops such a step long before approval, so reaching it here is a
+    difference between the two worlds that must be seen.
 
     The recipe runs under the guards (`engine.doctor.guards`): a receipt for each step, the plan's ledger, and the
     plan run twice. The result is added to `guards` when given; the prepared sample is the same as a plain run's.
@@ -790,8 +839,8 @@ def _learn(
                 tables=tables,
                 twice=guards is not None,  # the second run only pays off when someone reads the findings
             )
-        except RecipeError:
-            return None, None
+        except RecipeError as exc:
+            raise PrescriptionError(exc.code, exc.message, part=part) from exc
         prepared = guarded.run.frame
         if guards is not None:
             guards.append(guarded)
@@ -920,7 +969,7 @@ def prescription_from_case(
         first = upload_ids[0]
         key = next((keys[u] for u in upload_ids if u in keys), None)
         target = next((targets[u] for u in upload_ids if u in targets), None)
-        key = prepared_key(approved, target, key)
+        key = prepared_key(approved, target, key, uploads=set(upload_ids))
         recipe = _recipe(
             [s for u in upload_ids for s in steps_by_upload.get(u, [])],
             use_case_id=use_case_id,
@@ -934,7 +983,13 @@ def prescription_from_case(
             acknowledged_stops=acked,
         )
         frame, contract = _learn(
-            _frames(files, upload_ids), recipe, primary_key=key, target=target, guards=guards
+            _frames(files, upload_ids),
+            recipe,
+            primary_key=key,
+            target=target,
+            guards=guards,
+            tables=_slot_tables(files, upload_ids, prepared_by_slot, parts),
+            part=slot,
         )
         if frame is not None:
             prepared.append(frame)
@@ -982,6 +1037,7 @@ def prescription_from_case(
             target=built.target,
             tables=case_tables(prepared_by_slot, parts),
             guards=guards,
+            part="post_build",
         )
     profile: LocaleProfile | None = None
     if case.locale_profile is not None:

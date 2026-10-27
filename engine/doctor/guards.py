@@ -68,6 +68,7 @@ __all__ = [
     "cell_change",
     "frame_hash",
     "grouping_key",
+    "holds",
     "infer_key",
     "make_receipt",
     "names_a_log_row",
@@ -118,8 +119,22 @@ class Finding(StrictBase):
 
     @property
     def key(self) -> str:
-        """What a person's yes is tied to: this finding, at this step, with this count."""
-        return sha256_hex(canonical_bytes([self.code, self.order, self.count]))[:16]
+        """What a person's yes is tied to: this kind of finding about this step (its subject), never its count.
+
+        The count is data. A yes given on a sample's count must still match the whole file's finding, and
+        :func:`holds` says whether it still covers it: it does while the count stays at or below the one said
+        yes to, so a bigger loss needs a new yes."""
+        return sha256_hex(canonical_bytes([self.code, self.order]))[:16]
+
+
+def holds(said: int | None, count: int | None) -> bool:
+    """Whether a yes given at count `said` still covers a finding that now counts `count`: at or below it.
+
+    A finding that counts nothing (`count` None) is the same finding as before; a yes with no count (kept by an
+    older case) does not cover one that counts something."""
+    if count is None:
+        return True
+    return said is not None and count <= said
 
 
 def acknowledge(findings: Sequence[Finding], keys: Collection[str]) -> tuple[Finding, ...]:

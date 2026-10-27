@@ -393,7 +393,12 @@ export function readyHtml(r, ctx) {
   const stops = (r.stops || [])
     .map(
       (s) =>
-        `<div class="ddc-stop" data-dds-stop-block="${esc(s.key)}"><label class="dds-tick ddc-tick" data-dds-stop-row="${esc(s.key)}"><input type="checkbox" data-dds-stop="${esc(s.key)}"${ctx.stops.has(s.key) ? " checked" : ""}${ctx.busy ? " disabled" : ""}><span class="dds-item-body"><span class="dds-item-t">${userTextIn(
+        s.acknowledgeable === false
+          ? `<div class="ddc-stop" data-dds-stop-block="${esc(s.key)}" data-dds-rule><span class="dds-item-body"><span class="dds-item-t">${userTextIn(
+              s.text,
+              names,
+            )}</span><span class="dds-item-sub">This is a rule the data must meet, so no one can say yes to it. Change the plan or the file.</span></span></div>`
+          : `<div class="ddc-stop" data-dds-stop-block="${esc(s.key)}"><label class="dds-tick ddc-tick" data-dds-stop-row="${esc(s.key)}"><input type="checkbox" data-dds-stop="${esc(s.key)}"${ctx.stops.has(s.key) ? " checked" : ""}${ctx.busy ? " disabled" : ""}><span class="dds-item-body"><span class="dds-item-t">${userTextIn(
           s.text,
           names,
         )}</span><span class="dds-item-sub">A safety check stops this plan until you say yes. Tick to go on anyway.</span></span></label>${
@@ -488,7 +493,7 @@ export function leavesOutHtml(r, ctx) {
 /** Whether the one click may go: every stop is ticked, and nobody else must agree first (the own yeses are the click's). */
 export function approveAllowed(r, ctx) {
   if (!r || r.stage !== "approve" || r.blocked || r.hold) return false;
-  if ((r.stops || []).some((s) => !ctx.stops.has(s.key))) return false;
+  if ((r.stops || []).some((s) => s.acknowledgeable === false || !ctx.stops.has(s.key))) return false;
   return true; // a change that needs its own yes and is in the plan is agreed by this very click
 }
 

@@ -30,6 +30,7 @@ import json
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import ValidationError
@@ -341,6 +342,7 @@ class _Review:
     def _context(self, index: int, **extra: Any) -> DataToolContext:
         from engine.doctor.visit import active_section
 
+        given = case_as_of(self.case)
         return DataToolContext(
             agent=self.ctxs[index],
             principal=self.principal,
@@ -348,6 +350,7 @@ class _Review:
             egress=self.gates[index],
             files=self.files,
             case_items=active_section(self.case)[0],  # the plan so far, for `preview_working_copy`
+            as_of=date.fromisoformat(given) if given is not None else None,
             config_root=self.config_root,
             clock=self.clock,
             actor="agent:data-doctor",

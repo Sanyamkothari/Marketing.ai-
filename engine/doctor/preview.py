@@ -1,8 +1,9 @@
 """The data as the case's plan leaves it: the first rows of each file before and after, personal data masked.
 
 `preview_rows(files, items)` tries the ticked steps (the person's, and the ones the agent applied by itself: both are
-`ACCEPTED` items) on each file's first 1,000 rows under the guards, as `plan_check` does, and keeps the first
-`PREVIEW_ROWS` rows before and after, which columns changed, and a few rows per step (`StepSample`). Nothing is
+`ACCEPTED` items) on a seeded sample of 1,000 rows of each file under the guards - it IS the plan check's
+materialisation (:func:`engine.doctor.materialize.materialize_plan`), not a copy of it, so the preview and the plan's
+safety count are the same rows, steps, tables and stops - and keeps the first `PREVIEW_ROWS` rows before and after, which columns changed, and a few rows per step (`StepSample`). Nothing is
 written anywhere; the frames are thrown away, so the answer holds masked text only.
 
 Masking is one rule for every reader (the screen, the agent's `preview_working_copy` tool): a personal column shows
@@ -22,29 +23,21 @@ import numbers
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Collection, Sequence
+from datetime import date
 from typing import Any, Final
 
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
-from engine.agent.config import AgentConfig
 from engine.agent.contracts import RecipeStep, RecipeStepKind
 from engine.agent.dataset_recipe import consistent_types
 from engine.agent.formats import masked_cut
 from engine.agent.recipe import RecipeError, derive_names
-from engine.agent.sql_step import SqlStepError
 from engine.doctor.case import CaseFile, CaseItem
 from engine.doctor.diagnose import LoadedFile
-from engine.doctor.guards import run_guarded
-from engine.doctor.plan_check import (
-    SAMPLE_ROWS,
-    accepted_column,
-    case_tables,
-    guard_levels,
-    plan_digest,
-    recipe_steps_of,
-)
+from engine.doctor.materialize import Prepared, PreparedFile, Sample, materialize_plan, scoped
+from engine.doctor.plan_check import SAMPLE_ROWS, accepted_column, plan_digest
 from engine.utils.logging import get_logger
 
 __all__ = [
@@ -364,7 +357,7 @@ def _personal_columns(loaded: LoadedFile, frame: pd.DataFrame) -> set[str]:
 
 
 def _base_of(loaded: LoadedFile) -> pd.DataFrame:
-    base = consistent_types(loaded.frame.head(SAMPLE_ROWS)).copy()
+    base = consistent_types(scoped(loaded.frame, Sample(SAMPLE_ROWS))).copy()
     base.columns = [str(c) for c in base.columns]
     kept: pd.DataFrame = base.loc[:, ~base.columns.duplicated()]
     return kept
@@ -397,67 +390,33 @@ def _one_file(
     loaded: LoadedFile,
     items: Sequence[CaseItem],
     *,
-    only_file: bool,
-    tables: dict[str, Any],
+    done: PreparedFile | None,
+    prepared: Prepared | None,
+    failure: str | None,
     base: pd.DataFrame,
-    everyone: _Personal,
-    hide: Collection[str],
+    personal: set[str],
     rows: int,
-) -> tuple[PreviewFile, dict[str, StepSample]]:
-    # A column is personal when ANY file of the case says so by name: a join brings it in under the same name.
-    personal = set(everyone.names) | {str(h) for h in hide}
-    mine = recipe_steps_of(items, loaded.upload_id, only_file=only_file)
+) -> PreviewFile:
+    """One file as the materialised plan left it. `done` is what the plan did to it (none: no step touched it);
+    `failure` is why a step could not run on it (then the rows are shown as they were)."""
     after = base
     note: str | None = None
-    samples: dict[str, StepSample] = {}
-    reshaped = any(step.kind in _RESHAPING for step, _ in mine)
+    reshaped = False
     key = accepted_column(items, "key", loaded.upload_id, {str(c) for c in base.columns})
-    if mine:
-        ordered = [step for step, _ in mine]
-        by_order = {step.order: item_id for step, item_id in mine}
-        columns = {str(c) for c in base.columns}
-
-        def watch(step: RecipeStep, was: pd.DataFrame, became: pd.DataFrame) -> None:
-            was, became = _plain(was), _plain(became)
-            personal.update(
-                _personal_after(step, was, became, personal, names=everyone.names, values=everyone.values)
-            )
-            sample = _sample_of(step, was, became, personal)
-            if sample is not None:
-                samples[by_order[step.order]] = sample
-
-        try:
-            after = run_guarded(
-                base,
-                ordered,
-                primary_key=key,
-                target=accepted_column(items, "outcome_column", loaded.upload_id, columns),
-                tables=tables,
-                upload_id=loaded.upload_id,
-                source_name=loaded.file_name or None,
-                levels=guard_levels(ordered),
-                max_failure_pct=AgentConfig().max_conversion_failure_pct,
-                twice=False,  # repeatability is the plan check's; the preview only needs the rows
-                watch=watch,
-            ).run.frame.copy()
-            after.columns = [str(c) for c in after.columns]
-        except Exception as exc:
-            if not isinstance(exc, (RecipeError, SqlStepError, ValueError, KeyError, TypeError)):
-                _LOG.warning(
-                    "preview_step_failed", exc_info=True
-                )  # a bug, not a step: still no failing screen
-            after, samples = base, {}
-            note = masked_cut(
-                f"A step could not run on a sample of this file: {getattr(exc, 'message', None) or type(exc).__name__}",
-                300,
-            )
+    if failure is not None:
+        note = masked_cut(f"A step could not run on a sample of this file: {failure}", 300)
+    elif done is not None and prepared is not None:
+        after = prepared.tables[done.table].copy()
+        after.columns = [str(c) for c in after.columns]
+        key = done.key or key
+        reshaped = any(r.kind in {k.value for k in _RESHAPING} for _, r in done.receipts)
     after = after.loc[:, ~after.columns.duplicated()]
     changed = _changed_columns(base, after, reshaped=reshaped, key=key)
     names = [str(c) for c in after.columns] + [str(c) for c in base.columns if c not in after.columns]
     served = _served_columns(names, changed)
     shown_before = base.reindex(columns=served)
     shown_after = after.reindex(columns=served)
-    file = PreviewFile(
+    return PreviewFile(
         upload_id=loaded.upload_id,
         file_name=loaded.file_name,
         total_rows=int(loaded.file_rows or loaded.profile.row_count or len(loaded.frame)),
@@ -467,7 +426,6 @@ def _one_file(
         left_out_columns=len(names) - len(served),
         note=note,
     )
-    return file, samples
 
 
 def preview_rows(
@@ -477,34 +435,62 @@ def preview_rows(
     hide: Collection[str] = (),
     rows: int = PREVIEW_ROWS,
     only: str | None = None,
+    as_of: date | None = None,
 ) -> PreviewView:
     """The first `rows` rows of each file before and after the ticked steps, masked; see the module docstring.
 
     `items` are the case's items of the section on screen; only the ACCEPTED ones with a recipe step count, which
     is what `plan_check` counts. `hide` names columns that show no value either (the settings' hidden columns,
     for the agent's tool); `only` shows one file (by upload id), the others still being the tables a query reads
-    and the files whose personal columns and values no other column may show.
+    and the files whose personal columns and values no other column may show. `as_of` is the case's date.
     """
-    tables = case_tables(files)
     bases = {f.upload_id: _base_of(f) for f in files}
     everyone = _Personal(files, bases)
-    shown: list[PreviewFile] = []
+    # A column is personal when ANY file of the case says so by name: a join brings it in under the same name.
+    personal = {f.upload_id: set(everyone.names) | {str(h) for h in hide} for f in files}
     samples: dict[str, StepSample] = {}
-    for loaded in files:
-        if only is not None and loaded.upload_id != only:
-            continue
-        file, found = _one_file(
+    by_item: dict[str, str] = {}
+
+    def watch(
+        upload_id: str, item_id: str, step: RecipeStep, was: pd.DataFrame, became: pd.DataFrame
+    ) -> None:
+        was, became = _plain(was), _plain(became)
+        mine = personal[upload_id]
+        mine.update(_personal_after(step, was, became, mine, names=everyone.names, values=everyone.values))
+        sample = _sample_of(step, was, became, mine)
+        if sample is not None:
+            samples[item_id] = sample
+            by_item[item_id] = upload_id
+
+    prepared: Prepared | None = None
+    lost = "A step could not run."
+    try:
+        prepared = materialize_plan(
+            (), items, files, Sample(SAMPLE_ROWS), as_of=as_of, twice=False, watch=watch
+        )
+    except Exception as exc:  # a bug, not a step: still no failing screen
+        _LOG.warning("preview_step_failed", exc_info=True)
+        lost = f"A step could not run: {type(exc).__name__}"
+        samples.clear()
+    failures = {} if prepared is None else {f.upload_id: f.message for f in prepared.failures}
+    done = {} if prepared is None else {f.upload_id: f for f in prepared.files}
+    for upload_id in failures:  # a file that could not be prepared shows no sample of a step that half-ran
+        for item_id in [i for i, u in by_item.items() if u == upload_id]:
+            samples.pop(item_id, None)
+    shown = [
+        _one_file(
             loaded,
             items,
-            only_file=len(files) == 1,
-            tables=tables,
+            done=done.get(loaded.upload_id),
+            prepared=prepared,
+            failure=failures.get(loaded.upload_id, lost if prepared is None else None),
             base=bases[loaded.upload_id],
-            everyone=everyone,
-            hide=hide,
+            personal=personal[loaded.upload_id],
             rows=rows,
         )
-        shown.append(file)
-        samples.update(found)
+        for loaded in files
+        if only is None or loaded.upload_id == only
+    ]
     return PreviewView(files=tuple(shown), step_samples=samples)
 
 
@@ -521,10 +507,12 @@ def cached_preview(
     case_files: Sequence[CaseFile],
     items: Sequence[CaseItem],
     build: Callable[[], PreviewView],
+    *,
+    as_of: date | None = None,
 ) -> PreviewView:
-    """`build()`, once per plan (`plan_check.plan_digest`: the files and every accepted item as it stands), kept
-    by client and case: one client's rows are never another's, whatever a digest says."""
-    key = f"{client_id}:{case_id}:{plan_digest(case_files, items)}"
+    """`build()`, once per plan (`plan_check.plan_digest`: the files and every accepted item as it stands) and
+    as-of date, kept by client and case: one client's rows are never another's, whatever a digest says."""
+    key = f"{client_id}:{case_id}:{plan_digest(case_files, items)}:{as_of or ''}"
     with _LOCK:
         if key in _CACHE:
             _CACHE.move_to_end(key)

@@ -1,4 +1,4 @@
-"""A query is tried on the file after the plan's fixes, and a plan that moved on since says so."""
+"""A query is tried on the file after the plan's fixes (the plan's own materialisation), and a plan that moved on since stops."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from engine.agent.recipe import run_recipe
 from engine.agent.sql_step import sql_params
 from engine.doctor.case import CaseFile, CaseItem
 from engine.doctor.diagnose import LoadedFile
-from engine.doctor.plan_check import check_plan, steps_digest
+from engine.doctor.plan_check import check_plan
 from engine.doctor.prescription import _off_own_table
 from engine.doctor.registry import DataToolContext, data_registry
 
@@ -80,7 +80,6 @@ def test_a_fix_still_waiting_for_its_yes_counts_in_the_trial() -> None:
     proposal = propose(AS_TIME, (waiting,))
     sql = RecipeStep.model_validate(proposal["step"]).model_copy(update={"order": 2})
     parse = RecipeStep.model_validate(parse_date(ProposalState.ACCEPTED).payload["step"])
-    assert sql_params(sql.params).tried_after == steps_digest([parse])
     # The person then accepts it: the run feeds the query the same parsed dates it was tried on.
     out = run_recipe(
         log(),
@@ -94,7 +93,7 @@ def test_a_fix_still_waiting_for_its_yes_counts_in_the_trial() -> None:
     assert list(out.frame.columns) == ["Customer", "month", "n"]
 
 
-def test_a_fix_accepted_after_the_query_was_tried_is_named_not_a_binder_error() -> None:
+def test_a_fix_accepted_after_the_query_was_tried_is_a_step_that_cannot_run() -> None:
     proposal = propose(AS_TEXT, ())  # no fix yet: the dates are text
     step = {**proposal["step"], "order": 2}
     accepted_query = item(
@@ -104,11 +103,11 @@ def test_a_fix_accepted_after_the_query_was_tried_is_named_not_a_binder_error() 
     case_files = [CaseFile(upload_id="up-1", file_name="log.csv", added_at=NOW, added_by="u")]
     now_parsed = parse_date(ProposalState.ACCEPTED)
     found = check_plan(files, case_files, [now_parsed, accepted_query]).findings
-    assert [f.code for f in found] == ["PLAN_QUERY_TRIED_BEFORE_CHANGE"]
-    assert found[0].item_id == "item_sql"
+    assert [f.code for f in found] == ["PLAN_STEP_CANNOT_RUN"]
+    assert found[0].item_id == "item_sql" and found[0].hard
     # Unchanged plan: the same query is fine.
     unchanged = {f.code for f in check_plan(files, case_files, [accepted_query]).findings}
-    assert not unchanged & {"PLAN_QUERY_TRIED_BEFORE_CHANGE", "PLAN_STEP_CANNOT_RUN"}
+    assert "PLAN_STEP_CANNOT_RUN" not in unchanged
 
 
 def test_the_inputs_report_the_whole_file_not_the_tried_rows(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -124,6 +123,7 @@ def test_a_query_in_the_post_build_recipe_reads_the_prepared_table_by_name() -> 
     assert step.params["this_table"] == "log"
     plain = _off_own_table(step)
     assert "this_table" not in plain.params and "tried_after" not in plain.params
+    assert "tried_after" not in step.params  # the digest is no longer kept
     assert plain.params["inputs"] == ["log"]
 
 
@@ -155,9 +155,6 @@ def test_a_replacement_query_is_tried_on_the_lines_not_on_the_table_it_replaces(
     proposal = dict(data_registry().call("propose_sql_step", given, ctx).output)
     assert proposal["rows_out"] == 8
     # The pending parse_date was applied (InvoiceDate is a time, as the query needs), the table was not.
-    step = RecipeStep.model_validate(proposal["step"])
-    parsed = RecipeStep.model_validate(parse_date(ProposalState.ACCEPTED).payload["step"])
-    assert sql_params(step.params).tried_after == steps_digest([parsed])
 
 
 def test_another_waiting_query_is_not_applied_even_when_nothing_is_replaced() -> None:
@@ -222,19 +219,19 @@ def test_a_query_reading_the_future_states_its_window() -> None:
     assert "outcome_window_days" in caught.value.message
 
 
-def test_two_waiting_queries_both_accepted_name_that_the_later_one_runs_on_the_other() -> None:
+def test_a_query_that_cannot_run_on_the_other_one_is_a_hard_stop_not_a_yes() -> None:
     earlier = pending_table(ProposalState.ACCEPTED, "item_q1")
     proposal = propose(ON_LINES, (pending_table(ProposalState.PENDING),))
     step = {**proposal["step"], "order": 3}
     later = item("item_q2", {"step": step}, ProposalState.ACCEPTED, upload_id=None)
     case_files = [CaseFile(upload_id="up-1", file_name="log.csv", added_at=NOW, added_by="u")]
     found = check_plan([loaded(log())], case_files, [earlier, later]).findings
-    assert "PLAN_QUERY_TRIED_BEFORE_CHANGE" in {f.code for f in found}
-    assert next(f for f in found if f.code == "PLAN_QUERY_TRIED_BEFORE_CHANGE").level == "stop"
+    stop = next(f for f in found if f.code == "PLAN_STEP_CANNOT_RUN")
+    assert stop.level == "stop" and stop.hard
 
 
 def test_a_waiting_fix_on_what_a_waiting_combine_makes_is_left_out_with_it() -> None:
-    from engine.doctor.plan_check import trial_steps_of
+    from engine.doctor.tools_sql import _trial_items
 
     combine = RecipeStep(order=1, kind=RecipeStepKind.COMBINE_ROWS, column="Customer", params={}, reason="c")
     derive = RecipeStep(
@@ -245,8 +242,8 @@ def test_a_waiting_fix_on_what_a_waiting_combine_makes_is_left_out_with_it() -> 
         item("d", {"step": derive.model_dump(mode="json")}, ProposalState.PENDING, upload_id="up-1"),
         parse_date(ProposalState.PENDING),
     )
-    kept = [i for _, i in trial_steps_of(items, "up-1", only_file=True)]
-    assert kept == ["item_parse"]
+    kept = [(i.item_id, i.state) for i in _trial_items(items)]
+    assert kept == [("item_parse", ProposalState.ACCEPTED)]
 
 
 def frames_with(**extra: Any) -> dict[str, pd.DataFrame]:

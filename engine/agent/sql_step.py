@@ -724,6 +724,7 @@ def future_rows_moved(
     output_name: str,
     as_of: date,
     ignore: Collection[str] = (),
+    one_outcome: bool = False,
 ) -> int | None:
     """How many rows of the query's table change when every row dated after `as_of` is taken out of its inputs.
 
@@ -732,6 +733,9 @@ def future_rows_moved(
     compared row by row, without the `ignore` columns (the outcome of a query that builds it from later rows). None
     when no input holds a row dated after `as_of` (nothing to test). Our code runs both queries, so the answer is
     not the writer's word.
+
+    `one_outcome`: the outcome column is not decided yet, and a query that builds it from later rows has exactly one
+    such column, so one column may move (compared by its values) and two or more are a leak.
     """
     cut: dict[str, pd.DataFrame] = {}
     later = False
@@ -752,6 +756,9 @@ def future_rows_moved(
     part = part.drop(columns=[c for c in part.columns if c in ignore])
     if list(whole.columns) != list(part.columns):
         return len(whole)
+    if one_outcome:
+        moved = [c for c in whole.columns if Counter(whole[c].astype(str)) != Counter(part[c].astype(str))]
+        return len(whole) if len(moved) > 1 else 0
     left = Counter(whole.astype(str).itertuples(index=False, name=None))
     right = Counter(part.astype(str).itertuples(index=False, name=None))
     return max(sum((left - right).values()), sum((right - left).values()))

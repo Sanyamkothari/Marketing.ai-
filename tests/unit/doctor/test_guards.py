@@ -263,10 +263,21 @@ def test_the_rows_of_an_orders_log_are_never_counted_as_customers() -> None:
 
 
 def test_a_person_can_say_yes_to_a_stop_by_its_key() -> None:
-    stop = Finding(level="stop", code="PLAN_LOSES_TOO_MUCH", count=1000, message="Lost 20%.")
-    other = Finding(level="stop", code="PLAN_LOSES_TOO_MUCH", count=1001, message="Lost 20%.")
+    stop = Finding(level="stop", code="PLAN_LOSES_TOO_MUCH", order=1, count=1000, message="Lost 20%.")
+    other = Finding(level="stop", code="PLAN_LOSES_TOO_MUCH", order=2, count=1000, message="Lost 20%.")
     kept = acknowledge([stop, other], {stop.key})
     assert [f.level for f in kept] == ["flag", "stop"]
+
+
+def test_a_stops_key_is_its_code_and_step_never_its_count() -> None:
+    """A yes given on a sample matches the same stop counted on the whole file; the count is data, and a yes holds
+    while the new count is at or below the one said yes to."""
+    on_sample = Finding(level="stop", code="PLAN_LOSES_TOO_MUCH", order=1, count=60, message="x")
+    on_file = Finding(level="stop", code="PLAN_LOSES_TOO_MUCH", order=1, count=343, message="y")
+    assert on_sample.key == on_file.key
+    assert guards.holds(343, 343) and guards.holds(343, 300) and guards.holds(None, None)
+    assert not guards.holds(343, 344), "a bigger loss needs a new yes"
+    assert not guards.holds(None, 5), "a yes with no count does not cover one that counts something"
 
 
 def test_the_interruptions_are_kept_to_a_budget() -> None:

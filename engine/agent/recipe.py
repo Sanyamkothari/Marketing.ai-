@@ -909,12 +909,15 @@ def _run_sql_step(
     primary_key: str | None,
     target: str | None,
     leak_check: LeakCheck | None = None,
+    outcome_open: bool = False,
 ) -> tuple[pd.DataFrame, StepReceipt]:
     """The table a `sql_query` step makes, and its receipt (rows read from each table, rows written).
 
     The as-of date is the run's own, else the step's rule worked out on this run's files, else the date frozen in
     the step. On a training file (`leak_check` full) the table is built again without the rows dated after it and
-    must not change (the future-data check of onboarding ruling R1, for a table made by a query)."""
+    must not change (the future-data check of onboarding ruling R1, for a table made by a query). With no outcome
+    column named, every column is checked, unless `outcome_open` (the outcome is not decided yet): then the one
+    column a query that reads the future builds the outcome in may move, and two are a leak."""
     params = sql_params(_params(step))
     read: dict[str, pd.DataFrame] = {}
     for name in params.inputs:
@@ -951,6 +954,7 @@ def _run_sql_step(
                 output_name=params.output_name,
                 as_of=used,
                 ignore=(target,) if params.reads_future and target else (),
+                one_outcome=params.reads_future and not target and outcome_open,
             )
             if leak_check == "full" and used is not None
             else None
@@ -996,6 +1000,7 @@ def run_recipe(
     snapshot_column: str | None = None,
     derived_upload_id: str | None = None,
     leak_check: LeakCheck | None = None,
+    outcome_open: bool = False,
     clock: Callable[[], datetime] = utc_now,
     tables: Mapping[str, pd.DataFrame] | None = None,
     as_of: date | None = None,
@@ -1008,7 +1013,8 @@ def run_recipe(
 
     `leak_check` is the future-data check a `combine_rows` step runs after combining: `full` on a
     training file (the recipe's first build, onboarding ruling R1), `narrow` on a scoring file, and
-    none on a preview. A `keep_latest_per_id` step runs its point-in-time check under the same value
+    none on a preview. `outcome_open` is for a plan whose outcome column is not decided yet (see
+    :func:`_run_sql_step`). A `keep_latest_per_id` step runs its point-in-time check under the same value
     (Plan O M238, DEC-1808).
 
     `observe(step, before, after)` is called after each step with copies of the table it read and the table it
@@ -1098,7 +1104,14 @@ def run_recipe(
             continue
         if step.kind is RecipeStepKind.SQL_QUERY:
             work, sql_receipt = _run_sql_step(
-                step, work, tables, as_of, primary_key=primary_key, target=target, leak_check=leak_check
+                step,
+                work,
+                tables,
+                as_of,
+                primary_key=primary_key,
+                target=target,
+                leak_check=leak_check,
+                outcome_open=outcome_open,
             )
             receipts.append(sql_receipt)
             continue
