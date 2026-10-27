@@ -34,8 +34,8 @@ Defined in `configs/v3/journeys.yaml`:
 |---|---|---|
 | A | email | always |
 | B | email, then 3 days later WhatsApp if no purchase | the goal has a WhatsApp bid for this customer |
-| C | WhatsApp now | the customer's value if they buy is at least `value_bar` (50 in the file, in the shop's currency; a starting value, replace it per shop with `JourneyConfig.with_value_bar`) |
-| D | WhatsApp, then 2 days later an email reminder if no purchase | the customer's value is at least `value_bar` (50, the same bar as C, since both send WhatsApp first) and the goal has an email bid |
+| C | WhatsApp now | the customer's value if they buy is at least the bar: `value_bar_order_multiple: 1.0` in the file, one usual order of the shop (`RuntimeSettings.typical_order_value`; 50 on the reference order, so the bar the file always had). An exact bar for one shop: `JourneyConfig.with_value_bar`. See [CURRENCY.md](CURRENCY.md) |
+| D | WhatsApp, then 2 days later an email reminder if no purchase | the customer's value is at least the same bar as C (both send WhatsApp first) and the goal has an email bid |
 
 A step has `channel`, `wait_days` (since the step before) and `when`: `always`, `no_purchase` or
 `not_opened` (no click or reply since the step before). The first step goes at once. The file also

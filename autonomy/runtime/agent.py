@@ -1135,7 +1135,8 @@ COMPLAINT_BASE_RATE = 0.0005
 sender at about 0.1%)."""
 COMPLAINT_COST = 2.0
 """What one complaint costs beyond the lost contact: deliverability for every other customer. A
-rough figure in the goal's currency; a business that knows its own should set it."""
+dollar-sized default; production passes the shop's own (`complaint_cost`, else a share of its usual order
+value: `autonomy.runtime.prices.COMPLAINT_SHARE_OF_ORDER`)."""
 
 
 @dataclass(frozen=True)

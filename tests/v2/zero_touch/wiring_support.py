@@ -248,6 +248,10 @@ def make_shop(
         identity_linking=linking,
         hold_on_stale_data=hold,
         public_url="https://autonomy.example",
+        # The sample goal is in dollars: the shop's money is set in them (docs/v3/CURRENCY.md).
+        currency="USD",
+        channel_costs={Channel.EMAIL: 0.001, Channel.WHATSAPP: 0.03},
+        typical_order_value=50.0,
     )
     alerts = SqlAlertStore(db)
     wiring = build_connector_engine(

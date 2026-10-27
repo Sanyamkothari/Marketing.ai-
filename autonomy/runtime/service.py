@@ -667,8 +667,9 @@ class _OfferSend:
 class SpendLedger:
     """Money spent per goal, read from the event log: channel cost per SEND, offer cost per redemption.
 
-    A SEND costs its channel's price (`channel_costs`, by default the bidders' own
-    `DEFAULT_CHANNEL_COSTS`; a channel missing from the table costs what the decision's chosen bid
+    A SEND costs its channel's price (`channel_costs`; the default is the bidders' dollar-sized
+    `DEFAULT_CHANNEL_COSTS` for the Gym and the demo, and production always passes the shop's own, see
+    `autonomy.runtime.prices`; a channel missing from the table costs what the decision's chosen bid
     said). An offer costs money only when it is used: a PURCHASE whose `attrs["offer_id"]` names the
     offer of a decision sent to that customer within the goal's outcome window (`horizon_days` of
     its brief) pays that offer once, charged at the purchase. The price is the purchase's
