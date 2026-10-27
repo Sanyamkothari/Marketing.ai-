@@ -12,47 +12,38 @@ from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.grounding import grounded_numbers
 from engine.agent.tools import AgentToolError
+from engine.doctor.actions import ProposeFeaturesArgs
+from engine.doctor.decisions import decisions
 
 if TYPE_CHECKING:
     from engine.doctor.agent_review import _Review
 
 __all__ = ["FEATURE_ARGS", "run_features"]
 
-FEATURE_ARGS: Final[frozenset[str]] = frozenset(
-    {
-        "entity_key",
-        "time_column",
-        "as_of",
-        "as_of_rule",
-        "features",
-        "preset",
-        "amount_column",
-        "order_column",
-        "product_column",
-        "output_name",
-    }
-)
+FEATURE_ARGS: Final[frozenset[str]] = frozenset(ProposeFeaturesArgs.model_fields) - {"replaces"}
+"""What the model may pass to the tool: the action's arguments (`engine.doctor.actions`), less the chat's swap."""
 
 
 def run_features(review: _Review, index: int, args: dict[str, Any]) -> None:
-    from engine.doctor.agent_review import _decided, _Sql, case_as_of
+    from engine.doctor.agent_review import _Sql
     from engine.doctor.tools_features import parse_query_output
 
     turn = review.turn
     ctx = review.ctxs[index]
     given: dict[str, Any] = {k: v for k, v in args.items() if k in FEATURE_ARGS}
     given["upload_id"] = ctx.upload_id
-    outcome = _decided(review.case, "outcome_column", ctx.upload_id) or ctx.target
+    decided = decisions(review.case)
+    outcome = decided.outcome_of_upload(ctx.upload_id) or ctx.target
     if outcome:
         given["outcome_column"] = outcome  # no feature may read it: held in code by the tool
-    if "as_of" not in given and "as_of_rule" not in given and (decided := case_as_of(review.case)):
-        given["as_of"] = decided  # the person's own as-of answer, as `propose_sql` takes it
+    # No as-of is filled in here: the tool's context carries the case's (`decisions(case).as_of_date`) and the step
+    # keeps `$as_of` unbound, so the trial and every run measure at the date the case holds then.
     name = str(given.get("output_name") or "customer_features")
     if name in turn.closed:
         raise AgentToolError(
             "AGENT_RETRIES_USED", f"'{name[:60]}' has failed too often; it is left for the person."
         )
-    key = _decided(review.case, "key", ctx.upload_id)
+    key = decided.key(ctx.upload_id)
     result = review.registry.call(
         "propose_features", given, review._context(index, primary_key=key, replacing=review.replacing)
     )

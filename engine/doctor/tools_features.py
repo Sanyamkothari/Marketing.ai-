@@ -652,7 +652,6 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
             "FEATURE_NEEDS_AS_OF",
             "Features are measured at a date: ask the person for the as-of date, or name `as_of_rule`.",
         )
-    as_of = given.as_of or (ctx.as_of if given.as_of_rule is None else None)
     outcome = given.outcome_column or _decided_outcome(
         ctx, given.upload_id, [str(c) for c in loaded[given.upload_id].frame.columns]
     )
@@ -664,7 +663,9 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
         sql=compiled.sql,
         output_name=given.output_name,
         upload_ids=(given.upload_id,),
-        as_of=as_of,
+        # Only a date the person named is kept in the step; otherwise `$as_of` stays the case's date
+        # (`decisions(case).as_of_date`), bound by the trial and every run (`materialize`), as `propose_sql` does.
+        as_of=given.as_of,
         as_of_rule=given.as_of_rule,
         as_of_upload_id=given.upload_id if given.as_of_rule else None,
         as_of_column=given.time_column if given.as_of_rule else None,
@@ -688,7 +689,12 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
         raise DataToolError(exc.code, exc.message, status=422) from exc
     # The same step, once more on every row, through the one materialisation (its future-rows check is the leak
     # probe: a feature that moves when the rows after the as-of date are taken out fails here, whoever wrote it).
-    when = ctx.as_of or date.fromisoformat(str(base.step["params"]["as_of"]))
+    own_date = base.step["params"].get("as_of")
+    when = date.fromisoformat(str(own_date)) if own_date else ctx.as_of
+    if when is None:  # refused above already; kept for the type
+        raise _refuse(
+            "FEATURE_NEEDS_AS_OF", "Features are measured at a date: ask the person for the as-of date."
+        )
     tried = RecipeStep.model_validate(base.step)
     tried = tried.model_copy(update={"params": {k: v for k, v in tried.params.items() if k != "as_of_rule"}})
     whole = materialize_plan(
