@@ -15,7 +15,7 @@ import pytest
 
 from engine.access.roles import Principal, Role
 from engine.agent.contracts import ProposalState, RecipeStep
-from engine.agent.sql_step import future_rows_moved, run_sql
+from engine.agent.sql_step import MAX_COMPILED_SQL_CHARS, future_rows_moved, run_sql
 from engine.doctor.case import CaseItem
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.materialize import Full, Sample, materialize_plan
@@ -76,7 +76,9 @@ def made(frame: pd.DataFrame, **more: Any) -> pd.DataFrame:
         }
     )
     sql = compile_features(args, "t_invoices").sql
-    return run_sql(sql, {"invoices": frame}, output_name="f", as_of=AS_OF).frame.set_index("Customer")
+    return run_sql(
+        sql, {"invoices": frame}, output_name="f", as_of=AS_OF, max_chars=MAX_COMPILED_SQL_CHARS
+    ).frame.set_index("Customer")
 
 
 def test_rfm_equals_the_hand_computed_result() -> None:
@@ -444,3 +446,110 @@ def test_the_outcome_is_read_from_the_case_and_checked_again_at_materialisation(
     )
     prepared = materialize_plan((), [item, decided], (loaded(invoices()),), Full())
     assert [f.code for f in prepared.failures] == ["FEATURE_READS_OUTCOME"]
+
+
+# -- Step 7b: ratios, velocity and the recency bucket -------------------------------------------------
+DAYS = 30.4375
+
+
+def test_rfm_ratios_equal_the_hand_computed_result() -> None:
+    out = made(invoices(), preset="rfm_ratios")
+    c1, c2 = out.loc["C1"], out.loc["C2"]
+    tenure = (AS_OF - date(2024, 8, 1)).days  # 333
+    assert (c1.days_since_last_order, c1.tenure_days) == (10, tenure)
+    assert c1.dormancy_index == pytest.approx(10 / tenure)
+    assert c1.return_rate == 0  # no negative amount
+    assert c1.spend_per_month == pytest.approx(180.0 / (tenure / DAYS))  # 60+40+50+30 up to the as-of date
+    assert c1.basket_depth == pytest.approx(4 / 3)  # 4 lines, invoices A1 A2 A3
+    # last 30 days (2025-05-31..2025-06-30): 100 spend, 1 order; the 90 days before (2025-03-02..2025-05-31): none
+    assert pd.isna(c1.spend_velocity_30d) and pd.isna(c1.orders_velocity_30d)
+    assert c1.recency_bucket == "active"
+    # C2 has one order 29 days ago: tenure 29, so the dormancy index is 1 and the basket is one line of one order
+    assert (c2.dormancy_index, c2.basket_depth, c2.recency_bucket) == (1.0, 1.0, "active")
+    assert c2.spend_per_month == pytest.approx(20.0 / (29 / DAYS))
+
+
+def test_velocity_is_the_last_30_days_over_a_third_of_the_90_before() -> None:
+    rows = [
+        ("C1", "A1", "2025-06-25", 90.0, "p1"),  # last 30 days
+        ("C1", "A2", "2025-06-10", 30.0, "p1"),  # last 30 days
+        ("C1", "A3", "2025-04-20", 60.0, "p1"),  # the 90 before (2025-03-02..2025-05-31)
+        ("C1", "A4", "2025-03-10", 60.0, "p1"),  # the 90 before
+        ("C1", "A5", "2025-03-01", 500.0, "p1"),  # older than both windows
+        ("C2", "B1", "2025-06-01", 10.0, "p1"),  # no history before: blank
+    ]
+    out = made(
+        invoices(rows),
+        features=[{"name": "sv", "agg": "spend_velocity_30d"}, {"name": "ov", "agg": "orders_velocity_30d"}],
+    )
+    assert out.loc["C1", "sv"] == pytest.approx(120.0 / (120.0 / 3))  # 3.0: growing
+    assert out.loc["C1", "ov"] == pytest.approx(2 / (2 / 3))
+    assert pd.isna(out.loc["C2", "sv"]) and pd.isna(out.loc["C2", "ov"])  # division by nothing is blank
+    slow = made(
+        invoices([("C1", "A1", "2025-06-25", 10.0, "p1"), ("C1", "A2", "2025-04-20", 90.0, "p1")]),
+        features=[{"name": "sv", "agg": "spend_velocity_30d"}],
+    )
+    assert slow.loc["C1", "sv"] == pytest.approx(10.0 / 30.0)  # below 1: decaying
+
+
+def test_the_recency_bucket_sits_beside_the_raw_number_with_the_owners_cliffs() -> None:
+    rows = [
+        ("C1", "A1", "2025-06-30", 1.0, "p"),  # 0 days
+        ("C2", "A2", "2025-05-31", 1.0, "p"),  # 30
+        ("C3", "A3", "2025-05-30", 1.0, "p"),  # 31
+        ("C4", "A4", "2025-04-01", 1.0, "p"),  # 90
+        ("C5", "A5", "2025-03-31", 1.0, "p"),  # 91
+    ]
+    out = made(
+        invoices(rows),
+        features=[
+            {"name": "recency_bucket", "agg": "recency_bucket"},
+            {"name": "days", "agg": "days_since_last"},
+        ],
+    )
+    assert list(out["days"]) == [0, 30, 31, 90, 91]
+    assert list(out["recency_bucket"]) == ["active", "active", "at_risk", "at_risk", "lapsed"]
+
+
+def test_returns_and_a_one_day_tenure_give_blank_not_zero_or_an_error() -> None:
+    rows = [("C1", "A1", "2025-06-30", 50.0, "p"), ("C1", "A2", "2025-06-30", -50.0, "p")]
+    out = made(invoices(rows), preset="rfm_ratios")
+    c1 = out.loc["C1"]
+    assert c1.tenure_days == 0 and pd.isna(c1.dormancy_index) and pd.isna(c1.spend_per_month)
+    assert c1.return_rate == 0.5 and c1.basket_depth == 1.0
+
+
+def test_ratio_features_never_move_when_rows_after_the_as_of_date_change() -> None:
+    base = made(invoices(), preset="rfm_ratios")
+    more = invoices(
+        [*ROWS, ("C1", "A5", "2025-09-09", 12345.0, "pz"), ("C2", "B2", "2025-07-01", -7.0, "pq")]
+    )
+    pd.testing.assert_frame_equal(base, made(more, preset="rfm_ratios").loc[base.index])
+    sql = compile_features(
+        ProposeFeaturesArgs.model_validate(
+            {
+                "upload_id": "up-1",
+                "entity_key": "Customer",
+                "time_column": "InvoiceDate",
+                "preset": "rfm_ratios",
+                "amount_column": "Amount",
+                "order_column": "Invoice",
+            }
+        ),
+        "t_invoices",
+    ).sql
+    assert (
+        future_rows_moved(
+            sql, {"invoices": more}, output_name="f", as_of=AS_OF, max_chars=MAX_COMPILED_SQL_CHARS
+        )
+        or 0
+    ) == 0
+
+
+def test_the_preset_goes_through_the_tool_and_a_named_feature_needs_its_columns() -> None:
+    out = ask(preset="rfm_ratios")
+    names = {f["name"] for f in out["features"]}
+    assert {"dormancy_index", "recency_bucket", "days_since_last_order", "basket_depth"} <= names
+    with pytest.raises(DataToolError) as caught:
+        ask(features=[{"name": "bd", "agg": "basket_depth"}], order_column=None)
+    assert caught.value.code == "FEATURE_NEEDS_COLUMN"

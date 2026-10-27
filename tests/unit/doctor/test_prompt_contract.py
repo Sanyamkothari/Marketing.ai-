@@ -270,6 +270,7 @@ def _fields(model: type) -> set[str]:
 @pytest.mark.parametrize(
     ("module", "function", "model", "all_read"),
     [
+        ("agent_review", "_guide", actions.ReadGuideArgs, True),
         ("agent_review", "_sql", actions.ProposeSqlArgs, False),
         ("agent_review", "_ask", actions.AskReviewArgs, False),
         ("agent_review", "_doubt", actions.ExpressDoubtArgs, False),
@@ -289,3 +290,34 @@ def test_a_handler_reads_only_keys_the_registry_lists(
     assert read <= _fields(model), (function, read - _fields(model))
     if all_read:
         assert read == _fields(model), (function, _fields(model) - read)
+
+
+@pytest.mark.parametrize("name", SURFACES)
+def test_the_rendered_system_text_is_identical_whatever_the_turn_results_are(name: str) -> None:
+    """Prompt caching: instructions, the action contract and the guide index come first and do not move."""
+    surface = SURFACES[name]
+
+    def system(results: str, state: str) -> str:
+        values = {
+            "goal": "g",
+            "tools": [],
+            "questions": catalogue_lines(chat=surface == "chat"),
+            "state": state,
+            "conversation": "c",
+            "message": "m",
+            "turn_results": results,
+            **prompt_variables(surface),
+        }
+        done = render(load_prompt(name), values)
+        assert state in done.user and results in done.user
+        return done.system
+
+    assert system("none", "{}") == system('[{"tool": "read_guide", "text": ["x"]}]', '{"files": ["F1"]}')
+    assert "## Guides" in system("none", "{}") and "- features:" in system("none", "{}")
+
+
+@pytest.mark.parametrize("name", SURFACES)
+def test_the_prompts_offer_read_guide_and_name_the_guides_to_read(name: str) -> None:
+    text = _render(name)
+    assert '"action": "read_guide"' in text and "`read_guide`" in text
+    assert "features" in text and "time_and_as_of" in text

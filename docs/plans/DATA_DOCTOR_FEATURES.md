@@ -54,3 +54,16 @@ The agent reads `configs/doctor/guides/features.md` before proposing features, t
 `read_guide(name)` (guides live in `configs/doctor/guides/`, each loaded on demand so the system prompt stays under its
 word limit). The prompt gains one line: "Before proposing features, read_guide('features')." Later guides (joins,
 outcomes, time) and approved lessons (experience memory, AI-first design A5) use the same tool.
+
+### Built (Step 7b)
+
+* `read_guide(name, section?)` is an action of the registry (review and chat; `engine/doctor/guides.py`): the guide's
+  `## Rules` plus the section, or all of it. An unknown name or section is refused with the valid ones. A guide is
+  carried once in a turn's results (a second read of the same name and section answers "already read above") and is
+  not sent again in a later turn. Both prompts render `configs/doctor/guides/index.md` (`{{ guide_index }}`) and one
+  line telling the model to read a job's guide first. The stable parts (instructions, action contract, index) are the
+  system text; the case state and the turn's results are the user text, so the system text is identical across calls.
+* Preset `rfm_ratios` (tenure, dormancy index, return rate, spend per month, basket depth, `spend_velocity_30d`,
+  `orders_velocity_30d`, `recency_bucket` beside the raw days) and the same names as custom aggregations
+  (`agg: "dormancy_index"` ...), taking their columns from `amount_column` and `order_column`. A division by nothing is
+  blank. Buckets: 0-30 days active, 31-90 at risk, 91 and more lapsed.

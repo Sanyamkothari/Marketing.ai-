@@ -815,3 +815,64 @@ def test_the_ai_proposes_behaviour_features_and_they_are_a_pending_never_ticked_
         f["code"].startswith("FEATURE_") and f["level"] == "stop" for f in item.payload["findings"]
     )
     assert any(r.tool == "propose_features" for r in found.evidence)
+
+
+def test_read_guide_carries_the_rules_and_the_section_once_and_the_system_text_stays_the_same(
+    world: World, storage: LocalStorage
+) -> None:
+    read = {"action": "read_guide", "args": {"name": "features", "section": "Buckets and interactions"}}
+    client = Script(
+        [
+            read,
+            read,
+            {"action": "read_guide", "args": {"name": "nope"}},
+            {"action": "finish", "text": "Looked."},
+        ]
+    )
+    _review(_guard(client))(vs.open_case(storage, world), _files(world), None)
+    calls = [c for c in client.calls if c.kind == "complete"]
+    assert len(calls) == 4
+    assert len({c.system for c in calls}) == 1  # the stable part is byte-identical whatever the results are
+    last = calls[-1].prompt
+    assert last.count("Never target-encode") == 1  # the Rules, once, though the guide was asked for twice
+    assert last.count("Buckets follow the use case") == 1
+    assert "already read above" in last
+    assert "Guides:" in last and "AGENT_GUIDE_UNKNOWN" in last  # the refusal lists the valid names
+    assert "One-hot, scaling" not in last  # a section that was not asked for is not sent
+    assert (
+        "## Guides" in calls[0].system and "- features:" in calls[0].system
+    )  # the index is in the prompt, the guides are not
+    assert "Never target-encode" not in calls[0].system
+    assert "Never target-encode" not in calls[0].prompt  # not sent before it was read
+
+
+def test_a_refused_read_guide_is_not_a_strike_and_a_guide_part_is_carried_once(
+    world: World, storage: LocalStorage
+) -> None:
+    def read(section: str | None) -> dict[str, Any]:
+        args = {"name": "features", **({"section": section} if section else {})}
+        return {"action": "read_guide", "args": args}
+
+    client = Script(
+        [
+            read("nope"),
+            read("nada"),
+            {"action": "read_guide", "args": {"name": "zzz"}},
+            read("What to build"),
+            read("Receipt"),  # the Rules are already above: only the section is sent
+            read("buckets"),  # a unique start of a title is enough
+            read(None),  # the whole guide
+            read("Receipt"),  # in the whole guide already
+            {"action": "finish", "text": "Looked."},
+        ]
+    )
+    _review(_guard(client))(vs.open_case(storage, world), _files(world), None)
+    calls = [c for c in client.calls if c.kind == "complete"]
+    assert len(calls) == 9  # three refusals did not end the review
+    assert calls[4].prompt.count("Never target-encode") == 1
+    assert calls[5].prompt.count("Never target-encode") == 1 and "Fill rate per feature" in calls[5].prompt
+    assert (
+        calls[6].prompt.count("Never target-encode") == 1 and "Buckets follow the use case" in calls[6].prompt
+    )
+    assert calls[7].prompt.count("Never target-encode") == 2  # the whole guide after parts is sent whole
+    assert "already read above" in calls[8].prompt

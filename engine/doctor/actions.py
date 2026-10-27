@@ -52,7 +52,7 @@ def _sql(name: str) -> str:
 class ProposeStepArgs(_Args):
     kind: str = Field()
     column: str = Field()
-    params: dict[str, Any] = Field(default_factory=dict, description="that kind's parameters below")
+    params: dict[str, Any] = Field(default_factory=dict, description="below")
     reason: str = Field(description="cite a rule id (R4) when one asks")
     evidence_ids: list[str] = Field(default_factory=list)
     replaces: str | None = Field(
@@ -70,17 +70,17 @@ class ProposeSqlArgs(_Args):
     expect: Expectations | None = Field(default=None)
     as_of: str | None = Field(default=None, description="YYYY-MM-DD the person said")
     as_of_rule: Literal["latest_date_in_file", "last_complete_month_end"] | None = Field(
-        default=None, description="the date as a rule over `as_of_file`'s `as_of_column`"
+        default=None, description="a rule over `as_of_file`'s `as_of_column`"
     )
     as_of_file: str | None = Field(default=None)
     as_of_column: str | None = Field(default=None)
     reads_future: bool = Field(
         default=False,
-        description="outcome built from rows after `$as_of`; set `outcome_window_days`",
+        description="the outcome uses rows after `$as_of`",
     )
     outcome_window_days: int | None = Field(
         default=None,
-        description="days after `$as_of` the outcome looks; the as-of date must be at least this many days before the data ends",
+        description="days the outcome looks past `$as_of`; the data must run that far",
     )
     replaces: str | None = Field(
         default=None,
@@ -95,7 +95,7 @@ class ProposeFeaturesArgs(_Args):
 
     entity_key: str = Field()
     time_column: str = Field()
-    preset: Literal["rfm", "rfm_plus"] | None = Field(default=None)
+    preset: Literal["rfm", "rfm_plus", "rfm_ratios"] | None = Field(default=None)
     features: list[dict[str, Any]] = Field(
         default_factory=list, description="your own: name, agg, column, window_days, where"
     )
@@ -112,12 +112,19 @@ class ProposeFeaturesArgs(_Args):
     )
 
 
+class ReadGuideArgs(_Args):
+    """`read_guide` (`engine.doctor.guides`): read-only; the guide's rules, plus one section when named."""
+
+    name: str = Field()
+    section: str | None = Field(default=None)
+
+
 class AskReviewArgs(_Args):
     question: str = Field(description="a question id below")
     column: str | None = Field(default=None)
     values: dict[str, Any] = Field(default_factory=dict)
     choices: list[str] = Field(default_factory=list)
-    effects: list[str] = Field(default_factory=list, description="a short sentence per choice, no numbers")
+    effects: list[str] = Field(default_factory=list, description="one short sentence per choice, no numbers")
     evidence_ids: list[str] = Field(default_factory=list)
 
 
@@ -144,11 +151,9 @@ class ExpressDoubtArgs(_Args):
 
 
 class RequestDataArgs(_Args):
-    kind: Literal["more_data", "different_file"] = Field(
-        default="more_data", description="a column or a file"
-    )
+    kind: Literal["more_data", "different_file"] = Field(default="more_data")
     what: str = Field()
-    why: str = Field(description="why")
+    why: str = Field()
     columns: list[str] = Field(default_factory=list)
     per: str | None = Field(default=None)
     ask_whom: str | None = Field(default=None)
@@ -205,15 +210,21 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
     ActionSpec(
         "propose_sql",
         ProposeSqlArgs,
-        "when no typed change fits, one SELECT building a new table.",
+        "one SELECT building a new table.",
         _BOTH,
     ),
     ActionSpec(
         "propose_features",
         ProposeFeaturesArgs,
-        "behaviour features per customer from an order file (rows up to `$as_of`).",
+        "behaviour features per customer from orders, up to `$as_of`.",
         _BOTH,
         needs_file=True,
+    ),
+    ActionSpec(
+        "read_guide",
+        ReadGuideArgs,
+        "a guide: its rules plus the section (else all).",
+        _BOTH,
     ),
     ActionSpec("join_files", CombineArgs, "join the files on their key; code counts.", frozenset({"chat"})),
     ActionSpec(
@@ -222,7 +233,7 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
     ActionSpec(
         "ask",
         AskReviewArgs,
-        "ask the person only what the data cannot say.",
+        "ask the person.",
         _BOTH,
         surface_models=(("review", AskReviewArgs), ("chat", AskChatArgs)),
         needs_file=True,
@@ -236,14 +247,14 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
     ActionSpec(
         "express_doubt",
         ExpressDoubtArgs,
-        "say you are unsure (numbers only from cited looks).",
+        "say you are unsure.",
         _BOTH,
         needs_file=True,
     ),
     ActionSpec(
         "request_data",
         RequestDataArgs,
-        "a missing column (`more_data`) or file (`different_file`).",
+        "a missing column or file.",
         _BOTH,
         needs_file=True,
     ),
@@ -258,7 +269,7 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
     ActionSpec(
         "finish",
         FinishArgs,
-        "when every step passes: 3 to 5 plain sentences.",
+        "3 to 5 plain sentences.",
         frozenset({"review"}),
         top_level=("text",),
     ),
@@ -291,13 +302,13 @@ def _type_of(annotation: Any) -> str:
     if origin is not None and len(args) == 1 and origin is not list and origin is not dict:
         return _type_of(args[0])  # Optional[X]
     if origin is list or origin is tuple:
-        return "[" + _type_of(args[0]) + ", ...]"
+        return "[" + _type_of(args[0]) + "]"
     if origin is dict or annotation is dict:
         return "{...}"
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return (
-            "{" + ", ".join(f"{n} {_type_of(i.annotation)}" for n, i in annotation.model_fields.items()) + "}"
-        )
+            "{" + ", ".join(annotation.model_fields) + "}"
+        )  # names only: the types are in the model's checks
     if len(args) > 1:
         return "|".join(_type_of(a) for a in args)
     return "text"
@@ -357,13 +368,19 @@ def step_kind_lines(surface: str) -> list[str]:
 
 
 def prompt_variables(
-    surface: str, config: Any = None, *, callable_: Callable[[ActionSpec], bool] | None = None
+    surface: str,
+    config: Any = None,
+    *,
+    callable_: Callable[[ActionSpec], bool] | None = None,
+    config_root: Any = None,
 ) -> dict[str, Any]:
-    """The generated variables of a Doctor prompt: `actions`, `step_kinds` and `doctor_limits`."""
+    """The generated variables of a Doctor prompt: `actions`, `step_kinds`, `doctor_limits` and `guide_index`."""
+    from engine.doctor.guides import index_text
     from engine.doctor.limits import prompt_limits
 
     return {
         "actions": action_lines(surface, callable_=callable_),
         "step_kinds": step_kind_lines(surface),
         "doctor_limits": prompt_limits(config),
+        "guide_index": index_text(config_root),
     }

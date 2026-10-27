@@ -14,6 +14,7 @@ import pytest
 
 from engine.doctor.catalogue import CATALOGUE
 from engine.doctor.questions import CATALOGUE as QUESTIONS
+from engine.doctor.tools_features import NAMED
 
 GUIDES = Path(__file__).resolve().parents[3] / "configs" / "doctor" / "guides"
 MAX_WORDS = 400
@@ -24,7 +25,7 @@ TOPICS = [n for n in NAMES if n != "index"]
 
 # Words in backticks that are not tool names: arguments, columns, SQL, values, presets.
 _NOT_TOOLS = re.compile(
-    r"[^a-z_]|^(as_of|na|this|rfm|rfm_plus|t_\w*|reads_future|outcome_window_days|expect)$"
+    r"[^a-z_]|^(as_of|na|this|rfm|rfm_plus|rfm_ratios|t_\w*|reads_future|outcome_window_days|expect)$"
 )
 
 
@@ -88,6 +89,7 @@ def test_every_tool_a_guide_names_in_backticks_exists(name: str) -> None:
         "read_guide",
         "propose_features",
     }
+    known |= set(NAMED)  # the named aggregations the features guide lists
     # Action arguments are named in the prompts the model already reads (`evidence_ids`, `rows_out_equals`, ...).
     prompts = GUIDES.parents[1] / "prompts"
     known |= {
