@@ -20,7 +20,9 @@ next to it (`scripts/v2_realbench/learners.py`, numpy only, fitted on TRAIN, sco
 Rules they follow:
 
 - **TRAIN only.** Outcome models, folds, bin edges and split candidates come from train rows. `tests/v4/baselines/test_learners.py`
-  replaces every TEST row's outcome, arm and propensity with junk and checks that both policies come out identical.
+  replaces every TEST row's outcome, arm and propensity with junk and checks that both policies come out identical; a
+  second test replaces every TEST row's features with out-of-range values and checks that the bin edges, the split
+  candidates, the fitted tree and both policies on TRAIN rows are unchanged.
 - **Deterministic.** No random numbers; the folds are a BLAKE2b hash of the id.
 - **"Best simple" keeps its meaning.** It is still none / send to all / the segment rule, chosen on train, so earlier numbers
   stay comparable. The two learned rows are not candidates for it.
@@ -38,10 +40,9 @@ force over every root and child split.
 
 Measured here (these commands only):
 
-- `python -m pytest tests/v4 -q`: 13 passed (all tests of this stream, about 3 s).
-- A timing probe on synthetic data with the real sizes of the largest bench set (300,000 rows, 12 numeric features, train
-  half 150,000): `dr_learner` 2.6 s, `policy_tree` 1.2 s (60 candidate splits). It shows the cost is small next to the agent.
-  It says nothing about value.
+- `python -m pytest tests/v4 -q`: 15 passed (all tests of this stream, about 3 s).
+
+How long the two fits take on the real datasets is not measured here; the CI jobs' logs will show it.
 
 ### What to read in the CI report
 
@@ -76,7 +77,8 @@ Everything who adds to a bid, and whether it can remove all bids:
 2. **Offer cost ceiling** (`WhoBook.cost_ceiling`): applies only to options with an offer (`offer_cost > 0`). The bench's
    campaigns are plain messages, and a plain option is never stopped by it.
 3. **Slow-model scores** only write `churn_risk` / `clv_90d` into the state's scores.
-4. **The leave-alone step.** This is the only place in the whole path that does `return []`. Its test is
+4. **The leave-alone step.** This is the only who-dependent `return []` in the path (`_quote` has three others, for
+   audience, channels and no raw options, which do not depend on who). Its test is
    `clear or alone`, and `alone` includes `self.who.leave_alone(customer, stake)`.
 
 So only item 4 can produce 99.5-99.97% `no_bids`. Inside it there are two candidate causes:
@@ -97,10 +99,15 @@ So only item 4 can produce 99.5-99.97% `no_bids`. Inside it there are two candid
   true through `who.leave_alone`, which needs trait groups, which are fitted only from a harm model's records (and are
   reset when it disappears, `WhoBook.refresh`). On the bench the agent's `update_models` call (`learn_harm` is on by default) fills and fits a harm model in the
   warm start, before any decision. So the gate is a no-op either way. **Prediction: `agent_who_noprune` is identical to
-  `agent_who`** (Hillstrom 0.2847 / 1.9%, X5 70.76 / 1.5%).
+  `agent_who`** (Hillstrom 0.2847 / 1.9%, X5 70.76 / 1.5% in DIAGNOSE_RESULTS, measured at an older commit in
+  diagnose.yml). `agent_who` itself is now on realbench.yml's policy axis too, so the CI run compares the probes with an
+  `agent_who` of the same commit and the same workflow.
 
-This corrects a phrase in DIAGNOSE_RESULTS ("that step now runs for every customer, not only those with a harm record"): true
-of the gate, but the gate was never what removed the bids. `agent_who_noprune` is the control that shows it.
+If the CI run bears this out, it would correct a phrase in DIAGNOSE_RESULTS ("that step now runs for every customer, not
+only those with a harm record"): true of the gate, but the gate would not be what removed the bids. This is a prediction
+from reading the code, pending CI; `agent_who_noprune` is the control that decides it. A unit test
+(`test_the_noprune_gate_skips_the_leave_alone_step_only_without_a_harm_model`) checks the switch itself: with who on and
+no harm model, the default skips a trait-left-alone customer and `prune_without_harm=False` bids for them.
 
 ### How to read the CI outcome
 
@@ -113,13 +120,15 @@ of the gate, but the gate was never what removed the bids. `agent_who_noprune` i
 ## 3. CI
 
 Everything below runs in `.github/workflows/realbench.yml` (trigger: manual `workflow_dispatch`, or `[real]` in the head commit
-message). The `policy` axis is now `[agent, agent_v3, agent_who_notrait, agent_who_noprune]`, so the matrix is 4 datasets x 4
-policies = 16 jobs. Every job prints the two new baseline rows and the "best learned baseline" line. The summary job adds one
-table, "Which part of who collapses the bench" (DR profit per customer and contact rate for the four policies per dataset).
+message). The `policy` axis is now `[agent, agent_v3, agent_who, agent_who_notrait, agent_who_noprune]`, so the matrix is
+4 datasets x 5 policies = 20 jobs. Every job prints the two new baseline rows and the "best learned baseline" line. The
+summary job adds one table, "Which part of who collapses the bench" (DR profit per customer and contact rate for the five
+policies per dataset).
 
 Exact commands, to run one cell by hand where the data is downloaded (`$DATA_DIR`):
 
 ```
+python -m scripts.v2_realbench.run --dataset hillstrom --policy agent_who         --data-dir "$DATA_DIR" --json out-who.json
 python -m scripts.v2_realbench.run --dataset hillstrom --policy agent_who_notrait --data-dir "$DATA_DIR" --json out-notrait.json
 python -m scripts.v2_realbench.run --dataset hillstrom --policy agent_who_noprune --data-dir "$DATA_DIR" --json out-noprune.json
 python -m scripts.v2_realbench.run --dataset x5       --policy agent_who_notrait --data-dir "$DATA_DIR" --json out-notrait-x5.json
@@ -131,13 +140,13 @@ The Gym takes the same names: `python -m autonomy.gym.run --policy agent_who_not
 the probes do not change the Gym.
 
 Tests of this stream (cheap, run on every push): `python -m pytest tests/v4/baselines -q`. The existing tests that cover the
-touched code: `tests/v2/realfix/test_bench.py`, `tests/v3/diagnose`, `tests/v3/who`.
+touched code: `tests/v2/realfix/test_bench.py`, `tests/v3/diagnose`, `tests/v3/who`, `tests/v3/preset/test_wiring.py`.
 
 ## Results (pending CI)
 
-| Dataset | agent | agent_who_notrait | agent_who_noprune | DR-learner (ridge) | Policy tree (depth 2) | Agent minus best learned baseline |
-|---|---|---|---|---|---|---|
-| Hillstrom | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI |
-| X5 | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI |
-| Criteo | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI |
-| MegaFon | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI |
+| Dataset | agent | agent_who | agent_who_notrait | agent_who_noprune | DR-learner (ridge) | Policy tree (depth 2) | Agent minus best learned baseline |
+|---|---|---|---|---|---|---|---|
+| Hillstrom | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI |
+| X5 | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI |
+| Criteo | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI |
+| MegaFon | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI |

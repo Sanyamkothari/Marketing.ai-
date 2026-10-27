@@ -110,6 +110,30 @@ def test_neither_sees_test_rows_when_fitting() -> None:
     assert np.array_equal(L.dr_scores(data, train), L.dr_scores(poisoned, train))
 
 
+def test_bin_edges_and_split_candidates_come_from_train_rows() -> None:
+    """The TEST rows' features are replaced by out-of-range values: the bin edges, the split candidates,
+    the fitted tree and both policies on TRAIN rows stay the same (only TEST predictions may move)."""
+    data = _planted(n=3000)
+    train, test = _split(data)
+    feats = data.features.copy()
+    feats.iloc[test] = 1e6
+    poisoned = dataclasses.replace(data, features=feats)
+
+    def fitted(d: C.BenchData) -> C.Design:
+        return C.Design(d.numeric, d.categorical).fit(d.features.iloc[train])
+
+    clean, dirty = fitted(data), fitted(poisoned)
+    assert clean.edges.keys() == dirty.edges.keys()
+    assert all(np.array_equal(clean.edges[c], dirty.edges[c]) for c in clean.edges)
+    assert all(e.max() < 1e6 for e in clean.edges.values())
+    assert L._candidates(data, clean) == L._candidates(poisoned, dirty)
+    _, tree_clean = L.policy_tree(data, train, test)
+    _, tree_dirty = L.policy_tree(poisoned, train, test)
+    assert tree_clean == tree_dirty
+    for fit in (L.dr_learner, L.policy_tree):
+        assert np.array_equal(fit(data, train, train)[0], fit(poisoned, train, train)[0]), fit.__name__
+
+
 def test_the_report_carries_both_rows_and_a_separate_best_learned_line() -> None:
     from scripts.v2_realbench.run import render
 

@@ -5,8 +5,9 @@
 # Its own workflow, like the Gym's: it runs on a push to version-2 whose commit message contains
 # "[real]", or by hand (workflow_dispatch). Report-only: the targets are read from the uploaded
 # JSON, not enforced; the job turns red only when the bench itself crashes or a dataset errors.
-# Each dataset runs twice, on a policy axis: `agent` (the scoreboard of record) and `agent_v3` (the same agent
-# built with the plan-v3 preset, docs/v3/PRESET.md), so v3 is scored as a whole against v2 on the same split.
+# Each dataset runs on a policy axis: `agent` (the scoreboard of record) and `agent_v3` (the same agent
+# built with the plan-v3 preset, docs/v3/PRESET.md), so v3 is scored as a whole against v2 on the same split,
+# plus `agent_who` and its two probes `agent_who_notrait` / `agent_who_noprune` (docs/v4/BASELINES.md).
 # The datasets (about 1.27 GB) are downloaded from public mirrors with fixed SHA-256 checksums
 # (scripts/v2_realbench/fetch.py) and cached between runs; nothing is written into the repository.
 
@@ -36,7 +37,7 @@ jobs:
       fail-fast: false
       matrix:
         dataset: [hillstrom, x5, criteo, megafon]
-        policy: [agent, agent_v3, agent_who_notrait, agent_who_noprune]   # the last two: docs/v4/BASELINES.md
+        policy: [agent, agent_v3, agent_who, agent_who_notrait, agent_who_noprune]   # the last three: docs/v4/BASELINES.md
     env:
       DATA_DIR: ${{ github.workspace }}/.realbench-data   # inside the workspace: actions/cache rejects ".." paths
     steps:
@@ -161,7 +162,7 @@ jobs:
         run: |
           python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
           import json, pathlib
-          policies = ("agent", "agent_v3", "agent_who_notrait", "agent_who_noprune")
+          policies = ("agent", "agent_v3", "agent_who", "agent_who_notrait", "agent_who_noprune")
           cells = {}
           for p in sorted(pathlib.Path("parts").glob("*.json")):
               dataset, _, policy = p.stem.partition("-")

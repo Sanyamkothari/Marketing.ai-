@@ -42,6 +42,7 @@ from scripts.v2_realbench.adapters import DATASETS, SIZES, load
 from scripts.v2_realbench.ai_loop import AiSetup, CountingReplay
 from scripts.v2_realbench.common import (
     BENCH_VERSION,
+    LEARNED_BASELINES,
     Timings,
     add_multiplicity,
     evaluate_dataset,
@@ -86,7 +87,10 @@ def _fmt(e: Mapping[str, float] | None, digits: int = 4) -> str:
 
 
 def _digits(block: Mapping[str, Any]) -> int:
-    scale = max(abs(float(p["dr"]["point"])) for p in block["policies"].values())
+    # the learned rows are left out of the scale, so a report prints with the same decimals as before them
+    scale = max(
+        abs(float(p["dr"]["point"])) for name, p in block["policies"].items() if name not in LEARNED_BASELINES
+    )
     return 4 if scale < 10 else 2
 
 

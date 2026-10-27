@@ -8,7 +8,8 @@
 # Its own workflow, like the Gym's and the bench's, so a later push never cancels a long run. It runs on a push to
 # claude/** whose head commit message contains "[diagnose]", or by hand (workflow_dispatch). Report-only: a red job
 # means the run crashed, not that a variant lost. The policy list must match autonomy/runtime/ablation.py (a test
-# checks it); the bench's data cache is the one realbench.yml fills (same key, same folder).
+# checks it), except the who_probe family, which runs in realbench.yml instead (docs/v4/BASELINES.md); the bench's
+# data cache is the one realbench.yml fills (same key, same folder).
 
 name: diagnose
 
