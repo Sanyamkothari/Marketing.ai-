@@ -38,7 +38,7 @@ jobs:
         # agent and agent_v3 are the two things every variant is read against; then the v3 leave-one-out,
         # the new parts alone (agent_lookalike, agent_who and agent_frequency were already in the Gym), and one
         # v2 guard relaxed at a time (agent_no_guards: all four together)
-        policy: [agent, agent_v3, v3_no_lookalike, v3_no_who, v3_no_frequency, v3_no_moments, v3_no_journeys, v3_no_offers, agent_lookalike, agent_who, agent_frequency, agent_moments, agent_journeys, agent_offers, agent_no_restraint, agent_no_weekly_budget, agent_no_explore, agent_no_attention_price, agent_loose_caps, agent_no_guards]
+        policy: [agent, agent_v3, v3_no_lookalike, v3_no_who, v3_no_frequency, v3_no_moments, v3_no_journeys, v3_no_offers, agent_lookalike, agent_who, agent_frequency, agent_moments, agent_journeys, agent_offers, agent_no_restraint, agent_no_weekly_budget, agent_no_explore, agent_no_attention_price, agent_loose_caps, agent_no_guards, agent_greedy, agent_uplift_only]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -74,7 +74,7 @@ jobs:
       fail-fast: false
       matrix:
         dataset: [hillstrom, x5]
-        policy: [agent, agent_v3, v3_no_lookalike, v3_no_who, v3_no_frequency, v3_no_moments, v3_no_journeys, v3_no_offers, agent_lookalike, agent_who, agent_frequency, agent_moments, agent_journeys, agent_offers, agent_no_restraint, agent_no_weekly_budget, agent_no_explore, agent_no_attention_price, agent_loose_caps, agent_no_guards]
+        policy: [agent, agent_v3, v3_no_lookalike, v3_no_who, v3_no_frequency, v3_no_moments, v3_no_journeys, v3_no_offers, agent_lookalike, agent_who, agent_frequency, agent_moments, agent_journeys, agent_offers, agent_no_restraint, agent_no_weekly_budget, agent_no_explore, agent_no_attention_price, agent_loose_caps, agent_no_guards, agent_greedy, agent_uplift_only]
     env:
       DATA_DIR: ${{ github.workspace }}/.realbench-data   # inside the workspace: actions/cache rejects ".." paths
     steps:

@@ -49,6 +49,8 @@ def test_the_plain_agent_variant_is_the_default_build() -> None:
         "restraint": True,
         "weekly_budget": True,
         "exploration_floor": None,
+        "greedy": False,
+        "click_model": True,
         "attention_price": True,
         "weekly_cap": default_brief().envelope.max_contacts_per_week,
     }
@@ -102,6 +104,13 @@ def test_part_alone_turns_on_that_part_and_nothing_else(name: str, on: set[str])
 )
 def test_a_guard_variant_relaxes_only_its_guard(name: str, changed: dict[str, object]) -> None:
     assert _diff(name) == changed
+
+
+def test_the_method_variants_change_only_their_switch() -> None:
+    """docs/v4/METHOD.md: greedy has no floor and no Thompson draw; uplift-only prices from the score alone."""
+    assert _diff("agent_greedy") == {"exploration_floor": 0.0, "greedy": True}
+    assert _diff("agent_uplift_only") == {"click_model": False}
+    assert _build("agent_greedy").policy.greedy is True and _build("agent").policy.greedy is False
 
 
 def test_loose_caps_raises_the_cap_and_what_the_agent_sizes_by_it() -> None:

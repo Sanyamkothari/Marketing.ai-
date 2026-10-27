@@ -10,7 +10,11 @@ one thing does. Three families:
   agent but the preset loses, the harm is in how they combine;
 * **guards** (`agent_no_<guard>`, `agent_loose_caps`): the plain agent with one v2 guard relaxed. If the
   agent gains when a guard goes, that guard is holding back money. Hard safety rules (consent, quiet hours,
-  unsubscribes, holdout) are never relaxed by any variant.
+  unsubscribes, holdout) are never relaxed by any variant;
+* **method** (`agent_greedy`, `agent_uplift_only`, docs/v4/METHOD.md): the plain agent with its exploration
+  taken out, or with its click model taken out of the price. If `agent_greedy` gains on a real campaign,
+  exploration cost the plain agent money; if `agent_uplift_only` ties the plain agent, the click model adds
+  nothing there.
 
 The variants only choose which switches `build_agent_policy` is called with. Nothing here changes what the
 plain build does. `agent` and `agent_v3` are in the registry too, so callers can resolve every name in one
@@ -26,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from autonomy.contracts import Brief, ContentItem
 from autonomy.runtime.v3 import DEFAULT_OFFER_PRICING, V3Preset
+from autonomy.uplift.score import score_only, set_score_only
 
 if TYPE_CHECKING:
     from autonomy.runtime.agent import AgentPolicy
@@ -52,6 +57,7 @@ LEAVE_ONE_OUT = "leave_one_out"
 PART_ALONE = "part_alone"
 GUARD = "guard"
 REFERENCE = "reference"
+METHOD = "method"
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,8 @@ class Variant:
     """The hypothesis this variant tests, in a sentence."""
     kwargs: Callable[[], dict[str, Any]]
     """The keyword arguments for `build_agent_policy`, built on call so a variant imports its piece lazily."""
+    after: Callable[[AgentPolicy], None] | None = None
+    """Run on the built policy (a switch that is not a `build_agent_policy` argument)."""
     cap_factor: int = 1
     """What the brief's weekly contact cap is multiplied by (1: the brief as it is). The cap is not only the
     hard rule: the agent sizes its weekly-budget rhythms and the attention price's lost-value horizon by it
@@ -78,6 +86,14 @@ def _moments_book() -> dict[str, Any]:
     from autonomy.decide.moments import MomentBook
 
     return {"moments": MomentBook.load()}
+
+
+def _make_greedy(policy: AgentPolicy) -> None:
+    policy.policy.greedy = True
+
+
+def _detach_click_model(policy: AgentPolicy) -> None:
+    set_score_only(policy.bundle.response, True)
 
 
 def _variants() -> dict[str, Variant]:
@@ -201,6 +217,23 @@ def _variants() -> dict[str, Variant]:
                 "attention_price": False,
             },
         ),
+        # method: the plain agent, decided differently (docs/v4/METHOD.md)
+        Variant(
+            "agent_greedy",
+            METHOD,
+            "does exploring cost money on a one-shot test: a floor of 0 and, at scoring time, the best net "
+            "after price instead of a Thompson draw",
+            lambda: {"exploration_floor": 0.0},
+            after=_make_greedy,
+        ),
+        Variant(
+            "agent_uplift_only",
+            METHOD,
+            "does the click model add anything once an uplift score exists: the bidders price every scored "
+            "option from the uplift score alone, the click model detached",
+            dict,
+            after=_detach_click_model,
+        ),
     ]
     return {x.name: x for x in v}
 
@@ -253,7 +286,10 @@ def build_variant(
     clash = sorted(set(extra) & set(set_here))
     if clash:
         raise ValueError(f"variant {name!r} sets {', '.join(clash)} itself")
-    return build_agent_policy(list(briefs), list(content), **set_here, **extra)
+    policy = build_agent_policy(list(briefs), list(content), **set_here, **extra)
+    if variant.after is not None:
+        variant.after(policy)
+    return policy
 
 
 def uses_who(name: str) -> bool:
@@ -268,9 +304,10 @@ def uses_who(name: str) -> bool:
 def switches(policy: AgentPolicy) -> dict[str, object]:
     """The built policy's flags, one per switch a variant moves, read back from the policy itself.
 
-    `weekly_cap` is the cap the agent read from its briefs (`ContactPrice.cap`): it sizes the weekly-budget
-    rhythms and the attention price's horizon as well as the hard rule, which checks the run's briefs;
-    `variant_briefs` is what raises it."""
+    `greedy` is the final choice taking the best net with no Thompson draw; `click_model` is False when the
+    bidders price from the uplift score alone. `weekly_cap` is the cap the agent read from its briefs
+    (`ContactPrice.cap`): it sizes the weekly-budget rhythms and the attention price's horizon as well as the
+    hard rule, which checks the run's briefs; `variant_briefs` is what raises it."""
     inner = policy.policy
     moments = policy.moments
     return {
@@ -284,6 +321,8 @@ def switches(policy: AgentPolicy) -> dict[str, object]:
         "restraint": policy.restraint,
         "weekly_budget": inner.budget_fn is not None,
         "exploration_floor": inner.exploration_floor,
+        "greedy": inner.greedy,
+        "click_model": not score_only(policy.bundle.response),
         "attention_price": inner.attention_price_fn is not None and inner.channel_price_fn is not None,
         "weekly_cap": policy.contact_price.cap(),
     }
