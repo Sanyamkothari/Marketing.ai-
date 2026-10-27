@@ -11,18 +11,30 @@ offer-spend tracking and the proof's rewards all read purchases through this tab
 A token on a purchase is resolved in this order: the agent's own offer id (the Gym and any
 connector that already reports it), an exact code, then the longest matching prefix. Codes and
 prefixes ignore case, as Shopify's do. A token that matches no offer is an *unattributed discount*:
-callers count it (`UnattributedDiscount`), they never drop it silently.
+callers count it (`UnattributedDiscount`), they never drop it silently. That holds for every token of
+an order, also when another code of the same order is known (`unknown_tokens`).
+
+An envelope refuses codes that could be read two ways (`autonomy.contracts.goals.Envelope`): one code
+or prefix on two offers, or a code that is another offer's id. A short prefix still takes every shop
+code that starts with it (`W` takes `WELCOME15`); the exact codes of the offers are read first.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 
-from autonomy.contracts.events import AttrValue
+from autonomy.contracts.events import AttrValue, Event
 from autonomy.contracts.goals import NO_OFFER, OfferOption
 
-__all__ = ["OfferCodeTable", "UnattributedBook", "UnattributedDiscount", "redemption_tokens"]
+__all__ = [
+    "OfferCodeTable",
+    "UnattributedBook",
+    "UnattributedDiscount",
+    "redemption_tokens",
+    "unknown_tokens",
+]
 
 
 def redemption_tokens(attrs: Mapping[str, AttrValue]) -> tuple[str, ...]:
@@ -90,12 +102,23 @@ class OfferCodeTable:
         return tuple(t for t in redemption_tokens(attrs) if self.offer_for(t) is None)
 
 
+def unknown_tokens(attrs: Mapping[str, AttrValue], tables: Iterable[OfferCodeTable]) -> tuple[str, ...]:
+    """The tokens of a purchase that no table names: its unattributed discount codes.
+
+    Every token is checked, so an order that used a known code and an unknown one still reports the
+    unknown one."""
+    found = tuple(tables)
+    return tuple(t for t in redemption_tokens(attrs) if all(table.offer_for(t) is None for table in found))
+
+
 @dataclass(frozen=True)
 class UnattributedDiscount:
     """Discount money taken by orders whose code matches none of the agent's offers.
 
-    `code` is the code as the shop reported it (the first one seen, in its own case); `discount` is
-    the sum of the orders' `attrs["discounts"]` where the shop reported it."""
+    `code` is the code as the shop reported it (the first one seen, in its own case). `discount` is
+    the orders' `attrs["discounts"]` where the shop reported it. The shop reports one total per order,
+    so an order with several codes gives each of its codes an equal share of that total (an order with
+    COMEBACK10 and FRIEND20 and 12.00 off counts 6.00 for FRIEND20)."""
 
     code: str
     orders: int
@@ -103,24 +126,38 @@ class UnattributedDiscount:
 
 
 class UnattributedBook:
-    """A running count of the unattributed discounts a reader has seen, one row per code (any case)."""
+    """The unattributed discounts a reader has seen: one entry per order and code, one row per code
+    (any case). Adding the same order twice counts it once."""
 
     def __init__(self) -> None:
-        self._rows: dict[str, tuple[str, int, float]] = {}
+        self._entries: dict[tuple[str, str], tuple[datetime, str, float]] = {}
 
-    def add(self, code: str, attrs: Mapping[str, AttrValue]) -> None:
-        """Count one order that used `code`, with the money the shop says it took off (`discounts`)."""
-        money = attrs.get("discounts")
+    def add(self, order: Event, unknown: Iterable[str]) -> None:
+        """Count `order` for each of its `unknown` codes, with its equal share of the money the shop
+        says it took off (`discounts`)."""
+        tokens = redemption_tokens(order.attrs)
+        if not tokens:
+            return
+        money = order.attrs.get("discounts")
         taken = float(money) if isinstance(money, int | float) and not isinstance(money, bool) else 0.0
-        first, orders, total = self._rows.get(code.casefold(), (code, 0, 0.0))
-        self._rows[code.casefold()] = (first, orders + 1, total + max(taken, 0.0))
+        share = max(taken, 0.0) / len(tokens)
+        for code in unknown:
+            self._entries.setdefault((order.event_id, code.casefold()), (order.ts, code, share))
 
     def rows(self) -> list[UnattributedDiscount]:
         """Most orders first, then by code."""
+        by_code: dict[str, tuple[str, int, float]] = {}
+        for (_, folded), (_, code, share) in self._entries.items():
+            first, orders, total = by_code.get(folded, (code, 0, 0.0))
+            by_code[folded] = (first, orders + 1, total + share)
         found = [
-            UnattributedDiscount(code, orders, round(total, 2)) for code, orders, total in self._rows.values()
+            UnattributedDiscount(code, orders, round(total, 2)) for code, orders, total in by_code.values()
         ]
         return sorted(found, key=lambda r: (-r.orders, r.code.casefold()))
 
+    def prune(self, before: datetime) -> None:
+        """Forget the orders placed before `before`, so the book covers a window, not all time."""
+        self._entries = {k: v for k, v in self._entries.items() if v[0] >= before}
+
     def clear(self) -> None:
-        self._rows.clear()
+        self._entries.clear()

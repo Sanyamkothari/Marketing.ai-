@@ -135,6 +135,11 @@ class OfferOption(Contract):
         cleaned = tuple(dict.fromkeys(c.strip() for c in value))
         if any(not c for c in cleaned):
             raise ValueError("a discount code or prefix cannot be empty")
+        # The connector comma-joins an order's codes and "none" means no offer, so neither could match.
+        if any("," in c for c in cleaned):
+            raise ValueError("a discount code or prefix cannot contain a comma")
+        if any(c.casefold() == "none" for c in cleaned):
+            raise ValueError("'none' is not a discount code: it means no offer")
         return cleaned
 
     @model_validator(mode="after")
@@ -207,7 +212,34 @@ class Envelope(Contract):
             raise ValueError("an envelope needs at least one channel")
         if self.holdout_share + self.baseline_share >= 1:
             raise ValueError("holdout + baseline must leave room for the agent")
+        clash = _code_clash(self.offers)
+        if clash is not None:
+            raise ValueError(clash)
         return self
+
+
+def _code_clash(offers: tuple[OfferOption, ...]) -> str | None:
+    """Why the offers' discount codes cannot be read one way, or None when they can.
+
+    A code (any case) or a prefix named by two offers, or a code that is another offer's id, would
+    send a redemption to whichever offer the code table read first (`autonomy.contracts.offer_codes`)."""
+    ids = {o.offer_id.casefold(): o.offer_id for o in offers}
+    codes: dict[str, str] = {}
+    prefixes: dict[str, str] = {}
+    for o in offers:
+        for code in o.codes:
+            folded = code.casefold()
+            owner = codes.setdefault(folded, o.offer_id)
+            if owner != o.offer_id:
+                return f"discount code {code!r} is named by offers {owner!r} and {o.offer_id!r}"
+            other = ids.get(folded)
+            if other is not None and other != o.offer_id:
+                return f"discount code {code!r} of offer {o.offer_id!r} is the id of offer {other!r}"
+        for prefix in o.code_prefixes:
+            owner = prefixes.setdefault(prefix.casefold(), o.offer_id)
+            if owner != o.offer_id:
+                return f"discount code prefix {prefix!r} is named by offers {owner!r} and {o.offer_id!r}"
+    return None
 
 
 FilterOp = Literal[

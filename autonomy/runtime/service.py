@@ -102,6 +102,7 @@ from __future__ import annotations
 import contextlib
 import itertools
 import json
+import logging
 import math
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -155,6 +156,7 @@ from autonomy.contracts.offer_codes import (
     UnattributedBook,
     UnattributedDiscount,
     redemption_tokens,
+    unknown_tokens,
 )
 from autonomy.data.rebuild import apply_events, rebuild_states
 from autonomy.decide.audience import matches
@@ -252,6 +254,8 @@ on. Runs right before deciding; the result is matched back by customer id, and a
 out is decided on its plain state."""
 
 Severity = Literal["info", "warning", "critical"]
+
+_log = logging.getLogger(__name__)
 
 DATA_HOLD_PREFIX = "data_not_fresh: "
 """The reason a queued send is held while the business's connected data cannot be trusted."""
@@ -675,7 +679,8 @@ class SpendLedger:
     latest qualifying send is charged (last touch), and each decision pays its offer at most once.
     A typed code is mapped to the offer through the offers' `codes` / `code_prefixes`
     (`autonomy.contracts.offer_codes`); a code that no offer of any brief names is listed by
-    `unattributed()`, never dropped.
+    `unattributed()`, never dropped, also when the same order used a known code too. For that list the
+    ledger keeps every purchase that carried a discount (by event id) for as long as it lives.
 
     The runtime feeds it every event it folds (`observe`) and rebuilds it with state, so it is
     always derived from the log: idempotent by event id, and nothing to persist. Use it as a
@@ -701,6 +706,7 @@ class SpendLedger:
         self._paid: set[str] = set()
         self._briefs: dict[str, Brief] | None = None
         self._tables: dict[str, OfferCodeTable] = {}
+        self._discounted: dict[str, Event] = {}
 
     def reset(self) -> None:
         """Forget everything; the caller replays the log next (the runtime's full rebuild)."""
@@ -711,6 +717,7 @@ class SpendLedger:
         self._paid.clear()
         self._briefs = None
         self._tables = {}
+        self._discounted = {}
 
     def refresh(self) -> None:
         """Read the briefs again (outcome windows, offer prices and codes) the next time they are needed."""
@@ -729,6 +736,7 @@ class SpendLedger:
         self._paid = other._paid
         self._briefs = other._briefs
         self._tables = other._tables
+        self._discounted = other._discounted
 
     def observe(self, events: Iterable[Event]) -> None:
         for e in events:
@@ -749,14 +757,12 @@ class SpendLedger:
 
     def unattributed(self) -> list[UnattributedDiscount]:
         """Discount codes on purchases that no offer of any brief names, with the orders and the money
-        the shop reported. Purchases still waiting for their send count too (nothing is dropped)."""
+        the shop reported (`UnattributedDiscount`). Every code of every discounted purchase is checked,
+        charged or not, so an unknown code next to a known one is listed too (nothing is dropped)."""
         book = UnattributedBook()
         tables = [self._table(goal_id) for goal_id in self._all_goals()]
-        for waiting in self._unmatched.values():
-            for p in waiting:
-                tokens = redemption_tokens(p.attrs)
-                if tokens and not any(t.offer_for(tok) for t in tables for tok in tokens):
-                    book.add(tokens[0], p.attrs)
+        for p in self._discounted.values():
+            book.add(p, unknown_tokens(p.attrs, tables))
         return book.rows()
 
     # --- internals ---
@@ -796,6 +802,7 @@ class SpendLedger:
         if not redemption_tokens(e.attrs) or e.event_id in self._seen:
             return
         self._seen.add(e.event_id)
+        self._discounted[e.event_id] = e
         if not self._match(e):
             # Its send may still arrive (a late event); it is matched then.
             self._unmatched[e.customer_id].append(e)
@@ -2764,6 +2771,20 @@ class AutonomyRuntime:
         running = self._running(now, report)
         self._learn(running, now, self.config.nightly_lookback, report, code="nightly.error")
         self._negative_lift(running, now, report)
+        self._warn_unattributed()
+
+    def _warn_unattributed(self) -> None:
+        """Log the discount codes no offer names (foundation fix 5, docs/v3/OFFER_CODES.md): their
+        redemptions are charged to no goal's budget until an offer names the code."""
+        if self.spend_ledger is None:
+            return
+        rows = self.spend_ledger.unattributed()
+        if rows:
+            shown = ", ".join(f"{r.code} ({r.orders} orders, {r.discount:.2f} off)" for r in rows[:10])
+            more = f" and {len(rows) - 10} more" if len(rows) > 10 else ""
+            _log.warning(
+                "unattributed discount codes, charged to no budget (no offer names them): %s%s", shown, more
+            )
 
     def _profiles(self, now: datetime, report: TickReport) -> None:
         """The nightly profile: every state's `features`, as of `now`, built in batches

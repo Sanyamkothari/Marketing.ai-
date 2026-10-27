@@ -206,6 +206,14 @@ class AcceptRequest(Contract):
         default=True, description="A one-person shop: the documented single-owner path"
     )
     offers: bool = Field(default=False, description="Allow offers up to the shop's usual discount depth")
+    # Foundation fix 5 (docs/v3/OFFER_CODES.md): the shop's code(s) for that offer, so its redemptions
+    # are charged to the budget. Left out, they are listed as unattributed discounts instead.
+    offer_codes: tuple[str, ...] = Field(
+        default=(), description="With offers: the shop's discount code(s) for the offer, e.g. WELCOME10"
+    )
+    offer_code_prefixes: tuple[str, ...] = Field(
+        default=(), description="With offers: prefixes of the per-customer unique codes for the offer"
+    )
     autonomy: AutonomyLevel = AutonomyLevel.SHADOW
 
 
@@ -367,7 +375,16 @@ def accept(body: AcceptRequest, request: Request, services: ServicesDep, desk: D
         terms = learned.terms
         offers: tuple[OfferOption, ...] = ()
         if terms.offers_on and terms.max_offer_pct is not None:
-            offers = (offer_for(terms.max_offer_pct, history.mean_order_value() or 0.0),)
+            try:
+                offer = offer_for(
+                    terms.max_offer_pct,
+                    history.mean_order_value() or 0.0,
+                    codes=body.offer_codes,
+                    code_prefixes=body.offer_code_prefixes,
+                )
+            except ValueError as exc:  # a code the checkout could never report (empty, a comma, "none")
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            offers = (offer,)
         try:
             goal, brief = services.create_goal(
                 proposal.goal_text, terms.budget_ceiling, terms.currency, proposal.kind
