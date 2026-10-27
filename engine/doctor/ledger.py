@@ -204,7 +204,8 @@ def findings_of(
     # a count of every row supersedes what a trial saw, except the stops it does not measure again
     only = None if counted is None or counted.basis is None else _TRIAL_ONLY
     out.extend(_from_trials(items, said, told, only=only))
-    for doubt in case.doubts[-_DOUBTS_KEPT:]:
+    # a doubt the reconcile store resolved or superseded (`CaseDoubt.status`) is no longer the person's to clear
+    for doubt in [d for d in case.doubts if d.status == "open"][-_DOUBTS_KEPT:]:
         key = _key("DOUBT", doubt.doubt_id)
         out.append(
             Finding(
