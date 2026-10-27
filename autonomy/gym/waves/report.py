@@ -88,6 +88,13 @@ def summarize(rows: Rows, per_customer: PerCustomer | None = None) -> dict[str, 
                 "share_contacted": _mean([float(r["share_contacted"]) for r in rs]),
                 "unsubscribe_rate": _mean([float(r["unsubscribe_rate"]) for r in rs]),
                 "measured": _mean([float(r["measured"]) for r in rs]),
+                "measured_halfwidth": _mean(
+                    [
+                        (float(r["measured_high"]) - float(r["measured_low"])) / 2
+                        for r in rs
+                        if "measured_high" in r
+                    ]
+                ),
                 "measured_over_true": (
                     _mean([float(r["measured"]) for r in rs]) / means[policy]
                     if abs(means[policy]) > 1e-9
@@ -159,16 +166,17 @@ def render_markdown(summary: Mapping[str, Mapping[str, Any]]) -> str:
         lines.append("")
         lines.append(
             "| Policy | True value | Share of oracle | vs agent (95%) | vs best simple (95%) | "
-            "Contacts / cust-wk | Unsub | Measured at day 84 |"
+            "Contacts / cust-wk | Unsub | Measured at day 84 (± 95% half-width) |"
         )
         lines.append("|---|---:|---:|---|---|---:|---:|---:|")
         for e in block["policies"]:
             share = "-" if e["oracle_share"] is None else f"{e['oracle_share']:.0%}"
-            ratio = "" if e["measured_over_true"] is None else f" ({e['measured_over_true']:.1f}x true)"
+            half = e["measured_halfwidth"]
+            band = "" if math.isnan(half) else f" ± {half:,.0f}"
             lines.append(
                 f"| {e['policy']} | {_rub(e['true_value'])} | {share} | {_diff(e['vs_agent'])} | "
                 f"{_diff(e['vs_best_simple'])} | {e['contacts_per_customer_week']:.2f} | "
-                f"{e['unsubscribe_rate']:.1%} | {_rub(e['measured'])}{ratio} |"
+                f"{e['unsubscribe_rate']:.1%} | {_rub(e['measured'])}{band} |"
             )
         lines.append("")
     return "\n".join(lines)

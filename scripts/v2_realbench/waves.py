@@ -71,14 +71,24 @@ def describe(data: WavesData, source: str) -> dict[str, Any]:
 
 
 def run_all(
-    data: WavesData, worlds: Sequence[str], policies: Sequence[str], seeds: Sequence[int], days: int
+    data: WavesData,
+    worlds: Sequence[str],
+    policies: Sequence[str],
+    seeds: Sequence[int],
+    days: int,
+    lift: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, np.ndarray[Any, np.dtype[np.float64]]]]:
     rows: list[dict[str, Any]] = []
     arrays: dict[str, np.ndarray[Any, np.dtype[np.float64]]] = {}
     for w in worlds:
         for p in policies:
             for s in seeds:
-                result = run_one(data, get_world(w), p, s, days=days)
+                spec = (
+                    get_world(w)
+                    if lift is None or w == "null"
+                    else get_world(w).with_overrides(mean_lift=lift)
+                )
+                result = run_one(data, spec, p, s, days=days)
                 rows.append(result.row)
                 arrays[f"{w}|{p}|{s}"] = result.by_customer.astype(np.float32).astype(np.float64)
                 r = result.row
@@ -124,6 +134,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         help=f"default {DEFAULT_CUSTOMERS} ({FIXTURE_CUSTOMERS} with --fixture)",
     )
     ap.add_argument("--days", type=int, default=HORIZON_DAYS)
+    ap.add_argument(
+        "--lift", type=float, default=None, help="override the worlds' average relative lift (a power check)"
+    )
     ap.add_argument("--data-dir", type=Path, default=None)
     ap.add_argument("--fixture", action="store_true", help="a tiny synthetic table; no download")
     ap.add_argument("--json", type=Path, default=None, metavar="PATH")
@@ -167,7 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     info = describe(data, source)
     print("data:", json.dumps(info), flush=True)
     seeds = list(range(args.first_seed, args.first_seed + args.seeds))
-    rows, arrays = run_all(data, worlds, policies, seeds, args.days)
+    rows, arrays = run_all(data, worlds, policies, seeds, args.days, args.lift)
     report: dict[str, Any] = {
         "benchmark": "waves",
         "command": "python -m scripts.v2_realbench.waves " + " ".join(sys.argv[1:] if argv is None else argv),

@@ -108,3 +108,20 @@ def test_the_command_refuses_unknown_names(capsys: Any) -> None:
         cli.main(["--fixture", "--policy", "no_such_policy"])
     assert cli.main(["--list"]) == 0
     assert "heterogeneous" in capsys.readouterr().out
+
+
+def test_the_x5_loader_reads_the_files_the_bench_downloads(tmp_path: Path, tables: Any) -> None:
+    """The same loader CI uses, on files of X5's layout written from the fixture (no download)."""
+    from scripts.v2_realbench.common import Timings
+
+    receipts, clients, _cutoff = tables
+    root = tmp_path / "x5_retailhero"
+    root.mkdir()
+    lines = receipts.assign(regular_points_spent=0.0, express_points_spent=0.0)
+    lines.to_csv(root / "purchases.csv.gz", index=False)
+    clients.assign(first_redeem_date=None).to_csv(root / "clients.csv.gz", index=False)
+    data = cli.load_x5(tmp_path, 120, Timings(quiet=True))
+    assert data.n == 120 and len(data.post_idx) > 0
+    assert data.start.date().isoformat() == "2018-12-25"
+    assert float(data.features["n_receipts"].sum()) == len(data.hist_idx)
+    assert cli.load_x5(tmp_path, 120, Timings(quiet=True)).customer_ids == data.customer_ids

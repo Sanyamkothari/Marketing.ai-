@@ -1,0 +1,185 @@
+# The repeated-campaign benchmark (docs/v4/WAVES.md, ROOT_CAUSE.md test T5): real X5 RetailHero customers and
+# receipts, a hidden synthetic message effect that is not shaped like the agent's model, 12 weeks of daily
+# decisions through the Gym's own loop. agent, agent_greedy, agent_uplift_only, the simple rules, the oracle and
+# uplift_waves run in five worlds (null, homogeneous_small, heterogeneous, sleeping_dogs, fatigue_heavy).
+#
+# Its own workflow, like the Gym's and the real bench's: it runs on a push to version-2 or claude/** whose commit
+# message contains "[waves]", or by hand (workflow_dispatch). Report-only: the job turns red only when the
+# benchmark itself crashes. One table per world lands in the run's step summary.
+#
+# Sizing (measured on the 4-CPU dev box with the synthetic fixture, see docs/v4/WAVES.md "How the CI job is sized"):
+# the plain agent is the slow policy, about 1 ms per customer-day, so 3 seeds of 84 days must fit in 60 minutes.
+# CUSTOMERS below is what that allows, not the 30,000 of the spec; raise it by hand (workflow_dispatch input) for a
+# bigger run on a bigger machine.
+#
+# X5 is downloaded and cached exactly as realbench.yml does it (scripts/v2_realbench/fetch.py, fixed SHA-256),
+# once in a `data` job, so the matrix only restores caches. The receipts table the bench derives from the 670 MB
+# purchase file is cached too (it takes minutes to build).
+
+name: waves
+
+on:
+  push:
+    branches: ["version-2", "claude/**"]
+  workflow_dispatch:
+    inputs:
+      customers:
+        description: "Customers per run (default: the size the 60-minute limit allows)"
+        required: false
+        default: ""
+
+concurrency:
+  group: waves-${{ github.ref }}-${{ github.sha }}   # one group per commit: a later push never cancels a long run
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DATA_DIR: ${{ github.workspace }}/.realbench-data   # inside the workspace: actions/cache rejects ".." paths
+  DEFAULT_CUSTOMERS: "10000"
+
+jobs:
+  data:
+    name: X5 data and receipts cache
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[waves]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: .github/workflows/waves.yml
+      - name: Install the light deps
+        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54" "pyyaml==6.0.3"
+      - name: Cache the dataset (shared with realbench.yml)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.DATA_DIR }}/hillstrom
+            ${{ env.DATA_DIR }}/x5_retailhero
+            ${{ env.DATA_DIR }}/criteo_uplift
+            ${{ env.DATA_DIR }}/megafon
+          key: realbench-data-x5-${{ hashFiles('scripts/v2_realbench/fetch.py') }}
+      - name: Download (checksummed)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            python -m scripts.v2_realbench.fetch --data-dir "$DATA_DIR" --dataset x5 && break
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep $((attempt * 20))
+          done
+      - name: Cache the derived receipts table
+        id: receipts
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.DATA_DIR }}/_cache
+          key: waves-receipts-${{ hashFiles('scripts/v2_realbench/fetch.py', 'scripts/v2_realbench/adapters.py') }}
+      - name: Build the receipts table (once)
+        if: steps.receipts.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from scripts.v2_realbench.adapters import x5_receipts
+          from scripts.v2_realbench.common import Timings
+          rec = x5_receipts(Path(os.environ["DATA_DIR"]), Timings())
+          print(len(rec), "receipts", rec["transaction_datetime"].min(), rec["transaction_datetime"].max())
+          PY
+
+  waves:
+    name: waves ${{ matrix.world }} ${{ matrix.policy }}
+    needs: data
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        world: [null, homogeneous_small, heterogeneous, sleeping_dogs, fatigue_heavy]
+        policy: [send_none, send_all_sms, send_all_email, weekly_sms, best_fixed, oracle, uplift_waves, agent, agent_greedy, agent_uplift_only]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: .github/workflows/waves.yml
+      - name: Install the light deps
+        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54" "pyyaml==6.0.3"
+      - name: Cache the dataset (shared with realbench.yml)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.DATA_DIR }}/hillstrom
+            ${{ env.DATA_DIR }}/x5_retailhero
+            ${{ env.DATA_DIR }}/criteo_uplift
+            ${{ env.DATA_DIR }}/megafon
+          key: realbench-data-x5-${{ hashFiles('scripts/v2_realbench/fetch.py') }}
+      - name: Cache the derived receipts table
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.DATA_DIR }}/_cache
+          key: waves-receipts-${{ hashFiles('scripts/v2_realbench/fetch.py', 'scripts/v2_realbench/adapters.py') }}
+      - name: Download (checksummed; a no-op when the cache restored it)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            python -m scripts.v2_realbench.fetch --data-dir "$DATA_DIR" --dataset x5 && break
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep $((attempt * 20))
+          done
+      - name: Waves benchmark
+        shell: bash   # bash -eo pipefail: a crash under tee must turn the job red
+        env:
+          INPUT_CUSTOMERS: ${{ github.event.inputs.customers }}
+        run: |
+          CUSTOMERS="${INPUT_CUSTOMERS:-$DEFAULT_CUSTOMERS}"
+          mkdir -p waves-report
+          python -m scripts.v2_realbench.waves --world ${{ matrix.world }} --policy ${{ matrix.policy }} \
+            --seeds 3 --customers "$CUSTOMERS" --data-dir "$DATA_DIR" \
+            --json waves-report/${{ matrix.world }}-${{ matrix.policy }}.json \
+            | tee waves-report/${{ matrix.world }}-${{ matrix.policy }}.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: waves-${{ matrix.world }}-${{ matrix.policy }}
+          path: waves-report/
+          if-no-files-found: ignore
+
+  summary:
+    name: waves summary
+    needs: waves
+    if: always() && needs.waves.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install the light deps
+        run: pip install "pydantic==2.13.5" "numpy==2.4.6" "pandas==2.3.3" "sqlalchemy==2.0.54" "pyyaml==6.0.3"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: waves-*
+          path: parts
+          merge-multiple: true
+      - name: One table per world
+        shell: bash
+        run: |
+          {
+            echo "## Waves benchmark (docs/v4/WAVES.md)"
+            echo
+            echo "True value is RUB per run over 84 days plus the 30-day tail, mean of 3 seeds; paired differences use the same customers and the same luck in every policy."
+            echo
+            python -m scripts.v2_realbench.waves --summarize parts
+          } | tee waves-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: waves-report
+          path: |
+            waves-summary.md
+            parts/
