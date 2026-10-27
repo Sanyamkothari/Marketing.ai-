@@ -9,7 +9,7 @@
 // or a sentence saying it is not known. The only numbers not about this business are the product test in
 // "How we tested this", which is labelled as a fact about Autonomy, with its source.
 
-import { button, card, clear, dash, el, emptyState, errorBox, goalStatusWords, hour, humanize, info, int, kpiStrip, money, notice, pageHead, pct, pill, present, segmented, skeletonKpis, skeletonLines, slotted, statusTone, when, withInfo } from "../components.js";
+import { button, card, clear, dash, el, emptyState, errorBox, goalStatusWords, hour, humanize, info, int, isSimulatedShop, kpiStrip, money, notice, pageHead, pct, pill, present, segmented, simulatedLabel, skeletonKpis, skeletonLines, slotted, statusTone, when, withInfo } from "../components.js";
 
 /** The autonomy dial, in the order of how much the agent may do alone. One sentence each, in plain words. */
 export const AUTONOMY = Object.freeze([
@@ -205,7 +205,7 @@ export function messageState(item, review) {
     case "draft":
       if (failed) return { label: "Failed the editor: never sent", tone: "critical", key: "failed", about: FAILED_ABOUT };
       if (passed) return { label: "Passed the editor, waiting for you", tone: "info", key: "waiting" };
-      return { label: "Not checked by the editor yet", tone: "info", key: "waiting", about: "It is not sent unless you read it and approve it yourself." };
+      return { label: "Not checked by the editor yet", tone: "info", key: "waiting", about: "It is not sent until the editor has checked it and passed it. There is no Approve button before then." };
     default:
       return { label: humanize(item.status), tone: statusTone(item.status), key: "other" };
   }
@@ -306,6 +306,17 @@ function channelsFact(env) {
   return fact("Channels", described(channels.map(channelName).join(", "), about));
 }
 
+/**
+ * The follow-up steps, only when this server sends them (`facts.follow_ups_run`; no server does yet, v3 included).
+ * The plain agent decides once per customer and never sends a later step, so listing "After 3 days, follow up" would
+ * promise a message that never goes out. Without the plan facts (an older API) nothing is promised either.
+ */
+export function followUpsFact(followUps, facts) {
+  if (facts && facts.follow_ups_run === true && followUps.length) return el("ul", { class: "plain-list" }, followUps.map((s) => el("li", {}, followUpWords(s))));
+  if (facts && facts.follow_ups_run === true) return "None";
+  return described("Not sent", "Each decision sends at most one message. The agent decides again every day, so someone who has not bought may be contacted again then, inside the weekly limit. A planned follow-up step is not sent by this version.");
+}
+
 function briefCard(goal, brief, facts) {
   const env = brief.envelope || {};
   const cur = goal.currency;
@@ -345,7 +356,7 @@ function briefCard(goal, brief, facts) {
         "Proof built in",
         described(`${pct(env.holdout_share, 1)} are people we never contact; ${pct(env.baseline_share, 1)} get a simple fixed rule`, proofAbout),
       ),
-      fact("Follow-ups", followUps.length ? el("ul", { class: "plain-list" }, followUps.map((s) => el("li", {}, followUpWords(s)))) : "None"),
+      fact("Follow-ups", followUpsFact(followUps, facts)),
     ),
   });
   return withId(node, "plan-brief");
@@ -431,6 +442,11 @@ const PRODUCT_TEST_ABOUT =
   "A fact about Autonomy, not a result from your shop. Tested on a public real shop's order history (the UCI Online Retail data, 2010 to 2011): it learned from about nine months of orders, then was checked on the next 90 days, on the 1,858 customers who went on to buy something new to them. Nobody was sent a message. Your own results will differ; Proof shows your real numbers. Source: " +
   `${CATALOG_DOC} (Recommendations, Evaluation).`;
 
+/** The recommender result, best case first and then the rest of the table (docs/v2/REAL_DATA_RESULTS.md, "Recommender lift"). */
+export const RECOMMENDER_BEST_CASE = "On one public shop's orders, 34.7% bought one of its 5 suggestions, against 22.0% for the shop's 5 best-sellers: about 58% more.";
+export const RECOMMENDER_LOSSES =
+  "That was the best case. On six other public order histories the gain was smaller or negative: +8.8 points on Online Retail II, +4.6 on Instacart and +1.2 on Dunnhumby (both with invented dates), no difference we could measure on Olist, and worse than best-sellers on Ta-Feng (-1.3 points) and Superstore (-2.1 points). Where best-sellers do better, these suggestions do worse. Source: docs/v2/REAL_DATA_RESULTS.md.";
+
 /** Products it may suggest: what this shop's data allows, and the product test, labelled as a fact about Autonomy. */
 function productsCard(data) {
   const products = data && present(data.products) ? Number(data.products) : null;
@@ -455,7 +471,8 @@ function productsCard(data) {
         "aside",
         { class: "product-fact", "aria-label": "How we tested this: a fact about Autonomy, not about your shop" },
         el("p", { class: "product-fact-label" }, described("How we tested this", PRODUCT_TEST_ABOUT), el("span", { class: "product-fact-tag" }, "About Autonomy, not your shop.")),
-        el("p", {}, "34.7% bought one of its 5 suggestions, against 22.0% for the shop's 5 best-sellers: about 58% more.", source ? [" ", source] : null),
+        el("p", {}, RECOMMENDER_BEST_CASE, source ? [" ", source] : null),
+        el("p", { class: "product-fact-losses" }, RECOMMENDER_LOSSES),
       ),
     ],
   });
@@ -604,7 +621,15 @@ function contentCard(ctx, item, review, hasFacts, offers, onChange, grouped = fa
   /** Approve / Reject. A message the editor failed has none: its pill's description says why. */
   function actions() {
     if (item.status === "retired") return null;
-    if (review && review.passed === false && item.status !== "approved") return null;
+    // The server refuses to approve a message the editor did not pass (docs/v2/PROMISE_MAP.md row 23), so the
+    // screen offers Approve only on one it passed. A draft the editor has not finished may still be turned off.
+    const editorPassed = Boolean(review && review.passed === true);
+    if (!editorPassed && item.status !== "approved") {
+      if (item.status !== "draft" || (review && review.passed === false)) return null;
+      const turnOff = button("Reject", null, { kind: "ghost", size: "sm", ariaLabel: `Reject message ${item.content_id}` });
+      turnOff.addEventListener("click", () => set("rejected", [turnOff]));
+      return el("div", { class: "message-actions" }, turnOff);
+    }
     const approve = button(item.status === "rejected" ? "Use it again" : "Approve", null, { kind: "secondary", size: "sm", ariaLabel: `Approve message ${item.content_id}` });
     const reject = button(item.status === "approved" ? "Don't use this one" : "Reject", null, { kind: "ghost", size: "sm", ariaLabel: `Reject message ${item.content_id}` });
     approve.addEventListener("click", () => set("approved", [approve, reject]));
@@ -956,6 +981,7 @@ export async function render(root, ctx) {
     if (ctx.refreshGoals) await ctx.refreshGoals();
     await render(root, { ...ctx, goal: null });
   };
+  const simulated = await isSimulatedShop(ctx);
 
   const liveLink =
     goal.status === "active" || goal.status === "paused"
@@ -980,6 +1006,7 @@ export async function render(root, ctx) {
       sub: `“${goal.text}”`,
       status: pill(goalStatusWords(goal.status), goal.status === "draft" ? "neutral" : statusTone(goal.status), { dot: true }),
     }),
+    simulated ? simulatedLabel("The customers, budget and messages in this plan are for a shop we simulate, not for your customers.") : null,
     brief ? stepsNav() : null,
     brief ? limitsStrip(goal, brief, facts) : null,
     el(

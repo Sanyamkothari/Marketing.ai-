@@ -19,7 +19,7 @@
 // no plan has been approved; with no goal at all it is the first page.
 
 import { createApi, routeMissing } from "./api.js";
-import { button, clear, describe, el, emptyState, errorBox, goalStatusWords, humanize, info, int, loading, present, range, toast, when } from "./components.js";
+import { button, clear, describe, el, emptyState, errorBox, goalStatusWords, humanize, info, int, isSimulatedShop, loading, present, range, toast, when } from "./components.js";
 import { TRIAL_DAYS, rangeVerdict, trialDay, trialWords } from "./screens/onboarding.js";
 
 /** The screens, in the order a marketer meets them. `goal: true` means the address carries a goal id. */
@@ -75,6 +75,8 @@ const shell = {
   pausedByButton: new Set(),
   /** Per goal: {at, since, today, expected} for the Shadow note, kept a minute so routing stays quick. */
   shadowFacts: new Map(),
+  /** True when the server's only data is the Gym's simulated shop (the sample files are `api.isMock()` instead). */
+  simulated: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -283,17 +285,41 @@ function operatorAsked() {
 
 function drawBanner() {
   const banner = $("mode-banner");
-  if (!api.isMock()) {
+  if (api.isMock()) {
+    clear(
+      banner,
+      el("strong", {}, "Simulated shop."),
+      " Sample data: nothing you do here reaches a customer.",
+      info(`${api.reason || ""} Changes last until you reload.`.trim(), { label: "About the sample data" }),
+    );
+    banner.hidden = false;
+    return;
+  }
+  if (!shell.simulated) {
     banner.hidden = true;
     return;
   }
+  // The demo server runs a shop the Gym simulates: every number on every screen is from it, so the bar says so.
   clear(
     banner,
-    el("strong", {}, "Sample data."),
-    " Nothing you do here reaches a customer.",
-    info(`${api.reason || ""} Changes last until you reload.`.trim(), { label: "About the sample data" }),
+    el("strong", {}, "Simulated shop."),
+    " These numbers come from a shop we simulate, not from your customers.",
   );
   banner.hidden = false;
+}
+
+/** Ask once (the answer is kept a minute) whether the server's data is a simulated shop, and redraw the banner. */
+async function refreshSimulated() {
+  let now = false;
+  try {
+    now = await isSimulatedShop({ api });
+  } catch {
+    now = false;
+  }
+  if (now !== shell.simulated) {
+    shell.simulated = now;
+    drawBanner();
+  }
 }
 
 function drawTopbar(activeId) {
@@ -426,6 +452,7 @@ async function loadGoals() {
     toast(`Could not load your goals. ${err.message || ""}`.trim(), "critical");
   }
   shell.goalsLoaded = true;
+  refreshSimulated();
 }
 
 /**

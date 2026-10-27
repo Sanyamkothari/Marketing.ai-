@@ -10,7 +10,7 @@
 // Every number on it comes from the API (or the sample files in mock mode); nothing is made up, and a part the
 // server does not report says so in words.
 
-import { card, clear, dash, describe, el, emptyState, errorBox, freshness, int, notice, num, pageHead, pct, pill, present, skeletonKpis, skeletonLines, table, titleInfo, toast, when, withInfo } from "../components.js";
+import { card, clear, dash, describe, el, emptyState, errorBox, freshness, int, isSimulatedShop, notice, num, pageHead, pct, pill, present, simulatedLabel, skeletonKpis, skeletonLines, table, titleInfo, toast, when, withInfo } from "../components.js";
 import { SETUP_KEY } from "./onboarding.js";
 
 const V1_APP = "/";
@@ -660,8 +660,18 @@ function questionsCard(report, { primary = true } = {}) {
 
 // ---- 5. how messages go out -----------------------------------------------------------------------------------
 // A channel is its name and its state; a paused one's reason is the pill's description.
+/**
+ * WhatsApp is listed under "Coming next" above: it is not ready for production (Meta's message templates are not
+ * synced, and its quality and per-person limit signals are not read), and this app has no way to connect an account.
+ * So this card never says "Ready" for it, even where a sender is set up: one product, one answer. A paused WhatsApp
+ * still says "Paused" and why, first: a safety pause is a fact about sends that did happen.
+ */
+export const WHATSAPP_COMING_NEXT =
+  "WhatsApp is not ready for production yet: message templates are not synced with Meta, and its quality rating and per-person limit signals are not read. You cannot connect a WhatsApp account from this app yet. Where a WhatsApp sender is already set up, Autonomy does send through it.";
+
 function channelStatus(c) {
   if (c.paused) return withInfo(pill("Paused", "warning"), c.paused_reason || "Paused by a safety check.");
+  if (c.channel === "whatsapp") return withInfo(pill("Coming next", "neutral"), WHATSAPP_COMING_NEXT);
   if (c.ready) return pill("Ready", "good");
   return pill("Not set up yet", "neutral");
 }
@@ -686,7 +696,7 @@ function channelsCard(channels, error, retry) {
       el(
         "div",
         { class: "cn-channel-groups" },
-        block("direct", "Sent by Autonomy", "Email and WhatsApp: Autonomy sends these itself."),
+        block("direct", "Sent by Autonomy", "Email: Autonomy sends it itself. WhatsApp is coming next: it is not ready for production, and an account cannot be connected from this app yet."),
         block("handoff", "By hand-off", "SMS and your own tools: Autonomy decides who gets what, and hands each message to your tool to send."),
       ),
     ],
@@ -840,9 +850,11 @@ export async function render(root, ctx) {
   const fixed = at(r ? fixedCard(r) : null, 3);
   const healthBlock = at(healthCard(health.value, limits.value, isSimulated(r)), 4);
   const channelBlock = at(channelsCard(channels.value, channels.error, retry), 5);
+  const simulatedShop = isSimulated(r) || (await isSimulatedShop(ctx));
   clear(
     root,
     head(),
+    simulatedShop ? simulatedLabel("The customers, orders and lists on this page are from a shop we simulate, not from your customers.") : null,
     tools,
     el("div", { class: "grid cn-grid" }, column("span-7", [connected, fixed, healthBlock]), column("span-5", [asks, channelBlock])),
     el("p", { class: "cn-next" }, el("a", { href: "#/goal" }, "Next: say what you want to achieve \u2192")),

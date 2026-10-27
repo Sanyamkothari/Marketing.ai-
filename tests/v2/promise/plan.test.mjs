@@ -303,21 +303,49 @@ test("Plan (sample data): the editor's checklist on every message, and nothing g
   assert.ok(text.includes("WhatsApp template winback_6"));
 });
 
-test("Plan (sample data): approving a message the editor has not checked, and the count follows", async () => {
+test("Plan (sample data): a message the editor has not checked cannot be approved; the server's rule, kept by the screen", async () => {
   const api = mockApi();
   const facts = await sample("plan.json");
-  const { ctx, calls } = makeCtx(api, "goal_winback");
+  const { ctx } = makeCtx(api, "goal_winback");
   const root = C.el("div");
   await plan.render(root, ctx);
   const ready = (await api.getContent("goal_winback")).filter((c) => c.status === "approved").length;
   assert.ok(root.textContent.includes(`${ready} ready to send`));
   const unchecked = facts.content.find((r) => r.passed === null);
   const art = cardFor(root, unchecked.content_id);
-  await art.querySelectorAll("button").find((b) => b.getAttribute("aria-label") === `Approve message ${unchecked.content_id}`).click();
-  assert.equal((await api.getContent("goal_winback")).find((c) => c.content_id === unchecked.content_id).status, "approved");
-  assert.ok(root.textContent.includes(`${ready + 1} ready to send`));
-  assert.ok(art.textContent.includes("Ready to send"));
-  assert.ok(calls.toast.some(([m]) => m.startsWith("Message approved")));
+  const labels = art.querySelectorAll("button").map((b) => b.getAttribute("aria-label") || "");
+  assert.ok(!labels.some((l) => l.startsWith("Approve")), "no Approve button before the editor has passed it");
+  assert.ok(labels.includes(`Reject message ${unchecked.content_id}`), "it can still be turned off");
+  // the mock API answers as the server does (api/v2/deps.py set_content_status): 409, and nothing changes
+  await assert.rejects(api.setContentStatus(unchecked.content_id, "approved"), (err) => err.status === 409 && /editor/.test(err.message));
+  assert.equal((await api.getContent("goal_winback")).find((c) => c.content_id === unchecked.content_id).status, "draft");
+  const failed = facts.content.find((r) => r.passed === false);
+  await assert.rejects(api.setContentStatus(failed.content_id, "approved"), (err) => err.status === 409);
+  assert.equal((await api.getContent("goal_winback")).filter((c) => c.status === "approved").length, ready, "the count of ready messages did not move");
+});
+
+test("Plan (sample data): a message the editor passed can be turned off and used again", async () => {
+  const api = mockApi();
+  const facts = await sample("plan.json");
+  const { ctx } = makeCtx(api, "goal_winback");
+  const root = C.el("div");
+  await plan.render(root, ctx);
+  const ready = (await api.getContent("goal_winback")).filter((c) => c.status === "approved").length;
+  const passed = facts.content.find((r) => r.passed === true);
+  await api.setContentStatus(passed.content_id, "rejected");
+  assert.equal((await api.getContent("goal_winback")).filter((c) => c.status === "approved").length, ready - 1);
+  const again = await api.setContentStatus(passed.content_id, "approved");
+  assert.equal(again.status, "approved");
+  assert.equal((await api.getContent("goal_winback")).filter((c) => c.status === "approved").length, ready);
+});
+
+test("Plan (sample data): says Simulated shop before the plan", async () => {
+  const { ctx } = makeCtx(mockApi(), "goal_winback");
+  const root = C.el("div");
+  await plan.render(root, ctx);
+  const label = root.querySelectorAll(".simulated-label")[0];
+  assert.ok(label && label.textContent.startsWith("Simulated shop."));
+  assert.ok(root.textContent.indexOf("Simulated shop.") < root.textContent.indexOf("The plan in plain words"));
 });
 
 test("Plan (sample data): products it may suggest, and the product fact labelled as one", async () => {
@@ -337,6 +365,10 @@ test("Plan (sample data): products it may suggest, and the product fact labelled
     assert.ok(factBox.textContent.includes(n), n);
     assert.ok(!outside.includes(n), `${n} outside the product fact`);
   }
+  // the result is quoted with its losses, not only its best case (docs/v2/REAL_DATA_RESULTS.md "Recommender lift")
+  for (const n of ["-1.3 points", "-2.1 points", "+8.8 points", "+4.6", "+1.2", "Olist"]) assert.ok(factBox.textContent.includes(n), n);
+  assert.ok(factBox.textContent.includes("That was the best case"));
+  assert.ok(factBox.textContent.indexOf("about 58% more") < factBox.textContent.indexOf("Ta-Feng"));
 });
 
 test("Plan (sample data): you approve once, with the dial and Shadow recommended", async () => {

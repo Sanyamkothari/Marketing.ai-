@@ -7,7 +7,7 @@
 // its label, with its hint in the label's (i); the rest (what the budget covers, why an opportunity was found, what Shadow means) is a
 // description on the label, number or pill it explains.
 
-import { button, card, clear, el, emptyState, errorBox, goalStatusWords, humanize, info, int, money, pageHead, pill, present, skeleton, skeletonLines, statusTone, titleInfo, withInfo } from "../components.js";
+import { button, card, clear, el, emptyState, errorBox, goalStatusWords, humanize, info, int, isSimulatedShop, money, pageHead, pill, present, simulatedLabel, skeleton, skeletonLines, statusTone, titleInfo, withInfo } from "../components.js";
 
 /**
  * Starting points. The first is the pitch's own example, amount included: it is the marketer's words to change,
@@ -300,6 +300,9 @@ function goalForm(ctx, defaultCurrency) {
 // One card, one row per opportunity: the count of customers (the figure the pitch leads with) and what they did,
 // then the goal in its own words and why, then the suggested budget and the one-click ask. A row list rather than a
 // grid of cards, so one opportunity or five read the same and no half-empty row is left behind.
+/** What a suggested budget covers: the messages of the starting plan, no discounts. */
+export const BUDGET_ABOUT = "What the messages in this plan would cost, with no discounts. Offers cost extra, so raise it before you turn them on.";
+
 function opportunityRow(ctx, opp) {
   const goal = opp.goal;
   const sized = present(opp.audience_n);
@@ -330,7 +333,7 @@ function opportunityRow(ctx, opp) {
     el(
       "div",
       { class: "gl-opp-act" },
-      el("dl", { class: "gl-opp-budget" }, el("dt", {}, "Suggested budget"), el("dd", { class: "tabular" }, money(goal.budget, goal.currency))),
+      el("dl", { class: "gl-opp-budget" }, el("dt", {}, withInfo(el("span", {}, "Suggested budget"), BUDGET_ABOUT)), el("dd", { class: "tabular" }, money(goal.budget, goal.currency))),
       el("p", { class: "gl-opp-ask" }, none ? "No customers match today. Want a plan anyway?" : sized ? "Want me to handle them?" : "Want me to handle this?"),
       start,
     ),
@@ -443,9 +446,11 @@ export async function render(root, ctx) {
   const [goals, opps] = await Promise.all([ctx.api.listGoals().catch(() => []), loadOpportunities(ctx.api)]);
   const goalList = Array.isArray(goals) ? goals : [];
   const defaultCurrency = (ctx.goal && ctx.goal.currency) || (goalList[0] && goalList[0].currency) || "USD";
+  const simulated = await isSimulatedShop(ctx);
   clear(
     root,
     head(),
+    simulated ? simulatedLabel("The customer counts and budgets below are for a shop we simulate, not for your customers.") : null,
     el(
       "div",
       { class: "grid gl-grid" },

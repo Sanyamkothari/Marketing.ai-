@@ -180,7 +180,8 @@ def test_clean_llm_briefing_is_used_with_code_numbers() -> None:
     ]
     money = b.sections[0].numbers
     assert money["incremental_profit"] == 1234.56
-    assert money["budget_left"] == pytest.approx(5000 - 820.5)
+    assert money["spend"] == pytest.approx(820.5)
+    assert "budget_left" not in money and "budget" not in money  # what is left is the ledger's, shown on Live
     assert "$1,235" in b.sections[0].body
     assert b.sections[3].numbers == FACTS
     _assert_every_number_backed(b)

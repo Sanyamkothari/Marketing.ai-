@@ -353,13 +353,51 @@ test("the shareable summary leads with the people we never contact and says the 
   assert.match(unsure, /not sure yet/);
 });
 
-test("return on spend has one precision everywhere: the figure and the share text agree", async () => {
-  const roi = { point: 90.12, low: 40.4, high: 180.6 };
-  const { root } = await draw({ proof: { ...mock("proof.json"), roi } });
-  const cell = byClass(root, "kpi").find((k) => k.textContent.startsWith("Return on spend"));
-  assert.equal(byClass(cell, "kpi-value")[0].textContent, "90.1×");
-  assert.equal(byClass(cell, "kpi-range")[0].textContent, "40.4× to 180.6×");
-  assert.ok(byTag(root, "textarea")[0].value.includes("return on spend 90.1× (range 40.4× to 180.6×)"));
+test("no return-on-spend multiple is shown, however large the API's roi is (111.6x on a simulated shop was unearned)", async () => {
+  const roi = { point: 111.6, low: 40.4, high: 180.6 };
+  const { root, text } = await draw({ proof: { ...mock("proof.json"), roi } });
+  assert.ok(!/return on spend/i.test(text), "not on the page");
+  assert.ok(!/111\.6|×/.test(text), "no multiple at all");
+  assert.ok(!/return on spend|111\.6/i.test(byTag(root, "textarea")[0].value), "not in the share text either");
+  const strip = byClass(root, "pf-hero-strip")[0];
+  assert.deepEqual(byClass(strip, "kpi").map((k) => visible(byClass(k, "kpi-label")[0])), ["Extra revenue", "Spend so far"]);
+});
+
+test("spend agrees with Live: the same number is named, and what each one counts is said", async () => {
+  const proof = { ...mock("proof.json"), spend: 17.25 };
+  const live = { ...mock("today.json"), spend_to_date: 24.14 };
+  const { root } = await draw({ proof, getToday: async () => live });
+  const cell = byClass(root, "kpi").find((k) => k.textContent.startsWith("Spend so far"));
+  assert.equal(byClass(cell, "kpi-value")[0].textContent, "$17.25");
+  assert.equal(byClass(cell, "kpi-note")[0].textContent, "Live: $24.14 of the budget spent so far");
+  const tip = tipFor(cell, "Spend so far");
+  assert.match(tip, /counting only contacts whose results are in/);
+  assert.match(tip, /Live's "Budget spent" \(\$24\.14\) is what the budget limit counts: every message and every used discount so far, for the simple-rule group as well/);
+  assert.ok(!/no discounts/.test(tip), "Live's figure does count the discounts it matched");
+  // when the two counts are the same number there is nothing to reconcile
+  const same = await draw({ proof: { ...mock("proof.json"), spend: 1840 }, getToday: async () => ({ ...mock("today.json"), spend_to_date: 1840 }) });
+  const sameCell = byClass(same.root, "kpi").find((k) => k.textContent.startsWith("Spend so far"));
+  assert.equal(byClass(sameCell, "kpi-note").length, 0);
+});
+
+test("a simulated shop says so first: the label comes before the verdict and the money, and the share text carries it", async () => {
+  const simulatedNote = "Demo data from a simulated shop, not your customers.";
+  const { root, text } = await draw({ proof: { ...mock("proof.json"), notes: [simulatedNote] } });
+  const label = byClass(root, "simulated-label")[0];
+  assert.ok(label, "a Simulated shop label");
+  assert.ok(label.textContent.startsWith("Simulated shop."));
+  assert.ok(text.indexOf("Simulated shop.") < text.indexOf("$4,300"), "before any money");
+  assert.ok(text.indexOf("Simulated shop.") < text.indexOf("Real extra profit"), "before the verdict");
+  assert.ok(byTag(root, "textarea")[0].value.includes("Simulated shop: these numbers come from a shop we simulate"));
+  // the sample files (?mock=1) are a simulated shop too, whatever the notes say
+  const mocked = await draw({ isMock: () => true });
+  assert.ok(byClass(mocked.root, "simulated-label")[0]);
+  // a server whose only data source is the Gym
+  const gym = await draw({ getDataReport: async () => ({ sources: [{ name: "gym", kind: "simulation" }] }) });
+  assert.ok(byClass(gym.root, "simulated-label")[0]);
+  // a real shop: no label
+  const real = await draw({ getDataReport: async () => ({ sources: [{ name: "shopify", kind: "shop" }] }) });
+  assert.equal(byClass(real.root, "simulated-label").length, 0);
 });
 
 test("each card is its title, its numbers and at most one sentence; the rest is in descriptions", async () => {
@@ -371,7 +409,6 @@ test("each card is its title, its numbers and at most one sentence; the rest is 
   }
   const hero = byClass(root, "pf-hero")[0];
   assert.equal(byTag(hero, "text").filter((t) => /\$/.test(t.textContent)).length, 0, "the chart does not repeat the ranges as text");
-  assert.match(tipFor(hero, "Return on spend"), /Extra profit for each \$1 spent/);
 });
 
 test("the chart's zero line runs through each bar only, never through the value written under it", async () => {

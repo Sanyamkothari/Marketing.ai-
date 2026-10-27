@@ -957,3 +957,8 @@
     gap: 12px;
   }
 }
+
+/* The "Simulated shop" label slot under the title: nothing, and no gap, for a real shop. */
+.lv-simulated:empty {
+  display: none;
+}

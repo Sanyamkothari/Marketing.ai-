@@ -57,6 +57,18 @@ def test_product_fact_is_labelled_and_sourced() -> None:
     # the numbers the note quotes are the ones the catalogue's evaluation table reports (k = 5)
     assert re.search(r"co-purchase \(cosine\) \| 5 \| 34\.7%", catalog)
     assert re.search(r"popularity \(baseline\) \| 5 \| 22\.0%", catalog)
+    # ... and the losses it quotes are the ones the real-data results report
+    results = (ROOT / "docs" / "v2" / "REAL_DATA_RESULTS.md").read_text(encoding="utf-8")
+    for row in (
+        r"Online Retail II \| \*\*\+8\.8 points\*\*",
+        r"Instacart \| \+4\.6",
+        r"Dunnhumby \| \+1\.2",
+        r"Ta-Feng \| \*\*-1\.3\*\*",
+        r"Superstore \| loses at @5/@10, e\.g\. -2\.1",
+    ):
+        assert re.search(row, results), row
+    for quoted in ("-1.3 points", "-2.1 points", "+8.8 points", "+4.6", "+1.2", "Olist"):
+        assert quoted in js, quoted
 
 
 def test_plan_draws_and_clicks_through() -> None:

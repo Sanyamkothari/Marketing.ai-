@@ -3,43 +3,47 @@
   "goal_id": "goal_winback",
   "as_of": "2026-10-20T07:00:00Z",
   "period": "daily",
-  "headline": "Yesterday the win-back goal contacted 412 customers and 37 of them bought, for $2,960 in revenue.",
+  "headline": "It made an extra $4,300 in profit compared with people we never contact ($900 to $7,700).",
   "sections": [
     {
-      "title": "What happened",
-      "body": "Contacted 412 customers and left 1,688 alone. 37 bought within the day, for $2,960 in revenue. Spend was $96.",
+      "title": "Extra profit vs people we never contact",
+      "body": "It made an extra $4,300 in profit compared with people we never contact (likely range $900 to $7,700). Extra revenue: $14,200 (likely range $6,100 to $22,300). The agent group's contacts whose results are in cost $1,840, messages and the discounts used. It looks after 8,120 customers; 1,015 people we never contact are kept for comparison.",
       "numbers": {
-        "contacted": 412.0,
-        "left_alone": 1688.0,
-        "buyers": 37.0,
-        "revenue": 2960.0,
-        "spend": 96.0
+        "agent_customers": 8120.0,
+        "holdout_customers": 1015.0,
+        "interval_level": 0.95,
+        "incremental_profit": 4300.0,
+        "incremental_profit_low": 900.0,
+        "incremental_profit_high": 7700.0,
+        "incremental_revenue": 14200.0,
+        "incremental_revenue_low": 6100.0,
+        "incremental_revenue_high": 22300.0,
+        "spend": 1840.0
       }
     },
     {
-      "title": "Who we left alone and why",
-      "body": "1,120 were at their weekly contact limit or had just bought, 384 looked like they buy on their own anyway, and 184 are in the no-contact holdout.",
+      "title": "Against the simple rule",
+      "body": "Compared with the simple rule, it made $0.38 more profit per customer (likely range $0.05 to $0.71). The simple rule looks after 1,015 customers.",
       "numbers": {
-        "capped_or_recent": 1120.0,
-        "would_buy_anyway": 384.0,
-        "holdout": 184.0
+        "baseline_customers": 1015.0,
+        "interval_level": 0.95,
+        "lift_per_customer": 0.38,
+        "lift_per_customer_low": 0.05,
+        "lift_per_customer_high": 0.71
       }
     },
     {
-      "title": "What it is learning",
-      "body": "Free shipping is beating the percentage discount for lapsed coffee buyers. The share of contacts offered the discount fell from 31% to 18%.",
+      "title": "Customer health",
+      "body": "Each customer got 0.80 messages a week on average. Delivery rate 98.7%. Complaint rate 0.02%. Unsubscribe rate 0.24%. Block rate 0.11%. Alerts: 1 (0 critical, 1 with an automatic pause).",
       "numbers": {
-        "pct10_share_before": 0.31,
-        "pct10_share_now": 0.18
-      }
-    },
-    {
-      "title": "Watch",
-      "body": "No customer complaints yesterday and 3 unsubscribes. Email delivery was 98.7%.",
-      "numbers": {
-        "complaints": 0.0,
-        "unsubscribes": 3.0,
-        "delivery_rate": 0.987
+        "contacts_per_customer_week": 0.8,
+        "delivery_rate": 0.987,
+        "complaint_rate": 0.0002,
+        "unsubscribe_rate": 0.0024,
+        "block_rate": 0.0011,
+        "alerts": 1.0,
+        "critical_alerts": 0.0,
+        "auto_paused": 1.0
       }
     }
   ]

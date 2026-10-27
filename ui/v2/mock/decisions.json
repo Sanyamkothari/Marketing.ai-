@@ -239,7 +239,7 @@
       "content_id": "ci_3",
       "format": "text",
       "send_at": "2026-10-20T15:00:00Z",
-      "follow_up_step": 1,
+      "follow_up_step": 0,
       "item_id": null,
       "asset_id": null,
       "journey_id": null
@@ -248,7 +248,7 @@
     "probability": 0.79,
     "expected_net": 2.62,
     "attention_price": 0.15,
-    "reason": "WhatsApp follow-up: no purchase 3 days after the email, and she answers WhatsApp more often than email.",
+    "reason": "WhatsApp reminder: she answers WhatsApp more often than email.",
     "bids": [
       {
         "goal_id": "goal_winback",
@@ -259,7 +259,7 @@
           "content_id": "ci_3",
           "format": "text",
           "send_at": "2026-10-20T15:00:00Z",
-          "follow_up_step": 1,
+          "follow_up_step": 0,
           "item_id": null,
           "asset_id": null,
           "journey_id": null
@@ -281,7 +281,7 @@
           "content_id": "ci_0",
           "format": "text",
           "send_at": "2026-10-20T15:00:00Z",
-          "follow_up_step": 1,
+          "follow_up_step": 0,
           "item_id": null,
           "asset_id": null,
           "journey_id": null

@@ -235,6 +235,13 @@ class PlanFacts(Contract):
     rejected_by_person: int = Field(ge=0)
     autonomy: AutonomyLevel
     autonomy_since: AwareDatetime | None = None
+    follow_ups_run: bool = Field(
+        default=False,
+        description=(
+            "Whether this server sends the plan's follow-up steps. False today, v3 on or off: the brief lists "
+            "them, nothing sends them, and the Plan screen does not promise them"
+        ),
+    )
 
 
 class Expected(Contract):
@@ -1098,7 +1105,8 @@ def review_content(item: ContentItem, threshold: int = 3) -> ContentReview:
     notes = list(item.critic_notes)
     rules = [n.removeprefix("rule:").strip() for n in notes if n.startswith("rule:")]
     judged = [n for n in notes if n.startswith("judge run")]
-    by_critic = bool(rules or judged or any(n == "approved" or n.startswith("rejected:") for n in notes))
+    decided = any(n.startswith(("approved", "rejected:")) for n in notes)
+    by_critic = bool(rules or judged or decided)
     if not by_critic:
         person = item.status in (ContentStatus.REJECTED, ContentStatus.RETIRED)
         return ContentReview(
@@ -1136,9 +1144,15 @@ def review_content(item: ContentItem, threshold: int = 3) -> ContentReview:
         low, why = min(scores)
         note = why or _CHECK_NOTES[name]
         checks.append(EditorCheck(check=name, passed=low >= threshold, note=note))  # type: ignore[arg-type]
-    passed = all(c.passed is not False for c in checks) and not any(n.startswith("rejected:") for n in notes)
+    passed: bool | None = all(c.passed is not False for c in checks) and not any(
+        n.startswith("rejected:") for n in notes
+    )
+    if not rules and not decided:
+        # The editor started and has not finished (the judge went down between its two runs, so the message
+        # is held as a draft). That is not a pass, and the server refuses to approve it (`editor_passed`).
+        passed = None
     # The editor approved it and a person turned it down afterwards.
-    person = item.status is ContentStatus.REJECTED and passed
+    person = item.status is ContentStatus.REJECTED and passed is True
     return ContentReview(
         content_id=item.content_id,
         status=item.status,
@@ -1190,6 +1204,7 @@ def plan_facts(services: Services, goal_id: str) -> PlanFacts:
         ),
         autonomy=goal.autonomy,
         autonomy_since=autonomy_since(services, goal),
+        follow_ups_run=services.follow_ups_run,
     )
 
 

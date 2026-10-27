@@ -3,36 +3,56 @@
 26 Oct 2026, branch `claude/beautiful-keller-kacuxh`. The plan is [`plan-v3.md`](../../plan-v3.md); the calls on its open
 questions are in [DECISIONS.md](DECISIONS.md).
 
-## Built
+## Status: parked research
+
+**v3 is parked research. It stays off.** `AUTONOMY_V3` is off for every pilot, nothing in v3 is proven on real data,
+and the plain (v2) agent is what the product runs and what is sold ([ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)
+section 8, "Park" and "Stop now"). No new v3 features are being built. A part comes back on only with the evidence
+the review lists for it (section 8, "Evidence that would justify turning each v3 part back on").
+
+The first foundation fix, telling the truth in the product and the docs, is described in [HONEST.md](HONEST.md).
+
+## Built, wired, proven
 
 Every stream was built by one agent, reviewed by a second (adversarial) agent and fixed by a third, then merged.
 Every v3 piece is **off by default**; `build_agent_policy(v3=True)` or `AUTONOMY_V3=1` turns them all on together
 ([PRESET.md](PRESET.md)).
 
-| Plan item | Doc |
-|---|---|
-| Phase 0: the Data Doctor's order-log path (B1-B5, B7, the reusable part of B6; B8 superseded by the AI-first design, DECISIONS B-9) | [ORDER_LOG.md](ORDER_LOG.md) |
-| Foundation A: the customer profile | [PROFILE.md](PROFILE.md) |
-| Foundation B: look-alike learning | [LOOKALIKE.md](LOOKALIKE.md) |
-| Foundation C: live experiments | [EXPERIMENTS.md](EXPERIMENTS.md) |
-| Decision 1: who (leaving risk, 90-day value, sleeping dogs by traits) | [WHO.md](WHO.md) |
-| Decision 2: moments and the India calendar | [MOMENTS.md](MOMENTS.md) |
-| Decision 3: offers and the whole-budget planner | [OFFERS.md](OFFERS.md) |
-| Decision 4: journeys | [JOURNEYS.md](JOURNEYS.md) |
-| Decision 5: generated images (fake provider, checker, batch approval) | [IMAGES.md](IMAGES.md) |
-| Decision 6: copy per customer type, scoring model, live elimination | [COPY.md](COPY.md) |
-| Decision 7: frequency (look-alike tolerance, 3-week plans) | [FREQUENCY.md](FREQUENCY.md) |
-| Decision 8: early signals and auto-budget | [EARLY_SIGNALS.md](EARLY_SIGNALS.md) |
-| Decision 9: personalisation | through the profile; cross-client priors already in `autonomy/priors/` |
-| Scale: the sweep in batches | [SCALE.md](SCALE.md) |
-| CI failures that were red on version-2 before v3 | [CI_GREEN.md](CI_GREEN.md) |
-| The preset | [PRESET.md](PRESET.md) |
+The three columns mean different things, and only the first was true when this file was first written:
+
+- **Built**: the code and its tests exist.
+- **Wired into production**: it changes what the running product does when `AUTONOMY_V3=1`.
+- **Proven on real data**: it showed value on real data it could actually see.
+
+The verdicts are copied from [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md) section 7. Not one v3 component is proven.
+
+| Plan item | Doc | Built | Wired into production | Proven on real data |
+|---|---|---|---|---|
+| Phase 0: the Data Doctor's order-log path (B1-B5, B7, the reusable part of B6; B8 superseded by the AI-first design, DECISIONS B-9) | [ORDER_LOG.md](ORDER_LOG.md) | Yes | No: no link to the agent's event store (D5) | Works for the v1 AutoML table only |
+| Foundation A: the customer profile (52 features, nightly) | [PROFILE.md](PROFILE.md) | Yes | Yes | No; invisible on 2 of 4 bench sets (F1) |
+| Foundation B: look-alike learning | [LOOKALIKE.md](LOOKALIKE.md) | Yes | Yes, but wiped on every rebuild | No; unidentifiable live (B1) |
+| Foundation C: live experiments | [EXPERIMENTS.md](EXPERIMENTS.md) | Yes (library) | No: empty book; only the Gym starts one | No; the bar was never run |
+| Decision 1: who. Leaving risk and 90-day value models | [WHO.md](WHO.md) | Yes | Yes | Synthetic only |
+| Decision 1: who. Sleeping dogs by traits | [WHO.md](WHO.md) | Yes | Yes | No; confounded (B5, E12) |
+| Decision 2: moments and the India calendar | [MOMENTS.md](MOMENTS.md) | Yes | Yes, as fixed multipliers | No; the smoke gain was negative (-5.24) |
+| Decision 3: offers and the whole-budget planner | [OFFERS.md](OFFERS.md) | Yes | Yes | No; broken on Shopify discount codes (D1) |
+| Decision 4: journeys | [JOURNEYS.md](JOURNEYS.md) | Yes | Yes | No; no journey-level credit |
+| Decision 5: generated images (fake provider, checker, batch approval) | [IMAGES.md](IMAGES.md) | Yes (fakes) | No | No |
+| Decision 6: copy per customer type, scoring model, live elimination | [COPY.md](COPY.md) | Yes (library) | No | No; impossible at 8k customers |
+| Decision 7: frequency (look-alike tolerance, 3-week plans) | [FREQUENCY.md](FREQUENCY.md) | Yes | Yes | No; a candidate cause of the bench collapse |
+| Decision 8: early signals | [EARLY_SIGNALS.md](EARLY_SIGNALS.md) | Yes (library) | No | No; pull-forward bias (A1) |
+| Decision 8: auto-budget | [EARLY_SIGNALS.md](EARLY_SIGNALS.md) | Yes (library) | No | No; the two-goal scenario was never built |
+| Decision 9: personalisation | through the profile; cross-client priors already in `autonomy/priors/` | Yes | Yes | n/a (needs at least 5 clients) |
+| Scale: the sweep in batches | [SCALE.md](SCALE.md) | Yes | Yes | 300k completed |
+| CI failures that were red on version-2 before v3 | [CI_GREEN.md](CI_GREEN.md) | Yes | Yes | Yes (CI) |
+| The preset (`AUTONOMY_V3`) | [PRESET.md](PRESET.md) | Yes | Yes, all-or-nothing | n/a |
+| Plan's 1.5x calibration gate | plan-v3.md | No | No | No |
 
 ## Read this first: the review and the first real-data result
 
-**"Built" above means the code and its tests exist. It does not mean wired into the running product or proven.**
-An adversarial review (six red-team lenses, an independent skeptic per finding, a senior architect and a senior
-CMO) is in [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md); its section 7 has the built / wired / proven table.
+**"Built" means the code and its tests exist. It does not mean wired into the running product or proven; the table
+above keeps the three apart.** An adversarial review (six red-team lenses, an independent skeptic per finding, a senior architect and a senior
+CMO) is in [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md); its section 7 is the source of the table above.
 In short: experiments, copy per type, images, early signals and auto-budget have no caller in the runtime; the
 wired parts lose what they learn on every rebuild; and no v3 part is proven.
 

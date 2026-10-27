@@ -197,11 +197,11 @@ def _detectable_sentences(d: SectionDraft, proof: ProofSummary, currency: str) -
         d.notes.append("The shop margin is not set: profit is overstated; say so.")
 
 
-def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> SectionDraft:
+def _money_section(proof: ProofSummary, currency: str) -> SectionDraft:
     d = SectionDraft("money", MONEY_TITLE)
     agent_n = d.add("agent_customers", proof.agent_n, format_count(proof.agent_n))
     holdout_n = d.add("holdout_customers", proof.holdout_n, format_count(proof.holdout_n))
-    if any(e is not None for e in (proof.incremental_profit, proof.incremental_revenue, proof.roi)):
+    if any(e is not None for e in (proof.incremental_profit, proof.incremental_revenue)):
         d.add("interval_level", INTERVAL_LEVEL, format_rate(INTERVAL_LEVEL))
 
     profit = proof.incremental_profit
@@ -251,20 +251,17 @@ def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> Sec
             )
             d.sentences.append(f"A real revenue gain below about {seen} would not show up yet.")
 
+    # The proof's spend is the agent group's contacts whose results are in. It is not what the budget limit counts
+    # (the runtime's ledger: every send and matched discount as it happens, every group), so no "budget left" is
+    # derived from it: Live shows the ledger's figure and what is left of the budget.
     spend = d.add("spend", proof.spend, format_money(proof.spend, currency))
-    if goal is not None:
-        budget = d.add("budget", goal.budget, format_money(goal.budget, currency))
-        left = d.add(
-            "budget_left", goal.budget - proof.spend, format_money(goal.budget - proof.spend, currency)
-        )
-        d.sentences.append(f"Spend so far is {spend} of the {budget} budget, leaving {left}.")
-    else:
-        d.sentences.append(f"Spend so far is {spend}.")
+    d.sentences.append(
+        f"The agent group's contacts whose results are in cost {spend}, messages and the discounts used."
+    )
 
-    if proof.roi is not None:
-        roi, lo, hi = _estimate(d, "roi", proof.roi, "ratio", currency)
-        d.sentences.append(f"Return on spend: {roi} (likely range {lo} to {hi}).")
-
+    # No return-on-spend multiple is written. It divides profit by the cost the proof managed to charge, and a
+    # discount redeemed under a code the agent did not issue is not charged (ARCHITECTURE_REVIEW section 4 row 4),
+    # so the multiple would be larger than the truth. `ProofSummary.roi` is still computed for those who read it.
     d.sentences.append(
         f"It looks after {agent_n} customers; {holdout_n} people we never contact are kept for comparison."
     )
@@ -507,7 +504,7 @@ def build_sections(
     then the early read, what it learned and other facts when there are any."""
     currency = goal.currency if goal else "USD"
     drafts = [
-        _money_section(goal, proof, currency),
+        _money_section(proof, currency),
         _baseline_section(proof, currency),
         _health_section(health),
     ]

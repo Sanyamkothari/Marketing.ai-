@@ -245,7 +245,8 @@ test("the proof summary gives every estimate with its range", () => {
   const text = proofScreen.proofSummaryText(mock("proof.json"), goal);
   assert.match(text, /\$4,300 \(range \$900 to \$7,700\) in extra profit/);
   assert.match(text, /\$0\.38 \(range \$0\.05 to \$0\.71\) more profit per customer/);
-  assert.match(text, /2\.3× \(range 0\.5× to 4\.2×\)/);
+  assert.ok(!/return on spend|2\.3×/i.test(text), "no return-on-spend multiple in the summary");
+  assert.match(text, /Spend so far: \$1,840\./);
   assert.match(text, /8,120 customers decided by the agent/);
   assert.ok(!text.includes("undefined") && !text.includes("NaN"));
 });
@@ -400,7 +401,7 @@ test("Proof shows ranges, group sizes, a chart and copies a summary", async () =
   assert.ok(text.includes("$0.05 to $0.71"));
   assert.ok(text.includes("8,120") && text.includes("1,015"));
   assert.ok(text.includes("$1,840"));
-  assert.ok(text.includes("0.5× to 4.2×"));
+  assert.ok(!text.includes("0.5× to 4.2×") && !/Return on spend/.test(text), "the roi stays in the API shape, not on the page");
   const charts = byTag(root, "svg");
   assert.equal(charts.length, 1, "one chart: the simple rule's single figure needs none");
   assert.equal(byClass(charts[0], "ap-bar").length, 2);

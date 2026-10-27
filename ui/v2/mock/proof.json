@@ -27,5 +27,8 @@
   },
   "notes": [
     "Holdout and baseline are 10% each; ranges are 95% intervals."
-  ]
+  ],
+  "detectable": null,
+  "margin_rate": null,
+  "margin_note": null
 }

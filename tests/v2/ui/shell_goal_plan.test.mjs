@@ -472,21 +472,25 @@ test("Plan screen: the brief in plain words, the messages, the dial", async () =
     "$5,000",
     "If complaints go above 0.08% of delivered messages, pause the whole goal.",
     "If delivery falls below 95%, pause that channel.",
-    "After 3 days, if they have not bought, follow up on the channel that suits them best.",
     "Lapsed buyers respond to a reminder",
     "Shadow",
     "Approve each batch",
     "Autopilot",
   ]) assert.ok(text.includes(s), s);
   for (const a of planScreen.AUTONOMY) assert.ok(text.includes(a.text), a.value);
+  // The plain agent sends no later step, so the plan does not list "After 3 days, follow up" as something that will happen.
+  assert.ok(!text.includes("follow up on the channel that suits them best"));
+  assert.ok(text.includes("Follow-ups") && text.includes("Not sent"));
   const detail = await api.getGoal("goal_winback");
   assert.equal(root.querySelectorAll("article").length, detail.content.length);
   assert.ok(text.includes("Save autonomy level"), "an approved plan offers to change the level");
-  // approve a draft message from its card
+  // a draft the editor has not checked has no Approve button (the server refuses it); it can be turned off from its card
   const draft = detail.content.find((c) => c.status === "draft");
-  const approveBtn = root.querySelectorAll("button").find((b) => b.getAttribute("aria-label") === `Approve message ${draft.content_id}`);
-  await approveBtn.click();
-  assert.equal((await api.getContent("goal_winback")).find((c) => c.content_id === draft.content_id).status, "approved");
+  const buttons = root.querySelectorAll("button");
+  assert.ok(!buttons.some((b) => b.getAttribute("aria-label") === `Approve message ${draft.content_id}`));
+  const rejectBtn = buttons.find((b) => b.getAttribute("aria-label") === `Reject message ${draft.content_id}`);
+  await rejectBtn.click();
+  assert.equal((await api.getContent("goal_winback")).find((c) => c.content_id === draft.content_id).status, "rejected");
 });
 
 test("Plan screen: approving a new plan with the chosen autonomy", async () => {
@@ -563,6 +567,7 @@ test("the shell boots in mock mode: bar, nav, switcher, banner, a screen, one-cl
     const goals = JSON.parse(await readFile(fileURLToPath(new URL("mock/goals.json", UI)), "utf8"));
     assert.equal($("goal-select").querySelectorAll("option").length, goals.length);
     assert.equal($("mode-banner").hidden, false);
+    assert.match($("mode-banner").textContent, /Simulated shop\./);
     assert.match($("mode-banner").textContent, /Sample data/);
     assert.equal(document.title, "Plan · Autonomy");
 
@@ -599,5 +604,17 @@ test("the shell boots in mock mode: bar, nav, switcher, banner, a screen, one-cl
     delete globalThis.window;
     delete globalThis.location;
     delete globalThis.history;
+  }
+});
+
+test("follow-ups are listed only when the server sends them (journeys on)", () => {
+  const steps = [{ after_days: 3, when: "no_purchase", channel: null }];
+  const text = (n) => (typeof n === "string" ? n : n.textContent);
+  assert.match(text(planScreen.followUpsFact(steps, { follow_ups_run: true })), /After 3 days, if they have not bought, follow up/);
+  assert.equal(text(planScreen.followUpsFact([], { follow_ups_run: true })), "None");
+  for (const facts of [{ follow_ups_run: false }, {}, null]) {
+    const shown = text(planScreen.followUpsFact(steps, facts));
+    assert.ok(shown.startsWith("Not sent"), JSON.stringify(facts));
+    assert.ok(!shown.includes("After 3 days, if they have not bought, follow up"), "a follow-up that never goes out is not promised");
   }
 });
