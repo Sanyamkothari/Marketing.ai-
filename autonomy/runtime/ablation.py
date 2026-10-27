@@ -65,7 +65,9 @@ class Variant:
     kwargs: Callable[[], dict[str, Any]]
     """The keyword arguments for `build_agent_policy`, built on call so a variant imports its piece lazily."""
     cap_factor: int = 1
-    """What the brief's weekly contact cap is multiplied by (1: the brief as it is)."""
+    """What the brief's weekly contact cap is multiplied by (1: the brief as it is). The cap is not only the
+    hard rule: the agent sizes its weekly-budget rhythms and the attention price's lost-value horizon by it
+    (`ContactPrice.cap`), and journeys are filtered by it, so all of these move with it."""
 
 
 def _preset(**off: Any) -> Callable[[], dict[str, Any]]:
@@ -181,7 +183,9 @@ def _variants() -> dict[str, Variant]:
         Variant(
             "agent_loose_caps",
             GUARD,
-            f"does the brief's weekly contact cap (x{LOOSE_CAP_FACTOR} here) bind",
+            f"does the brief's weekly contact cap (x{LOOSE_CAP_FACTOR} here) bind, with everything sized by it: "
+            "the hard rule, the weekly-budget rhythm menu, the attention price's horizon and the journeys' "
+            "cap filter (read it next to agent_no_weekly_budget)",
             dict,
             cap_factor=LOOSE_CAP_FACTOR,
         ),
@@ -264,8 +268,9 @@ def uses_who(name: str) -> bool:
 def switches(policy: AgentPolicy) -> dict[str, object]:
     """The built policy's flags, one per switch a variant moves, read back from the policy itself.
 
-    The brief's weekly cap is not a policy flag (the cap comes from the briefs), so it is not here; see
-    `variant_briefs`."""
+    `weekly_cap` is the cap the agent read from its briefs (`ContactPrice.cap`): it sizes the weekly-budget
+    rhythms and the attention price's horizon as well as the hard rule, which checks the run's briefs;
+    `variant_briefs` is what raises it."""
     inner = policy.policy
     moments = policy.moments
     return {
@@ -280,6 +285,7 @@ def switches(policy: AgentPolicy) -> dict[str, object]:
         "weekly_budget": inner.budget_fn is not None,
         "exploration_floor": inner.exploration_floor,
         "attention_price": inner.attention_price_fn is not None and inner.channel_price_fn is not None,
+        "weekly_cap": policy.contact_price.cap(),
     }
 
 

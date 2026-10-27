@@ -50,6 +50,7 @@ def test_the_plain_agent_variant_is_the_default_build() -> None:
         "weekly_budget": True,
         "exploration_floor": None,
         "attention_price": True,
+        "weekly_cap": default_brief().envelope.max_contacts_per_week,
     }
     assert inspect.signature(build_agent_policy).parameters["attention_price"].default is True
     assert inspect.signature(AgentPolicy.__init__).parameters["attention_price"].default is True
@@ -103,8 +104,12 @@ def test_a_guard_variant_relaxes_only_its_guard(name: str, changed: dict[str, ob
     assert _diff(name) == changed
 
 
-def test_loose_caps_raises_only_the_briefs_weekly_cap() -> None:
-    assert _diff("agent_loose_caps") == {}  # no policy flag moves: the cap is in the briefs
+def test_loose_caps_raises_the_cap_and_what_the_agent_sizes_by_it() -> None:
+    """The cap is not only the hard rule: the agent's `ContactPrice` reads it too, so the weekly-budget rhythm
+    menu and the attention price's horizon move with it (docs/v3/DIAGNOSE.md). No other flag moves."""
+    plain, loose = _build("agent"), _build("agent_loose_caps")
+    assert loose.contact_price.cap() == 3 * plain.contact_price.cap()
+    assert _diff("agent_loose_caps") == {"weekly_cap": 3 * plain.contact_price.cap()}
     [brief] = ablation.variant_briefs("agent_loose_caps", [default_brief()])
     assert brief.envelope.max_contacts_per_week == default_brief().envelope.max_contacts_per_week * 3
     assert brief.model_copy(update={"envelope": default_brief().envelope}) == default_brief()
