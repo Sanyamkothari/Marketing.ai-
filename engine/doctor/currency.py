@@ -57,6 +57,7 @@ from engine.agent.currency_steps import (
 from engine.agent.formats import MIN_CONVERT_SHARE, currency_codes, parse_numbers
 from engine.config import StrictBase
 from engine.doctor.indian_values import money_header
+from engine.doctor.out_of_scope import out_of_scope
 from engine.pilot.roi import format_inr
 from engine.storage import Storage, StorageError
 from engine.utils.time import utc_now
@@ -144,6 +145,10 @@ _HEADER_UNITS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
 """A header word that names the column's currency: `amount_usd`, `Price (INR)`, `spend in dollars`."""
 _SELECTOR_HEADER: Final[re.Pattern[str]] = re.compile(r"(?i)(currency|curr\b|ccy|country|market|region)")
 """A column that may say which rows are in which currency."""
+_CURRENCY_HEADER: Final[re.Pattern[str]] = re.compile(r"(?i)(?:^|[^a-z])(currency|curr|ccy)(?:$|[^a-z])")
+"""A column that names, for each row, the currency its amount is in."""
+_COUNTRY_HEADER: Final[re.Pattern[str]] = re.compile(r"(?i)(?:^|[^a-z])(country|market|region)(?:$|[^a-z])")
+"""A column that names a country; several countries beside an amount hint at several currencies."""
 _COUNTRY_CODES: Final[dict[str, str]] = {
     "in": "INR",
     "ind": "INR",
@@ -382,6 +387,117 @@ def _candidates(frame: pd.DataFrame, column: str, skip: set[str]) -> tuple[str, 
     return tuple(found)
 
 
+def _selector_values(frame: pd.DataFrame, name: str) -> dict[str, int]:
+    """Rows per distinct trimmed value of a column (bounded); empty when a value is long or holds a digit."""
+    counts: dict[str, int] = {}
+    for value in frame[name].dropna().head(MAX_DISTINCT * 10).tolist():
+        text = str(value).strip()
+        if not text:
+            continue
+        if len(text) > 40 or any(ch.isdigit() for ch in text):
+            return {}
+        counts[text] = counts.get(text, 0) + 1
+        if len(counts) > MAX_SELECTOR_VALUES:
+            return {}
+    return counts
+
+
+def _currency_column(frame: pd.DataFrame, skip: set[str]) -> tuple[str, dict[str, int]] | None:
+    """A `currency` column whose values are all ISO codes and more than one: (name, rows per code), else None."""
+    for name in (str(c) for c in frame.columns):
+        if name in skip or not _CURRENCY_HEADER.search(name):
+            continue
+        values = _selector_values(frame, name)
+        counts: dict[str, int] = {}
+        for text, n in values.items():
+            counts[text.upper()] = counts.get(text.upper(), 0) + n
+        if len(counts) > 1 and all(is_currency_code(code) for code in counts):
+            return name, counts
+    return None
+
+
+def _country_column(frame: pd.DataFrame, skip: set[str]) -> tuple[str, int] | None:
+    """A `country` column with several countries: (name, how many countries), else None. Names are never kept."""
+    for name in (str(c) for c in frame.columns):
+        if name in skip or not _COUNTRY_HEADER.search(name):
+            continue
+        distinct = len({v.casefold() for v in _selector_values(frame, name)})
+        if distinct > 1:
+            return name, distinct
+    return None
+
+
+def _by_currency_column(column: ColumnCurrency, selector: str, counts: dict[str, int]) -> CurrencyFinding:
+    """CURRENCY_MIXED (stop) for plain amounts whose own `currency` column holds several currencies."""
+    parts = [
+        _plural(n, f"row in {currency_name(c)}", f"rows in {currency_name(c)}")
+        for c, n in sorted(counts.items())
+    ]
+    options = [
+        CurrencyOption(
+            key=f"rows_by_column:{selector}", label=f"'{selector}' says which rows are in which currency"
+        )
+    ]
+    options += [
+        CurrencyOption(
+            key=f"keep_rows:{code}",
+            label=f"Keep only the {_plural(n, 'row')} in {currency_name(code)} and leave the rest out",
+        )
+        for code, n in sorted(counts.items())
+    ]
+    options.append(
+        CurrencyOption(
+            key="out_of_scope",
+            label=out_of_scope("CURRENCY_CONVERSION", currencies=" and ".join(sorted(counts))),
+        )
+    )
+    return CurrencyFinding(
+        code="CURRENCY_MIXED",
+        column=column.column,
+        severity="stop",
+        currencies=tuple(sorted(counts)),
+        rows=dict(sorted(counts.items())),
+        unmarked=column.unmarked,
+        candidates=(selector,),
+        question=CurrencyQuestion(
+            text=(
+                f"'{selector}' shows more than one currency ({'; '.join(parts)}), so '{column.column}' cannot be "
+                "added up as one amount. Amounts in different currencies are never added together, so nothing is "
+                "built from this column until you choose."
+            ),
+            options=tuple(options),
+            blocking=True,
+        ),
+    )
+
+
+def _by_countries(column: ColumnCurrency, selector: str, countries: int, workspace: str) -> CurrencyFinding:
+    """CURRENCY_UNSTATED (ask, never a stop): several countries beside an amount that names no currency."""
+    return CurrencyFinding(
+        code="CURRENCY_UNSTATED",
+        column=column.column,
+        severity="ask",
+        currencies=(),
+        unmarked=column.unmarked,
+        candidates=(selector,),
+        question=CurrencyQuestion(
+            text=(
+                f"'{column.column}' names no currency, and '{selector}' holds {countries} countries. Are all the "
+                f"amounts in {currency_name(workspace)}, or in different currencies by country?"
+            ),
+            options=(
+                CurrencyOption(key=f"unit:{workspace}", label=f"All in {currency_name(workspace)}"),
+                CurrencyOption(
+                    key=f"rows_by_column:{selector}",
+                    label=f"'{selector}' says which rows are in which currency",
+                ),
+                CurrencyOption(key="unit:other", label="All in one other currency (say which)"),
+            ),
+            blocking=False,
+        ),
+    )
+
+
 def _foreign(column: ColumnCurrency, code: str, workspace: str) -> CurrencyFinding:
     count = sum(column.rows.values()) + column.unmarked
     return CurrencyFinding(
@@ -492,6 +608,9 @@ def check_currency(
     found = read_currencies(frame, columns=columns, primary_key=primary_key, target=target)
     units: dict[str, str] = {}
     findings: list[CurrencyFinding] = []
+    money_names = {c.column for c in found}
+    currency_col = _currency_column(frame, skip | money_names) if found else None
+    country_col = _country_column(frame, skip | money_names) if found else None
     for column in found:
         codes = set(column.codes)
         held = confirmed.get(column.column)
@@ -502,7 +621,12 @@ def check_currency(
             continue
         code = next(iter(codes)) if codes else held if held and is_currency_code(held) else None
         if code is None:
-            findings.append(_unstated(column, workspace_currency))
+            if currency_col is not None:
+                findings.append(_by_currency_column(column, *currency_col))
+            elif country_col is not None:
+                findings.append(_by_countries(column, *country_col, workspace_currency))
+            else:
+                findings.append(_unstated(column, workspace_currency))
         elif code == workspace_currency:
             units[column.column] = code
         else:

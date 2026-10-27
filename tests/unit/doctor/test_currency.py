@@ -552,3 +552,51 @@ def test_two_columns_in_two_currencies_are_shown_apart() -> None:
         == "Amounts in Indian rupees and US dollars are shown apart and never added together."
     )
     assert report_money(basis) is not None
+
+
+# ---------------------------------------------------------------------------
+# W10: a currency column, or several countries, beside plain amounts
+# ---------------------------------------------------------------------------
+def test_a_currency_column_with_one_value_passes_silently() -> None:
+    frame = pd.DataFrame({"id": [1, 2, 3], "amount": [100.0, 250.0, 75.0], "currency": ["INR", "INR", "INR"]})
+    check = check_currency(frame, workspace_currency="INR", primary_key="id")
+    assert not check.stopped
+    assert [f.code for f in check.findings] == ["CURRENCY_UNSTATED"]  # the unit still waits for the person
+
+
+def test_a_currency_column_holding_inr_and_usd_stops_with_counts_only() -> None:
+    frame = pd.DataFrame(
+        {"id": [1, 2, 3, 4], "amount": [100.0, 250.0, 75.0, 9.0], "currency": ["INR", "USD", "INR", "inr"]}
+    )
+    check = check_currency(frame, workspace_currency="INR", primary_key="id")
+    assert check.stopped
+    (finding,) = check.findings
+    assert (finding.code, finding.column, finding.currencies) == ("CURRENCY_MIXED", "amount", ("INR", "USD"))
+    assert finding.rows == {"INR": 3, "USD": 1}
+    keys = [o.key for o in finding.question.options]
+    assert keys == ["rows_by_column:currency", "keep_rows:INR", "keep_rows:USD", "out_of_scope"]
+    assert "3 rows in Indian rupees" in finding.question.text
+    assert answer_mixed(
+        finding,
+        workspace_currency="INR",
+        rows_column="currency",
+        spellings={"INR": ["INR", "inr"], "USD": ["USD"]},
+    ).to_convert == ("USD",)
+
+
+def test_a_country_column_alone_gives_a_question_not_a_stop() -> None:
+    frame = pd.DataFrame(
+        {"id": [1, 2, 3], "amount": [100.0, 250.0, 75.0], "country": ["India", "Germany", "India"]}
+    )
+    check = check_currency(frame, workspace_currency="INR", primary_key="id")
+    assert not check.stopped
+    (finding,) = check.findings
+    assert (finding.code, finding.severity, finding.question.blocking) == ("CURRENCY_UNSTATED", "ask", False)
+    assert "holds 2 countries" in finding.question.text
+    assert "Germany" not in finding.question.model_dump_json()
+
+
+def test_one_country_beside_plain_amounts_is_the_ordinary_question() -> None:
+    frame = pd.DataFrame({"id": [1, 2], "amount": [100.0, 250.0], "country": ["India", "india"]})
+    (finding,) = check_currency(frame, workspace_currency="INR", primary_key="id").findings
+    assert "countries" not in finding.question.text
