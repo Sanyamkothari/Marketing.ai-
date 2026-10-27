@@ -33,3 +33,17 @@ the Data Doctor's AI cannot call it.
 Point-in-time (a feature never changes when rows after the snapshot are added or removed); preset compile = SQL result
 on a fixture; leak probe fires on a hand-written feature that reads the future; the Online Retail replay builds the
 training table with `rfm_plus` and the outcome, and reaches a readiness verdict.
+
+## Step 7b - the owner's feature toolkit (2026-10-27)
+
+Mapped from the owner's feature-engineering guide; 7b follows Step 7 on the same tool.
+
+| Concept | Decision |
+|---|---|
+| Ratios | Presets: dormancy index = recency_days / tenure_days; return rate = returned items / items; spend velocity = spend / tenure months; basket depth = items / orders. Division by zero gives blank, reported. |
+| RFM | Step 7 `rfm` preset (recency; orders in N days; mean / median / max order value). |
+| Velocity / trend | activity in the last 30 days / (activity in the prior 90 days / 3), for spend and for orders; > 1 growing, < 1 decaying. |
+| Encodings | Left to AutoML (one-hot, categories). Ordinal: the existing `map_values` step, proposed by the AI for known ordered labels. **Target encoding is not done in the Data Doctor**: it leaks the outcome unless computed out-of-fold inside training. |
+| Interactions | Only business-meaningful products or flags (e.g. discount-sensitive x high historical spend), proposed with a reason, approved by the person. Trees learn the rest. |
+| Binning | Business buckets from the use case (win-back: 0-30 days active, 31-90 at risk, 90+ lapsed), proposed by the AI, approved by the person; the raw number is kept beside the bucket. |
+| Leakage | Enforced in code (Step 7): point-in-time to the snapshot, the leak probe in every scope, features never read the outcome. |
