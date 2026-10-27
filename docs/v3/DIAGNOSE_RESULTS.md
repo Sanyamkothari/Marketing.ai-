@@ -3,8 +3,7 @@
 27 Oct 2026. The ablation runs set up in [DIAGNOSE.md](DIAGNOSE.md) ran in CI as run
 [40464041864](https://github.com/Sanyamkothari/Marketing.ai-/actions/runs/40464041864) (commit 6c9704f3, which
 includes the f-proof and f-codes fixes). They cover 4 Gym scenarios × 20 variants and the Hillstrom and X5 bench × 20
-variants. **111 of the 120 jobs are read here. None failed.** The 9 still running are listed at the end. None of
-them can change the answer to H2, H3, H4 or H5, and two of them would finish settling H1 in the Gym.
+variants. **All 120 jobs are read here. None failed.**
 
 The question was: is it too many rules, strict AI prompts, the ML, or the wrong method?
 
@@ -16,8 +15,8 @@ The question was: is it too many rules, strict AI prompts, the ML, or the wrong 
 2. **It is not prompts.** No LLM call sits on the decision path in the Gym, on the bench or in production
    ([ROOT_CAUSE.md](ROOT_CAUSE.md), audit 1). This run changes nothing about that.
 3. **v3 lost because of two parts, and a different one in each test bed:**
-   - In the Gym it is **journeys**. On its own it costs 25-34%. Removing it from v3 gives back almost everything in
-     `discount_cannibalisation`.
+   - In the Gym it is **journeys**. On its own it costs 25-34%. Removing it from v3 gives back 89-98% of v3's loss in
+     three of four scenarios, and about 70% in `whatsapp_fatigue`.
    - On the real bench it is **who**. On its own it stops contact with 98% of customers. Removing it from v3 gives
      back everything on both datasets.
    - Moments and offers do nothing at all: their decisions are identical to the plain agent's.
@@ -53,11 +52,11 @@ Gym, value change against the plain agent:
 | Variant | baseline_shop | whatsapp_fatigue | discount_cannibalisation | sleeping_dogs_15 |
 |---|---:|---:|---:|---:|
 | agent_v3 (everything on) | -29.4% | -39.7% | -37.7% | -28.2% |
-| v3 without journeys | pending | **-11.2%** | **-0.8%** | pending |
+| v3 without journeys | **-1.4%** | **-11.2%** | **-0.8%** | **-3.2%** |
 | v3 without who | -28.8% | -35.2% | -35.1% | -28.1% |
 | v3 without look-alike | -28.6% | -36.0% | -36.9% | -28.4% |
-| v3 without frequency | -28.4% | -35.0% | -35.2% | pending |
-| v3 without moments / offers | -29.4% | -39.7% | -37.7% | pending |
+| v3 without frequency | -28.4% | -35.0% | -35.2% | -25.7% |
+| v3 without moments / offers | -29.4% | -39.7% | -37.7% | -28.2% |
 
 With journeys on, the reason "never reads this channel" (`no_bids:journey_never_read`) accounts for 30-41% of all
 "do nothing" decisions. Contacts per customer-week fall from 1.6 to about 0.8-1.0. In `whatsapp_fatigue` the -11.2%
@@ -88,7 +87,8 @@ so "never read" can never fire there. That is why the Gym and the bench blamed d
 - **Journeys alone loses in every Gym scenario:** -28.2%, -26.7%, -33.6%, -24.8%.
 - **Who alone loses on the bench** (above). In the Gym it is within 1% of the plain agent, except -6.0% in
   `whatsapp_fatigue`.
-- **Look-alike and frequency alone** sit within ±1% in three scenarios and lose 5-7% in `whatsapp_fatigue`. On the
+- **Look-alike alone** sits within ±1% in three scenarios and loses 4.7% in `whatsapp_fatigue`. **Frequency
+  alone** is within ±1% in two scenarios and loses 2.2% in `sleeping_dogs_15` and 6.7% in `whatsapp_fatigue`. On the
   bench they give +0.5% (Hillstrom) and +0.1% (X5), well inside the noise.
 - **Moments and offers alone are inert.** They make the same decisions and get the same value as the plain agent
   everywhere they were run. The only trace of moments is a higher *expected* value on X5 (3.05 against 2.89 per
@@ -103,7 +103,7 @@ so "never read" can never fire there. That is why the Gym and the bench blamed d
 | no restraint | 0 | 0 | 0 | 0 | 0 | 0 |
 | no exploration | +1.1% | -0.9% | +1.2% | +0.4% | +3.6% | +0.1% |
 | no attention price | -0.1% | +1.1% | +1.1% | +0.9% | 0 | 0 |
-| loose caps | -17.9% | -0.8% | -20.2% | pending | 0 | 0 |
+| loose caps | -17.9% | -0.8% | -20.2% | -29.0% | 0 | 0 |
 | no weekly budget | -14.1% | -79.4% | -12.6% | -14.9% | 0 | 0 |
 | no guards at all | -14.6% | -88.5% | -11.8% | -15.0% | +3.6% | +0.1% |
 
@@ -171,14 +171,17 @@ measured value is negative on Hillstrom, and 0.26× on 1.5% of X5 customers).
   if it beats the best simple rule on held-out data), and the agent with exploration off and the click model detached.
   Add a calibration gate that shrinks the agent's expected value to what the holdout measures.
 
-## Still pending in run 40464041864
+## How much of v3's Gym loss is journeys
 
-- baseline_shop: `v3_no_journeys`
-- sleeping_dogs_15: `agent_frequency`, `agent_who`, `agent_offers`, `agent_loose_caps`, `v3_no_frequency`,
-  `v3_no_moments`, `v3_no_journeys`, `v3_no_offers`
+| Scenario | agent_v3 | v3 without journeys | plain agent | Share of the gap recovered |
+|---|---:|---:|---:|---:|
+| baseline_shop | 22,905 | 31,991 | 32,460 | 95% |
+| sleeping_dogs_15 | 17,588 | 23,699 | 24,483 | 89% |
+| discount_cannibalisation | 16,717 | 26,601 | 26,818 | 98% |
+| whatsapp_fatigue | 23,936 | 35,266 | 39,707 | 72% |
 
-`v3_no_journeys` in baseline_shop and sleeping_dogs_15 will say whether journeys explains the whole Gym loss there too,
-as it does in discount_cannibalisation, or only most of it, as in whatsapp_fatigue.
+Journeys is most of the Gym loss everywhere. The 2-11% that is left is the sum of the small losses look-alike, who and
+frequency each show on their own. It is largest in `whatsapp_fatigue`, where each of them loses 5-7% alone.
 
 ## How the numbers were read
 
