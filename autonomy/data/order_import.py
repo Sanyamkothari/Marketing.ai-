@@ -30,10 +30,13 @@ What it produces:
   order for `Refunded Amount`, naming `order_id`, and one `void` refund for the unpaid rest of a voided
   order, as the connector writes them. UCI: one per returned line; a UCI return does not say which
   invoice it returns, so it names no order and the proof matches it to the customer's latest earlier
-  purchase with exactly that amount left.
+  purchase with exactly that amount left. A return by a customer with no purchase in the file (nor, given
+  the store, in the store) is skipped, as are UCI's non-product lines (postage, fees, manual adjustments).
 - **Consent only when the file says so.** Only a Shopify `Accepts Marketing` of yes becomes a
   `CONSENT_GRANTED` on email. Everything else (UCI, a "no", a blank) has no consent and is not
   contactable. Nothing is invented: no signup event either, because a first order is not a signup date.
+  An export never overrides an opt-out the store holds (an unsubscribe, a complaint, a revoke from
+  elsewhere, or an earlier import's revoke at or after this export).
 
 **Idempotent** (DECISIONS B-8). An event's id is `stable_id` over a content hash of (shop, kind, order id,
 line). The line of a purchase is the whole order; the line of a UCI return is its stock code, quantity and
@@ -48,8 +51,9 @@ adds only the increase.
 (UTC unless given) and the report says how many were. Events are stored in UTC and carry the shop's zone
 as `attrs["timezone"]` when it is not UTC, as `map_frame` does. A slash date that could be day first or
 month first is refused with the option that settles it unless the file's own dates settle it.
-Shopify's export holds no refund time and no consent time: both are stamped at `exported_at` (the
-latest order in the file unless given) and the report says so.
+Shopify's export holds no refund time and no consent time: both are stamped at `exported_at`, which
+must then be given and not be earlier than the latest order in the file (the command line defaults it
+to the file's modification time, the API route to the time the upload is received).
 
 Pure and deterministic, apart from the optional store reads and writes. No clock reads.
 """
@@ -109,6 +113,8 @@ SKIP_REASONS: Final[dict[str, str]] = {
     "zero_quantity": "a quantity of zero",
     "order_customer_conflict": "the order already belongs to another customer",
     "other_currency": "the row is in another currency than the one imported",
+    "non_product_line": "a postage, fee, discount or manual line, not goods (UCI StockCode POST, D, M ...)",
+    "return_without_purchase": "a return by a customer with no purchase in the file or the store",
 }
 """Why a row is left out, in plain words. The report counts skipped rows by these keys."""
 
@@ -117,6 +123,15 @@ _UNPAID_STATUSES: Final[frozenset[str]] = frozenset({"voided", "expired"})
 _YES: Final[frozenset[str]] = frozenset({"yes", "true", "1", "y", "subscribed"})
 _NO: Final[frozenset[str]] = frozenset({"no", "false", "0", "n", "unsubscribed", "not_subscribed"})
 _PLACEHOLDERS: Final[frozenset[str]] = frozenset(DEFAULT_ID_PLACEHOLDERS)
+_NON_PRODUCT_CODES: Final[frozenset[str]] = frozenset(
+    {"POST", "DOT", "C2", "D", "M", "S", "B", "BANK CHARGES", "AMAZONFEE", "CRUK"}
+)
+"""UCI Online Retail stock codes that are not goods: postage and carriage, discounts, manual entries,
+samples, bad-debt adjustments, bank and marketplace fees, charity."""
+_OPT_OUTS: Final[frozenset[EventType]] = frozenset({EventType.UNSUBSCRIBE, EventType.COMPLAINT})
+_EMAIL_CONSENT_TYPES: Final[frozenset[EventType]] = frozenset(
+    {EventType.CONSENT_GRANTED, EventType.CONSENT_REVOKED, *_OPT_OUTS}
+)
 
 _ISO_TIME = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?\s*(Z|[+-]\d{2}:?\d{2})?$"
@@ -141,12 +156,18 @@ class ImportReport(Contract):
     orders: int = Field(description="Distinct orders that became a PURCHASE")
     customers: int = Field(description="Distinct customers with at least one event")
     purchases: int
-    refunds: int = Field(description="REFUND events, including voids")
-    refunded_amount: float
-    revenue: float = Field(description="Sum of the PURCHASE values, before refunds")
+    refunds: int = Field(description="REFUND events the file holds, including voids")
+    refunded_amount: float = Field(
+        description="Their total as the file states it; a grown Shopify refund writes only the increase"
+    )
+    revenue: float = Field(description="Sum of the file's PURCHASE values, before refunds")
     skipped: dict[str, int] = Field(default_factory=dict, description="Rows left out, by reason")
     contactable: int = Field(
-        description="Customers the file says accept marketing by email. Everyone else has no consent"
+        description="Customers the file says accept marketing by email, less those whose stored opt-out "
+        "stands. Everyone else has no consent"
+    )
+    consent_blocked: int = Field(
+        default=0, description="Yes answers not written because the store holds an opt-out that stands"
     )
     consent_events: int
     consent_revoked: int = Field(default=0, description="Consents withdrawn because the file now says no")
@@ -172,6 +193,10 @@ class Parsed:
     customers: frozenset[str] = frozenset()
     withdrawn: frozenset[str] = frozenset()
     """Customers whose file says "no": a store that holds a consent for them gets a revoke."""
+    stamp: datetime | None = None
+    """`exported_at`: the time of the refunds and consent the export holds without one."""
+    orphans: list[Event] = field(default_factory=list)
+    """UCI returns by customers with no purchase in the file, written only if the store holds one."""
 
 
 # ---------------------------------------------------------------------------
@@ -418,9 +443,12 @@ def _uci(
         if price <= 0:
             b.skip("non_positive_price")
             continue
+        sku = row.get("stockcode", "")
+        if sku.strip().upper() in _NON_PRODUCT_CODES:
+            b.skip("non_product_line")
+            continue
         ts, naive = when
         b.naive += naive
-        sku = row.get("stockcode", "")
         country = row.get("country", "")
         b.used += 1
         if qty < 0 or invoice.upper().startswith("C"):
@@ -613,7 +641,9 @@ def _consents(b: _Build, orders: dict[str, dict[str, Any]], exported_at: datetim
             b.granted[customer] = exported_at
             out.append(
                 Event(
-                    event_id=_event_id(b.shop, "consent", customer, "email", "granted"),
+                    event_id=_event_id(
+                        b.shop, "consent", customer, "email", "granted", exported_at.isoformat()
+                    ),
                     customer_id=customer,
                     type=EventType.CONSENT_GRANTED,
                     ts=exported_at,
@@ -659,24 +689,41 @@ def parse_orders(
     )
     if legacy:
         b.notes.append("The file is not UTF-8; it was read as Windows-1252.")
+    orphans: list[Event] = []
     if cols.shape == SHAPE_UCI:
         orders, returns = _uci(rows, cols, b, order)
-        events = _purchase_events(b, orders) + returns
+        buyers = {o["customer"] for o in orders.values()}
+        orphans = [e for e in returns if e.customer_id not in buyers]
+        if orphans:
+            b.skip("return_without_purchase", len(orphans))
+            b.used -= len(orphans)
+        events = _purchase_events(b, orders) + [e for e in returns if e.customer_id in buyers]
         consents: list[Event] = []
         b.notes.append("This file has no consent column: nobody in it is contactable.")
-        last = max((o["ts"] for o in orders.values()), default=None)
     else:
         orders = _shopify(rows, cols, b, order)
         last = max((o["ts"] for o in orders.values()), default=None)
-        stamp = exported_at or last or datetime(1970, 1, 1, tzinfo=UTC)
-        events = _purchase_events(b, orders) + _shopify_refunds(b, orders, stamp)
+        if exported_at is not None and last is not None and exported_at < last:
+            raise OrderImportError(
+                f"exported_at {exported_at.isoformat()} is earlier than the latest order in the file "
+                f"({last.isoformat()}); give the time the export was made"
+            )
+        stamp = exported_at or datetime(1970, 1, 1, tzinfo=UTC)
+        refunds = _shopify_refunds(b, orders, stamp)
         consents = _consents(b, orders, stamp)
+        undated = bool(consents or b.withdrawn) or any(e.attrs.get("time_known") is False for e in refunds)
+        if exported_at is None and undated:
+            raise OrderImportError(
+                "this export has refunds or marketing answers whose time is not in the file; give the time "
+                "the export was made (exported_at, --exported-at) so they are not dated before they happened"
+            )
+        events = _purchase_events(b, orders) + refunds
         if "acceptsmarketing" not in names:
             b.notes.append("This file has no Accepts Marketing column: nobody in it is contactable.")
-        else:
+        if exported_at is not None and undated:
             b.notes.append(
-                f"Consent and refund times are not in the export; they are stamped {stamp.isoformat()} "
-                f"({'exported_at as given' if exported_at else 'the latest order in the file'})."
+                "Consent and refund times are not in the export; they are stamped at exported_at "
+                f"{exported_at.isoformat()}."
             )
     if b.naive:
         b.notes.append(
@@ -714,7 +761,12 @@ def parse_orders(
         notes=tuple(b.notes),
     )
     return Parsed(
-        events=events, report=report, customers=frozenset(customers), withdrawn=frozenset(b.withdrawn)
+        events=events,
+        report=report,
+        customers=frozenset(customers),
+        withdrawn=frozenset(b.withdrawn),
+        stamp=exported_at,
+        orphans=orphans,
     )
 
 
@@ -724,14 +776,59 @@ def _held(store: EventStore, customer: str, cache: dict[str, list[Event]]) -> li
     return cache[customer]
 
 
-def _reconcile(parsed: Parsed, store: EventStore) -> tuple[list[Event], int]:
-    """Events to offer the store: a Shopify refund as the increase over what is held, and a revoke for a
-    customer the file now says declines marketing while the store still holds their consent."""
+def _email_consents(events: Iterable[Event]) -> list[Event]:
+    """The held events that decide e-mail consent, oldest first."""
+    return sorted(
+        (x for x in events if x.type in _EMAIL_CONSENT_TYPES and x.channel in (Channel.EMAIL, None)),
+        key=lambda x: (x.ts, x.event_id),
+    )
+
+
+def _opt_out_stands(held: Sequence[Event], shop: str, at: datetime) -> bool:
+    """True when a held opt-out outranks an export's yes stamped `at`.
+
+    An unsubscribe or a complaint always stands, and so does a revoke from anywhere but this importer.
+    An earlier import's own revoke (an export that said no) stands unless this export is later.
+    """
+    for x in held:
+        if x.type in _OPT_OUTS:
+            return True
+        if x.type is EventType.CONSENT_REVOKED:
+            own = x.source == SOURCE and x.attrs.get("import_shop") == shop
+            if not own or x.ts >= at:
+                return True
+    return False
+
+
+@dataclass
+class _Reconciled:
+    offered: list[Event]
+    revoked: int = 0
+    blocked: int = 0
+    orphans_kept: list[Event] = field(default_factory=list)
+
+
+def _reconcile(parsed: Parsed, store: EventStore) -> _Reconciled:
+    """Events to offer the store, given what it holds.
+
+    A Shopify refund is offered as the increase over what earlier imports hold. A consent grant is
+    dropped when the customer's latest held e-mail consent is already a grant (nothing to add), or when
+    a held opt-out stands (`_opt_out_stands`). A customer the file now says declines marketing, whose
+    latest held consent is a grant, gets a revoke. A UCI return by a customer with no purchase in the
+    file is kept only if the store holds an earlier purchase of theirs.
+    """
     cache: dict[str, list[Event]] = {}
     out: list[Event] = []
-    revoked = 0
+    result = _Reconciled(offered=out)
     shop = parsed.report.shop
     for e in parsed.events:
+        if e.type is EventType.CONSENT_GRANTED:
+            consents = _email_consents(_held(store, e.customer_id, cache))
+            if consents and consents[-1].type is EventType.CONSENT_GRANTED:
+                continue
+            if _opt_out_stands(consents, shop, e.ts):
+                result.blocked += 1
+                continue
         if e.type is EventType.REFUND and e.attrs.get("refund_id") == "refunded":
             held = sum(
                 x.value or 0.0
@@ -748,18 +845,13 @@ def _reconcile(parsed: Parsed, store: EventStore) -> tuple[list[Event], int]:
                 continue
             e = e.model_copy(update={"value": increase})
         out.append(e)
-    stamp = max((e.ts for e in parsed.events), default=None)
+    for e in parsed.orphans:
+        if any(x.type is EventType.PURCHASE and x.ts <= e.ts for x in _held(store, e.customer_id, cache)):
+            result.orphans_kept.append(e)
+            out.append(e)
+    stamp = parsed.stamp
     for customer in sorted(parsed.withdrawn):
-        events = _held(store, customer, cache)
-        consents = sorted(
-            (
-                x
-                for x in events
-                if x.channel is Channel.EMAIL
-                and x.type in (EventType.CONSENT_GRANTED, EventType.CONSENT_REVOKED, EventType.UNSUBSCRIBE)
-            ),
-            key=lambda x: (x.ts, x.event_id),
-        )
+        consents = _email_consents(_held(store, customer, cache))
         if stamp is not None and consents and consents[-1].type is EventType.CONSENT_GRANTED:
             out.append(
                 Event(
@@ -772,8 +864,8 @@ def _reconcile(parsed: Parsed, store: EventStore) -> tuple[list[Event], int]:
                     attrs={"import_shop": shop, "collected_from": "orders_export_accepts_marketing"},
                 )
             )
-            revoked += 1
-    return out, revoked
+            result.revoked += 1
+    return result
 
 
 def write_events(events: Sequence[Event], store: EventStore) -> tuple[list[Event], int]:
@@ -820,7 +912,8 @@ def import_orders(
     report = parsed.report.model_copy(update={"dry_run": dry_run})
     if store is None:
         return report, [] if dry_run else list(parsed.events)
-    offered, revoked = _reconcile(parsed, store)
+    rec = _reconcile(parsed, store)
+    offered = rec.offered
     written: list[Event] = []
     if dry_run:
         fresh = _count_new(offered, store)
@@ -829,12 +922,26 @@ def import_orders(
     else:
         written, _ = write_events(offered, store)
         fresh = len(written)
+    kept = rec.orphans_kept
+    skipped = dict(report.skipped)
+    if kept:
+        left = skipped.pop("return_without_purchase", 0) - len(kept)
+        if left > 0:
+            skipped["return_without_purchase"] = left
+    customers = {e.customer_id for e in parsed.events} | {e.customer_id for e in kept}
     report = report.model_copy(
         update={
+            "rows_used": report.rows_used + len(kept),
+            "customers": len(customers),
+            "refunds": report.refunds + len(kept),
+            "refunded_amount": round(report.refunded_amount + sum(e.value or 0.0 for e in kept), 2),
+            "skipped": skipped,
+            "contactable": report.contactable - rec.blocked,
+            "consent_blocked": rec.blocked,
             "events_built": len(offered),
             "events_new": fresh,
             "events_already_present": len(offered) - fresh,
-            "consent_revoked": revoked,
+            "consent_revoked": rec.revoked,
         }
     )
     return report, written
@@ -871,6 +978,8 @@ def format_report(report: ImportReport) -> str:
         )
     if report.consent_revoked:
         lines.append(f"  Consent withdrawn: {report.consent_revoked:,}")
+    if report.consent_blocked:
+        lines.append(f"  Consent not restored: {report.consent_blocked:,} (the store holds their opt-out)")
     lines.extend(f"  Note: {n}" for n in report.notes)
     return "\n".join(lines)
 
@@ -886,7 +995,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--timezone", default="UTC", help="IANA zone for times with no offset (default UTC)")
     p.add_argument("--currency", help="ISO currency code of the amounts")
     p.add_argument("--date-order", choices=("day_first", "month_first"), help="for dates such as 01/12/2010")
-    p.add_argument("--exported-at", help="when the export was made (ISO 8601 with offset)")
+    p.add_argument(
+        "--exported-at",
+        help="when the export was made (ISO 8601 with offset); refunds and consent are stamped at it. "
+        "Default: the file's modification time",
+    )
     p.add_argument(
         "--database-url",
         help="SQLAlchemy URL of the event store (default AUTONOMY_DATABASE_URL, else sqlite:///autonomy.db). "
@@ -898,7 +1011,10 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        exported = datetime.fromisoformat(args.exported_at) if args.exported_at else None
+        if args.exported_at:
+            exported = datetime.fromisoformat(args.exported_at)
+        else:
+            exported = datetime.fromtimestamp(args.csv.stat().st_mtime, UTC).replace(microsecond=0)
         data = args.csv.read_bytes()
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -7,7 +7,8 @@
 
 The body is the raw CSV (`Content-Type: text/csv`), the way `POST /v2/webhooks/{channel}` takes its raw body, so
 the v2 CI job needs no multipart parser. Optional query fields: `timezone` (IANA zone for times with no offset,
-default UTC), `currency`, `date_order` (`day_first` or `month_first`) and `exported_at` (ISO 8601 with offset).
+default UTC), `currency`, `date_order` (`day_first` or `month_first`) and `exported_at` (ISO 8601 with offset;
+the time refunds and consent are stamped at, default the time the upload is received, `Services.clock`).
 `shop` defaults to the server's business id. The answer is the same `ImportReport` the command line
 (`python -m autonomy.data.order_import`) prints: rows read, orders, customers, refunds, skipped rows by reason, and
 how many customers are contactable. Re-uploading the same or an overlapping export adds nothing twice
@@ -54,6 +55,7 @@ async def import_order_history(
     if declared is not None and declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="That file is too large to import in one request.")
     body = await request.body()
+    received = services.clock()
     if len(body) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="That file is too large to import in one request.")
 
@@ -67,7 +69,7 @@ async def import_order_history(
             timezone=timezone,
             currency=currency,
             date_order=date_order,
-            exported_at=exported_at,
+            exported_at=received if exported_at is None else exported_at,
         )
         return report
 

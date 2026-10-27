@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from api.v2.deps import Services, build_demo_services
+from autonomy.contracts import EventType
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SHOPIFY = (FIXTURES / "shopify_orders.csv").read_bytes()
@@ -76,3 +77,25 @@ def test_a_file_that_is_not_an_order_list_is_a_400(client: Any) -> None:
 def test_an_unknown_time_zone_is_a_400(client: Any) -> None:
     r = client.post("/v2/import/orders", params={"timezone": "Mars/Olympus"}, content=SHOPIFY, headers=CSV)
     assert r.status_code == 400
+
+
+def test_refunds_and_consent_default_to_the_receive_time(client: Any, services: Services) -> None:
+    r = client.post("/v2/import/orders", params={"shop": "in"}, content=SHOPIFY, headers=CSV)
+    assert r.status_code == 200, r.text
+    events = services.events.for_customer("ravi@example.com") + services.events.for_customer(
+        "asha@example.com"
+    )
+    undated = [e for e in events if e.attrs.get("time_known") is False or e.type is EventType.CONSENT_GRANTED]
+    assert len(undated) == 2  # ravi's refund of #1002, asha's consent
+    assert all(e.ts == NOW for e in undated)  # the services' clock, after every order in the file
+
+
+def test_an_export_time_before_the_last_order_is_a_400(client: Any) -> None:
+    r = client.post(
+        "/v2/import/orders",
+        params={"shop": "in", "exported_at": "2024-03-02T00:00:00+00:00"},
+        content=SHOPIFY,
+        headers=CSV,
+    )
+    assert r.status_code == 400
+    assert "earlier than the latest order" in r.json()["detail"]

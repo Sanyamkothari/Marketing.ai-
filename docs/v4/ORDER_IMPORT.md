@@ -15,7 +15,8 @@ python -m autonomy.data.order_import orders.csv --shop my-shop --timezone Asia/K
 ```
 
 Options: `--timezone` (IANA zone for times with no offset, default UTC), `--currency`, `--date-order day_first|month_first`,
-`--exported-at` (ISO 8601 with offset), `--database-url` (default `AUTONOMY_DATABASE_URL`, else `sqlite:///autonomy.db`).
+`--exported-at` (ISO 8601 with offset; default the file's modification time), `--database-url` (default
+`AUTONOMY_DATABASE_URL`, else `sqlite:///autonomy.db`).
 Without `--dry-run` it appends the new events and folds them into customer state. A dry run opens no database unless
 `--database-url` is given; with one it reads the store to say how many events would be new.
 
@@ -25,12 +26,16 @@ curl -X POST 'http://localhost:8000/v2/import/orders?shop=my-shop&dry_run=true' 
 ```
 
 The body is the raw CSV (as `POST /v2/webhooks/{channel}` takes its raw body), so the light v2 CI job needs no multipart
-parser. `shop` defaults to the server's business id. 400 for a file that is not a known shape, 413 above 64 MB. The route
+parser. `shop` defaults to the server's business id; `exported_at` defaults to the time the upload is received
+(`Services.clock`). 400 for a file that is not a known shape or an `exported_at` before its latest order, 413 above 64 MB. The route
 is not in `docs/v2/openapi.json` (`IN_SCHEMA` is false, as for `/v2/images`), so that shared file is untouched.
 
 The report (printed, or the JSON answer) holds: rows read and used, orders, customers, refunds and their total, gross
 revenue, skipped rows by reason, how many customers are contactable, events built, and (given a store) how many were new
-and how many already held. It carries counts only, never an id or an address.
+and how many already held. It carries counts only, never an id or an address. `orders`, `refunds`, `refunded_amount` and
+`revenue` are what the file holds: a Shopify refund that grew since an earlier import writes only the increase, and
+`events_new` says how many events were actually written. `contactable` is the file's yes answers less those whose stored
+opt-out stands (`consent_blocked`).
 
 ## What is read
 
@@ -53,7 +58,7 @@ refused, an e-mail is lower-cased). Delimiters `,` `;` and tab are sniffed; a fi
 | `PURCHASE` | one per order | value = sum of the lines (UCI) or `Total` (Shopify); attrs `order_id`, `lines`, `quantity`, `discount_codes`, `offer_id` (first code), `country`, `currency`, `financial_status`, `import_shop`; `item_id` = the biggest line. One per order, not per line, so `CustomerState.purchases` counts orders as the Shopify connector's does |
 | `REFUND` (Shopify `Refunded Amount`) | one per order | names `order_id`, `refund_id="refunded"`; never more than the order's total |
 | `REFUND` (void) | a `voided` or `expired` order | the unpaid rest of the order, `refund_id="void"`, at `Cancelled at` when the file has it (the connector's convention) |
-| `REFUND` (UCI return) | one per returned line (negative quantity, or an invoice beginning `C`) | positive value; attr `cancellation_id`; **no `order_id`**: a UCI return does not say which invoice it returns, so `autonomy.proof.rewards` matches it to the customer's latest earlier purchase with exactly that amount left, else the latest with money left (docs/v3/PROOF_PROFIT.md section 1) |
+| `REFUND` (UCI return) | one per returned line (negative quantity, or an invoice beginning `C`) | positive value; attr `cancellation_id`; **no `order_id`**: a UCI return does not say which invoice it returns, so `autonomy.proof.rewards` matches it to the customer's latest earlier purchase with exactly that amount left, else the latest with money left (docs/v3/PROOF_PROFIT.md section 1). A return by a customer with no purchase in the file is skipped (`return_without_purchase`) unless the store already holds an earlier purchase of theirs, so lifetime revenue never goes negative from an import |
 | `CONSENT_GRANTED` (email) | only Shopify `Accepts Marketing` of yes/true | see below |
 
 Nothing else: no `SIGNUP` (a first order is not a signup date), no revocation for a "no" unless the store holds a grant.
@@ -66,8 +71,17 @@ Nothing else: no `SIGNUP` (a first order is not a signup date), no revocation fo
   e-mail for Shopify exports and the shop's own id for UCI.
 - **A later no is honoured.** Given a store, a customer the file now says declines marketing, whose latest stored e-mail
   consent is a grant, gets a `CONSENT_REVOKED`. A customer who never consented gets nothing.
-- **Consent and refund times are not in a Shopify export.** Both are stamped at `exported_at` (the latest order in the file
-  unless given), never at the order, and the refund carries `time_known=false`. The report says which.
+- **An export never brings back an opt-out.** Given a store, a yes is not written when the customer holds an
+  `UNSUBSCRIBE` or `COMPLAINT`, a `CONSENT_REVOKED` from any other source, or an earlier import's own revoke at or after
+  this export's `exported_at`. The state folder folds events in the order they arrive, so without this an old export
+  would undo a newer unsubscribe. Such answers are counted in `consent_blocked` and not in `contactable`. A yes is also
+  not written again when the latest held consent is already a grant. A grant's id includes `exported_at`, so a customer
+  who said no in one export and yes in a later one is granted again.
+- **Consent and refund times are not in a Shopify export.** Both are stamped at `exported_at`, never at the order, and the
+  refund carries `time_known=false`. A Shopify file with any such refund or any marketing answer is refused without
+  `exported_at`, and so is an `exported_at` earlier than the file's latest order: either would date a refund or a consent
+  before it happened. The command line defaults it to the file's modification time, the API route to the time the upload
+  is received.
 - **Ids are text.** Order numbers (`#1001`, `536365`) and customer ids are never parsed as numbers.
 - **Time zones.** A time with an offset keeps it; one without is read in `--timezone` and counted (`naive_times`, with a
   note when that zone is the UTC default). Events are stored in UTC; a non-UTC zone is also put on the event as
@@ -78,8 +92,9 @@ Nothing else: no `SIGNUP` (a first order is not a signup date), no revocation fo
   `other_currency`; amounts are never added across currencies.
 - **Skipped rows, each with a reason** (`SKIP_REASONS`): `blank_row`, `missing_order_id`, `missing_customer` (a guest
   checkout, never merged into one customer), `placeholder_customer`, `bad_customer_id`, `bad_timestamp`, `bad_amount`,
-  `non_positive_price`, `zero_quantity`, `order_customer_conflict`, `other_currency`. For Shopify the unit is the row, and
-  an order whose customer is blank skips all its rows.
+  `non_positive_price`, `zero_quantity`, `order_customer_conflict`, `other_currency`, `non_product_line` (UCI stock codes
+  that are not goods: `POST`, `DOT`, `C2`, `D`, `M`, `S`, `B`, `BANK CHARGES`, `AMAZONFEE`, `CRUK`) and
+  `return_without_purchase`. For Shopify the unit is the row, and an order whose customer is blank skips all its rows.
 
 ## Idempotency (DECISIONS B-8)
 
@@ -102,9 +117,10 @@ Every figure is from a command run on this branch, on this machine.
 
 | Command | Result |
 |---|---|
-| `pytest -o addopts="" tests/v4/import` | 39 passed in 3.34 s (34 in `test_order_import.py`, 5 in `test_order_import_api.py`; the API file needs FastAPI and httpx and skips without them) |
-| the same plus `tests/v2/backbone/test_loaders.py test_folder.py test_sql_stores.py`, `tests/v2/realfix/test_mapping_safe.py`, `tests/v2/api/test_api.py`, `tests/unit/doctor/test_order_log.py test_order_log_parity.py`, `-n 2` | 303 passed, 22 skipped in 16.78 s (the skips are the Postgres variants, which need `MARKETING_AI_TEST_DATABASE_URL`) |
-| `python -m autonomy.data.order_import tests/v4/import/fixtures/uci_orders.csv --shop uk --dry-run --currency GBP --timezone Europe/London` | 9 rows, 6 used, 3 orders, 4 customers, 2 refunds totalling 36.00, revenue 100.82 GBP, 0 contactable, 3 skipped (1 each of `missing_customer`, `placeholder_customer`, `non_positive_price`), 5 events |
+| `pytest -o addopts="" tests/v4/import` | 52 passed in 3.76 s (45 in `test_order_import.py`, 7 in `test_order_import_api.py`; the API file needs FastAPI and httpx and skips without them) |
+| the same plus `tests/v2/backbone/test_loaders.py test_folder.py test_sql_stores.py`, `tests/v2/realfix/test_mapping_safe.py`, `tests/v2/api/test_api.py`, `tests/unit/doctor/test_order_log.py test_order_log_parity.py`, `-n 2` | 316 passed, 22 skipped in 17.37 s (the skips are the Postgres variants, which need `MARKETING_AI_TEST_DATABASE_URL`) |
+| `python -m autonomy.data.order_import tests/v4/import/fixtures/uci_orders.csv --shop uk --dry-run --currency GBP --timezone Europe/London` | 9 rows, 5 used, 3 orders, 3 customers, 1 refund totalling 8.50, revenue 100.82 GBP, 0 contactable, 4 skipped (1 each of `missing_customer`, `placeholder_customer`, `non_positive_price`, `non_product_line`), 4 events |
+| `python -m autonomy.data.order_import tests/v4/import/fixtures/shopify_orders.csv --shop in --dry-run --exported-at 2024-04-01T00:00:00+00:00` | 6 rows, 5 used, 4 orders, 3 customers, 2 refunds totalling 800.00, revenue 3,200.00 INR, 1 contactable, 1 skipped (`missing_customer`), 7 events |
 | `ruff check`, `black --check`, `mypy --strict` on the changed `autonomy/`, `api/v2/` files and the new tests | clean |
 
 ## Not done, and pending CI
@@ -120,5 +136,7 @@ Every figure is from a command run on this branch, on this machine.
   `IN_SCHEMA = True` if it should be.
 - A Shopify export's `Email` is the customer id, which differs from the numeric id the Shopify connector uses. A shop that
   later connects Shopify needs the identity linker (`autonomy/connectors/identity.py`) to join the two; this import does not.
-- The upload is not authenticated beyond whatever protects the rest of `/v2`; it writes events and consent, so put it behind
-  the same auth as the other write routes when one exists.
+- The route sits behind the v2 operator bearer-token guard (`_Guard` in `api/v2/app.py`; `/v2/import/` is not in
+  `_PUBLIC_PREFIXES`), like the other write routes.
+- An export's "no" revokes a held grant even when that grant (from Klaviyo, say) is newer than the export. This errs
+  towards not sending; a shop that re-collects consent elsewhere after an export should not re-import that older export.
