@@ -66,8 +66,8 @@ wired parts lose what they learn on every rebuild; and no v3 part is proven.
 | X5 | 72.23 [71.14, 73.32] | **70.76** [69.66, 71.86] | 1.5% |
 
 v3 changed nothing where its parts cannot see the customers' features (Criteo, MegaFon), and nearly stopped
-contacting anyone and lost where they can (Hillstrom, X5). The cause of that collapse is not yet diagnosed (the
-bench records `blocked_by` per decision; reading it is the next step). **Decision: v3 stays off; see the review's
+contacting anyone and lost where they can (Hillstrom, X5). The cause is now diagnosed: the **who** part on the bench and
+**journeys** in the Gym; see [DIAGNOSE_RESULTS.md](DIAGNOSE_RESULTS.md). **Decision: v3 stays off; see the review's
 section 8 for the fix order.** Full numbers: [redteam/bench_results.md](redteam/bench_results.md).
 
 ## Foundation fixes (review section 8, "Fix first")
