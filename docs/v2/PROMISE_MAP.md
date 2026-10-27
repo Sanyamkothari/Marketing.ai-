@@ -37,14 +37,22 @@ in the table below, in the same row numbers (the audit further down is left as i
   "Nothing new yet" there as it does on the demo. The briefing sample is the Analyst's own template output
   (extra profit, the simple rule, customer health) and no longer has "would buy anyway", "What it is learning" or a
   return-on-spend line.
-- **Row 47** (spend): Proof's "Spend so far" and Live's "Spent on messages" count different sets (Proof: the agent
-  group's contacts whose results are in, messages and discounts; Live: every message sent, as the budget limit counts
-  it). Each says what it counts, and Proof names Live's number when they differ.
+- **Row 47** (spend): Proof's "Spend so far" and Live's "Budget spent" count different sets. Proof: the agent group
+  only, contacts whose results are in, messages and the discounts used. Live: the runtime's budget ledger
+  (`SpendLedger`), every message and every matched discount as it happens, for the simple-rule group as well as the
+  agent group, which is what the budget limit counts. Each says what it counts, and Proof names Live's number when
+  they differ. The Analyst's briefing (drawn on Live) states the proof's spend as the agent group's and no longer
+  derives a "budget left" from it, so Live shows one "left" figure, the ledger's.
 - **Every screen that shows numbers** says "Simulated shop" when the shop is simulated (the sample files, or a server
   whose only data source is the Gym), Proof first; the top bar says it for the demo server.
 - **Follow-ups** (plan): the Plan screen lists a follow-up step only when the server sends it
-  (`PlanFacts.follow_ups_run`, true only with the v3 journeys). The plain agent sends none.
-- **WhatsApp**: "Coming next" on the platforms card and on the channels card; never "Ready".
+  (`PlanFacts.follow_ups_run`). No server does: the plain agent sends none, and the v3 journeys run the steps of
+  `configs/v3/journeys.yaml`, not the brief's, so every entry point leaves it false, v3 on or off.
+- **WhatsApp** (row 9): "Coming next" on the platforms card and on the channels card, never "Ready"; a paused
+  WhatsApp still says "Paused" and why. Its description says it is not ready for production (templates not synced
+  with Meta, quality signals not read), not that nothing is sent: a set-up sender does send.
+- **Rows re-read against the rewritten pitch** (9, 22, 45, 47, 57, 58), and one new row (62, no return multiple).
+  Rows 23 ("the server refuses to approve") and 56 (no price list) already covered the other new lines.
 
 ## Final status (after the promise work, 20 Oct 2026)
 
@@ -55,7 +63,9 @@ The "Where" column below says where each moved promise lives now.
 
 Checked against the simulated demo API (`python3 -m api.v2.app`) and the mock files (`?mock=1`), with the
 screenshots in [screenshots/](screenshots/README.md) retaken afterwards. Totals before the honesty pass: **49 present, 11 partial,
-1 missing** out of 61; after it (row 23 present, row 56 dropped): **50 present, 10 partial, 0 missing** out of 60.
+1 missing** out of 61 (the old pitch); after it, against the rewritten pitch (row 23 present, row 56 dropped, rows 9,
+22, 45, 47, 57 and 58 reworded to its lines, row 62 added): **51 present, 10 partial, 0 missing** out of 61. The
+screenshots were not retaken for the honesty pass.
 
 | # | Promise (short) | Screen | Status | Where you see it, or why it is not fully kept |
 | --- | --- | --- | --- | --- |
@@ -67,7 +77,7 @@ screenshots in [screenshots/](screenshots/README.md) retaken afterwards. Totals 
 | 6 | Upload files or connect your database | connect | present | "Bring your data in" says exactly what to upload and where (the Data Doctor in the Marketing AI app, linked); "What is connected" shows the API's totals and sources. Uploading itself still happens in v1. |
 | 7 | The Data Doctor cleans up messy data | connect | partial | "What the Data Doctor fixed" lists fixes with row counts, but only when its report is linked (`doctor_connected`). The demo has no linked report, so the card says so and shows no counts; "columns mapped" is not reported by the API. |
 | 8 | ...and asks before changing anything | connect | partial | "It asks before changing anything." shows everywhere, with how it asks in its description (the card is "Data Doctor questions" when nothing waits); "Waiting for your answer (n)" with rows affected shows only when the report is linked (mock). Answering means going to the v1 Data Doctor: v2 has no endpoint for answers. |
-| 9 | Email and WhatsApp today; SMS and your tools by hand-off | connect | present | "How messages go out": Sent by Autonomy (Email, WhatsApp) and By hand-off (SMS, your own tools), each Ready / Not set up yet / Paused with the API's reason. |
+| 9 | Email today; WhatsApp is next; SMS and your tools by hand-off | connect | present | "How messages go out": Sent by Autonomy (Email; WhatsApp is coming next) and By hand-off (SMS, your own tools). Email is Ready / Not set up yet / Paused with the API's reason; WhatsApp is "Coming next" (never "Ready"), with why it is not ready for production in its description, or "Paused" with the API's reason when a safety check paused it. The platforms card lists WhatsApp under "Coming next" too. |
 | 10 | Less spam, healthier lists | connect | present | Five health lines (label and number, rate rounded to 2 places); each line's meaning and the goal's safety stop, in the API's words, are the label's description. |
 | 11 | Type what you want, in plain words | goal | present | Text box with the pitch's own example; how to say it ("Say who, what you want them to do, and how much to spend.") is the label's (i), and "Every new goal starts in Shadow." holds "Nothing is sent yet" in its description. |
 | 12 | "...$5,000 this month" read from the words | goal | present | `POST /v2/goals/read` fills Budget and says "We read $5,000 as your budget and 'this month' as the period, so it runs until 31 Oct 2026". A typed budget is never overwritten. |
@@ -80,7 +90,7 @@ screenshots in [screenshots/](screenshots/README.md) retaken afterwards. Totals 
 | 19 | You approve once | plan | present | "You approve once" dial; passed messages need no approval one by one: a ready message's one choice is a quiet circle-slash icon whose description (hover, focus; its label on touch) is "Don't use this one. Optional: …". |
 | 20 | Hard rules it can never break | plan | present | "Rules it can never break": consent, unsubscribes, quiet hours, weekly limit, budget, complaints, no-discount requests, people we never contact, each name with its words and the plan's value in its description. |
 | 21 | It pauses itself (the limits) | plan | present | "When it pauses itself" card: the rows grouped under "Pauses the goal" and "Pauses that channel" (each said once), each row's full sentence in its description. |
-| 22 | Copywriter plus strict editor | plan | present | "✓ Checked by the editor" said ONCE, over the group of messages the editor passed on every check, with the checklist (on brand, no false claims, no made-up numbers, unsubscribe line, channel rules) in its description; any other message keeps its own line (one that needs a look comes first, and none that needs a look is ever folded), and the failed check shows on the page; raw notes folded on each message. |
+| 22 | Approved templates in your voice, checked by a strict editor | plan | present | "✓ Checked by the editor" said ONCE, over the group of messages the editor passed on every check, with the checklist (on brand, no false claims, no made-up numbers, unsubscribe line, channel rules) in its description; any other message keeps its own line (one that needs a look comes first, and none that needs a look is ever folded), and the failed check shows on the page; raw notes folded on each message. A message passed on the rules alone (no judge model) shows brand voice and honesty as "Not scored". |
 | 23 | Nothing goes out without passing | plan | present | The screen offers Approve only on a message the editor passed, and counts "N passed the editor; M failed and will never be sent". The server enforces it: `POST /v2/content/{id}/status` answers 409 to an approval of a message the editor failed, held or never checked (the Plan screen no longer offers that approval either). A person can still reject or retire any message. |
 | 24 | ...which image | plan | partial | Cards draw a thumbnail with alt text when a message has `asset_url`, but no demo or mock message has one, so every real card says "Picture: None, text only". Seen only in the node test. |
 | 25 | It knows your products; 58% more than best-sellers | plan | partial | The 58% (34.7% vs 22.0%) appears only in a labelled "How we tested this" box, a fact about the product. This shop's product count shows only in mock mode: the demo's orders name no products, so the card says suggestions are off. The CATALOG.md source is text, not a link, because the app does not serve `docs/`. |
@@ -103,9 +113,9 @@ screenshots in [screenshots/](screenshots/README.md) retaken afterwards. Totals 
 | 42 | Complementary products, "the moisturiser she viewed" | live | partial | The feed and panel name the product and possible next items when the data names them (mock). The demo's orders have no product names, so nothing is named there. |
 | 43 | It acts, watches, learns | live | partial | "What it learned" card from `today.learned` or the briefing's learning section. On the demo both are empty, so the card says "Nothing new yet". |
 | 44 | Every customer, one by one, every day | live | present | "Made a decision for each of N customers yesterday, one by one. Last check ... Next check ..." is the description of Yesterday's "As of" stamp; an overdue check shows on the page. |
-| 45 | "Yesterday: 341 messages, 24 purchases. Extra profit $570 (range ...)" | live | present | Messages, purchases (labelled every purchase, not only extra) and extra profit with its range, or "Not sure yet". |
+| 45 | Next morning: how many were contacted and how many bought, and the extra profit so far with its range or "not sure yet" | live | present | Messages, purchases (labelled every purchase, not only extra) and extra profit with its range, or "Not sure yet". |
 | 46 | It pauses itself (seeing it happen) | live | present | Red "This goal paused itself" banner with the alert's words; unsubscribes "pauses at 3x your usual rate" (the Unsubscribes label's description), or the API's "usual rate not known, so this check is not running". |
-| 47 | Budget (spend as it runs) | live | present | "Spent on messages: $38.40 of $5,000", the figure the budget limit counts. Its description says Proof's spend also counts the discounts customers used, because the runtime's ledger prices messages only. |
+| 47 | Budget (spend as it runs) | live | present | "Budget spent: $1,840 of $5,000" (sample), the runtime's budget ledger: every message and every matched discount, for the agent and the simple-rule groups, as the budget limit counts it, with what is left. Its description says Proof's spend counts only the agent group's contacts whose results are in. The briefing on the same page states the proof's spend as the agent group's and no "budget left" of its own. |
 | 48 | Extra profit against a group never contacted, with a range | proof | present | One sentence, "$X extra profit (likely $low to $high), measured against people we never contact.", then each other figure with its range line. |
 | 49 | If it isn't sure yet, it says so | proof | present | Verdict before the numbers: Real extra profit / Not sure yet / Losing money so far / Too early to tell. Too early, the result card shows what it waits for, from the API: the three groups so far, "Each contact counts after N days" and "First from <date>" (the forecast's `since` plus `horizon_days`, only while ahead), and the spend; the method fold then leaves out its group counts. |
 | 50 | Real extra profit, not "attributed revenue" | proof | present | How it is measured is the description of "people we never contact", and the "How this is measured" fold at the bottom. |
@@ -115,11 +125,12 @@ screenshots in [screenshots/](screenshots/README.md) retaken afterwards. Totals 
 | 54 | What it expects to earn before a message goes out | proof | present | "What it expects to earn" from `GET /v2/expected`, chip "Its own forecast, not proof", with its range, under one sentence: "Its forecast covers the N days after each contact it decided on since <date>." |
 | 55 | Typically 3-10%; we'll show the real number | proof | present | A "General guidance" pill whose description says "General guidance about AI marketing, not a result from your business", with its source. |
 | 56 | ~~Paid in results~~ | proof | dropped from the pitch | There are no pricing terms in the API or the pitch. When a price list exists it must be tied to the low end of the proof range. |
-| 57 | Week 1: connect and run in Shadow | onboarding | present | `#/start` "Getting started is safe: it watches before it sends.", five steps whose states come from data (the current one's pill says where you are; no "Step n of 5"); Plan marks Shadow "Recommended to start". |
-| 58 | Two weeks of Shadow: what, why, what it expects | onboarding | present | "Shadow: day N of 14" in the badge, the note and step 3, with what it would have done, its reasons and the forecast. |
+| 57 | Weeks 0 to 3: a read-only audit of your data, then Shadow on your live customers | onboarding | present | `#/start` "Getting started is safe: it watches before it sends.", five steps whose states come from data (the current one's pill says where you are; no "Step n of 5"); Connect is the read-only audit (what is connected, what the Data Doctor found); every new goal starts in Shadow, and Plan marks Shadow "Recommended to start". Shadow runs forward on live decisions; nothing replays your past orders. |
+| 58 | Shadow: what it would do, why, and what it expects to earn (a forecast, not proof) | onboarding | present | "Shadow: day N of 14" in the badge, the note and step 3, with what it would have done, its reasons and the forecast labelled "a forecast, not proof". |
 | 59 | Then Approve for one goal, small budget | onboarding | present | Step 4 lowers the budget (`PATCH /v2/goals/{id}`, the server's 409 words when raising above an approved plan) and turns on Approve. |
 | 60 | Honest status: not yet run with a real business | onboarding | present | "Honest status" card (one line); "How we tested it" is its title's (i). |
 | 61 | The ask: your data and one goal | onboarding | present | First run with no goals goes to `#/start` and shows only the ask and steps 1-2; once a goal exists the ask card is gone (it has been met). |
+| 62 | No return multiple: the profit shown is already after the costs it could charge | proof | present | No return-on-spend multiple on Proof, in its share text or in the Analyst's briefing (`ProofSummary.roi` is still served). Tests: `tests/v2/promise/proof.test.mjs`, `tests/v2/agents/test_analyst_honest.py`. |
 
 What would turn the partial rows into present ones, and who owns it:
 
