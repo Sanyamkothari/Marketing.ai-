@@ -158,7 +158,7 @@ All run in this worktree.
 
 * Offers' cost per redemption, the offer budget price and the other v3 money numbers (`DEFAULT_OFFER_PRICING`, the
   moments' lifts) are not rescaled; v3 is off.
-* The API's proof and measurement read their channel costs from `api/v2/deps.py` `SEND_COST` (dollar-sized), not from
+* (Done on v4, docs/v4/ONBOARDING_MARGIN.md.) The API's proof and measurement read their channel costs from `api/v2/deps.py` `SEND_COST` (dollar-sized), not from
   the shop's prices.
 * A SEND does not record its unit price or provider, so a full rebuild reprices the period (above), and the budget is
   held at the dearest listed provider rather than the one actually used.
