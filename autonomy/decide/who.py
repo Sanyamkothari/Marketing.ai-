@@ -83,6 +83,11 @@ class WhoConfig:
     expected to earn is not bid (None: no ceiling)."""
     trait_harm: bool = True
     """Pool the harm reading across profile neighbours and leave alone on it."""
+    prune_without_harm: bool = True
+    """The bidders' leave-alone step (`GoalBidder._quote`) also runs for a customer when the harm model
+    is missing, as it does whenever a who book is on. False: it runs only when there is a harm model,
+    as before the who book existed. A diagnostic switch (docs/v4/BASELINES.md); the default is the
+    behaviour of every earlier run."""
     trait_min_group: int = 20
     """A trait group with fewer customers with a record than this is not read."""
     trait_refit_days: int = 7

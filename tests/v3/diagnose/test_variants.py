@@ -118,7 +118,11 @@ def test_loose_caps_raises_the_cap_and_what_the_agent_sizes_by_it() -> None:
 
 
 def test_hard_safety_rules_are_never_a_switch() -> None:
-    allowed = set(ablation.switches(_build("agent"))) | {"weekly_contact_cap"}
+    allowed = set(ablation.switches(_build("agent"))) | {
+        "weekly_contact_cap",
+        "who_trait_harm",
+        "who_prune_without_harm",
+    }
     for name in ablation.names():
         assert set(_diff(name)) <= allowed
     briefs = ablation.variant_briefs("agent_no_guards", [default_brief()])
@@ -162,7 +166,9 @@ def test_the_diagnose_workflow_lists_every_variant_on_both_matrices() -> None:
     lists = re.findall(r"policy: \[([^\]]*)\]", text)
     assert len(lists) == 2  # the Gym matrix and the bench matrix
     for found in lists:
-        assert [p.strip() for p in found.split(",")] == list(ablation.names())
+        # the two who probes (docs/v4/BASELINES.md) run in realbench.yml, not in the v3 diagnose matrices
+        probes = {n for n, v in ablation.VARIANTS.items() if v.family == ablation.WHO_PROBE}
+        assert [p.strip() for p in found.split(",")] == [n for n in ablation.names() if n not in probes]
     assert re.search(
         r"scenario: \[baseline_shop, whatsapp_fatigue, discount_cannibalisation, sleeping_dogs_15\]", text
     )

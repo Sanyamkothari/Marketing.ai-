@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from autonomy.contracts import Brief, ContentItem
+from autonomy.decide.who import WhoConfig
 from autonomy.runtime.v3 import DEFAULT_OFFER_PRICING, V3Preset
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ __all__ = [
     "BASELINE_NAMES",
     "LOOSE_CAP_FACTOR",
     "VARIANTS",
+    "WHO_PROBE",
     "Variant",
     "build_variant",
     "changed_switches",
@@ -52,6 +54,7 @@ LEAVE_ONE_OUT = "leave_one_out"
 PART_ALONE = "part_alone"
 GUARD = "guard"
 REFERENCE = "reference"
+WHO_PROBE = "who_probe"
 
 
 @dataclass(frozen=True)
@@ -154,6 +157,20 @@ def _variants() -> dict[str, Variant]:
             PART_ALONE,
             "the budget price for offers alone",
             lambda: {"offer_pricing": DEFAULT_OFFER_PRICING},
+        ),
+        # why does who collapse the bench? one of its two code paths off (docs/v4/BASELINES.md)
+        Variant(
+            "agent_who_notrait",
+            WHO_PROBE,
+            "agent_who with the trait-pooled leave-alone off (WhoConfig trait_harm=False): is it the trait path",
+            lambda: {"lookalike": True, "who": WhoConfig(trait_harm=False)},
+        ),
+        Variant(
+            "agent_who_noprune",
+            WHO_PROBE,
+            "agent_who with the bidder's leave-alone step run only when a harm model exists, as before who "
+            "existed (WhoConfig prune_without_harm=False): is it the step's new gate",
+            lambda: {"lookalike": True, "who": WhoConfig(prune_without_harm=False)},
         ),
         # too many rules? one v2 guard relaxed on the plain agent
         Variant(
@@ -273,7 +290,7 @@ def switches(policy: AgentPolicy) -> dict[str, object]:
     `variant_briefs` is what raises it."""
     inner = policy.policy
     moments = policy.moments
-    return {
+    out: dict[str, object] = {
         "lookalike": policy.outcomes is not None,
         "who": policy.who is not None,
         "frequency": policy.frequency is not None,
@@ -287,12 +304,19 @@ def switches(policy: AgentPolicy) -> dict[str, object]:
         "attention_price": inner.attention_price_fn is not None and inner.channel_price_fn is not None,
         "weekly_cap": policy.contact_price.cap(),
     }
+    if policy.who is not None:
+        # who's two diagnostic sub-switches (docs/v4/BASELINES.md): listed only when moved off their default
+        if not policy.who.config.trait_harm:
+            out["who_trait_harm"] = False
+        if not policy.who.config.prune_without_harm:
+            out["who_prune_without_harm"] = False
+    return out
 
 
 def changed_switches(policy: AgentPolicy, plain: AgentPolicy) -> dict[str, object]:
     """The switches of `policy` that differ from `plain`'s, with the policy's values."""
     a, b = switches(policy), switches(plain)
-    return {k: a[k] for k in a if a[k] != b[k]}
+    return {k: a[k] for k in a if a[k] != b.get(k)}
 
 
 def describe(names_: Sequence[str] | None = None) -> Mapping[str, str]:
