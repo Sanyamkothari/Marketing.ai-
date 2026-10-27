@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -383,8 +383,12 @@ def prescription_hash(prescription: Prescription) -> str:
     )
 
 
-def query_makes(items: Sequence[CaseItem], column: str) -> bool:
-    """True when an accepted query step's table has `column`."""
+def _query_tables(
+    items: Sequence[CaseItem], also: Sequence[Sequence[str]], uploads: Collection[str] | None = None
+) -> list[list[str]]:
+    """The columns of each accepted query step's table, then those of a query being tried (`also`). With `uploads`,
+    only the queries of those files (and the ones that belong to no single file)."""
+    found: list[list[str]] = []
     for item in items:
         made, step = item.payload.get("columns"), item.payload.get("step")
         if (
@@ -392,33 +396,44 @@ def query_makes(items: Sequence[CaseItem], column: str) -> bool:
             and isinstance(made, list)
             and isinstance(step, dict)
             and step.get("kind") == "sql_query"
-            and column in made
+            and (uploads is None or item.upload_id is None or item.upload_id in uploads)
         ):
-            return True
-    return False
+            found.append([str(c) for c in made])
+    found.extend([str(c) for c in made] for made in also)
+    return found
 
 
-def prepared_key(items: Sequence[CaseItem], target: str | None, key: str | None) -> str | None:
-    """The ID column a run reads when the outcome comes from an accepted query's table: the file's key where the
-    table keeps it, else the table's own ID-named column (a table of one row per customer has no invoice id).
+def query_makes(items: Sequence[CaseItem], column: str, *, also: Sequence[Sequence[str]] = ()) -> bool:
+    """True when an accepted query step's table (or one being tried, `also`) has `column`."""
+    return any(column in made for made in _query_tables(items, also))
+
+
+def prepared_key(
+    items: Sequence[CaseItem],
+    target: str | None,
+    key: str | None,
+    *,
+    also: Sequence[Sequence[str]] = (),
+    uploads: Collection[str] | None = None,
+) -> str | None:
+    """The ID column a run reads when the plan makes a table by a query: the file's key where the table keeps it,
+    else the table's own ID-named column (a table of one row per customer has no invoice id).
+
+    The table is the one that has the outcome `target`; with `uploads` (the file or slot being counted) and no such
+    table, the last table a query of those files makes, since the file is that table when the steps have run. One
+    rule for an accepted query (a run) and a query being tried (`also`): a trial and the run agree.
     """
     from engine.doctor.visit import _ID_NAMED
 
-    for item in items:
-        made = item.payload.get("columns")
-        step = item.payload.get("step")
-        if (
-            target is not None
-            and isinstance(made, list)
-            and isinstance(step, dict)
-            and step.get("kind") == "sql_query"
-            and item.state is ProposalState.ACCEPTED
-            and target in made
-        ):
-            if key in made:
-                return key
-            return next((str(c) for c in made if _ID_NAMED.search(str(c).strip())), key)
-    return key
+    tables = _query_tables(items, also, uploads)
+    chosen = next((m for m in tables if target is not None and target in m), None)
+    if chosen is None and uploads is not None and tables:
+        chosen = tables[-1]
+    if chosen is None:
+        return key
+    if key in chosen:
+        return key
+    return next((str(c) for c in chosen if _ID_NAMED.search(str(c).strip())), key)
 
 
 def make_prescription(
@@ -612,11 +627,15 @@ def _slot_tables(
     parts: Sequence[FilePart],
 ) -> dict[str, pd.DataFrame]:
     """What a file's query may read besides its own rows: every other file by its name (as uploaded), and a slot
-    already prepared as it was prepared (:func:`case_tables`)."""
+    already prepared as it was prepared (:func:`case_tables`). A file is named by the one namer
+    (:func:`engine.doctor.materialize.table_names`), so a name two files share is told apart as the plan check
+    tells it."""
     from engine.agent.dataset_recipe import consistent_types
+    from engine.doctor.materialize import table_names
 
+    names = table_names(files)
     tables = {
-        slot_name(Path(f.file_name).stem): consistent_types(f.frame)
+        names[f.upload_id]: consistent_types(f.frame)
         for f in files
         if f.upload_id not in upload_ids and f.file_name
     }
@@ -950,7 +969,7 @@ def prescription_from_case(
         first = upload_ids[0]
         key = next((keys[u] for u in upload_ids if u in keys), None)
         target = next((targets[u] for u in upload_ids if u in targets), None)
-        key = prepared_key(approved, target, key)
+        key = prepared_key(approved, target, key, uploads=set(upload_ids))
         recipe = _recipe(
             [s for u in upload_ids for s in steps_by_upload.get(u, [])],
             use_case_id=use_case_id,

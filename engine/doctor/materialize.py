@@ -168,18 +168,25 @@ def table_names(files: Sequence[LoadedFile]) -> dict[str, str]:
 
 
 def roles_of(
-    items: Sequence[CaseItem], upload_id: str, columns: Collection[str]
+    items: Sequence[CaseItem],
+    upload_id: str,
+    columns: Collection[str],
+    *,
+    candidate_made: Sequence[str] | None = None,
 ) -> tuple[str | None, str | None]:
     """`(key, outcome)` the guards count this file by: the accepted ID and outcome items that name a column of the
     file; the outcome may come from an accepted query's table (one row per customer), whose ID then follows.
+
+    `candidate_made` are the columns of the table of a query being tried: it is read as if it were accepted, by the
+    very same rule, so a trial and the run after the yes resolve the roles alike.
     """
     from engine.doctor.plan_check import accepted_column
+    from engine.doctor.prescription import prepared_key, query_makes
 
     key = accepted_column(items, "key", upload_id, columns)
     target = accepted_column(items, "outcome_column", upload_id, columns)
+    also = () if candidate_made is None else (candidate_made,)
     if target is None:
-        from engine.doctor.prescription import prepared_key, query_makes
-
         declared = next(
             (
                 str(i.payload["column"])
@@ -191,8 +198,11 @@ def roles_of(
             ),
             None,
         )
-        if declared is not None and query_makes(items, declared):
-            target, key = declared, prepared_key(items, declared, key)
+        if declared is not None and query_makes(items, declared, also=also):
+            target, key = declared, prepared_key(items, declared, key, also=also)
+    if key is not None:
+        # a query's table is the file once the steps have run: the ID follows it, outcome or not
+        key = prepared_key(items, target, key, also=also, uploads={upload_id})
     return key, target
 
 
@@ -278,13 +288,11 @@ def materialize_plan(
     candidate: tuple[str, RecipeStep] | None = None,
     twice: bool = True,
     watch: Watch | None = None,
-    fallback_key: str | None = None,
 ) -> Prepared:
     """:func:`materialize` for a caller that has the case's files and as-of date rather than the case itself.
 
-    `as_of` is a run's own date; with none, a query step keeps the date (or the rule) it carries. `fallback_key` is
-    the ID column of the candidate's file when the plan has no accepted ID for it (a trial by a caller that knows
-    it). `watch` sees each step's input and output once (the preview samples what each step did from it).
+    `as_of` is a run's own date; with none, a query step keeps the date (or the rule) it carries. `watch` sees
+    each step's input and output once (the preview samples what each step did from it).
     """
     from engine.doctor.plan_check import plan_digest, recipe_steps_of
 
@@ -322,8 +330,6 @@ def materialize_plan(
         name = names[loaded.upload_id]
         frame = tables[name]
         key, target = roles_of(items, loaded.upload_id, {str(c) for c in frame.columns})
-        if key is None and candidate is not None and candidate[0] == loaded.upload_id:
-            key = fallback_key if fallback_key in frame.columns else None
         file_name = loaded.file_name or "the file"
         ordered = [_reads_own_table(step, name) for step in ordered]
 
@@ -351,21 +357,15 @@ def materialize_plan(
         )
 
         try:
-            try:
-                guarded = run(key, target)
-            except RecipeError as exc:
-                # A query being tried makes a new table: the file's ID and outcome move onto it only when the person
-                # says yes (`prepared_key`), so a trial that drops them is not yet a stop; the plan check after
-                # the yes holds the new table to them.
-                dropped = (
-                    by_order.get(exc.order or 0) == CANDIDATE
-                    and exc.column is not None
-                    and exc.column in (key, target)
+            if candidate is not None and candidate[0] == loaded.upload_id:
+                # A query being tried makes a new table, whose columns say where the outcome (and the ID that follows
+                # it) is. They are read as if the query were accepted, by the one rule the run uses after the yes
+                # (:func:`roles_of`), so a trial and the run give the same answer, the same stop included.
+                table_columns = [str(c) for c in run(None, None).run.frame.columns]
+                key, target = roles_of(
+                    items, loaded.upload_id, {str(c) for c in frame.columns}, candidate_made=table_columns
                 )
-                if not dropped:
-                    raise
-                key = target = None
-                guarded = run(None, None)
+            guarded = run(key, target)
         except (RecipeError, SqlStepError, ValueError, KeyError, TypeError) as exc:
             order = getattr(exc, "order", None)
             item_id = by_order.get(order or 0)
@@ -454,7 +454,8 @@ def _guarded(
         max_failure_pct=max_failure_pct,
         twice=twice,
         as_of=as_of,
-        leak_check=None if outcome is None and _reads_future(steps) else "full",
+        leak_check="full",
+        outcome_open=outcome is None,  # one column of a query that reads the future is the outcome-to-be
         watch=watch,
     )
 
@@ -472,18 +473,6 @@ def _reads_own_table(step: RecipeStep, table: str) -> RecipeStep:
     if params.this_table is not None or table not in params.inputs:
         return step
     return step.model_copy(update={"params": {**step.params, "this_table": table}})
-
-
-def _reads_future(steps: Sequence[RecipeStep]) -> bool:
-    """Whether a query builds the outcome from rows after the as-of date. Until the outcome column is decided the
-    future-rows check cannot tell it from a leak (only the outcome column is let off), so it waits for the decision;
-    the trial still checks that the data reaches as far as the query looks."""
-    for step in steps:
-        if step.kind is RecipeStepKind.SQL_QUERY:
-            with contextlib.suppress(SqlStepError):
-                if sql_params(step.params).reads_future:
-                    return True
-    return False
 
 
 def stop_finding(

@@ -5,7 +5,8 @@ the preview, the plan check, the AI's query trial and the final check. A new cal
 `run_sql` there is a second world that drifts from the first (different rows, tables, order, as-of date), and fails
 here instead of at the person's run.
 
-The modules listed below still run a recipe for a reason of their own (each says which). The list may only shrink:
+The modules listed below still run a recipe for a reason of their own (each says which). Each entry names its reason; a "TODO Step 4" entry is the plan's remaining second world, taken off when that step
+lands. The list may only shrink:
 a module that stops calling is a stale entry and fails too, so it is taken off.
 """
 
@@ -19,12 +20,12 @@ RUNNERS = frozenset({"run_recipe", "run_guarded", "run_sql"})
 THE_ONE = "engine/doctor/materialize.py"
 STILL_OWN_RUN = {
     "engine/doctor/guards.py": "defines run_guarded over run_recipe",
-    "engine/doctor/prescription.py": "learns a contract from the approved recipe (replay world, Step 4)",
+    "engine/doctor/prescription.py": "TODO Step 4: learns a contract from the approved recipe (replay world)",
     "engine/doctor/build_driver.py": "tries a build, not the plan's steps",
-    "engine/doctor/split.py": "splits rows with the recipe's own run (split settings)",
-    "engine/doctor/time_settings.py": "a time-settings trial over the prepared rows",
-    "engine/doctor/change_share.py": "measures what the plan changes on the prepared rows",
-    "engine/doctor/evals.py": "the eval harness replays a recipe",
+    "engine/doctor/split.py": "TODO Step 4: splits rows with the recipe's own run, not on the materialised tables",
+    "engine/doctor/time_settings.py": "TODO Step 4: a time-settings trial over rows it prepares itself",
+    "engine/doctor/change_share.py": "TODO Step 4: measures a step on rows that are not the materialised tables",
+    "engine/doctor/evals.py": "the eval harness replays a recipe (a test tool, not a customer path)",
     "api/routes/agent.py": "the Guided-setup agent's own recipe route",
 }
 

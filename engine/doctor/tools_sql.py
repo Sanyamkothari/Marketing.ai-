@@ -56,13 +56,16 @@ from engine.doctor.registry import (
 
 if TYPE_CHECKING:
     from engine.doctor.case import CaseItem
+    from engine.doctor.diagnose import LoadedFile
 
 __all__ = ["DRY_RUN_ROWS", "M_SQL_TOOLS", "ProposeSqlStepArgs", "SqlStepProposal", "register_sql_tools"]
 
 M_SQL_TOOLS: Final[tuple[str, ...]] = ("propose_sql_step",)
 DRY_RUN_ROWS: Final[int] = 100_000
-"""A query is tried on at most this many rows of each file (a seeded random sample); a bigger file is said to be
-sampled."""
+"""A query is tried on at most this many rows of each file (a seeded random sample, drawn as the plan check draws its
+own); a bigger file is said to be sampled. It is larger than the plan check's sample on purpose: the checks the writer
+states about the table (`rows_out_equals`, the customers kept) are about the file, so the trial reads as much of it
+as it can. On the same rows the trial's receipt is the plan check's (`tests/unit/doctor/test_trial_is_run.py`)."""
 _SHAPING: Final[frozenset[RecipeStepKind]] = frozenset(
     {
         RecipeStepKind.SQL_QUERY,
@@ -340,18 +343,24 @@ def _window_finding(
     )
 
 
-def _refused(prepared: Prepared, upload_id: str) -> DataToolError | None:
+def _refused(prepared: Prepared, reads: Collection[str], files: Sequence[LoadedFile]) -> DataToolError | None:
     """Why the plan could not be run with the query: the query's own failure (its engine code, 422), or a fix already
-    in the plan that cannot be applied to the file first (409). None when everything ran."""
-    own = next((f for f in prepared.failures if f.item_id == CANDIDATE and f.upload_id == upload_id), None)
+    in the plan that cannot be applied to a file the query reads (409, naming the file). A failure in a file the
+    query does not read is not the query's: the plan check reports it as the plan's own stop. None when the query
+    can be tried. `reads` are the uploads the query reads."""
+    own = next((f for f in prepared.failures if f.item_id == CANDIDATE), None)
     if own is not None:
         return DataToolError(own.code, own.message, status=422)
-    other = next(iter(prepared.failures), None)
+    other = next((f for f in prepared.failures if f.upload_id in reads), None)
     if other is None:
         return None
+    name = (
+        next((str(f.file_name or "").strip() for f in files if f.upload_id == other.upload_id), "")
+        or "the file"
+    )
     return DataToolError(
         "TOOL_INPUT_INVALID",
-        f"The fixes already in the plan cannot be applied to the file first: {other.message}",
+        f"The fixes already in the plan cannot be applied to {name} first: {other.message}",
         status=409,
     )
 
@@ -381,8 +390,8 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
 
     def plan_so_far() -> Prepared:
         """Every row of every file as the plan leaves it, before the query (the as-of rule and the window read it)."""
-        whole = materialize_plan((), items, ctx.files, Full(), twice=False, fallback_key=ctx.primary_key)
-        if (refusal := _refused(whole, given.upload_ids[0])) is not None:
+        whole = materialize_plan((), items, ctx.files, Full(), twice=False, as_of=ctx.as_of)
+        if (refusal := _refused(whole, given.upload_ids, ctx.files)) is not None:
             raise refusal
         return whole
 
@@ -426,10 +435,10 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         ctx.files,
         Sample(DRY_RUN_ROWS),
         candidate=(first_upload, tried),
-        fallback_key=ctx.primary_key,
+        as_of=ctx.as_of,
         watch=watch,
     )
-    if (refusal := _refused(prepared, first_upload)) is not None:
+    if (refusal := _refused(prepared, given.upload_ids, ctx.files)) is not None:
         raise refusal
     table = names[first_upload]
     made = prepared.tables[table]
