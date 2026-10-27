@@ -150,12 +150,20 @@ def check_plan(
     items: Sequence[CaseItem],
     *,
     as_of: date | None = None,
+    training_as_of: date | None = None,
 ) -> PlanCheck:
     """Run the accepted steps on a seeded sample of each file under the guards (run twice) and keep what was
     counted: :func:`materialize_plan` at :class:`Sample` of `data_doctor.limits.trial.sample_rows`, as a stored check.
     """
     return plan_check_of(
-        materialize_plan(case_files, items, files, Sample(limits().trial.sample_rows), as_of=as_of)
+        materialize_plan(
+            case_files,
+            items,
+            files,
+            Sample(limits().trial.sample_rows),
+            as_of=as_of,
+            training_as_of=training_as_of,
+        )
     )
 
 

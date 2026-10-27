@@ -139,7 +139,15 @@ def _preview(given: PreviewWorkingCopyArgs, ctx: DataToolContext) -> WorkingCopy
             hidden |= {found.column for found in find_long_text(loaded.frame.head(1_000))}
     values = agent is None or agent.config.agent.ai_data_access is not DataAccess.SUMMARIES_ONLY
     try:
-        view = preview_rows(files, items, hide=hidden, rows=given.rows, only=only)
+        view = preview_rows(
+            files,
+            items,
+            as_of=ctx.as_of,
+            training_as_of=ctx.training_as_of,
+            hide=hidden,
+            rows=given.rows,
+            only=only,
+        )
     except Exception as exc:  # a refusal the AI can recover from, never the end of its whole review
         _LOG.warning("preview_working_copy_failed", exc_info=True)
         raise DataToolError(

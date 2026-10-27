@@ -530,6 +530,7 @@ class _Chat(_Review):
             self.clock(),
             roles_of(self.case, self.config_root),
             decisions(self.case).as_of_date,
+            decisions(self.case).training_as_of_date,
         )
         for item, waits in decided:
             self.chosen.reported.add(item.item_id)

@@ -158,7 +158,7 @@ def person_owns(case: Case, item: CaseItem) -> bool:
 
 
 _WORDING: Final[frozenset[str]] = frozenset({"reason", "order", "proposal_id", "decided_by"})
-_VOLATILE_PARAMS: Final[frozenset[str]] = frozenset({"tried_after", "as_of"})
+_VOLATILE_PARAMS: Final[frozenset[str]] = frozenset({"tried_after"})
 """Step parameters that record when or on what it was tried (the rows a trial counted after, the date it read), not
 what the step does: the same query re-proposed after a tick has another `tried_after` and is the same change."""
 
@@ -173,7 +173,9 @@ def meaning_key(item: CaseItem) -> str:
     body = {k: v for k, v in step.items() if k not in _WORDING}
     params = body.get("params")
     if isinstance(params, dict):  # what a trial found when it was made is not what the step does
-        body["params"] = {k: v for k, v in params.items() if k not in _VOLATILE_PARAMS}
+        # the date a step reads is part of what it does, unless a rule derives it (then it is only what the rule gave)
+        gone = _VOLATILE_PARAMS | ({"as_of"} if params.get("as_of_rule") else set())
+        body["params"] = {k: v for k, v in params.items() if k not in gone}
     return f"{item.kind}|{item.upload_id}|{json.dumps(body, sort_keys=True, default=str)}"
 
 
@@ -270,6 +272,7 @@ def agent_applies(
     now: datetime,
     roles: Roles = NO_ROLES,
     as_of: date | None = None,
+    training_as_of: date | None = None,
 ) -> list[Applied]:
     """`fresh`, each with the agent's tick when it may apply and `None` for why it waits when it may not.
 
@@ -292,8 +295,12 @@ def agent_applies(
             expected = EXPECTED_FLAGS.get(
                 str(step.get("kind")) if isinstance(step, dict) else "", frozenset()
             )
-            counted = counted or check_plan(files, case_files, active, as_of=as_of)
-            after = check_plan(files, case_files, [*active, trial], as_of=as_of)
+            counted = counted or check_plan(
+                files, case_files, active, as_of=as_of, training_as_of=training_as_of
+            )
+            after = check_plan(
+                files, case_files, [*active, trial], as_of=as_of, training_as_of=training_as_of
+            )
             seen_keys = {f.key for f in counted.findings}
             seen_codes = {(f.code, f.item_id) for f in counted.findings}
             found = [

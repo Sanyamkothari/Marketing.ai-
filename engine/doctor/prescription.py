@@ -49,7 +49,7 @@ import logging
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -555,18 +555,16 @@ def _step_of(item: CaseItem) -> RecipeStep | None:
         return None
 
 
-def _bound_as_of(step: RecipeStep, as_of: str | None) -> RecipeStep:
-    """A query step with the case's as-of date (`decisions(case).as_of`) in it: the plan keeps `$as_of` symbolic and
-    the materialiser binds the date when it runs the step, so the prescription (which a run replays on its own)
-    carries the very date the plan was checked with, however late the person answered. The decided date also wins over
-    the step's `as_of_rule` (the materialiser binds it over the rule), so the rule is dropped from the copy: a run
-    resolves a rule before `params.as_of`, and would count other rows than the plan check did."""
-    if as_of is None or step.kind is not RecipeStepKind.SQL_QUERY:
-        return step
-    if step.params.get("as_of") == as_of and "as_of_rule" not in step.params:
-        return step
-    params = {k: v for k, v in step.params.items() if k != "as_of_rule"}
-    return step.model_copy(update={"params": {**params, "as_of": as_of}})
+def _bound_as_of(step: RecipeStep, as_of: str | None, training_as_of: str | None = None) -> RecipeStep:
+    """A query step with the case's dates in it (`engine.doctor.materialize.bound_as_of`): the prescription carries
+    the very date the plan was checked with, however late the person answered."""
+    from engine.doctor.materialize import bound_as_of
+
+    return bound_as_of(
+        step,
+        date.fromisoformat(as_of) if as_of else None,
+        date.fromisoformat(training_as_of) if training_as_of else None,
+    )
 
 
 def _column(item: CaseItem) -> str | None:
@@ -980,11 +978,14 @@ def prescription_from_case(
         if time_decision.upload_id:
             as_of.setdefault(current_upload(case, time_decision.upload_id), time_decision.column)
     steps_by_upload: dict[str | None, list[RecipeStep]] = {}
-    for item in approved:
-        step = _step_of(item)
+    from engine.doctor.materialize import snapshot_of
+
+    pairs = [(item, _step_of(item)) for item in approved]
+    snapshot = snapshot_of([s for _, s in pairs if s is not None], decided.training_as_of_date)
+    for item, step in pairs:
         if step is None:
             continue
-        step = _bound_as_of(step, decided.as_of_iso)
+        step = _bound_as_of(step, decided.as_of_iso, snapshot.isoformat() if snapshot else None)
         where = None if item.payload.get("stage") == POST_BUILD else item.upload_id
         steps_by_upload.setdefault(where, []).append(step)
     slots = _slots(case, None if build is None else build.record)

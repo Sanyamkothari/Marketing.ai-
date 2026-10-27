@@ -62,14 +62,14 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-DecisionKind = Literal["key", "outcome", "as_of", "as_of_column", "consent", "window"]
-Sets = Literal["as_of", "outcome", "key", "as_of_column", "consent", "note"]
+DecisionKind = Literal["key", "outcome", "as_of", "training_as_of", "as_of_column", "consent", "window"]
+Sets = Literal["as_of", "training_as_of", "outcome", "key", "as_of_column", "consent", "note"]
 """What an option of a question may declare it sets (`CaseOption.sets`); `note` = it sets nothing, on purpose."""
 
 AS_OF_QUESTION: Final[str] = "Q08_AS_OF"
 """The question that asks for the as-of date: the one question whose answer this module reads for its date."""
 DECISION_TARGETS: Final[frozenset[str]] = frozenset(
-    {"as_of", "outcome", "key", "as_of_column", "consent", "note"}
+    {"as_of", "training_as_of", "outcome", "key", "as_of_column", "consent", "note"}
 )
 """What an option may declare it sets (`CaseOption.sets`); `note` sets nothing, on purpose."""
 _ITEM_KINDS: Final[dict[str, DecisionKind]] = {
@@ -254,6 +254,13 @@ class Decisions:
         iso = self.as_of_iso
         return date.fromisoformat(iso) if iso is not None else None
 
+    @property
+    def training_as_of_date(self) -> date | None:
+        """The date the training table is cut at (the outcome window must fit before the data ends); the as-of date
+        (the scoring date) when nobody decided a separate one."""
+        found = next(iter(self.of("training_as_of")), None)
+        return date.fromisoformat(str(found.value)) if found is not None else self.as_of_date
+
     def window_days(self, goal_id: str | None = None) -> int | None:
         """The outcome window in days: the goal's, else one decided for no goal in particular."""
         found = self.of("window")
@@ -323,6 +330,7 @@ def decisions_from(items: Iterable[CaseItem], questions: Sequence[CaseQuestion] 
             (kind, item.upload_id, item.goal_id, in_upload),
         )
     _as_of(accepted, questions, add)
+    _as_of(accepted, questions, add, "training_as_of")
     _window(accepted, add)
     return Decisions(records=tuple(records), ignored=ignored, shadowed=tuple(shadowed))
 
@@ -349,14 +357,19 @@ def _valid_date(text: object) -> str | None:
     return None
 
 
-def _as_of(accepted: Sequence[CaseItem], questions: Sequence[CaseQuestion], add: Any) -> None:
+def _as_of(
+    accepted: Sequence[CaseItem],
+    questions: Sequence[CaseQuestion],
+    add: Any,
+    kind: Literal["as_of", "training_as_of"] = "as_of",
+) -> None:
     candidates: list[Decided] = []
     for item in reversed(accepted):
-        given = _valid_date(item.payload.get("as_of"))
+        given = _valid_date(item.payload.get(kind))
         if given is not None:
             candidates.append(
                 Decided(
-                    kind="as_of",
+                    kind=kind,
                     value=given,
                     by=item.decided_by,
                     at=item.decided_at,
@@ -369,7 +382,7 @@ def _as_of(accepted: Sequence[CaseItem], questions: Sequence[CaseQuestion], add:
         if question.answer is None:
             continue
         option = _option_of(question)
-        if option is None or _target_of(question, option) != "as_of":
+        if option is None or _target_of(question, option) != kind:
             continue
         given = _valid_date(
             getattr(question, "answer_value", None)
@@ -380,7 +393,7 @@ def _as_of(accepted: Sequence[CaseItem], questions: Sequence[CaseQuestion], add:
         if given is not None:
             candidates.append(
                 Decided(
-                    kind="as_of",
+                    kind=kind,
                     value=given,
                     by=question.answered_by,
                     at=question.answered_at,
@@ -389,7 +402,7 @@ def _as_of(accepted: Sequence[CaseItem], questions: Sequence[CaseQuestion], add:
                 )
             )
     for record in candidates:
-        add(record, ("as_of",))  # the first holds the place; the others are counted as ignored
+        add(record, (kind,))  # the first holds the place; the others are counted as ignored
 
 
 def _window(accepted: Sequence[CaseItem], add: Any) -> None:

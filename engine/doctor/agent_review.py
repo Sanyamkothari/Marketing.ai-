@@ -391,6 +391,7 @@ class _Review:
             files=self.files,
             case_items=active_section(self.case)[0],  # the plan so far, for `preview_working_copy`
             as_of=decisions(self.case).as_of_date,
+            training_as_of=decisions(self.case).training_as_of_date,
             config_root=self.config_root,
             clock=self.clock,
             actor="agent:data-doctor",

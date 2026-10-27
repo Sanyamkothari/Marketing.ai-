@@ -240,6 +240,8 @@ class DataToolContext:
     """The file's ID column as decided in the case or session (M238's and M241's tools never change it)."""
     as_of: date | None = None
     """The case's as-of date (`decisions(case).as_of`): a query is tried with the date a run gives it."""
+    training_as_of: date | None = None
+    """The case's training snapshot (`decisions(case).training_as_of_date`): where an outcome query is cut."""
     locale_profile: LocaleProfile | None = None
     """The client's confirmed locale profile (M241), when there is one."""
     case_files: FormatToolContext | None = None

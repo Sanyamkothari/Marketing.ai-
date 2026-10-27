@@ -1303,6 +1303,7 @@ def _converse(run: _Run, case: Case) -> _Step:
                 now,
                 roles_of(case, run.deps.config_root),
                 decisions(case).as_of_date,
+                decisions(case).training_as_of_date,
             )
         ]
         if fresh
