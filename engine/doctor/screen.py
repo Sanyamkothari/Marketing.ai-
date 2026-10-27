@@ -45,12 +45,14 @@ from pydantic import Field
 from engine.access.roles import Principal
 from engine.agent.contracts import ProposalState
 from engine.config import ConfigError, StrictBase
+from engine.doctor.approval_model import Approval, approval_of
 from engine.doctor.carry import carry_of, new_line
 from engine.doctor.case import Case, CaseError, CaseStore, TimelineEvent, TimelineKind
 from engine.doctor.combine_run import current_upload
 from engine.doctor.conversation import ConversationCard, build_conversation
 from engine.doctor.diagnose import LoadedFile
-from engine.doctor.plan_check import ledger_view, open_stops, plan_digest
+from engine.doctor.ledger import screen_ledger
+from engine.doctor.plan_check import open_stops, plan_digest
 from engine.doctor.preview import PreviewView, cached_preview, preview_rows
 from engine.doctor.protocol import (
     DEFAULT_SETTINGS,
@@ -211,6 +213,12 @@ class CaseScreenView(StrictBase):
         default=None, description="While the visit waits for Approve: the sentence approved, word for word."
     )
     approve_class: tuple[ScreenApproveClass, ...] = ()
+    approval: Approval | None = Field(
+        default=None,
+        description="While the visit waits for Approve: the one approval (`engine.doctor.approval_model`) - every "
+        "yes the plan needs (`yeses`, each with the `subject` and `digest` it covers), the sentence, and the "
+        "`digest` of all of it, which `POST /cases/{id}/approval` takes back with the yeses it gives.",
+    )
     standing: tuple[ScreenStanding, ...] = ()
     remembered: tuple[ScreenRemembered, ...] = Field(
         default=(), description="Answers given here that are remembered for next time, by question."
@@ -353,6 +361,11 @@ def screen_view(
         verdict=_verdict(storage, case, approve_class),
         approval_sentence=sentence,
         approve_class=approve_class,
+        approval=(
+            approval_of(case, sentence, separate=separate, principal=principal)
+            if sentence is not None
+            else None
+        ),
         ledger=_with_samples(_ledger(case), preview),
         preview=preview,
         carried=_carried(case),
@@ -377,12 +390,7 @@ def screen_view(
 # ---------------------------------------------------------------------------
 def _ledger(case: Case) -> dict[str, Any] | None:
     """The plan's count for the plan as it stands now; None when the plan changed since it was counted."""
-    visit = case.visit
-    if visit is None or visit.plan_check is None:
-        return None
-    if visit.plan_check.digest != plan_digest(case.files, active_section(case)[0]):
-        return None
-    return ledger_view(visit.plan_check, visit.acknowledged)
+    return screen_ledger(case)
 
 
 def _preview(case: Case, load_files: Callable[[Case], Sequence[LoadedFile]] | None) -> PreviewView | None:
@@ -440,7 +448,13 @@ def _carried(case: Case) -> ScreenCarried | None:
         return None
     items, _ = active_section(case)
     visit = case.visit
-    counted = visit.plan_check if visit is not None and _ledger(case) is not None else None
+    counted = (
+        visit.plan_check
+        if visit is not None
+        and visit.plan_check is not None
+        and visit.plan_check.digest == plan_digest(case.files, items)
+        else None
+    )
     carry = carry_of(case, items, counted, confirmed=confirmed)
     if carry is None:
         return None

@@ -94,9 +94,10 @@ from engine.doctor.case import (
     payload_digest,
 )
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL, GoalBrief, load_goal_brief, register_goal_brief_tool
+from engine.doctor.ledger import blocking
+from engine.doctor.ledger import find as find_finding
 from engine.doctor.materialize import Full, materialize, stop_finding
 from engine.doctor.plan_check import (
-    open_stops,
     plan_check_of,
     plan_digest,
     readiness_acknowledged,
@@ -1146,7 +1147,7 @@ def _converse(run: _Run, case: Case) -> _Step:
     active = [i for i in plan if _in_section(i.goal_id, case)]
     placed = (
         [
-            item
+            item.model_copy(update={"requested_by": message.by})  # who asked, recorded (separation of duties)
             for item, _waits in agent_applies(
                 run.files(case), case.files, active, fresh, now, roles_of(case, run.deps.config_root)
             )
@@ -3032,8 +3033,52 @@ def approve(
     actor: str,
     op_id: str | None = None,
     sentence: str | None = None,
+    yeses: Sequence[Any] = (),
+    principal: Principal | None = None,
+    digest: str | None = None,
 ) -> Case:
     """The person approves what the preview showed: recorded with their user id and the sentence they read.
+
+    `yeses` (`approval_model.GivenYes`) are the stops and own-yes changes the person was shown (`needs_yes`): all are
+    given with the approval in this one call, checked before any is written; `digest` is the approval they read.
+    """
+    if yeses or digest is not None:
+        from engine.doctor.approval_model import approve_with
+
+        return approve_with(
+            client_id,
+            case_id,
+            deps,
+            expected_version=expected_version,
+            actor=actor,
+            yeses=yeses,
+            principal=principal,
+            op_id=op_id,
+            sentence=sentence,
+            digest=digest,
+        )
+    return _approve_one(
+        client_id,
+        case_id,
+        deps,
+        expected_version=expected_version,
+        actor=actor,
+        op_id=op_id,
+        sentence=sentence,
+    )
+
+
+def _approve_one(
+    client_id: str,
+    case_id: str,
+    deps: VisitDeps,
+    *,
+    expected_version: int,
+    actor: str,
+    op_id: str | None = None,
+    sentence: str | None = None,
+) -> Case:
+    """The approval itself, once every yes it needs is given.
 
     Plan O M246 (DEC-1816): refused while an accepted APPROVE-class item lacks its own yes
     (`APPROVAL_CONFIRMATION_MISSING`, :func:`confirm`); `sentence`, when sent, must be the sentence the server shows
@@ -3086,7 +3131,7 @@ def _approval(
         # never another plan's counts, nor a count of a sample only (a case kept before the whole file was counted)
         said = said if check is not None and check.digest == plan_digest(case.files, items) else ()
         check = _counted(run, case, items)
-    stops = open_stops(check, said)
+    stops = blocking(case, check, said)
     if stops:
         raise CaseError(
             "APPROVAL_STOP_OPEN",
@@ -3202,10 +3247,10 @@ def acknowledge_stop(
         check = visit.plan_check
         if check is None or check.digest != plan_digest(case.files, items):
             raise _unknown("The plan changed since its checks were counted. Look at the checks again.")
-        found = next((f for f in check.findings if f.key == key and f.level == "stop"), None)
-        if found is None:
+        found = find_finding(case, key)
+        if found is None or found.level == "flag":
             raise _unknown("There is no such stop in the plan now.")
-        if found.hard:
+        if not found.acknowledgeable:
             raise CaseError(
                 "STOP_NOT_ACKNOWLEDGEABLE",
                 "No one can say yes to this one: it is a rule the data must meet. Change the plan or the file.",
@@ -3267,6 +3312,16 @@ def _approval_required(deps: VisitDeps, case: Case) -> bool:
     return bool(load_use_case(goal.goal_id, deps.config_root).governance.approval_required)
 
 
+def approval_is_required(deps: VisitDeps, case: Case) -> bool:
+    """The active goal's separation of duties (:func:`_approval_required`), for :mod:`engine.doctor.approval_model`."""
+    return _approval_required(deps, case)
+
+
+def was_applied(case: Case, op_id: str) -> bool:
+    """Whether the person's action with this idempotency key is already written (a retried request)."""
+    return _seen(case, op_id)
+
+
 def _proposers(case: Case, item: CaseItem) -> tuple[str, ...]:
     """Everyone who proposed an item or answered the question it came from (separation of duties, O17).
 
@@ -3274,16 +3329,19 @@ def _proposers(case: Case, item: CaseItem) -> tuple[str, ...]:
     ticked or unticked it since (`decided_by`) took part too. Data Doctor (the rules, the AI) is no one."""
     found: list[str] = []
     origin = next((q for q in case.questions if item.item_id.startswith(f"{q.question_id}:")), None)
-    asked = next(  # a change the agent made in answer to a message was asked for by whoever wrote it
-        (
-            case.chat[n - 1].by
-            for n, entry in enumerate(case.chat)
-            if n
-            and entry.role == "agent"
-            and item.item_id in entry.item_ids
-            and case.chat[n - 1].role == "user"
-        ),
-        None,
+    asked = (
+        item.requested_by
+        or next(  # recorded on the item; one made before that is read off the chat's order
+            (
+                case.chat[n - 1].by
+                for n, entry in enumerate(case.chat)
+                if n
+                and entry.role == "agent"
+                and item.item_id in entry.item_ids
+                and case.chat[n - 1].role == "user"
+            ),
+            None,
+        )
     )
     for who in (origin.answered_by if origin is not None else None, asked, item.decided_by):
         if who is not None and who != AGENT and who not in found:

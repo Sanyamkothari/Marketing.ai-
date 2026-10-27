@@ -9,7 +9,7 @@ off - the default - none of these paths exists and docs/API.md is unchanged.
 | `POST /cases/{case_id}/goal` | Analyst | Chooses, switches or clears (`null`) the goal; nothing decided is asked again. |
 | `POST /cases/{case_id}/answers` | Analyst | Answers a question with one of its options. |
 | `POST /cases/{case_id}/decisions` | Analyst | Ticks or unticks a suggestion of the active section; unticked with `park_for`, it waits for the one who would know and is left out until resumed. |
-| `POST /cases/{case_id}/approval` | Analyst | Approves what the preview showed; recorded with the user id and the sentence shown. |
+| `POST /cases/{case_id}/approval` | Analyst | Approves what the preview showed; recorded with the user id and the sentence shown. With `yeses` (`view.approval.yeses`) it also gives every stop's yes and every own-yes change's yes the person was shown, all checked before any is written; `digest` is `view.approval.digest` as read. The two routes below stay and run the same checks. |
 | `POST /cases/{case_id}/acknowledgements` | Analyst | Says yes to one stop of the plan, by its `key` (`view.ledger.findings[].key`), with an optional reason; the stop may have been found on a sample, on the whole file before approval, or by the final check (`scope`). Approve is refused while a stop has no yes; a yes holds while the stop's count stays at or below the one said yes to, and a changed plan takes it away; a hard rule (`acknowledgeable` false) takes no yes (`409 STOP_NOT_ACKNOWLEDGEABLE`). |
 | `POST /cases/{case_id}/chat` | Analyst | Writes to Data Doctor; with no AI service the reply says so and nothing else changes. |
 | `POST /cases/{case_id}/confirmations` | Analyst | Plan O M246: the own yes of one APPROVE-class item, with the exact sentence read (the item's role is checked). |
@@ -37,7 +37,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Final
+from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi import Path as Path_
@@ -51,6 +51,7 @@ from api.schemas import ErrorResponse
 from engine.access.roles import Principal, Role
 from engine.config import ConfigError, StrictBase
 from engine.doctor import visit as doctor_visit
+from engine.doctor.approval_model import GivenYes
 from engine.doctor.case import CLIENT_ID_PATTERN, DEFAULT_CLIENT_ID, Case, CaseError
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.goal_brief import GOAL_ID_PATTERN, BriefMode, GoalBrief, load_goal_brief
@@ -172,6 +173,27 @@ class ApprovalRequest(_Change):
         max_length=4_000,
         description="Plan O M246: the sentence the person read, word for word; a changed one records nothing.",
     )
+    yeses: list[GivenYesRequest] = Field(
+        default_factory=list,
+        max_length=64,
+        description="Every yes the person was shown (`view.approval.yeses`): the stops they accept and the changes "
+        "that need their own yes. All are checked before any is written; a yes to something not shown is ignored.",
+    )
+    digest: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{32}$",
+        description="`view.approval.digest` as the person read it; a changed approval records nothing.",
+    )
+
+
+class GivenYesRequest(StrictBase):
+    """One yes given with the approval: a stop (`key`) or an own-yes change (`item_id`, with its `sentence`)."""
+
+    kind: Literal["acknowledge", "confirm"]
+    key: str | None = Field(default=None, pattern=r"^[a-f0-9]{16}$")
+    item_id: str | None = Field(default=None, min_length=1, max_length=128)
+    sentence: str | None = Field(default=None, max_length=4_000)
+    reason: str = Field(default="", max_length=500)
 
 
 class ConfirmationRequest(_Change):
@@ -685,6 +707,9 @@ def approve_changes(
             actor=principal.user_id,
             op_id=body.op_id,
             sentence=body.sentence,
+            yeses=[GivenYes(**y.model_dump()) for y in body.yeses],
+            principal=principal,
+            digest=body.digest,
         )
     except CaseError as exc:
         raise _error(exc) from exc
