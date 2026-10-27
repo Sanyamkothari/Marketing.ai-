@@ -721,3 +721,30 @@ def test_emissions_from_different_producers_give_the_same_plan_in_any_order(
         assert work is not None
         shapes.append(sorted((item_subject(i), i.state.value) for i in work.items))
     assert all(s == shapes[0] for s in shapes)
+
+
+def test_a_later_review_does_not_retract_a_step_the_chat_made_by_omission(
+    storage: LocalStorage, world: World
+) -> None:
+    sql = _ai(_query("SELECT 1")).model_copy(update={"producer": "chat"})
+    for state in (ProposalState.PENDING, ProposalState.ACCEPTED):
+        mine = sql.model_copy(update={"state": state})
+        case = _case(storage, world, (mine,))
+        done = reconcile(case, Emission(producer="review", items=[], complete=True), now=NOW)
+        assert done.items[0].state is state and done.items[0].withdrawn_because is None
+    own = sql.model_copy(update={"producer": "review"})
+    done = reconcile(_case(storage, world, (own,)), Emission(producer="review", complete=True), now=NOW)
+    assert done.items[0].withdrawn_because is None, "an AI review never retracts by omission"
+
+
+def test_the_rules_still_retract_their_own_stale_items_and_replaces_still_supersedes(
+    storage: LocalStorage, world: World
+) -> None:
+    stale = _fix("amount", "parse_number").model_copy(update={"producer": "rules"})
+    done = reconcile(_case(storage, world, (stale,)), Emission(producer="rules", complete=True), now=NOW)
+    assert done.items[0].withdrawn_because
+    old = _ai(_query("SELECT 1")).model_copy(update={"producer": "chat"})
+    new = _ai(_query("SELECT 2"))
+    done = reconcile(_case(storage, world, (old,)), Emission(producer="chat", items=[new]), now=NOW)
+    by_id = {i.item_id: i for i in done.items}
+    assert by_id[old.item_id].superseded_by == new.item_id
