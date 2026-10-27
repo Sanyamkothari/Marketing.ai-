@@ -12,8 +12,11 @@ Safety first, in this order:
    anything sent after the customer asked shows up as a breach. A reply that says "stop" in passing
    ("can't stop wearing these") is also treated as stop: a missed opt-out is a legal problem, a
    wrong one costs one customer's messages.
-   Opt-outs in Hindi, Hinglish and other languages come from `configs/v4/optout_phrases.yaml`
-   (`autonomy.channels.optout`): add a language there, not in code.
+   On WhatsApp replies, opt-outs in Hindi, Hinglish and other languages come from
+   `configs/v4/optout_phrases.yaml` (`autonomy.channels.optout`): add a language there, not in code.
+   Email and SMS replies use the English net only, as before. A WhatsApp reply the adapter already
+   flagged (`opted_out` on its attrs) is stop, and the adapter has written that channel's
+   UNSUBSCRIBE: only the other channels' are added here, so each channel gets one.
 2. **Complaint words** (spam, scam, harassment, "report you") always mean complaint, unless stop won.
 3. Only then the swappable **text classifier** (`autonomy.interfaces.TextSignals`). A low-confidence
    answer or a classifier failure is handed to a person.
@@ -31,7 +34,7 @@ from typing import Literal, cast, get_args
 from pydantic import Field
 
 from autonomy.agents.base import load_prompt
-from autonomy.channels.optout import opt_out_phrase
+from autonomy.channels.optout import OPTED_OUT_ATTR, opt_out_phrase
 from autonomy.contracts import Channel, Contract, CustomerState, Event, EventType, stable_id
 from autonomy.interfaces import TextSignals
 
@@ -137,8 +140,10 @@ def _normalise(text: str) -> str:
     return re.sub(r"\s+", " ", text.replace("’", "'").replace("‘", "'").lower()).strip()
 
 
-def stop_keyword(text: str) -> str | None:
-    """The opt-out word or phrase in `text`, if any. The hard safety net: no classifier overrides it."""
+def stop_keyword(text: str, channel: Channel | None = None) -> str | None:
+    """The opt-out word or phrase in `text`, if any. The hard safety net: no classifier overrides it.
+
+    A WhatsApp reply is also checked against the multilingual list (`autonomy.channels.optout`)."""
     norm = _normalise(text)
     bare = re.sub(r"[^\w\s\-]", "", norm).strip()
     if bare in STOP_EXACT or bare.replace("-", " ") in STOP_EXACT:
@@ -147,7 +152,9 @@ def stop_keyword(text: str) -> str | None:
         found = pattern.search(norm)
         if found:
             return found.group(0)
-    return opt_out_phrase(text)  # Hindi, Hinglish and the other languages in configs/v4/optout_phrases.yaml
+    if channel is Channel.WHATSAPP:
+        return opt_out_phrase(text)  # Hindi, Hinglish, ...: configs/v4/optout_phrases.yaml
+    return None
 
 
 def complaint_keyword(text: str) -> str | None:
@@ -171,9 +178,11 @@ class Conversation:
         self.signals = signals
         self.stop_all_channels = stop_all_channels
 
-    def classify(self, text: str) -> tuple[Intent, float, str | None, str]:
-        """(intent, confidence, matched keyword, reason). Keyword nets first, then the classifier."""
-        word = stop_keyword(text)
+    def classify(self, text: str, channel: Channel | None = None) -> tuple[Intent, float, str | None, str]:
+        """(intent, confidence, matched keyword, reason). Keyword nets first, then the classifier.
+
+        `channel` is the reply's channel: WhatsApp replies also go through the multilingual list."""
+        word = stop_keyword(text, channel)
         if word is not None:
             return "stop", 1.0, word, f"The reply contains the opt-out word '{word}'."
         word = complaint_keyword(text)
@@ -214,7 +223,13 @@ class Conversation:
             raise ValueError("a reply event needs a channel")
 
         text = event.text or ""
-        intent, confidence, matched, reason = self.classify(text)
+        raw_flag = event.attrs.get(OPTED_OUT_ATTR)
+        flagged = raw_flag if isinstance(raw_flag, str) and raw_flag else None
+        intent, confidence, matched, reason = (
+            ("stop", 1.0, flagged, f"The reply is the opt-out phrase '{flagged}'.")
+            if flagged is not None
+            else self.classify(text, channel)
+        )
         events: list[Event] = []
 
         def derived(kind: EventType, ch: Channel | None, **attrs: str) -> Event:
@@ -233,6 +248,8 @@ class Conversation:
             channels = {channel}
             if self.stop_all_channels and state is not None:
                 channels |= set(state.channels)
+            if flagged is not None:
+                channels.discard(channel)  # the adapter wrote this channel's UNSUBSCRIBE already
             for ch in sorted(channels, key=lambda c: (c is not channel, c.value)):
                 events.append(derived(EventType.UNSUBSCRIBE, ch, reason="reply_stop"))
         elif intent == "not_now":

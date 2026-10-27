@@ -50,7 +50,7 @@ OPT_OUTS = [
     "बंद  करो",
     "bandkaro",
     "s t o p",
-    # a clear phrase inside a longer message
+    # the phrase with filler words around it (greetings, "please", "me", "these messages")
     "please band karo ab",
     "mujhe ye messages nahi chahiye",
     "कृपया बंद करो",
@@ -64,6 +64,13 @@ NOT_OPT_OUTS = [
     "band hai kya?",  # "is it closed?"
     "stopover in Delhi",  # a word that merely starts with stop
     "रोकोगे",  # a different word
+    # a Hinglish or Hindi phrase inside a longer sentence is about the product, not the messages
+    "Red nahi chahiye, blue wala bhejo",
+    "size M nahi chahiye L chahiye",
+    "price mat bhejo, photo bhejo",
+    "abhi nahi chahiye, next month",  # "not now": a snooze, not a stop
+    "abhi nahi chahiye",
+    "लाल वाला नहीं चाहिए, नीला भेजो",
     "",
     "   ",
     "👍",
@@ -88,13 +95,23 @@ def test_words_are_cut_on_letters_not_on_vowel_signs() -> None:
 
 def test_a_language_is_added_in_config_without_code(tmp_path: Path) -> None:
     path = tmp_path / "phrases.yaml"
-    path.write_text("languages:\n  english: [stop]\n  tamil: ['நிறுத்து', 'vendam']\n", encoding="utf-8")
+    path.write_text(
+        "languages:\n  english: {match: contains, phrases: [stop]}\n  tamil: ['நிறுத்து', 'vendam']\n"
+        "filler_words: [please]\n",
+        encoding="utf-8",
+    )
     lexicon = load_lexicon(path)
     assert opt_out_phrase("நிறுத்து", lexicon) == "நிறுத்து" and lexicon.language_of("vendam") == "tamil"
+    assert opt_out_phrase("please vendam", lexicon) == "vendam"
+    assert opt_out_phrase("blue vendam", lexicon) is None  # a plain list matches the whole message
+    assert opt_out_phrase("can you stop", lexicon) == "stop"  # `contains`
     assert opt_out_phrase("band karo", lexicon) is None  # only what this file lists
     assert opt_out_phrase("band karo") is not None
     bad = tmp_path / "bad.yaml"
     bad.write_text("languages:\n  hindi: not-a-list\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_lexicon(bad)
+    bad.write_text("languages:\n  hindi: {match: sometimes, phrases: [roko]}\n", encoding="utf-8")
     with pytest.raises(ValueError):
         load_lexicon(bad)
 
@@ -109,10 +126,26 @@ def test_the_shipped_lexicon_names_each_language() -> None:
 
 
 @pytest.mark.parametrize("text", ["band karo", "बंद करो", "nahi chahiye", "मत भेजो"])
-def test_the_conversation_agent_reads_them_as_stop(text: str) -> None:
-    assert stop_keyword(text) is not None
-    intent, confidence, matched, _why = Conversation(KeywordTextSignals()).classify(text)
+def test_the_conversation_agent_reads_them_as_stop_on_whatsapp(text: str) -> None:
+    assert stop_keyword(text, Channel.WHATSAPP) is not None
+    intent, confidence, matched, _why = Conversation(KeywordTextSignals()).classify(text, Channel.WHATSAPP)
     assert (intent, confidence) == ("stop", 1.0) and matched
+
+
+@pytest.mark.parametrize("text", ["band karo", "dnd", "roko", "nahi chahiye"])
+def test_email_and_sms_replies_keep_the_english_net_only(text: str) -> None:
+    # The multilingual list is for WhatsApp (the spec's scope); other channels behave as before.
+    assert stop_keyword(text) is None
+    assert stop_keyword(text, Channel.SMS) is None and stop_keyword(text, Channel.EMAIL) is None
+    assert stop_keyword("STOP", Channel.SMS) == "stop"
+
+
+@pytest.mark.parametrize("text", ["Red nahi chahiye, blue bhejo", "abhi nahi chahiye, next month"])
+def test_a_product_reply_is_not_turned_into_a_stop(text: str) -> None:
+    intent, _c, _m, _why = Conversation(KeywordTextSignals()).classify(text, Channel.WHATSAPP)
+    assert intent != "stop"
+    events = WhatsAppCloudAdapter(PNID, "t", "s").parse_webhook({}, inbound(text))
+    assert [e.type for e in events] == [EventType.REPLY]
 
 
 # --- the adapter: an UNSUBSCRIBE next to the REPLY -----------------------------------------------

@@ -1,33 +1,89 @@
-# Opt-out phrases for inbound replies (WhatsApp first; the Conversation agent reads the same list).
+# Opt-out phrases for inbound WhatsApp replies (autonomy/channels/optout.py).
 #
-# A reply opts the customer out when, after lower-casing and dropping punctuation, it IS one of
-# these phrases or CONTAINS one as whole words ("please band karo ab" matches "band karo").
-# Add a language by adding a key under `languages` with its phrases: no code change is needed.
+# Text is compared after lower-casing and dropping punctuation. Each language says how it matches:
+#   match: contains       the reply CONTAINS the phrase as whole words ("please stop texting me").
+#   match: whole_message  the reply IS the phrase once the `filler_words` below are dropped
+#                         ("please band karo ab" matches, "Red nahi chahiye, blue bhejo" does not).
+# A language given as a plain list is `whole_message`. Hinglish and Hindi phrases are ordinary words
+# that also describe products ("size M nahi chahiye"), so they match only as the whole message.
+# Add a language by adding a key under `languages`: no code change is needed.
 # Romanised Hindi (Hinglish) is spelled the ways people type it; add variants freely.
 languages:
   english:
-    - stop
-    - unsubscribe
-    - unsub
-    - opt out
-    - optout
-    - dnd
+    match: contains
+    phrases:
+      - stop
+      - unsubscribe
+      - unsub
+      - opt out
+      - optout
+      - dnd
   hinglish:
-    - band karo
-    - band kar do
-    - band kardo
-    - band kijiye
-    - mat bhejo
-    - mat bhejna
-    - nahi chahiye
-    - nahin chahiye
-    - roko
+    match: whole_message
+    phrases:
+      - band karo
+      - band kar do
+      - band kardo
+      - band kijiye
+      - mat bhejo
+      - mat bhejna
+      - nahi chahiye
+      - nahin chahiye
+      - roko
   hindi:
-    - बंद करो
-    - बंद कर दो
-    - बंद कीजिए
-    - मत भेजो
-    - मत भेजना
-    - नहीं चाहिए
-    - नही चाहिए
-    - रोको
+    match: whole_message
+    phrases:
+      - बंद करो
+      - बंद कर दो
+      - बंद कीजिए
+      - मत भेजो
+      - मत भेजना
+      - नहीं चाहिए
+      - नही चाहिए
+      - रोको
+
+# Words dropped before a `whole_message` comparison: greetings, politeness, "me", "these",
+# "messages". Never add a word that changes the meaning ("abhi" = "now" turns a stop into "not now").
+filler_words:
+  - please
+  - pls
+  - plz
+  - hi
+  - hello
+  - ab
+  - mujhe
+  - muje
+  - mujhko
+  - ye
+  - yeh
+  - koi
+  - aur
+  - sab
+  - message
+  - messages
+  - msg
+  - msgs
+  - sms
+  - whatsapp
+  - bhai
+  - yaar
+  - ji
+  - sir
+  - madam
+  - thanks
+  - kripya
+  - कृपया
+  - अब
+  - मुझे
+  - मुझको
+  - ये
+  - यह
+  - कोई
+  - और
+  - सब
+  - मैसेज
+  - संदेश
+  - प्लीज
+  - प्लीज़
+  - भाई
+  - जी

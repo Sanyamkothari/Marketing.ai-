@@ -23,10 +23,12 @@ Why it is built this way:
   `message_template_status_update` updates the catalogue. `get_phone_status` reads both on demand.
   A failure status with a code Meta explains (131049, 131026) carries what it means for the
   customer and the breakers (`whatsapp_health`).
-- **An opt-out reply is an UNSUBSCRIBE at once.** A reply that is, or contains, a phrase of
-  `configs/v4/optout_phrases.yaml` ("STOP", "band karo", "बंद करो", ...) yields an UNSUBSCRIBE and a
-  CONSENT_REVOKED event next to the REPLY, so the gateway suppresses the number and revokes its
-  consent proofs while handling the webhook, without waiting for the Conversation agent.
+- **An opt-out reply is an UNSUBSCRIBE at once.** A reply matching `configs/v4/optout_phrases.yaml`
+  ("STOP", "band karo", "बंद करो", ...; see `autonomy.channels.optout` for how each language
+  matches) yields an UNSUBSCRIBE and a CONSENT_REVOKED event next to the REPLY, so the gateway
+  suppresses the number and revokes its consent proofs while handling the webhook, without waiting
+  for the Conversation agent. The REPLY carries `opted_out` so that agent adds only the other
+  channels' UNSUBSCRIBE events, never a second one for WhatsApp.
 - **No network in tests.** The httpx transport is injectable (`httpx.MockTransport` in tests). httpx
   is imported when the first message is sent, so parsing and verifying webhooks need nothing but the
   standard library.
@@ -43,8 +45,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from autonomy.channels.common import header, send_event_id, str_or_none
-from autonomy.channels.optout import OptOutLexicon, opt_out_phrase
+from autonomy.channels.optout import OPTED_OUT_ATTR, OptOutLexicon, opt_out_phrase
 from autonomy.channels.whatsapp_health import (
+    ACCOUNT_CUSTOMER,
+    ACCOUNT_LEVEL_ATTR,
     RATINGS,
     WhatsAppHealth,
     WhatsAppLimits,
@@ -80,8 +84,6 @@ becomes a BLOCK, so consent is withdrawn rather than the send merely retried."""
 
 RECEIVED_AT_HEADER = "X-Autonomy-Received-At"
 """The gateway stamps the time it received a webhook here (see `gateway.Gateway.handle_webhook`)."""
-ACCOUNT_CUSTOMER = "whatsapp_account"
-"""The customer id of account-level events (quality reports): they belong to the number, not a person."""
 OPT_OUT_REASON = "reply_optout_instant"
 """The reason on the UNSUBSCRIBE this adapter writes for an opt-out reply."""
 MAX_TEMPLATE_PAGES = 50
@@ -162,6 +164,7 @@ class WhatsAppCloudAdapter:
         health: WhatsAppHealth | None = None,
         limits: WhatsAppLimits | None = None,
         optout: OptOutLexicon | None = None,
+        display_phone_number: str | None = None,
     ) -> None:
         """
         `language` is the template language code used for every message (the `Message` contract has
@@ -171,6 +174,10 @@ class WhatsAppCloudAdapter:
         `waba_id` is the WhatsApp Business Account id, needed to list templates. `templates` and
         `health` are shared with the dispatcher's `WhatsAppGuard`; `limits` defaults to
         `configs/v4/whatsapp.yaml` and `optout` to `configs/v4/optout_phrases.yaml`.
+
+        `display_phone_number` is this number as Meta shows it: quality webhooks name the number only
+        that way, so with it a report about another number of the same business account is ignored.
+        `get_phone_status` fills it in when it is not given.
         """
         self.phone_number_id = phone_number_id
         self._access_token = access_token
@@ -185,9 +192,14 @@ class WhatsAppCloudAdapter:
         self._client: httpx.Client | None = None
         self.waba_id = waba_id
         self.limits = limits if limits is not None else load_limits()
-        self.templates = templates if templates is not None else TemplateCatalogue()
+        self.templates = (
+            templates
+            if templates is not None
+            else TemplateCatalogue(categories=self.limits.usable_categories, status=self.limits.usable_status)
+        )
         self.health = health if health is not None else WhatsAppHealth(self.limits)
         self._optout = optout
+        self.display_phone_number = _digits(display_phone_number)
 
     @property
     def messages_url(self) -> str:
@@ -301,8 +313,10 @@ class WhatsAppCloudAdapter:
         Raises `RuntimeError` for an HTTP or Graph error."""
         doc = self._graph_get(
             f"{GRAPH_URL}/{self.api_version}/{self.phone_number_id}",
-            {"fields": "quality_rating,messaging_limit_tier"},
+            {"fields": "quality_rating,messaging_limit_tier,display_phone_number"},
         )
+        if self.display_phone_number is None:
+            self.display_phone_number = _digits(str_or_none(doc.get("display_phone_number")))
         rating = str_or_none(doc.get("quality_rating"))
         tier = str_or_none(doc.get("messaging_limit_tier"))
         self.health.update(rating, tier, now)
@@ -473,6 +487,9 @@ class WhatsAppCloudAdapter:
             attrs["context_message_id"] = replied_to
         who = customer_id or self._customer(sender)
         ts = _unix_ts(inbound.get("timestamp"))
+        phrase = opt_out_phrase(text, self._optout) if text else None
+        if phrase is not None:
+            attrs[OPTED_OUT_ATTR] = phrase  # the Conversation agent then skips this channel's UNSUBSCRIBE
         events = [
             Event(
                 event_id=stable_id("ev", SOURCE, message_wamid, "reply"),
@@ -486,7 +503,6 @@ class WhatsAppCloudAdapter:
                 attrs=attrs,
             )
         ]
-        phrase = opt_out_phrase(text, self._optout) if text else None
         if phrase is not None:
             events.extend(self._opt_out_events(who, sender, message_wamid, decision_id, ts, phrase))
         return events
@@ -522,16 +538,29 @@ class WhatsAppCloudAdapter:
         """Apply a `phone_number_quality_update` to `health` and report it as an account-level event.
 
         The rating is the payload's own (`quality_rating` or `current_quality_rating`) when it has
-        one, else implied by a FLAGGED or UNFLAGGED event; the tier is `current_limit`."""
+        one, else implied by a FLAGGED or UNFLAGGED event; the tier is `current_limit`. A report
+        naming another number than `display_phone_number` (when we know ours) is ignored. The event
+        is marked `account_level`, so it is not folded into a customer state."""
         at = _entry_time(entry, headers)
         if at is None:
+            return []
+        number = _digits(str_or_none(value.get("display_phone_number")))
+        if (
+            self.display_phone_number is not None
+            and number is not None
+            and number != self.display_phone_number
+        ):
             return []
         event = str(value.get("event") or "").upper()
         given = str_or_none(value.get("quality_rating") or value.get("current_quality_rating"))
         rating = given.upper() if given and given.upper() in RATINGS else _QUALITY_EVENT_RATINGS.get(event)
         tier = str_or_none(value.get("current_limit"))
         self.health.update(rating, tier, at)
-        attrs: dict[str, str | int | float | bool] = {"key": "whatsapp_quality", "value": rating or ""}
+        attrs: dict[str, str | int | float | bool] = {
+            "key": "whatsapp_quality",
+            "value": rating or "",
+            ACCOUNT_LEVEL_ATTR: True,
+        }
         if rating is not None:
             attrs["quality_rating"] = rating
         if tier is not None:
@@ -612,6 +641,12 @@ def _entry_time(entry: Mapping[str, Any], headers: Mapping[str, str]) -> datetim
             return None
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
     return None
+
+
+def _digits(number: str | None) -> str | None:
+    """A phone number's digits only ("+1 555-000 1111" -> "15550001111"); None if it has none."""
+    digits = "".join(ch for ch in number or "" if ch.isdigit())
+    return digits or None
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:
