@@ -233,6 +233,7 @@ export function findingsOf(items, ledger, approveIds = new Set()) {
       level: f.level,
       kind: f.kind || "guard",
       key: typeof f.key === "string" ? f.key : null,
+      acknowledgeable: f.acknowledgeable !== false, // false: a rule no one may say yes to
       count: num(f.count) ?? 0,
       text: typeof f.text === "string" ? f.text : "",
       columns: Array.isArray(f.columns) ? f.columns : [],

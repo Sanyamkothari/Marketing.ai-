@@ -755,7 +755,7 @@ async function approveAndStart(entry) {
         return;
       }
       for (const stop of now.stops) {
-        if (!s.stops.has(stop.key)) {
+        if (stop.acknowledgeable === false || !s.stops.has(stop.key)) {
           s.notice = "A safety check changed. Read it below, tick it if you agree, then click Approve and start.";
           return;
         }

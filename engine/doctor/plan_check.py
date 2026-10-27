@@ -42,6 +42,7 @@ __all__ = [
     "open_stops",
     "plan_check_of",
     "plan_digest",
+    "readiness_acknowledged",
     "recipe_steps_of",
     "steps_digest",
     "stop_is_open",
@@ -253,14 +254,31 @@ def stop_is_open(found: PlanFinding, acknowledged: Sequence[Acknowledgement]) ->
 
 
 def with_full_findings(check: PlanCheck, found: Sequence[PlanFinding]) -> PlanCheck:
-    """The check with what VERIFY found on the whole file in place of every earlier whole-file finding of the same
-    plan, and the sample's findings of the same kind and subject taken over by them (same key: the whole file is
-    what counts). It is marked `verified`: the screen reads those findings as the reasons the data is not ready.
+    """The check with what VERIFY found on the whole file taken over the earlier findings of the same key (the
+    whole file is what counts) and in place of the last check's readiness findings; the guards' other findings stay. It is marked `verified`: the screen reads those findings as the reasons the data is not ready.
     """
     keys = {f.key for f in found}
-    kept = tuple(f for f in check.findings if f.scope == "sample" and f.key not in keys)
+    # what the last check said (readiness) goes; the guards' findings stay unless the new ones say it again
+    kept = tuple(f for f in check.findings if f.key not in keys and f.source != "readiness")
     return check.model_copy(
         update={"findings": (*kept, *found), "basis": check.basis or check.digest, "verified": True}
+    )
+
+
+def readiness_acknowledged(visit: CaseVisit | None) -> tuple[str, ...]:
+    """The readiness findings a person said yes to, as `validation.acknowledged` entries (`CODE` or `CODE:column`),
+    for the plan as counted: the readiness check then holds them as acknowledged."""
+    if visit is None or visit.plan_check is None:
+        return ()
+    return tuple(
+        dict.fromkeys(
+            f.code if f.column is None else f"{f.code}:{f.column}"
+            for f in visit.plan_check.findings
+            if f.source == "readiness"
+            and f.level == "stop"
+            and not f.hard
+            and not stop_is_open(f, visit.acknowledged)
+        )
     )
 
 

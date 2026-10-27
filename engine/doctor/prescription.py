@@ -708,6 +708,8 @@ def _section(
     brief_hash: str | None,
     brief: GoalBrief | None,
 ) -> GoalSection:
+    from engine.doctor.plan_check import readiness_acknowledged
+
     items = _accepted([item for item in case.items if item.goal_id == goal_id])
     roles: dict[str, str] = {}
     for item in items:
@@ -729,7 +731,11 @@ def _section(
         settings=settings,
         split=_brief_dump(brief, "split"),
         time_settings=_brief_dump(brief, "time_settings"),
-        acknowledgements=_acknowledged(settings),
+        # a yes the person gave at APPROVE to a readiness stop goes into the approved prescription with the settings'
+        # own, so the file VERIFY called ready is the file the run is let through with (the active goal's only)
+        acknowledgements=tuple(
+            sorted({*_acknowledged(settings), *(readiness_acknowledged(case.visit) if active else ())})
+        ),
         item_digests=tuple(sorted(item.payload_digest for item in items)),
     )
 

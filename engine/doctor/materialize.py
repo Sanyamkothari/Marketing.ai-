@@ -114,6 +114,8 @@ class Prepared:
     scope: Scope
     by_upload: dict[str, str] = field(default_factory=dict)
     """The table each file's upload became."""
+    failed: tuple[str, ...] = ()
+    """The uploads with a step that could not run: not prepared, and never to be read as if no step touched them."""
 
     @property
     def stopped(self) -> bool:
@@ -181,12 +183,19 @@ def _stop(code: str, message: str, order: int | None, item_id: str | None, scope
 
 
 def _finding(
-    found: Finding, item_id: str | None, scope: Scope, seen: dict[tuple[str, str], int]
+    found: Finding,
+    item_id: str | None,
+    scope: Scope,
+    seen: dict[tuple[str, str], int],
+    *,
+    hard: bool = False,
+    file: str | None = None,
 ) -> PlanFinding:
-    """A guard finding as the ledger holds it. Its subject is the step (or the whole plan): the key is the code and
-    the subject, never the count. Two findings of one code about one subject are told apart by their number.
+    """A guard finding as the ledger holds it. Its subject is the step, or else the file's plan (`file`, an upload
+    id): the key is the code and the subject, never the count, so a yes given to one file's stop never carries
+    to another file's. Two findings of one code about one subject are told apart by their number.
     """
-    subject = item_id or "plan"
+    subject = item_id or (f"plan:{file}" if file else "plan")
     place = (found.code, subject)
     seen[place] = seen.get(place, 0) + 1
     if seen[place] > 1:
@@ -200,7 +209,7 @@ def _finding(
         detail=found.detail,
         count=found.count,
         scope="full" if isinstance(scope, Full) else "sample",
-        hard=found.code in _HARD_CODES,
+        hard=hard or found.code in _HARD_CODES,
     )
 
 
@@ -264,6 +273,7 @@ def materialize_plan(
     receipts: list[tuple[str, Receipt]] = []
     findings: list[PlanFinding] = []
     seen: dict[tuple[str, str], int] = {}
+    failed: list[str] = []
 
     plans: list[tuple[LoadedFile, list[tuple[RecipeStep, str]]]] = []
     for loaded in files:
@@ -318,7 +328,10 @@ def materialize_plan(
                     message=f"A step could not run on {'a sample of ' if isinstance(scope, Sample) else ''}"
                     f"{file_name}: {said}",
                 )
-            findings.append(_finding(found, item_id, scope, seen))
+            # a step that cannot run is a rule whichever sentence says why: the file is not prepared, so no yes may
+            # let the plan go on as if it were
+            findings.append(_finding(found, item_id, scope, seen, hard=True, file=loaded.upload_id))
+            failed.append(loaded.upload_id)
             continue
         for order in (st.order for st in ordered if _tried_before_change(ordered, st.order)):
             findings.append(  # it runs, but not on what it was tried on: the person says yes to that
@@ -334,12 +347,15 @@ def materialize_plan(
                     by_order.get(order),
                     scope,
                     seen,
+                    file=loaded.upload_id,
                 )
             )
         made = [(by_order[r.order], r) for r in guarded.receipts]
         receipts.extend(made)
         findings.extend(
-            _finding(f, by_order.get(f.order) if f.order is not None else None, scope, seen)
+            _finding(
+                f, by_order.get(f.order) if f.order is not None else None, scope, seen, file=loaded.upload_id
+            )
             for f in guarded.findings
         )
         tables[name] = guarded.run.frame  # the prepared file is what every later step reads
@@ -369,6 +385,7 @@ def materialize_plan(
         digest=digest,
         scope=scope,
         by_upload=names,
+        failed=tuple(failed),
     )
 
 

@@ -519,3 +519,160 @@ def test_an_older_stored_case_still_loads() -> None:
     assert old.plan_check.findings[0].scope == "sample" and not old.plan_check.findings[0].hard
     assert old.acknowledged[0].count is None
     assert open_stops(old.plan_check, old.acknowledged) == [], "no count on either side: the old yes holds"
+
+
+# ---- review round: older cases, rules that no check's flag can soften, flags-only verdicts, failed steps --------------
+def test_an_older_case_at_approve_is_counted_on_the_whole_file_and_the_count_is_kept(tmp_path: Path) -> None:
+    """A case kept with a sample-only check (no basis): the whole-file count is stored, with the old yeses dropped, so
+    the stops approval refuses at are the stops the screen shows and a yes to each lets the person approve."""
+    config = load_use_case(GOAL_A)
+    whole = vs.customers(seed=1)
+    w_whole = vs.World(
+        files={FIRST: vs.loaded(FIRST, "customers_oct.csv", whole, config)}, offers=vs.world().offers
+    )
+    storage = LocalStorage(tmp_path)
+    case = vs.open_case(storage, vs.world())
+    for _name, _op, act in vs.SCRIPT[:4]:
+        case = act(vs.deps_for(storage, vs.world()), CaseStore(storage).get(CLIENT, case.case_id))
+    deps = vs.deps_for(storage, w_whole, load_full=w_whole.load)
+    item = _step_item(LOSES, HALF)
+    CaseStore(storage).update(
+        CLIENT,
+        case.case_id,
+        expected_version=case.version,
+        actor=ANALYST,
+        change=lambda c: (c.model_copy(update={"items": (*c.items, item), "state": VisitState.TREAT}), []),
+    )
+    case = visit.resume(CLIENT, case.case_id, deps, actor=ANALYST)
+    case = visit.confirm(
+        CLIENT,
+        case.case_id,
+        LOSES,
+        deps,
+        principal=MEERA,
+        sentence=item_sentence(item.title, item.payload),
+        expected_version=case.version,
+    )
+    assert case.visit is not None and case.visit.plan_check is not None
+    digest = case.visit.plan_check.digest
+    old = PlanFinding(key="o" * 16, level="stop", code="PLAN_LOSES_TOO_MUCH", text="old", count=1)
+    legacy = PlanCheck(digest=digest, findings=(old,))  # no basis: counted on a sample only
+    said = Acknowledgement(key=old.key, count=1, by="u", at=T0)
+    CaseStore(storage).update(
+        CLIENT,
+        case.case_id,
+        expected_version=case.version,
+        actor=ANALYST,
+        change=lambda c: (
+            c.model_copy(
+                update={
+                    "visit": (c.visit or CaseVisit()).model_copy(
+                        update={"plan_check": legacy, "acknowledged": (said,)}
+                    )
+                }
+            ),
+            [],
+        ),
+    )
+
+    case = visit.resume(CLIENT, case.case_id, deps, actor=ANALYST)
+    assert case.visit is not None and case.visit.plan_check is not None
+    assert case.visit.plan_check.basis is not None and case.visit.acknowledged == ()
+    stops = open_stops(case.visit.plan_check, case.visit.acknowledged)
+    assert stops and all(f.scope == "full" for f in stops) and old.key not in {f.key for f in stops}
+    for stop in [s for s in stops if not s.hard]:
+        case = _ack(deps, case, stop.key)
+    assert case.visit is not None and not open_stops(case.visit.plan_check, case.visit.acknowledged)
+    assert _approve(deps, case).state is not VisitState.APPROVE
+
+
+def test_leakage_consent_and_the_minimums_are_rules_whatever_the_check_says() -> None:
+    from engine.doctor.visit import _readiness_findings
+
+    def check(code: str) -> Any:
+        return SimpleNamespace(
+            severity=Severity.ERROR,
+            acknowledged=False,
+            code=code,
+            column="c",
+            message=code,
+            suggestion="",
+            acknowledgeable=True,  # the registry would let a run acknowledge it
+        )
+
+    codes = [
+        "LEAKAGE_SUSPECTED",
+        "ROWS_TOO_FEW",
+        "TARGET_TOO_FEW_POSITIVES",
+        "CONSENT_COLUMN_MISSING",
+        "CONSENT_X",
+    ]
+    report = SimpleNamespace(
+        dry_run_report=SimpleNamespace(checks=[check(c) for c in [*codes, "HIGH_NULL_COLUMN"]]),
+        requirements=[],
+        probes=[],
+    )
+    found = {f.code: f for f in _readiness_findings(report)}
+    assert all(found[c].hard for c in codes)
+    assert not found["HIGH_NULL_COLUMN"].hard
+    said = [Acknowledgement(key=found["LEAKAGE_SUSPECTED"].key, by="u", at=T0)]
+    still = open_stops(PlanCheck(digest="d", findings=tuple(found.values())), said)
+    assert "LEAKAGE_SUSPECTED" in {f.code for f in still}, "a yes never lifts it"
+
+
+def test_a_verdict_with_only_flags_does_not_loop_and_gets_its_stop(tmp_path: Path) -> None:
+    flag = PlanFinding(key="f" * 16, level="flag", code="SOME_FLAG", text="Worth a look.", scope="full")
+    port = Scripted(
+        VerifyResult(verdict="needs_answers", reason="Needs answers: 1 question(s).", findings=(flag,))
+    )
+    storage, deps, case = _at_approve(tmp_path, verify=port)
+
+    case = _approve(deps, case)
+    assert case.state is VisitState.APPROVE and port.calls == 1
+    case = _approve(deps, case)
+    assert case.state is VisitState.APPROVE and port.calls == 2
+    assert case.visit is not None and case.visit.plan_check is not None
+    (stopped,) = open_stops(case.visit.plan_check, case.visit.acknowledged)
+    assert stopped.code == "VERIFY_NOT_READY"
+    shown = build_screen(storage, CLIENT, case.case_id, config_root=None).view.verdict
+    assert shown.key == "not_ready" and shown.reasons
+
+
+def test_the_no_progress_stop_goes_when_a_confirmation_changes_what_the_check_depends_on(
+    tmp_path: Path,
+) -> None:
+    from engine.doctor.case import CaseApproval
+
+    port = Scripted(VerifyResult(verdict="needs_approval", reason="Needs approval: 1 change."))
+    _storage, deps, case = _at_approve(tmp_path, verify=port)
+    case = _approve(deps, case)
+    case = _approve(deps, case)
+    assert case.visit is not None and case.visit.plan_check is not None
+    assert [f.code for f in open_stops(case.visit.plan_check, case.visit.acknowledged)] == [
+        "VERIFY_NOT_READY"
+    ]
+
+    yes = CaseApproval(
+        approval_id="approval.9", approved_by="u", approved_at=T0, approve_class=True, payload_digest="p" * 16
+    )
+    CaseStore(_storage).update(
+        CLIENT,
+        case.case_id,
+        expected_version=case.version,
+        actor=ANALYST,
+        change=lambda c: (c.model_copy(update={"approvals": (*c.approvals, yes)}), []),
+    )
+    case = visit.resume(CLIENT, case.case_id, deps, actor=ANALYST)
+    assert case.visit is not None and case.visit.plan_check is not None
+    assert not open_stops(case.visit.plan_check, case.visit.acknowledged), "the check may run again"
+
+
+def test_a_step_that_cannot_run_is_hard_in_every_form_and_its_file_is_recorded_as_failed() -> None:
+    files, case_files, items = _orders_case(200, 0.0)
+    broken = items[0].payload["step"]
+    assert isinstance(broken, dict)
+    broken["column"] = "no_such_column"
+    items[0] = items[0].model_copy(update={"payload": {**items[0].payload, "step": broken}})
+    prepared = materialize_plan(case_files, items, files, Full())
+    assert prepared.failed == (files[0].upload_id,) and not prepared.files
+    assert all(f.hard for f in prepared.findings if f.level == "stop")

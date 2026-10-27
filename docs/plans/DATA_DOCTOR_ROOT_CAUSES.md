@@ -102,6 +102,9 @@ leak check inside `materialize`, consent as a decision with its own approval cla
 | 5 | F3 rest + F6 one approval | scattered stops, extra confirmations | M |
 | 6 | F7 contracts and limits | prompt/code drift | S |
 
+Step 1 leaves the preview tables (`preview.py`), the query trial (`tools_sql`, through `candidate=`), `agent_apply`'s check and the replay on their own resolution of the plan; they move onto `materialize` with the current-tables work (Step 4), so one Sample and one as-of reach every caller.
+A yes to a stop without a count (a rate moved, a run that does not repeat) holds however the stop grows; counting those is part of the decisions work (Step 2).
+
 Total roughly 2–3 engineer-weeks of work. Stored cases migrate lazily (subjects and decisions derived on read; old
 count-keyed acknowledgements are dropped so the person is asked again - the safe direction).
 
