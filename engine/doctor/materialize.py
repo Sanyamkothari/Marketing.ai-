@@ -12,8 +12,9 @@ and as-of date. A stop could then show up only at the very end (VERIFY), after t
   share is told apart;
 * **the tables** - ALL of them, prepared: a query step that reads another file reads that file as the plan makes it,
   not as it was uploaded (files that make no table by a query are prepared first);
-* **the key and the outcome** the guards count by (:func:`roles_of`; one helper, until the decisions model replaces
-  it), **the case's as-of date**, and **the future-data check** a training file gets;
+* **the key and the outcome** the guards count by (:func:`roles_of`, over :mod:`engine.doctor.decisions`),
+  **the case's as-of date** (``decisions(case).as_of``; a query keeps ``$as_of`` symbolic and is bound to it here),
+  and **the future-data check** a training file gets;
 * **the rows** - :class:`Sample` is a seeded random sample, the same for every caller with the same scope;
   :class:`Full` is every row the caller loaded.
 
@@ -33,7 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.config import AgentConfig
-from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind
+from engine.agent.contracts import RecipeStep, RecipeStepKind
 from engine.agent.dataset_recipe import consistent_types
 from engine.agent.recipe import STEP_PHASE, RecipeError
 from engine.agent.sql_step import SqlStepError, sql_params
@@ -180,24 +181,15 @@ def roles_of(
     `candidate_made` are the columns of the table of a query being tried: it is read as if it were accepted, by the
     very same rule, so a trial and the run after the yes resolve the roles alike.
     """
-    from engine.doctor.plan_check import accepted_column
+    from engine.doctor.decisions import decisions_from
     from engine.doctor.prescription import prepared_key, query_makes
 
-    key = accepted_column(items, "key", upload_id, columns)
-    target = accepted_column(items, "outcome_column", upload_id, columns)
+    decided = decisions_from(items)
+    key = decided.column("key", upload_id, columns)
+    target = decided.column("outcome", upload_id, columns)
     also = () if candidate_made is None else (candidate_made,)
     if target is None:
-        declared = next(
-            (
-                str(i.payload["column"])
-                for i in items
-                if i.kind == "outcome_column"
-                and i.state is ProposalState.ACCEPTED
-                and i.upload_id in (upload_id, None)
-                and isinstance(i.payload.get("column"), str)
-            ),
-            None,
-        )
+        declared = decided.declared("outcome", upload_id)
         if declared is not None and query_makes(items, declared, also=also):
             target, key = declared, prepared_key(items, declared, key, also=also)
     if key is not None:
@@ -263,15 +255,14 @@ def materialize(
 ) -> Prepared:
     """The case's plan run over `files` at `scope`, with the case's as-of date. `items` are the plan's (the active
     section). `candidate` is `(upload id, step)`: a step to try as if it were accepted (a query trial)."""
-    from engine.doctor.agent_review import case_as_of
+    from engine.doctor.decisions import decisions
 
-    given = case_as_of(case)
     return materialize_plan(
         case.files,
         items,
         files,
         scope,
-        as_of=date.fromisoformat(given) if given is not None else None,
+        as_of=decisions(case).as_of_date,
         candidate=candidate,
         twice=twice,
         watch=watch,

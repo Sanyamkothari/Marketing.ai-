@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 
 from engine.doctor import visit
-from engine.doctor.agent_review import case_as_of
 from engine.doctor.carry import _answers_mark
 from engine.doctor.case import Case, CaseError, CaseQuestion, CaseStore, TimelineKind
+from engine.doctor.decisions import decisions
 from engine.doctor.protocol import _case_question, _with_dont_know
 from engine.doctor.questions import build_ask
 from engine.storage import LocalStorage
@@ -72,7 +72,7 @@ def test_a_typed_date_is_stored_and_becomes_the_as_of_date(storage: LocalStorage
     answered = _typed(storage, world, case, typed.option_id, " 2011-11-30 ")
     question = next(q for q in answered.questions if q.question_id == "q8")
     assert question.answer_value == "2011-11-30"
-    assert case_as_of(answered) == "2011-11-30"  # the typed value wins over the label
+    assert decisions(answered).as_of_iso == "2011-11-30"  # the typed value wins over the label
     event = [
         e
         for e in CaseStore(storage).timeline(CLIENT, case.case_id)
@@ -115,7 +115,7 @@ def test_answering_another_option_clears_the_typed_date(storage: LocalStorage, w
     again = _typed(storage, world, first, "c0", None)
     question = next(q for q in again.questions if q.question_id == "q8")
     assert question.answer_value is None
-    assert case_as_of(again) == "2011-12-09"  # the label's date, now that nothing is typed
+    assert decisions(again).as_of_iso == "2011-12-09"  # the label's date, now that nothing is typed
 
 
 def test_a_changed_typed_date_is_a_changed_answer(storage: LocalStorage, world: World) -> None:

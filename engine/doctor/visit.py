@@ -93,6 +93,7 @@ from engine.doctor.case import (
     evidence_key,
     payload_digest,
 )
+from engine.doctor.decisions import decisions, sets_of_effect
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL, GoalBrief, load_goal_brief, register_goal_brief_tool
 from engine.doctor.materialize import Full, materialize, stop_finding
 from engine.doctor.plan_check import (
@@ -1060,9 +1061,10 @@ def _treat(run: _Run, case: Case) -> _Step:
         goal.goal_id if goal is not None else None,
         brief.brief_hash if brief is not None else None,
         answers,
+        decisions(case).digest,  # what the answers and accepted items decide (the as-of date, the roles)
         # A decided outcome whose query the person left out is asked about again (the rules run once more).
         goal is not None
-        and (decided := _decided(case, "outcome_column", goal.goal_id)) is not None
+        and (decided := decisions(case).pair("outcome", goal.goal_id)) is not None
         and _outcome_is_gone(case, run.files(case), decided),
     )
     visit = case.visit or CaseVisit()
@@ -1148,7 +1150,13 @@ def _converse(run: _Run, case: Case) -> _Step:
         [
             item
             for item, _waits in agent_applies(
-                run.files(case), case.files, active, fresh, now, roles_of(case, run.deps.config_root)
+                run.files(case),
+                case.files,
+                active,
+                fresh,
+                now,
+                roles_of(case, run.deps.config_root),
+                decisions(case).as_of_date,
             )
         ]
         if fresh
@@ -1313,11 +1321,9 @@ def _counted(run: _Run, case: Case, items: Sequence[CaseItem]) -> PlanCheck:
     """The plan counted on every row of its files (:class:`Full`), so the whole file's stops are known BEFORE the
     person approves, not after. Kept by the plan's digest and the as-of date it was counted under: the same plan
     is not counted again (the stops VERIFY adds to it stay)."""
-    from engine.doctor.agent_review import case_as_of
-
     visit = case.visit or CaseVisit()
     digest = plan_digest(case.files, items)
-    basis = _digest(digest, case_as_of(case))
+    basis = _digest(digest, decisions(case).digest)
     kept = visit.plan_check
     if kept is not None and kept.digest == digest and kept.basis == basis:
         return kept
@@ -1738,6 +1744,7 @@ def _question(
             option_id=effect.option_id,
             label=label,
             effect_digest=payload_digest(effect.payload) if effect.kind is not None else None,
+            sets=sets_of_effect(effect.kind),
         )
         for label, effect in choices
     )
@@ -1756,15 +1763,6 @@ def _question(
 
 
 _DONT_KNOW: Final[str] = "I don't know"
-
-
-def _key_of(case: Case, upload_id: str) -> str | None:
-    """The file's ID column as decided: a ticked `key` item of the base, else none."""
-    for item in case.items:
-        if item.kind == "key" and item.upload_id == upload_id and item.state is ProposalState.ACCEPTED:
-            column = item.payload.get("column")
-            return column if isinstance(column, str) else None
-    return None
 
 
 _ID_NAMED: Final[re.Pattern[str]] = re.compile(
@@ -1788,7 +1786,7 @@ def _base_rules(run: _Run, case: Case, step: _Step) -> None:
     ctx = run.context(case)
     for loaded in run.files(case):
         upload_id = loaded.upload_id
-        if _key_of(case, upload_id) is not None:
+        if decisions(case).key(upload_id) is not None:
             continue
         result = run.call("find_file_role", {"upload_id": upload_id}, ctx)
         step.evidence.append(result)
@@ -1884,7 +1882,7 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
     goal = brief.goal_id
     files = run.files(case)
     # The outcome: the configured column where it is; otherwise one question over the files' likely columns.
-    outcome = _decided(case, "outcome_column", goal)
+    outcome = decisions(case).pair("outcome", goal)
     if outcome is not None and _outcome_is_gone(case, files, outcome):
         step.doubts.append(
             CaseDoubt(
@@ -2096,19 +2094,10 @@ def _outcome_is_gone(case: Case, files: Sequence[LoadedFile], decided: tuple[str
     return not any(column in made for _i, _o, _s, made in _query_tables(case, files))
 
 
-def _decided(case: Case, kind: str, goal_id: str) -> tuple[str, str] | None:
-    for item in case.items:
-        if item.kind == kind and item.goal_id == goal_id and item.state is ProposalState.ACCEPTED:
-            upload_id, column = item.payload.get("upload_id"), item.payload.get("column")
-            if isinstance(upload_id, str) and isinstance(column, str):
-                return upload_id, column
-    return None
-
-
 def _time_rule(run: _Run, case: Case, brief: GoalBrief, upload_id: str, step: _Step, now: datetime) -> None:
     """The date each row describes, for a goal whose split or outcome window needs one."""
     need = brief.column("time")
-    if need is None or _decided(case, "as_of_column", brief.goal_id) is not None:
+    if need is None or decisions(case).pair("as_of_column", brief.goal_id) is not None:
         return
     loaded = next((lf for lf in run.files(case) if lf.upload_id == upload_id), None)
     if loaded is None:
@@ -2174,7 +2163,7 @@ def _consent_rule(
 ) -> None:
     """A contacting goal's consent column: proposed, never ticked (it decides who may be contacted)."""
     need = brief.column("consent")
-    if need is None or _decided(case, "consent_column", brief.goal_id) is not None:
+    if need is None or decisions(case).pair("consent", brief.goal_id) is not None:
         return
     loaded = next((lf for lf in files if lf.upload_id == upload_id), None)
     if loaded is None:
@@ -2311,7 +2300,7 @@ def readiness_verify(
 
         if brief is None:
             return VerifyResult(verdict="no_goal", reason="No goal is chosen.")
-        outcome = _decided(case, "outcome_column", brief.goal_id)
+        outcome = decisions(case).pair("outcome", brief.goal_id)
         if outcome is None:
             return VerifyResult(
                 verdict="not_ready", reason="VISIT_NO_OUTCOME: no file has the goal's outcome yet."
@@ -2323,7 +2312,7 @@ def readiness_verify(
             )
         # An approved join or stack gave its files' place to the table it made: that table is what a run reads.
         upload_id, column = current_upload(case, outcome[0]), outcome[1]
-        key = _key_of(case, upload_id)
+        key = decisions(case).key(upload_id)
         if key is None:
             diagnosed = next((f for f in case.files if f.upload_id == upload_id), None)
             key = diagnosed.key_columns[0] if diagnosed is not None and diagnosed.key_columns else None

@@ -80,6 +80,7 @@ from pydantic import AwareDatetime, BaseModel, Field, JsonValue, ValidationError
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.config import ConfigError, StrictBase, load_engine_config
 from engine.contracts import Artefact
+from engine.doctor.decisions import Sets
 from engine.doctor.visit_contracts import CaseVisit
 from engine.settings import SettingsError, settings
 from engine.storage import LocalStorage, Storage, StorageError
@@ -399,6 +400,12 @@ class CaseOption(StrictBase):
         default=None,
         exclude_if=lambda value: value is None,
         description="AI-first A1c: the answer needs a value typed with it (a date as YYYY-MM-DD, a number, or text).",
+    )
+    sets: Sets | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="The decision this answer sets (`engine.doctor.decisions`): the as-of date, the outcome or the "
+        "key; `note` = it sets nothing, on purpose. Older cases stored none (read from the question's code).",
     )
 
 

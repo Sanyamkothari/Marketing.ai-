@@ -494,6 +494,7 @@ class _Chat(_Review):
         and which wait for their tick (and why): what it says it did is what happens (`agent_apply`). Each change
         is judged once, with the ones already applied in this turn in place."""
         from engine.doctor.agent_apply import agent_applies, roles_of, twin_of
+        from engine.doctor.decisions import decisions
         from engine.doctor.visit import active_section
 
         items, _evidence = self._items()
@@ -527,6 +528,7 @@ class _Chat(_Review):
             fresh,
             self.clock(),
             roles_of(self.case, self.config_root),
+            decisions(self.case).as_of_date,
         )
         for item, waits in decided:
             self.chosen.reported.add(item.item_id)

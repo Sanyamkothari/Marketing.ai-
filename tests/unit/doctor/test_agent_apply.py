@@ -260,7 +260,7 @@ def test_a_new_stop_on_another_step_holds_the_change_back(monkeypatch: pytest.Mo
     )
     calls: list[int] = []
 
-    def fake(files: object, case_files: object, items: list[CaseItem]) -> PlanCheck:
+    def fake(files: object, case_files: object, items: list[CaseItem], as_of: object = None) -> PlanCheck:
         calls.append(len(items))
         return PlanCheck(digest="d", findings=(stop,) if len(items) > 1 else ())
 
@@ -270,3 +270,42 @@ def test_a_new_stop_on_another_step_holds_the_change_back(monkeypatch: pytest.Mo
     world = cs.orders_world()
     ((_, why),) = agent_applies(tuple(world.files.values()), [], [other], [tidy], vs.T0)
     assert why == "Another step breaks."
+
+
+def test_the_check_binds_the_decided_as_of_date_to_a_query_already_in_the_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the date the accepted query fails in both runs of the check, the file is never prepared, and the new
+    step would be ticked unguarded."""
+    from datetime import date
+
+    from engine.doctor.plan_check import check_plan
+    from tests.unit.doctor.test_decisions import log_file, query_item
+
+    accepted = query_item().model_copy(update={"state": ProposalState.ACCEPTED})
+    tidy = _item(
+        "recipe_step",
+        {
+            "upload_id": "up-1",
+            "step": {"order": 1, "kind": "normalise_text", "column": "Customer", "params": {"strip": True}},
+        },
+        title="A change",
+        upload_id="up-1",
+        confidence=AgentConfidence.CHECK,
+        evidence=(),
+        now=vs.T0,
+        source=ProposalSource.AI,
+    )
+    files = (log_file(),)
+    given: list[date | None] = []
+
+    def spy(files: Any, case_files: Any, items: Any, as_of: date | None = None) -> Any:
+        given.append(as_of)
+        return check_plan(files, case_files, items, as_of=as_of)
+
+    monkeypatch.setattr(agent_apply, "check_plan", spy)
+    day = date(2025, 1, 31)
+    agent_applies(files, [], [accepted], [tidy], vs.T0, as_of=day)
+    assert given == [day, day]
+    # and the query really runs with it: no step is reported as unable to run
+    assert not [f for f in check_plan(files, [], [accepted], as_of=day).findings if f.level == "stop"]

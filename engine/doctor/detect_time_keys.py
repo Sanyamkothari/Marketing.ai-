@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, Final
 import pandas as pd
 from pydantic import JsonValue
 
-from engine.agent.contracts import AgentConfidence, ProposalState, RecipeStepKind
+from engine.agent.contracts import AgentConfidence, RecipeStepKind
 from engine.doctor.checks_time_keys import (
     ID_NAME,
     Check,
@@ -41,6 +41,7 @@ from engine.doctor.checks_time_keys import (
     summary_check,
     tail_checks,
 )
+from engine.doctor.decisions import decisions
 from engine.doctor.protocol import Ask, AskOption, DataRequest
 from engine.doctor.visit_contracts import OptionEffect
 from engine.utils.logging import get_logger
@@ -131,8 +132,9 @@ def _file(
     requests: list[DataRequest],
 ) -> None:
     upload_id, frame = loaded.upload_id, loaded.frame
-    key = _decided(case, "key", upload_id)
-    outcome = _decided(case, "outcome_column", upload_id)
+    decided = decisions(case)
+    key = decided.key(upload_id)
+    outcome = decided.outcome_of_upload(upload_id)
     rows = loaded.file_rows or len(frame)
 
     # Keys: the report, rounded digits, stand-ins, lost zeros.
@@ -203,14 +205,6 @@ def _file(
 # ---------------------------------------------------------------------------
 # What the case already knows
 # ---------------------------------------------------------------------------
-def _decided(case: Case, kind: str, upload_id: str) -> str | None:
-    for item in case.items:
-        if item.kind == kind and item.upload_id == upload_id and item.state is ProposalState.ACCEPTED:
-            column = item.payload.get("column")
-            return column if isinstance(column, str) else None
-    return None
-
-
 def _key_rules(case: Case, upload_id: str) -> list[tuple[str, Any]]:
     """`(column, KeyRule)` of the key tidy-up steps proposed or accepted for this file."""
     from engine.agent.key_steps import KeyRule
@@ -275,15 +269,10 @@ def _date_column(case: Case, frame: pd.DataFrame, upload_id: str) -> str | None:
     from engine.agent.formats import looks_like_date_name
     from engine.doctor.impossible import column_words
 
-    for item in case.items:
-        if (
-            item.kind == "as_of_column"
-            and item.upload_id == upload_id
-            and item.state is ProposalState.ACCEPTED
-        ):
-            column = item.payload.get("column")
-            if isinstance(column, str) and column in frame.columns:
-                return column
+    if (
+        column := decisions(case).column_of_upload("as_of_column", upload_id, columns=set(frame.columns))
+    ) is not None:
+        return column
     for name in frame.columns:
         words = column_words(str(name))
         if (looks_like_date_name(str(name)) or words & _PERIOD_WORDS) and not words & _NOT_AS_OF:

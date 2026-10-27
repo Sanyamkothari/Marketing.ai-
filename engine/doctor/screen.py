@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Final, Literal
 
@@ -391,10 +391,9 @@ def _preview(case: Case, load_files: Callable[[Case], Sequence[LoadedFile]] | No
     if load_files is None or not case.files:
         return None
     items, _ = active_section(case)
-    from engine.doctor.agent_review import case_as_of
+    from engine.doctor.decisions import decisions
 
-    given = case_as_of(case)
-    as_of = date.fromisoformat(given) if given is not None else None
+    as_of = decisions(case).as_of_date
     try:
         return cached_preview(
             case.client_id,
@@ -562,36 +561,21 @@ def _start(case: Case, hand_off: HandOffRecord | None) -> ScreenStart | None:
     if hand_off is None or hand_off.target == "choose_goal" or hand_off.goal_id is None:
         return None
     goal_id = hand_off.goal_id
-    outcome = next(
-        (
-            item
-            for item in case.items
-            if item.kind == "outcome_column"
-            and item.goal_id == goal_id
-            and item.state is ProposalState.ACCEPTED
-        ),
-        None,
-    )
+    from engine.doctor.decisions import decisions
+
+    decided = decisions(case)
+    outcome = decided.pair("outcome", goal_id)
     if outcome is None:
         return None
-    upload_id, column = outcome.payload.get("upload_id"), outcome.payload.get("column")
-    if not isinstance(upload_id, str) or not isinstance(column, str):
-        return None
+    upload_id, column = outcome
     # An approved join or stack made its files into one table: the run reads that table, with the outcome on it.
     upload_id = current_upload(case, upload_id)
-    key = next(
-        (
-            item.payload.get("column")
-            for item in case.items
-            if item.kind == "key" and item.upload_id == upload_id and item.state is ProposalState.ACCEPTED
-        ),
-        None,
-    )
+    key = decided.key(upload_id)
     return ScreenStart(
         target=hand_off.target,
         goal_id=goal_id,
         upload_id=upload_id,
-        primary_key=key if isinstance(key, str) else None,
+        primary_key=key,
         outcome=column,
     )
 

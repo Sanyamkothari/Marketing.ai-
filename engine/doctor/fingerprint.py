@@ -37,9 +37,9 @@ import pandas as pd
 import yaml
 from pydantic import AwareDatetime, Field, JsonValue
 
-from engine.agent.contracts import ProposalState
 from engine.config import StrictBase
 from engine.doctor.case import CASE_PREFIX, CLIENT_ID_PATTERN, CaseDoubt
+from engine.doctor.decisions import decisions
 from engine.doctor.facts import ClientFact, FactKind, FactStore
 from engine.doctor.protocol import Ask, AskOption, ProtocolError, express_doubt
 from engine.doctor.registry import DataToolKind, DataToolResult, Exposure, data_evidence_id
@@ -664,17 +664,6 @@ def compare(now: Fingerprint, prev: Fingerprint | None, facts: Sequence[ClientFa
 # ---------------------------------------------------------------------------
 # The visit's detector, and the record after approval
 # ---------------------------------------------------------------------------
-def _decided(case: Case, kind: str, upload_id: str, goal_id: str | None = None) -> str | None:
-    for item in case.items:
-        if item.kind == kind and item.upload_id == upload_id and item.state is ProposalState.ACCEPTED:
-            if goal_id is not None and item.goal_id not in (None, goal_id):
-                continue
-            column = item.payload.get("column")
-            if isinstance(column, str):
-                return column
-    return None
-
-
 def _main_file(
     case: Case, files: Sequence[LoadedFile], prev: Fingerprint | None, seen: frozenset[str] = frozenset()
 ) -> LoadedFile | None:
@@ -689,7 +678,7 @@ def _main_file(
         if names & {str(c) for c in best.frame.columns}:
             return best
     for loaded in files:
-        if _decided(case, "outcome_column", loaded.upload_id) is not None:
+        if decisions(case).outcome_of_upload(loaded.upload_id) is not None:
             return loaded
     return max(files, key=lambda f: f.profile.row_count)
 
@@ -698,13 +687,13 @@ def _current(
     case: Case, loaded: LoadedFile, brief: GoalBrief | None, at: datetime, actor: str = ""
 ) -> Fingerprint:
     goal = brief.goal_id if brief is not None else None
-    outcome = _decided(case, "outcome_column", loaded.upload_id, goal)
+    outcome = decisions(case).column_of_upload("outcome", loaded.upload_id, goal_id=goal)
     if outcome is None and brief is not None and brief.outcome.column in loaded.frame.columns:
         outcome = brief.outcome.column
     return fingerprint_file(
         loaded,
         goal_id=goal,
-        key=_decided(case, "key", loaded.upload_id),
+        key=decisions(case).key(loaded.upload_id),
         outcome=outcome,
         brief=brief,
         at=at,

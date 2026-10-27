@@ -25,8 +25,9 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import JsonValue
 
-from engine.agent.contracts import AgentConfidence, ProposalKind, ProposalState, RecipeStep, RecipeStepKind
+from engine.agent.contracts import AgentConfidence, ProposalKind, RecipeStep, RecipeStepKind
 from engine.config import ConfigError, RunMode, load_use_case
+from engine.doctor.decisions import decisions
 from engine.doctor.protocol import Ask, AskOption
 from engine.doctor.visit_contracts import OptionEffect
 from engine.utils.logging import get_logger
@@ -85,14 +86,6 @@ def _config(offers: Sequence[Offer], brief: GoalBrief | None, root: Path | None)
     return offers[0].config if offers else None
 
 
-def _decided(case: Case, kind: str, upload_id: str) -> str | None:
-    for item in case.items:
-        if item.kind == kind and item.upload_id == upload_id and item.state is ProposalState.ACCEPTED:
-            column = item.payload.get("column")
-            return column if isinstance(column, str) else None
-    return None
-
-
 def _clean(
     case: Case, loaded: LoadedFile, config: UseCaseConfig | None, root: Path | None, now: datetime
 ) -> tuple[list[CaseItem], list[Ask]]:
@@ -101,8 +94,9 @@ def _clean(
 
     upload_id = loaded.upload_id
     frame = loaded.frame
-    key = _decided(case, "key", upload_id)
-    outcome = _decided(case, "outcome_column", upload_id)
+    decided = decisions(case)
+    key = decided.key(upload_id)
+    outcome = decided.outcome_of_upload(upload_id)
     items: list[CaseItem] = []
     asks: list[Ask] = []
 

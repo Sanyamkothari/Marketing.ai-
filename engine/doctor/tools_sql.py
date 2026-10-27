@@ -451,7 +451,7 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
     ]
     if given.reads_future:
         whole = whole or plan_so_far()
-        if late := _window_finding(given, as_of, {n: whole.tables[n] for n in asked}):
+        if late := _window_finding(given, as_of or ctx.as_of, {n: whole.tables[n] for n in asked}):
             findings.append(late)
     first = seen["before"]
     key = ctx.primary_key

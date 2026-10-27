@@ -67,6 +67,7 @@ from pydantic import AwareDatetime, Field, JsonValue
 
 from engine.config import RunMode, StrictBase
 from engine.contracts import RunState, RunStatus, StageKey
+from engine.doctor.decisions import decisions
 from engine.run_progress import (
     DEFAULT_STAGE_SECONDS,
     MIN_STAGE_SECONDS,
@@ -2086,27 +2087,6 @@ def apply_time_settings(
 # ---------------------------------------------------------------------------
 # The visit's detector (M246's port): time settings in TREAT, for a goal
 # ---------------------------------------------------------------------------
-def _accepted(case: Any, kind: str, goal_id: str) -> tuple[str, str] | None:
-    from engine.agent.contracts import ProposalState
-
-    for item in case.items:
-        if item.kind == kind and item.goal_id == goal_id and item.state is ProposalState.ACCEPTED:
-            upload_id, column = item.payload.get("upload_id"), item.payload.get("column")
-            if isinstance(upload_id, str) and isinstance(column, str):
-                return upload_id, column
-    return None
-
-
-def _key_of(case: Any, upload_id: str) -> str | None:
-    from engine.agent.contracts import ProposalState
-
-    for item in case.items:
-        if item.kind == "key" and item.upload_id == upload_id and item.state is ProposalState.ACCEPTED:
-            column = item.payload.get("column")
-            return column if isinstance(column, str) else None
-    return None
-
-
 def time_settings_detector(
     storage: Storage | None,
     *,
@@ -2125,7 +2105,7 @@ def time_settings_detector(
         if brief is None or not files:
             return Detected()
         goal = brief.goal_id
-        outcome = _accepted(case, "outcome_column", goal)
+        outcome = decisions(case).pair("outcome", goal)
         file = next((f for f in files if outcome is not None and f.upload_id == outcome[0]), files[0])
         try:
             config = load_use_case(goal, config_root)
@@ -2152,7 +2132,7 @@ def time_settings_detector(
                 )
         except TimeSettingsError:
             budget = None
-        as_of = _accepted(case, "as_of_column", goal)
+        as_of = decisions(case).pair("as_of_column", goal)
         given = as_of[1] if as_of is not None and as_of[0] == file.upload_id else None
         try:
             settings = propose_time_settings(
@@ -2161,7 +2141,7 @@ def time_settings_detector(
                 brief=brief,
                 as_of_column=given,
                 outcome_column=outcome[1] if outcome is not None and outcome[0] == file.upload_id else None,
-                primary_key=_key_of(case, file.upload_id),
+                primary_key=decisions(case).key(file.upload_id),
                 budget=budget,
                 config_root=config_root,
             )

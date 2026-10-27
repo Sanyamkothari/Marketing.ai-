@@ -22,6 +22,7 @@ from typing import Final, Literal
 
 from pydantic import JsonValue
 
+from engine.doctor.decisions import Sets
 from engine.doctor.protocol import DONT_KNOW, Ask, AskOption
 from engine.doctor.visit_contracts import OptionEffect
 
@@ -66,6 +67,9 @@ class OptionSpec:
     carries a step; a repeated option has none (its label is already a sentence)."""
     value_kind: Literal["date", "number", "text"] | None = None
     """Set when choosing it needs the person to type a value of this kind with the answer ("I will type a date")."""
+    sets: Sets | None = None
+    """The decision choosing it sets (`engine.doctor.decisions`): the as-of date, the outcome or the key. `note` says
+    on purpose that it sets nothing; None = not declared (an option that adds a step makes its own item)."""
 
 
 @dataclass(frozen=True)
@@ -214,21 +218,25 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
                 OptionSpec(
                     "The latest date in the file: {latest_date}",
                     effect="The data is cut at the latest date in the file.",
+                    sets="as_of",
                 ),
                 OptionSpec(
                     "The date in the file name: {name_date}",
                     optional=True,
                     effect="The data is cut at the date in the file name.",
+                    sets="as_of",
                 ),
                 OptionSpec(
                     "Counted back from the days-since column: {back_date}",
                     optional=True,
                     effect="The data is cut at the date counted back from the days-since column.",
+                    sets="as_of",
                 ),
                 OptionSpec(
                     "I will type a date",
                     effect="Your date is used as the cut-off for the steps that follow.",
                     value_kind="date",
+                    sets="as_of",
                 ),
             ),
             blocking=True,
@@ -637,6 +645,7 @@ def build_ask(
             label_rate=label_rates[index] if label_rates else None,
             says=_says(shown[index], values, choice_says),
             value_kind=shown[index][0].value_kind,
+            sets=shown[index][0].sets,
         )
         for index, label in enumerate(labels)
     ]
