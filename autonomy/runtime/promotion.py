@@ -935,6 +935,13 @@ class AutopilotGuard:
 
     # --- reading ---------------------------------------------------------------------------------
 
+    def set_margin_rate(self, rate: float | None) -> None:
+        """Count purchases with no margin of their own at `rate` from now on. The cached judgements are keyed
+        by goal and level, not by margin, so they are dropped: the next check reads the new margin."""
+        with self._lock:
+            self.margin_rate = rate
+            self._proof.clear()
+
     def goal(self, goal_id: str) -> Goal | None:
         return next((g for g in self.workspace.goals() if g.goal_id == goal_id), None)
 

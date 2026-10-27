@@ -42,7 +42,7 @@
         "description": "Margin turns extra orders into extra profit, and sets the floor any offer must respect: your margin less your usual discount.",
         "source": "your orders' margins",
         "from_data": true,
-        "question": null
+        "question": "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?"
       },
       {
         "key": "quiet_hours",
@@ -82,7 +82,9 @@
       ],
       "valid_days": 30
     },
-    "questions": [],
+    "questions": [
+      "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?"
+    ],
     "notes": []
   },
   "opp_first_to_second": {
@@ -128,7 +130,7 @@
         "description": "Margin turns extra orders into extra profit, and sets the floor any offer must respect: your margin less your usual discount.",
         "source": "your orders' margins",
         "from_data": true,
-        "question": null
+        "question": "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?"
       },
       {
         "key": "quiet_hours",
@@ -168,7 +170,9 @@
       ],
       "valid_days": 30
     },
-    "questions": [],
+    "questions": [
+      "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?"
+    ],
     "notes": []
   },
   "opp_vip_at_risk": {
@@ -214,7 +218,7 @@
         "description": "Margin turns extra orders into extra profit, and sets the floor any offer must respect: your margin less your usual discount.",
         "source": "your orders' margins",
         "from_data": true,
-        "question": null
+        "question": "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?"
       },
       {
         "key": "quiet_hours",
@@ -254,7 +258,9 @@
       ],
       "valid_days": 30
     },
-    "questions": [],
+    "questions": [
+      "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?"
+    ],
     "notes": []
   },
   "opp_win_back": {
@@ -300,7 +306,7 @@
         "description": "Margin turns extra orders into extra profit, and sets the floor any offer must respect: your margin less your usual discount.",
         "source": "your orders' margins",
         "from_data": true,
-        "question": null
+        "question": "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?"
       },
       {
         "key": "quiet_hours",
@@ -340,7 +346,9 @@
       ],
       "valid_days": 30
     },
-    "questions": [],
+    "questions": [
+      "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?"
+    ],
     "notes": []
   }
 }

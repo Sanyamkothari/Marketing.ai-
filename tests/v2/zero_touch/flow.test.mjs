@@ -200,6 +200,18 @@ function presser(root) {
   return { press, pressed };
 }
 
+/** Type the shop's margin into the required margin question (a typed answer, not a click). */
+async function answerMargin(root, value) {
+  const until = Date.now() + 5000;
+  const find = () => root.querySelectorAll("input").find((i) => i.getAttribute("name") === "margin_pct");
+  while (!find() && Date.now() < until) await new Promise((r) => setTimeout(r, 5));
+  const input = find();
+  assert.ok(input, `the margin question is on screen: ${text(root).slice(0, 400)}`);
+  input.value = String(value);
+  await input.dispatch("change");
+  for (let i = 0; i < 5; i += 1) await settle();
+}
+
 const noHoldout = (root) => assert.doesNotMatch(text(root), /holdout/i, "people we never contact, never 'holdout'");
 
 // ---- a shop going through the setup: the real round trips, faked -------------------------------------------------
@@ -320,9 +332,12 @@ test("from Connect Shopify to Shadow running in five clicks, keeping every defau
   assert.match(t, /Safe default/, "a default not learned from the data says so");
   assert.ok(t.includes(lim.limits.find((x) => x.key === "discount_frequency").found), "the reference-only limit is in the Discounts row's description");
   noHoldout(root);
+  // The margin has no default (docs/v4/ONBOARDING_MARGIN.md): signing waits for the shop's answer.
+  assert.ok(t.includes(lim.limits.find((x) => x.key === "margin").question), "the margin question is asked");
+  await answerMargin(root, 40);
   await press("Sign and start Shadow");
   const accept = api.st.calls.find((c) => c[0] === "accept");
-  assert.deepEqual(accept[1], { opportunity_id: best.opportunity_id, offers: false }, "the preselected proposal, offers off");
+  assert.deepEqual(accept[1], { opportunity_id: best.opportunity_id, offers: false, margin_pct: 40 }, "the preselected proposal, offers off, the typed margin");
   assert.ok(toasts.some(([m]) => /decides every day and sends nothing/.test(m)));
   // The voice is read on its own once a tool is connected: no click for it.
   assert.ok(api.st.calls.some((c) => c[0] === "read" && c[1] === "goal_1"));
@@ -397,7 +412,11 @@ test("the sample data walks the same setup: proposals, limits, a Shadow goal, th
   assert.match(text(root), /2 of 5 done/, "Shopify and Klaviyo are connected in the setup scenario");
   assert.match(text(root), /Sending is set up in your Klaviyo/);
   await press("Use this goal");
+  assert.equal((await api.getMargin()).answered, false, "the sample shop starts with the margin unanswered");
+  await assert.rejects(api.acceptProposal({}), /Answer this first/, "as the server: no accept without the margin");
+  await answerMargin(root, 40);
   await press("Sign and start Shadow");
+  assert.equal((await api.getMargin()).margin_pct, 40, "the mock keeps the answer as the server does");
   const goals = await api.listGoals();
   assert.equal(goals.length, 1);
   assert.equal(goals[0].autonomy, "shadow");

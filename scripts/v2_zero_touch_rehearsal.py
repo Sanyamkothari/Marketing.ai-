@@ -594,11 +594,12 @@ class Rehearsal:
         scan = self.scan
         chosen = next(p for p in scan["proposals"] if p["opportunity_id"] == scan["preselected_id"])
         self.click("Use this goal")
-        limits = self.get("/v2/onboarding/limits", opportunity_id=chosen["opportunity_id"])
-        margin = next((q for q in limits.get("questions", []) if "margin" in str(q).lower()), None)
-        body: dict[str, Any] = {"opportunity_id": chosen["opportunity_id"]}
-        if margin is not None or not scan["margin"]["from_data"]:
-            body["margin_pct"] = round(self.spec.margin_rate * 100, 1)  # typed by the owner, not clicked
+        self.get("/v2/onboarding/limits", opportunity_id=chosen["opportunity_id"])
+        body: dict[str, Any] = {
+            "opportunity_id": chosen["opportunity_id"],
+            # The margin question is required (docs/v4/ONBOARDING_MARGIN.md): typed by the owner, not clicked.
+            "margin_pct": round(self.spec.margin_rate * 100, 1),
+        }
         result = self.post("/v2/onboarding/accept", body)
         self.click("Sign and start Shadow")
         self.goal_id = result["goal"]["goal_id"]

@@ -53,7 +53,14 @@ from autonomy.mandate import (
 )
 from autonomy.mandate.signing import KeyRing, Signer, sign_mandate, verify_mandate, with_signature
 from autonomy.onboarding.history import MESSAGE_CHANNELS, ShopHistory, quantile
-from autonomy.onboarding.opportunities import MESSAGES_COSTED, MarginReading, Proposal, margin_reading
+from autonomy.onboarding.opportunities import (
+    ANSWER_SOURCE,
+    MESSAGES_COSTED,
+    ORDERS_SOURCE,
+    MarginReading,
+    Proposal,
+    margin_reading,
+)
 from autonomy.onboarding.priors import CHANNEL_COSTS, DEFAULT_FREQUENCY, DEFAULT_QUIET
 
 __all__ = [
@@ -91,6 +98,9 @@ SINGLE_OWNER_NOTE: Final[str] = (
 TWO_PERSON_NOTE: Final[str] = "Proposed from the shop's own history at setup; needs a second signer."
 
 LimitKey = Literal["cadence", "discount_depth", "discount_frequency", "margin", "quiet_hours", "budget"]
+
+MARGIN_QUESTION = "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?"
+"""The one question onboarding must have answered (docs/v4/ONBOARDING_MARGIN.md): the shop's contribution margin."""
 
 
 class LearnedLimit(Contract):
@@ -249,7 +259,12 @@ def _discounts(h: ShopHistory) -> tuple[LearnedLimit, LearnedLimit, float | None
     return depth_limit, freq_limit, usual
 
 
-def _margin(reading: MarginReading, depth: float | None) -> tuple[LearnedLimit, float]:
+def _margin(
+    reading: MarginReading,
+    depth: float | None,
+    answer: float | None = None,
+    answer_source: str = ANSWER_SOURCE,
+) -> tuple[LearnedLimit, float]:
     floor = max(0.0, round(reading.rate - (depth or 0.0), 2)) if depth is not None else 0.0
     use_floor = (
         f"an offer may never take an order below a {floor:.0%} margin"
@@ -257,11 +272,16 @@ def _margin(reading: MarginReading, depth: float | None) -> tuple[LearnedLimit, 
         else "no offers, so no margin floor is needed yet"
     )
     if reading.from_data:
-        found = (
-            f"{reading.rate:.0%} gross margin from your answer."
-            if reading.source == "your answer"
-            else f"{reading.rate:.0%} gross margin across {reading.orders_with_margin:,} orders that carry one."
-        )
+        from_orders = reading.source == ORDERS_SOURCE
+        if not from_orders:
+            found = f"{reading.rate:.0%} gross margin from {reading.source}."
+        else:
+            found = f"{reading.rate:.0%} gross margin across {reading.orders_with_margin:,} orders that carry one."
+            if answer is not None:
+                found += (
+                    f" {answer:.0%} from {answer_source} counts only the purchases with no margin of their "
+                    "own, in the proof; sizing and the offer floor use your orders' margin."
+                )
         return (
             LearnedLimit(
                 key="margin",
@@ -272,6 +292,9 @@ def _margin(reading: MarginReading, depth: float | None) -> tuple[LearnedLimit, 
                 "respect: your margin less your usual discount.",
                 source=reading.source,
                 from_data=True,
+                # Asked even when the orders carry margins: the proof counts every other purchase at the
+                # shop's own answer, so it is required until given (docs/v4/ONBOARDING_MARGIN.md).
+                question=MARGIN_QUESTION if from_orders and answer is None else None,
             ),
             floor,
         )
@@ -281,11 +304,11 @@ def _margin(reading: MarginReading, depth: float | None) -> tuple[LearnedLimit, 
             label="Margin",
             found="Your orders do not carry product costs, so we cannot see your margin.",
             use=f"Assume {reading.rate:.0%} until you tell us; {use_floor}.",
-            description="40% is the default the decision engine uses for a customer with no margin data. "
-            "Answer once and every number on this page updates.",
+            description="40% is only what these proposals are sized at until you answer; it is not used as your "
+            "margin anywhere else. Answer once and every number on this page updates, and the proof can show profit.",
             source=reading.source,
             from_data=False,
-            question="What is your typical gross margin, as a percentage of the order value?",
+            question=MARGIN_QUESTION,
         ),
         floor,
     )
@@ -460,8 +483,15 @@ def learn_limits(
     margin_rate: float | None = None,
     offers_on: bool = False,
     channel_costs: Mapping[Channel, float] | None = None,
+    margin_source: str = ANSWER_SOURCE,
+    margin_answer: float | None = None,
 ) -> LearnedLimits:
     """Each limit as found -> used, and the terms a mandate would sign (see the module docstring).
+
+    `margin_rate` is the margin to size with when the shop gave one (`margin_source` says where from).
+    `margin_answer` is the shop's answer when `margin_rate` was left out because its orders carry their own
+    margins: those size the goal and set the offer floor, and the answer is only shown, as what the proof
+    counts purchases with no margin at.
 
     `channel_costs` is the shop's price of one message in its own currency (the runtime's
     `ShopPrices.costs()`); the budget itself is the proposal's message cost, sized with the same prices by
@@ -469,8 +499,8 @@ def learn_limits(
     money = currency or (proposal.currency if proposal is not None else history.currency())
     cadence, cap = _cadence(history)
     depth_limit, freq_limit, depth = _discounts(history)
-    reading = margin_reading(history, margin_rate)
-    margin, floor = _margin(reading, depth)
+    reading = margin_reading(history, margin_rate, given_source=margin_source)
+    margin, floor = _margin(reading, depth, margin_answer, margin_source)
     quiet, zone = _quiet(history)
     allow = offers_on and depth is not None
     budget, ceiling = _budget(

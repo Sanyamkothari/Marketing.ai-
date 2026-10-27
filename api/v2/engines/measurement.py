@@ -73,6 +73,7 @@ from autonomy.proof.estimate import welch_difference
 from autonomy.proof.ope import OpeResult, evaluate
 
 __all__ = [
+    "PROFIT_LOSS_NOTE",
     "HoldoutAssignRequest",
     "HoldoutAssignResponse",
     "LoggedDecision",
@@ -316,10 +317,7 @@ def measurement_summary(
     status = _status(diff, p, alpha)
     loss = proof.incremental_profit is not None and proof.incremental_profit.high < 0
     if status is MeasurementStatus.POSITIVE and loss:
-        notes.append(
-            "More treated customers converted, but net incremental profit is below zero across its "
-            "whole interval: the extra sales cost more than they made."
-        )
+        notes.append(PROFIT_LOSS_NOTE)
     if status is not MeasurementStatus.INSUFFICIENT:
         notes.append(
             f"The status reads the conversion comparison: a two-sided p-value below {alpha:g} counts "
@@ -339,6 +337,13 @@ def measurement_summary(
         status=status,
         notes=tuple(notes),
     )
+
+
+PROFIT_LOSS_NOTE: Final[str] = (
+    "More treated customers converted, but net incremental profit is below zero across its "
+    "whole interval: the extra sales cost more than they made."
+)
+"""The note a positive status gets when profit is wholly below zero (dropped when profit is withheld)."""
 
 
 def _status(diff: Estimate | None, p: float | None, alpha: float) -> MeasurementStatus:
@@ -410,10 +415,12 @@ def get_goal_summary(goal_id: str, request: Request) -> MeasurementSummary:
     """The summary for one goal of the running programme, from the attached `Services`.
 
     Reads every decision up to now from the decision log and each decided customer's events. The
-    horizon is the goal's brief's; channel costs are the API's `SEND_COST` and offer costs the
-    brief's. 503 when the app runs without services, 404 for an unknown goal.
+    horizon is the goal's brief's; channel costs are the shop's prices (`Services.send_prices`) and offer
+    costs the brief's. Profit is withheld, with a note, while the shop's margin or the price of a channel it
+    uses is unknown. 503 when the app runs without services, 404 for an unknown goal.
     """
-    from api.v2.deps import DEFAULT_HORIZON_DAYS, SEND_COST, SERVICES_STATE_KEY, Services
+    from api.v2.deps import DEFAULT_HORIZON_DAYS, SERVICES_STATE_KEY, Services
+    from api.v2.honest_proof import goal_decisions, unpriced_channels, withhold_measurement_profit
 
     services = getattr(request.app.state, SERVICES_STATE_KEY, None)
     if not isinstance(services, Services):
@@ -427,12 +434,13 @@ def get_goal_summary(goal_id: str, request: Request) -> MeasurementSummary:
     decisions = list(services.decisions.scan(until=now + _TICK))
     customers = sorted({d.customer_id for d in decisions})
     events = [e for c in customers for e in services.events.for_customer(c, until=now + _TICK)]
+    prices = services.send_prices()
     costs = Costs(
-        channel=SEND_COST,
+        channel=prices,
         offer={o.offer_id: o.cost_per_redemption for b in briefs for o in b.envelope.offers},
         margin_rate=services.margin_rate,
     )
-    return measurement_summary(
+    summary = measurement_summary(
         decisions,
         events,
         horizon_days=horizon,
@@ -441,6 +449,9 @@ def get_goal_summary(goal_id: str, request: Request) -> MeasurementSummary:
         now=now,
         goal_id=goal_id,
     )
+    # Only this goal's sends: an unpriced channel another goal used never hides this goal's profit.
+    unpriced = unpriced_channels(goal_decisions(decisions, goal_id), events, prices)
+    return withhold_measurement_profit(summary, margin_rate=services.margin_rate, unpriced=unpriced)
 
 
 # --- off-policy evaluation ------------------------------------------------------------------------

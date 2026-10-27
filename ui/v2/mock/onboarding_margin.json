@@ -1,0 +1,14 @@
+{
+  "question": "Out of every 100 of sales, how much is left after product cost, shipping and payment fees?",
+  "explanation": "This is your contribution margin. Say the shop sells 100 in a week and 60 goes on what the products cost you, shipping and payment fees: the answer is 40. Count refused cash-on-delivery parcels and returns in it too. We use it to turn extra sales into extra profit, so the proof never shows a profit we made up. Until you answer, the proof shows revenue only.",
+  "answered": false,
+  "margin_pct": null,
+  "margin_rate": null,
+  "source": "not set",
+  "min_pct": 0.0,
+  "max_pct": 100.0,
+  "warn_below_pct": 5.0,
+  "warn_above_pct": 80.0,
+  "warning": null,
+  "note": "Not answered yet. Until it is, the proof shows revenue only and says profit needs your margin."
+}

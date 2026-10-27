@@ -437,6 +437,8 @@ def test_published_openapi_matches_the_routes(client: Any, tmp_path: Path) -> No
         ("/v2/onboarding/limits", "get"),
         ("/v2/onboarding/answers", "post"),
         ("/v2/onboarding/accept", "post"),
+        ("/v2/onboarding/margin", "get"),
+        ("/v2/onboarding/margin", "post"),
         ("/v2/onboarding/mandates", "get"),
         ("/v2/onboarding/brand", "get"),
         ("/v2/onboarding/brand/read", "post"),

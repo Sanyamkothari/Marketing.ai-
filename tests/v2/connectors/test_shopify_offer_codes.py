@@ -474,9 +474,11 @@ def test_onboarding_accept_puts_the_owners_codes_on_the_plans_offer() -> None:
     app = create_app(services)
     attach_onboarding(app, OnboardingDesk(secret=b"test-secret", persistent_key=True))
     with TestClient(app) as c:
-        bad = c.post("/v2/onboarding/accept", json={"offers": True, "offer_codes": ["A,B"]})
+        bad = c.post("/v2/onboarding/accept", json={"offers": True, "offer_codes": ["A,B"], "margin_pct": 40})
         assert bad.status_code == 422
-        r = c.post("/v2/onboarding/accept", json={"offers": True, "offer_codes": ["WELCOME10"]})
+        r = c.post(
+            "/v2/onboarding/accept", json={"offers": True, "offer_codes": ["WELCOME10"], "margin_pct": 40}
+        )
         assert r.status_code == 200, r.text
     plan = Brief.model_validate(r.json()["brief"])
     [offer] = [o for o in plan.envelope.offers if o.offer_id != NO_OFFER.offer_id]
