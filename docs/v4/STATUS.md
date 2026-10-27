@@ -19,3 +19,10 @@ Open at integration:
 - After a guard demotion, the Autopilot gate measures its 14-day minimum from the brief's approval, not from the
   demotion. Fixing this needs a ledger reader in `Services`.
 - The agent reads the margin only at start-up.
+
+## Repeated-campaign benchmark
+
+[WAVES.md](WAVES.md) (design) and [WAVES_RESULTS.md](WAVES_RESULTS.md) (first X5 run). The agent does not beat the
+best simple policy in any world. Where messages help, the best fixed rule beats it by 18-27%, and where fatigue bites,
+one SMS a week beats it by 23%. The fairness check (null world) passes. The next steps listed there are decisions for
+the owner.

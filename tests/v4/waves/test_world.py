@@ -142,6 +142,12 @@ def test_clicks_and_opt_outs_do_not_depend_on_the_hidden_effect(data) -> None:
     assert {e.event_id for e in purchases(null)} != {e.event_id for e in purchases(hetero)}
 
 
+def _spearman(a: pd.Series, b: pd.Series) -> float:
+    """Spearman's rank correlation as Pearson's on ranks: pandas' own method needs scipy, which the v2 CI job
+    does not install."""
+    return float(a.rank().corr(b.rank()))
+
+
 def test_click_chance_is_not_a_function_of_the_effect(data) -> None:
     world = make_world(data, "heterogeneous")
     rates = []
@@ -149,7 +155,7 @@ def test_click_chance_is_not_a_function_of_the_effect(data) -> None:
         world.reset(seed)
         rel = world.truth.rel
         assert rel.std() > 0
-        rho = pd.Series(rel).corr(pd.Series(world.p_click[0]), method="spearman")
+        rho = _spearman(pd.Series(rel), pd.Series(world.p_click[0]))
         rates.append(abs(float(rho)))
     assert max(rates) < 0.4, rates
     # the click chance itself is the same in every world and seed
@@ -169,11 +175,9 @@ def test_clicks_rank_the_value_of_a_contact_only_through_the_base_rate(data) -> 
         world.reset(seed)
         net = pd.Series(world.truth.effects(everyone, Channel.SMS, 0).net)
         click = pd.Series(world.p_click[CHANNEL_INDEX[Channel.SMS]])
-        overall.append(float(click.corr(net, method="spearman")))
+        overall.append(_spearman(click, net))
         bands = pd.qcut(base.rank(method="first"), 5, labels=False)
-        within.append(
-            float(np.mean([click[bands == b].corr(net[bands == b], method="spearman") for b in range(5)]))
-        )
+        within.append(float(np.mean([_spearman(click[bands == b], net[bands == b]) for b in range(5)])))
     assert max(overall) < 0.6, overall
     assert max(abs(x) for x in within) < 0.2, within
 
