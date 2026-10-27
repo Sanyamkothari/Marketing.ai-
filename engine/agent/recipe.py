@@ -56,6 +56,8 @@ from engine.agent.latest import KeepLatestError, KeepLatestSpec, keep_latest_per
 from engine.agent.placeholders import MAX_PLACEHOLDER_VALUES, set_missing
 from engine.agent.reshape import CombineError, CombineSpec, LeakCheck, combine_rows
 from engine.agent.sql_step import (
+    MAX_COMPILED_SQL_CHARS,
+    MAX_SQL_CHARS,
     THIS_TABLE,
     SqlStepError,
     aliases_of,
@@ -378,7 +380,12 @@ def _check_sql_step(step: RecipeStep) -> None:
             raise SqlStepError("SQL_NOT_VALID", "A query step's column is the name of the table it makes.")
         if params.as_of_rule is not None and params.as_of_rule.table not in params.inputs:
             raise SqlStepError("SQL_NOT_VALID", "The as-of date rule reads a table the query does not read.")
-        check_sql(params.sql, aliases_of(params.inputs), as_of=params.as_of or date.min)
+        check_sql(
+            params.sql,
+            aliases_of(params.inputs),
+            as_of=params.as_of or date.min,
+            max_chars=MAX_COMPILED_SQL_CHARS if params.compiled else MAX_SQL_CHARS,
+        )
     except SqlStepError as exc:
         raise RecipeError(exc.code, exc.message, order=step.order) from exc
 
@@ -932,6 +939,12 @@ def _run_sql_step(
                 order=step.order,
             )
         read[name] = frame
+    if target and any(c.lower() == target.lower() for c in params.feature_reads):
+        raise RecipeError(
+            "FEATURE_READS_OUTCOME",
+            "A feature may not read the outcome column: the model would be handed the answer.",
+            order=step.order,
+        )
     try:
         used = as_of
         rule = params.as_of_rule
@@ -944,7 +957,8 @@ def _run_sql_step(
                 )
             used = resolve_as_of_rule(rule, source[rule.column])
         used = used or params.as_of
-        run = run_sql(params.sql, read, output_name=params.output_name, as_of=used)
+        cap = MAX_COMPILED_SQL_CHARS if params.compiled else MAX_SQL_CHARS
+        run = run_sql(params.sql, read, output_name=params.output_name, as_of=used, max_chars=cap)
         # A query that builds the outcome from later rows (`reads_future`) is let off for the outcome column only:
         # every other column must still be what was known on the as-of date.
         moved = (
@@ -955,6 +969,8 @@ def _run_sql_step(
                 as_of=used,
                 ignore=(target,) if params.reads_future and target else (),
                 one_outcome=params.reads_future and not target and outcome_open,
+                event_column=params.leak_column,
+                max_chars=cap,
             )
             if leak_check == "full" and used is not None
             else None

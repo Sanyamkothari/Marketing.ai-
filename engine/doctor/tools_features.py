@@ -42,7 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from api.access_policy import RoutePolicy
 from engine.access.roles import Role
 from engine.agent.contracts import RecipeStep
-from engine.agent.sql_step import SqlStepError, table_alias
+from engine.agent.sql_step import MAX_COMPILED_SQL_CHARS, SqlStepError, date_read_counts, table_alias
 from engine.config import (
     AggFunction,
     FeatureDef,
@@ -54,7 +54,6 @@ from engine.config import (
 from engine.doctor.guards import Finding
 from engine.doctor.materialize import CANDIDATE, Full, materialize_plan, table_names
 from engine.doctor.registry import (
-    BY_EXPOSURE,
     DataTool,
     DataToolContext,
     DataToolError,
@@ -64,7 +63,6 @@ from engine.doctor.registry import (
 )
 from engine.doctor.tools_sql import (
     MAX_COLUMNS_KEPT,
-    MAX_COLUMNS_LISTED,
     ProposeSqlStepArgs,
     SqlStepProposal,
     _propose,
@@ -95,6 +93,9 @@ __all__ = [
 M_FEATURE_TOOLS: Final[tuple[str, ...]] = ("propose_features",)
 PRESETS: Final[tuple[str, ...]] = ("rfm", "rfm_plus")
 MAX_FEATURES: Final[int] = 40
+MAX_OUTPUT_CHARS: Final[int] = 22_000
+"""The answer's cap through the registry: the compiled query (up to `MAX_COMPILED_SQL_CHARS`) is in the step, and
+`MAX_FEATURES` lines and their words are in the proposal; the default 5,500 fits neither."""
 MOSTLY_BLANK_SHARE: Final[float] = 0.95
 """A feature blank for more than this share of customers is reported."""
 _ROLE: Final[str] = "events"
@@ -238,6 +239,12 @@ class Compiled:
     notes: tuple[str, ...] = ()
 
 
+class _CompiledSqlArgs(ProposeSqlStepArgs):
+    """`propose_sql_step`'s arguments for a query our own code compiled: it may be longer than one written by hand."""
+
+    sql: str = Field(min_length=1, max_length=MAX_COMPILED_SQL_CHARS)
+
+
 def _refuse(code: str, message: str) -> DataToolError:
     return DataToolError(code, message, status=422)
 
@@ -289,6 +296,8 @@ def _library(
     except Exception as exc:
         raise _refuse("FEATURE_NOT_VALID", f"Feature '{name}' is not valid: {_first(exc)}") from exc
     reads = tuple(c for c in (column, where.column if where else None) if c)
+    if function is AggFunction.SUM and (window is not None or where is not None):
+        expr = f"COALESCE({expr}, 0)"  # no row in the window is a spend of nothing, not an unknown
     said = phrase or (_WORDS[function].format(c=column or "") + _window(window) + _where_phrase(where))
     return _Col(name, expr, said, reads)
 
@@ -441,7 +450,7 @@ def compile_features(given: ProposeFeaturesArgs, table: str, *, outcome: str | N
     shown = f"{_col(key)} AS {_ENTITY}, TRY_CAST({_col(given.time_column)} AS DATE) AS {_EVENT_TIME}"
     sql = (
         f"WITH ev AS (SELECT {shown}{', ' + source if source else ''} FROM {table} "
-        f"WHERE {_col(key)} IS NOT NULL AND TRY_CAST({_col(given.time_column)} AS DATE) <= CAST($as_of AS DATE)), "
+        f"WHERE NULLIF(TRIM(CAST({_col(key)} AS VARCHAR)), '') IS NOT NULL AND TRY_CAST({_col(given.time_column)} AS DATE) <= CAST($as_of AS DATE)), "
         f"snapshots AS (SELECT DISTINCT {_ENTITY}, CAST($as_of AS DATE) AS snapshot_date FROM ev) "
         f"SELECT s.{_ENTITY} AS {_col(key)}, "
         + ", ".join(f"{c.expr} AS {_col(c.name)}" for c in cols)
@@ -449,6 +458,8 @@ def compile_features(given: ProposeFeaturesArgs, table: str, *, outcome: str | N
         + point_in_time_join_clause("e", "s", inclusive=True).replace("\n", " ")
         + f"\nGROUP BY s.{_ENTITY}, s.snapshot_date ORDER BY s.{_ENTITY}"
     )
+    if len(sql) > MAX_COMPILED_SQL_CHARS:
+        raise _refuse("FEATURE_TOO_MANY", "These features make a query that is too long: ask for fewer.")
     try:
         assert_point_in_time(sql)
     except FeatureError as exc:
@@ -462,7 +473,9 @@ def compile_features(given: ProposeFeaturesArgs, table: str, *, outcome: str | N
 
 class FeatureLine(StrictBase):
     name: str
-    phrase: str = Field(description="What it is, in plain words.")
+    phrase: str = Field(
+        default="", description="Empty here: the sentence already says what each feature is, in plain words."
+    )
     fill_rate: float = Field(description="Share of customers it has a value for (0 to 1).")
     distinct: int = Field(description="How many different values it takes.")
     median: float | None = Field(default=None, description="The middle value of a number feature.")
@@ -549,13 +562,85 @@ def _sentence(
     columns: int,
     name: str,
     notes: tuple[str, ...],
+    rows_read: int,
 ) -> str:
     listed = "; ".join(f"{f.phrase} ({f.fill_rate:.0%} filled)" for f in lines)
     text = (
         f"Add {len(lines)} behaviour features per {key}, measured at {as_of.isoformat()} from rows dated on or "
-        f"before it: {listed}. The new table '{name}' would have {rows:,} rows and {columns:,} columns."
+        f"before it: {listed}. Reads {rows_read:,} rows; the new table '{name}' would have {rows:,} rows (one "
+        f"per {key}) and {columns:,} columns."
     )
     return " ".join([text, *notes])
+
+
+_ROLL_UP: Final[frozenset[str]] = frozenset(
+    {"PLAN_LOSES_TOO_MUCH", "STEP_NOT_COUNTED", "STEP_LEAVES_OUT_ROWS"}
+)
+"""What the row-loss guards say about a step that turns many rows into one row per customer: it is the purpose of
+this step, not a loss. The customers and rows read are said in the sentence, and what is really lost (rows with no
+ID, no readable date) is a finding of this tool."""
+
+
+def _input_findings(given: ProposeFeaturesArgs, table: str, frame: pd.DataFrame) -> list[Finding]:
+    """What the query would drop from `frame` without a word: rows with no ID, no date, or a date it cannot read.
+
+    Refuses (`FEATURE_TIME_NOT_READ`) when most dates cannot be read: day-first or month-first text, `20240331`.
+    """
+    key, when = given.entity_key, given.time_column
+    for column in (key, when):
+        if column not in frame.columns:
+            raise _refuse("FEATURE_NOT_VALID", f"The column '{column[:60]}' is not in the file.")
+    try:
+        n, no_key, no_time, unread = date_read_counts(frame, table, key, when)
+    except SqlStepError as exc:
+        raise DataToolError(exc.code, exc.message, status=422) from exc
+    with_time = n - no_time
+    if (with_time and unread * 2 > with_time) or (with_time == 0 and n):
+        raise _refuse(
+            "FEATURE_TIME_NOT_READ",
+            f"{unread:,} of {with_time:,} values of '{when}' could not be read as dates (they are not written "
+            "year first, like 2025-06-20), so no feature could be dated. Parse the date column first.",
+        )
+    found: list[Finding] = []
+    if unread:
+        found.append(
+            Finding(
+                level="flag",
+                code="FEATURE_TIME_PARTLY_UNREAD",
+                count=unread,
+                message=f"{unread:,} of {n:,} rows have a '{when}' that could not be read as a date; they feed no feature.",
+            )
+        )
+    if no_time:
+        found.append(
+            Finding(
+                level="flag",
+                code="FEATURE_TIME_BLANK",
+                count=no_time,
+                message=f"{no_time:,} of {n:,} rows have no '{when}'; they feed no feature.",
+            )
+        )
+    if no_key:
+        found.append(
+            Finding(
+                level="flag",
+                code="FEATURE_NO_ID",
+                count=no_key,
+                message=f"{no_key:,} of {n:,} rows have no '{key}'; they belong to no customer and feed no feature.",
+            )
+        )
+    return found
+
+
+def _decided_outcome(ctx: DataToolContext, upload_id: str, columns: list[str]) -> str | None:
+    """The outcome column the case has decided for this file (an accepted item), else the agent's target."""
+    from engine.doctor.materialize import roles_of
+
+    if ctx.case_items:
+        target = roles_of(_trial_items(ctx.case_items, ctx.replacing), upload_id, columns)[1]
+        if target is not None:
+            return target
+    return ctx.agent.target if ctx.agent is not None else None
 
 
 def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> FeatureProposal:
@@ -568,11 +653,13 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
             "Features are measured at a date: ask the person for the as-of date, or name `as_of_rule`.",
         )
     as_of = given.as_of or (ctx.as_of if given.as_of_rule is None else None)
-    outcome = given.outcome_column or (ctx.agent.target if ctx.agent is not None else None)
+    outcome = given.outcome_column or _decided_outcome(
+        ctx, given.upload_id, [str(c) for c in loaded[given.upload_id].frame.columns]
+    )
     names = table_names(ctx.files)
     table = names[given.upload_id]
     compiled = compile_features(given, table_alias(table), outcome=outcome)
-    sql_args = ProposeSqlStepArgs(
+    sql_args = _CompiledSqlArgs(
         description=compiled.description,
         sql=compiled.sql,
         output_name=given.output_name,
@@ -582,8 +669,21 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
         as_of_upload_id=given.upload_id if given.as_of_rule else None,
         as_of_column=given.time_column if given.as_of_rule else None,
     )
+    # What the query would drop without a word is counted on the file as the plan leaves it (before the query).
+    items = _trial_items(ctx.case_items or (), ctx.replacing)
+    before = materialize_plan((), items, ctx.files, Full(), twice=False, as_of=ctx.as_of)
+    source = before.tables.get(table)
+    inputs = _input_findings(given, table, source) if source is not None else []
     try:
-        base = _propose(sql_args, ctx)
+        base = _propose(
+            sql_args,
+            ctx,
+            extra={
+                "compiled": True,
+                "leak_column": given.time_column,
+                "feature_reads": sorted(compiled.reads),
+            },
+        )
     except SqlStepError as exc:
         raise DataToolError(exc.code, exc.message, status=422) from exc
     # The same step, once more on every row, through the one materialisation (its future-rows check is the leak
@@ -593,7 +693,7 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
     tried = tried.model_copy(update={"params": {k: v for k, v in tried.params.items() if k != "as_of_rule"}})
     whole = materialize_plan(
         (),
-        _trial_items(ctx.case_items or (), ctx.replacing),
+        items,
         ctx.files,
         Full(),
         candidate=(given.upload_id, tried),
@@ -602,27 +702,57 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
     own = next((f for f in whole.failures if f.item_id == CANDIDATE), None)
     if own is not None:
         raise DataToolError(own.code, own.message, status=422)
-    findings = list(base.findings)
-    lines: list[FeatureLine] = []
     made = whole.tables.get(table)
+    if made is not None and len(made) == 0:
+        raise _refuse(
+            "FEATURE_NO_ROWS",
+            f"No row is dated on or before {when.isoformat()} with an ID, so there is no customer to build "
+            "features for. Check the as-of date and the date column.",
+        )
+    findings = [f for f in base.findings if f.code not in _ROLL_UP and f.code != "STEP_NOT_MEASURED"]
+    seen = {(f.code, f.message) for f in findings}
+    for plan in whole.findings:
+        if (
+            plan.item_id in (CANDIDATE, None)
+            and plan.code not in _ROLL_UP
+            and plan.code != "STEP_NOT_MEASURED"
+        ):
+            found = Finding(
+                level=plan.level, code=plan.code, message=plan.text, count=plan.count, detail=plan.detail
+            )
+            if (found.code, found.message) not in seen:
+                findings.append(found)
+                seen.add((found.code, found.message))
+    findings.extend(inputs)
+    lines: list[FeatureLine] = []
     if made is not None:
         lines, extra = _lines(made, compiled.features)
         findings.extend(extra)
+    rows_out = len(made) if made is not None else base.rows_out
+    columns_out = len(made.columns) if made is not None else base.columns_out
+    rows_read = len(source) if source is not None else base.rows_in
     sentence = _sentence(
-        lines, given.entity_key, when, base.rows_out, base.columns_out, given.output_name, compiled.notes
+        lines, given.entity_key, when, rows_out, columns_out, given.output_name, compiled.notes, rows_read
     )
+    # The sentence already says what each feature is: the answer carries the numbers, not the words twice.
+    lines = [line.model_copy(update={"phrase": ""}) for line in lines]
+    names_out = tuple(str(c) for c in made.columns) if made is not None else base.all_columns
     data = base.model_dump()
     data.update(
         title=compiled.description.rstrip("."),
         sentence=sentence,
         findings=tuple(findings),
-        needs_yes=base.needs_yes or any(f.level == "stop" for f in findings),
+        needs_yes=any(f.level == "stop" for f in findings),
         entity_key=given.entity_key,
         features_as_of=when,
         features=tuple(lines),
         notes=compiled.notes,
-        columns=base.columns[:MAX_COLUMNS_LISTED],
-        all_columns=base.all_columns[:MAX_COLUMNS_KEPT],
+        rows_out=rows_out,
+        columns_out=columns_out,
+        sampled=False,
+        columns=(),
+        all_columns=names_out[:MAX_COLUMNS_KEPT],
+        two_valued=(),
     )
     return FeatureProposal.model_validate(data)
 
@@ -652,7 +782,7 @@ def register_feature_tools(registry: DataToolRegistry) -> tuple[str, ...]:
             run=_propose_features,
             callers=frozenset({"rules", "ai"}),
             needs=("files",),
-            max_output_bytes=BY_EXPOSURE,
+            max_output_bytes=MAX_OUTPUT_CHARS,
             policy_kind="data.propose_features",
             wraps="engine/onboarding/features.py (point-in-time library); the sql_query recipe step",
         )

@@ -453,6 +453,9 @@ NO_CLIENT_DATA = {"data_request"}
 """Session-only by the catalogue, but built from configuration alone: not a row-level result."""
 
 
+from engine.doctor.tools_features import MAX_OUTPUT_CHARS  # noqa: E402
+
+
 def test_every_tool_gets_the_budget_of_its_exposure() -> None:
     """The design §5.2: 5,500 characters for row-level (`session-only`) tools, 16 KB for aggregates."""
     for tool in data_registry().list():
@@ -460,6 +463,9 @@ def test_every_tool_gets_the_budget_of_its_exposure() -> None:
             assert tool.budget is None, tool.name
         elif tool.name in NO_CLIENT_DATA:
             assert tool.budget == AGGREGATE_BUDGET, tool.name
+        elif tool.name == "propose_features":
+            # its answer carries the compiled query (up to 12,000 characters) and up to 40 feature lines
+            assert tool.budget == MAX_OUTPUT_CHARS > ROW_LEVEL_BUDGET, tool.name
         elif tool.exposure is Exposure.SESSION_ONLY:
             assert tool.budget == ROW_LEVEL_BUDGET == 5_500, tool.name
         else:
