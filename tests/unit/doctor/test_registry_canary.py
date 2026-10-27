@@ -225,6 +225,23 @@ SPECS: dict[str, Calls | None] = {
     # The agent's look at its own work: the first rows, personal columns withheld, in every data-access mode.
     "preview_working_copy": _fixed({}, {"rows": 3}, {"rows": 10}),
     # The SQL step reads tables named after their files, and the canary's file names carry planted secrets.
+    "propose_features": lambda _columns: [
+        {
+            "upload_id": EVENTS,
+            "entity_key": "customer_id",
+            "time_column": "bill_date",
+            "as_of": "2025-09-01",
+            "features": [{"name": "total_spend", "agg": "sum", "column": "amount"}],
+        },
+        {
+            "upload_id": EVENTS,
+            "entity_key": "customer_id",
+            "time_column": "bill_date",
+            "as_of_rule": "latest_date_in_file",
+            "preset": "rfm",
+            "amount_column": "amount",
+        },
+    ],
     "propose_sql_step": lambda _columns: [
         {
             "description": "Every customer row",

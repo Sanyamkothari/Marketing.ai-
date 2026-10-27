@@ -22,7 +22,7 @@ checks) are tried the same way, on the plan so far.
 from __future__ import annotations
 
 import re
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -365,7 +365,12 @@ def _refused(prepared: Prepared, reads: Collection[str], files: Sequence[LoadedF
     )
 
 
-def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal:
+def _propose(
+    given: ProposeSqlStepArgs,
+    ctx: DataToolContext,
+    *,
+    extra: Mapping[str, Any] | None = None,
+) -> SqlStepProposal:
     if given.reads_future and given.outcome_window_days is None:
         raise DataToolError(
             "SQL_NOT_VALID",
@@ -384,6 +389,8 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         "output_name": given.output_name,
         "description": given.description,
     }
+    if extra:
+        params.update(extra)  # what our own code knows about a query it compiled (`propose_features`)
     if len(ctx.files) == 1 and len(asked) == 1:
         # an older recipe runner (a replay's file recipe) is given no tables: the query names its one file
         params["this_table"] = next(iter(asked))

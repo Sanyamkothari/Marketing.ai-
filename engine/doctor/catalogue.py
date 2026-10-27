@@ -144,6 +144,8 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     _R(84, "propose_sql_step", "propose", "rules + ai", "new"),
     # O. The agent looks at its own work: the first rows before and after the plan (masked)
     _R(85, "preview_working_copy", "read", "ai", "new"),
+    # P. Behaviour features from the point-in-time library (Step 7)
+    _R(86, "propose_features", "propose", "rules + ai", "new"),
 )
 """The design §5.5, row by row."""
 

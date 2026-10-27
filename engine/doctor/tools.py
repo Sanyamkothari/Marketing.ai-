@@ -1002,6 +1002,10 @@ def register_all(registry: DataToolRegistry) -> None:
     from engine.doctor.tools_sql import register_sql_tools
 
     register_sql_tools(registry)
+    # Behaviour features (#86): the point-in-time feature library as one change tool, for the rules and the AI.
+    from engine.doctor.tools_features import register_feature_tools
+
+    register_feature_tools(registry)
     # The agent looks at its own work (#85): the first rows before and after the plan, the AI only.
     from engine.doctor.tools_preview import register_preview_tools
 

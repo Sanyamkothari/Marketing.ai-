@@ -189,6 +189,11 @@ data:
       proposes: plan
       rules: [data.never_ticked, data.approve_class]
       approve: above_drop_share
+    # Step 7: behaviour features compiled to one query (never ticked, like a query of its own).
+    data.propose_features:
+      proposes: plan
+      rules: [data.never_ticked, data.approve_class]
+      approve: above_drop_share
     # M238: which customers are learnt from is the person's choice (design §6.6).
     data.split_file:
       proposes: plan

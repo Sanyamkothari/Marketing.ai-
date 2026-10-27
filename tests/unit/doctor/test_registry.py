@@ -51,6 +51,7 @@ from engine.doctor.registry import (
     unified_on,
 )
 from engine.doctor.tools import LookOutput
+from engine.doctor.tools_features import M_FEATURE_TOOLS
 from engine.doctor.tools_outcomes import M239_TOOLS
 from engine.doctor.tools_preview import M_PREVIEW_TOOLS
 from engine.doctor.tools_sql import M_SQL_TOOLS
@@ -131,6 +132,7 @@ def test_the_registry_holds_the_22_existing_tools_and_the_first_wrappers() -> No
         *M239_TOOLS,  # Plan O M239 (DEC-1809): the outcome tools
         *M244_TOOLS,  # Plan O M244 (DEC-1814): the time-settings tools
         *M_SQL_TOOLS,  # the sandboxed SQL step
+        *M_FEATURE_TOOLS,  # behaviour features
         *M_PREVIEW_TOOLS,  # the agent looks at its own work
     }
     assert len(LOOK_TOOLS) == 18
@@ -158,6 +160,7 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
             *M239_TOOLS,
             *M244_TOOLS,
             *M_SQL_TOOLS,
+            *M_FEATURE_TOOLS,
             *M_PREVIEW_TOOLS,
         }
         assert entry.status in {"existing", "wrapper"} or tool.name in built_new, tool.name
@@ -169,21 +172,22 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
 def test_the_catalogue_is_the_designs_eighty_tools() -> None:
     """The design's 80 tools in 81 rows, and since Plan O M236 (DEC-1806) M240's two READ tools as #82, #83."""
     counted = [entry for entry in CATALOGUE if entry.counted_with is None]
-    assert len(CATALOGUE) == 85 and [e.number for e in CATALOGUE] == list(range(1, 86))
-    assert len(counted) == 84
-    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 29, "new": 33}
+    assert len(CATALOGUE) == 86 and [e.number for e in CATALOGUE] == list(range(1, 87))
+    assert len(counted) == 85
+    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 29, "new": 34}
     kinds = Counter(e.kind for e in counted)
-    assert kinds["propose"] == 25 and kinds["ask"] == 4
+    assert kinds["propose"] == 26 and kinds["ask"] == 4
     assert {e.name for e in CATALOGUE if e.exposure == "aggregate"} == {
         "what_can_this_power",
         "check_readiness",
     }
-    assert len({e.name for e in CATALOGUE}) == 85
+    assert len({e.name for e in CATALOGUE}) == 86
     assert [(e.number, e.name, e.kind) for e in CATALOGUE[81:]] == [
         (82, "read_workbook_sheets", "read"),
         (83, "find_excel_serial_dates", "read"),
         (84, "propose_sql_step", "propose"),
         (85, "preview_working_copy", "read"),
+        (86, "propose_features", "propose"),
     ]
     assert not EXECUTOR_NAMES & {e.name for e in CATALOGUE}, "an executor is never in the catalogue"
 
@@ -449,6 +453,9 @@ NO_CLIENT_DATA = {"data_request"}
 """Session-only by the catalogue, but built from configuration alone: not a row-level result."""
 
 
+from engine.doctor.tools_features import MAX_OUTPUT_CHARS  # noqa: E402
+
+
 def test_every_tool_gets_the_budget_of_its_exposure() -> None:
     """The design §5.2: 5,500 characters for row-level (`session-only`) tools, 16 KB for aggregates."""
     for tool in data_registry().list():
@@ -456,6 +463,9 @@ def test_every_tool_gets_the_budget_of_its_exposure() -> None:
             assert tool.budget is None, tool.name
         elif tool.name in NO_CLIENT_DATA:
             assert tool.budget == AGGREGATE_BUDGET, tool.name
+        elif tool.name == "propose_features":
+            # its answer carries the compiled query (up to 12,000 characters) and up to 40 feature lines
+            assert tool.budget == MAX_OUTPUT_CHARS > ROW_LEVEL_BUDGET, tool.name
         elif tool.exposure is Exposure.SESSION_ONLY:
             assert tool.budget == ROW_LEVEL_BUDGET == 5_500, tool.name
         else:

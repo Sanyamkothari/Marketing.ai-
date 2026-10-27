@@ -179,6 +179,7 @@ const DID = Object.freeze({
   ...TOOL_PHRASES,
   propose_step: "Suggested a change",
   propose_sql: "Prepared a change to the table",
+  propose_features: "Prepared customer behaviour features",
   join_files: "Joined the files",
   stack_files: "Stacked the files",
   ask: "Asked you a question",

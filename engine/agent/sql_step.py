@@ -42,6 +42,8 @@ from engine.config import StrictBase
 
 __all__ = [
     "AS_OF_RULES",
+    "MAX_COMPILED_SQL_CHARS",
+    "MAX_SQL_CHARS",
     "SQL_CODES",
     "THIS_TABLE",
     "AsOfRule",
@@ -50,6 +52,7 @@ __all__ = [
     "SqlStepError",
     "SqlStepParams",
     "check_sql",
+    "date_read_counts",
     "future_rows_moved",
     "group_by_column",
     "resolve_as_of_rule",
@@ -63,6 +66,8 @@ THIS_TABLE: Final[str] = "this"
 """The table a step reads when it names `this`: the table being prepared when the step runs."""
 
 MAX_SQL_CHARS: Final[int] = 2500
+MAX_COMPILED_SQL_CHARS: Final[int] = 12_000
+"""A query our own code compiled (`propose_features`) may be longer than one an AI writes by hand."""
 MAX_INPUTS: Final[int] = 10
 TIMEOUT_SECONDS: Final[float] = 20.0
 MEMORY_LIMIT: Final[str] = "512MB"
@@ -199,7 +204,22 @@ class SqlStepParams(StrictBase):
     """A `sql_query` step's parameters, as frozen in the recipe."""
 
     sql: str = Field(
-        min_length=1, max_length=MAX_SQL_CHARS, description="One SELECT, over `t_<input>` tables."
+        min_length=1, max_length=MAX_COMPILED_SQL_CHARS, description="One SELECT, over `t_<input>` tables."
+    )
+    compiled: bool = Field(
+        default=False,
+        description="Our own code compiled the query (`propose_features`): it may be longer than a handwritten one.",
+    )
+    feature_reads: tuple[str, ...] = Field(
+        default=(),
+        max_length=200,
+        description="The source columns a compiled feature query reads: none may be the decided outcome.",
+    )
+    leak_column: str | None = Field(
+        default=None,
+        max_length=128,
+        description="The column that dates the rows the future-rows check cuts on, when the query says so "
+        "(a compiled query); else the first column that reads as dates.",
     )
     inputs: tuple[str, ...] = Field(
         min_length=1,
@@ -245,7 +265,10 @@ class SqlStepParams(StrictBase):
 def sql_params(params: Mapping[str, Any]) -> SqlStepParams:
     """The parameters of a `sql_query` step, checked; `SqlStepError` (`SQL_NOT_VALID`) when they are not shaped so."""
     try:
-        return SqlStepParams.model_validate(dict(params))
+        found = SqlStepParams.model_validate(dict(params))
+        if not found.compiled and len(found.sql) > MAX_SQL_CHARS:
+            raise SqlStepError("SQL_NOT_VALID", f"A query is at most {MAX_SQL_CHARS:,} characters long.")
+        return found
     except ValidationError as exc:
         first = exc.errors()[0]
         where = ".".join(str(part) for part in first["loc"]) or "step"
@@ -317,13 +340,15 @@ def _function_refusal(name: str, children: int) -> SqlStepError | None:
     return None
 
 
-def check_sql(sql: str, tables: Collection[str], *, as_of: date | None = None) -> None:
+def check_sql(
+    sql: str, tables: Collection[str], *, as_of: date | None = None, max_chars: int = MAX_SQL_CHARS
+) -> None:
     """Refuse `sql` unless it is one read-only, repeatable SELECT over the tables named in `tables` (by
     :func:`table_alias`). Raises `SqlStepError`; nothing is run against any data."""
     import duckdb
 
-    if len(sql) > MAX_SQL_CHARS:
-        raise SqlStepError("SQL_NOT_VALID", f"A query is at most {MAX_SQL_CHARS:,} characters long.")
+    if len(sql) > max_chars:
+        raise SqlStepError("SQL_NOT_VALID", f"A query is at most {max_chars:,} characters long.")
     try:
         statements = duckdb.extract_statements(sql)
     except duckdb.Error as exc:
@@ -439,7 +464,7 @@ def rows_aggregated(sql: str, tables: Mapping[str, pd.DataFrame], *, as_of: date
         )
         counting = con.execute("SELECT json_deserialize_sql(?)", [json.dumps(tree)]).fetchone()[0]
         for name, frame in tables.items():
-            con.register(aliases[name], frame)
+            con.register(aliases[name], _wall_clock(frame))
         _lock(con)
         uses_as_of = "as_of" in set(_PARAMETER.findall(_blank(counting)))
         if uses_as_of and as_of is None:
@@ -599,6 +624,21 @@ class SqlRun:
     receipt: SqlReceipt
 
 
+def _wall_clock(frame: pd.DataFrame) -> pd.DataFrame:
+    """`frame` with the zone taken off every time-zone-aware column, keeping the clock on the wall.
+
+    DuckDB turns such a column into an instant and a date cast then reads it in UTC, so an order at 02:00 in
+    Asia/Kolkata would be the day before; the future-rows check (`_day_values`) dates it by its local day. One rule
+    for both: the local day (R20)."""
+    zoned = [c for c, kind in frame.dtypes.items() if isinstance(kind, pd.DatetimeTZDtype)]
+    if not zoned or not frame.columns.is_unique:
+        return frame
+    copy = frame.copy()
+    for c in zoned:
+        copy[c] = copy[c].dt.tz_localize(None)
+    return copy
+
+
 def run_sql(
     sql: str,
     tables: Mapping[str, pd.DataFrame],
@@ -606,6 +646,7 @@ def run_sql(
     output_name: str,
     as_of: date | None = None,
     timeout: float = TIMEOUT_SECONDS,
+    max_chars: int = MAX_SQL_CHARS,
 ) -> SqlRun:
     """Run `sql` over `tables` (name -> frame, each read as `t_<name>`) and return the new table.
 
@@ -620,7 +661,7 @@ def run_sql(
         if alias in aliases.values():
             raise SqlStepError("SQL_NOT_VALID", f"Two tables are both called '{alias}' in a query.")
         aliases[name] = alias
-    check_sql(sql, aliases.values(), as_of=as_of)
+    check_sql(sql, aliases.values(), as_of=as_of, max_chars=max_chars)
     uses_as_of = "as_of" in set(_PARAMETER.findall(_blank(sql)))
     con = _connect()
     timed_out = threading.Event()
@@ -632,7 +673,7 @@ def run_sql(
     timer = threading.Timer(timeout, stop)
     try:
         for name, frame in tables.items():
-            con.register(aliases[name], frame)
+            con.register(aliases[name], _wall_clock(frame))
         _lock(con)
         timer.start()
         try:
@@ -661,6 +702,28 @@ def run_sql(
         as_of=as_of if uses_as_of else None,
     )
     return SqlRun(frame=result, receipt=receipt)
+
+
+def date_read_counts(frame: pd.DataFrame, table: str, key: str, when: str) -> tuple[int, int, int, int]:
+    """`(rows, rows with no `key`, rows with no `when`, rows whose `when` is filled but is not read as a date)`.
+
+    Counted the way a query reads a date (`TRY_CAST(.. AS DATE)`), so these are the rows such a query would drop
+    without a word. Not a plan run: it counts one table that is already prepared."""
+
+    def blank(column: str) -> str:
+        return f"NULLIF(TRIM(CAST(\"{column.replace(chr(34), chr(34) * 2)}\" AS VARCHAR)), '')"
+
+    cast = f'TRY_CAST("{when.replace(chr(34), chr(34) * 2)}" AS DATE)'
+    sql = (
+        "SELECT COUNT(*) AS n, "
+        f"COUNT(*) FILTER (WHERE {blank(key)} IS NULL) AS no_key, "
+        f"COUNT(*) FILTER (WHERE {blank(when)} IS NULL) AS no_time, "
+        f"COUNT(*) FILTER (WHERE {blank(when)} IS NOT NULL AND {cast} IS NULL) AS unread "
+        f"FROM {table_alias(table)}"
+    )
+    row = run_sql(sql, {table: frame}, output_name="counts").frame.iloc[0]
+    n, no_key, no_time, unread = (int(row[c]) for c in ("n", "no_key", "no_time", "unread"))
+    return n, no_key, no_time, unread
 
 
 def aliases_of(inputs: Sequence[str]) -> list[str]:
@@ -725,6 +788,8 @@ def future_rows_moved(
     as_of: date,
     ignore: Collection[str] = (),
     one_outcome: bool = False,
+    event_column: str | None = None,
+    max_chars: int = MAX_SQL_CHARS,
 ) -> int | None:
     """How many rows of the query's table change when every row dated after `as_of` is taken out of its inputs.
 
@@ -736,11 +801,13 @@ def future_rows_moved(
 
     `one_outcome`: the outcome column is not decided yet, and a query that builds it from later rows has exactly one
     such column, so one column may move (compared by its values) and two or more are a leak.
+
+    `event_column`: the column that dates the rows, when the caller knows it (else `_event_column` guesses it).
     """
     cut: dict[str, pd.DataFrame] = {}
     later = False
     for name, frame in tables.items():
-        column = _event_column(frame)
+        column = event_column if event_column in frame.columns else _event_column(frame)
         if column is None:
             cut[name] = frame
             continue
@@ -750,8 +817,8 @@ def future_rows_moved(
         cut[name] = frame[~after.to_numpy()]
     if not later:
         return None
-    whole = run_sql(sql, tables, output_name=output_name, as_of=as_of).frame
-    part = run_sql(sql, cut, output_name=output_name, as_of=as_of).frame
+    whole = run_sql(sql, tables, output_name=output_name, as_of=as_of, max_chars=max_chars).frame
+    part = run_sql(sql, cut, output_name=output_name, as_of=as_of, max_chars=max_chars).frame
     whole = whole.drop(columns=[c for c in whole.columns if c in ignore])
     part = part.drop(columns=[c for c in part.columns if c in ignore])
     if list(whole.columns) != list(part.columns):
