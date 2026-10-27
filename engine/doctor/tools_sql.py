@@ -44,7 +44,15 @@ from engine.agent.sql_step import (
 from engine.config import StrictBase
 from engine.doctor.guards import Finding, NotMeasurableError, Receipt, cell_change, infer_key
 from engine.doctor.limits import limits
-from engine.doctor.materialize import CANDIDATE, Full, Prepared, Sample, materialize_plan, table_names
+from engine.doctor.materialize import (
+    CANDIDATE,
+    Full,
+    Prepared,
+    Sample,
+    materialize_plan,
+    table_names,
+    tried_step,
+)
 from engine.doctor.registry import (
     BY_EXPOSURE,
     DataTool,
@@ -428,7 +436,7 @@ def _propose(
     )
     # The trial is the plan's own materialisation with the query as one more step. It is given the date the rule
     # gives on the whole file, so a sample cannot move it.
-    tried = step.model_copy(update={"params": {k: v for k, v in params.items() if k != "as_of_rule"}})
+    tried = tried_step(step, ctx.as_of, ctx.training_as_of)
     first_upload = given.upload_ids[0]
     seen: dict[str, pd.DataFrame] = {}
 
@@ -494,8 +502,8 @@ def _propose(
     if receipt.keys_in is not None:
         sentence += f" Customers: {receipt.keys_in:,} before, {receipt.keys_out:,} after ({receipt.keys_lost:,} lost, {receipt.keys_repeated:,} repeated)."
     own = step.params.get("as_of")
-    decided = (ctx.training_as_of if given.reads_future else None) or ctx.as_of
-    if own and decided is not None and own != decided.isoformat():
+    decided = ctx.training_as_of or ctx.as_of
+    if own and decided is not None and own != decided.isoformat() and "as_of_rule" not in step.params:
         sentence += (
             f" It reads the data as of {own}, not {decided.isoformat()}."  # shown, never silently changed
         )

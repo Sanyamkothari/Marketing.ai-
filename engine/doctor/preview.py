@@ -438,6 +438,7 @@ def preview_rows(
     rows: int = PREVIEW_ROWS,
     only: str | None = None,
     as_of: date | None = None,
+    training_as_of: date | None = None,
 ) -> PreviewView:
     """The first `rows` rows of each file before and after the ticked steps, masked; see the module docstring.
 
@@ -468,7 +469,14 @@ def preview_rows(
     lost = "A step could not run."
     try:
         prepared = materialize_plan(
-            (), items, files, Sample(limits().trial.sample_rows), as_of=as_of, twice=False, watch=watch
+            (),
+            items,
+            files,
+            Sample(limits().trial.sample_rows),
+            as_of=as_of,
+            training_as_of=training_as_of,
+            twice=False,
+            watch=watch,
         )
     except Exception as exc:  # a bug, not a step: still no failing screen
         _LOG.warning("preview_step_failed", exc_info=True)
@@ -511,10 +519,11 @@ def cached_preview(
     build: Callable[[], PreviewView],
     *,
     as_of: date | None = None,
+    training_as_of: date | None = None,
 ) -> PreviewView:
     """`build()`, once per plan (`plan_check.plan_digest`: the files and every accepted item as it stands) and
     as-of date, kept by client and case: one client's rows are never another's, whatever a digest says."""
-    key = f"{client_id}:{case_id}:{plan_digest(case_files, items)}:{as_of or ''}"
+    key = f"{client_id}:{case_id}:{plan_digest(case_files, items)}:{as_of or ''}:{training_as_of or ''}"
     with _LOCK:
         if key in _CACHE:
             _CACHE.move_to_end(key)

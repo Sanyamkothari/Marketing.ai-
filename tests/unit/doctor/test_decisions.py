@@ -271,9 +271,12 @@ def query_item(frozen: str | None = None) -> CaseItem:
     return item("query", "recipe_step", {"step": step.model_dump(mode="json")}, decided_by=None)
 
 
-def counted(case: Case, items: list[CaseItem]) -> int:
+def counted(case: Case, items: list[CaseItem], *, told: bool = False) -> int:
     prepared = materialize(case, items, (log_file(),), Full(), twice=False)
-    assert not prepared.stopped, [f.code for f in prepared.findings]
+    codes = [f.code for f in prepared.findings]
+    # a step that reads another date than the decided one is held for the person's yes, never silent
+    assert ("STEP_DATE_DIFFERS" in codes) == told, codes
+    assert told or not prepared.stopped, codes
     return int(prepared.tables["log"]["n"].sum())
 
 
@@ -287,7 +290,9 @@ def test_a_later_as_of_answer_reaches_a_query_step_without_a_date_but_not_one_wi
     items = [query_item(frozen="2025-03-01")]
     assert counted(case_of(items), items) == 60  # nothing decided: the step keeps its own frozen date
     later = case_of(items, [as_of_question("c1", "2025-01-10")])
-    assert counted(later, items) == 60  # the step's own date is never overwritten by a later answer
+    assert (
+        counted(later, items, told=True) == 60
+    )  # the step's own date is never overwritten by a later answer
     assert counted(later, [query_item()]) == 10  # a step with none reads the answer
 
 

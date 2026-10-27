@@ -978,12 +978,14 @@ def prescription_from_case(
         if time_decision.upload_id:
             as_of.setdefault(current_upload(case, time_decision.upload_id), time_decision.column)
     steps_by_upload: dict[str | None, list[RecipeStep]] = {}
-    for item in approved:
-        step = _step_of(item)
+    from engine.doctor.materialize import snapshot_of
+
+    pairs = [(item, _step_of(item)) for item in approved]
+    snapshot = snapshot_of([s for _, s in pairs if s is not None], decided.training_as_of_date)
+    for item, step in pairs:
         if step is None:
             continue
-        training = decided.training_as_of_date
-        step = _bound_as_of(step, decided.as_of_iso, training.isoformat() if training else None)
+        step = _bound_as_of(step, decided.as_of_iso, snapshot.isoformat() if snapshot else None)
         where = None if item.payload.get("stage") == POST_BUILD else item.upload_id
         steps_by_upload.setdefault(where, []).append(step)
     slots = _slots(case, None if build is None else build.record)

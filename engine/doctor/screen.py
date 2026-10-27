@@ -402,14 +402,16 @@ def _preview(case: Case, load_files: Callable[[Case], Sequence[LoadedFile]] | No
     from engine.doctor.decisions import decisions
 
     as_of = decisions(case).as_of_date
+    training = decisions(case).training_as_of_date
     try:
         return cached_preview(
             case.client_id,
             case.case_id,
             case.files,
             items,
-            lambda: preview_rows(tuple(load_files(case)), items, as_of=as_of),
+            lambda: preview_rows(tuple(load_files(case)), items, as_of=as_of, training_as_of=training),
             as_of=as_of,
+            training_as_of=training,
         )
     except Exception:
         _LOG.warning("preview_unavailable", exc_info=True)

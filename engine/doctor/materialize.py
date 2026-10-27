@@ -318,6 +318,9 @@ def materialize_plan(
             plans.append((loaded, mine))
     # A file no query reads from is prepared first, so a query step reads the others as the plan makes them.
     plans.sort(key=lambda plan: any(s.kind in _SHAPING for s, _ in plan[1]))
+    # One date for the whole training table: a query without its own date reads the outcome's, never a later one.
+    decided_training = training_as_of
+    training_as_of = snapshot_of([s for _, mine in plans for s, _ in mine], training_as_of)
 
     for loaded, mine in plans:
         ordered = [step for step, _ in mine]
@@ -327,6 +330,9 @@ def materialize_plan(
         key, target = roles_of(items, loaded.upload_id, {str(c) for c in frame.columns})
         file_name = loaded.file_name or "the file"
         ordered = [bound_as_of(_reads_own_table(step, name), as_of, training_as_of) for step in ordered]
+        findings.extend(
+            date_differences([(st, by_order[st.order]) for st in ordered], as_of, decided_training, scope)
+        )
 
         def seen_by(
             step: RecipeStep,
@@ -455,20 +461,76 @@ def _guarded(
     )
 
 
+def snapshot_of(steps: Sequence[RecipeStep], training_as_of: date | None = None) -> date | None:
+    """The one date a plan's training table is cut at: the decided training snapshot, else the own date of a query
+    that reads the future (the outcome's), so a step without a date of its own never reads rows inside the outcome's
+    window. None when the plan has neither."""
+    if training_as_of is not None:
+        return training_as_of
+    for step in steps:
+        p = step.params
+        if (
+            step.kind is RecipeStepKind.SQL_QUERY
+            and p.get("reads_future")
+            and p.get("as_of")
+            and not p.get("as_of_rule")
+        ):
+            with contextlib.suppress(ValueError):
+                return date.fromisoformat(str(p["as_of"]))
+    return None
+
+
 def bound_as_of(step: RecipeStep, as_of: date | None, training_as_of: date | None = None) -> RecipeStep:
-    """A query step with the case's dates in it: `$as_of` stays symbolic in the plan and is bound here (and in the
+    """A query step with the plan's date in it: `$as_of` stays symbolic in the plan and is bound here (and in the
     prescription) so a trial, a check and a run count the same rows. A step's own explicit date is never changed
-    (it is shown to the person in the item's sentence); a step without one reads the scoring date, or - when it
-    builds the outcome from later rows (`reads_future`) - the training snapshot. The decided date also wins over the
-    step's `as_of_rule`, so the rule is dropped from the copy."""
+    (:func:`date_differences` tells the person); a step without one reads the training snapshot when the plan has one
+    (:func:`snapshot_of`), else the case date. The date wins over the step's `as_of_rule`, so the rule is dropped.
+    """
     params = step.params
     if step.kind is not RecipeStepKind.SQL_QUERY or (params.get("as_of") and not params.get("as_of_rule")):
         return step
-    chosen = (training_as_of if params.get("reads_future") else None) or as_of
+    chosen = training_as_of or as_of
     if chosen is None or (params.get("as_of") == chosen.isoformat() and "as_of_rule" not in params):
         return step
     kept = {k: v for k, v in params.items() if k != "as_of_rule"}
     return step.model_copy(update={"params": {**kept, "as_of": chosen.isoformat()}})
+
+
+def tried_step(step: RecipeStep, as_of: date | None, training_as_of: date | None) -> RecipeStep:
+    """A query step as a trial runs it: bound the way a run binds it (the decided date wins over a rule), and the rule
+    dropped (its date is already in `as_of`), so a trial and the run count the same rows."""
+    bound = bound_as_of(step, as_of, training_as_of)
+    kept = {k: v for k, v in bound.params.items() if k != "as_of_rule"}
+    return bound.model_copy(update={"params": kept})
+
+
+def date_differences(
+    bound: Sequence[tuple[RecipeStep, str | None]],
+    as_of: date | None,
+    training_as_of: date | None,
+    scope: Scope,
+) -> list[PlanFinding]:
+    """A stop for each query step that reads another date than the one decided (the training snapshot, else the case's
+    as-of date): the person says yes to it. It also covers a date that was the case's when the step was made.
+    """
+    decided = training_as_of or as_of
+    if decided is None:
+        return []
+    out: list[PlanFinding] = []
+    for step, item_id in bound:
+        have = step.params.get("as_of")
+        if step.kind is RecipeStepKind.SQL_QUERY and have and have != decided.isoformat() and item_id:
+            out.append(
+                _stop(
+                    "STEP_DATE_DIFFERS",
+                    f"A query reads the data as of {have}, not {decided.isoformat()} (the date decided for the "
+                    "case). Say yes to keep it; a scoring file made by this recipe reads as of that date too.",
+                    step.order,
+                    item_id,
+                    scope,
+                )
+            )
+    return out
 
 
 def _reads_own_table(step: RecipeStep, table: str) -> RecipeStep:

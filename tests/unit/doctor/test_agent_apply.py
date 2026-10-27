@@ -260,7 +260,9 @@ def test_a_new_stop_on_another_step_holds_the_change_back(monkeypatch: pytest.Mo
     )
     calls: list[int] = []
 
-    def fake(files: object, case_files: object, items: list[CaseItem], as_of: object = None) -> PlanCheck:
+    def fake(
+        files: object, case_files: object, items: list[CaseItem], as_of: object = None, **_: object
+    ) -> PlanCheck:
         calls.append(len(items))
         return PlanCheck(digest="d", findings=(stop,) if len(items) > 1 else ())
 
@@ -299,7 +301,7 @@ def test_the_check_binds_the_decided_as_of_date_to_a_query_already_in_the_plan(
     files = (log_file(),)
     given: list[date | None] = []
 
-    def spy(files: Any, case_files: Any, items: Any, as_of: date | None = None) -> Any:
+    def spy(files: Any, case_files: Any, items: Any, as_of: date | None = None, **_: Any) -> Any:
         given.append(as_of)
         return check_plan(files, case_files, items, as_of=as_of)
 

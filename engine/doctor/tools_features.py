@@ -52,7 +52,7 @@ from engine.config import (
     WhereOp,
 )
 from engine.doctor.guards import Finding
-from engine.doctor.materialize import CANDIDATE, Full, materialize_plan, table_names
+from engine.doctor.materialize import CANDIDATE, Full, materialize_plan, table_names, tried_step
 from engine.doctor.registry import (
     DataTool,
     DataToolContext,
@@ -801,7 +801,9 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
     )
     # What the query would drop without a word is counted on the file as the plan leaves it (before the query).
     items = _trial_items(ctx.case_items or (), ctx.replacing)
-    before = materialize_plan((), items, ctx.files, Full(), twice=False, as_of=ctx.as_of)
+    before = materialize_plan(
+        (), items, ctx.files, Full(), twice=False, as_of=ctx.as_of, training_as_of=ctx.training_as_of
+    )
     source = before.tables.get(table)
     inputs = _input_findings(given, table, source) if source is not None else []
     try:
@@ -825,7 +827,7 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
             "FEATURE_NEEDS_AS_OF", "Features are measured at a date: ask the person for the as-of date."
         )
     tried = RecipeStep.model_validate(base.step)
-    tried = tried.model_copy(update={"params": {k: v for k, v in tried.params.items() if k != "as_of_rule"}})
+    tried = tried_step(tried, ctx.as_of, ctx.training_as_of)
     whole = materialize_plan(
         (),
         items,
@@ -833,6 +835,7 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
         Full(),
         candidate=(given.upload_id, tried),
         as_of=ctx.as_of,
+        training_as_of=ctx.training_as_of,
     )
     own = next((f for f in whole.failures if f.item_id == CANDIDATE), None)
     if own is not None:
