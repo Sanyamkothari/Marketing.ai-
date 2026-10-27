@@ -258,6 +258,6 @@ So the Gym rewards contact volume. Any part that holds people back loses there (
 | T2 | Agent ablations: floor 0 and greedy at scoring time; click model detached (uplift score only) | Shows the click model adds about 0 and the Hillstrom loss is exploration | pending CI |
 | T3 | Stronger baselines: numpy DR-learner, depth-2 policy tree on DR pseudo-outcomes | Sets a fair bar above the weak T-learner | pending CI |
 | T4 | Read `blocked_by` in realbench-{hillstrom,x5}-agent_v3 (run 40325405923), then v3 minus one part at a time | Names the gate behind the 1.5-1.9% contact rate | artifacts exist; download Forbidden here |
-| T5 | Semi-synthetic multi-wave benchmark from X5 receipts (non-multiplicative uplift, decoupled clicks, 3-10% lifts, 30-day net margin), 12 weekly waves, agent vs uplift_threshold | Decides the method under realistic, non-circular truth | to build; pending CI |
+| T5 | Semi-synthetic multi-wave benchmark from X5 receipts (non-multiplicative uplift, decoupled clicks, 3-10% lifts, 30-day net margin), 12 weekly waves, agent vs uplift_threshold | Decides the method under realistic, non-circular truth | built, see [docs/v4/WAVES.md](../v4/WAVES.md); pending CI (`[waves]`) |
 | T6 | Pilot of 100k+ customers: 50/50 agent vs uplift_threshold inside the agent group, shared 10% holdout, pre-registered 30-day net margin | The real answer | needs a design partner |
 

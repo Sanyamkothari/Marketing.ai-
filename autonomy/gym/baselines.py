@@ -497,7 +497,8 @@ def _in_audience(state: CustomerState, brief: Brief, now: datetime) -> bool:
 class BestFixedRule(_Static):
     """WhatsApp if the customer consented, else email; no offer; at one fixed hour on the customer's
     clock (14:00 by default, moved out of quiet hours if need be); everyone in the audience, as often
-    as the weekly cap allows.
+    as the weekly cap allows. `channels` is that preference order (the waves benchmark, which sends SMS
+    and e-mail, passes `(SMS, EMAIL)`); the default is the Gym's.
 
     It never reads the truth: it is built without one and decides from the customer's state and the
     decision context alone. It is the strongest policy in the Gym that needs no learning, so an agent
@@ -510,11 +511,18 @@ class BestFixedRule(_Static):
 
     version = "best-fixed-rule-v1"
 
-    def __init__(self, hour: int = BEST_FIXED_HOUR, *, min_gap_hours: float = MIN_GAP_HOURS) -> None:
+    def __init__(
+        self,
+        hour: int = BEST_FIXED_HOUR,
+        *,
+        min_gap_hours: float = MIN_GAP_HOURS,
+        channels: tuple[Channel, ...] = (Channel.WHATSAPP, Channel.EMAIL),
+    ) -> None:
         if not 0 <= hour < 24:
             raise ValueError(f"hour must be 0-23, not {hour}")
         self.hour = hour
         self.min_gap_hours = min_gap_hours
+        self.channels = channels
         self._scheduled: dict[str, datetime] = {}
         self._last_now: datetime | None = None
 
@@ -540,11 +548,9 @@ class BestFixedRule(_Static):
             if all(o.offer_id != NO_OFFER.offer_id for o in brief.envelope.offers):
                 continue  # this goal's envelope does not allow a message without an offer
             allowed = brief.envelope.channels
-            if Channel.WHATSAPP in allowed and Channel.WHATSAPP in reachable:
-                ch = Channel.WHATSAPP
-            elif Channel.EMAIL in allowed and Channel.EMAIL in reachable:
-                ch = Channel.EMAIL
-            else:
+            # the first channel in the preference order that the brief allows and the customer can receive
+            ch = next((c for c in self.channels if c in allowed and c in reachable), None)
+            if ch is None:
                 continue
             hour = send_hour(self.hour, brief.envelope)
             if hour is None or not _in_audience(state, brief, now):
