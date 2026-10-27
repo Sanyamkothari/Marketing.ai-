@@ -3131,7 +3131,8 @@ def _approval(
         # never another plan's counts, nor a count of a sample only (a case kept before the whole file was counted)
         said = said if check is not None and check.digest == plan_digest(case.files, items) else ()
         check = _counted(run, case, items)
-    stops = blocking(case, check, said)
+    # the refusal that stopped the visit is shown, not a gate: approving is itself the retry, and its write clears it
+    stops = [f for f in blocking(case, check, said) if f.source != "visit"]
     if stops:
         raise CaseError(
             "APPROVAL_STOP_OPEN",

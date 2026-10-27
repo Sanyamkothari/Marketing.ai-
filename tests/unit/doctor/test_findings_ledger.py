@@ -123,7 +123,7 @@ def test_a_stop_in_a_trials_payload_is_in_the_ledger_and_blocks_until_the_plan_i
         ("PLAN_LOSES_TOO_MUCH", "stop", 343, "sql.base.q1")
     ]
     assert found[0].measured == {"count": 343} and found[0].acknowledgeable
-    assert {r.kind for r in found[0].resolutions} >= {"acknowledge", "fix", "ai_may_fix"}
+    assert {r.kind for r in found[0].resolutions} >= {"acknowledge", "fix"}
     assert [f.key for f in blocking(case)] == [found[0].key]
     shown = _view(storage, case).ledger
     assert shown is not None and [f["key"] for f in shown["findings"]] == [found[0].key], "the screen sees it"
@@ -205,7 +205,7 @@ def test_needs_yes_lists_the_stop_and_the_change_and_one_call_gives_both(tmp_pat
 
 
 def test_without_the_yeses_the_old_refusals_stand(tmp_path: Path) -> None:
-    _storage, deps, case, _item = _whole_file_world(tmp_path)
+    storage, deps, case, _item = _whole_file_world(tmp_path)
     with pytest.raises(CaseError) as missing:
         visit.approve(CLIENT, case.case_id, deps, expected_version=case.version, actor=MEERA.user_id)
     assert missing.value.code == "APPROVAL_CONFIRMATION_MISSING"
@@ -221,6 +221,8 @@ def test_without_the_yeses_the_old_refusals_stand(tmp_path: Path) -> None:
             principal=MEERA,
         )
     assert only_stops.value.code == "APPROVAL_CONFIRMATION_MISSING"
+    after = CaseStore(storage).get(CLIENT, case.case_id)  # and nothing was written on the way to the refusal
+    assert after.version == case.version and after.visit.acknowledged == case.visit.acknowledged  # type: ignore[union-attr]
 
 
 def test_every_yes_is_checked_before_any_is_written(tmp_path: Path) -> None:
@@ -384,3 +386,38 @@ def test_a_chat_request_records_who_asked_on_the_item(tmp_path: Path) -> None:
     assert made.requested_by == ASHA.user_id
     assert made.source is ProposalSource.AI
     del storage
+
+
+def test_a_visit_stop_at_approve_is_shown_but_approve_is_its_own_retry(tmp_path: Path) -> None:
+    storage, deps, case = _at_approve(tmp_path)
+    stopped = (case.visit or CaseVisit()).model_copy(
+        update={"stopped": VisitStop(code="AGENT_TOOL_FAILED", message="File busy.", state="approve")}
+    )
+    case = _edit(storage, case, visit=stopped)
+    assert any(f.source == "visit" for f in findings_of(case))
+    case = visit.resume(CLIENT, case.case_id, deps, actor=ANALYST)
+    done = visit.approve(CLIENT, case.case_id, deps, expected_version=case.version, actor=ANALYST)
+    assert done.state is not VisitState.APPROVE and done.visit.stopped is None  # type: ignore[union-attr]
+
+
+def test_a_yes_is_named_by_what_it_is_about_not_its_place(tmp_path: Path) -> None:
+    from engine.doctor.approval_model import _sub_op
+
+    assert _sub_op("op", "stop:a") != _sub_op("op", "confirm:x") and _sub_op(None, "stop:a") is None
+    assert _sub_op("op", "stop:a") == _sub_op("op", "stop:a")
+
+
+def test_a_plan_step_that_cannot_run_in_a_trial_is_hard(tmp_path: Path) -> None:
+    storage, _deps, case = _at_approve(tmp_path)
+    payload: dict[str, Any] = {
+        "step": {"kind": "sql_query", "order": 1, "params": {}},
+        "findings": [{"level": "stop", "code": "PLAN_STEP_CANNOT_RUN", "message": "It cannot run."}],
+    }
+    item = CaseItem(
+        item_id="sql.base.q2", kind="recipe_step", title="Q", source=ProposalSource.AI,
+        confidence=AgentConfidence.CHECK, state=ProposalState.ACCEPTED, upload_id=FIRST, payload=payload,
+        payload_digest=digest_of(payload), proposed_at=T0,
+    )  # fmt: skip
+    case = _edit(storage, case, items=(*case.items, item), visit=None)
+    (found,) = [f for f in findings_of(case) if f.source == "sql_trial"]
+    assert found.level == "hard" and not found.acknowledgeable

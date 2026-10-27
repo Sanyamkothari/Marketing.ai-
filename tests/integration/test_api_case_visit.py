@@ -548,3 +548,32 @@ def test_an_invoice_log_with_an_ai_query_reaches_a_computed_readiness_verdict_on
         assert approved.status_code == 200, approved.text
         readiness = approved.json()["readiness"]
         assert readiness and readiness[-1]["goal_id"] == "retail-win-back" and readiness[-1]["verdict"]
+
+
+def test_one_approval_call_takes_the_screens_yeses_and_digest_and_refuses_a_stale_one(
+    client: TestClient,
+) -> None:
+    upload_id = _upload(client)
+    case = client.post("/cases", json={"upload_ids": [upload_id]}).json()
+    case_id = case["case_id"]
+    case = _answer_open(client, client.post(f"/cases/{case_id}/visit", json={}).json())
+    chosen = client.post(
+        f"/cases/{case_id}/goal", json={"version": case["version"], "goal_id": GOAL, "op_id": "g1"}
+    )
+    case = _answer_open(client, chosen.json())
+    shown = client.get(f"/cases/{case_id}/screen").json()["view"]["approval"]
+    assert shown is not None and shown["digest"]
+    stale = client.post(
+        f"/cases/{case_id}/approval", json={"version": case["version"], "digest": "0" * 32, "yeses": []}
+    )
+    assert stale.status_code == 409 and _code(stale) == "APPROVAL_SENTENCE_CHANGED"
+    unseen = client.post(
+        f"/cases/{case_id}/approval",
+        json={
+            "version": case["version"],
+            "yeses": [{"kind": "confirm", "item_id": "nope", "sentence": "x"}],
+            "digest": shown["digest"],
+        },
+    )
+    assert unseen.status_code == 200, "a yes to something not shown is not given"
+    assert unseen.json()["approvals"]

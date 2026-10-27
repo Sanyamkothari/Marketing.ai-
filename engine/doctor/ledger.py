@@ -43,6 +43,8 @@ Level = Literal["hard", "stop", "flag"]
 Source = Literal["guard", "readiness", "sql_trial", "doubt", "visit"]
 _ORDER: Final[dict[str, int]] = {"hard": 0, "stop": 1, "flag": 2}
 _DOUBTS_KEPT: Final[int] = 20
+_TRIAL_ONLY: Final[frozenset[str]] = frozenset({"OUTCOME_WINDOW_PAST_DATA"})
+"""The trial's stops the count of every row does not measure again: they stay while the step is accepted."""
 
 
 class Resolution(StrictBase):
@@ -93,13 +95,15 @@ def _measured(count: int | None) -> dict[str, int | float]:
     return {} if count is None else {"count": count}
 
 
-def _resolutions(*, hard: bool, item_id: str | None, ai: bool = True) -> tuple[Resolution, ...]:
+def _resolutions(*, hard: bool, item_id: str | None, ai: bool = False) -> tuple[Resolution, ...]:
     out: list[Resolution] = []
     if not hard:
         out.append(Resolution(kind="acknowledge", label="Accept this and go on"))
     ids = (item_id,) if item_id else ()
     out.append(Resolution(kind="fix", label="Change the plan or the file", item_ids=ids))
-    if ai:
+    if (
+        ai
+    ):  # offered only once the AI reads the ledger (through the egress gate): until then it would do nothing
         out.append(Resolution(kind="ai_may_fix", label="Ask Data Doctor to fix it", item_ids=ids))
     return tuple(out)
 
@@ -131,10 +135,18 @@ def _holds(said: Sequence[Acknowledgement], key: str, count: int | None) -> bool
 
 
 def _from_trials(
-    items: Sequence[CaseItem], said: Sequence[Acknowledgement], told: set[tuple[str, str | None]]
+    items: Sequence[CaseItem],
+    said: Sequence[Acknowledgement],
+    told: set[tuple[str, str | None]],
+    *,
+    only: frozenset[str] | None = None,
 ) -> list[Finding]:
     """The stops a query's trial wrote into its item's payload (`tools_sql.SqlStepProposal.payload`): the plan's own
-    count of the same code about the same step says it better and takes its place."""
+    count of the same code about the same step says it better and takes its place. `only`: just these codes (those the
+    count of every row does not measure again). A code no yes can lift (`materialize.HARD_CODES`, or a payload entry
+    marked `hard`) is a hard rule here too."""
+    from engine.doctor.materialize import HARD_CODES
+
     out: list[Finding] = []
     for item in items:
         if item.state is not ProposalState.ACCEPTED:
@@ -146,6 +158,9 @@ def _from_trials(
             code, text = entry.get("code"), entry.get("message")
             if not isinstance(code, str) or not isinstance(text, str) or (code, item.item_id) in told:
                 continue
+            if only is not None and code not in only:
+                continue
+            hard = code in HARD_CODES or entry.get("hard") is True
             count = entry.get("count")
             number = count if isinstance(count, int) and not isinstance(count, bool) else None
             key = _key(code, item.item_id)
@@ -155,7 +170,7 @@ def _from_trials(
                     key=key,
                     code=code,
                     subject=item.item_id,
-                    level="stop",
+                    level="hard" if hard else "stop",
                     source="sql_trial",
                     count=number,
                     measured=_measured(number),
@@ -163,7 +178,7 @@ def _from_trials(
                     detail=detail if isinstance(detail, str) else None,
                     item_id=item.item_id,
                     acknowledged=_holds(said, key, number),
-                    resolutions=_resolutions(hard=False, item_id=item.item_id),
+                    resolutions=_resolutions(hard=hard, item_id=item.item_id),
                 )
             )
     return out
@@ -185,8 +200,10 @@ def findings_of(
     if counted is not None and counted.digest != plan_digest(case.files, items):
         counted = None
     out = [_from_plan(f, said) for f in counted.findings] if counted is not None else []
-    if counted is None or counted.basis is None:  # a count of every row supersedes what a trial saw
-        out.extend(_from_trials(items, said, {(f.code, f.item_id) for f in out}))
+    told = {(f.code, f.item_id) for f in out}
+    # a count of every row supersedes what a trial saw, except the stops it does not measure again
+    only = None if counted is None or counted.basis is None else _TRIAL_ONLY
+    out.extend(_from_trials(items, said, told, only=only))
     for doubt in case.doubts[-_DOUBTS_KEPT:]:
         key = _key("DOUBT", doubt.doubt_id)
         out.append(

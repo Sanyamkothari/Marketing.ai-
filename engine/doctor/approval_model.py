@@ -173,8 +173,36 @@ def approval_of(
     )
 
 
-def _sub_op(op_id: str | None, n: int) -> str | None:
-    return None if op_id is None else sha256_hex(canonical_bytes([op_id, n]))[:40]
+def _sub_op(op_id: str | None, subject: str) -> str | None:
+    """What a yes is about, not its place in the call, names it: a retry that has fewer yeses left keeps the ids."""
+    return None if op_id is None else sha256_hex(canonical_bytes([op_id, subject]))[:40]
+
+
+def _refuse_what_is_left(
+    case: Case, deps: VisitDeps, wanted: dict[str, Yes], given: set[str], sentence: str | None
+) -> None:
+    """Before anything is written: the approval's own refusals, for what the yeses given leave undone."""
+    from engine.doctor import visit
+
+    if sentence is not None:
+        shown = visit.approval_sentence(case, goal_name=visit.approval_goal_name(deps.storage, case))
+        if sentence != shown:
+            raise CaseError(
+                "APPROVAL_SENTENCE_CHANGED",
+                f"What would be approved has changed since you read it. It now reads: “{shown}”",
+            )
+    left = [y for s, y in wanted.items() if s not in given]
+    if any(y.kind == "confirm" for y in left):
+        raise CaseError(
+            "APPROVAL_CONFIRMATION_MISSING", "A change still needs its own yes before the plan is approved."
+        )
+    hard = [f for f in blocking(case) if f.level == "hard" and f.source != "visit"]
+    if hard or left:
+        raise CaseError(
+            "APPROVAL_STOP_OPEN",
+            f"{len(hard) + len(left)} safety check(s) still stop this plan: say yes to each one that may be "
+            "said yes to, or change the plan.",
+        )
 
 
 def approve_with(
@@ -256,10 +284,11 @@ def approve_with(
                 "POLICY_ROLE_SEPARATION" if need.cannot_agree == "separation" else "TOOL_ROLE_REQUIRED",
                 "Someone else must give this one: the person who asked for it, or lacks the role, cannot.",
             )
+    _refuse_what_is_left(case, deps, wanted, {g.subject for g in given}, sentence)
     version = expected_version
-    for n, each in enumerate(  # a stop's yes does not move the plan: those first
-        sorted(given, key=lambda g: g.kind != "acknowledge"), start=1
-    ):
+    for each in sorted(
+        given, key=lambda g: g.kind != "acknowledge"
+    ):  # a stop's yes does not move the plan: first
         if each.kind == "acknowledge":
             assert each.key is not None
             case = visit.acknowledge_stop(
@@ -270,7 +299,7 @@ def approve_with(
                 expected_version=version,
                 actor=actor,
                 reason=each.reason,
-                op_id=_sub_op(op_id, n),
+                op_id=_sub_op(op_id, each.subject),
             )
         else:
             assert principal is not None and each.item_id is not None
@@ -282,7 +311,7 @@ def approve_with(
                 principal=principal,
                 sentence=each.sentence,
                 expected_version=version,
-                op_id=_sub_op(op_id, n),
+                op_id=_sub_op(op_id, each.subject),
             )
         version = case.version
     return visit.approve(

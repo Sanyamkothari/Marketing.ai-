@@ -70,8 +70,9 @@ SAMPLE_SEED: Final[int] = 20_260_101
 """The seed every sample of the plan is drawn with: the same rows for every caller of the same scope."""
 CANDIDATE: Final[str] = "candidate"
 """The item id of the step a caller asks about (:func:`materialize`'s `candidate`)."""
-_HARD_CODES: Final[frozenset[str]] = frozenset({"PLAN_STEP_CANNOT_RUN"})
+HARD_CODES: Final[frozenset[str]] = frozenset({"PLAN_STEP_CANNOT_RUN"})
 """The guards' stops no yes can lift: a step that cannot run is not a loss a person may accept."""
+_HARD_CODES: Final[frozenset[str]] = HARD_CODES
 _SHAPING: Final[frozenset[RecipeStepKind]] = frozenset({RecipeStepKind.SQL_QUERY})
 
 
