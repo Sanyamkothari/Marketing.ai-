@@ -43,6 +43,15 @@ default, so a deployment that does not turn it on sends exactly as before. Manda
 (`mandates=`) and a state enricher (`state_enricher=`) are passed by argument. The nightly
 negative-lift breaker is on (`negative_lift_breaker`); its sample floors are settings too.
 
+**The shop's money** (`currency`, `channel_costs`, `typical_order_value`, `complaint_cost`;
+docs/v3/CURRENCY.md). Costs are read in the shop's own currency, never a dollar default: what one message
+costs per channel (`AUTONOMY_CHANNEL_COSTS=email=0.12,whatsapp=0.85`, or the provider prices of the mandate
+catalogue, which win where they list a channel), the usual order value that new customers are assumed to
+spend and that sizes the journeys' value bars, and the cost of a complaint. `build_runtime` makes a
+`ShopPrices` of them for the runtime (the spend ledger, the overspend breaker, the agent) and refuses to
+start while an active goal cannot be priced; a goal approved later is refused by the tick (alert
+`prices.missing`) and by the API, with an error that names what to set.
+
 **Plan-v3** (`v3`, `AUTONOMY_V3`, docs/v3/PRESET.md). Off by default. On, the agent is built with the v3
 preset (look-alike, who, frequency, moments, journeys, offer pricing and the experiments' wrapper with no
 experiment running) and the nightly run fills every state's profile (`RuntimeConfig.nightly_profile`), which
@@ -53,8 +62,9 @@ as they are.
 from __future__ import annotations
 
 import importlib
+import math
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -78,8 +88,10 @@ from autonomy.interfaces import (
     TextSignals,
     Workspace,
 )
+from autonomy.mandate.catalogue import ActionCatalogue
 from autonomy.proof.split import group_assigner
 from autonomy.runtime.batches import SqlBatchStore, create_batch_tables
+from autonomy.runtime.prices import ShopPrices, money_prefix, parse_channel_costs
 from autonomy.runtime.service import (
     AutonomyRuntime,
     BreakersFn,
@@ -116,6 +128,7 @@ if TYPE_CHECKING:
     from autonomy.connectors.shopify import ProductSink, ShopifyPrivacyDesk
     from autonomy.connectors.sync import ConnectorEngine, TransportFor
     from autonomy.connectors.tokens import SecretCipher
+    from autonomy.mandate.catalogue import CatalogueVersion
     from autonomy.runtime.v3 import V3Preset
 
 __all__ = [
@@ -137,6 +150,7 @@ __all__ = [
 
 ENV_PREFIX = "AUTONOMY_"
 _LIST_FIELDS = frozenset({"ses_topic_arns", "countries", "dnd_registries"})
+_COSTS_FIELDS = frozenset({"channel_costs"})
 
 
 class RuntimeSettings(BaseModel):
@@ -178,6 +192,36 @@ class RuntimeSettings(BaseModel):
     late_window_hours: float = Field(default=48.0, ge=0)
     trigger_window_hours: float = Field(default=24.0, ge=0)
     batch_max_age_hours: float = Field(default=72.0, gt=0)
+
+    # The shop's money, in its own currency (autonomy.runtime.prices, docs/v3/CURRENCY.md). Nothing here has a
+    # dollar default: a goal that cannot be priced from these (or the mandate catalogue) does not run.
+    currency: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z]{3}$",
+        description="ISO 4217 code of the currency every money setting is in, e.g. INR (AUTONOMY_CURRENCY)",
+    )
+    channel_costs: dict[Channel, float] = Field(
+        default_factory=dict,
+        description=(
+            "What one message costs per channel, in `currency`: AUTONOMY_CHANNEL_COSTS=email=0.12,whatsapp=0.85. "
+            "Push, web and webhook are free unless listed. The catalogue's provider prices win where it lists a channel"
+        ),
+    )
+    typical_order_value: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        description=(
+            "The shop's usual order value, in `currency`: assumed for a customer with no orders until "
+            "the shop's own are learned, and the unit of the journeys' value bars"
+        ),
+    )
+    complaint_cost: float | None = Field(
+        default=None,
+        ge=0,
+        allow_inf_nan=False,
+        description="What one spam complaint costs beyond the lost contact (default: 4% of the usual order)",
+    )
 
     # Email through Amazon SES.
     ses_from_address: str | None = None
@@ -255,6 +299,24 @@ class RuntimeSettings(BaseModel):
         ),
     )
 
+    @field_validator("currency")
+    @classmethod
+    def _currency(cls, value: str | None) -> str | None:
+        return None if value is None else value.upper()
+
+    @field_validator("channel_costs", mode="before")
+    @classmethod
+    def _costs(cls, value: object) -> object:
+        return parse_channel_costs(value) if isinstance(value, str) else value
+
+    @field_validator("channel_costs")
+    @classmethod
+    def _costs_are_prices(cls, value: dict[Channel, float]) -> dict[Channel, float]:
+        bad = [c.value for c, price in value.items() if not math.isfinite(price) or price < 0]
+        if bad:
+            raise ValueError(f"channel costs must be numbers of zero or more, not {bad}")
+        return value
+
     @field_validator("countries")
     @classmethod
     def _countries(cls, value: tuple[str, ...]) -> tuple[str, ...]:
@@ -286,6 +348,8 @@ class RuntimeSettings(BaseModel):
     def _shares(self) -> RuntimeSettings:
         if self.holdout_share + self.baseline_share >= 1:
             raise ValueError("holdout + baseline must leave room for the agent")
+        if self.channel_costs and self.currency is None:
+            raise ValueError("channel_costs are prices in a currency: set currency (AUTONOMY_CURRENCY) too")
         return self
 
     @classmethod
@@ -305,11 +369,31 @@ class RuntimeSettings(BaseModel):
                 continue
             if name in _LIST_FIELDS:
                 values[name] = tuple(part.strip() for part in raw.split(",") if part.strip())
+            elif name in _COSTS_FIELDS:
+                values[name] = parse_channel_costs(raw)
             elif raw.strip() == "" and cls.model_fields[name].default is None:
                 values[name] = None
             else:
                 values[name] = raw.strip()
         return cls.model_validate(values)
+
+    def shop_prices(
+        self,
+        catalogue: Callable[[], CatalogueVersion | None] | ActionCatalogue | None = None,
+        *,
+        channel_costs: Mapping[Channel, float] | None = None,
+    ) -> ShopPrices:
+        """The shop's money (`autonomy.runtime.prices.ShopPrices`) from these settings and, where there is one,
+        the mandate catalogue (an `ActionCatalogue`, or a function giving its latest version).
+        `channel_costs` replaces the settings' own table (the costs `build_runtime` is given)."""
+        latest = catalogue.latest if isinstance(catalogue, ActionCatalogue) else catalogue
+        return ShopPrices(
+            currency=self.currency,
+            channel_costs=dict(self.channel_costs if channel_costs is None else channel_costs),
+            typical_order_value=self.typical_order_value,
+            complaint_cost_override=self.complaint_cost,
+            catalogue=latest,
+        )
 
     def lift_guards(self) -> LiftGuards | None:
         """The negative-lift breaker's guards, or None when it is turned off."""
@@ -373,11 +457,14 @@ def agent_policy_factory(
     kinds: Mapping[str, GoalKind] | None = None,
     lookalike: bool = False,
     v3: V3Preset | bool = False,
+    prices: ShopPrices | None = None,
 ) -> Policy:
     """The agent's policy (`autonomy.runtime.agent.build_agent_policy`), imported when first needed.
 
-    `kinds` gives each goal's kind (cart recovery fades fast), as the demo passes it too. The agent
-    keeps its own default channel costs. The baseline group is decided by the simple rule a careful
+    `kinds` gives each goal's kind (cart recovery fades fast), as the demo passes it too. `prices` is the
+    shop's money in its own currency: the agent is built with its channel costs, complaint cost, usual
+    order value (which also sets the journeys' value bars) and the currency's symbol for the reasons it
+    writes. Without it the agent keeps its own dollar-sized defaults (the Gym's and the bench's). The baseline group is decided by the simple rule a careful
     marketer would set up (`autonomy.gym.baselines.RuleBaseline`: e-mail customers who have not bought
     in 60 days, at most every 14 days): without it the baseline group was never contacted, and the
     proof's "agent vs the simple rule" comparison compared the agent with doing nothing."""
@@ -386,6 +473,8 @@ def agent_policy_factory(
     extra: dict[str, Any] = {"lookalike": True} if lookalike else {}
     if v3:
         extra["v3"] = v3
+    if prices is not None:
+        extra.update(_money_arguments(prices))
     if kinds is None:
         built = build(list(briefs), list(content), **extra)
     else:
@@ -396,15 +485,34 @@ def agent_policy_factory(
     return cast(Policy, built)
 
 
+def _money_arguments(prices: ShopPrices) -> dict[str, Any]:
+    """The `build_agent_policy` arguments that carry the shop's money, read now (a catalogue version published
+    since the last build is used from this build on)."""
+    out: dict[str, Any] = {"costs": prices.costs()}
+    complaint = prices.complaint_cost()
+    if complaint is not None:
+        out["complaint_cost"] = complaint
+    if prices.typical_order_value is not None:
+        out["default_order_value"] = prices.typical_order_value
+    currency = prices.shop_currency()
+    if currency is not None:
+        out["currency"] = money_prefix(currency)
+    return out
+
+
 def workspace_policy_factory(
-    workspace: Workspace, *, lookalike: bool = False, v3: V3Preset | bool = False
+    workspace: Workspace,
+    *,
+    lookalike: bool = False,
+    v3: V3Preset | bool = False,
+    prices: ShopPrices | None = None,
 ) -> PolicyFactory:
     """`agent_policy_factory` with each brief's goal kind read from the workspace when it is built."""
 
     def build(briefs: Sequence[Brief], content: Sequence[ContentItem]) -> Policy:
         wanted = {b.goal_id for b in briefs}
         kinds = {g.goal_id: g.kind for g in workspace.goals() if g.goal_id in wanted}
-        return agent_policy_factory(briefs, content, kinds=kinds, lookalike=lookalike, v3=v3)
+        return agent_policy_factory(briefs, content, kinds=kinds, lookalike=lookalike, v3=v3, prices=prices)
 
     return build
 
@@ -781,6 +889,7 @@ def build_runtime(
     channel_costs: Mapping[Channel, float] | None = None,
     run_send_jobs: bool | None = False,
     state_enricher: StateEnricher | None = None,
+    catalogue: ActionCatalogue | None = None,
     mandates: MandateSource | None = None,
     consent: ConsentRegistry | None = None,
     dnd: DndRegistry | Mapping[str, DndRegistry] | None = None,
@@ -795,6 +904,12 @@ def build_runtime(
     (`python -m autonomy.runtime.worker`), their one owner; pass None for a single process that
     ticks with no worker.
 
+    The shop's money comes from `settings` (`currency`, `channel_costs`, `typical_order_value`,
+    `complaint_cost`) and from the `catalogue`'s provider prices where it lists a channel
+    (`RuntimeSettings.shop_prices`); `channel_costs` replaces the settings' table. The same prices go to the agent,
+    the spend ledger and the overspend breaker. If an active goal cannot be priced, `build_runtime` raises
+    `autonomy.runtime.prices.MissingShopMoneyError` (docs/v3/CURRENCY.md).
+
     `settings.gateway_enabled` sends through `build_gateway` (with `consent` and `dnd` overriding
     the registries from the settings); `mandates` and `state_enricher` go to the runtime as they are.
 
@@ -804,6 +919,7 @@ def build_runtime(
     `request_rebuild` as the engine's `history_hook` and the linker's `on_change`. `before_tick`
     hooks run first in every tick."""
     settings = settings or RuntimeSettings.from_env(environ)
+    prices = settings.shop_prices(catalogue, channel_costs=channel_costs)
     engine = engine or engine_for(settings.database_url)
     create_all(engine)
     create_batch_tables(engine)
@@ -888,7 +1004,7 @@ def build_runtime(
         folder=ProductionStateFolder(),
         policy_factory=policy_factory
         or workspace_policy_factory(
-            workspace, lookalike=settings.lookalike_model, v3=settings.v3_preset() or False
+            workspace, lookalike=settings.lookalike_model, v3=settings.v3_preset() or False, prices=prices
         ),
         queue=queue,
         dispatcher=dispatcher,
@@ -918,7 +1034,6 @@ def build_runtime(
         ),
         alerts=alert_store,
         briefings=SqlBriefingStore(engine),
-        channel_costs=channel_costs,
         state_enricher=state_enricher,
         mandates=mandates,
         gateway=gateway,
@@ -926,7 +1041,9 @@ def build_runtime(
         business_id=wiring.business_id if wiring is not None else settings.business_id,
         data_gate=data_gate,
         before_tick=hooks,
+        prices=prices,
     )
+    runtime.check_live_goals()
     if wiring is not None:
         # Connector history older than the late window, and changed identity links, rebuild state.
         wiring.engine.history_hook = runtime.request_rebuild

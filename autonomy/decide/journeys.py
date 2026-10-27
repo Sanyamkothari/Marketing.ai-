@@ -87,6 +87,7 @@ from autonomy.contracts import (
     DecisionKind,
 )
 from autonomy.decide import rules
+from autonomy.decide.models import REFERENCE_ORDER_VALUE
 from autonomy.interfaces import Bidder
 
 DEFAULT_PATH: Final[Path] = Path(__file__).resolve().parents[2] / "configs" / "v3" / "journeys.yaml"
@@ -158,6 +159,14 @@ class Journey(Contract):
     steps: tuple[JourneyStep, ...] = Field(min_length=1)
     value_bar: float | None = Field(
         default=None, ge=0, description="Only offered to customers worth at least this if they buy"
+    )
+    value_bar_order_multiple: float | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "The bar as a multiple of the shop's usual order value, so it is the same size in any currency; "
+            "`JourneyConfig.for_shop` turns it into `value_bar`. An explicit `value_bar` wins"
+        ),
     )
 
     @model_validator(mode="after")
@@ -238,6 +247,33 @@ class JourneyConfig(Contract):
     def get(self, journey_id: str) -> Journey | None:
         return next((j for j in self.journeys if j.journey_id == journey_id), None)
 
+    def for_shop(self, order_value: float) -> JourneyConfig:
+        """The same config with every `value_bar_order_multiple` turned into a `value_bar` of
+        multiple x `order_value`, the shop's usual order value in its own currency. A journey with an
+        explicit `value_bar` keeps it."""
+        if not math.isfinite(order_value) or order_value <= 0:
+            raise ValueError(f"the shop's usual order value must be a positive number, not {order_value!r}")
+        return self.model_copy(
+            update={
+                "journeys": tuple(
+                    (
+                        j.model_copy(update={"value_bar": j.value_bar_order_multiple * order_value})
+                        if j.value_bar is None and j.value_bar_order_multiple is not None
+                        else j
+                    )
+                    for j in self.journeys
+                )
+            }
+        )
+
+    def unresolved(self) -> tuple[str, ...]:
+        """Ids of journeys whose bar is still a multiple of the order value (`for_shop` not applied)."""
+        return tuple(
+            j.journey_id
+            for j in self.journeys
+            if j.value_bar is None and j.value_bar_order_multiple is not None
+        )
+
     def with_value_bar(self, journey_id: str, bar: float | None) -> JourneyConfig:
         """The same config with one journey's value bar replaced (the bar is in the shop's currency)."""
         if self.get(journey_id) is None:
@@ -268,12 +304,14 @@ def parse_journeys(raw: Mapping[str, Any]) -> JourneyConfig:
     return JourneyConfig.model_validate({"settings": raw.get("settings") or {}, "journeys": journeys})
 
 
-def load_journeys(path: Path | None = None) -> JourneyConfig:
-    """The journeys in `path` (default: the shipped `configs/v3/journeys.yaml`)."""
+def load_journeys(path: Path | None = None, *, order_value: float = REFERENCE_ORDER_VALUE) -> JourneyConfig:
+    """The journeys in `path` (default: the shipped `configs/v3/journeys.yaml`), their value bars set for a
+    shop whose usual order is worth `order_value`. The default is the reference order the file was written
+    for, which gives the bars the file always had."""
     raw = yaml.safe_load((path or DEFAULT_PATH).read_text(encoding="utf-8"))
     if not isinstance(raw, Mapping):
         raise ValueError("journeys.yaml must hold a mapping")
-    return parse_journeys(raw)
+    return parse_journeys(raw).for_shop(order_value)
 
 
 # --- one customer's journey in progress -------------------------------------------------------
@@ -357,6 +395,12 @@ class JourneyRunner:
     """Prices journeys as auction options and carries each customer's journey from step to step."""
 
     def __init__(self, config: JourneyConfig, *, history: int = 50_000) -> None:
+        loose = config.unresolved()
+        if loose:
+            raise ValueError(
+                f"journeys {', '.join(loose)} have a value bar that is a multiple of the shop's order value; "
+                "call JourneyConfig.for_shop(order_value) first"
+            )
         self.config = config
         self.settings = config.settings
         self._runs: dict[str, JourneyRun] = {}

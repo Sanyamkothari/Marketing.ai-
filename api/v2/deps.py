@@ -229,7 +229,7 @@ class Services:
         self,
         text: str,
         budget: float | None,
-        currency: str = "USD",
+        currency: str | None = None,
         kind: GoalKind | None = None,
         objective: Objective | None = None,
         ends_at: datetime | None = None,
@@ -238,7 +238,8 @@ class Services:
 
         With no `budget`, the amount (and the period, unless `ends_at` is given) are read from the
         words, e.g. "$5,000 this month"; words that name no amount are refused. A given budget is
-        used as it is and the words are not read.
+        used as it is and the words are not read. Without a `currency` the goal is in the one the words
+        name, else the shop's (the runtime's prices), else USD.
         """
         text = text.strip()
         if not text:
@@ -251,7 +252,7 @@ class Services:
             if reading.budget is None:
                 raise BadRequestError("say how much you want to spend, e.g. '$2,000 this month'")
             budget = reading.budget
-            if reading.currency is not None and currency.upper() == "USD":
+            if reading.currency is not None and (currency is None or currency.upper() == "USD"):
                 currency = reading.currency
             if ends_at is None:
                 ends_at = reading.ends_at
@@ -261,6 +262,7 @@ class Services:
             raise BadRequestError("the budget must be a finite amount of zero or more")
         if ends_at is not None and (ends_at.tzinfo is None or ends_at <= now):
             raise BadRequestError("the end date must include a time zone and be in the future")
+        currency = currency or self._shop_currency() or "USD"
         taken = {g.goal_id for g in self.workspace.goals()}
         n = len(taken)
         goal_id = stable_id("goal", self.business_id, text, now.isoformat(), n)
@@ -310,6 +312,22 @@ class Services:
         self.workspace.put_goal(updated)
         return updated, brief
 
+    def _shop_currency(self) -> str | None:
+        """The shop's currency when the runtime knows its prices (`autonomy.runtime.prices.ShopPrices`)."""
+        prices = getattr(self.runtime, "prices", None)
+        found = prices.shop_currency() if prices is not None else None
+        return found if isinstance(found, str) else None
+
+    def _check_prices(self, goal: Goal) -> None:
+        """Refuse to start a goal the runtime cannot price in the shop's currency (a clear error saying what to set)."""
+        check = getattr(self.runtime, "check_goal_prices", None)
+        if not callable(check):
+            return
+        try:
+            check(goal)
+        except ValueError as err:  # MissingShopMoneyError
+            raise ConflictError(str(err)) from err
+
     def pause_all(self) -> list[Goal]:
         """The one big Pause button: pause every active goal; returns the goals it paused."""
         return [self.pause(g.goal_id) for g in self.list_goals() if g.status is GoalStatus.ACTIVE]
@@ -322,6 +340,7 @@ class Services:
         brief = self.latest_brief(goal_id)
         if brief is None:
             raise ConflictError("this goal has no plan to approve yet")
+        self._check_prices(goal)
         now = self.clock()
         approved: Brief = brief.model_copy(update={"approved_by": APPROVER, "approved_at": now})
         active: Goal = goal.model_copy(update={"autonomy": autonomy, "status": GoalStatus.ACTIVE})
@@ -346,6 +365,7 @@ class Services:
         brief = self.latest_brief(goal_id)
         if brief is None or not brief.approved:
             raise ConflictError("approve the plan before the agent can run it")
+        self._check_prices(goal)
         resumed: Goal = goal.model_copy(update={"status": GoalStatus.ACTIVE})
         self.workspace.put_goal(resumed)
         return resumed
@@ -1355,6 +1375,17 @@ class _RecordingRuntime:
         report = self.inner.tick(now)
         self.reads.record(report)
         return report
+
+    @property
+    def prices(self) -> object:
+        """The runtime's `ShopPrices` (None when it has none): what a new goal's currency defaults to."""
+        return getattr(self.inner, "prices", None)
+
+    def check_goal_prices(self, goal: Goal) -> None:
+        """The runtime's refusal of a goal it cannot price in the shop's currency (nothing without prices)."""
+        check = getattr(self.inner, "check_goal_prices", None)
+        if callable(check):
+            check(goal)
 
 
 def build_services_from_runtime(

@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Literal
 from autonomy.decide.frequency import FrequencyConfig
 from autonomy.decide.journeys import JourneyConfig, JourneyRunner, load_journeys
 from autonomy.decide.lookalike import LookalikeConfig
+from autonomy.decide.models import REFERENCE_ORDER_VALUE
 from autonomy.decide.pacing import OfferPricing
 from autonomy.decide.who import WhoBook, WhoConfig
 
@@ -87,6 +88,7 @@ def resolve_v3(
     moments: MomentBook | Literal[False] | None = None,
     journeys: bool | JourneyConfig | JourneyRunner | None = None,
     offer_pricing: OfferPricing | None = None,
+    order_value: float | None = None,
 ) -> V3Parts:
     """What `build_agent_policy` builds for `v3` and the pieces it was also given by name.
 
@@ -94,7 +96,8 @@ def resolve_v3(
     that part off, a `journeys=` runner is used as it is. A piece left at None (not given) takes the
     preset's. Offer pricing has no "off" by name (None is "not given"): switch it off with
     `V3Preset(offers=False)`. With `v3=False` the pieces given by name are used as they are (None is off)
-    and the preset adds nothing."""
+    and the preset adds nothing. `order_value` is the shop's usual order in its own currency: the journeys'
+    value bars are set from it (None: the reference order the shipped file was written for)."""
     preset = v3 if isinstance(v3, V3Preset) else V3Preset() if v3 else None
     if preset is None:
         return V3Parts(
@@ -102,7 +105,7 @@ def resolve_v3(
             False if who is None else who,
             False if frequency is None else frequency,
             moments,
-            _runner(False if journeys is None else journeys),
+            _runner(False if journeys is None else journeys, order_value),
             offer_pricing,
             None,
         )
@@ -127,16 +130,21 @@ def resolve_v3(
         who=preset.who if who is None else who,
         frequency=preset.frequency if frequency is None else frequency,
         moments=moments,
-        journeys=_runner(preset.journeys if journeys is None else journeys),
+        journeys=_runner(preset.journeys if journeys is None else journeys, order_value),
         offer_pricing=offer_pricing,
         experiments=experiments,
     )
 
 
-def _runner(journeys: bool | JourneyConfig | JourneyRunner) -> JourneyRunner | None:
-    """A runner for `journeys`: True is the shipped `configs/v3/journeys.yaml`, False is none."""
+def _runner(
+    journeys: bool | JourneyConfig | JourneyRunner, order_value: float | None = None
+) -> JourneyRunner | None:
+    """A runner for `journeys`: True is the shipped `configs/v3/journeys.yaml`, False is none. Value bars given
+    as a multiple of the order value are set from `order_value` (None: the reference order)."""
     if isinstance(journeys, JourneyRunner):
         return journeys
     if isinstance(journeys, JourneyConfig):
-        return JourneyRunner(journeys)
-    return JourneyRunner(load_journeys()) if journeys else None
+        return JourneyRunner(journeys.for_shop(REFERENCE_ORDER_VALUE if order_value is None else order_value))
+    if not journeys:
+        return None
+    return JourneyRunner(load_journeys() if order_value is None else load_journeys(order_value=order_value))

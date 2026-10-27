@@ -85,7 +85,12 @@ class GoalCreate(Contract):
         description="Optional: without it the amount (and the period) are read from the text",
     )
     ends_at: AwareDatetime | None = Field(default=None, description="Optional end of the goal")
-    currency: str = Field(default="USD", min_length=3, max_length=3)
+    currency: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=3,
+        description="Optional: the currency in the words, else the shop's, else USD",
+    )
     kind: GoalKind | None = Field(default=None, description="Optional; inferred from the text when absent")
     objective: Objective | None = Field(
         default=None, description="Optional; the Strategist proposes one when absent"

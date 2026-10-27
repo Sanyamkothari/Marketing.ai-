@@ -56,6 +56,13 @@ and the operator endpoint call it by hand. Each tick does, in order:
   every decision through its send-time compliance gate: consent proof, do-not-disturb registers,
   country quiet hours, rate limits and carrier failover. A refusal is a skipped send and an
   alert; held decisions come back as `gateway_send_decision` jobs.
+- `prices` (an `autonomy.runtime.prices.ShopPrices`, always given by `build_runtime`) is the shop's money in
+  its own currency: the channel costs the spend ledger and the overspend breaker charge (re-read every
+  tick, so a catalogue version published later is used from then on), and the check that a goal can be
+  priced at all. A goal in another currency than the shop's, or one that may use a paid channel with no
+  price, does not decide and a critical alert (`prices.missing`) says what to set; `check_goal_prices`
+  raises the same error to the API before a plan is approved. Without `prices` the runtime keeps the
+  bidders' dollar-sized `DEFAULT_CHANNEL_COSTS`, as the Gym and the demo want.
 - `business_id` and `data_gate` tie the runtime to one shop's connected data
   (`autonomy.runtime.settings.build_runtime` with connectors). Each tick asks
   `data_gate(now)` first; a `DataHold` (the shop's Shopify or Klaviyo data is stale, still loading
@@ -176,6 +183,7 @@ from autonomy.runtime.batches import (
     mark_sent,
     reject,
 )
+from autonomy.runtime.prices import MissingShopMoneyError, ShopPrices
 from autonomy.runtime.stores import (
     AlertStore,
     BriefingStore,
@@ -1118,6 +1126,7 @@ class AutonomyRuntime:
         business_id: str | None = None,
         data_gate: DataGate | None = None,
         before_tick: Sequence[TickHook] = (),
+        prices: ShopPrices | None = None,
     ) -> None:
         """`conversation` defaults to one over `text_signals`, else over `PersonReadsReplies`: STOP
         is always honoured. `strategist` is the weekly adjustment, e.g. `Strategist.adjust_brief`;
@@ -1131,7 +1140,9 @@ class AutonomyRuntime:
         on each goal's candidate states right before deciding; `mandates` puts goals under signed
         mandates; `gateway` sends through a `DispatchGateway` (its attached dispatcher becomes
         `dispatcher`, so pauses reach it); `lift_guards` turns on the nightly negative-lift
-        breaker; `business_id`, `data_gate` and `before_tick` tie it to a connected shop."""
+        breaker; `business_id`, `data_gate` and `before_tick` tie it to a connected shop. `prices` is the
+        shop's money (see the module docstring): `channel_costs` then defaults to its table, never to the
+        dollar-sized defaults."""
         if gateway is not None:
             if gateway.dispatcher is None:
                 raise ValueError("attach a dispatcher to the gateway (attach_dispatcher) before using it")
@@ -1157,6 +1168,9 @@ class AutonomyRuntime:
         self._last_rebuild: datetime | None = None
         self._hold_seen: tuple[datetime, DataHold | None] | None = None
         """The data gate's last answer and its minute: queued sends reuse it, not one check each."""
+        self.prices = prices
+        if channel_costs is None and prices is not None:
+            channel_costs = prices.costs()
         self.channel_costs: dict[Channel, float] = dict(
             DEFAULT_CHANNEL_COSTS if channel_costs is None else channel_costs
         )
@@ -1268,6 +1282,53 @@ class AutonomyRuntime:
         if self.config.holdout_share is not None and self.config.baseline_share is not None:
             check_split(brief, self.config.holdout_share, self.config.baseline_share)
 
+    def check_goal_prices(self, goal: Goal | str) -> None:
+        """Raise `MissingShopMoneyError` if the goal cannot be priced in the shop's currency.
+
+        The API calls this before it approves or resumes a plan, and `build_runtime` for every active goal
+        at start; the tick also refuses to run such a goal. Without `prices` nothing is checked."""
+        if self.prices is None:
+            return
+        found = (
+            goal
+            if isinstance(goal, Goal)
+            else next((g for g in self.workspace.goals() if g.goal_id == goal), None)
+        )
+        if found is None:
+            return
+        briefs = self.workspace.briefs(found.goal_id)
+        self.prices.check_goal(found, max(briefs, key=lambda b: b.version) if briefs else None)
+
+    def check_live_goals(self) -> None:
+        """Raise `MissingShopMoneyError` naming every active goal that cannot be priced: a runtime does not
+        start on money it does not know."""
+        if self.prices is None:
+            return
+        problems: list[str] = []
+        for goal in sorted(self.workspace.goals(), key=lambda g: g.goal_id):
+            if goal.status is not GoalStatus.ACTIVE:
+                continue
+            try:
+                self.check_goal_prices(goal)
+            except MissingShopMoneyError as err:
+                problems.append(str(err))
+        if problems:
+            raise MissingShopMoneyError(" ".join(problems))
+
+    def _sync_prices(self) -> None:
+        """Re-read the shop's prices, so the ledger and the mandate check charge what the catalogue lists
+        now. Sends already charged keep the price they were charged at (the ledger only adds); a full
+        rebuild of the ledger from the log prices every send at today's table."""
+        if self.prices is None:
+            return
+        table = self.prices.costs()
+        if table == self.channel_costs:
+            return
+        self.channel_costs.clear()
+        self.channel_costs.update(table)
+        if self.spend_ledger is not None:
+            self.spend_ledger.channel_costs = dict(table)
+
     # --- the tick ------------------------------------------------------------------------------
 
     def tick(self, now: datetime) -> TickReport:
@@ -1278,6 +1339,7 @@ class AutonomyRuntime:
         local = now.astimezone(self._tz)
         self._start_day(local.date())
         self._run_hooks(now, report)
+        self._sync_prices()
         if self.spend_ledger is not None:
             self.spend_ledger.refresh()  # a weekly brief may have moved a window or an offer price
 
@@ -3038,6 +3100,12 @@ class AutonomyRuntime:
             except SplitMismatchError as err:
                 self._refuse(goal, report, str(err))
                 continue
+            if self.prices is not None:
+                try:
+                    self.prices.check_goal(goal, brief)
+                except MissingShopMoneyError as err:
+                    self._refuse_prices(goal, report, str(err))
+                    continue
             content = sorted(
                 self.workspace.content(goal_id=goal.goal_id, approved_only=True), key=lambda c: c.content_id
             )
@@ -3079,6 +3147,22 @@ class AutonomyRuntime:
                 f"This goal's decision policy could not be built ({type(err).__name__}: {err}), so it "
                 "is not deciding or sending; it is tried again every tick. Other goals are not affected."
             )[:1000],
+        )
+
+    def _refuse_prices(self, goal: Goal, report: TickReport, why: str) -> None:
+        """Alert (once a day per goal) that a goal cannot be priced in the shop's currency, so it did not run."""
+        day = self._today()
+        key = ("prices.missing", goal.goal_id)
+        if key in day.alerted:
+            return
+        day.alerted.add(key)
+        self._alert(
+            report,
+            code="prices.missing",
+            key=f"{goal.goal_id}:{day.day.isoformat()}",
+            severity="critical",
+            goal_id=goal.goal_id,
+            message=f"This goal is not running. {why}"[:1000],
         )
 
     def _refuse(self, goal: Goal, report: TickReport, why: str) -> None:
