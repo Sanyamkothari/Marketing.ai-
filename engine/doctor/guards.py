@@ -281,11 +281,12 @@ def _key_values(series: pd.Series[Any]) -> pd.Series[Any]:
     """The IDs as text, empty ones left out, index kept. A whole-number float ID reads as the integer (a join
     that turns 7 into 7.0 does not lose and re-add every customer)."""
     values = series.dropna()
-    if pdt.is_object_dtype(values) or pdt.is_string_dtype(values):
-        values = values[values.astype(str).str.strip() != ""]  # an empty ID is no customer
     if pdt.is_float_dtype(values) and bool(((values == values.round()) & (values.abs() < 2**53)).all()):
         values = values.astype("int64")
-    return values.astype(str).str.strip()
+    text = values.astype(str).str.strip()  # (once: a text column of 500k rows costs seconds a pass)
+    if pdt.is_object_dtype(values) or pdt.is_string_dtype(values):
+        text = text[text != ""]  # an empty ID is no customer
+    return text
 
 
 def _key_text(frame: pd.DataFrame, key: str) -> pd.Series[Any]:
@@ -470,6 +471,8 @@ def make_receipt(
 def _rows_without(frame: pd.DataFrame, key: str) -> int:
     """Rows with no ID: empty, or only spaces."""
     column = frame[next(c for c in frame.columns if str(c) == key)]
+    if pdt.is_numeric_dtype(column) and not pdt.is_bool_dtype(column):
+        return int(column.isna().sum())  # a number is never blank text
     return int((column.isna() | (column.astype(str).str.strip() == "")).sum())
 
 

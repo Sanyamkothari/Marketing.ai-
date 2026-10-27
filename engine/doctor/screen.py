@@ -51,6 +51,7 @@ from engine.doctor.case import Case, CaseError, CaseStore, TimelineEvent, Timeli
 from engine.doctor.combine_run import current_upload
 from engine.doctor.conversation import ConversationCard, build_conversation
 from engine.doctor.diagnose import LoadedFile
+from engine.doctor.full_count import full_count_of
 from engine.doctor.ledger import screen_ledger
 from engine.doctor.plan_check import open_stops, plan_digest
 from engine.doctor.preview import PreviewView, cached_preview, preview_rows
@@ -71,6 +72,7 @@ from engine.doctor.visit import (
     confirmed,
     item_proposers,
     open_blocking,
+    plan_basis,
     prescription_digest,
     stored_brief,
 )
@@ -203,6 +205,15 @@ class ScreenCarried(StrictBase):
     )
 
 
+class ScreenFullCheck(StrictBase):
+    """Where the check of the whole file (every row, before Approve) stands (`engine.doctor.full_count`)."""
+
+    state: Literal["pending", "running", "done", "failed"]
+    steps_done: int = 0
+    steps_total: int = 0
+    message: str = Field(default="", description="Plain words for the state; no cell value.")
+
+
 class CaseScreenView(StrictBase):
     """Everything the screen needs beyond the case itself."""
 
@@ -229,6 +240,11 @@ class CaseScreenView(StrictBase):
         "rows and customers in and out, the outcome rate before and after, a receipt per step (`steps[].item_id`) "
         "and the findings (`level` stop, flag or note, each with its `key`). None until the plan is counted. The "
         "plan screen reads these names; a stop is lowered to a flag once a person said yes to it.",
+    )
+    full_check: ScreenFullCheck | None = Field(
+        default=None,
+        description="While the plan waits for Approve: the check of the whole file runs in the background "
+        "(pending, running, done or failed) and Approve waits for it. None when it runs inline or nothing waits.",
     )
     preview: PreviewView | None = Field(
         default=None,
@@ -367,6 +383,7 @@ def screen_view(
             else None
         ),
         ledger=_with_samples(_ledger(case), preview),
+        full_check=_full_check(storage, case),
         preview=preview,
         carried=_carried(case),
         standing=_standing(storage, case),
@@ -391,6 +408,36 @@ def screen_view(
 def _ledger(case: Case) -> dict[str, Any] | None:
     """The plan's count for the plan as it stands now; None when the plan changed since it was counted."""
     return screen_ledger(case)
+
+
+_FULL_CHECK_SAYS: Final[dict[str, str]] = {
+    "pending": "The whole file is queued to be checked.",
+    "running": "Checking every row of the file. Approve waits for the result.",
+    "done": "Every row of the file was checked.",
+    "failed": "The check of the whole file could not finish. Approve tries it again.",
+}
+
+
+def _full_check(storage: Storage, case: Case) -> ScreenFullCheck | None:
+    """The background check of the whole file for the plan as it stands, while the plan waits for Approve."""
+    if case.state.value != "approve":
+        return None
+    items, _ = active_section(case)
+    basis = plan_basis(case, items)
+    found = full_count_of(storage, case, basis)
+    if found is None:
+        return None
+    visit = case.visit
+    folded = visit is not None and visit.plan_check is not None and visit.plan_check.basis == basis
+    state = (
+        "done" if found.state == "done" and folded else ("running" if found.state == "done" else found.state)
+    )
+    return ScreenFullCheck(
+        state=state,
+        steps_done=found.steps_done,
+        steps_total=found.steps_total,
+        message=_FULL_CHECK_SAYS[state],
+    )
 
 
 def _preview(case: Case, load_files: Callable[[Case], Sequence[LoadedFile]] | None) -> PreviewView | None:

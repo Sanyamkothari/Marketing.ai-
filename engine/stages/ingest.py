@@ -1063,10 +1063,16 @@ def _numeric_parse_rate(values: pd.Series[Any]) -> tuple[float, pd.Series[Any]]:
 def _datetime_parse_rate(values: pd.Series[Any]) -> tuple[float, pd.Series[Any]]:
     import pandas as pd
 
+    text = values.astype(str)
+    distinct = (
+        text.drop_duplicates()
+    )  # each spelling is read once, then spread (format="mixed" reads one at a time)
     try:
-        parsed = pd.to_datetime(values.astype(str), errors="coerce", format="mixed")
+        read = pd.to_datetime(distinct, errors="coerce", format="mixed")
     except (ValueError, TypeError):
         return 0.0, pd.Series([], dtype="datetime64[ns]")
+    parsed = pd.Series(text.map(pd.Series(read.array, index=pd.Index(distinct.array, dtype=object))))
+    parsed = pd.Series(parsed.array, index=values.index)
     return float(parsed.notna().mean()), parsed
 
 
