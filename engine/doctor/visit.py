@@ -95,6 +95,7 @@ from engine.doctor.case import (
 )
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL, GoalBrief, load_goal_brief, register_goal_brief_tool
 from engine.doctor.materialize import Full, materialize, stop_finding
+from engine.doctor.memo import plan_part
 from engine.doctor.plan_check import (
     open_stops,
     plan_check_of,
@@ -117,9 +118,11 @@ from engine.doctor.protocol import (
     decision_body,
     item_sentence,
     question_budget,
+    question_id_of,
     request_data,
     settle,
 )
+from engine.doctor.reconcile import Emission, Reconciled, reconcile
 from engine.doctor.registry import (
     DataToolContext,
     DataToolRegistry,
@@ -614,6 +617,9 @@ class _Step:
     after: list[Callable[[Case], None]] = field(default_factory=list)
     """Plan O M246: side effects once the step is written (a standing answer's use or memory); each is
     idempotent, and none may fail the step."""
+    reasked: set[str] = field(default_factory=set)
+    """Ids of unanswered questions that are asked again with other options (`engine.doctor.reconcile`): their
+    options' effects are replaced."""
     carried: bool = False
     """An approval the visit made by itself (`engine.doctor.carry`): if its record cannot be made, the visit
     waits for the person instead of failing whatever they just did."""
@@ -696,6 +702,17 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
         asked_per_file = dict(current.counters.questions_per_file)
         for question, effects in step.questions:
             if question.question_id in have_questions:
+                # Asked again with other options: the new options' effects answer it.
+                if question.question_id in step.reasked:
+                    offers[question.question_id] = effects
+                    drafts.append(
+                        EventDraft(
+                            kind=_asked_kind(question),
+                            upload_id=question.upload_id,
+                            item_id=question.question_id,
+                            details={"code": question.code, "blocking": question.blocking, "reasked": True},
+                        )
+                    )
                 continue  # asked once: an answered question is never asked again, in any mode
             have_questions.add(question.question_id)
             questions.append(question)
@@ -778,7 +795,7 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
                 "evidence": tuple(refs),
                 "items": tuple(updates.get("items", items)),
                 "questions": tuple(updates.get("questions", questions)),
-                "doubts": tuple(doubts),
+                "doubts": tuple(updates.get("doubts", doubts)),
                 "visit": new_visit,
                 "counters": counters,
             }
@@ -1060,6 +1077,7 @@ def _treat(run: _Run, case: Case) -> _Step:
         goal.goal_id if goal is not None else None,
         brief.brief_hash if brief is not None else None,
         answers,
+        plan_part(case),  # the plan and the decisions: the rules read the tables the plan makes (F5)
         # A decided outcome whose query the person left out is asked about again (the rules run once more).
         goal is not None
         and (decided := _decided(case, "outcome_column", goal.goal_id)) is not None
@@ -1073,24 +1091,88 @@ def _treat(run: _Run, case: Case) -> _Step:
             _generic_rules(run, case, step)
         else:
             _goal_rules(run, case, brief, step)
+        by_rules = _mark(step)
         review = _digest(
             [(f.upload_id, f.fingerprint) for f in case.files],
             goal.goal_id if goal is not None else None,
             brief.brief_hash if brief is not None else None,
-        )  # the AI review's inputs: not the answers or the ticks, so neither pays for another review
+            plan_part(case),
+        )  # the AI review's inputs: the plan as it stands too, so a tick or a new table is a new review
         _detect(run, case, brief, step)
         _standing(run, case, step)
+        by_detectors = _mark(step)
         reviewed = visit.done.get("agent") != review and _review(run, case, brief, step)
         step.visit["done"] = {**visit.done, "treat": inputs, **({"agent": review} if reviewed else {})}
-    asked = {question.question_id for question in case.questions}
-    blocking = [
-        q
-        for q, _effects in step.questions
-        if q.blocking and q.answer is None and q.question_id not in asked and _in_section(q.goal_id, case)
-    ]
-    if open_blocking(case) or blocking:
+        settled = _reconciled(run, case, step, (by_rules, by_detectors), reviewed=bool(reviewed))
+        blocking = [
+            q for q in settled.questions if q.blocking and q.answer is None and _in_section(q.goal_id, case)
+        ]
+        if blocking:
+            step.to = VisitState.ASK
+        return step
+    if open_blocking(case):
         step.to = VisitState.ASK
     return step
+
+
+def _mark(step: _Step) -> tuple[int, int, int]:
+    """How much each list of the step holds now: where one producer's emission ends and the next one's begins."""
+    return len(step.items), len(step.questions), len(step.doubts)
+
+
+def _reconciled(
+    run: _Run,
+    case: Case,
+    step: _Step,
+    ends: tuple[tuple[int, int, int], tuple[int, int, int]],
+    *,
+    reviewed: bool,
+) -> Reconciled:
+    """TREAT's emissions through the reconcile store, one producer at a time, and the step rewritten to what the
+    store made of them: new proposals, questions asked again, proposals and questions and doubts taken back.
+    """
+    now = run.deps.clock()
+    rules, detectors = ends
+    items, questions, doubts = list(step.items), list(step.questions), list(step.doubts)
+
+    def section(goal_id: str | None) -> bool:
+        return _in_section(goal_id, case)
+
+    work: Reconciled | None = None
+    for producer, lo, hi, complete in (
+        # The detectors' sets depend on what is already on the page, so they add and supersede; they do not take back.
+        ("rules", (0, 0, 0), rules, True),
+        ("detectors", rules, detectors, False),
+        ("review", detectors, (len(items), len(questions), len(doubts)), reviewed),
+    ):
+        work = reconcile(
+            case,
+            Emission(
+                producer=producer,
+                items=items[lo[0] : hi[0]],
+                questions=questions[lo[1] : hi[1]],
+                doubts=doubts[lo[2] : hi[2]],
+                complete=complete,
+                in_scope=section,
+            ),
+            now=now,
+            refit=_refit_answered,
+            before=work,
+        )
+    assert work is not None
+    step.items = list(work.added)
+    step.questions = list(work.asked)
+    step.doubts = [d for d in work.doubts if d.doubt_id not in {c.doubt_id for c in case.doubts}]
+    step.reasked |= work.reasked
+    step.updates["items"] = list(work.items)
+    step.updates["questions"] = list(work.questions)
+    step.updates["doubts"] = list(work.doubts)
+    step.events.extend(work.events)
+    return work
+
+
+def _refit_answered(question: CaseQuestion, answer: Any) -> CaseQuestion:
+    return _no_longer_fits(question, answer)
 
 
 def _ask(_run: _Run, case: Case) -> _Step | None:
@@ -1143,7 +1225,27 @@ def _converse(run: _Run, case: Case) -> _Step:
         case, [i for i in result.withdrawn if i not in kept_ids], {item.item_id for item in fresh}
     )
     plan = [_decided_as(i, ProposalState.REJECTED, now) if i.item_id in back else i for i in case.items]
-    active = [i for i in plan if _in_section(i.goal_id, case)]
+    # The store adds what is new, leaves out a change a newer one supersedes, and sets a swap for one of the
+    # person's own (waiting for their yes, never applied for them) instead of putting both in the plan.
+    settled = reconcile(
+        case,
+        Emission(
+            producer="chat",
+            items=fresh,
+            in_scope=lambda goal_id: _in_section(goal_id, case),
+            replaces=[i for i in result.withdrawn if i not in back],
+        ),
+        now=now,
+        refit=_refit_answered,
+        before=Reconciled.of(case, plan),
+    )
+    swaps = {i.item_id for i in settled.added if i.replaces is not None}
+    fresh = [i for i in settled.added if i.item_id not in swaps]
+    active = [
+        i
+        for i in settled.items
+        if _in_section(i.goal_id, case) and i.item_id not in {f.item_id for f in fresh}
+    ]
     placed = (
         [
             item
@@ -1154,9 +1256,13 @@ def _converse(run: _Run, case: Case) -> _Step:
         if fresh
         else []
     )
-    step.items.extend(placed)
-    if back:  # `_write` adds new items itself; a change to an existing one is written whole
-        step.updates["items"] = [*plan, *placed]
+    landed = {i.item_id: i for i in [*(i for i in settled.added if i.item_id in swaps), *placed]}
+    final = [landed.get(i.item_id, i) for i in settled.items]
+    step.items.extend(landed.values())
+    if back or final != list(case.items):
+        # `_write` adds new items itself; a change to an existing one is written whole
+        step.updates["items"] = final
+    step.events.extend(settled.events)
     step.events.extend(
         EventDraft(
             kind=TimelineKind.ITEM_DECIDED,
@@ -1180,6 +1286,26 @@ def _converse(run: _Run, case: Case) -> _Step:
     for request in result.requests:
         _add_request(step, request)
     _settle_asks(run, case, step, result.asks, counted=False)
+    asked = reconcile(  # the chat's questions and doubts: asked again when their options changed, never twice
+        case,
+        Emission(
+            producer="chat",
+            questions=tuple(step.questions),
+            doubts=tuple(step.doubts),
+            in_scope=lambda goal_id: _in_section(goal_id, case),
+        ),
+        now=now,
+        refit=_refit_answered,
+        before=Reconciled.of(case, settled.items),
+    )
+    step.questions = list(asked.asked)
+    step.reasked |= asked.reasked
+    known_doubts = {d.doubt_id for d in case.doubts}
+    step.doubts = [d for d in asked.doubts if d.doubt_id not in known_doubts]
+    if asked.questions != list(case.questions):
+        step.updates["questions"] = list(asked.questions)
+    if asked.doubts != list(case.doubts):
+        step.updates["doubts"] = list(asked.doubts)
     text = result.reply
     again = list(
         {t.item_id: t for t in twins.values() if t is not None and t.state is ProposalState.REJECTED}.values()
@@ -1201,7 +1327,7 @@ def _converse(run: _Run, case: Case) -> _Step:
         sent=result.sent,
         item_ids=tuple(
             dict.fromkeys(
-                [i.item_id for i in placed]
+                [i.item_id for i in landed.values()]
                 + [t.item_id for t in twins.values() if t is not None and t.item_id not in left_out]
             )
         ),
@@ -1273,7 +1399,7 @@ def _suggested(case: Case, step: _Step, given: tuple[str, str] | None) -> ChatSu
         return None
     question_id, option_id = given
     asked = [q for q, _effects in step.questions]
-    question = next((q for q in (*case.questions, *asked) if q.question_id == question_id), None)
+    question = next((q for q in (*asked, *case.questions) if q.question_id == question_id), None)
     if question is None or question.answer is not None:
         return None
     option = next((o for o in question.options if o.option_id == option_id), None)
@@ -2544,9 +2670,9 @@ def _settle_asks(run: _Run, case: Case, step: _Step, asks: Sequence[Ask], *, cou
     short; they still count towards the file's total."""
     now = run.deps.clock()
     settings = run.deps.protocol
-    have = {q.question_id for q in case.questions} | {q.question_id for q, _e in step.questions}
+    known = {q.question_id for q in case.questions}  # asked already: still asked now, so the store keeps it
+    have = {q.question_id for q, _e in step.questions}
     asked = dict(case.counters.questions_per_file)
-    known = {q.question_id for q in case.questions}
     for pending, _effects in step.questions:  # the rules' own questions of this step count too
         if pending.upload_id is not None and pending.answer is None and pending.question_id not in known:
             asked[pending.upload_id] = asked.get(pending.upload_id, 0) + 1
@@ -2556,13 +2682,18 @@ def _settle_asks(run: _Run, case: Case, step: _Step, asks: Sequence[Ask], *, cou
     for ask in asks:
         key = ask.upload_id or ""
         budget = question_budget(asked.get(key, 0) + ambiguities[key], settings)
-        settled = settle(ask, now=now, settings=settings, over_budget=counted and asked.get(key, 0) >= budget)
+        over = (
+            counted
+            and asked.get(key, 0) >= budget
+            and question_id_of(ask.code, ask.subject, ask.goal_id) not in known
+        )
+        settled = settle(ask, now=now, settings=settings, over_budget=over)
         if settled.question is not None:
             if settled.question.question_id in have:
-                continue  # asked once: never again, in any mode
+                continue  # one question once per step
             have.add(settled.question.question_id)
             step.questions.append((settled.question, settled.effects))
-            if settled.how == "ask":
+            if settled.how == "ask" and settled.question.question_id not in known:
                 asked[key] = asked.get(key, 0) + 1
         if settled.item is not None:
             step.items.append(settled.item)
@@ -3007,17 +3138,46 @@ def decide(
         decided = item.model_copy(
             update={"state": state, "decided_by": actor, "decided_at": now, "parked_for": park_for}
         )
-        return _Step(
-            to=VisitState.TREAT if case.state in _AFTER_RECALL else case.state,
-            updates={"items": [decided if i.item_id == item_id else i for i in case.items]},
-            events=[
+        swapped_out = [  # a yes to a swap leaves the change it replaces out: the two are never both in the plan
+            i
+            for i in case.items
+            if accept and i.item_id == item.replaces and i.state is not ProposalState.REJECTED
+        ]
+        events = [
+            EventDraft(
+                kind=TimelineKind.ITEM_DECIDED,
+                upload_id=item.upload_id,
+                item_id=item_id,
+                details={"state": state.value, **({"parked_for": park_for} if park_for else {})},
+            ),
+            *(
                 EventDraft(
                     kind=TimelineKind.ITEM_DECIDED,
-                    upload_id=item.upload_id,
-                    item_id=item_id,
-                    details={"state": state.value, **({"parked_for": park_for} if park_for else {})},
+                    upload_id=old.upload_id,
+                    item_id=old.item_id,
+                    details={"state": "rejected", "swapped_for": item_id},
                 )
-            ],
+                for old in swapped_out
+            ),
+        ]
+        out = {
+            old.item_id: old.model_copy(
+                update={
+                    "state": ProposalState.REJECTED,
+                    "decided_by": actor,
+                    "decided_at": now,
+                    "parked_for": None,
+                    "superseded_by": item_id,
+                }
+            )
+            for old in swapped_out
+        }
+        return _Step(
+            to=VisitState.TREAT if case.state in _AFTER_RECALL else case.state,
+            updates={
+                "items": [decided if i.item_id == item_id else out.get(i.item_id, i) for i in case.items]
+            },
+            events=events,
         )
 
     return _person_step(run, client_id, case_id, expected_version, op_id, build)

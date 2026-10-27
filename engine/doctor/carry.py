@@ -301,7 +301,9 @@ def carries_on(
         return None
     source = (case.visit or CaseVisit()).carry_source
     if source is not None and (
-        case.doubts  # last month's approval does not cover what moved in this month's file: a person looks
+        any(
+            d.status == "open" for d in case.doubts
+        )  # last month's approval does not cover what moved in this month's file: a person looks
         or source.missing_columns
         or any(marks(i)[0] in source.declined for i in carry.new)
     ):

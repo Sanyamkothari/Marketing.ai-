@@ -248,7 +248,8 @@ class _Chat(_Review):
                 }
             )
         doubts = [
-            self._text(d.upload_id, clean_text(d.because, SHORT)) for d in self.case.doubts[-STATE_DOUBTS:]
+            self._text(d.upload_id, clean_text(d.because, SHORT))
+            for d in [d for d in self.case.doubts if d.status == "open"][-STATE_DOUBTS:]
         ]
         return {"plan": plan, "questions": asked, "doubts": doubts}
 
