@@ -244,7 +244,8 @@ def _personal_of(files: Sequence[LoadedFile]) -> dict[str, tuple[str, ...]]:
     return found
 
 
-def _key_of(columns: Sequence[str], given: str | None) -> str | None:
+def _built_key(columns: Sequence[str], given: str | None) -> str | None:
+    """A built table's key: the one its query names when the table has it, else an ID-named column (not a decision)."""
     if given is not None and given in columns:
         return given
     from engine.doctor.visit import _ID_NAMED
@@ -409,7 +410,7 @@ def _built_tables(
                 loaded=loaded,
                 origin=origin,
                 made_by=item.item_id,
-                key=_key_of(columns, mine.key if mine is not None else None),
+                key=_built_key(columns, mine.key if mine is not None else None),
                 time_column=_time_of(
                     frame, params.as_of_rule.column if params.as_of_rule is not None else None
                 ),
