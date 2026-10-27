@@ -1,0 +1,7 @@
+Name,Email,Financial Status,Created at,Currency,Total,Discount Code,Refunded Amount,Cancelled at,Accepts Marketing,Lineitem quantity,Lineitem name,Lineitem price,Lineitem sku
+#1001,Asha@Example.com,paid,2024-03-01 10:00:00 +0530,INR,1500.00,DIWALI10,0.00,,yes,2,Kurta,600.00,K1
+#1001,,,,,,,,,,1,Scarf,300.00,S1
+#1002,ravi@example.com,refunded,2024-03-02 09:15:00 +0530,INR,800.00,,300.00,,no,1,Mug,800.00,M1
+#1003,asha@example.com,voided,2024-03-03 20:00:00 +0530,INR,500.00,,0.00,2024-03-04 08:00:00 +0530,yes,1,Cup,500.00,C1
+#1004,,paid,2024-03-04 11:00:00 +0530,INR,200.00,,0.00,,,1,Pen,200.00,P1
+#1005,sam@example.com,paid,2024-03-05 11:00:00 +0530,INR,400.00,,0.00,,,1,Pad,400.00,PD1
