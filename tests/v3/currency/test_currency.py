@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
+from sqlalchemy.engine import Engine
 
 from autonomy.contracts import (
     NO_OFFER,
@@ -27,7 +30,9 @@ from autonomy.contracts import (
 )
 from autonomy.decide.bidders import DEFAULT_CHANNEL_COSTS
 from autonomy.decide.journeys import JourneyConfig, JourneyRunner, load_journeys
+from autonomy.decide.models import REFERENCE_ORDER_VALUE
 from autonomy.fakes import ContactEveryonePolicy, FakeChannelAdapter
+from autonomy.mandate import Mandate, MandateStatus
 from autonomy.mandate.catalogue import ActionCatalogue, CatalogueContent, ChannelRate
 from autonomy.runtime.agent import COMPLAINT_COST, build_agent_policy
 from autonomy.runtime.prices import (
@@ -37,8 +42,9 @@ from autonomy.runtime.prices import (
     money_prefix,
     parse_channel_costs,
 )
-from autonomy.runtime.service import AutonomyRuntime, SpendLedger
+from autonomy.runtime.service import AutonomyRuntime, MandateBook, SpendLedger
 from autonomy.runtime.settings import RuntimeSettings, build_runtime
+from autonomy.runtime.v3 import _runner
 from autonomy.store import memory_engine
 from tests.v3.experiments.helpers import GOAL as AGENT_GOAL
 from tests.v3.experiments.helpers import NOW as AGENT_NOW
@@ -135,14 +141,19 @@ def runtime_for(
     *,
     adapter: FakeChannelAdapter | None = None,
     catalogue: ActionCatalogue | None = None,
+    agent: bool = False,
+    mandates: MandateBook | None = None,
+    engine: Engine | None = None,
 ) -> AutonomyRuntime:
+    """The production runtime from `env`; `agent` keeps its own agent policy (built with the shop's prices)."""
     return build_runtime(
         RuntimeSettings.from_env(env),
-        engine=memory_engine(),
-        policy_factory=lambda briefs, items: ContactEveryonePolicy(),
+        engine=engine or memory_engine(),
+        policy_factory=None if agent else lambda briefs, items: ContactEveryonePolicy(),
         adapters={Channel.WHATSAPP: adapter or FakeChannelAdapter(Channel.WHATSAPP)},
         address_book=lambda cid, ch: f"+91{cid}",
         catalogue=catalogue,
+        mandates=mandates,
     )
 
 
@@ -203,12 +214,41 @@ def test_a_goal_without_prices_refuses_to_start() -> None:
         "AUTONOMY_TYPICAL_ORDER_VALUE": "1800",
     }
     engine = memory_engine()
-    first = build_runtime(RuntimeSettings.from_env(env), engine=engine)  # nothing live yet: it starts
+    first = runtime_for(env, engine=engine)
     goal, brief = inr_goal()
-    first.workspace.put_goal(goal)
-    first.workspace.put_brief(brief)
+    seed(first, goal, brief)
+    # An old dollar goal that ended but was never marked done is not live, and blocks nothing.
+    ended = goal.model_copy(update={"goal_id": "goal_old_usd", "currency": "USD", "ends_at": T0})
+    first.workspace.put_goal(ended)
+
+    # The process still starts with an unpriced live goal (the API must still pause or fix it and take
+    # webhooks); the goal itself does not run.
+    runtime = runtime_for(env, engine=engine)
+    report = runtime.tick(SWEEP)
+    assert report.decisions == [] and whatsapp_sends(runtime) == []
+    (alert,) = [a for a in report.alerts if a.code == "prices.missing"]
+    assert alert.goal_id == GOAL_ID and "no INR price for whatsapp" in alert.message
     with pytest.raises(MissingShopMoneyError, match="no INR price for whatsapp"):
-        build_runtime(RuntimeSettings.from_env(env), engine=engine)  # a live goal is there now
+        runtime.check_goal_prices(GOAL_ID)
+
+    from api.v2.deps import ConflictError, build_services_from_runtime
+
+    services = build_services_from_runtime(runtime, clock=lambda: T0, business_id="shop")
+    paused = services.pause(GOAL_ID)
+    assert paused.status is GoalStatus.PAUSED
+    with pytest.raises(ConflictError, match="no INR price for whatsapp"):
+        services.resume(GOAL_ID)
+
+
+def test_channel_costs_given_with_no_currency_are_refused_not_dropped() -> None:
+    plain = RuntimeSettings(database_url="sqlite://")
+    with pytest.raises(ValueError, match="set currency"):
+        build_runtime(plain, engine=memory_engine(), channel_costs={Channel.WHATSAPP: 0.85})
+    with pytest.raises(ValueError, match="set currency"):
+        plain.shop_prices(channel_costs={Channel.WHATSAPP: 0.85})
+    # With a catalogue the currency may come from it, so the costs are kept.
+    cat, _ = catalogue_with(0.78)
+    assert plain.shop_prices(cat, channel_costs={Channel.EMAIL: 0.12}).costs()[Channel.EMAIL] == 0.12
 
 
 def test_a_goal_approved_later_without_prices_does_not_decide_and_says_why() -> None:
@@ -368,16 +408,34 @@ def test_the_agent_prices_whatsapp_at_the_inr_cost_and_a_default_agent_does_not(
     assert whatsapp_cost(plain) == {DEFAULT_CHANNEL_COSTS[Channel.WHATSAPP]}
     assert inr.contact_price.complaint_cost == 72.0 and plain.contact_price.complaint_cost == COMPLAINT_COST
     # A customer with no orders is valued at the shop's usual order, not at 50 rupees.
-    assert inr.bundle.value.default_order_value == 1800.0  # type: ignore[attr-defined]
+    assert inr.bundle.value.default_order_value == 1800.0
     assert AGENT_GOAL in inr.briefs
 
 
 def test_the_journeys_value_bar_scales_with_the_shops_order_value() -> None:
-    reference = load_journeys()
+    # Loaded with no shop, the bars stay multiples of the order value: no fixed number is applied by default.
+    loose = load_journeys()
+    assert loose.unresolved() == ("C", "D") and loose.get("C").value_bar is None  # type: ignore[union-attr]
+    with pytest.raises(ValueError, match="for_shop"):
+        JourneyRunner(loose)
+    reference = load_journeys(order_value=REFERENCE_ORDER_VALUE)
     assert reference.get("C").value_bar == 50.0 and reference.get("D").value_bar == 50.0  # type: ignore[union-attr]
     assert reference.get("A").value_bar is None  # type: ignore[union-attr]
     rupees = load_journeys(order_value=1800.0)
     assert rupees.get("C").value_bar == 1800.0  # type: ignore[union-attr]
+    # A config loaded and passed on gets the shop's bar, not 50 rupees.
+    runner = _runner(loose, 1800.0)
+    assert runner is not None and runner.config.get("C").value_bar == 1800.0  # type: ignore[union-attr]
+    agent = build_agent_policy(
+        [agent_brief()], list(library()), journeys=load_journeys(), default_order_value=1800.0
+    )
+    assert agent.policy.journeys is not None
+    assert agent.policy.journeys.config.get("D").value_bar == 1800.0  # type: ignore[union-attr]
+    # None is "no bar", and stays so whatever the shop's order value.
+    unbarred = loose.with_value_bar("C", None)
+    assert unbarred.unresolved() == ("D",)
+    gone = _runner(unbarred, 1800.0)
+    assert gone is not None and gone.config.get("C").value_bar is None  # type: ignore[union-attr]
     # An explicit bar keeps winning over the multiple, and a multiple nobody resolved is refused, not guessed.
     pinned = rupees.with_value_bar("C", 500.0).for_shop(9999.0)
     assert pinned.get("C").value_bar == 500.0  # type: ignore[union-attr]
@@ -449,3 +507,175 @@ def test_the_api_refuses_to_approve_a_goal_the_shop_cannot_price_and_defaults_to
     assert created.currency == "INR"  # not the old USD default
     approved, _ = shop.approve(created.goal_id, AutonomyLevel.APPROVE)
     assert approved.status is GoalStatus.ACTIVE
+
+
+# --- review fixes: the agent's bids, the mandate, the dearest provider, onboarding -----------------------
+
+
+def inr_mandate(**kw: object) -> Mandate:
+    base: dict[str, object] = {
+        "mandate_id": "m_inr",
+        "business_id": "shop",
+        "goal_ids": (GOAL_ID,),
+        "budget_ceiling": 50_000.0,
+        "currency": "INR",
+        "channels": (Channel.WHATSAPP,),
+        "approved_template_ids": tuple(c.content_id for c in content()),
+        "valid_from": T0 - timedelta(days=10),
+        "valid_until": T0 + timedelta(days=30),
+        "status": MandateStatus.ACTIVE,
+    }
+    base.update(kw)
+    return Mandate.model_validate(base)
+
+
+def test_an_inr_mandate_cap_stops_sending_once_the_rupee_spend_reaches_it() -> None:
+    # A daily cap of 4 rupees: the pacer lets a quarter (1.00) go at once. At 0.85 a WhatsApp message one
+    # send fits; at the old dollar table's 0.03 all of them would have.
+    runtime = runtime_for(INR_ENV, mandates=MandateBook([inr_mandate(max_daily_spend=4.0)]))
+    goal, brief = inr_goal()
+    seed(runtime, goal, brief)
+    report = runtime.tick(SWEEP)
+    acted = [d for d in report.decisions if d.action is not None and d.group.value != "holdout"]
+    assert len(acted) >= 2 and len(acted) * DEFAULT_CHANNEL_COSTS[Channel.WHATSAPP] < 1.0
+    assert len(whatsapp_sends(runtime)) == 1 and len(report.mandate_blocked) == len(acted) - 1
+    assert "mandate.paced" in {a.code for a in report.alerts}
+    assert runtime.spend_fn(GOAL_ID, SWEEP + timedelta(hours=1)) == pytest.approx(0.85)
+
+
+def test_a_mandate_in_another_currency_does_not_authorise_the_goal() -> None:
+    runtime = runtime_for(INR_ENV, mandates=MandateBook([inr_mandate(currency="USD")]))
+    goal, brief = inr_goal()
+    seed(runtime, goal, brief)
+    report = runtime.tick(SWEEP)
+    assert whatsapp_sends(runtime) == [] and GOAL_ID in report.halted_goals
+    (alert,) = [a for a in report.alerts if a.code == "mandate.not_active"]
+    assert "USD" in alert.message and "INR" in alert.message
+
+
+def test_the_catalogue_charges_the_dearest_provider_in_the_shops_currency() -> None:
+    cat = ActionCatalogue()
+    rates = (
+        ChannelRate(channel=Channel.WHATSAPP, unit_cost=0.78, currency="INR", provider="gupshup"),
+        ChannelRate(channel=Channel.WHATSAPP, unit_cost=0.92, currency="INR", provider="karix"),
+        ChannelRate(channel=Channel.WHATSAPP, unit_cost=0.01, currency="USD", provider="twilio"),
+    )
+    cat.publish(CatalogueContent(channels=rates), created_by="ops", now=T0 - timedelta(days=2))
+    # The gateway may fail over to either INR provider: the budget holds the dearer one.
+    assert RuntimeSettings.from_env(INR_ENV).shop_prices(cat).costs()[Channel.WHATSAPP] == 0.92
+
+
+def test_a_newly_published_catalogue_rate_reaches_the_agents_bids() -> None:
+    cat, _ = catalogue_with(0.78)
+    runtime = runtime_for(INR_ENV, catalogue=cat, agent=True)
+    goal, brief = inr_goal()
+    seed(runtime, goal, brief)
+
+    def whatsapp_bid_costs(since: datetime) -> set[float]:
+        return {
+            b.channel_cost
+            for d in runtime.decisions.scan(since=since)
+            for b in d.bids
+            if b.action.channel is Channel.WHATSAPP
+        }
+
+    runtime.tick(SWEEP)
+    assert whatsapp_bid_costs(SWEEP) == {0.78}
+
+    cat.publish(
+        CatalogueContent(
+            channels=(
+                ChannelRate(channel=Channel.WHATSAPP, unit_cost=0.95, currency="INR", provider="gupshup"),
+            )
+        ),
+        created_by="ops",
+        now=SWEEP + timedelta(hours=2),
+    )
+    later = SWEEP + timedelta(days=1)
+    runtime.tick(later)
+    # The goal's agent was built again with the new price: its bids and the ledger agree.
+    assert whatsapp_bid_costs(later) == {0.95}
+    assert runtime.channel_costs[Channel.WHATSAPP] == 0.95
+
+
+class _PricedRuntime:
+    """The two things the API reads from a production runtime about money."""
+
+    def __init__(self, prices: ShopPrices, workspace: Any) -> None:
+        self.prices = prices
+        self.workspace = workspace
+
+    def check_goal_prices(self, goal: Goal) -> None:
+        briefs = self.workspace.briefs(goal.goal_id)
+        self.prices.check_goal(goal, max(briefs, key=lambda b: b.version) if briefs else None)
+
+
+def onboarding_client(prices: ShopPrices) -> tuple[Any, Any, Any]:
+    import dataclasses
+
+    from fastapi.testclient import TestClient
+
+    from api.v2.app import create_app
+    from api.v2.deps import build_demo_services
+    from api.v2.onboarding import OnboardingDesk, attach_onboarding
+    from tests.v2.zero_touch.test_goals_limits import NOW as SHOP_NOW
+    from tests.v2.zero_touch.test_goals_limits import shopify_shop
+
+    events, states = shopify_shop(n_customers=250, days=300)
+    base = build_demo_services(SHOP_NOW, n_customers=20, days=1)
+    for g in base.workspace.goals():  # a fresh shop: nothing is running yet
+        base.workspace.put_goal(g.model_copy(update={"status": GoalStatus.DONE}))
+    services = dataclasses.replace(
+        base,
+        events=events,
+        states=states,
+        clock=lambda: SHOP_NOW,
+        runtime=_PricedRuntime(prices, base.workspace),  # type: ignore[arg-type]
+    )
+    desk = OnboardingDesk(secret=b"test-secret", persistent_key=True)
+    app = create_app(services)
+    attach_onboarding(app, desk)
+    return TestClient(app), services, desk
+
+
+def test_an_inr_shops_accepted_proposal_is_budgeted_at_the_inr_price() -> None:
+    from autonomy.onboarding.opportunities import MESSAGES_COSTED
+
+    prices = ShopPrices(
+        currency="INR",
+        channel_costs={Channel.EMAIL: 0.12, Channel.SMS: 0.2, Channel.WHATSAPP: 0.85},
+        typical_order_value=1800,
+    )
+    client, services, _ = onboarding_client(prices)
+    with client:
+        proposals = client.get("/v2/onboarding/proposals").json()["proposals"]
+        win_back = next(p for p in proposals if p["opportunity_id"] == "opp_win_back")
+        assert win_back["currency"] == "INR" and win_back["message_cost"] is not None
+        r = client.post("/v2/onboarding/accept", json={"opportunity_id": "opp_win_back"})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    reached = out["proposal"]["reached_in_month"]
+    # Everyone in this shop is reached by e-mail: the budget is reached x messages x the INR e-mail price,
+    # where the dollar table (0.001) gives the 1-rupee floor.
+    expected = max(1, math.ceil(round(reached * MESSAGES_COSTED * 0.12, 2)))
+    assert out["goal"]["currency"] == "INR" and out["goal"]["budget"] == expected
+    assert expected > max(1, math.ceil(reached * MESSAGES_COSTED * DEFAULT_CHANNEL_COSTS[Channel.EMAIL]))
+    assert out["mandate"]["mandate"]["budget_ceiling"] == expected
+    assert out["mandate"]["mandate"]["currency"] == "INR"
+    assert out["goal"]["goal_id"] in {g.goal_id for g in services.workspace.goals()}
+
+
+def test_onboarding_without_the_shops_prices_quotes_no_money_and_writes_nothing() -> None:
+    prices = ShopPrices(currency="INR", typical_order_value=1800)  # no price for any paid channel
+    client, services, desk = onboarding_client(prices)
+    before = {g.goal_id for g in services.workspace.goals()}
+    head = desk.ledger.head
+    with client:
+        proposals = client.get("/v2/onboarding/proposals").json()["proposals"]
+        win_back = next(p for p in proposals if p["opportunity_id"] == "opp_win_back")
+        assert win_back["budget"] == 0.0 and win_back["message_cost"] is None
+        assert "No INR price per message for email" in win_back["not_enough"]
+        r = client.post("/v2/onboarding/accept", json={"opportunity_id": "opp_win_back"})
+    assert r.status_code == 409 and "no INR price for email" in r.json()["detail"]
+    assert {g.goal_id for g in services.workspace.goals()} == before
+    assert desk.signed == {} and desk.ledger.head == head

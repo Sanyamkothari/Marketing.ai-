@@ -28,7 +28,7 @@ from __future__ import annotations
 import math
 import statistics
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Final, Literal
 from zoneinfo import ZoneInfo
@@ -373,13 +373,20 @@ def _budget(
     *,
     depth: float | None,
     offers_on: bool,
+    channel_costs: Mapping[Channel, float] | None = None,
 ) -> tuple[LearnedLimit, float]:
     since = h.window(SPEND_DAYS)
     recent = [p for p in h.all_purchases() if p.ts > since]
     discount_month = sum(p.discount or 0.0 for p in recent) * 30 / SPEND_DAYS
     delivered = sum(len(rows) for rows in h.received_since(h.window(CADENCE_WEEKS * 7)).values())
     messages_month = delivered * 30 / (CADENCE_WEEKS * 7)
-    email = CHANNEL_COSTS.get(Channel.EMAIL, 0.0)
+    email = (CHANNEL_COSTS if channel_costs is None else channel_costs).get(Channel.EMAIL)
+    costed = (
+        "at the shop's channel prices"
+        if email is None
+        else f"at about {email:.3f} {currency} per e-mail "
+        + ("(documented default)" if channel_costs is None else "(the shop's price)")
+    )
     found = (
         f"About {discount_month:,.0f} {currency} a month in discounts and {messages_month:,.0f} messages a month "
         f"(last {SPEND_DAYS} days of orders, last {CADENCE_WEEKS} weeks of sends)."
@@ -422,7 +429,7 @@ def _budget(
             found=found,
             use=f"{ceiling:,.0f} {currency} for the first 30 days: {proposal.reached_in_month:,} people x "
             f"{MESSAGES_COSTED} messages{offer_words}{share}.",
-            description=f"Messages are costed at about {email:.3f} {currency} per e-mail (documented default). "
+            description=f"Messages are costed {costed}. "
             "Offers, when on, are budgeted for everyone who would buy and redeem them, and never above "
             "what you already give in discounts in a month.",
             source="your orders and sends, and the chosen goal",
@@ -440,8 +447,13 @@ def learn_limits(
     currency: str | None = None,
     margin_rate: float | None = None,
     offers_on: bool = False,
+    channel_costs: Mapping[Channel, float] | None = None,
 ) -> LearnedLimits:
-    """Each limit as found -> used, and the terms a mandate would sign (see the module docstring)."""
+    """Each limit as found -> used, and the terms a mandate would sign (see the module docstring).
+
+    `channel_costs` is the shop's price of one message in its own currency (the runtime's
+    `ShopPrices.costs()`); the budget itself is the proposal's message cost, sized with the same prices by
+    `scan_opportunities`. None: the documented dollar-sized default (`priors.CHANNEL_COSTS`)."""
     money = currency or (proposal.currency if proposal is not None else history.currency())
     cadence, cap = _cadence(history)
     depth_limit, freq_limit, depth = _discounts(history)
@@ -449,7 +461,9 @@ def learn_limits(
     margin, floor = _margin(reading, depth)
     quiet, zone = _quiet(history)
     allow = offers_on and depth is not None
-    budget, ceiling = _budget(history, proposal, money, depth=depth, offers_on=allow)
+    budget, ceiling = _budget(
+        history, proposal, money, depth=depth, offers_on=allow, channel_costs=channel_costs
+    )
     limits = (cadence, depth_limit, freq_limit, margin, quiet, budget)
     terms = MandateTerms(
         max_touches=cap,

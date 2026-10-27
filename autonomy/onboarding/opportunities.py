@@ -682,6 +682,16 @@ def _size(
         )
     if gap is None and reached == 0:
         gap = "Nobody we may message is in this group right now."
+    unpriced = sorted(
+        {(h.reachable_channel(c) or Channel.EMAIL).value for c in reachable_month}
+        - {c.value for c in channel_costs}
+    )
+    if gap is None and unpriced:
+        # Never a dollar-sized default in another currency: no price, no budget (docs/v3/CURRENCY.md).
+        gap = (
+            f"No {currency} price per message for {', '.join(unpriced)} yet: set the shop's channel prices "
+            "(AUTONOMY_CHANNEL_COSTS) to size this goal's budget."
+        )
     if gap is not None or base is None:
         return out(
             why=why, enough_history=False, not_enough=gap, goal_text=goal_text, budget=0.0, base_sample=n_base
@@ -752,7 +762,11 @@ def _size(
         Basis(
             label="Message cost",
             value=f"{MESSAGES_COSTED} messages each at about {per_message:.3f} {currency}",
-            source="autonomy/decide/bidders.py DEFAULT_CHANNEL_COSTS",
+            source=(
+                "autonomy/decide/bidders.py DEFAULT_CHANNEL_COSTS"
+                if dict(channel_costs) == dict(CHANNEL_COSTS)
+                else "the shop's channel prices"
+            ),
             assumed=True,
         )
     )

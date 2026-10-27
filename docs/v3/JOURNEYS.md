@@ -10,7 +10,9 @@ A journey is a short plan of messages for one customer: an ordered list of steps
 a wait since the step before and a condition. The agent chooses a journey the way it chooses any
 option, by price, and logs the chance it had of choosing it.
 
-It is opt-in. `AutonomousPolicy(journeys=JourneyRunner(load_journeys()))` switches it on. With the
+It is opt-in. `AutonomousPolicy(journeys=JourneyRunner(load_journeys(order_value=...)))` switches it on
+(the shop's usual order value sizes the value bars; `load_journeys()` alone leaves them unresolved and
+`JourneyRunner` refuses it, see [CURRENCY.md](CURRENCY.md)). With the
 default `journeys=None` every journey hook is skipped (`if self.journeys is not None`) and the new
 decision fields stay `None`; the guarantee that v2 numbers are unchanged is the existing v2 test
 suite, which runs that default path (CI runs it). One journey test adds a check of the hooks
@@ -34,7 +36,7 @@ Defined in `configs/v3/journeys.yaml`:
 |---|---|---|
 | A | email | always |
 | B | email, then 3 days later WhatsApp if no purchase | the goal has a WhatsApp bid for this customer |
-| C | WhatsApp now | the customer's value if they buy is at least the bar: `value_bar_order_multiple: 1.0` in the file, one usual order of the shop (`RuntimeSettings.typical_order_value`; 50 on the reference order, so the bar the file always had). An exact bar for one shop: `JourneyConfig.with_value_bar`. See [CURRENCY.md](CURRENCY.md) |
+| C | WhatsApp now | the customer's value if they buy is at least the bar: `value_bar_order_multiple: 1.0` in the file, one usual order of the shop (`RuntimeSettings.typical_order_value`; the Gym and the bench use the reference order 50, so the bar the file always had). An exact bar for one shop, or None for no bar: `JourneyConfig.with_value_bar`. See [CURRENCY.md](CURRENCY.md) |
 | D | WhatsApp, then 2 days later an email reminder if no purchase | the customer's value is at least the same bar as C (both send WhatsApp first) and the goal has an email bid |
 
 A step has `channel`, `wait_days` (since the step before) and `when`: `always`, `no_purchase` or
@@ -78,7 +80,7 @@ A journey's bid is priced over the whole plan:
   unaffected.
 
 Worked example from the test fixtures (email: uplift 0.05, cost 0.001, value 100; WhatsApp: uplift
-0.06, cost 0.03; no attention price). `JourneyRunner(load_journeys()).expand([EMAIL, WHATSAPP],
+0.06, cost 0.03; no attention price). `JourneyRunner(load_journeys(order_value=50.0)).expand([EMAIL, WHATSAPP],
 state())`, with `EMAIL`, `WHATSAPP` and `state` imported from `tests/v3/journeys/test_journeys.py`,
 prints these (rounded to 4 places):
 

@@ -47,6 +47,7 @@ from autonomy.decide.journeys import (
     never_read,
     parse_journeys,
 )
+from autonomy.decide.models import REFERENCE_ORDER_VALUE
 from autonomy.decide.policy import AutonomousPolicy
 from autonomy.fakes import FakeChannelAdapter, InMemoryEventStore, InMemoryWorkspace
 from autonomy.fakes.samples import sample_brief, sample_content, sample_goal
@@ -126,12 +127,12 @@ def make(
     floor: float | None = 0.0,
     **kw: object,
 ) -> AutonomousPolicy:
-    runner = JourneyRunner(config or load_journeys())
+    runner = JourneyRunner(config or load_journeys(order_value=REFERENCE_ORDER_VALUE))
     return AutonomousPolicy([PriceBidder(bids)], None, floor, journeys=runner, **kw)  # type: ignore[arg-type]
 
 
 def only(journey_ids: Sequence[str]) -> JourneyConfig:
-    full = load_journeys()
+    full = load_journeys(order_value=REFERENCE_ORDER_VALUE)
     return full.model_copy(
         update={"journeys": tuple(j for j in full.journeys if j.journey_id in journey_ids)}
     )
@@ -173,7 +174,7 @@ def after_first(first: Decision, **kw: object) -> CustomerState:
 
 
 def test_shipped_config_has_the_four_journeys() -> None:
-    cfg = load_journeys()
+    cfg = load_journeys(order_value=REFERENCE_ORDER_VALUE)
     assert [j.journey_id for j in cfg.journeys] == ["A", "B", "C", "D"]
     a, b, c, d = cfg.journeys
     assert [s.channel for s in a.steps] == [Channel.EMAIL]
@@ -271,7 +272,7 @@ def test_a_second_step_that_costs_more_than_it_brings_makes_the_journey_worse() 
 
 def test_value_bar_keeps_whatsapp_now_for_valuable_customers() -> None:
     runner = JourneyRunner(only(["C"]))
-    bar = load_journeys().get("C").value_bar  # type: ignore[union-attr]
+    bar = load_journeys(order_value=REFERENCE_ORDER_VALUE).get("C").value_bar  # type: ignore[union-attr]
     assert bar is not None
     low = bid(Channel.WHATSAPP, 0.06, 0.03, value=bar - 1)
     high = bid(Channel.WHATSAPP, 0.06, 0.03, value=bar)
@@ -298,7 +299,7 @@ def test_a_journey_needs_a_bid_on_every_one_of_its_channels() -> None:
 
 def test_customers_who_never_read_a_channel_are_not_offered_journeys_that_use_it() -> None:
     deaf_email = ChannelStats(address_known=True, consent=True, sends=6, delivers=6)
-    runner = JourneyRunner(load_journeys())
+    runner = JourneyRunner(load_journeys(order_value=REFERENCE_ORDER_VALUE))
     ids = {
         b.action.journey_id
         for b in runner.expand(

@@ -9,8 +9,9 @@
 # `value_bar` (in the shop's own currency, optional) offers the journey only to customers worth at least
 # that much if they buy. The shipped bars are `value_bar_order_multiple`: a multiple of the shop's usual order
 # value (RuntimeSettings.typical_order_value), turned into a bar by JourneyConfig.for_shop, so the bar is the
-# same size in rupees as in dollars. 1.0 is a customer worth as much as one usual order; with no shop given,
-# load_journeys uses the reference order of 50 and the bar is the 50 this file used to hold. To set an exact
+# same size in rupees as in dollars. 1.0 is a customer worth as much as one usual order. load_journeys leaves
+# the multiple unresolved unless given the shop's order value; the Gym and the bench resolve it with the
+# reference order of 50, which gives the 50 this file used to hold. To set an exact
 # bar for one shop use JourneyConfig.with_value_bar. C and D both send WhatsApp first, so both carry the bar.
 # A goal for which no journey fits a customer
 # (WhatsApp only and below the bar, say) keeps its single messages, as without journeys.

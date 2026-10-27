@@ -143,8 +143,9 @@ def _runner(
     as a multiple of the order value are set from `order_value` (None: the reference order)."""
     if isinstance(journeys, JourneyRunner):
         return journeys
+    shop = REFERENCE_ORDER_VALUE if order_value is None else order_value
     if isinstance(journeys, JourneyConfig):
-        return JourneyRunner(journeys.for_shop(REFERENCE_ORDER_VALUE if order_value is None else order_value))
+        return JourneyRunner(journeys.for_shop(shop))
     if not journeys:
         return None
-    return JourneyRunner(load_journeys() if order_value is None else load_journeys(order_value=order_value))
+    return JourneyRunner(load_journeys(order_value=shop))

@@ -54,7 +54,8 @@ section 8 for the fix order.** Full numbers: [redteam/bench_results.md](redteam/
 
 - **2. Money in the shop's currency:** done on branch `v3/f-currency`, see [CURRENCY.md](CURRENCY.md). Channel costs,
   the usual order value and the complaint cost are required per-shop settings (or the mandate catalogue's provider
-  prices); a goal that cannot be priced does not start. The Gym smoke is identical to the base commit.
+  prices); a goal that cannot be priced does not run (the process still starts). The Gym smoke is identical to
+  the base commit.
 
 ## The proof runs
 

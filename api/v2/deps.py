@@ -95,6 +95,7 @@ if TYPE_CHECKING:  # imported lazily below, so `import api.v2.deps` stays light
     from api.v2 import insights
     from autonomy.proof import Costs
     from autonomy.runtime.batches import BatchStore
+    from autonomy.runtime.prices import ShopPrices
     from autonomy.runtime.service import AutonomyRuntime
 
 ProofProvider: TypeAlias = Callable[[str | None], ProofSummary | None]
@@ -312,11 +313,28 @@ class Services:
         self.workspace.put_goal(updated)
         return updated, brief
 
+    def shop_prices(self) -> ShopPrices | None:
+        """The runtime's `autonomy.runtime.prices.ShopPrices` (the shop's money in its own currency), or None
+        when the runtime has none (the demo, the fakes): then the documented dollar-sized defaults apply."""
+        from autonomy.runtime.prices import ShopPrices
+
+        prices = getattr(self.runtime, "prices", None)
+        return prices if isinstance(prices, ShopPrices) else None
+
+    def check_new_goal_prices(self, currency: str, channels: Iterable[Channel]) -> None:
+        """Refuse, before anything is written, a goal in `currency` that may use `channels` and that the shop
+        cannot price (the same reasons `approve` would refuse it for)."""
+        prices = self.shop_prices()
+        found = prices.problems_for(currency, channels) if prices is not None else []
+        if found:
+            raise ConflictError(
+                "this goal cannot run until the shop's money is set: " + "; ".join(found) + "."
+            )
+
     def _shop_currency(self) -> str | None:
         """The shop's currency when the runtime knows its prices (`autonomy.runtime.prices.ShopPrices`)."""
-        prices = getattr(self.runtime, "prices", None)
-        found = prices.shop_currency() if prices is not None else None
-        return found if isinstance(found, str) else None
+        prices = self.shop_prices()
+        return prices.shop_currency() if prices is not None else None
 
     def _check_prices(self, goal: Goal) -> None:
         """Refuse to start a goal the runtime cannot price in the shop's currency (a clear error saying what to set)."""
@@ -1000,8 +1018,14 @@ def suggest_opportunities(
     *,
     taken: frozenset[GoalKind] = frozenset(),
     events: Iterable[Event] | None = None,
+    channel_costs: Mapping[Channel, float] | None = None,
+    currency: str | None = None,
 ) -> list[Goal]:
     """Draft goals for the shop; kinds in `taken` (already being worked on) are left out.
+
+    `channel_costs` and `currency` are the shop's prices of one message and their currency (the runtime's
+    `ShopPrices`); None: the documented dollar-sized defaults. A channel with no price gets no money: the
+    goal's budget is 0, never a dollar figure read as the shop's currency.
 
     With `events` (the shop's history), these are the money-sized proposals of
     `autonomy.onboarding.scan_opportunities`, best first: refill due, first to second purchase,
@@ -1018,11 +1042,13 @@ def suggest_opportunities(
     if events is not None:
         from autonomy.onboarding import proposal_goal, scan_opportunities
 
-        scan = scan_opportunities(events, rows, now, taken=taken)
+        priced: dict[str, Any] = {} if channel_costs is None else {"channel_costs": channel_costs}
+        scan = scan_opportunities(events, rows, now, taken=taken, currency=currency, **priced)
         return [proposal_goal(p, business_id, now) for p in scan.proposals if p.kind not in taken]
     from autonomy.onboarding.priors import CHANNEL_COSTS
 
-    per_message = CHANNEL_COSTS.get(Channel.EMAIL, 0.0)
+    per_message = (CHANNEL_COSTS if channel_costs is None else channel_costs).get(Channel.EMAIL)
+    money: dict[str, Any] = {} if currency is None else {"currency": currency}
     ideas = [
         (
             "opp_repeat_purchase",
@@ -1043,9 +1069,10 @@ def suggest_opportunities(
             business_id=business_id,
             text=text.format(n=n),
             kind=kind,
-            budget=float(max(1, math.ceil(n * 2 * per_message))),
+            budget=0.0 if per_message is None else float(max(1, math.ceil(n * 2 * per_message))),
             starts_at=now,
             created_at=now,
+            **money,
         )
         for goal_id, kind, n, text in ideas
         if n > 0 and kind not in taken
@@ -1229,6 +1256,8 @@ class StoreReadModels:
     """Anything with `list(...) -> Sequence[Alert]`, e.g. `autonomy.runtime.stores`' alert store."""
     briefing_store: Any = None
     """Anything with `latest(goal_id) -> Briefing | None` (or `list(...)`), e.g. the briefing store."""
+    prices: Any = None
+    """The runtime's `autonomy.runtime.prices.ShopPrices`: suggestions are budgeted at the shop's prices."""
 
     def record(self, report: TickOutcome) -> None:
         self.alerts_log.extend(report.alerts)
@@ -1303,7 +1332,16 @@ class StoreReadModels:
     def opportunities(self) -> list[Goal]:
         """Suggestions for kinds of goal nobody is working on yet."""
         taken = frozenset(g.kind for g in self.workspace.goals() if g.status is not GoalStatus.DONE)
-        return suggest_opportunities(self.states.scan(), self.business_id, self.clock(), taken=taken)
+        if self.prices is None:
+            return suggest_opportunities(self.states.scan(), self.business_id, self.clock(), taken=taken)
+        return suggest_opportunities(
+            self.states.scan(),
+            self.business_id,
+            self.clock(),
+            taken=taken,
+            channel_costs=self.prices.costs(),
+            currency=self.prices.shop_currency(),
+        )
 
 
 def _call_with(fn: Callable[..., Any], **kwargs: Any) -> Any:
@@ -1436,6 +1474,7 @@ def build_services_from_runtime(
         seed=seed,
         alert_store=alert_store,
         briefing_store=briefing_store,
+        prices=getattr(runtime, "prices", None),
     )
     if adapters is None:
         adapters = dict(runtime.dispatcher.adapters) if runtime.dispatcher is not None else {}

@@ -57,11 +57,14 @@ and the operator endpoint call it by hand. Each tick does, in order:
   country quiet hours, rate limits and carrier failover. A refusal is a skipped send and an
   alert; held decisions come back as `gateway_send_decision` jobs.
 - `prices` (an `autonomy.runtime.prices.ShopPrices`, always given by `build_runtime`) is the shop's money in
-  its own currency: the channel costs the spend ledger and the overspend breaker charge (re-read every
-  tick, so a catalogue version published later is used from then on), and the check that a goal can be
+  its own currency: the channel costs the spend ledger and the overspend breaker charge, the figures each
+  goal's policy is built with (all re-read every tick: a catalogue version published later is used from
+  then on, and a goal's policy is built again when they change), and the check that a goal can be
   priced at all. A goal in another currency than the shop's, or one that may use a paid channel with no
   price, does not decide and a critical alert (`prices.missing`) says what to set; `check_goal_prices`
-  raises the same error to the API before a plan is approved. Without `prices` the runtime keeps the
+  raises the same error to the API before a plan is approved. The runtime itself always starts, so the
+  API can still pause or fix a goal and webhooks are still taken. A mandate in another currency than the
+  shop's does not authorise a goal (`mandate.not_active`). Without `prices` the runtime keeps the
   bidders' dollar-sized `DEFAULT_CHANNEL_COSTS`, as the Gym and the demo want.
 - `business_id` and `data_gate` tie the runtime to one shop's connected data
   (`autonomy.runtime.settings.build_runtime` with connectors). Each tick asks
@@ -1286,8 +1289,8 @@ class AutonomyRuntime:
     def check_goal_prices(self, goal: Goal | str) -> None:
         """Raise `MissingShopMoneyError` if the goal cannot be priced in the shop's currency.
 
-        The API calls this before it approves or resumes a plan, and `build_runtime` for every active goal
-        at start; the tick also refuses to run such a goal. Without `prices` nothing is checked."""
+        The API calls this before it approves or resumes a plan; the tick refuses to run such a goal (and
+        raises the `prices.missing` alert). Without `prices` nothing is checked."""
         if self.prices is None:
             return
         found = (
@@ -1300,26 +1303,11 @@ class AutonomyRuntime:
         briefs = self.workspace.briefs(found.goal_id)
         self.prices.check_goal(found, max(briefs, key=lambda b: b.version) if briefs else None)
 
-    def check_live_goals(self) -> None:
-        """Raise `MissingShopMoneyError` naming every active goal that cannot be priced: a runtime does not
-        start on money it does not know."""
-        if self.prices is None:
-            return
-        problems: list[str] = []
-        for goal in sorted(self.workspace.goals(), key=lambda g: g.goal_id):
-            if goal.status is not GoalStatus.ACTIVE:
-                continue
-            try:
-                self.check_goal_prices(goal)
-            except MissingShopMoneyError as err:
-                problems.append(str(err))
-        if problems:
-            raise MissingShopMoneyError(" ".join(problems))
-
     def _sync_prices(self) -> None:
         """Re-read the shop's prices, so the ledger and the mandate check charge what the catalogue lists
-        now. Sends already charged keep the price they were charged at (the ledger only adds); a full
-        rebuild of the ledger from the log prices every send at today's table."""
+        now. The ledger only adds, so sends charged since the process started keep their price until the
+        next full rebuild; a full rebuild (every night by default, and at every start) replays the log and
+        prices every send of the period at the current table, since a SEND carries no unit price."""
         if self.prices is None:
             return
         table = self.prices.costs()
@@ -2378,6 +2366,15 @@ class AutonomyRuntime:
                 f"the signatures on mandate {mandate.mandate_id} (v{mandate.version}) do not authorise it "
                 f"({', '.join(problems)})",
             )
+        shop = self.prices.shop_currency() if self.prices is not None else None
+        if shop is not None and mandate.currency.upper() != shop:
+            # Its money limits are in another currency than the spend they would be compared with.
+            return (
+                mandate,
+                MANDATE_INACTIVE,
+                f"its mandate {mandate.mandate_id} (v{mandate.version}) sets its money limits in "
+                f"{mandate.currency} but the shop's prices are in {shop}",
+            )
         return mandate, None, ""
 
     def _mandate_for(self, goal: Goal, now: datetime, report: TickReport) -> tuple[bool, Mandate | None]:
@@ -3093,6 +3090,8 @@ class AutonomyRuntime:
         proof split other than the business's is refused: its goal does not run."""
         out: list[_Running] = []
         built: list[_Running] = []
+        # The shop's money is part of what a policy is built with: a new price builds it again.
+        money: tuple[object, ...] = self.prices.money_key() if self.prices is not None else ()
         for goal, brief in self._goals_with_briefs():
             if not _sendable(goal, now, require_level=False):
                 continue
@@ -3110,7 +3109,7 @@ class AutonomyRuntime:
             content = sorted(
                 self.workspace.content(goal_id=goal.goal_id, approved_only=True), key=lambda c: c.content_id
             )
-            key: tuple[object, ...] = (material_brief(brief), tuple(c.content_id for c in content))
+            key: tuple[object, ...] = (material_brief(brief), tuple(c.content_id for c in content), money)
             cached = self._policies.get(goal.goal_id)
             fresh = cached is None or cached[0] != key
             if fresh:

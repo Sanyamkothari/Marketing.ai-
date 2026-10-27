@@ -11,21 +11,23 @@ section 4 row 1; docs/v3/CURRENCY.md).
 `RuntimeSettings` and, where there is one, the mandate catalogue):
 
 * **channel costs**: the catalogue's provider prices (`autonomy.mandate.catalogue.ChannelRate`, the
-  cheapest provider per channel in the shop's currency) where it lists the channel, else
+  dearest provider per channel in the shop's currency, because the gateway may fail over to any of them
+  and the budget must hold whichever one carries a send) where it lists the channel, else
   `RuntimeSettings.channel_costs`. Push, web and webhook messages are free unless a price is given.
 * **the usual order value** (`typical_order_value`, a per-shop setting): the order assumed before the
   shop's own purchases are learned, and the unit of the journeys' value bars.
 * **the cost of a complaint**: `complaint_cost`, else `COMPLAINT_SHARE_OF_ORDER` of the usual order.
 
 `check_goal` refuses a goal that cannot be priced: an error that says what is missing, never a silent
-default. The Gym and the bench never build a `ShopPrices`; they pass their own costs to the agent
-(`build_agent_policy(costs=...)`) and keep every number they had.
+default (`problems_for` does the same for a goal not created yet, e.g. the one-click onboarding). The Gym
+and the bench never build a `ShopPrices`: the Gym keeps the agent's dollar-sized defaults and the bench passes its
+own costs (`build_agent_policy(costs=...)`), so both keep every number they had.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -136,9 +138,11 @@ class ShopPrices:
     def costs(self) -> dict[Channel, float]:
         """The price of one message per channel, in the shop's currency.
 
-        Free channels cost 0; `channel_costs` prices the rest; the catalogue's cheapest rate in the
-        shop's currency replaces a channel's price where it lists one. A paid channel with no price is
-        absent from the result (never defaulted)."""
+        Free channels cost 0; `channel_costs` prices the rest; the catalogue's rate in the shop's currency
+        replaces a channel's price where it lists one. With several providers for a channel the dearest
+        rate is used: the gateway fails over between them, and a send that goes through a dearer one must
+        not be charged at a cheaper one's price. A paid channel with no price is absent from the result
+        (never defaulted)."""
         currency = self.shop_currency()
         out: dict[Channel, float] = dict.fromkeys(FREE_CHANNELS, 0.0)
         if currency is None:
@@ -147,10 +151,22 @@ class ShopPrices:
         version = self._version()
         if version is not None:
             for channel in Channel:
-                rate = version.channel_rate(channel, currency=currency)
-                if rate is not None:
-                    out[channel] = rate.unit_cost
+                rates = [
+                    r.unit_cost for r in version.channels if r.channel is channel and r.currency == currency
+                ]
+                if rates:
+                    out[channel] = max(rates)
         return out
+
+    def money_key(self) -> tuple[object, ...]:
+        """Every figure the agent is built with, as one comparable value: when it changes (a catalogue
+        version published, a setting changed) the runtime builds the goal's policy again."""
+        return (
+            self.shop_currency(),
+            tuple(sorted((c.value, price) for c, price in self.costs().items())),
+            self.complaint_cost(),
+            self.typical_order_value,
+        )
 
     def complaint_cost(self) -> float | None:
         """What one complaint costs in the shop's currency; None until the usual order value is known."""
@@ -164,22 +180,26 @@ class ShopPrices:
 
     def problems(self, goal: Goal, brief: Brief | None = None) -> list[str]:
         """Why this goal cannot be priced, in plain words (empty when it can)."""
-        currency = self.shop_currency()
+        wanted = brief.envelope.channels if brief is not None else tuple(PAID_CHANNELS)
+        return self.problems_for(goal.currency, wanted)
+
+    def problems_for(self, currency: str, channels: Iterable[Channel]) -> list[str]:
+        """Why a goal in `currency` that may use `channels` cannot be priced (empty when it can)."""
+        shop = self.shop_currency()
         out: list[str] = []
-        if currency is None:
+        if shop is None:
             out.append(
                 "the shop's currency is not set (AUTONOMY_CURRENCY, e.g. INR) and the catalogue does not "
                 "name a single one"
             )
-        elif goal.currency.upper() != currency:
-            out.append(f"the goal is in {goal.currency} but the shop's prices are in {currency}")
+        elif currency.upper() != shop:
+            out.append(f"the goal is in {currency} but the shop's prices are in {shop}")
         else:
             table = self.costs()
-            wanted = brief.envelope.channels if brief is not None else tuple(PAID_CHANNELS)
-            missing = sorted({c.value for c in wanted if c in PAID_CHANNELS and c not in table})
+            missing = sorted({c.value for c in channels if c in PAID_CHANNELS and c not in table})
             if missing:
                 out.append(
-                    f"no {currency} price for {', '.join(missing)}: set AUTONOMY_CHANNEL_COSTS "
+                    f"no {shop} price for {', '.join(missing)}: set AUTONOMY_CHANNEL_COSTS "
                     f"(e.g. whatsapp=0.85) or publish the provider rates in the action catalogue"
                 )
         if self.typical_order_value is None:

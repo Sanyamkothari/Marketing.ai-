@@ -40,7 +40,7 @@ import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import Field
@@ -50,6 +50,7 @@ from api.v2.deps import ServiceError, Services, get_services
 from autonomy.contracts import (
     AutonomyLevel,
     Brief,
+    Channel,
     Contract,
     Goal,
     GoalKind,
@@ -161,13 +162,31 @@ class OnboardingDesk:
         taken = frozenset(
             g.kind for g in services.workspace.goals() if g.status in (GoalStatus.ACTIVE, GoalStatus.PAUSED)
         )
-        key: tuple[object, ...] = (int(now.timestamp() // CACHE_SECONDS), margin_rate, tuple(sorted(taken)))
+        # The shop's own prices of one message, in its currency (docs/v3/CURRENCY.md); none: the documented
+        # dollar-sized defaults (the demo and the fakes have no prices).
+        prices = services.shop_prices()
+        money: dict[str, Any] = (
+            {} if prices is None else {"channel_costs": prices.costs(), "currency": prices.shop_currency()}
+        )
+        key: tuple[object, ...] = (
+            int(now.timestamp() // CACHE_SECONDS),
+            margin_rate,
+            tuple(sorted(taken)),
+            prices.money_key() if prices is not None else None,
+        )
         if self._cache is not None and self._cache[0] == key:
             return self._cache[1], self._cache[2]
         events = services.events.scan(since=now - timedelta(days=HISTORY_DAYS), until=now + _TICK)
         history = ShopHistory.build(events, services.states.scan(), now)
         found = scan_opportunities(
-            (), (), now, margin_rate=margin_rate, taken=taken, history=history, unreachable=self.unreachable
+            (),
+            (),
+            now,
+            margin_rate=margin_rate,
+            taken=taken,
+            history=history,
+            unreachable=self.unreachable,
+            **money,
         )
         self._cache = (key, found, history)
         return found, history
@@ -235,6 +254,12 @@ _UNMET_WORDS: dict[str, str] = {
 }
 
 # --- helpers -------------------------------------------------------------------------------------
+
+
+def _shop_costs(services: Services) -> dict[Channel, float] | None:
+    """The shop's price of one message per channel in its currency; None: the documented defaults."""
+    prices = services.shop_prices()
+    return prices.costs() if prices is not None else None
 
 
 def _rate(margin_pct: float | None, desk: OnboardingDesk) -> float | None:
@@ -328,7 +353,14 @@ def limits(
     proposal = None
     if opportunity_id is not None or found.preselected_id is not None:
         proposal = _pick(found, opportunity_id)
-    return learn_limits(history, services.clock(), proposal=proposal, margin_rate=rate, offers_on=offers)
+    return learn_limits(
+        history,
+        services.clock(),
+        proposal=proposal,
+        margin_rate=rate,
+        offers_on=offers,
+        channel_costs=_shop_costs(services),
+    )
 
 
 @router.post("/answers")
@@ -363,8 +395,19 @@ def accept(body: AcceptRequest, request: Request, services: ServicesDep, desk: D
         if proposal.already_running:
             raise HTTPException(status_code=409, detail="A goal of this kind is already running or paused.")
         now = services.clock()
-        learned = learn_limits(history, now, proposal=proposal, margin_rate=rate, offers_on=body.offers)
+        learned = learn_limits(
+            history,
+            now,
+            proposal=proposal,
+            margin_rate=rate,
+            offers_on=body.offers,
+            channel_costs=_shop_costs(services),
+        )
         terms = learned.terms
+        try:  # refused before a goal is stored or a mandate signed, so a retry leaves nothing behind
+            services.check_new_goal_prices(terms.currency, terms.channels)
+        except ServiceError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         offers: tuple[OfferOption, ...] = ()
         if terms.offers_on and terms.max_offer_pct is not None:
             offers = (offer_for(terms.max_offer_pct, history.mean_order_value() or 0.0),)

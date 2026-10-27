@@ -48,9 +48,9 @@ docs/v3/CURRENCY.md). Costs are read in the shop's own currency, never a dollar 
 costs per channel (`AUTONOMY_CHANNEL_COSTS=email=0.12,whatsapp=0.85`, or the provider prices of the mandate
 catalogue, which win where they list a channel), the usual order value that new customers are assumed to
 spend and that sizes the journeys' value bars, and the cost of a complaint. `build_runtime` makes a
-`ShopPrices` of them for the runtime (the spend ledger, the overspend breaker, the agent) and refuses to
-start while an active goal cannot be priced; a goal approved later is refused by the tick (alert
-`prices.missing`) and by the API, with an error that names what to set.
+`ShopPrices` of them for the runtime (the spend ledger, the overspend breaker, the agent). A goal that
+cannot be priced does not run: the tick refuses it (alert `prices.missing`) and the API refuses to approve
+or resume it, with an error that names what to set. The runtime itself still starts.
 
 **Plan-v3** (`v3`, `AUTONOMY_V3`, docs/v3/PRESET.md). Off by default. On, the agent is built with the v3
 preset (look-alike, who, frequency, moments, journeys, offer pricing and the experiments' wrapper with no
@@ -385,8 +385,11 @@ class RuntimeSettings(BaseModel):
     ) -> ShopPrices:
         """The shop's money (`autonomy.runtime.prices.ShopPrices`) from these settings and, where there is one,
         the mandate catalogue (an `ActionCatalogue`, or a function giving its latest version).
-        `channel_costs` replaces the settings' own table (the costs `build_runtime` is given)."""
+        `channel_costs` replaces the settings' own table (the costs `build_runtime` is given); prices with no
+        currency to be in (none set and no catalogue to read one from) raise ValueError, never dropped."""
         latest = catalogue.latest if isinstance(catalogue, ActionCatalogue) else catalogue
+        if channel_costs and self.currency is None and latest is None:
+            raise ValueError("channel_costs are prices in a currency: set currency (AUTONOMY_CURRENCY) too")
         return ShopPrices(
             currency=self.currency,
             channel_costs=dict(self.channel_costs if channel_costs is None else channel_costs),
@@ -907,8 +910,10 @@ def build_runtime(
     The shop's money comes from `settings` (`currency`, `channel_costs`, `typical_order_value`,
     `complaint_cost`) and from the `catalogue`'s provider prices where it lists a channel
     (`RuntimeSettings.shop_prices`); `channel_costs` replaces the settings' table. The same prices go to the agent,
-    the spend ledger and the overspend breaker. If an active goal cannot be priced, `build_runtime` raises
-    `autonomy.runtime.prices.MissingShopMoneyError` (docs/v3/CURRENCY.md).
+    the spend ledger and the overspend breaker. The runtime starts even while a goal cannot be priced (so
+    the API can pause or fix it, and webhooks are still taken); that goal does not run, the tick raises a
+    critical `prices.missing` alert and the API refuses to approve or resume it (docs/v3/CURRENCY.md).
+    `channel_costs` with no currency in the settings and no catalogue raises ValueError, as the settings do.
 
     `settings.gateway_enabled` sends through `build_gateway` (with `consent` and `dnd` overriding
     the registries from the settings); `mandates` and `state_enricher` go to the runtime as they are.
@@ -1043,7 +1048,6 @@ def build_runtime(
         before_tick=hooks,
         prices=prices,
     )
-    runtime.check_live_goals()
     if wiring is not None:
         # Connector history older than the late window, and changed identity links, rebuild state.
         wiring.engine.history_hook = runtime.request_rebuild

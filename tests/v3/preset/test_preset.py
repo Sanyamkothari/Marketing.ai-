@@ -19,7 +19,7 @@ from autonomy.contracts import (
 )
 from autonomy.decide.frequency import FrequencyPlanner, LookalikeHazard
 from autonomy.decide.journeys import JourneyRunner, load_journeys
-from autonomy.decide.models import HazardModel
+from autonomy.decide.models import REFERENCE_ORDER_VALUE, HazardModel
 from autonomy.decide.moments import MomentBook
 from autonomy.decide.pacing import OfferPricing
 from autonomy.decide.who import WhoBook
@@ -170,7 +170,7 @@ def test_each_part_can_be_switched_off_inside_the_preset(part: str, gone: object
 def test_a_piece_given_by_name_wins_over_the_preset() -> None:
     off = build(v3=True, moments=False)
     assert off.moments is False and off.who is not None
-    runner = JourneyRunner(load_journeys())
+    runner = JourneyRunner(load_journeys(order_value=REFERENCE_ORDER_VALUE))
     own = build(v3=True, journeys=runner)
     assert own.policy.journeys is runner
     pricing = OfferPricing(days=10, initial=0.2)
