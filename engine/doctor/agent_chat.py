@@ -331,7 +331,7 @@ class _Chat(_Review):
             return {
                 "goal": goal,
                 "tools": tools,
-                **prompt_variables("chat", self.ctxs[0].config),
+                **prompt_variables("chat", self.ctxs[0].config, config_root=self.config_root),
                 "questions": catalogue_lines(chat=True),
                 "state": json.dumps(self.state, ensure_ascii=False),
                 "conversation": history,

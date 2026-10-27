@@ -16,7 +16,7 @@
 4. Trend: activity in the last 30 days / (prior 90 days / 3), for orders and spend. Above 1 growing, below 1 decaying; blank when the prior window is empty.
 5. Ratios: dormancy index = recency_days / tenure_days; return rate = returned items / items; spend velocity = spend / tenure months; basket depth = items / orders.
 6. Tenure and breadth: days since first order; distinct products; active months.
-Start with 1-3, then 4-6; remove what the data cannot support, explaining why.
+Start with 1-3, then 4-6 (preset `rfm_ratios` has recency, ratios, velocity and the bucket); remove what the data cannot support, explaining why.
 
 ## Returns and guests
 - Net returns against spend unless told otherwise; return count and amount are own features.

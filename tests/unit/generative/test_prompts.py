@@ -95,6 +95,7 @@ VALUES: dict[str, object] = {
     "questions": ["Q1 main customer ID (blocking): values choices, file"],
     "actions": ['`{"action": "reply", "text": "..."}` - what you tell the person.'],
     "step_kinds": ["parse_date (dayfirst)"],
+    "guide_index": "- features: read before proposing features.",
     "doctor_limits": {
         "retries": 2,
         "strikes": 2,

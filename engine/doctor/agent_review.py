@@ -171,6 +171,8 @@ class _Turn:
     sent: list[Any] = field(default_factory=list)
     book: ExpectationBook = field(default_factory=ExpectationBook)
     orders: dict[str, int] = field(default_factory=dict)
+    guides: set[tuple[str, str | None]] = field(default_factory=set)
+    """The (guide, section) pairs already in this turn's results: a guide is carried once."""
 
 
 def agent_review(
@@ -458,7 +460,7 @@ class _Review:
             variables = {
                 "goal": goal,
                 "tools": tools,
-                **prompt_variables("review", self.ctxs[0].config),
+                **prompt_variables("review", self.ctxs[0].config, config_root=self.config_root),
                 "questions": catalogue_lines(),
                 "state": json.dumps(self.state, ensure_ascii=False),
                 "turn_results": (
@@ -513,6 +515,8 @@ class _Review:
             self._sql(args)
         elif name == "propose_features":
             self._features(action, args)
+        elif name == "read_guide":
+            self._guide(args)
         elif name == "ask_question":
             self._ask(action, args)
         elif name == "express_doubt":
@@ -664,6 +668,19 @@ class _Review:
         }
         self.checker.grounded = self.checker.grounded | grounded_numbers([shown["result"]])
         turn.feedback.append(shown)
+
+    def _guide(self, args: dict[str, Any]) -> None:
+        """`read_guide`: the guide's rules and a section, once per turn (a second read says it is above)."""
+        from engine.doctor.guides import ALREADY_READ, read_guide
+
+        name, section, lines = read_guide(args.get("name"), args.get("section"), self.config_root)
+        shown: dict[str, Any] = {"tool": "read_guide", "guide": name, "section": section or "all"}
+        if (name, section) in self.turn.guides:
+            shown["text"] = ALREADY_READ
+        else:
+            self.turn.guides.add((name, section))
+            shown["text"] = lines
+        self.turn.feedback.append(shown)
 
     def _features(self, action: dict[str, Any], args: dict[str, Any]) -> None:
         from engine.doctor.agent_features import run_features

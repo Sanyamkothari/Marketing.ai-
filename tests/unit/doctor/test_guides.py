@@ -24,7 +24,7 @@ TOPICS = [n for n in NAMES if n != "index"]
 
 # Words in backticks that are not tool names: arguments, columns, SQL, values, presets.
 _NOT_TOOLS = re.compile(
-    r"[^a-z_]|^(as_of|na|this|rfm|rfm_plus|t_\w*|reads_future|outcome_window_days|expect)$"
+    r"[^a-z_]|^(as_of|na|this|rfm|rfm_plus|rfm_ratios|t_\w*|reads_future|outcome_window_days|expect)$"
 )
 
 
