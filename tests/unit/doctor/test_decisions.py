@@ -306,7 +306,8 @@ def test_the_decisions_digest_moves_the_plan_count_basis() -> None:
 # -- architecture: only decisions.py reads the decisions out of the items ----------------------------------------
 ROLE_KINDS = frozenset({"key", "outcome_column", "as_of_column", "consent_column"})
 """The item kinds that are decisions: reading them by kind, or the as-of question by code, belongs here only."""
-ALLOWED = {"engine/doctor/decisions.py"}
+ALLOWED = {"engine/doctor/decisions.py", "engine/doctor/subjects.py"}
+"""`subjects.py` names what any item is about (`key@file`), whatever its state: it decides nothing."""
 
 
 def _strings(node: ast.AST) -> set[str]:
