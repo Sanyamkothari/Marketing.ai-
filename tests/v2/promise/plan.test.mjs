@@ -339,6 +339,15 @@ test("Plan (sample data): a message the editor passed can be turned off and used
   assert.equal((await api.getContent("goal_winback")).filter((c) => c.status === "approved").length, ready);
 });
 
+test("Plan (sample data): says Simulated shop before the plan", async () => {
+  const { ctx } = makeCtx(mockApi(), "goal_winback");
+  const root = C.el("div");
+  await plan.render(root, ctx);
+  const label = root.querySelectorAll(".simulated-label")[0];
+  assert.ok(label && label.textContent.startsWith("Simulated shop."));
+  assert.ok(root.textContent.indexOf("Simulated shop.") < root.textContent.indexOf("The plan in plain words"));
+});
+
 test("Plan (sample data): products it may suggest, and the product fact labelled as one", async () => {
   const data = await sample("data_status.json");
   const { ctx } = makeCtx(mockApi(), "goal_winback");

@@ -399,6 +399,28 @@ def test_suggest_opportunities_with_history_returns_the_sized_goals(
     assert plain and all(g.budget < 1000 for g in plain)
 
 
+def test_a_suggested_budget_without_history_covers_the_dearest_channel_of_the_starting_plan(
+    shop: tuple[InMemoryEventStore, InMemoryStateStore],
+) -> None:
+    """Two messages to everyone at the email price alone suggested $1.00; the starting plan may use WhatsApp."""
+    from api.v2.deps import STARTING_PLAN_CHANNELS
+    from autonomy.onboarding.priors import CHANNEL_COSTS
+
+    _events, states = shop
+    rows = list(states.scan())
+    dearest = max(CHANNEL_COSTS.get(c, 0.0) for c in STARTING_PLAN_CHANNELS)
+    assert dearest > CHANNEL_COSTS[Channel.EMAIL]
+    counts = {
+        GoalKind.REPEAT_PURCHASE: sum(1 for s in rows if s.purchases == 1),
+        GoalKind.ONBOARDING: sum(1 for s in rows if s.purchases == 0),
+    }
+    plain = suggest_opportunities(rows, "biz", NOW)
+    assert plain
+    for goal in plain:
+        assert goal.budget == float(max(1, math.ceil(counts[goal.kind] * 2 * dearest)))
+        assert goal.budget >= math.ceil(counts[goal.kind] * 2 * CHANNEL_COSTS[Channel.EMAIL])
+
+
 # --- limits ---------------------------------------------------------------------------------------
 
 

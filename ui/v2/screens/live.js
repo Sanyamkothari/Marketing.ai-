@@ -42,7 +42,7 @@
    components.js; the formatters kept here are the ones whose wording the feed and the proof page need
    ("$4,300 (range $900 to $7,700)", a date without the year). */
 
-import { EM_DASH, describe, info, num, pageHead as pageHeadBlock, present, withInfo } from "../components.js";
+import { EM_DASH, describe, info, isSimulatedShop, num, pageHead as pageHeadBlock, present, simulatedLabel, withInfo } from "../components.js";
 
 // ---- tiny helpers shared by live.js, proof.js and operator.js ------------------------------------------
 
@@ -1024,8 +1024,10 @@ export async function render(root, ctx) {
   // column is the inbox, health, what it learned and the briefing. On a phone the cards are one column in the order
   // of the questions (batches, yesterday, inbox, health, then the feed, what it learned and the briefing), set in
   // live.css, so the inbox and health still come before the long feed.
+  const simulatedSlot = h("div", { class: "lv-simulated" });
   page.append(
     header,
+    simulatedSlot,
     selfPause,
     h("div", { class: "grid lv-grid" },
       h("div", { class: "span-8 stack lv-main" }, offerSlot, batchSlot, todaySec.card, feedSec.card),
@@ -1059,6 +1061,11 @@ export async function render(root, ctx) {
   ]);
   if (limits.status === "fulfilled") state.limits = limits.value;
   const todayValue = today.status === "fulfilled" ? today.value : null;
+  // A shop we simulate says so before any number is read: the label is the first thing under the title.
+  const proofNotes = proof.status === "fulfilled" && proof.value ? proof.value.notes : [];
+  if (await isSimulatedShop(ctx, [...(proofNotes || []), ...(todayValue?.notes || [])])) {
+    simulatedSlot.replaceChildren(simulatedLabel("The customers, messages and money on this page are from a shop we simulate. Nothing here reaches a real person."));
+  }
   if (todayValue && present(todayValue.autonomy_since)) state.since = todayValue.autonomy_since;
 
   // Yesterday: the pitch's daily briefing for this goal.
@@ -1291,7 +1298,7 @@ function todayView(today, { brief, currency, proof, proofError }) {
   const spentShare = spent && present(today.budget) && Number(today.budget) > 0
     ? Math.min(100, Math.max(0, (100 * Number(today.spend_to_date)) / Number(today.budget))) : null;
   const spentCell = h("div", { class: "kpi lv-spent" },
-    h("dt", { class: "kpi-label" }, explained("Spent on messages", "The cost of the messages sent, as the budget limit counts it. Proof's spend also counts the discounts customers used.")),
+    h("dt", { class: "kpi-label" }, explained("Spent on messages", "The cost of every message sent so far, as the budget limit counts it. Proof's spend counts a different set: the discounts customers used as well, but only contacts whose results are in, so the two can differ.")),
     spent
       ? h("dd", { class: "kpi-value" }, money(today.spend_to_date, cur), h("span", { class: "lv-kpi-of" }, ` of ${money(today.budget, cur)}`))
       : h("dd", { class: "kpi-value is-missing" }, DASH),

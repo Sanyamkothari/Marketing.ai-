@@ -9,7 +9,7 @@
 // or a sentence saying it is not known. The only numbers not about this business are the product test in
 // "How we tested this", which is labelled as a fact about Autonomy, with its source.
 
-import { button, card, clear, dash, el, emptyState, errorBox, goalStatusWords, hour, humanize, info, int, kpiStrip, money, notice, pageHead, pct, pill, present, segmented, skeletonKpis, skeletonLines, slotted, statusTone, when, withInfo } from "../components.js";
+import { button, card, clear, dash, el, emptyState, errorBox, goalStatusWords, hour, humanize, info, int, isSimulatedShop, kpiStrip, money, notice, pageHead, pct, pill, present, segmented, simulatedLabel, skeletonKpis, skeletonLines, slotted, statusTone, when, withInfo } from "../components.js";
 
 /** The autonomy dial, in the order of how much the agent may do alone. One sentence each, in plain words. */
 export const AUTONOMY = Object.freeze([
@@ -975,6 +975,7 @@ export async function render(root, ctx) {
     if (ctx.refreshGoals) await ctx.refreshGoals();
     await render(root, { ...ctx, goal: null });
   };
+  const simulated = await isSimulatedShop(ctx);
 
   const liveLink =
     goal.status === "active" || goal.status === "paused"
@@ -999,6 +1000,7 @@ export async function render(root, ctx) {
       sub: `“${goal.text}”`,
       status: pill(goalStatusWords(goal.status), goal.status === "draft" ? "neutral" : statusTone(goal.status), { dot: true }),
     }),
+    simulated ? simulatedLabel("The customers, budget and messages in this plan are for a shop we simulate, not for your customers.") : null,
     brief ? stepsNav() : null,
     brief ? limitsStrip(goal, brief, facts) : null,
     el(

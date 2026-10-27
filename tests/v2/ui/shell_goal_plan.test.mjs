@@ -567,6 +567,7 @@ test("the shell boots in mock mode: bar, nav, switcher, banner, a screen, one-cl
     const goals = JSON.parse(await readFile(fileURLToPath(new URL("mock/goals.json", UI)), "utf8"));
     assert.equal($("goal-select").querySelectorAll("option").length, goals.length);
     assert.equal($("mode-banner").hidden, false);
+    assert.match($("mode-banner").textContent, /Simulated shop\./);
     assert.match($("mode-banner").textContent, /Sample data/);
     assert.equal(document.title, "Plan · Autonomy");
 

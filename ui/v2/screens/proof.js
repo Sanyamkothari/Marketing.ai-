@@ -5,7 +5,7 @@
      1. Did it make me extra money? A verdict in plain words comes before any number: "Real extra profit",
         "Not sure yet", "Losing money so far" or "Too early to tell". Then ONE sentence with the money and its
         range ("$4,300 extra profit (likely $900 to $7,700), measured against people we never contact"), the
-        other figures (extra revenue, return on spend, spend) and a chart of the ranges. How this is measured
+        other figures (extra revenue, spend) and a chart of the ranges. How this is measured
         (real extra profit, not "attributed revenue") is the description of "people we never contact".
      2. What should I do now? "Ready for Autopilot" when even the low end of the profit range is above zero
         and the goal is not on Autopilot yet; otherwise "stay in Shadow or Approve until the range is above
@@ -26,10 +26,15 @@
      - an estimate is always shown with its low and high, never a bare point, and "not sure yet" when its
        range includes zero; a missing estimate says "not enough data yet" instead of showing a zero;
      - general facts about the product (3-10%) are labelled as such and never shown as this shop's numbers;
-     - a description holds words, never a number the page does not also have from the API.
+     - a description holds words, never a number the page does not also have from the API;
+     - a shop we simulate says so first, in a "Simulated shop" label at the top of the page;
+     - no return-on-spend multiple is shown: it divides profit by the cost the proof managed to charge, and a
+       discount redeemed under a code the agent did not issue is not charged (ARCHITECTURE_REVIEW section 4 row 4),
+       so the multiple is larger than the truth. The page shows extra profit (already after message and discount
+       costs it charged) and the spend, each with what it counts.
    There are no pricing terms in the API, so nothing about "paid in results" is shown yet. */
 
-import { info, pageHead, withInfo } from "../components.js";
+import { info, isSimulatedShop, pageHead, simulatedLabel, withInfo } from "../components.js";
 import {
   DASH,
   call,
@@ -41,7 +46,6 @@ import {
   money,
   notFound,
   notify,
-  num,
   pct,
   present,
   range,
@@ -53,9 +57,6 @@ const NOT_ENOUGH = "Not enough data yet";
 
 /** Where the "3-10% typical" guidance comes from. The docs are not served with the app, so it is named in words. */
 export const EXPECT_DOC = "docs/research/v2/03_DECISION_SCIENCE.md";
-
-/** Return on spend as a multiple, always one decimal: 90.1 reads "90.1×" (each unit spent brought 90.1 back). */
-export const times = (v) => (present(v) ? `${num(v, 1)}×` : DASH);
 
 /**
  * One precision for the whole estimate: when any of its numbers is 1,000 or more, all three are shown whole, so a
@@ -228,13 +229,14 @@ export function notesGloss(notes) {
  * plain words where the data is not there yet. `goal` may be null (the whole programme), then money has no
  * currency sign.
  */
-export function proofSummaryText(proof, goal) {
+export function proofSummaryText(proof, goal, { simulated = false } = {}) {
   const currency = goal?.currency;
   const m = (v) => money(v, currency);
   const subject = goal?.text ? `"${goal.text}"` : "the whole programme";
   if (!proof) return `There is not enough data yet to show proof for ${subject}.`;
 
   const out = [`Proof for ${subject}, as of ${day(proof.as_of)}.`];
+  if (simulated) out.push("Simulated shop: these numbers come from a shop we simulate, not from real customers.");
   const profit = proof.incremental_profit;
   const revenue = proof.incremental_revenue;
   if (profit || revenue) {
@@ -262,8 +264,7 @@ export function proofSummaryText(proof, goal) {
   out.push(
     `Groups: ${count(proof.agent_n)} customers decided by the agent, ${count(proof.baseline_n)} by the simple rule, and ${count(proof.holdout_n)} people we never contact.`,
   );
-  const spend = `Spend so far: ${m(proof.spend)}`;
-  out.push(complete(proof.roi) ? `${spend}; return on spend ${rangeText(proof.roi, times)}.` : `${spend}.`);
+  out.push(`Spend so far: ${m(proof.spend)}.`);
   const gloss = notesGloss(proof.notes);
   if (gloss) out.push(gloss);
   for (const note of proof.notes || []) out.push(String(note));
@@ -433,7 +434,7 @@ export function firstCountsOn(since, horizonDays, asOf) {
  * forecast's horizon) and, when that is still ahead, the day the first ones count; then the spend. In Shadow the
  * days are left out: nothing is sent, so nothing will count.
  */
-function earlyStrip(proof, forecast, shadow, m) {
+function earlyStrip(proof, forecast, shadow, m, today = null) {
   const expected = forecast && forecast.state === "ok" ? forecast.expected : null;
   const horizon = expected && present(expected.horizon_days) ? Number(expected.horizon_days) : null;
   const first = horizon !== null ? firstCountsOn(expected.since, horizon, proof.as_of) : null;
@@ -448,7 +449,7 @@ function earlyStrip(proof, forecast, shadow, m) {
     plainCell(described("The simple rule decides", "Customers a simple fixed rule decides for, picked at random, for comparison."), count(proof.baseline_n)),
     plainCell(described("People we never contact", methodWords(proof)), count(proof.holdout_n)),
     waits && plainCell(described("Each contact counts after", waits), `${count(horizon)} days`, first ? `First from ${day(first)}` : null),
-    plainCell(described("Spend so far", "On discounts and messages, for this goal."), m(proof.spend)),
+    plainCell(described("Spend so far", spendWords(proof, today, m)), m(proof.spend), sentSoFar(proof, today, m)),
   ], "pf-hero-strip pf-early-strip");
 }
 
@@ -676,8 +677,8 @@ function methodCard(proof, groupsShown = false) {
   );
 }
 
-function shareCardFor(proof, goal, ctx, announcer, span) {
-  const summary = proofSummaryText(proof, goal);
+function shareCardFor(proof, goal, ctx, announcer, span, simulated = false) {
+  const summary = proofSummaryText(proof, goal, { simulated });
   const field = h("textarea", { class: "pf-summary", readonly: true, rows: 4, id: "ap-proof-summary" });
   field.value = summary;
   // The paragraph itself stays folded: the card is its title and its button, and the text is one tap away.
@@ -705,6 +706,27 @@ function shareCardFor(proof, goal, ctx, announcer, span) {
     fold,
   );
 }
+
+/**
+ * What "Spend so far" counts, so it can be read next to Live's "Spent on messages". Proof counts the agent group's
+ * contacts whose results are in (their window has closed), with the discounts customers used; Live counts every
+ * message sent so far, as the budget limit does. The two are different counts, and the page says so.
+ */
+export function spendWords(proof, today, fmt) {
+  const base = "What the agent group's contacts cost, messages and the discounts customers used, counting only contacts whose results are in. Extra profit above is already after this cost.";
+  return present(today?.spend_to_date) && differs(today.spend_to_date, proof?.spend)
+    ? `${base} Live's "Spent on messages" (${fmt(today.spend_to_date)}) counts every message sent so far, including contacts still waiting for their result, and no discounts.`
+    : base;
+}
+
+/** The line under the spend when Live's count of messages sent differs from it: the same number Live shows. */
+export function sentSoFar(proof, today, fmt) {
+  return present(today?.spend_to_date) && differs(today.spend_to_date, proof?.spend)
+    ? `Live: ${fmt(today.spend_to_date)} of messages sent so far`
+    : null;
+}
+
+const differs = (a, b) => present(a) && present(b) && Math.abs(Number(a) - Number(b)) >= 0.005;
 
 const RANGES = "Every range on this page is a 95% range: the real number is very likely inside it. When a range includes zero, it says \"not sure yet\" rather than guess.";
 
@@ -734,8 +756,8 @@ function loadingView() {
         h("p", { class: "pf-verdict pf-verdict-lg" }, block("220px", "28px", "skeleton-inline")),
         h("p", { class: "pf-lede" }, block("min(520px, 100%)", "32px", "skeleton-inline")),
         h("div", { class: "pf-figure pf-figure-pair" },
-          h("div", { class: "kpis", style: css({ "--kpi-count": "3" }) },
-            ...["Extra revenue", "Return on spend", "Spend so far"].map((l) => h("div", { class: "kpi" }, h("p", { class: "kpi-label" }, l),
+          h("div", { class: "kpis", style: css({ "--kpi-count": "2" }) },
+            ...["Extra revenue", "Spend so far"].map((l) => h("div", { class: "kpi" }, h("p", { class: "kpi-label" }, l),
               h("p", { class: "kpi-value" }, block("110px", "28px", "skeleton-inline")), h("p", { class: "kpi-range" }, block("120px", "12px", "skeleton-inline"))))),
           block("100%", "100px")),
       ),
@@ -770,6 +792,7 @@ export async function render(root, ctx) {
 
   // The forecast loads alongside the proof; either failing leaves the other standing.
   const forecastP = fetchForecast(ctx, goal);
+  const todayP = goalId ? call(ctx.api, "getToday", goalId).catch(() => null) : Promise.resolve(null);
   let proof = null;
   let proofError = null;
   try {
@@ -781,6 +804,8 @@ export async function render(root, ctx) {
     else proofError = e;
   }
   const forecast = await forecastP;
+  const today = await todayP;
+  const simulated = await isSimulatedShop(ctx, proof?.notes);
 
   const currency = goal?.currency;
   const m = (v) => money(v, currency);
@@ -796,10 +821,9 @@ export async function render(root, ctx) {
     resultCard.append(verdictLine(verdict, "pf-verdict"), profitLede(verdict, proof?.incremental_profit, m, goal, proof));
     if (proof && verdict.key === "early") {
       early = true;
-      resultCard.append(h("div", { class: "pf-figure" }, earlyStrip(proof, forecast, shadow, m)));
+      resultCard.append(h("div", { class: "pf-figure" }, earlyStrip(proof, forecast, shadow, m, today)));
     } else if (proof) {
-      // The figures that support the sentence: revenue next to profit, the return on spend once it has a range,
-      // and the spend always (a measured $0 is a value). A figure with no range yet is left to the verdict.
+      // The figures that support the sentence: revenue next to profit, and the spend always (a measured $0 is a value). A figure with no range yet is left to the verdict.
       const measured = complete(proof.incremental_profit) || complete(proof.incremental_revenue);
       const chart = estimateChart(
         [{ label: "Extra profit", est: proof.incremental_profit }, { label: "Extra revenue", est: proof.incremental_revenue }], m,
@@ -807,8 +831,7 @@ export async function render(root, ctx) {
       resultCard.append(figure(
         kpis([
           measured && estimateCell(described("Extra revenue", "Extra sales compared with people we never contact, before the cost of discounts and messages."), proof.incremental_revenue, m),
-          complete(proof.roi) && estimateCell(described("Return on spend", `Extra profit for each ${m(1)} spent on discounts and messages.`), proof.roi, times),
-          plainCell(described("Spend so far", "On discounts and messages, for this goal."), m(proof.spend)),
+          plainCell(described("Spend so far", spendWords(proof, today, m)), m(proof.spend), sentSoFar(proof, today, m)),
         ], "pf-hero-strip"),
         chart,
       ));
@@ -831,6 +854,7 @@ export async function render(root, ctx) {
   page.replaceChildren(
     ...[
       head(goal ? goal.text : "The whole programme", { asOf: proof?.as_of }),
+      simulated && simulatedLabel("The money on this page is from a shop we simulate, not from your customers. Nothing here is a result for a real business."),
       goalError && h("p", { class: "notice" }, `Couldn't load the goal (${errText(goalError)}); amounts are shown without a currency.`),
       h(
         "div",
@@ -842,7 +866,7 @@ export async function render(root, ctx) {
           proof ? ruleCardFor(proof, m, ruleSpan) : null,
           shadow ? null : forecastEl,
           expectFact(proof, direction(proof?.incremental_profit) !== "early", proof ? "span-5" : "span-12"),
-          proof ? shareCardFor(proof, goal, ctx, announcer, "span-7") : null,
+          proof ? shareCardFor(proof, goal, ctx, announcer, "span-7", simulated) : null,
           proofError ? null : methodCard(proof, early),
         ].filter(Boolean),
       ),

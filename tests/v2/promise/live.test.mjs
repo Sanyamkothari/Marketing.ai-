@@ -241,6 +241,21 @@ test("Live leads with yesterday: contacted, left alone and why, from GET /v2/tod
   assert.ok(noJunk(text), "no stray false/null/undefined text");
 });
 
+test("Live says Simulated shop first, and says what its spend counts", async () => {
+  const { root } = await draw();
+  const label = byClass(root, "simulated-label")[0];
+  assert.ok(label && label.textContent.startsWith("Simulated shop."), "a Simulated shop label on the sample data");
+  const text = root.textContent;
+  assert.ok(text.indexOf("Simulated shop.") < text.indexOf("Made a decision for each of"), "before the numbers");
+  const spent = all(root).find((n) => n.textContent === "Spent on messages" && n.getAttribute("aria-describedby"));
+  const tip = all(root).find((n) => n.getAttribute("role") === "tooltip" && spent.getAttribute("aria-describedby").split(" ").includes(n.id));
+  assert.match(tip.textContent, /every message sent so far/);
+  assert.match(tip.textContent, /Proof's spend counts a different set/);
+  // a real shop: no label
+  const real = await draw({ isMock: () => false, getDataReport: async () => ({ sources: [{ name: "shopify", kind: "shop" }] }) });
+  assert.equal(byClass(real.root, "simulated-label").length, 0);
+});
+
 test("the feed says what really happened, to whom, with the message", async () => {
   const activity = await mock("activity.json");
   const { root } = await draw();

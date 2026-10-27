@@ -539,6 +539,46 @@ export function notice(children, { tone = "warning", role = null } = {}) {
   return el("div", { class: ["notice", tone === "neutral" && "notice-neutral"], role }, children);
 }
 
+/** The label every screen that shows numbers carries when the shop is not a real one. */
+export const SIMULATED_SHOP = "Simulated shop";
+const SIMULATED_NOTE = /simulated (shop|sample)|demo data/i;
+const simulatedMemo = new WeakMap();
+
+/**
+ * Whether the numbers on screen come from a shop we simulate: the mock files (`?mock=1`, or the fall-back when no
+ * server answers), a server whose every data source is the Gym (`/v2/data/status`, kind "simulation"), or a note the
+ * server itself wrote ("Demo data from a simulated shop", on the proof). Never throws: when it cannot tell, a shop is
+ * not called simulated. Pass the notes a screen already has, to save the call.
+ */
+export async function isSimulatedShop(ctx, notes = []) {
+  if ([].concat(notes || []).some((n) => SIMULATED_NOTE.test(String(n)))) return true;
+  const api = ctx && ctx.api;
+  if (!api) return false;
+  if (typeof api.isMock === "function" && api.isMock()) return true;
+  if (typeof api.getDataReport !== "function") return false;
+  let asked = simulatedMemo.get(api);
+  if (!asked || Date.now() - asked.at > 60000) {
+    const ask = Promise.resolve()
+      .then(() => api.getDataReport())
+      .then((report) => {
+        const sources = report && Array.isArray(report.sources) ? report.sources : [];
+        return sources.length > 0 && sources.every((s) => s.kind === "simulation");
+      })
+      .catch(() => false);
+    asked = { at: Date.now(), ask };
+    simulatedMemo.set(api, asked);
+  }
+  return Boolean(await asked.ask) || (typeof api.isMock === "function" && api.isMock());
+}
+
+/**
+ * The visible "Simulated shop" label, one line, for the top of a screen that shows numbers. `what` says what the
+ * screen's numbers are, when it helps ("The money on this page is ...").
+ */
+export function simulatedLabel(what = "Everything on this page comes from a shop we simulate, not from your customers.") {
+  return el("div", { class: ["notice", "simulated-label"], role: "note" }, el("strong", {}, `${SIMULATED_SHOP}.`), " ", what);
+}
+
 /**
  * A grey block at the real size of what is loading (no shimmer, nothing shifts when the data lands). `width` and
  * `height` are CSS lengths; the default is one line of body text across the block.

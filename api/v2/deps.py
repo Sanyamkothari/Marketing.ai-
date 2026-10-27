@@ -729,7 +729,7 @@ def template_strategist(goal: Goal) -> Brief:
         audience=_AUDIENCES[goal.kind],
         horizon_days=horizon,
         envelope=Envelope(
-            channels=(Channel.EMAIL, Channel.WHATSAPP),
+            channels=STARTING_PLAN_CHANNELS,
             offers=(NO_OFFER,),
             budget=goal.budget,
             max_contacts_per_week=2,
@@ -744,6 +744,9 @@ def template_strategist(goal: Goal) -> Brief:
         created_at=goal.created_at,
     )
 
+
+STARTING_PLAN_CHANNELS: tuple[Channel, ...] = (Channel.EMAIL, Channel.WHATSAPP)
+"""The channels of the starting plan (`template_strategist`); a suggested budget is costed on the dearest of them."""
 
 # --- the demo -------------------------------------------------------------------------------------
 
@@ -994,8 +997,11 @@ def suggest_opportunities(
     `GET /v2/onboarding/proposals` returns the full proposals (why, basis, ranges).
 
     Without `events`, only counts from customer state are possible: one-time buyers and sign-ups who
-    never bought, each budgeted at what two messages to every one of them cost (the starting plan's
-    message and follow-up), never a made-up amount.
+    never bought, each budgeted at what two messages to every one of them cost on the dearest channel
+    the starting plan may use (`STARTING_PLAN_CHANNELS`: email and WhatsApp), never a made-up amount.
+    Costing them at the email price alone suggested $1.00 for a few hundred people, a budget a
+    plan that may use WhatsApp spends in about 30 messages; the costs are `DEFAULT_CHANNEL_COSTS`, in
+    the shop's currency units until the per-shop costs of ARCHITECTURE_REVIEW section 8 "Fix first" 2 land.
     """
     rows = list(states)
     if events is not None:
@@ -1005,7 +1011,7 @@ def suggest_opportunities(
         return [proposal_goal(p, business_id, now) for p in scan.proposals if p.kind not in taken]
     from autonomy.onboarding.priors import CHANNEL_COSTS
 
-    per_message = CHANNEL_COSTS.get(Channel.EMAIL, 0.0)
+    per_message = max((CHANNEL_COSTS.get(c, 0.0) for c in STARTING_PLAN_CHANNELS), default=0.0)
     ideas = [
         (
             "opp_repeat_purchase",
