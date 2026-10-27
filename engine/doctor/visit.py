@@ -2008,6 +2008,57 @@ def _base_rules(run: _Run, case: Case, step: _Step) -> None:
                     upload_id=upload_id,
                 )
             )
+        elif len(loaded.frame) > 0:
+            step.items.append(_row_id_item(run, step, loaded, ctx, now, evidence=result.evidence_id))
+
+
+ROW_ID_WARNING: Final[str] = (
+    "This file has no column that names each row, so this adds a row number. A row number only counts the rows "
+    "of this file: predictions cannot be joined back to your CRM or customer list without a real ID. Say no and "
+    "send a file with an ID column to get that."
+)
+"""What the person is told with the proposed row number (never silently invented: it waits for their yes)."""
+
+
+def _row_id_item(
+    run: _Run, step: _Step, loaded: LoadedFile, ctx: DataToolContext, now: datetime, *, evidence: str
+) -> CaseItem:
+    """A file with no ID column (one row per call, say): a pending query that adds a row number, with the plain
+    warning. It is the ordinary `sql_query` step, so the person's yes, the trial and the checks are the usual ones.
+    """
+    from engine.agent.sql_step import table_alias
+    from engine.doctor.guards import Finding
+    from engine.doctor.materialize import table_names
+    from engine.doctor.tools_sql import SqlStepProposal
+
+    taken = {str(c).casefold() for c in loaded.frame.columns}
+    column = next(name for name in ("row_id", *(f"row_id_{n}" for n in range(2, 100))) if name not in taken)
+    table = table_names(ctx.files)[loaded.upload_id]
+    result = run.call(
+        "propose_sql_step",
+        {
+            "description": f"Add a row number “{column}” to each row, in the order of the file.",
+            "sql": f"SELECT row_number() OVER () AS {column}, * FROM {table_alias(table)}",
+            "output_name": f"{table}_with_row_id",
+            "upload_ids": [loaded.upload_id],
+        },
+        ctx,
+    )
+    step.evidence.append(result)
+    made = SqlStepProposal.model_validate(result.output)
+    findings = [*made.findings, Finding(level="flag", code="ROW_ID_INVENTED", message=ROW_ID_WARNING)]
+    payload = made.payload()
+    payload["findings"] = [f.model_dump(mode="json") for f in findings]
+    payload["needs_yes"] = True
+    return _item(
+        "recipe_step",
+        payload,
+        title=f"Add a row number “{column}” to {loaded.file_name or 'this file'}: it has no ID column.",
+        upload_id=None,
+        confidence=AgentConfidence.CHECK,
+        evidence=(evidence, result.evidence_id),
+        now=now,
+    )
 
 
 def _generic_rules(run: _Run, case: Case, step: _Step) -> None:

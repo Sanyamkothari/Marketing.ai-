@@ -1132,6 +1132,8 @@ def run_recipe(
                 outcome_open=outcome_open,
             )
             receipts.append(sql_receipt)
+            # a later query may read this one's table by its name (a query over a table another query built)
+            tables = {**(tables or {}), sql_params(_params(step)).output_name: work}
             continue
         if step.kind is RecipeStepKind.KEEP_LATEST_PER_ID:
             try:

@@ -55,7 +55,7 @@ def run_features(review: _Review, index: int, args: dict[str, Any]) -> None:
     ]
     shown = {
         "evidence_id": result.evidence_id,
-        "file": f"F{index + 1}",
+        "file": review.labels[index],
         "tool": "propose_features",
         "result": review.gates[index].prepare(
             {

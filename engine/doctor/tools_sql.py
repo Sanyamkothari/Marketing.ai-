@@ -42,6 +42,7 @@ from engine.agent.sql_step import (
     sql_params,
 )
 from engine.config import StrictBase
+from engine.doctor.current_tables import BUILT_PREFIX, is_built
 from engine.doctor.guards import Finding, NotMeasurableError, Receipt, cell_change, infer_key
 from engine.doctor.limits import limits
 from engine.doctor.materialize import (
@@ -101,7 +102,9 @@ class ProposeSqlStepArgs(BaseModel):
     )
     output_name: str = Field(min_length=1, max_length=64, description="What the new table is called.")
     upload_ids: tuple[str, ...] = Field(
-        min_length=1, max_length=MAX_INPUTS, description="The files it reads."
+        min_length=1,
+        max_length=MAX_INPUTS,
+        description="The files it reads, or a table another query built (`built:<its name>`).",
     )
     as_of: date | None = Field(
         default=None, description="The date `$as_of` stands for, when the query uses it."
@@ -249,6 +252,43 @@ def _trial_items(items: Sequence[CaseItem], replacing: Collection[str] = ()) -> 
     return kept
 
 
+def _built_query(items: Sequence[CaseItem], name: str, replacing: Collection[str]) -> CaseItem | None:
+    """The live query item that makes the table `name` (accepted, or waiting for a yes), unless the chat is swapping it."""
+    for item in items:
+        step = _step_of(item)
+        if step is None or step.kind is not RecipeStepKind.SQL_QUERY or item.item_id in replacing:
+            continue
+        if item.state is ProposalState.REJECTED:
+            continue
+        try:
+            made = sql_params(step.params).output_name
+        except SqlStepError:
+            continue
+        if made == name:
+            return item
+    return None
+
+
+def built_source(ctx: DataToolContext, upload_id: str) -> tuple[LoadedFile, CaseItem]:
+    """The file a built table (`built:<name>`) was made from, and the query item that makes it."""
+    maker = _built_query(ctx.case_items or (), upload_id[len(BUILT_PREFIX) :], ctx.replacing)
+    origin = (
+        next((f for f in ctx.files if f.upload_id == (maker.upload_id or ctx.files[0].upload_id)), None)
+        if maker is not None and ctx.files
+        else None
+    )
+    if maker is None or origin is None:
+        raise DataToolError("TOOL_INPUT_INVALID", "That table is not in this case.", status=422)
+    return origin, maker
+
+
+def with_accepted(items: Sequence[CaseItem], item_ids: Collection[str]) -> list[CaseItem]:
+    """The plan with the queries that make the tables read counted as accepted (a waiting one is not applied)."""
+    return [
+        i.model_copy(update={"state": ProposalState.ACCEPTED}) if i.item_id in item_ids else i for i in items
+    ]
+
+
 def _as_of_rule(
     given: ProposeSqlStepArgs, tables: dict[str, pd.DataFrame], names: dict[str, str]
 ) -> tuple[date, dict[str, Any]]:
@@ -388,11 +428,26 @@ def _propose(
             status=422,
         )
     loaded = {f.upload_id: f for f in ctx.files}
-    if any(u not in loaded for u in given.upload_ids):
-        raise DataToolError("TOOL_INPUT_INVALID", "That file is not in this case.", status=422)
     names = table_names(ctx.files)
-    asked = {names[u]: loaded[u] for u in given.upload_ids}
-    items = _trial_items(ctx.case_items or (), ctx.replacing)
+    # An input is a file, or a table a query built (`built:<name>`): that one is read by its name, after its own query,
+    # which the trial counts as accepted; the new query runs on the file the built table was made from.
+    asked: dict[str, LoadedFile] = {}
+    reads: list[str] = []  # the uploads the inputs come from
+    made_by: dict[str, str] = {}  # built table name -> the item that makes it
+    for given_id in given.upload_ids:
+        if is_built(given_id):
+            built_name = given_id[len(BUILT_PREFIX) :]
+            origin, maker = built_source(ctx, given_id)
+            asked[built_name], made_by[built_name] = origin, maker.item_id
+            reads.append(origin.upload_id)
+        elif given_id in loaded:
+            asked[names[given_id]] = loaded[given_id]
+            reads.append(given_id)
+        else:
+            raise DataToolError("TOOL_INPUT_INVALID", "That file is not in this case.", status=422)
+    home = next((reads[i] for i, n in enumerate(asked) if n in made_by), reads[0])
+    promoted = set(made_by.values())
+    items = _trial_items(with_accepted(ctx.case_items or (), promoted), ctx.replacing)
     params: dict[str, Any] = {
         "sql": given.sql,
         "inputs": list(asked),
@@ -401,7 +456,7 @@ def _propose(
     }
     if extra:
         params.update(extra)  # what our own code knows about a query it compiled (`propose_features`)
-    if len(ctx.files) == 1 and len(asked) == 1:
+    if len(ctx.files) == 1 and len(asked) == 1 and not made_by:
         # an older recipe runner (a replay's file recipe) is given no tables: the query names its one file
         params["this_table"] = next(iter(asked))
 
@@ -410,7 +465,7 @@ def _propose(
         whole = materialize_plan(
             (), items, ctx.files, Full(), twice=False, as_of=ctx.as_of, training_as_of=ctx.training_as_of
         )
-        if (refusal := _refused(whole, given.upload_ids, ctx.files)) is not None:
+        if (refusal := _refused(whole, reads, ctx.files)) is not None:
             raise refusal
         return whole
 
@@ -419,7 +474,9 @@ def _propose(
     try:
         if given.as_of_rule is not None:
             whole = plan_so_far()  # the rule reads the whole file, after the same fixes, as a run does
-            as_of, rule = _as_of_rule(given, whole.tables, names)
+            as_of, rule = _as_of_rule(
+                given, whole.tables, {**names, **{BUILT_PREFIX + n: n for n in made_by}}
+            )
             params["as_of_rule"] = rule
         if as_of is not None:
             params["as_of"] = as_of.isoformat()
@@ -439,14 +496,15 @@ def _propose(
     # The trial is the plan's own materialisation with the query as one more step. It is given the date the rule
     # gives on the whole file, so a sample cannot move it.
     tried = tried_step(step, ctx.as_of, ctx.training_as_of)
-    first_upload = given.upload_ids[0]
+    first_upload = home
     seen: dict[str, pd.DataFrame] = {}
+    built_frames: dict[str, pd.DataFrame] = {}
 
-    def watch(
-        _upload: str, item_id: str, _step: RecipeStep, was: pd.DataFrame, _became: pd.DataFrame
-    ) -> None:
+    def watch(_upload: str, item_id: str, _step: RecipeStep, was: pd.DataFrame, became: pd.DataFrame) -> None:
         if item_id == CANDIDATE:
             seen["before"] = was  # the rows the query started from: the first table, after the plan's fixes
+        elif item_id in promoted:
+            built_frames[item_id] = became  # a built table the query reads, as its own query made it
 
     prepared = materialize_plan(
         (),
@@ -458,7 +516,7 @@ def _propose(
         training_as_of=ctx.training_as_of,
         watch=watch,
     )
-    if (refusal := _refused(prepared, given.upload_ids, ctx.files)) is not None:
+    if (refusal := _refused(prepared, reads, ctx.files)) is not None:
         raise refusal
     table = names[first_upload]
     made = prepared.tables[table]
@@ -484,15 +542,25 @@ def _propose(
     except NotMeasurableError as exc:
         changed_cells = compared_cells = None
         findings.append(Finding(level="flag", code="STEP_NOT_MEASURED", message=f"{exc} It needs your yes."))
-    inputs = tuple(
-        SqlTableSummary(
-            name=name,
-            file_name=str(file.file_name or "").strip() or file.upload_id,
-            rows=len(file.frame),
-            columns=len((first if file.upload_id == first_upload else prepared.tables[name]).columns),
+    summaries: list[SqlTableSummary] = []
+    for name, file in asked.items():
+        built = built_frames.get(made_by.get(name, ""))  # a built table: the rows its own query made
+        if built is None and name in made_by:
+            raise DataToolError("TOOL_INPUT_INVALID", "That table could not be built first.", status=409)
+        shown = (
+            built
+            if built is not None
+            else (first if file.upload_id == first_upload else prepared.tables[name])
         )
-        for name, file in asked.items()
-    )
+        summaries.append(
+            SqlTableSummary(
+                name=name,
+                file_name=name if built is not None else str(file.file_name or "").strip() or file.upload_id,
+                rows=len(built) if built is not None else len(file.frame),
+                columns=len(shown.columns),
+            )
+        )
+    inputs = tuple(summaries)
     sampled = any(len(file.frame) > limits().trial.dry_run_rows for file in asked.values())
     read = ", ".join(f"{t.file_name} ({t.rows:,} rows)" for t in inputs)
     columns = tuple(str(c) for c in made.columns)
