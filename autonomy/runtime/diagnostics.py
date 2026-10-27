@@ -5,8 +5,11 @@ from a `DecisionTally`: it is fed every decision the agent makes for the agent g
 by the reason code of each "do nothing" and by every `blocked_by` code, and records which v3 part held a
 customer where the decision says so:
 
-* journeys: a "do nothing" that has a `journey_id` (a customer held between steps), and every
-  `journey_ended` code (`never_read`, `no_longer_pays`...);
+* journeys: a "do nothing" that has a `journey_id` (a customer held between steps, or held mid-journey by a
+  rule: `journey_hold:<code>`), every `journey_ended` code (`never_read`, `no_longer_pays`...), and a
+  `no_bids` where journeys are on and the customer's contactable channels are ones they never read (the
+  journeys' filter removes every bid on such a channel before the auction, `JourneyRunner.expand`):
+  `no_bids:journey_never_read` when all of them are, `no_bids:journey_never_read_some` when some are;
 * frequency: `frequency_plan` in `blocked_by`;
 * the weekly cap: `weekly_cap` is one code for two things, the hard cap of the briefs and the agent's own weekly
   budget (a customer's rhythm), so a hold is split by whether the customer's contacts in 7 days had reached the
@@ -25,13 +28,25 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from autonomy.contracts import CustomerState, Decision, DecisionContext, DecisionKind
 from autonomy.decide import rules
 from autonomy.decide.explain import BLOCK_ORDER
+from autonomy.decide.journeys import never_read
 
-__all__ = ["DecisionTally", "RunRecorder", "format_block", "part_snapshot", "reason_code"]
+if TYPE_CHECKING:
+    from autonomy.decide.journeys import JourneyRunner
+
+__all__ = [
+    "DecisionTally",
+    "RunRecorder",
+    "format_block",
+    "journeys_of",
+    "never_read_code",
+    "part_snapshot",
+    "reason_code",
+]
 
 PREFIX = "DIAG "
 
@@ -49,27 +64,57 @@ it, and the short code each stands for. `rest_draw`: the auction drew "do nothin
 worth sending; `explore_rest`: the exploration floor chose rest; `restraint_hold`: restraint kept the best
 message out of the draw; `price_beats_value`: the best message earns something but not more than the
 attention price; `net_not_positive`: no message earns more than its own channel and offer cost, price aside; `no_bids`: the bidders
-offered nothing (no goal, or a customer left alone before the auction: who, harm, pruning)."""
+offered nothing (no goal, or a customer left alone before the auction: who, harm, pruning), or journeys'
+never-read filter removed every bid (`DecisionTally.add` splits that out when it is given the journeys)."""
 
 
 def reason_code(d: Decision) -> str:
     """One short code for why the decision is what it is: "act", or the cause of a "do nothing"."""
     if d.kind is DecisionKind.ACT:
         return "act"
-    if d.journey_id is not None:
-        return "journey_hold"
     blocked = set(d.blocked_by)
+    rule = _first_block(blocked - {"experiment_arm"})
+    if d.journey_id is not None:
+        # held mid-journey: by a rule (`journey_hold:<code>`) or waiting for the next step
+        return f"journey_hold:{rule}" if rule else "journey_hold"
     if "experiment_arm" in blocked:
         return "experiment_arm"
-    for code in (*BLOCK_ORDER, *rules.ALL_CODES):
-        if code in blocked:
-            return f"blocked:{code}"
-    if blocked:
-        return f"blocked:{sorted(blocked)[0]}"
+    if rule:
+        return f"blocked:{rule}"
     for stem, code in _STEMS:
         if d.reason.startswith(stem):
             return code
     return "other"
+
+
+def _first_block(blocked: set[str]) -> str | None:
+    for code in (*BLOCK_ORDER, *rules.ALL_CODES):
+        if code in blocked:
+            return code
+    return sorted(blocked)[0] if blocked else None
+
+
+def journeys_of(policy: Any) -> JourneyRunner | None:
+    """The journey runner of a built agent (`AgentPolicy.policy.journeys`), or None when journeys are off or
+    the policy is not an agent."""
+    runner = getattr(getattr(policy, "policy", None), "journeys", None)
+    return cast("JourneyRunner | None", runner)
+
+
+def never_read_code(state: CustomerState, journeys: JourneyRunner) -> str | None:
+    """Whether journeys' never-read filter can explain a "no bids" for this customer.
+
+    `JourneyRunner.expand` removes every bid on a channel where the customer has had
+    `never_open_after_sends` messages with no click or reply. The bids themselves are not on the decision,
+    so this reads the state: "journey_never_read" when every contactable channel is never read (no bid can
+    have survived), "journey_never_read_some" when only some are (the bids may have been on those), None
+    when none are."""
+    limit = journeys.settings.never_open_after_sends
+    reachable = [stats for stats in state.channels.values() if stats.contactable]
+    hit = sum(1 for stats in reachable if never_read(stats, limit))
+    if not hit:
+        return None
+    return "journey_never_read" if hit == len(reachable) else "journey_never_read_some"
 
 
 @dataclass
@@ -86,13 +131,25 @@ class DecisionTally:
     attention_price_sum: float = 0.0
 
     def add(
-        self, d: Decision, state: CustomerState | None = None, ctx: DecisionContext | None = None
+        self,
+        d: Decision,
+        state: CustomerState | None = None,
+        ctx: DecisionContext | None = None,
+        *,
+        journeys: JourneyRunner | None = None,
     ) -> None:
         """Count one decision. With the `state` it was made on and its `ctx`, a `weekly_cap` hold is also split
         by whether the customer had reached the briefs' cap: the code is shared by the hard cap and by the
-        agent's own weekly budget (a customer's rhythm), which holds earlier."""
+        agent's own weekly budget (a customer's rhythm), which holds earlier. With the agent's `journeys`
+        (`journeys_of`) and the `state`, a `no_bids` that journeys' never-read filter explains is counted as
+        `no_bids:<never_read_code>` and as that part."""
         self.kinds[d.kind.value] += 1
         code = reason_code(d)
+        if code == "no_bids" and journeys is not None and state is not None:
+            filtered = never_read_code(state, journeys)
+            if filtered:
+                code = f"no_bids:{filtered}"
+                self.parts[f"{filtered}_filter"] += 1
         self.reasons[code] += 1
         for b in d.blocked_by:
             self.blocked[b] += 1
@@ -116,7 +173,7 @@ class DecisionTally:
             self.parts["weekly_cap_hold_at_cap" if at_cap else "weekly_cap_hold_below_cap"] += 1
         if rules.FREQUENCY_PLAN in d.blocked_by and d.kind is DecisionKind.NOTHING:
             self.parts["frequency_plan_hold"] += 1
-        if code == "journey_hold":
+        if code.startswith("journey_hold"):
             self.parts["journey_hold"] += 1
         if d.journey_ended:
             self.parts[f"journey_ended:{d.journey_ended.rpartition(':')[2]}"] += 1
@@ -179,6 +236,7 @@ class RunRecorder:
         self.policy = policy
         self.tally = DecisionTally()
         self.agent: Any = None
+        self.journeys: JourneyRunner | None = None
         self.runs = 0
 
     def __call__(
@@ -188,8 +246,9 @@ class RunRecorder:
             return
         if agent is not self.agent:
             self.agent = agent
+            self.journeys = journeys_of(agent)
             self.runs += 1
-        self.tally.add(decision, state, ctx)
+        self.tally.add(decision, state, ctx, journeys=self.journeys)
 
 
 def part_snapshot(policy: Any) -> dict[str, object]:
@@ -203,7 +262,7 @@ def part_snapshot(policy: Any) -> dict[str, object]:
     planner = getattr(policy, "planner", None)
     if planner is not None:
         out["frequency_plans_chosen"] = dict(planner.chosen)
-    runner = getattr(getattr(policy, "policy", None), "journeys", None)
+    runner = journeys_of(policy)
     if runner is not None:
         events: Counter[str] = Counter()
         for e in runner.history:
@@ -215,9 +274,10 @@ def part_snapshot(policy: Any) -> dict[str, object]:
     return out
 
 
-def _counts(counter: Mapping[str, int], limit: int = 14) -> str:
+def _counts(counter: Mapping[str, int]) -> str:
+    """Every count, largest first: the log must not lose a code."""
     items = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
-    return " ".join(f"{k}={v}" for k, v in items[:limit]) or "none"
+    return " ".join(f"{k}={v}" for k, v in items) or "none"
 
 
 def format_block(

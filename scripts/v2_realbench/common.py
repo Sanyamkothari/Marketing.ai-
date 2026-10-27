@@ -73,7 +73,7 @@ from autonomy.proof.estimate import Z_95
 from autonomy.proof.replay import LoggedBandit, fit_segment_policy
 from autonomy.proof.replay import evaluate as harness_evaluate
 from autonomy.proof.replay.harness import SegmentPolicy, per_action_mean_model
-from autonomy.runtime.diagnostics import DecisionTally, format_block, part_snapshot
+from autonomy.runtime.diagnostics import DecisionTally, format_block, journeys_of, part_snapshot
 
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
@@ -462,6 +462,7 @@ def run_agent(
     reasons: list[str] = []
     nets: list[float] = []
     tally = DecisionTally()
+    runner = journeys_of(policy)  # splits journeys' never-read filter out of `no_bids`
     n_dec = 0
     t0 = time.perf_counter()
     with timings.step(f"agent: decide for {len(test_states)} test customers x {seeds} seeds"):
@@ -470,7 +471,7 @@ def run_agent(
             for j, st in enumerate(test_states):
                 d = policy.decide(st, ctx)
                 n_dec += 1
-                tally.add(d, st, ctx)
+                tally.add(d, st, ctx, journeys=runner)
                 a = inp.arm_of(d)
                 pi[j, a] += 1.0
                 arms[a] += 1

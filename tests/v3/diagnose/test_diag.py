@@ -9,6 +9,7 @@ import pytest
 from autonomy.contracts import (
     Action,
     Channel,
+    ChannelStats,
     CustomerState,
     Decision,
     DecisionContext,
@@ -19,7 +20,14 @@ from autonomy.gym import default_brief, default_content, get_scenario
 from autonomy.gym.run import main as gym_main
 from autonomy.gym.score import observing, run_policy
 from autonomy.runtime import ablation
-from autonomy.runtime.diagnostics import DecisionTally, RunRecorder, format_block, reason_code
+from autonomy.runtime.agent import build_agent_policy
+from autonomy.runtime.diagnostics import (
+    DecisionTally,
+    RunRecorder,
+    format_block,
+    journeys_of,
+    reason_code,
+)
 from scripts.v2_realbench import common as bench
 from tests.v2.realfix.test_bench import _synthetic
 
@@ -82,6 +90,9 @@ def test_reason_codes_name_why_a_decision_did_nothing() -> None:
         "net_not_positive"
     )
     assert reason_code(_nothing("A journey holds them", journey_id="j")) == "journey_hold"
+    # held mid-journey by a rule: the rule's code is kept, not folded into journeys
+    assert reason_code(_nothing("Left alone: cap", "weekly_cap", journey_id="j")) == "journey_hold:weekly_cap"
+    assert reason_code(_nothing("quiet", "quiet_hours", journey_id="j")) == "journey_hold:quiet_hours"
     assert reason_code(_nothing("something new")) == "other"
 
 
@@ -97,12 +108,14 @@ def test_the_tally_counts_kinds_codes_and_parts_and_merges() -> None:
     t.add(_nothing("Left alone: cap", "weekly_cap"), state.model_copy(update={"contacts_7d": 2}), ctx)
     t.add(_nothing("Left alone: plan", "frequency_plan"))
     t.add(_nothing("hold", journey_id="j"))
+    t.add(_nothing("held by a rule", "unsubscribed", journey_id="j"))
     t.add(_nothing("ended", ended="j:never_read"))
-    assert (t.total, t.acts, t.nothing) == (7, 2, 5)
+    assert (t.total, t.acts, t.nothing) == (8, 2, 6)
     assert t.mean_expected_net == pytest.approx(1.0) and t.mean_attention_price == pytest.approx(0.2)
     assert t.blocked["weekly_cap"] == 2 and t.blocked["frequency_plan"] == 1
     assert t.parts["weekly_cap_hold_below_cap"] == 1 and t.parts["weekly_cap_hold_at_cap"] == 1
-    assert t.parts["frequency_plan_hold"] == 1 and t.parts["journey_hold"] == 1
+    assert t.parts["frequency_plan_hold"] == 1 and t.parts["journey_hold"] == 2
+    assert t.reasons["journey_hold"] == 1 and t.reasons["journey_hold:unsubscribed"] == 1
     assert t.parts["journey_ended:never_read"] == 1
     other = DecisionTally()
     other.add(_act(2.0, 0.0))
@@ -114,7 +127,51 @@ def test_the_tally_counts_kinds_codes_and_parts_and_merges() -> None:
     lines = block.splitlines()
     assert lines and all(line.startswith("DIAG ") for line in lines)
     assert "restraint=False" in block and "who_left_alone=3" in block and "k=1" in block
-    assert "decisions total=8 act=3" in block
+    assert "decisions total=9 act=3" in block
+
+
+def _reader(sends: int, *, clicks: int = 0) -> ChannelStats:
+    return ChannelStats(address_known=True, consent=True, sends=sends, clicks=clicks)
+
+
+def test_a_no_bids_that_journeys_never_read_filter_explains_is_named() -> None:
+    """With journeys on, `JourneyRunner.expand` drops every bid on a channel the customer never reads; the
+    decision then reads "no active goal has anything" with no journey and no block, so the tally names it."""
+    runner = build_agent_policy([default_brief()], default_content(), journeys=True).policy.journeys
+    assert runner is not None
+    limit = runner.settings.never_open_after_sends
+    no_bids = _nothing("Left alone: no active goal has anything to offer this customer.")
+    deaf = CustomerState(
+        customer_id="c",
+        as_of=NOW,
+        channels={Channel.EMAIL: _reader(limit), Channel.WHATSAPP: _reader(limit + 3)},
+    )
+    some = deaf.model_copy(
+        update={"channels": {Channel.EMAIL: _reader(limit), Channel.WHATSAPP: _reader(limit, clicks=1)}}
+    )
+    fresh = deaf.model_copy(update={"channels": {Channel.EMAIL: _reader(limit - 1)}})
+    t = DecisionTally()
+    t.add(no_bids, deaf, journeys=runner)
+    t.add(no_bids, some, journeys=runner)
+    t.add(no_bids, fresh, journeys=runner)
+    t.add(no_bids, deaf)  # journeys off: the filter cannot have run
+    assert t.reasons == {
+        "no_bids:journey_never_read": 1,
+        "no_bids:journey_never_read_some": 1,
+        "no_bids": 2,
+    }
+    assert t.parts["journey_never_read_filter"] == 1 and t.parts["journey_never_read_some_filter"] == 1
+    plain = build_agent_policy([default_brief()], default_content())
+    assert journeys_of(plain) is None and journeys_of(object()) is None
+
+
+def test_the_block_prints_every_code() -> None:
+    t = DecisionTally()
+    for i in range(30):
+        t.add(_nothing("x", f"code_{i:02d}"))
+    block = format_block("many", t)
+    for i in range(30):
+        assert f"blocked:code_{i:02d}=1" in block and f" code_{i:02d}=1" in block
 
 
 def test_a_tally_with_nothing_in_it_still_prints() -> None:
