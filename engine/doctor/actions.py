@@ -95,7 +95,7 @@ class ProposeFeaturesArgs(_Args):
 
     entity_key: str = Field()
     time_column: str = Field()
-    preset: Literal["rfm", "rfm_plus"] | None = Field(default=None)
+    preset: Literal["rfm", "rfm_plus", "rfm_ratios"] | None = Field(default=None)
     features: list[dict[str, Any]] = Field(
         default_factory=list, description="your own: name, agg, column, window_days, where"
     )

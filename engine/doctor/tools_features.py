@@ -32,7 +32,7 @@ Not here: scaling, encoding or imputation for the model (AutoML does those).
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any, Final, Literal
 
@@ -91,7 +91,22 @@ __all__ = [
 ]
 
 M_FEATURE_TOOLS: Final[tuple[str, ...]] = ("propose_features",)
-PRESETS: Final[tuple[str, ...]] = ("rfm", "rfm_plus")
+PRESETS: Final[tuple[str, ...]] = ("rfm", "rfm_plus", "rfm_ratios")
+NAMED: Final[tuple[str, ...]] = (
+    "dormancy_index",
+    "return_rate",
+    "spend_per_month",
+    "basket_depth",
+    "spend_velocity_30d",
+    "orders_velocity_30d",
+    "recency_bucket",
+)
+"""Named custom aggregations (Step 7b): ratios, velocities and the recency bucket. Each takes its columns from the
+request's `amount_column` and `order_column`, and is the same expression the `rfm_ratios` preset uses."""
+RECENCY_BUCKETS: Final[tuple[int, int]] = (30, 90)
+"""Win-back cliffs: 0-30 days active, 31-90 at risk, 91 and more lapsed. The raw number is kept beside the bucket."""
+MONTH_DAYS: Final[float] = 30.4375
+"""Days in a month for a rate per month of tenure (365.25 / 12)."""
 MAX_FEATURES: Final[int] = 40
 MAX_OUTPUT_CHARS: Final[int] = 22_000
 """The answer's cap through the registry: the compiled query (up to `MAX_COMPILED_SQL_CHARS`) is in the step, and
@@ -172,9 +187,16 @@ class FeatureArg(BaseModel):
         "days_since_last",
         "days_since_first",
         "exists",
+        "dormancy_index",
+        "return_rate",
+        "spend_per_month",
+        "basket_depth",
+        "spend_velocity_30d",
+        "orders_velocity_30d",
+        "recency_bucket",
     ]
     column: str | None = Field(
-        default=None, max_length=128, description="Needed by all but the counts and days."
+        default=None, max_length=128, description="Needed by all but the counts and days and the named ones."
     )
     window_days: int | None = Field(
         default=None, ge=1, le=3650, description="Only rows in the last N days before the as-of date."
@@ -197,10 +219,12 @@ class ProposeFeaturesArgs(BaseModel):
         default=None, description="Keep the as-of date as a rule worked out again on every file."
     )
     features: tuple[FeatureArg, ...] = Field(default=(), max_length=MAX_FEATURES)
-    preset: Literal["rfm", "rfm_plus"] | None = Field(
+    preset: Literal["rfm", "rfm_plus", "rfm_ratios"] | None = Field(
         default=None,
         description="rfm: days since the last order, orders and spend in 90 and 365 days, average order value. "
-        "rfm_plus adds return rate, distinct products, days between orders, tenure, spend trend, active months.",
+        "rfm_plus adds return rate, distinct products, days between orders, tenure, spend trend, active months. "
+        "rfm_ratios adds tenure, dormancy index, return rate, spend per month, basket depth, 30-day spend and "
+        "order velocity, and the recency bucket beside the days.",
     )
     amount_column: str | None = Field(
         default=None, max_length=128, description="What an order is worth (presets)."
@@ -321,6 +345,91 @@ def _col(name: str) -> str:
         raise _refuse(exc.code, f"{exc.message} {exc.suggestion}") from exc
 
 
+def _between(aggregate: str, low: int, high: int) -> str:
+    """`aggregate` over the rows dated more than `low` and at most `high` days before the snapshot."""
+    return (
+        f"{aggregate} FILTER (WHERE e.{_EVENT_TIME} IS NOT NULL "
+        f"AND e.{_EVENT_TIME} > s.snapshot_date - INTERVAL {high} DAY "
+        f"AND e.{_EVENT_TIME} <= s.snapshot_date - INTERVAL {low} DAY)"
+    )
+
+
+def _named(name: str, amount: str | None, order: str | None) -> _Col:
+    """One named custom aggregation (Step 7b). A division by nothing is blank (`NULLIF`), never 0; every term is
+    cut at the snapshot by the join, as the library's are."""
+    if name == "return_rate":
+        if not amount:
+            raise _refuse(
+                "FEATURE_NEEDS_COLUMN", "'return_rate' needs `amount_column`: a return is negative."
+            )
+        return _ratio(
+            name,
+            SubAggregation(
+                function=AggFunction.COUNT, where=WhereClause(column=amount, op=WhereOp.LT, value=0)
+            ),
+            SubAggregation(function=AggFunction.COUNT),
+            "share of rows that are returns (a negative amount)",
+        )
+    if name == "basket_depth":
+        if not order:
+            raise _refuse("FEATURE_NEEDS_COLUMN", "'basket_depth' needs `order_column`: the order number.")
+        return _ratio(
+            name,
+            SubAggregation(function=AggFunction.COUNT),
+            SubAggregation(function=AggFunction.NUNIQUE, column=order),
+            "items per order",
+        )
+    recency = _library("r", AggFunction.DAYS_SINCE_LAST).expr
+    tenure = _library("t", AggFunction.DAYS_SINCE_FIRST).expr
+    if name == "dormancy_index":
+        return _Col(
+            name,
+            f"({recency}) / NULLIF({tenure}, 0)",
+            "days since the last order divided by days since the first",
+            (),
+        )
+    if name == "recency_bucket":
+        low, high = RECENCY_BUCKETS
+        return _Col(
+            name,
+            f"CASE WHEN ({recency}) IS NULL THEN NULL WHEN ({recency}) <= {low} THEN 'active' "
+            f"WHEN ({recency}) <= {high} THEN 'at_risk' ELSE 'lapsed' END",
+            f"recency bucket: active (up to {low} days), at risk (up to {high}), lapsed (longer)",
+            (),
+        )
+    if not amount:
+        raise _refuse("FEATURE_NEEDS_COLUMN", f"'{name}' needs `amount_column`: what an order is worth.")
+    q = f"e.{_col(amount)}"
+    if name == "spend_per_month":
+        spend = _library("s", AggFunction.SUM, amount).expr
+        return _Col(
+            name,
+            f"({spend}) / NULLIF(({tenure}) / {MONTH_DAYS}, 0)",
+            "total spend per month since the first order",
+            (amount,),
+        )
+    short, prior = 30, 90
+    if name == "spend_velocity_30d":
+        now = f"SUM({q}){filter_clause(short, None)}"
+        before = _between(f"SUM({q})", short, short + prior)
+        reads: tuple[str, ...] = (amount,)
+    elif name == "orders_velocity_30d":
+        counted = f"COUNT(DISTINCT e.{_col(order)})" if order else "COUNT(*)"
+        now = f"{counted}{filter_clause(short, None)}"
+        before = _between(counted, short, short + prior)
+        reads = (order,) if order else ()
+    else:
+        raise _refuse("FEATURE_NOT_VALID", f"'{name[:40]}' is not a named feature.")
+    what = "spend" if name.startswith("spend") else "orders"
+    return _Col(
+        name,
+        f"COALESCE({now}, 0) / NULLIF(COALESCE({before}, 0) / {prior / short}, 0)",
+        f"{what} in the last {short} days divided by the monthly average of the {prior} days before "
+        "(above 1 growing, below 1 decaying)",
+        reads,
+    )
+
+
 def _preset(given: ProposeFeaturesArgs) -> tuple[list[_Col], list[str]]:
     amount, order, product = given.amount_column, given.order_column, given.product_column
     if not amount:
@@ -351,6 +460,16 @@ def _preset(given: ProposeFeaturesArgs) -> tuple[list[_Col], list[str]]:
     else:
         cols.append(_library("avg_order_value", AggFunction.MEAN, amount, phrase="average order value"))
     if given.preset == "rfm":
+        return cols, notes
+    if given.preset == "rfm_ratios":
+        cols.append(
+            _library("tenure_days", AggFunction.DAYS_SINCE_FIRST, phrase="days since the first order")
+        )
+        for name in NAMED:
+            if name == "basket_depth" and not order:
+                notes.append("No order column was given, so 'basket depth' is left out.")
+                continue
+            cols.append(_named(name, amount, order))
         return cols, notes
     every = filter_clause(None, None)
     q = _col(amount)
@@ -422,6 +541,14 @@ def compile_features(given: ProposeFeaturesArgs, table: str, *, outcome: str | N
                 "FEATURE_NOT_VALID",
                 f"The feature name '{arg.name[:40]}' is not lower case letters, digits and underscores.",
             )
+        if arg.agg in NAMED:
+            if arg.window_days is not None or arg.where is not None or arg.column is not None:
+                raise _refuse(
+                    "FEATURE_NOT_VALID",
+                    f"'{arg.agg}' takes its columns from amount_column and order_column, not from the feature.",
+                )
+            cols.append(replace(_named(arg.agg, given.amount_column, given.order_column), name=arg.name))
+            continue
         function = AggFunction(arg.agg)
         if function not in _ALLOWED:
             raise _refuse(
@@ -429,7 +556,9 @@ def compile_features(given: ProposeFeaturesArgs, table: str, *, outcome: str | N
             )
         cols.append(_library(arg.name, function, arg.column, arg.window_days, _where(arg.where)))
     if not cols:
-        raise _refuse("FEATURE_NOTHING_ASKED", "Ask for a preset (rfm or rfm_plus) or at least one feature.")
+        raise _refuse(
+            "FEATURE_NOTHING_ASKED", "Ask for a preset (rfm, rfm_plus or rfm_ratios) or at least one feature."
+        )
     if len(cols) > MAX_FEATURES:
         raise _refuse("FEATURE_TOO_MANY", f"At most {MAX_FEATURES} features in one step.")
     names = [c.name for c in cols]
@@ -772,7 +901,7 @@ def register_feature_tools(registry: DataToolRegistry) -> tuple[str, ...]:
             kind=DataToolKind.PROPOSE,
             description=(
                 "Propose behaviour features per customer from a file of orders or events (days since the last "
-                "order, orders and spend in 90 and 365 days, ...), from a preset (rfm, rfm_plus) and/or a list of "
+                "order, orders and spend in 90 and 365 days, ...), from a preset (rfm, rfm_plus, rfm_ratios) and/or a list of "
                 "{name, agg, column, window_days, where}. Only rows dated on or before the as-of date feed a "
                 "feature; none may read the outcome. Shown as a plain list with fill rates; nothing is changed "
                 "until the person approves the plan."
