@@ -503,6 +503,12 @@ LIFT_PER_SEND_PRIOR = (
 """On a channel that logs no clicks (SMS, direct mail, coupons), extra purchases per delivered
 message before purchases say otherwise: what the two priors above imply for a message whose clicks
 we cannot see (a quarter purchase per click x 5% clicks = 1.25%, give or take as much)."""
+NEVER_CLICK_CHANNELS: frozenset[str] = frozenset({Channel.WHATSAPP.value})
+"""Channels whose messages carry no reliable click signal, from the first send (v4): the WhatsApp
+Cloud API reports sent, delivered, read and failed, never a click. They start in `no_click`, stay
+there however many clicks an outside system reports, and are valued per delivered message from
+the purchases attributed in the window (`LiftPerClick` with `kind=SEND`). Read receipts are not
+used as a click: a read says the message was seen, not that it moved anyone."""
 NO_CLICK_MIN_SENDS = 200
 """Delivered past messages a channel needs, all without a click, before it is taken to log no clicks:
 its value is then read from purchases (lift per message), not from clicks it can never show."""
@@ -611,8 +617,9 @@ class ClickResponseModel(BetaResponseModel):
         self._rates: dict[tuple[str, str], Beta] = {}
         self._fatigue: dict[int, list[float]] = {}  # contacts this week (capped) -> [clicks, expected]
         self._hours: dict[tuple[str, int], list[float]] = {}  # (segment or ANY, local send hour) -> same
-        self.no_click: set[str] = set()
-        """Channels (their values) that log no clicks: their uplift is lift per message, not per click."""
+        self.no_click: set[str] = set(NEVER_CLICK_CHANNELS)
+        """Channels (their values) that log no clicks: their uplift is lift per message, not per click.
+        `NEVER_CLICK_CHANNELS` are in it from the start and are never taken out."""
         self.send_lift: tuple[float, float] = LIFT_PER_SEND_PRIOR
         """Extra purchases per delivered message on a channel that logs no clicks (set by the agent)."""
         self.send_lift_by_segment: dict[str, tuple[float, float]] = {}
@@ -666,7 +673,8 @@ class ClickResponseModel(BetaResponseModel):
         local_hour: int | None = None,
     ) -> None:
         del offer_id
-        self.no_click.discard(_channel_value(action_key))
+        if _channel_value(action_key) not in NEVER_CLICK_CHANNELS:
+            self.no_click.discard(_channel_value(action_key))
         self._fatigue.setdefault(_bucket(contacts_7d), [0.0, 0.0])[0] += 1.0
         if local_hour is not None:
             for seg in _with_pool(segment):
@@ -1389,6 +1397,8 @@ class Breaker:
             EventType.COMPLAINT,
         ):
             return
+        if event.type is EventType.FAIL and event.attrs.get("breaker_ignore") is True:
+            return  # a provider limit on this one person (WhatsApp 131049), not a delivery problem
         self.outcomes.append(_Outcome(event.ts, goal_id, channel, event.type))
         if goal_id not in self.unsub_baseline and event.type in (EventType.DELIVER, EventType.UNSUBSCRIBE):
             first = self._first.setdefault(goal_id, [0.0, 0.0, event.ts.timestamp()])
@@ -2378,6 +2388,8 @@ class AgentPolicy:
                 for s in sends:
                     if s.click_at is None or s.click_at - s.sent_at < LATE_CLICK:
                         continue
+                    if s.channel.value in NEVER_CLICK_CHANNELS:
+                        continue  # v4: a WhatsApp "click" says nothing about reading hours
                     st = states.get(s.customer_id)
                     tz = st.timezone if st is not None else self._timezones.get(s.customer_id, "UTC")
                     self.reading.observe(
@@ -3045,7 +3057,11 @@ class AgentPolicy:
         model = self.bundle.response
         keyed = self._send_keys.get(e.decision_id)
         seg = keyed[0] if keyed is not None else self._decision_segment.get(e.decision_id)
-        first_click = e.type is EventType.CLICK and e.decision_id not in self._clicked
+        first_click = (
+            e.type is EventType.CLICK
+            and e.decision_id not in self._clicked
+            and channel.value not in NEVER_CLICK_CHANNELS  # WhatsApp: no click means anything
+        )
         if first_click:
             self._clicked.add(e.decision_id)
             self.lift.click(send_at, e.customer_id)
@@ -3088,7 +3104,11 @@ class AgentPolicy:
                 self.hour_model.observe_click(
                     e.customer_id, send_at, e.ts, self._timezones.get(e.customer_id, "UTC"), seg
                 )
-        if e.type is EventType.CLICK and e.ts - send_at >= LATE_CLICK:
+        if (
+            e.type is EventType.CLICK
+            and e.ts - send_at >= LATE_CLICK
+            and channel.value not in NEVER_CLICK_CHANNELS  # v4: WhatsApp clicks mean nothing
+        ):
             hour = self._local_hour(e.customer_id, e.ts)
             self.reading.observe(e.customer_id, hour, seg)
 

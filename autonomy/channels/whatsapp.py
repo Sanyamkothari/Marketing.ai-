@@ -15,6 +15,20 @@ Why it is built this way:
   reply's customer id is the sender's WhatsApp id, for identity resolution to link later.
 - **Webhooks are signed** with the app secret: `X-Hub-Signature-256: sha256=<HMAC-SHA256 of the raw
   body>`, compared in constant time. The one-off GET subscription check is `verify_subscription`.
+- **Templates are checked before they are sent.** `sync_templates` reads the business account's
+  templates (`GET /{waba_id}/message_templates`) into a `TemplateCatalogue`; once synced, `send`
+  refuses a template that is not APPROVED and MARKETING/UTILITY before any request is made.
+- **The number's health rides the webhooks.** `phone_number_quality_update` sets the quality rating
+  and tier on `health` (and emits an account-level event the circuit breaker can read);
+  `message_template_status_update` updates the catalogue. `get_phone_status` reads both on demand.
+  A failure status with a code Meta explains (131049, 131026) carries what it means for the
+  customer and the breakers (`whatsapp_health`).
+- **An opt-out reply is an UNSUBSCRIBE at once.** A reply matching `configs/v4/optout_phrases.yaml`
+  ("STOP", "band karo", "बंद करो", ...; see `autonomy.channels.optout` for how each language
+  matches) yields an UNSUBSCRIBE and a CONSENT_REVOKED event next to the REPLY, so the gateway
+  suppresses the number and revokes its consent proofs while handling the webhook, without waiting
+  for the Conversation agent. The REPLY carries `opted_out` so that agent adds only the other
+  channels' UNSUBSCRIBE events, never a second one for WhatsApp.
 - **No network in tests.** The httpx transport is injectable (`httpx.MockTransport` in tests). httpx
   is imported when the first message is sent, so parsing and verifying webhooks need nothing but the
   standard library.
@@ -31,7 +45,23 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from autonomy.channels.common import header, send_event_id, str_or_none
-from autonomy.contracts import Channel, Event, EventType, Message, SendReceipt, stable_id
+from autonomy.channels.optout import OPTED_OUT_ATTR, OptOutLexicon, opt_out_phrase
+from autonomy.channels.whatsapp_health import (
+    ACCOUNT_CUSTOMER,
+    ACCOUNT_LEVEL_ATTR,
+    RATINGS,
+    WhatsAppHealth,
+    WhatsAppLimits,
+    failure_attrs,
+    load_limits,
+)
+from autonomy.channels.whatsapp_templates import (
+    TemplateCatalogue,
+    TemplateError,
+    WhatsAppTemplate,
+    parse_templates,
+)
+from autonomy.contracts import Alert, Channel, Event, EventType, Message, SendReceipt, stable_id
 
 if TYPE_CHECKING:
     import httpx
@@ -51,6 +81,26 @@ _STATUS_TYPES: dict[str, EventType] = {
 OPTED_OUT_ERROR_CODES: frozenset[int] = frozenset({131050})
 """A failure with these codes means the person stopped marketing messages from this business; it
 becomes a BLOCK, so consent is withdrawn rather than the send merely retried."""
+
+RECEIVED_AT_HEADER = "X-Autonomy-Received-At"
+"""The gateway stamps the time it received a webhook here (see `gateway.Gateway.handle_webhook`)."""
+OPT_OUT_REASON = "reply_optout_instant"
+"""The reason on the UNSUBSCRIBE this adapter writes for an opt-out reply."""
+MAX_TEMPLATE_PAGES = 50
+"""Pages of 100 templates read before giving up (an account holds at most a few thousand)."""
+_TEMPLATE_STATUS_EVENTS: dict[str, str] = {
+    "APPROVED": "APPROVED",
+    "REINSTATED": "APPROVED",
+    "REJECTED": "REJECTED",
+    "PAUSED": "PAUSED",
+    "DISABLED": "DISABLED",
+    "PENDING": "PENDING",
+}
+"""`message_template_status_update` events that change whether a template may be sent. FLAGGED and
+IN_APPEAL leave it as it is (Meta still lets a flagged template go)."""
+_QUALITY_EVENT_RATINGS: dict[str, str] = {"FLAGGED": "RED", "UNFLAGGED": "YELLOW"}
+"""`phone_number_quality_update` events that imply a rating when the payload carries none. FLAGGED is
+Meta's low-quality state; after UNFLAGGED we assume YELLOW until `get_phone_status` reads the real one."""
 
 CustomerLookup = Callable[[str], str | None]
 """A WhatsApp id (the sender's phone number, digits only) -> our customer id, if we know them."""
@@ -109,11 +159,25 @@ class WhatsAppCloudAdapter:
         customer_lookup: CustomerLookup | None = None,
         decision_lookup: DecisionLookup | None = None,
         timeout: float = 10.0,
+        waba_id: str | None = None,
+        templates: TemplateCatalogue | None = None,
+        health: WhatsAppHealth | None = None,
+        limits: WhatsAppLimits | None = None,
+        optout: OptOutLexicon | None = None,
+        display_phone_number: str | None = None,
     ) -> None:
         """
         `language` is the template language code used for every message (the `Message` contract has
         no language of its own). `verify_token` is the token chosen when registering the webhook in
         the Meta app dashboard; without it the GET subscription check always fails.
+
+        `waba_id` is the WhatsApp Business Account id, needed to list templates. `templates` and
+        `health` are shared with the dispatcher's `WhatsAppGuard`; `limits` defaults to
+        `configs/v4/whatsapp.yaml` and `optout` to `configs/v4/optout_phrases.yaml`.
+
+        `display_phone_number` is this number as Meta shows it: quality webhooks name the number only
+        that way, so with it a report about another number of the same business account is ignored.
+        `get_phone_status` fills it in when it is not given.
         """
         self.phone_number_id = phone_number_id
         self._access_token = access_token
@@ -126,6 +190,16 @@ class WhatsAppCloudAdapter:
         self._decision_lookup = decision_lookup
         self._timeout = timeout
         self._client: httpx.Client | None = None
+        self.waba_id = waba_id
+        self.limits = limits if limits is not None else load_limits()
+        self.templates = (
+            templates
+            if templates is not None
+            else TemplateCatalogue(categories=self.limits.usable_categories, status=self.limits.usable_status)
+        )
+        self.health = health if health is not None else WhatsAppHealth(self.limits)
+        self._optout = optout
+        self.display_phone_number = _digits(display_phone_number)
 
     @property
     def messages_url(self) -> str:
@@ -174,6 +248,9 @@ class WhatsAppCloudAdapter:
             payload = self.build_payload(message)
         except ValueError as exc:
             return SendReceipt(accepted=False, error=str(exc))
+        refusal = self.templates.refusal(message.template_name, self.language)
+        if refusal:
+            return SendReceipt(accepted=False, error=f"template_not_approved: {refusal}")
         try:
             response = self._http().post(
                 self.messages_url,
@@ -197,6 +274,74 @@ class WhatsAppCloudAdapter:
         if not isinstance(wamid, str) or not wamid:
             return SendReceipt(accepted=False, error="the Cloud API returned no message id")
         return SendReceipt(accepted=True, provider_message_id=wamid)
+
+    # --- templates and number health ---------------------------------------------------------------
+
+    def list_templates(self) -> list[WhatsAppTemplate]:
+        """Every message template of the business account, following the API's paging.
+
+        Raises `TemplateError` for a response that is not the documented shape and `RuntimeError`
+        for an HTTP or Graph error; it needs `waba_id`."""
+        if not self.waba_id:
+            raise RuntimeError("listing templates needs the WhatsApp Business Account id (waba_id)")
+        url = f"{GRAPH_URL}/{self.api_version}/{self.waba_id}/message_templates"
+        params: dict[str, str] | None = {
+            "fields": "name,language,category,status,components",
+            "limit": "100",
+        }
+        found: list[WhatsAppTemplate] = []
+        for _page in range(MAX_TEMPLATE_PAGES):
+            doc = self._graph_get(url, params)
+            found.extend(parse_templates(doc))
+            paging = doc.get("paging")
+            following = str_or_none(paging.get("next")) if isinstance(paging, dict) else None
+            if following is None:
+                return found
+            if not following.startswith(GRAPH_URL + "/"):
+                raise TemplateError("the template list's next page is not on the Graph API")
+            url, params = following, None  # the `next` link carries the parameters
+        raise TemplateError(f"the template list has more than {MAX_TEMPLATE_PAGES} pages")
+
+    def sync_templates(self, now: datetime) -> list[WhatsAppTemplate]:
+        """Replace the catalogue with the account's templates as they are now; returns the usable ones."""
+        self.templates.replace(self.list_templates(), at=now)
+        return self.templates.usable()
+
+    def get_phone_status(self, now: datetime) -> tuple[str | None, str | None]:
+        """(quality rating, messaging-limit tier) of the number from the API, applied to `health`.
+
+        Raises `RuntimeError` for an HTTP or Graph error."""
+        doc = self._graph_get(
+            f"{GRAPH_URL}/{self.api_version}/{self.phone_number_id}",
+            {"fields": "quality_rating,messaging_limit_tier,display_phone_number"},
+        )
+        if self.display_phone_number is None:
+            self.display_phone_number = _digits(str_or_none(doc.get("display_phone_number")))
+        rating = str_or_none(doc.get("quality_rating"))
+        tier = str_or_none(doc.get("messaging_limit_tier"))
+        self.health.update(rating, tier, now)
+        return rating, tier
+
+    def drain_alerts(self) -> list[Alert]:
+        """Alerts raised by quality reports since the last call (the number turned RED)."""
+        return self.health.drain_alerts()
+
+    def _graph_get(self, url: str, params: Mapping[str, str] | None) -> dict[str, Any]:
+        try:
+            response = self._http().get(
+                url, params=params, headers={"Authorization": f"Bearer {self._access_token}"}
+            )
+        except Exception as exc:  # the provider boundary
+            raise RuntimeError(f"{type(exc).__name__}: {exc}") from exc
+        try:
+            data: Any = response.json()
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise RuntimeError(f"HTTP {response.status_code}: not a JSON object")
+        if response.status_code >= 400 or data.get("error") is not None:
+            raise RuntimeError(_graph_error(data.get("error"), response.status_code))
+        return data
 
     def _http(self) -> httpx.Client:
         if self._client is None:
@@ -229,7 +374,7 @@ class WhatsAppCloudAdapter:
             return None
         return params.get("hub.challenge")
 
-    def parse_webhook(self, headers: Mapping[str, str], body: bytes) -> list[Event]:  # noqa: ARG002
+    def parse_webhook(self, headers: Mapping[str, str], body: bytes) -> list[Event]:
         """Our events for one webhook delivery: a status per message status, a REPLY per inbound message.
 
         Changes for another phone number on the same business account are ignored, as are statuses we
@@ -248,7 +393,16 @@ class WhatsAppCloudAdapter:
         for entry in _dicts(doc.get("entry")):
             for change in _dicts(entry.get("changes")):
                 value = change.get("value")
-                if change.get("field") != "messages" or not isinstance(value, dict):
+                if not isinstance(value, dict):
+                    continue
+                field = change.get("field")
+                if field == "phone_number_quality_update":
+                    events.extend(self._quality_event(entry, value, headers))
+                    continue
+                if field == "message_template_status_update":
+                    self._template_status(value)
+                    continue
+                if field != "messages":
                     continue
                 metadata = value.get("metadata")
                 number = metadata.get("phone_number_id") if isinstance(metadata, dict) else None
@@ -292,6 +446,7 @@ class WhatsAppCloudAdapter:
                 attrs["error_code"] = code
                 if code in OPTED_OUT_ERROR_CODES:
                     event_type = EventType.BLOCK
+                attrs.update(failure_attrs(self.limits, code, _unix_ts(status.get("timestamp"))))
             attrs["error_title"] = str(first.get("title") or first.get("message") or "failed")
         if event_type is EventType.SEND and message_id is not None:
             # The dispatcher's id for the SEND it records on an accepted send: one SEND per message.
@@ -330,12 +485,17 @@ class WhatsAppCloudAdapter:
         }
         if replied_to is not None:
             attrs["context_message_id"] = replied_to
-        return [
+        who = customer_id or self._customer(sender)
+        ts = _unix_ts(inbound.get("timestamp"))
+        phrase = opt_out_phrase(text, self._optout) if text else None
+        if phrase is not None:
+            attrs[OPTED_OUT_ATTR] = phrase  # the Conversation agent then skips this channel's UNSUBSCRIBE
+        events = [
             Event(
                 event_id=stable_id("ev", SOURCE, message_wamid, "reply"),
-                customer_id=customer_id or self._customer(sender),
+                customer_id=who,
                 type=EventType.REPLY,
-                ts=_unix_ts(inbound.get("timestamp")),
+                ts=ts,
                 source=SOURCE,
                 channel=Channel.WHATSAPP,
                 decision_id=decision_id,
@@ -343,6 +503,88 @@ class WhatsAppCloudAdapter:
                 attrs=attrs,
             )
         ]
+        if phrase is not None:
+            events.extend(self._opt_out_events(who, sender, message_wamid, decision_id, ts, phrase))
+        return events
+
+    def _opt_out_events(
+        self, customer_id: str, wa_id: str, wamid: str, decision_id: str | None, ts: datetime, phrase: str
+    ) -> list[Event]:
+        """The UNSUBSCRIBE and CONSENT_REVOKED for an opt-out reply. `address` is what the gateway
+        suppresses and revokes consent proofs for."""
+        attrs: dict[str, str | int | float | bool] = {
+            "reason": OPT_OUT_REASON,
+            "matched": phrase,
+            "address": wa_id,
+            "provider_message_id": wamid,
+        }
+        return [
+            Event(
+                event_id=stable_id("ev", SOURCE, wamid, kind.value),
+                customer_id=customer_id,
+                type=kind,
+                ts=ts,
+                source=SOURCE,
+                channel=Channel.WHATSAPP,
+                decision_id=decision_id,
+                attrs=dict(attrs),
+            )
+            for kind in (EventType.UNSUBSCRIBE, EventType.CONSENT_REVOKED)
+        ]
+
+    def _quality_event(
+        self, entry: Mapping[str, Any], value: Mapping[str, Any], headers: Mapping[str, str]
+    ) -> list[Event]:
+        """Apply a `phone_number_quality_update` to `health` and report it as an account-level event.
+
+        The rating is the payload's own (`quality_rating` or `current_quality_rating`) when it has
+        one, else implied by a FLAGGED or UNFLAGGED event; the tier is `current_limit`. A report
+        naming another number than `display_phone_number` (when we know ours) is ignored. The event
+        is marked `account_level`, so it is not folded into a customer state."""
+        at = _entry_time(entry, headers)
+        if at is None:
+            return []
+        number = _digits(str_or_none(value.get("display_phone_number")))
+        if (
+            self.display_phone_number is not None
+            and number is not None
+            and number != self.display_phone_number
+        ):
+            return []
+        event = str(value.get("event") or "").upper()
+        given = str_or_none(value.get("quality_rating") or value.get("current_quality_rating"))
+        rating = given.upper() if given and given.upper() in RATINGS else _QUALITY_EVENT_RATINGS.get(event)
+        tier = str_or_none(value.get("current_limit"))
+        self.health.update(rating, tier, at)
+        attrs: dict[str, str | int | float | bool] = {
+            "key": "whatsapp_quality",
+            "value": rating or "",
+            ACCOUNT_LEVEL_ATTR: True,
+        }
+        if rating is not None:
+            attrs["quality_rating"] = rating
+        if tier is not None:
+            attrs["messaging_limit_tier"] = tier
+        if event:
+            attrs["quality_event"] = event
+        return [
+            Event(
+                event_id=stable_id("ev", SOURCE, "quality", at.isoformat(), event, rating or "", tier or ""),
+                customer_id=ACCOUNT_CUSTOMER,
+                type=EventType.PREFERENCE,
+                ts=at,
+                source=SOURCE,
+                channel=Channel.WHATSAPP,
+                attrs=attrs,
+            )
+        ]
+
+    def _template_status(self, value: Mapping[str, Any]) -> None:
+        """Apply a `message_template_status_update` to the catalogue."""
+        name = str_or_none(value.get("message_template_name"))
+        status = _TEMPLATE_STATUS_EVENTS.get(str(value.get("event") or "").upper())
+        if name is not None and status is not None:
+            self.templates.set_status(name, str_or_none(value.get("message_template_language")), status)
 
     def _customer(self, wa_id: str) -> str:
         if self._customer_lookup is not None:
@@ -381,6 +623,30 @@ def _graph_error(error: Any, status_code: int) -> str:
             return text
         return f"(#{code}) {text}"
     return f"HTTP {status_code}"
+
+
+def _entry_time(entry: Mapping[str, Any], headers: Mapping[str, str]) -> datetime | None:
+    """When a webhook entry happened: its own Unix `time`, else the gateway's received-at stamp."""
+    raw = entry.get("time")
+    if raw is not None:
+        try:
+            return datetime.fromtimestamp(int(raw), tz=UTC)
+        except (TypeError, ValueError):
+            return None
+    stamped = header(headers, RECEIVED_AT_HEADER)
+    if stamped:
+        try:
+            parsed = datetime.fromisoformat(stamped)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _digits(number: str | None) -> str | None:
+    """A phone number's digits only ("+1 555-000 1111" -> "15550001111"); None if it has none."""
+    digits = "".join(ch for ch in number or "" if ch.isdigit())
+    return digits or None
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:

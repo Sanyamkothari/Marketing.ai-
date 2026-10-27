@@ -11,8 +11,8 @@ name: v2
 on:
   workflow_dispatch:
   push:
-    branches: ["version-2", "v2/**", "v3/**", "claude/**"]
-    paths: ["autonomy/**", "tests/v2/**", "tests/v3/**", "api/v2/**", "ui/v2/**", "pyproject.toml", ".github/workflows/v2.yml"]
+    branches: ["version-2", "v2/**", "v3/**", "v4/**", "claude/**"]
+    paths: ["autonomy/**", "tests/v2/**", "tests/v3/**", "tests/v4/**", "api/v2/**", "ui/v2/**", "pyproject.toml", ".github/workflows/v2.yml"]
   pull_request:
     branches: ["version-2"]
 
@@ -58,10 +58,10 @@ jobs:
           "fastapi==0.141.1" "httpx==0.28.1" "jinja2==3.1.6" "pyyaml==6.0.3"
           "pytest==9.1.1" "ruff==0.16.8" "black==26.5.1" "mypy==2.3.1" "pandas-stubs==3.0.5.260914"
       - name: ruff
-        run: ruff check autonomy tests/v2 tests/v3
+        run: ruff check autonomy tests/v2 tests/v3 tests/v4
       - name: black
-        run: black --check autonomy tests/v2 tests/v3
+        run: black --check autonomy tests/v2 tests/v3 tests/v4
       - name: mypy (strict, autonomy only)
         run: mypy --strict --python-version 3.11 --ignore-missing-imports --follow-imports=silent autonomy
       - name: fast tests
-        run: python -m pytest tests/v2 tests/v3 -q -m "not v1bridge and not slow"
+        run: python -m pytest tests/v2 tests/v3 tests/v4 -q -m "not v1bridge and not slow"

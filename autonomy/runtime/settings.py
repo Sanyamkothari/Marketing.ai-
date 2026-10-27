@@ -77,6 +77,7 @@ from sqlalchemy.engine import Engine
 from autonomy.agents.orchestrator import AdjustFn, AnalystFn
 from autonomy.channels.breakers import DEFAULT_GUARDS, Guards, LiftGuards
 from autonomy.channels.dispatcher import AddressBook, Dispatcher, ProfileBook
+from autonomy.channels.whatsapp_guard import whatsapp_guards, whatsapp_upkeep
 from autonomy.contracts import Brief, Channel, ContentItem, GoalKind
 from autonomy.data.folder import StateFolder as ProductionStateFolder
 from autonomy.interfaces import (
@@ -236,6 +237,8 @@ class RuntimeSettings(BaseModel):
     whatsapp_app_secret_ref: str = "WHATSAPP_APP_SECRET"
     whatsapp_verify_token_ref: str = "WHATSAPP_VERIFY_TOKEN"
     whatsapp_language: str = "en"
+    whatsapp_waba_id: str | None = None
+    """The WhatsApp Business Account id: needed to read the approved templates (v4)."""
 
     # The client's own tool: a signed webhook, or else a CSV file they import.
     webhook_tool_url: str | None = None
@@ -574,6 +577,7 @@ def build_adapters(
             _required(settings, settings.whatsapp_app_secret_ref, "WhatsApp", environ),
             verify_token=settings.secret(settings.whatsapp_verify_token_ref, environ),
             language=settings.whatsapp_language,
+            waba_id=settings.whatsapp_waba_id,
         )
     if settings.webhook_tool_url:
         from autonomy.channels.client_tool import WebhookToolAdapter
@@ -1017,7 +1021,13 @@ def build_runtime(
         )
         dispatcher = gateway.dispatcher
     else:
-        dispatcher = Dispatcher(chosen, book, workspace, events, queue, profiles=profiles)
+        dispatcher = Dispatcher(
+            chosen, book, workspace, events, queue, profiles=profiles, guards=whatsapp_guards(chosen.values())
+        )
+    # v4 WhatsApp readiness: re-read templates and the number's rating, hand RED alerts to the inbox.
+    wa_upkeep = whatsapp_upkeep(chosen.values(), alert_store.put)
+    if wa_upkeep is not None:
+        hooks.append(wa_upkeep)
     data_gate: DataGate | None = None
     if wiring is not None and settings.hold_on_stale_data:
         data_gate = connector_data_gate(wiring.engine.monitor, wiring.business_id)

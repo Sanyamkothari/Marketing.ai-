@@ -1,0 +1,32 @@
+# WhatsApp Cloud API limits and quality handling (autonomy/channels/whatsapp_health.py).
+# Every number here is a default to tune against a real Meta account (docs/v4/WHATSAPP.md).
+
+quality:
+  # YELLOW: the WhatsApp weekly budget (messages per customer per week) is multiplied by this.
+  yellow_budget_factor: 0.5
+  # RED: WhatsApp is paused for the shop and an alert is raised until a person resumes it.
+  red_pauses: true
+
+# What each Meta error code means for us. `counts_as_failure: false` keeps it out of the circuit
+# breakers' delivery rate. `hold_hours` is how long the customer is not retried on WhatsApp.
+errors:
+  meta_limit:
+    codes: [131049]          # Meta withheld the message to keep the person's inbox healthy
+    label: "not delivered: Meta limit"
+    counts_as_failure: false
+    hold_hours: 24
+  undeliverable:
+    codes: [131026]          # the person cannot receive it (not on WhatsApp, old app, ToS not accepted)
+    label: "not delivered: recipient cannot receive WhatsApp"
+    counts_as_failure: false
+    hold_hours: 168
+  reengagement:
+    codes: [131047]          # sent outside the 24h window without a template: a bug on our side
+    label: "not delivered: needs a template (outside the 24-hour window)"
+    counts_as_failure: true
+    hold_hours: 0
+
+# Template categories we may send, and the only status we may send.
+templates:
+  usable_categories: [MARKETING, UTILITY]
+  usable_status: APPROVED

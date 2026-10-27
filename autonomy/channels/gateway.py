@@ -74,6 +74,7 @@ from autonomy.channels.dispatcher import (
 )
 from autonomy.channels.ratelimit import RateLimiter
 from autonomy.channels.sms import PERMANENT_ERROR_PREFIX, RECEIVED_AT_HEADER, SentRef, SmsAdapter
+from autonomy.channels.whatsapp_guard import whatsapp_guards
 from autonomy.compliance_packs import pack_for
 from autonomy.compliance_packs.base import CompliancePack, PackSettings, Purpose, covering_window
 from autonomy.contracts import (
@@ -1287,9 +1288,13 @@ class DispatchGateway:
         *,
         profiles: ProfileBook | None = None,
     ) -> Dispatcher:
-        """Build the Dispatcher the decision path wraps. It gets no queue: the gateway does the waiting."""
+        """Build the Dispatcher the decision path wraps. It gets no queue: the gateway does the waiting.
+
+        A WhatsApp Cloud provider adds its guard (approved templates, quality, Meta's holds)."""
+        # v4 WhatsApp readiness (autonomy/channels/whatsapp_guard.py)
+        guards = whatsapp_guards(p.adapter for p in self.providers.get(Channel.WHATSAPP, ()))
         self.dispatcher = Dispatcher(
-            self.channel_adapters(), address_book, workspace, events, profiles=profiles
+            self.channel_adapters(), address_book, workspace, events, profiles=profiles, guards=guards
         )
         return self.dispatcher
 
