@@ -93,6 +93,18 @@ VALUES: dict[str, object] = {
     "facts": '[{"ref": "f1", "type": "count", "about": "rows"}]',
     # The Data Doctor agent (data_doctor_agent)
     "questions": ["Q1 main customer ID (blocking): values choices, file"],
+    "actions": ['`{"action": "reply", "text": "..."}` - what you tell the person.'],
+    "step_kinds": ["parse_date (dayfirst)"],
+    "doctor_limits": {
+        "retries": 2,
+        "strikes": 2,
+        "blocking": 3,
+        "quick": 2,
+        "chat_reply_chars": 2000,
+        "summary_chars": 800,
+        "quick_options_min": 2,
+        "quick_options_max": 4,
+    },
     # The Data Doctor's chat (data_doctor_chat)
     "conversation": '[{"who": "person", "text": "Drop the test accounts."}]',
 }

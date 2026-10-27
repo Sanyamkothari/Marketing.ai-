@@ -21,7 +21,7 @@ could not become one table ([INV] gap 2). `join_files` closes that gap, by rules
   the tenth - has a `JoinPartPlan` with `joined: false` and the reason. The receipt counts, per file: rows, rows with no ID, exact repeats removed, IDs, the
   rows that found their customer, the rows that did not (dropped: their customer is not on the base) and the
   share that is; the base rows that got a value; the columns added and the columns left out. A file whose
-  dropped share is over `APPROVE_DROP_SHARE` (2%) makes the join an APPROVE-class item (design §6.6).
+  dropped share is over `data_doctor.limits.gates.approve_drop_share` (2%) makes the join an APPROVE-class item (design §6.6).
 
 `plan_join` measures the files and proposes a `JoinSpec` (pending, `check`, never ticked); `run_join` runs a
 spec. The spec is frozen: next month's files are joined by the same rule and the same column list (a new
@@ -50,9 +50,9 @@ from engine.agent.key_steps import (
 )
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import StrictBase
+from engine.doctor.limits import limits
 
 __all__ = [
-    "APPROVE_DROP_SHARE",
     "JOIN_CODES",
     "MAX_JOIN_PARTS",
     "ColumnPick",
@@ -68,9 +68,6 @@ __all__ = [
     "plan_join",
     "run_join",
 ]
-
-APPROVE_DROP_SHARE: Final[float] = 0.02
-"""A join or de-duplication that drops more than this share of a file's rows needs the person's own yes."""
 
 MAX_JOIN_PARTS: Final[int] = 10
 """Files joined onto one base at most; more is a sign the files are not per-customer."""
@@ -353,7 +350,7 @@ def _run_join(base: pd.DataFrame, parts: Mapping[str, pd.DataFrame], spec: JoinS
         dropped_share = _share(rows_dropped, len(frame))
         if part.kind == "outcome_list" and "JOIN_DEFINES_OUTCOME" not in reasons:
             reasons.append("JOIN_DEFINES_OUTCOME")
-        if dropped_share > APPROVE_DROP_SHARE and "JOIN_DROPS_ROWS" not in reasons:
+        if dropped_share > limits().gates.approve_drop_share and "JOIN_DROPS_ROWS" not in reasons:
             reasons.append("JOIN_DROPS_ROWS")
         receipts.append(
             JoinPartReceipt(

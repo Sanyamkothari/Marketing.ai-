@@ -34,7 +34,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import ProposalSource, ProposalState
-from engine.doctor.guards import LOSS_STOP_PCT
+from engine.doctor.limits import limits
 from engine.doctor.plan_check import check_plan
 from engine.doctor.protocol import AGENT, approve_class_of
 
@@ -251,8 +251,9 @@ def _filter_waits(files: Sequence[LoadedFile], item: CaseItem) -> str | None:
     except (ValueError, TypeError, KeyError):
         return None  # the guard run says what is wrong with it
     share = 100.0 * float((~kept).mean())
-    if share > LOSS_STOP_PCT:
-        return f"it would leave out {share:.0f}% of the rows of the whole file, more than {LOSS_STOP_PCT:g}%"
+    stop = limits().gates.loss_stop_pct
+    if share > stop:
+        return f"it would leave out {share:.0f}% of the rows of the whole file, more than {stop:g}%"
     return None
 
 

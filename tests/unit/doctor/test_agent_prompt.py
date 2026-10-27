@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from engine.agent import egress
+from engine.doctor.actions import prompt_variables
 from engine.doctor.questions import CATALOGUE, catalogue_lines
 from engine.generative.contracts import GenerativePurpose
 from engine.generative.prompts import load_prompt, prompts_dir, render
@@ -44,6 +45,7 @@ def _rendered(tool_count: int = 24) -> str:
         {
             "goal": "Find the customers most likely to renew their policy.",
             "tools": tools,
+            **prompt_variables("review"),
             "questions": catalogue_lines(),
             "state": '{"files": ["F1"], "steps": []}',
             "turn_results": "none",
@@ -52,11 +54,16 @@ def _rendered(tool_count: int = 24) -> str:
     return f"{done.system}\n{done.user}"
 
 
+def _system() -> str:
+    """The instructions as the model reads them: the generated action lists and the limits filled in."""
+    return _rendered(tool_count=0).split("# User")[0]
+
+
 def test_it_loads_as_a_versioned_prompt_with_its_own_purpose() -> None:
     prompt = load_prompt(NAME)
-    assert prompt.version == 1 and prompt.name == NAME
+    assert prompt.version == 2 and prompt.name == NAME
     assert prompt.purpose == GenerativePurpose.DOCTOR_AGENT.value
-    assert (prompts_dir() / f"{NAME}.v1.md").is_file()
+    assert (prompts_dir() / f"{NAME}.v2.md").is_file()
 
 
 def test_it_renders_with_every_tool_and_question_and_stays_under_the_size_limit() -> None:
@@ -72,19 +79,19 @@ def test_it_renders_with_every_tool_and_question_and_stays_under_the_size_limit(
 
 
 def test_every_rule_r1_to_r29_is_in_it_once() -> None:
-    text = load_prompt(NAME).system
+    text = _system()
     found = re.findall(r"^- (R\d+)\. ", text, flags=re.MULTILINE)
     assert sorted(found, key=lambda rule: int(rule[1:])) == [f"R{n}" for n in range(1, 30)]
 
 
 def test_the_questions_it_names_exist_in_the_catalogue() -> None:
-    text = load_prompt(NAME).system
+    text = _system()
     named = set(re.findall(r"\bQ\d+\b", text))
     assert named and named <= set(CATALOGUE)
 
 
 def test_it_keeps_the_promises_the_checks_depend_on() -> None:
-    system = load_prompt(NAME).system
+    system = _system()
     for phrase in (
         "one JSON object and nothing else",
         "Never claim a number that is not in a tool result",
@@ -121,7 +128,7 @@ def test_it_names_every_code_the_out_of_scope_config_has_once_that_config_exists
 
 
 def test_the_instructions_are_untouched_by_the_egress_backstop() -> None:
-    path = prompts_dir() / f"{NAME}.v1.md"
+    path = prompts_dir() / f"{NAME}.v2.md"
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         cleaned, matches = egress.assert_clean(line)
         assert matches == 0, f"{path.name} line {number} would be masked: {line!r} -> {cleaned!r}"

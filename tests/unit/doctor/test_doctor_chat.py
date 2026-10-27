@@ -21,6 +21,7 @@ from engine.doctor import agent_chat, visit
 from engine.doctor import registry as doctor_registry
 from engine.doctor.case import Case, CaseChatEntry, TimelineKind, VisitState
 from engine.doctor.config import AiLimitsConfig
+from engine.doctor.limits import limits
 from engine.doctor.visit import AGENT, AI_NEEDED_REPLY
 from engine.generative.errors import BUDGET_EXCEEDED
 from engine.llm import AwsSignInExpiredError, LLMError
@@ -1151,7 +1152,7 @@ def test_a_reply_over_the_doctor_ceiling_is_refused_and_the_model_is_told_the_li
     talk.say("explain the plan")
     assert talk.reply.text == "Short version."
     told = [r for r in client.seen[1].results if r.get("error") == "AGENT_TEXT_REFUSED"]
-    assert told and str(agent_chat.DOCTOR_REPLY_CHARS) in str(told[0]["message"])
+    assert told and str(limits().turn.chat_reply_chars) in str(told[0]["message"])
 
 
 def test_an_over_long_reply_that_also_has_a_wrong_number_is_told_both(
@@ -1193,10 +1194,10 @@ def test_guided_setup_keeps_its_shorter_reply_ceiling() -> None:
     from engine.agent.loop import MAX_REPLY_CHARS
     from engine.generative.guardrails import CheckContext, Guardrails, load_policy
 
-    assert MAX_REPLY_CHARS == 800 < agent_chat.DOCTOR_REPLY_CHARS
+    assert MAX_REPLY_CHARS == 800 < limits().turn.chat_reply_chars
     guard = Guardrails(load_policy())
     text = _long_reply(900)
     assert not guard.check(text, CheckContext(target="helper reply", max_chars=MAX_REPLY_CHARS)).passed
     assert guard.check(
-        text, CheckContext(target="doctor reply", max_chars=agent_chat.DOCTOR_REPLY_CHARS)
+        text, CheckContext(target="doctor reply", max_chars=limits().turn.chat_reply_chars)
     ).passed

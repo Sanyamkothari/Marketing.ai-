@@ -39,6 +39,7 @@ from engine.agent.latest import (
 from engine.agent.reshape import _order
 from engine.doctor.change_share import CHANGE_SHARE_CODES
 from engine.doctor.impossible import IMPOSSIBLE_CODES, ImpossibleReport, find_impossible_values
+from engine.doctor.limits import limits
 from engine.doctor.reshape_guard import RESHAPE_GUARD_CODES, reshape_question
 from engine.doctor.row_contracts import StepProposal
 from engine.doctor.split import SPLIT_CODES, SplitError, SplitReceipt, SplitRule, split_rows
@@ -244,10 +245,6 @@ class KeepLatestInput(_Input):
     )
 
 
-APPROVE_DROP_SHARE: Final[float] = 0.02
-"""Design §6.6: a join, stack or de-duplication that drops more than 2% of rows is an APPROVE-class item."""
-
-
 class ConflictCounts(_Output):
     ids: int
     rows: int
@@ -354,7 +351,7 @@ def _keep_latest(given: KeepLatestInput, ctx: RowToolContext) -> KeepLatestOutpu
         failed=preview.failed,
         note=note,
     )
-    approve = bool(preview.rows_in) and removed / preview.rows_in > APPROVE_DROP_SHARE
+    approve = bool(preview.rows_in) and removed / preview.rows_in > limits().gates.approve_drop_share
     return KeepLatestOutput(
         step=step,
         rows_in=preview.rows_in,

@@ -43,6 +43,7 @@ from engine.agent.sql_step import (
 )
 from engine.config import StrictBase
 from engine.doctor.guards import Finding, NotMeasurableError, Receipt, cell_change, infer_key
+from engine.doctor.limits import limits
 from engine.doctor.materialize import CANDIDATE, Full, Prepared, Sample, materialize_plan, table_names
 from engine.doctor.registry import (
     BY_EXPOSURE,
@@ -58,14 +59,13 @@ if TYPE_CHECKING:
     from engine.doctor.case import CaseItem
     from engine.doctor.diagnose import LoadedFile
 
-__all__ = ["DRY_RUN_ROWS", "M_SQL_TOOLS", "ProposeSqlStepArgs", "SqlStepProposal", "register_sql_tools"]
+__all__ = ["M_SQL_TOOLS", "ProposeSqlStepArgs", "SqlStepProposal", "register_sql_tools"]
 
 M_SQL_TOOLS: Final[tuple[str, ...]] = ("propose_sql_step",)
-DRY_RUN_ROWS: Final[int] = 100_000
-"""A query is tried on at most this many rows of each file (a seeded random sample, drawn as the plan check draws its
-own); a bigger file is said to be sampled. It is larger than the plan check's sample on purpose: the checks the writer
-states about the table (`rows_out_equals`, the customers kept) are about the file, so the trial reads as much of it
-as it can. On the same rows the trial's receipt is the plan check's (`tests/unit/doctor/test_trial_is_run.py`)."""
+# A query is tried on at most `data_doctor.limits.trial.dry_run_rows` rows of each file (a seeded random sample, drawn as the plan check draws its
+# own); a bigger file is said to be sampled. It is larger than the plan check's sample on purpose: the checks the writer
+# states about the table (`rows_out_equals`, the customers kept) are about the file, so the trial reads as much of it
+# as it can. On the same rows the trial's receipt is the plan check's (`tests/unit/doctor/test_trial_is_run.py`).
 _SHAPING: Final[frozenset[RecipeStepKind]] = frozenset(
     {
         RecipeStepKind.SQL_QUERY,
@@ -433,7 +433,7 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         (),
         items,
         ctx.files,
-        Sample(DRY_RUN_ROWS),
+        Sample(limits().trial.dry_run_rows),
         candidate=(first_upload, tried),
         as_of=ctx.as_of,
         watch=watch,
@@ -471,13 +471,13 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         )
         for name, file in asked.items()
     )
-    sampled = any(len(file.frame) > DRY_RUN_ROWS for file in asked.values())
+    sampled = any(len(file.frame) > limits().trial.dry_run_rows for file in asked.values())
     read = ", ".join(f"{t.file_name} ({t.rows:,} rows)" for t in inputs)
     columns = tuple(str(c) for c in made.columns)
     sentence = (
         f"{given.description.rstrip('.')}. Reads {read}; the new table '{given.output_name}' would have "
         f"{receipt.rows_out:,} rows and {len(columns):,} columns"
-        + (f" (tried on {DRY_RUN_ROWS:,} sampled rows of each file)." if sampled else ".")
+        + (f" (tried on {limits().trial.dry_run_rows:,} sampled rows of each file)." if sampled else ".")
     )
     if receipt.keys_in is not None:
         sentence += f" Customers: {receipt.keys_in:,} before, {receipt.keys_out:,} after ({receipt.keys_lost:,} lost, {receipt.keys_repeated:,} repeated)."

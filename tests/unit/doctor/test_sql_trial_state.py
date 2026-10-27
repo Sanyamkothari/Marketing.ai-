@@ -110,8 +110,16 @@ def test_a_fix_accepted_after_the_query_was_tried_is_a_step_that_cannot_run() ->
     assert "PLAN_STEP_CANNOT_RUN" not in unchanged
 
 
+def _dry_run_rows(monkeypatch: pytest.MonkeyPatch, rows: int) -> None:
+    from engine.doctor.config import DataDoctorLimits, TrialLimits
+
+    monkeypatch.setattr(
+        "engine.doctor.limits._ACTIVE", [DataDoctorLimits(trial=TrialLimits(dry_run_rows=rows))]
+    )
+
+
 def test_the_inputs_report_the_whole_file_not_the_tried_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("engine.doctor.tools_sql.DRY_RUN_ROWS", 10)
+    _dry_run_rows(monkeypatch, 10)
     proposal = propose(AS_TIME, (parse_date(ProposalState.ACCEPTED),), log(60))
     (table,) = proposal["inputs"]
     assert table["rows"] == 60

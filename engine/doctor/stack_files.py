@@ -37,7 +37,7 @@ from engine.agent.contracts import Question, QuestionOption
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import StrictBase
 from engine.doctor.contracts import FileStack
-from engine.doctor.join_files import APPROVE_DROP_SHARE
+from engine.doctor.limits import limits
 
 __all__ = [
     "STACK_CODES",
@@ -266,7 +266,7 @@ def run_stack(frames: Sequence[pd.DataFrame], spec: StackSpec) -> StackRun:
     rows_in = len(combined)
     removed = sum(removed_dup) + sum(removed_conflict)
     share = round(removed / rows_in, 4) if rows_in else 0.0
-    reasons = ("STACK_DROPS_ROWS",) if share > APPROVE_DROP_SHARE else ()
+    reasons = ("STACK_DROPS_ROWS",) if share > limits().gates.approve_drop_share else ()
     receipt = StackReceipt(
         spec_hash=spec.spec_hash,
         files=tuple(

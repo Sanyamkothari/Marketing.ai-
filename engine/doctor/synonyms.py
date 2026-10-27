@@ -43,7 +43,7 @@ from engine.agent.contracts import ProposalSource, RecipeStepKind
 from engine.agent.formats import MAX_CATEGORY_DISTINCT, masked_cut
 from engine.agent.value_steps import MAX_MAPPINGS, map_values
 from engine.config import StrictBase
-from engine.doctor.change_share import DEFAULT_LIMITS, ChangeShareLimits, change_share_verdict
+from engine.doctor.change_share import ChangeShareLimits, change_share_verdict
 from engine.doctor.row_contracts import StepProposal
 
 __all__ = [
@@ -325,7 +325,7 @@ def _proposal(
     mapping: dict[str, str],
     *,
     source: ProposalSource,
-    limits: ChangeShareLimits,
+    limits: ChangeShareLimits | None,
     groups: int,
 ) -> StepProposal:
     outcome = map_values(series, mapping=mapping)
@@ -357,7 +357,7 @@ def find_synonym_clusters(
     *,
     column: str,
     lexicon: Sequence[Sequence[str]] | None = None,
-    limits: ChangeShareLimits = DEFAULT_LIMITS,
+    limits: ChangeShareLimits | None = None,
 ) -> SynonymReport:
     """The groups of spellings in `series` and one pending `map_values` proposal that merges them."""
     words = load_value_synonyms() if lexicon is None else lexicon
@@ -415,7 +415,7 @@ def check_ai_merge(
     column: str,
     groups: Sequence[Sequence[str]],
     canonicals: Sequence[str],
-    limits: ChangeShareLimits = DEFAULT_LIMITS,
+    limits: ChangeShareLimits | None = None,
 ) -> StepProposal:
     """The rules' check of a merge the AI proposed: every spelling is in the column, each group's canonical is
     one of its spellings, no spelling is in two groups; then measured and held to decision O10.
