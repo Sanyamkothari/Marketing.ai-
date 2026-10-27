@@ -512,3 +512,212 @@ def test_the_review_runs_again_when_the_plan_changes(storage: LocalStorage, worl
     item = next(i for i in case.items if item_subject(i) == "sql@customer_training")
     visit.decide(CLIENT, case.case_id, item.item_id, True, deps, expected_version=case.version, actor=ANALYST)
     assert len(calls) > first, "an accepted change is a new plan for the review"
+
+
+# -- review, memo, producers, answers, swaps (the fixer's round on F5) -----------------------------------------
+def _decide(storage: LocalStorage, world: World, case: Case, item_id: str, accept: bool = True) -> Case:
+    return visit.decide(
+        CLIENT,
+        case.case_id,
+        item_id,
+        accept,
+        po._deps(storage, world),
+        expected_version=case.version,
+        actor=ANALYST,
+    )
+
+
+def test_a_stored_case_without_producers_adopts_them_and_the_contradiction_clears(
+    storage: LocalStorage, world: World
+) -> None:
+    old = _ai(_query("SELECT 1"))
+    question = _q("OUTCOME_COLUMN", ["a"])
+    doubt = _doubt("outcome_missing")
+    case = _case(storage, world, (old,)).model_copy(update={"questions": (question,), "doubts": (doubt,)})
+    again = Emission(producer="rules", items=[old], questions=[(question, ())], doubts=[doubt], complete=True)
+    first = reconcile(case, again, now=NOW)
+    assert first.items[0].producer == "rules" and first.questions[0].producer == "rules"
+    assert first.doubts[0].producer == "rules"
+    nothing = reconcile(case, Emission(producer="rules", complete=True), now=NOW, before=first)
+    assert nothing.items[0].withdrawn_because and not nothing.questions
+    assert nothing.doubts[0].status == "resolved"
+
+
+def test_a_retraction_is_on_the_timeline(storage: LocalStorage, world: World) -> None:
+    case = _case(storage, world).model_copy(
+        update={
+            "questions": (_q("DATA_REQUESTED", ["a"], producer="rules"),),
+            "doubts": (_doubt("x").model_copy(update={"producer": "rules"}),),
+        }
+    )
+    done = reconcile(case, Emission(producer="rules", complete=True), now=NOW)
+    assert {e.item_id for e in done.events} == {case.questions[0].question_id, "d.x.goal"}
+
+
+def test_what_the_producer_did_not_evaluate_is_not_taken_back(storage: LocalStorage, world: World) -> None:
+    kept = _q("AS_OF_COLUMN", ["a"], producer="rules")
+    case = _case(storage, world).model_copy(
+        update={
+            "questions": (kept, _q("OTHER", ["a"], producer="rules")),
+            "doubts": (_doubt("consent_missing").model_copy(update={"producer": "rules"}),),
+        }
+    )
+    done = reconcile(
+        case,
+        Emission(producer="rules", complete=True, unevaluated=("AS_OF_COLUMN", "d.consent_missing.")),
+        now=NOW,
+    )
+    assert [q.code for q in done.questions] == ["AS_OF_COLUMN"]
+    assert done.doubts[0].status == "open"
+
+
+def test_the_goal_rules_keep_the_consent_doubt_while_the_outcome_is_undecided(
+    storage: LocalStorage, world: World
+) -> None:
+    case = _goal_first(storage, world)
+    gone = {d.doubt_id for d in case.doubts if d.status == "resolved"}
+    assert not [d for d in gone if d.startswith("d.consent_missing")]
+
+
+def test_a_question_taken_back_and_asked_again_counts_once_for_the_file(
+    storage: LocalStorage, world: World
+) -> None:
+    case = _goal_first(storage, world)
+    counted = dict(case.counters.questions_per_file)
+    case = _chat(
+        storage,
+        world,
+        case,
+        po._sql_item(world, ["customer_id", "ordered_again_90d"], two_valued=["ordered_again_90d"]),
+    )
+    case = _chat(storage, world, case, text="Again.")
+    assert all(case.counters.questions_per_file.get(k, 0) <= v + 1 for k, v in counted.items())
+
+
+def test_the_other_review_proposal_stays_when_the_person_ticks_one(
+    storage: LocalStorage, world: World
+) -> None:
+    a, b = _ai(_fix("age", "fill_nulls")), _ai(_fix("income", "fill_nulls"))
+    seen: list[int] = []
+
+    def review(_case: Case, _files: Any, _brief: Any) -> visit.Detected:
+        seen.append(1)
+        return (
+            visit.Detected(items=(a, b), model_calls=1) if len(seen) == 1 else visit.Detected(model_calls=1)
+        )
+
+    deps = deps_for(storage, world, agent=review)
+    case = visit.resume(CLIENT, open_case(storage, world).case_id, deps, actor=ANALYST)
+    assert {a.item_id, b.item_id} <= {i.item_id for i in case.items if i.state is ProposalState.PENDING}
+    case = visit.decide(
+        CLIENT, case.case_id, a.item_id, True, deps, expected_version=case.version, actor=ANALYST
+    )
+    assert len(seen) >= 2, "a tick is a new plan for the review"
+    by_id = {i.item_id: i for i in case.items}
+    assert by_id[a.item_id].state is ProposalState.ACCEPTED
+    assert by_id[b.item_id].state is ProposalState.PENDING and not by_id[b.item_id].withdrawn_because
+
+
+def test_ticking_the_old_query_after_its_swap_leaves_the_swap_out(
+    storage: LocalStorage, world: World
+) -> None:
+    case = visit.resume(CLIENT, open_case(storage, world).case_id, po._deps(storage, world), actor=ANALYST)
+    first = _ai(_query("SELECT customer_id, 1 AS y FROM invoices"))
+    case = _chat(storage, world, case, first)
+    case = _decide(storage, world, case, first.item_id)
+    second = _ai(_query("SELECT customer_id, 2 AS y FROM invoices"))
+    case = _chat(storage, world, case, second)
+    case = _decide(storage, world, case, second.item_id)
+    case = _decide(storage, world, case, first.item_id)
+    live = [i.item_id for i in case.items if i.kind == "recipe_step" and i.state is ProposalState.ACCEPTED]
+    assert live == [first.item_id]
+
+
+def test_confirming_a_swap_leaves_the_old_query_out(storage: LocalStorage, world: World) -> None:
+    from engine.access.roles import Principal, Role
+    from engine.doctor.protocol import item_sentence
+
+    case = visit.resume(CLIENT, open_case(storage, world).case_id, po._deps(storage, world), actor=ANALYST)
+    first = _ai(_query("SELECT customer_id, 1 AS y FROM invoices"))
+    case = _chat(storage, world, case, first)
+    case = _decide(storage, world, case, first.item_id)
+    second = _ai(_query("SELECT customer_id, 2 AS y FROM invoices"))
+    case = _chat(storage, world, case, second)
+    swap = next(i for i in case.items if i.item_id == second.item_id)
+    assert swap.replaces == first.item_id
+    meera = Principal(user_id="u-meera", username="meera", roles=frozenset({Role.ANALYST}), kind="user")
+    case = visit.confirm(
+        CLIENT,
+        case.case_id,
+        second.item_id,
+        po._deps(storage, world),
+        principal=meera,
+        sentence=item_sentence(swap.title, swap.payload),
+        expected_version=case.version,
+    )
+    by_id = {i.item_id: i for i in case.items}
+    assert by_id[second.item_id].state is ProposalState.ACCEPTED
+    assert by_id[first.item_id].state is ProposalState.REJECTED
+
+
+def test_an_answer_given_again_leaves_the_change_of_the_earlier_one_out() -> None:
+    from engine.doctor.swaps import leave_out_of_answer
+
+    old = _ai(_fix("age", "fill_nulls")).model_copy(
+        update={"item_id": "q.outcome:c0", "state": ProposalState.ACCEPTED}
+    )
+    other = _ai(_fix("income", "fill_nulls"))
+    done = leave_out_of_answer([old, other], "q.outcome", "q.outcome:c1", now=NOW)
+    assert done[0].state is ProposalState.REJECTED and done[0].superseded_by == "q.outcome:c1"
+    assert done[0].withdrawn_because and done[1] is other
+
+
+def test_the_chat_does_not_blame_the_person_for_a_change_the_doctor_withdrew(
+    storage: LocalStorage, world: World
+) -> None:
+    case = visit.resume(CLIENT, open_case(storage, world).case_id, po._deps(storage, world), actor=ANALYST)
+    first = _ai(_query("SELECT customer_id, 1 AS y FROM invoices"))
+    case = _chat(storage, world, case, first)
+    second = _ai(_query("SELECT customer_id, 2 AS y FROM invoices"))
+    case = _chat(storage, world, case, second)  # `first` is superseded by the Doctor
+    case = _chat(storage, world, case, first)
+    assert "left out earlier" not in case.chat[-1].text
+
+
+def test_the_rules_run_again_when_the_plan_changes(
+    storage: LocalStorage, world: World, monkeypatch: Any
+) -> None:
+    runs: list[int] = []
+    real = visit._goal_rules
+
+    def spy(run: Any, case: Case, brief: Any, step: Any) -> None:
+        runs.append(len(case.items))
+        real(run, case, brief, step)
+
+    monkeypatch.setattr(visit, "_goal_rules", spy)
+    case = _goal_first(storage, world)
+    before = len(runs)
+    case = _chat(storage, world, case, _ai(_query("SELECT 1")))
+    after_chat = len(runs)
+    item = next(i for i in case.items if item_subject(i) == "sql@customer_training")
+    _decide(storage, world, case, item.item_id)
+    assert after_chat > before and len(runs) > after_chat, "a tick that changes what the rules see runs them"
+
+
+def test_emissions_from_different_producers_give_the_same_plan_in_any_order(
+    storage: LocalStorage, world: World
+) -> None:
+    case = _case(storage, world)
+    emissions = [
+        Emission(producer="chat", items=[_ai(_query("SELECT 1"))]),
+        Emission(producer="review", items=[_ai(_query("SELECT 2"))], complete=True),
+        Emission(producer="detectors", items=[_ai(_query("SELECT 3", name="other"))]),
+    ]
+    shapes = []
+    for order in itertools.permutations(emissions):
+        work = None
+        for e in order:
+            work = reconcile(case, e, now=NOW, before=work)
+        assert work is not None
+        shapes.append(sorted((item_subject(i), i.state.value) for i in work.items))
+    assert all(s == shapes[0] for s in shapes)

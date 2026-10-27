@@ -77,6 +77,10 @@ class Emission:
     """Whether a goal section (`None`: the shared base) is the producer's now; other goals' sections are set aside."""
     replaces: Sequence[str] = ()
     """Ids of the person's changes the producer says its new changes replace (the chat's `replace`)."""
+    unevaluated: Sequence[str] = ()
+    """Parts of its scope the producer did not look at this round (the rules stop early when the outcome is not
+    decided): item kinds, question codes and doubt-id prefixes named here are not taken back, because their
+    absence says nothing."""
 
 
 @dataclass
@@ -143,6 +147,15 @@ def reconcile(
 # ---------------------------------------------------------------------------
 # Items
 # ---------------------------------------------------------------------------
+def _skipped(emission: Emission, *names: str | None) -> bool:
+    """The producer did not evaluate the part that `names` (a kind, a code or an id) belongs to."""
+    return any(
+        name is not None
+        and any(name == part or name.startswith(part) for part in emission.unevaluated if part)
+        for name in names
+    )
+
+
 def _tagged(item: CaseItem, producer: str) -> CaseItem:
     update: dict[str, Any] = {}
     if item.producer is None:
@@ -193,6 +206,14 @@ def _fold_items(case: Case, emission: Emission, work: Reconciled, now: datetime)
         slot = next((n for n, i in enumerate(items) if i.item_id == item.item_id), None)
         if slot is not None:
             current = items[slot]
+            if current.producer is None and emission.complete and current.withdrawn_because is None:
+                # A case stored before producers were kept: the one that says it again owns it from now on.
+                current = items[slot] = current.model_copy(
+                    update={
+                        "producer": emission.producer,
+                        **({} if current.subject else {"subject": item.subject}),
+                    }
+                )
             work.twins[item.item_id] = current
             if current.withdrawn_because is None or person_owns(case, current):
                 continue  # already there (or the person's decision): left as it is
@@ -247,6 +268,7 @@ def _fold_items(case: Case, emission: Emission, work: Reconciled, now: datetime)
                 and current.withdrawn_because is None
                 and current.item_id not in kept
                 and not person_owns(case, current)
+                and not _skipped(emission, current.kind)
             ):
                 items[n] = _taken_back(current, now, NO_LONGER_EMITTED)
                 work.events.append(_event("retracted", current))
@@ -329,6 +351,8 @@ def _fold_questions(
             continue
         current = questions[slot]
         if current.answer is None:
+            if current.producer is None and emission.complete:
+                current = questions[slot] = current.model_copy(update={"producer": emission.producer})
             if options_digest(current) != options_digest(emitted):
                 again = emitted.model_copy(update={"producer": current.producer or emitted.producer})
                 questions[slot] = again
@@ -344,6 +368,25 @@ def _fold_questions(
             work.asked.append((questions[slot], effects))
             work.reasked.add(emitted.question_id)
     if emission.complete:
+        gone = [
+            q
+            for q in questions
+            if q.producer == emission.producer
+            and q.answer is None
+            and emission.in_scope(q.goal_id)
+            and q.question_id not in emitted_ids
+            and question_subject(q) not in emitted_subjects
+            and not _skipped(emission, q.code)
+        ]
+        work.events.extend(
+            EventDraft(
+                kind=TimelineKind.ITEM_DECIDED,
+                upload_id=q.upload_id,
+                item_id=q.question_id,
+                details={"state": "rejected", "by": "agent", "withdrawn": True, "why": "question retracted"},
+            )
+            for q in gone
+        )
         questions[:] = [
             q
             for q in questions
@@ -353,6 +396,7 @@ def _fold_questions(
                 and emission.in_scope(q.goal_id)
                 and q.question_id not in emitted_ids
                 and question_subject(q) not in emitted_subjects
+                and not _skipped(emission, q.code)
             )
         ]
 
@@ -380,6 +424,10 @@ def _fold_doubts(emission: Emission, work: Reconciled) -> None:
             doubts[slot] = doubt  # it holds again
         elif doubts[slot].producer in (None, emission.producer) and _words(doubts[slot]) != _words(doubt):
             doubts[slot] = doubt  # the same doubt with newer words: one doubt, not two
+        elif doubts[slot].producer is None and emission.complete:
+            doubts[slot] = doubts[slot].model_copy(
+                update={"producer": emission.producer}
+            )  # stored before producers
     if emission.complete:
         for n, doubt in enumerate(doubts):
             if (
@@ -387,9 +435,23 @@ def _fold_doubts(emission: Emission, work: Reconciled) -> None:
                 and doubt.producer == emission.producer
                 and doubt.doubt_id not in emitted_ids
                 and doubt_subject(doubt) not in emitted_subjects
+                and not _skipped(emission, doubt.doubt_id)
             ):
                 doubts[n] = doubt.model_copy(
                     update={"status": "resolved", "closed_because": NO_LONGER_EMITTED}
+                )
+                work.events.append(
+                    EventDraft(
+                        kind=TimelineKind.ITEM_DECIDED,
+                        upload_id=doubt.upload_id,
+                        item_id=doubt.doubt_id,
+                        details={
+                            "state": "rejected",
+                            "by": "agent",
+                            "withdrawn": True,
+                            "why": "doubt resolved",
+                        },
+                    )
                 )
 
 
