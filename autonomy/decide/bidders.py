@@ -1837,7 +1837,8 @@ class GoalBidder:
                 and _offer_allowed(bid, state, envelope, ctx)
             }
             out = [b for b in out if id(b) not in dropped]
-        if prune_z is not None and (harm is not None or self.who is not None) and out:
+        who_prunes = self.who is not None and self.who.config.prune_without_harm
+        if prune_z is not None and (harm is not None or who_prunes) and out:
             # Leave alone someone a message clearly harms: their credible harm is larger than every
             # option's gain even prune_z standard deviations up, or their own posterior makes it
             # credible that messages lower their buying (`leave_alone`), or (plan-v3 decision 1) the

@@ -10,6 +10,7 @@
 # docs/v4/METHOD.md adds three more on the same split: `uplift_threshold` (a cross-fitted uplift model with a cost
 # threshold, gated against the best simple rule), and the agent ablations `agent_greedy` (no exploration) and
 # `agent_uplift_only` (the click model detached).
+# docs/v4/BASELINES.md adds `agent_who` and its two probes `agent_who_notrait` / `agent_who_noprune`.
 # The datasets (about 1.27 GB) are downloaded from public mirrors with fixed SHA-256 checksums
 # (scripts/v2_realbench/fetch.py) and cached between runs; nothing is written into the repository.
 
@@ -39,7 +40,7 @@ jobs:
       fail-fast: false
       matrix:
         dataset: [hillstrom, x5, criteo, megafon]
-        policy: [agent, agent_v3, uplift_threshold, agent_greedy, agent_uplift_only]
+        policy: [agent, agent_v3, uplift_threshold, agent_greedy, agent_uplift_only, agent_who, agent_who_notrait, agent_who_noprune]   # docs/v4/METHOD.md, docs/v4/BASELINES.md
     env:
       DATA_DIR: ${{ github.workspace }}/.realbench-data   # inside the workspace: actions/cache rejects ".." paths
     steps:
@@ -172,6 +173,29 @@ jobs:
               python -m scripts.v2_realbench.run --render "realbench-$policy.json" | tee -a "$GITHUB_STEP_SUMMARY"
             fi
           done
+      - name: Why who collapses the bench (docs/v4/BASELINES.md)
+        shell: bash
+        run: |
+          python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          policies = ("agent", "agent_v3", "agent_who", "agent_who_notrait", "agent_who_noprune")
+          cells = {}
+          for p in sorted(pathlib.Path("parts").glob("*.json")):
+              dataset, _, policy = p.stem.partition("-")
+              if policy in policies:
+                  r = json.loads(p.read_text())["datasets"].get(dataset, {})
+                  if "error" not in r and r:
+                      cells[(dataset, policy)] = r["agent"]
+          print("\n## Which part of who collapses the bench: DR profit per customer (contact rate)\n")
+          print("| Dataset | " + " | ".join(policies) + " |")
+          print("|---|" + "---:|" * len(policies))
+          for dataset in sorted({d for d, _ in cells}):
+              row = []
+              for policy in policies:
+                  a = cells.get((dataset, policy))
+                  row.append("n/a" if a is None else f"{a['value']['dr']['point']:.4f} ({a['contact_rate']:.1%})")
+              print(f"| {dataset} | " + " | ".join(row) + " |")
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: realbench-report

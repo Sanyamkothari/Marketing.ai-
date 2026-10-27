@@ -145,7 +145,7 @@ def test_the_bench_hands_the_who_book_the_test_customers_pre_campaign_events() -
 
 def test_the_bench_workflow_has_a_policy_axis() -> None:
     text = (Path(__file__).resolve().parents[3] / ".github" / "workflows" / "realbench.yml").read_text()
-    assert "policy: [agent, agent_v3]" in text and "--policy ${{ matrix.policy }}" in text
+    assert "policy: [agent, agent_v3" in text and "--policy ${{ matrix.policy }}" in text
 
 
 # --- the imports ---------------------------------------------------------------------------------

@@ -43,6 +43,7 @@ from scripts.v2_realbench.adapters import DATASETS, SIZES, load
 from scripts.v2_realbench.ai_loop import AiSetup, CountingReplay
 from scripts.v2_realbench.common import (
     BENCH_VERSION,
+    LEARNED_BASELINES,
     Timings,
     add_multiplicity,
     evaluate_dataset,
@@ -88,7 +89,10 @@ def _fmt(e: Mapping[str, float] | None, digits: int = 4) -> str:
 
 
 def _digits(block: Mapping[str, Any]) -> int:
-    scale = max(abs(float(p["dr"]["point"])) for p in block["policies"].values())
+    # the learned rows are left out of the scale, so a report prints with the same decimals as before them
+    scale = max(
+        abs(float(p["dr"]["point"])) for name, p in block["policies"].items() if name not in LEARNED_BASELINES
+    )
     return 4 if scale < 10 else 2
 
 
@@ -135,6 +139,14 @@ def render(report: Mapping[str, Any]) -> str:
                 f"| {pname} | {p['contact_rate']:.1%} | {p['ips']['point']:.{d}f} | {sn:.{d}f} | "
                 f"{_fmt(p['dr'], d)} | {_fmt(p['dr_vs_none'], d)} | {_fmt(p['agent_minus_this'], d)} |"
             )
+        learned = b.get("best_learned_baseline")
+        if learned:
+            lines += [
+                "",
+                f"Best learned baseline (DR-learner or depth-2 policy tree; chosen on TEST, so it flatters it; "
+                f"not part of best simple): {learned['name']}, DR {_fmt(learned['dr'], d)}; "
+                f"agent minus it {_fmt(learned['agent_minus'], d)}.",
+            ]
         a = b["agent"]
         lines.append("")
         lines.append(
