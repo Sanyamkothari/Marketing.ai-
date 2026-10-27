@@ -18,10 +18,17 @@ from autonomy.proof.ope import (
     ips,
     snips,
 )
+from autonomy.proof.power import (
+    MDE_MULTIPLIER,
+    minimum_detectable_difference,
+    minimum_detectable_lift,
+    smallest_visible_lift,
+)
 from autonomy.proof.rewards import Attribution, Costs, build_rewards, proof_rewards
 from autonomy.proof.split import assign_group, group_assigner, split_score, with_group
 
 __all__ = [
+    "MDE_MULTIPLIER",
     "MIN_GROUP",
     "Z_95",
     "Attribution",
@@ -37,8 +44,11 @@ __all__ = [
     "from_decisions",
     "group_assigner",
     "ips",
+    "minimum_detectable_difference",
+    "minimum_detectable_lift",
     "proof_rewards",
     "proof_summary",
+    "smallest_visible_lift",
     "snips",
     "split_score",
     "welch_difference",

@@ -274,13 +274,13 @@ def value_check(
     objective: Objective,
     now: datetime,
     *,
-    margin_rate: float = 1.0,
+    margin_rate: float | None = None,
 ) -> ValueCheck:
     """Shadow's forecast check: what customers spent when they bought, against the forecast.
 
     For each purchase, the latest closed contact decision (agent group, with a forecast) whose
     outcome window holds it gives the pair (forecast `value_if_converted`, what was spent). Spent is
-    the purchase's margin (its own, else `value x margin_rate`) for a profit goal and its value for a
+    the purchase's margin (its own, else `value x margin_rate`, the shop's setting, else the full value) for a profit goal and its value for a
     revenue goal; other objectives value a conversion, not a purchase, and are not checked here."""
     if objective not in (Objective.GROSS_PROFIT, Objective.REVENUE):
         return ValueCheck(0, None)
@@ -307,7 +307,11 @@ def value_check(
             if objective is Objective.REVENUE:
                 spent = e.value
             else:
-                spent = e.margin if e.margin is not None else e.value * margin_rate
+                spent = (
+                    e.margin
+                    if e.margin is not None
+                    else e.value * (1.0 if margin_rate is None else margin_rate)
+                )
             pairs.append((covering[-1], spent))
     n = len(pairs)
     if n < 2:
@@ -350,7 +354,7 @@ def assess(
     since: datetime,
     rule: PromotionRule | None = None,
     costs: Costs | None = None,
-    margin_rate: float = 1.0,
+    margin_rate: float | None = None,
     safety_stops: Sequence[Alert] = (),
     data_trusted: bool = True,
     mandate_ok: bool | None = None,
@@ -900,7 +904,7 @@ class AutopilotGuard:
         governed: bool = False,
         data_trusted: Callable[[datetime], bool] | None = None,
         channel_costs: Mapping[Any, float] | None = None,
-        margin_rate: float = 1.0,
+        margin_rate: float | None = None,
         timezone: str = "UTC",
     ) -> None:
         self.business_id = business_id

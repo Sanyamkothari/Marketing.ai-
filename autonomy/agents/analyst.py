@@ -171,6 +171,32 @@ def _estimate(draft: SectionDraft, name: str, est: Estimate, fmt: str, currency:
     )
 
 
+def _detectable_sentences(d: SectionDraft, proof: ProofSummary, currency: str) -> None:
+    """What this size of comparison can see at all, and a warning when the shop margin is not set."""
+    det = proof.detectable
+    if det is not None and proof.incremental_profit is not None:
+        smallest = d.add("detectable_profit", det.profit, format_money(det.profit, currency))
+        if det.relative is not None:
+            rel = d.add("detectable_lift", det.relative, format_rate(det.relative))
+            d.sentences.append(
+                f"With this many customers, a real gain below {rel} in profit per customer, about "
+                f"{smallest} in all, would not show up yet."
+            )
+        else:
+            d.sentences.append(
+                f"With this many customers, a real gain below about {smallest} would not show up yet."
+            )
+        d.notes.append(
+            "Say how small a gain this comparison can see, so a flat result is not read as no effect."
+        )
+    if proof.margin_note is not None and proof.margin_rate is None:
+        d.sentences.append(
+            "The shop's margin is not set, so orders with no recorded margin are counted at their full "
+            "value and profit is overstated."
+        )
+        d.notes.append("The shop margin is not set: profit is overstated; say so.")
+
+
 def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> SectionDraft:
     d = SectionDraft("money", MONEY_TITLE)
     agent_n = d.add("agent_customers", proof.agent_n, format_count(proof.agent_n))
@@ -211,6 +237,8 @@ def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> Sec
                 f"{lo} to {hi}, which includes zero."
             )
             d.notes.append("The profit range includes zero: we cannot tell yet whether the agent helped.")
+
+    _detectable_sentences(d, proof, currency)
 
     if proof.incremental_revenue is not None:
         r, lo, hi = _estimate(d, "incremental_revenue", proof.incremental_revenue, "money", currency)

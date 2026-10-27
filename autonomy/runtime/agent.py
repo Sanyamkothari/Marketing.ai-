@@ -109,7 +109,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -165,6 +165,7 @@ from autonomy.decide.models import action_key as key_of
 from autonomy.decide.pacing import BudgetPrice, OfferPricing, Pacer
 from autonomy.decide.planner import basket_cost_fn
 from autonomy.decide.policy import SWEEP, AutonomousPolicy, seeded_rng
+from autonomy.decide.slow_models import SlowModelConfig
 from autonomy.decide.timing import LATE_CLICK, ReadingHourModel, zone_named
 from autonomy.decide.who import WhoBook, WhoConfig
 from autonomy.interfaces import Bidder, Policy
@@ -3094,6 +3095,7 @@ def build_agent_policy(
     frequency: bool | FrequencyConfig | None = None,
     journeys: bool | JourneyConfig | JourneyRunner | None = None,
     v3: bool | V3Preset = False,
+    margin_rate: float | None = None,
 ) -> AgentPolicy:
     """The agent for these briefs and this content library, ready to decide and to learn.
 
@@ -3145,7 +3147,20 @@ def build_agent_policy(
     also passed by name here wins over the preset's, False included (`journeys=False`, `moments=False`, a
     `journeys=` runner...); `lookalike`, `who`, `frequency` and `journeys` default to None, "not given",
     which is off without the preset. Offer pricing is switched off only with `V3Preset(offers=False)`.
+
+    `margin_rate` is the shop's contribution margin (after shipping, gateway fees and returns to origin),
+    the one setting `RuntimeSettings.margin_rate` holds. It is the margin the value model starts from for a
+    customer with no margin of their own (in place of the built-in 0.4; recorded margins still move it),
+    and, with `who` on, the rate the 90-day value label uses until a purchase reports a margin. None (the
+    default) leaves every number as it was. With a `bundle` given, build it with
+    `build_bundle(margin_rate=...)`; one with another default margin is refused.
     """
+    if (
+        margin_rate is not None
+        and bundle is not None
+        and bundle.value.default_margin_rate != min(margin_rate, 1.0)
+    ):
+        raise ValueError("with a bundle given, build it with build_bundle(margin_rate=...) instead")
     parts = resolve_v3(
         v3,
         lookalike=lookalike,
@@ -3157,13 +3172,18 @@ def build_agent_policy(
     )
     lookalike, who, frequency = parts.lookalike, parts.who, parts.frequency
     moments, offer_pricing = parts.moments, parts.offer_pricing
+    if margin_rate is not None and who:
+        if who is True:
+            who = WhoConfig(slow=SlowModelConfig(margin_rate=margin_rate))
+        elif isinstance(who, WhoConfig) and who.slow.margin_rate is None:
+            who = replace(who, slow=replace(who.slow, margin_rate=margin_rate))
     book = (
         who
         if isinstance(who, WhoBook)
         else WhoBook(who if isinstance(who, WhoConfig) else None) if who else None
     )
     if bundle is None:
-        fresh = build_bundle()
+        fresh = build_bundle(margin_rate=margin_rate)
         if not lookalike:
             response: ClickResponseModel = ClickResponseModel()
         else:

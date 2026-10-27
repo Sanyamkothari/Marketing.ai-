@@ -224,6 +224,18 @@ export function notesGloss(notes) {
 }
 
 /**
+ * Two cautions that sit under the headline number, both worded by the API: the smallest gain this size of
+ * comparison could see at all (so a flat result is not read as "no effect"), and a warning when the shop's
+ * margin is not set (so the profit is overstated). Empty when the API sends neither.
+ */
+export function proofCaveats(proof) {
+  const out = [];
+  if (proof?.detectable?.sentence) out.push(h("p", { class: "pf-caveat pf-mde" }, String(proof.detectable.sentence)));
+  if (proof?.margin_note) out.push(h("p", { class: "notice pf-caveat pf-margin" }, String(proof.margin_note)));
+  return out;
+}
+
+/**
  * The shareable paragraph. Plain text, every estimate with its range (in the same precision as the page), and
  * plain words where the data is not there yet. `goal` may be null (the whole programme), then money has no
  * currency sign.
@@ -793,7 +805,11 @@ export async function render(root, ctx) {
     resultCard.append(h("h2", { class: "card-title" }, "Extra profit compared with people we never contact"), failedBox("proof", proofError, retry));
   } else {
     const verdict = profitVerdict(proof?.incremental_profit);
-    resultCard.append(verdictLine(verdict, "pf-verdict"), profitLede(verdict, proof?.incremental_profit, m, goal, proof));
+    resultCard.append(
+      verdictLine(verdict, "pf-verdict"),
+      profitLede(verdict, proof?.incremental_profit, m, goal, proof),
+      ...proofCaveats(proof),
+    );
     if (proof && verdict.key === "early") {
       early = true;
       resultCard.append(h("div", { class: "pf-figure" }, earlyStrip(proof, forecast, shadow, m)));

@@ -21,6 +21,17 @@ difference in means is an unbiased estimate of what being in the agent group did
 with replacement within each group (`n_boot` times, seeded) and the 2.5% and 97.5% percentiles are
 taken; it is slower and better for very skewed spend.
 
+**What the comparison can see.** Next to the incremental figures the summary carries their minimum
+detectable effect (`autonomy.proof.power`): the smallest true gain a comparison of this many customers,
+with this much spread, would reliably tell from nothing (95% confidence, 80% power). A small shop's
+proof says "this size of shop can only see lifts above X%" instead of leaving a flat result to be read
+as "no effect". Every closed window of a customer is summed into one figure, so the MDE is for the
+whole period measured: waiting for more months pools more windows and lowers it.
+
+**The margin.** Profit is margin less cost, and a purchase with no recorded margin counts at the
+shop's margin rate (`Costs.margin_rate`). Given `costs`, the summary says when that rate is not set
+(purchases are then counted at full value) or how much of the margin rests on it.
+
 **When we say nothing.** If the agent group or the holdout has fewer than `min_group` measured
 customers, the incremental figures are None and a note says why; the same for the baseline and the
 lift. Per-goal proof needs the goal to run alone: with one programme-wide holdout, two goals acting
@@ -38,7 +49,9 @@ from typing import Final, Literal
 import numpy as np
 import numpy.typing as npt
 
-from autonomy.contracts import Decision, Estimate, Group, ProofSummary, Reward
+from autonomy.contracts import Decision, Detectable, Estimate, Group, ProofSummary, Reward
+from autonomy.proof.power import minimum_detectable_difference
+from autonomy.proof.rewards import Costs
 
 __all__ = [
     "MIN_GROUP",
@@ -107,8 +120,12 @@ def proof_summary(
     method: Method = "normal",
     n_boot: int = 2000,
     seed: int = 0,
+    costs: Costs | None = None,
 ) -> ProofSummary:
     """The proof as of `now`: incremental money vs holdout, lift vs baseline, spend and ROI.
+
+    `costs`, when given, lets the summary report the shop's margin setting (`margin_rate`,
+    `margin_note`); without it nothing is said about the margin.
 
     `rewards` should be last-touch rewards (`proof_rewards()`) built with this same `now`, so every
     customer is measured over the same period; rewards whose window ends after `now`, or whose
@@ -209,6 +226,16 @@ def proof_summary(
             f"from the holdout times the {agent_n:,} agent customers."
         )
 
+    detectable: Detectable | None = None
+    if not refuse_goal and agent_n >= min_group and holdout_n >= min_group:
+        rule = prof_b if baseline_n >= min_group else prof_b[:0]
+        detectable = _detectable(usable, by_id, prof_a, prof_h, rev_a, rev_h, rule)
+        if detectable is not None:
+            notes.append(detectable.sentence)
+    margin_note = _margin_note(usable, costs)
+    if margin_note is not None:
+        notes.append(margin_note)
+
     return ProofSummary(
         goal_id=goal_id,
         as_of=now,
@@ -221,6 +248,70 @@ def proof_summary(
         spend=spend,
         roi=roi,
         notes=tuple(notes),
+        detectable=detectable,
+        margin_rate=costs.margin_rate if costs is not None else None,
+        margin_note=margin_note,
+    )
+
+
+def _detectable(
+    usable: Sequence[Reward],
+    by_id: Mapping[str, Decision],
+    prof_a: FloatArray,
+    prof_h: FloatArray,
+    rev_a: FloatArray,
+    rev_h: FloatArray,
+    prof_b: FloatArray,
+) -> Detectable | None:
+    """The minimum detectable effect of the incremental figures, in their own units."""
+    n = float(len(prof_a))
+    per_customer = minimum_detectable_difference(prof_a, prof_h)
+    if per_customer is None:
+        return None
+    revenue = minimum_detectable_difference(rev_a, rev_h)
+    versus_rule = minimum_detectable_difference(prof_a, prof_b)
+    holdout_mean = float(prof_h.mean())
+    relative = per_customer / holdout_mean if holdout_mean > 0 else None
+    starts = [by_id[r.decision_id].made_at for r in usable]
+    days = max(0, (max(r.window_end for r in usable) - min(starts)).days) if usable else 0
+    who = f"{len(prof_a):,} agent and {len(prof_h):,} holdout customers measured over {days:,} days"
+    if relative is not None:
+        what = f"profit per customer more than {relative:.0%} above the holdout's"
+    else:
+        what = f"a gain of more than {per_customer:,.2f} in profit per customer"
+    sentence = (
+        f"With {who}, this comparison can only see {what}; a real gain smaller than that would look like "
+        "noise. Every closed window is already pooled, so more months lower this bar."
+    )
+    return Detectable(
+        profit=per_customer * n,
+        revenue=revenue * n if revenue is not None else None,
+        lift_vs_baseline=versus_rule,
+        relative=relative,
+        period_days=days,
+        sentence=sentence,
+    )
+
+
+def _margin_note(usable: Sequence[Reward], costs: Costs | None) -> str | None:
+    """Says when the profit rests on a margin the shop never gave (or on the one it did)."""
+    if costs is None:
+        return None
+    total = sum(r.margin for r in usable)
+    assumed = sum(r.margin_assumed for r in usable)
+    if assumed <= 0 or total <= 0:
+        return None
+    share = assumed / total
+    if costs.margin_rate is None:
+        return (
+            "No shop margin is set. "
+            f"{share:.0%} of the margin counted here comes from purchases that carry no margin, and those "
+            "are counted at their full value, so profit is overstated. Set the shop's contribution margin "
+            "(after shipping, gateway fees and returns to origin) to correct it."
+        )
+    return (
+        f"Purchases with no recorded margin are counted at the shop's margin of {costs.margin_rate:.0%} "
+        f"({share:.0%} of the margin counted here)."
     )
 
 

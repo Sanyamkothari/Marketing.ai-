@@ -1118,6 +1118,7 @@ class AutonomyRuntime:
         business_id: str | None = None,
         data_gate: DataGate | None = None,
         before_tick: Sequence[TickHook] = (),
+        margin_rate: float | None = None,
     ) -> None:
         """`conversation` defaults to one over `text_signals`, else over `PersonReadsReplies`: STOP
         is always honoured. `strategist` is the weekly adjustment, e.g. `Strategist.adjust_brief`;
@@ -1131,7 +1132,9 @@ class AutonomyRuntime:
         on each goal's candidate states right before deciding; `mandates` puts goals under signed
         mandates; `gateway` sends through a `DispatchGateway` (its attached dispatcher becomes
         `dispatcher`, so pauses reach it); `lift_guards` turns on the nightly negative-lift
-        breaker; `business_id`, `data_gate` and `before_tick` tie it to a connected shop."""
+        breaker; `business_id`, `data_gate` and `before_tick` tie it to a connected shop. `margin_rate`
+        is the shop's contribution margin (`RuntimeSettings.margin_rate`), which the nightly proof check
+        counts a purchase with no margin at; None counts it at full value."""
         if gateway is not None:
             if gateway.dispatcher is None:
                 raise ValueError("attach a dispatcher to the gateway (attach_dispatcher) before using it")
@@ -1150,6 +1153,7 @@ class AutonomyRuntime:
         self.state_enricher = state_enricher
         self.mandates = mandates
         self.lift_guards = lift_guards
+        self.margin_rate = margin_rate
         self.business_id = business_id
         self.data_gate = data_gate
         self.before_tick: list[TickHook] = list(before_tick)
@@ -2789,7 +2793,9 @@ class AutonomyRuntime:
                     mine,
                     events,
                     now,
-                    costs=Costs.from_brief(run.brief, channel=self.channel_costs),
+                    costs=Costs.from_brief(
+                        run.brief, channel=self.channel_costs, margin_rate=self.margin_rate
+                    ),
                     guards=guards,
                 )
             except Exception as err:

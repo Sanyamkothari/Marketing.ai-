@@ -240,6 +240,20 @@ class RuntimeSettings(BaseModel):
     lift_min_group: int = Field(default=30, ge=2, description="Measured customers per group before judging")
     lift_min_closed: int = Field(default=100, ge=1, description="Closed outcome windows before judging")
 
+    # The shop's contribution margin: one setting for the value model, the proof and the 90-day value label.
+    margin_rate: float | None = Field(
+        default=None,
+        gt=0,
+        le=1,
+        description=(
+            "Contribution margin of the shop's orders as a share of their value, after shipping, gateway "
+            "fees and returns to origin (AUTONOMY_MARGIN_RATE, 0.35 for 35%). Used for every purchase that "
+            "carries no margin of its own, by the agent's value model, the proof's profit and the "
+            "90-day value label. Unset: the built-in 0.4 for the value model, full order value for the "
+            "proof, and the proof page says the margin is not set"
+        ),
+    )
+
     # Look-alike learning (plan-v3 foundation B, docs/v3/LOOKALIKE.md). Off: the agent's click model alone.
     lookalike_model: bool = Field(
         default=False,
@@ -373,6 +387,7 @@ def agent_policy_factory(
     kinds: Mapping[str, GoalKind] | None = None,
     lookalike: bool = False,
     v3: V3Preset | bool = False,
+    margin_rate: float | None = None,
 ) -> Policy:
     """The agent's policy (`autonomy.runtime.agent.build_agent_policy`), imported when first needed.
 
@@ -386,6 +401,8 @@ def agent_policy_factory(
     extra: dict[str, Any] = {"lookalike": True} if lookalike else {}
     if v3:
         extra["v3"] = v3
+    if margin_rate is not None:
+        extra["margin_rate"] = margin_rate
     if kinds is None:
         built = build(list(briefs), list(content), **extra)
     else:
@@ -397,14 +414,20 @@ def agent_policy_factory(
 
 
 def workspace_policy_factory(
-    workspace: Workspace, *, lookalike: bool = False, v3: V3Preset | bool = False
+    workspace: Workspace,
+    *,
+    lookalike: bool = False,
+    v3: V3Preset | bool = False,
+    margin_rate: float | None = None,
 ) -> PolicyFactory:
     """`agent_policy_factory` with each brief's goal kind read from the workspace when it is built."""
 
     def build(briefs: Sequence[Brief], content: Sequence[ContentItem]) -> Policy:
         wanted = {b.goal_id for b in briefs}
         kinds = {g.goal_id: g.kind for g in workspace.goals() if g.goal_id in wanted}
-        return agent_policy_factory(briefs, content, kinds=kinds, lookalike=lookalike, v3=v3)
+        return agent_policy_factory(
+            briefs, content, kinds=kinds, lookalike=lookalike, v3=v3, margin_rate=margin_rate
+        )
 
     return build
 
@@ -888,7 +911,10 @@ def build_runtime(
         folder=ProductionStateFolder(),
         policy_factory=policy_factory
         or workspace_policy_factory(
-            workspace, lookalike=settings.lookalike_model, v3=settings.v3_preset() or False
+            workspace,
+            lookalike=settings.lookalike_model,
+            v3=settings.v3_preset() or False,
+            margin_rate=settings.margin_rate,
         ),
         queue=queue,
         dispatcher=dispatcher,
@@ -923,6 +949,7 @@ def build_runtime(
         mandates=mandates,
         gateway=gateway,
         lift_guards=settings.lift_guards(),
+        margin_rate=settings.margin_rate,
         business_id=wiring.business_id if wiring is not None else settings.business_id,
         data_gate=data_gate,
         before_tick=hooks,
