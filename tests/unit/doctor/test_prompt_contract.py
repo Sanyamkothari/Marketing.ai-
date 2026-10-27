@@ -270,6 +270,7 @@ def _fields(model: type) -> set[str]:
 @pytest.mark.parametrize(
     ("module", "function", "model", "all_read"),
     [
+        ("agent_review", "_guide", actions.ReadGuideArgs, True),
         ("agent_review", "_sql", actions.ProposeSqlArgs, False),
         ("agent_review", "_ask", actions.AskReviewArgs, False),
         ("agent_review", "_doubt", actions.ExpressDoubtArgs, False),

@@ -171,8 +171,8 @@ class _Turn:
     sent: list[Any] = field(default_factory=list)
     book: ExpectationBook = field(default_factory=ExpectationBook)
     orders: dict[str, int] = field(default_factory=dict)
-    guides: set[tuple[str, str | None]] = field(default_factory=set)
-    """The (guide, section) pairs already in this turn's results: a guide is carried once."""
+    guides: dict[str, set[str]] = field(default_factory=dict)
+    """Guide -> the parts already in this turn's results (its section titles, `Rules`, and `*` for all of it)."""
 
 
 def agent_review(
@@ -670,15 +670,31 @@ class _Review:
         turn.feedback.append(shown)
 
     def _guide(self, args: dict[str, Any]) -> None:
-        """`read_guide`: the guide's rules and a section, once per turn (a second read says it is above)."""
-        from engine.doctor.guides import ALREADY_READ, read_guide
+        """`read_guide`: the guide's rules and a section, each part once per turn (a repeat says it is above).
 
-        name, section, lines = read_guide(args.get("name"), args.get("section"), self.config_root)
-        shown: dict[str, Any] = {"tool": "read_guide", "guide": name, "section": section or "all"}
-        if (name, section) in self.turn.guides:
+        A lookup the guides cannot answer is a read-only miss, not a strike: the refusal, with the valid names or
+        sections, goes to the model as feedback.
+        """
+        from engine.doctor.guides import ALREADY_READ, RULES, read_guide
+
+        name, section = args.get("name"), args.get("section")
+        try:
+            key, title, lines = read_guide(name, section, self.config_root)
+        except AgentToolError as exc:
+            self.turn.feedback.append(
+                self.gates[0].prepare({"tool": "read_guide", "error": exc.code, "message": exc.message})
+            )
+            return
+        carried = self.turn.guides.setdefault(key, set())
+        shown: dict[str, Any] = {"tool": "read_guide", "guide": key, "section": title or "all"}
+        wanted = "*" if title is None else title
+        if "*" in carried or wanted in carried:
             shown["text"] = ALREADY_READ
         else:
-            self.turn.guides.add((name, section))
+            if title is not None and RULES in carried:
+                lines = read_guide(key, title, self.config_root, rules=False)[2]
+            carried.add(wanted)
+            carried.add(RULES)
             shown["text"] = lines
         self.turn.feedback.append(shown)
 

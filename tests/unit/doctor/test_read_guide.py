@@ -69,3 +69,11 @@ def test_every_guide_reaches_the_model_whole(name: str) -> None:
 
 def test_the_index_is_what_the_prompts_carry() -> None:
     assert index_text().startswith("- explore:") and len(index_text().split()) <= 150
+
+
+def test_a_section_may_be_named_by_a_unique_start_and_the_rules_may_be_left_out() -> None:
+    assert read_guide("features", "buckets")[1] == "Buckets and interactions"
+    with pytest.raises(AgentToolError):
+        read_guide("features", "re")  # two sections start so: no guess
+    text = "\n".join(read_guide("features", "Receipt", rules=False)[2])
+    assert "## Receipt" in text and "Never target-encode" not in text

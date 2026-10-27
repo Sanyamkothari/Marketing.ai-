@@ -14,7 +14,7 @@
 2. Frequency: distinct orders in the last 30 / 90 / 365 days.
 3. Monetary: spend in the same windows; mean, median, max order value.
 4. Trend: activity in the last 30 days / (prior 90 days / 3), for orders and spend. Above 1 growing, below 1 decaying; blank when the prior window is empty.
-5. Ratios: dormancy index = recency_days / tenure_days; return rate = returned items / items; spend velocity = spend / tenure months; basket depth = items / orders.
+5. Ratios and trend, as `agg` ids: `dormancy_index` (recency / tenure), `return_rate`, `spend_per_month`, `basket_depth`, `spend_velocity_30d`, `orders_velocity_30d`, `recency_bucket`; blank when the divisor is 0.
 6. Tenure and breadth: days since first order; distinct products; active months.
 Start with 1-3, then 4-6 (preset `rfm_ratios` has recency, ratios, velocity and the bucket); remove what the data cannot support, explaining why.
 

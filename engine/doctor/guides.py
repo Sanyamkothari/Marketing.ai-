@@ -81,9 +81,12 @@ def _lines(text: str) -> list[str]:
 
 
 def read_guide(
-    name: object, section: object = None, root: Path | None = None
+    name: object, section: object = None, root: Path | None = None, *, rules: bool = True
 ) -> tuple[str, str | None, list[str]]:
     """`(name, section, lines)`: the guide's rules and the section asked for, or all of it when `section` is None.
+
+    `rules=False` leaves the `## Rules` block out of a section read (the caller already sent it this turn). A
+    section may be named by its title or by a unique start of it ("buckets").
 
     Raises `AgentToolError` (`AGENT_GUIDE_UNKNOWN`) naming the valid guides, or the valid sections of the guide.
     """
@@ -101,11 +104,14 @@ def read_guide(
     wanted = str(section).strip().lstrip("#").strip().lower().replace("_", " ")
     title = next((t for t in sections if t.lower() == wanted), None)
     if title is None:
+        starts = [t for t in sections if t.lower().startswith(wanted)] if wanted else []
+        title = starts[0] if len(starts) == 1 else None
+    if title is None:
         raise AgentToolError(
             "AGENT_GUIDE_SECTION_UNKNOWN",
             f"The guide {key!r} has no section {str(section)[:40]!r}. Sections: {', '.join(sections)}.",
         )
-    parts: Iterable[str] = [sections[RULES]] if RULES in sections and title != RULES else []
+    parts: Iterable[str] = [sections[RULES]] if rules and RULES in sections and title != RULES else []
     return key, title, _fit(_lines("\n".join([*parts, sections[title]])))
 
 
