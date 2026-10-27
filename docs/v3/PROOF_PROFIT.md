@@ -12,8 +12,16 @@ same customer:
 
 - **Which purchase.** The one whose `attrs["order_id"]` the refund names. Shopify refunds and voids both do (the
   connector writes a REFUND per refund and one `void` REFUND for the unpaid total of a voided order). A refund that
-  names no order reverses the customer's latest earlier purchase that still has money left. A refund naming an order
-  we do not hold (bought before the history) is ignored.
+  names no order reverses the customer's latest earlier purchase with exactly the refund's amount left, else the
+  latest earlier purchase that still has money left. Every purchase of the customer is a candidate, including one no
+  decision was credited with (before the first decision, outside every window, or after the last-touch cutoff): its
+  refund then finds it and changes nothing, instead of reversing an in-window purchase that was earned (which would
+  lower the agent group only, since the holdout has fewer credited purchases to absorb such refunds). An order sent
+  as several PURCHASE lines with one `order_id` is reversed across all its lines in proportion. A refund naming an
+  order we do not hold (bought before the history) is ignored.
+- **Sign and order.** The refund's amount is the size of its `value` whatever its sign (some sources write refunds
+  negative, as the profile and the 90-day label already assume). A purchase and a refund at the same instant are
+  taken purchase first.
 - **How much.** The refunded share of the order's value comes off the revenue, and the same share of its margin
   (recorded or assumed) comes off the margin. Refunds can never take more than the order was worth. An order refunded
   in full is no longer a conversion.
@@ -23,8 +31,10 @@ same customer:
 - **Cash on delivery and return to origin.** A COD parcel the customer refuses arrives as a voided or cancelled order,
   so it is a REFUND naming the order and is netted like any other. A REFUND with `attrs["rto"]` true (or
   `return_to_origin`), or `attrs["reason"]` of `rto` or `return_to_origin`, reverses the whole order whatever amount it
-  carries. The lost outbound and return shipping of an RTO parcel is **not** charged as a separate cost: it belongs in
-  the shop's contribution margin (below).
+  carries. These `rto` / `reason` attrs are a convention for a loader or courier feed to set: no connector sets them
+  yet (the Shopify REFUND attrs are `order_id`, `refund_id` and `currency`), so today an RTO is netted only through the
+  void or refund the shop records. The lost outbound and return shipping of an RTO parcel is **not** charged as a
+  separate cost: it belongs in the shop's contribution margin (below).
 - An offer's cost is still charged when its order is later refunded (the discount was given).
 
 What moves: any shop with refund events in its store now shows less profit, in the proof, in the nightly negative-lift
@@ -51,10 +61,15 @@ A margin recorded on the purchase always wins over the setting. `Reward.margin_a
 margin came from the setting.
 
 **When it is unset**, nothing changes numerically (0.4, 0.3 and "full value" stay as they were), but the proof no
-longer hides it: `ProofSummary.margin_note` (also appended to `notes`) says "No shop margin is set", what share of the
+longer hides it: `ProofSummary.margin_note` (its own field, not repeated in `notes`) says "No shop margin is set", what share of the
 margin counted rests on it, and that profit is overstated; the proof page shows it under the headline and the Analyst's
 briefing says so in words. No note is written when every purchase carries its own margin. With the setting on, the note
-says which rate was used and for what share of the margin.
+says which rate was used and for what share of the margin. The proof's profit figures are margin less cost for every
+objective (`autonomy/proof/estimate.py`, `profit[...] += r.margin - r.cost`), so the note is written for a revenue or
+conversion goal too: their proof page still leads with extra profit.
+
+`build_agent_policy(margin_rate=...)` refuses a `who` given as a ready `WhoBook` whose 90-day label uses another
+margin (as it refuses such a `bundle`), so the setting cannot be silently ignored on that path.
 
 What moves when a shop sets it: the proof's profit falls from "full value" to value x rate for purchases with no
 margin; the agent's start margin goes from 0.4 to the shop's. The demo's own read model
@@ -72,10 +87,13 @@ proof.
 - **From the data** (`ProofSummary.detectable`): `SE` is Welch's standard error of the per-customer profit difference,
   the one the proof's range uses. `detectable.profit` and `.revenue` are in the units of the incremental figures (times
   the agent customers); `.lift_vs_baseline` is per customer; `.relative` is the smallest lift as a share of the
-  holdout's profit per customer; `.sentence` says it in words and is added to `notes`: "With 60 agent and 40 holdout
-  customers measured over 7 days, this comparison can only see profit per customer more than X% above the holdout's...".
-  The briefing carries the same in `detectable_profit` and `detectable_lift`, and the ledger summary has
-  `minimum_detectable_lift_pct` (conversion, at the holdout's own rate) and `minimum_detectable_profit`.
+  holdout's profit per customer; `.sentence` says it in words (its own field, not repeated in `notes`): "With 60 agent
+  and 40 holdout customers measured over 7 days, this comparison can only see profit per customer more than X% above
+  the holdout's...". The proof page shows the sentence under the headline, and the revenue and simple-rule MDEs in the
+  descriptions of "Extra revenue" and "Extra profit per customer"; the shareable text carries the sentence. The
+  briefing carries the same in `detectable_profit`, `detectable_lift`, `detectable_revenue` and
+  `detectable_lift_per_customer`, and the ledger summary has `minimum_detectable_lift_pct` (conversion, at the
+  holdout's own rate) and `minimum_detectable_profit`.
 - **Before the data** (`minimum_detectable_lift`, `smallest_visible_lift`): for "did the customer buy", relative lift
   `2.8016 x sqrt(p(1-p)(1/n_agent + 1/n_holdout)) / p`, for the runtime's 10% holdout and 80% agent group. Run with
   `python -c` on this commit (`smallest_visible_lift(n, p)`):
@@ -96,12 +114,22 @@ added. The sentence says so. No new pooling code was needed; the pooled column a
 effect (a longer period means a higher buy rate per customer).
 
 No MDE is claimed when a group has fewer than `MIN_GROUP` (30) measured customers, the same rule as the incremental
-figures.
+figures, nor when profit per customer does not vary at all in either group (nobody bought yet): a standard error of
+0 would claim that any gain could be seen, so a note says there is nothing to say yet instead.
 
 ## What was run
 
 - `pytest tests/v2/proof_profit`: 26 passed (refund inside and after the window, partial refund, void, COD/RTO, margin
   single source, MDE for 8k and 300k).
+- After review (refund matching, multi-line orders, negative refunds, same-instant order, zero-spread MDE, the shown
+  MDEs): `pytest -o addopts="" -n 2` on `tests/v2/proof_profit` (42 tests, the `slow` 300,000-customer ledger run
+  included, 16 s), `tests/v2/decide/test_proof.py`, `tests/v2/promise/test_proof.py`,
+  `tests/v2/ui_finish/test_briefing.py`, `tests/v2/ui_finish/test_plan_proof.py`,
+  `tests/v2/zero_touch/test_wiring_proof.py`, `tests/v2/ui/test_live_proof_operator_js.py`,
+  `tests/v3/who/test_slow_models.py`, `tests/v2/engines/test_ledger_doctor_api.py`,
+  `tests/v2/agents/test_analyst_conversation.py` and `tests/v2/realfix/test_finish_wiring.py`: 192 passed.
+  `node --test tests/v2/promise/proof.test.mjs`: 17 passed. The ledger's shown MDE
+  (`minimum_detectable_lift_pct`) is 45.8% / 21.0% for 8,000 customers and 7.5% / 3.4% for 300,000, as in the table.
 - Existing tests that cover the touched modules, 255 passed in all (281 with the new file): `tests/v2/decide/test_proof.py`,
   `tests/v2/ui_finish/test_briefing.py`, `tests/v2/ui_finish/test_plan_proof.py`,
   `tests/v2/zero_touch/test_wiring_proof.py`, `tests/v2/engines/test_ledger_doctor_api.py`,
@@ -127,5 +155,6 @@ figures.
   setting is the follow-up.
 - A separate per-order RTO cost (outbound plus return shipping on a refused parcel) is not modelled; it is inside the
   margin rate.
-- A refund that names no order is matched to the customer's latest earlier purchase, which can be the wrong one.
-  It is conservative for the claim (it only ever lowers profit) and affects only sources that do not name orders.
+- A partial refund that names no order, and matches no purchase's remaining amount exactly, is matched to the
+  customer's latest earlier purchase, which can be the wrong one. Only sources that do not name orders are affected
+  (CSV and Online Retail cancellations, `loaders.py`'s synthetic refunds).

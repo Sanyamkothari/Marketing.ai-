@@ -243,6 +243,13 @@ def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> Sec
     if proof.incremental_revenue is not None:
         r, lo, hi = _estimate(d, "incremental_revenue", proof.incremental_revenue, "money", currency)
         d.sentences.append(f"Extra revenue: {r} (likely range {lo} to {hi}).")
+        if proof.detectable is not None and proof.detectable.revenue is not None:
+            seen = d.add(
+                "detectable_revenue",
+                proof.detectable.revenue,
+                format_money(proof.detectable.revenue, currency),
+            )
+            d.sentences.append(f"A real revenue gain below about {seen} would not show up yet.")
 
     spend = d.add("spend", proof.spend, format_money(proof.spend, currency))
     if goal is not None:
@@ -296,6 +303,17 @@ def _baseline_section(proof: ProofSummary, currency: str) -> SectionDraft:
             f"customer, with a likely range from {lo} to {hi}."
         )
         d.notes.append("The range includes zero: no clear difference from the simple rule yet.")
+    det = proof.detectable
+    if det is not None and det.lift_vs_baseline is not None:
+        seen = d.add(
+            "detectable_lift_per_customer",
+            det.lift_vs_baseline,
+            format_money(det.lift_vs_baseline, currency),
+        )
+        d.sentences.append(
+            f"With this many customers, a difference from the simple rule below about {seen} per "
+            "customer would not show up yet."
+        )
     d.sentences.append(f"The simple rule looks after {baseline_n} customers.")
     return d
 

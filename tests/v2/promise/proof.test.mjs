@@ -384,3 +384,18 @@ test("the chart's zero line runs through each bar only, never through the value 
     for (const y of notes) assert.ok(y - 13 > y2 || y + 4 < y1, `note at ${y} crosses zero line ${y1}-${y2}`);
   }
 });
+
+test("the smallest visible gain sits next to profit, revenue and the simple rule, each once", async () => {
+  const sentence = "With 900 agent and 100 holdout customers measured over 30 days, this comparison can only see profit per customer more than 40% above the holdout's.";
+  const margin = "No shop margin is set.";
+  const detectable = { profit: 5000, revenue: 9000, lift_vs_baseline: 3, relative: 0.4, period_days: 30, sentence };
+  const proof = { ...mock("proof.json"), detectable, margin_note: margin };
+  const { root, text } = await draw({ proof });
+  assert.equal(text.split(sentence).length - 1, 1, "the profit sentence is shown once");
+  assert.equal(text.split(margin).length - 1, 1, "the margin note is shown once");
+  assert.match(tipFor(root, "Extra revenue"), /a real gain in revenue below about \$9,000 would not show up yet/);
+  assert.match(tipFor(root, "Extra profit per customer"), /a difference per customer below about \$3/);
+  const share = proofScreen.proofSummaryText(proof, mock("goal_detail.json").goal);
+  assert.ok(share.includes(sentence) && share.includes(margin));
+  assert.ok(noJunk(text));
+});

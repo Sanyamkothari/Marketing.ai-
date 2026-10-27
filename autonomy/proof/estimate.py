@@ -30,7 +30,9 @@ whole period measured: waiting for more months pools more windows and lowers it.
 
 **The margin.** Profit is margin less cost, and a purchase with no recorded margin counts at the
 shop's margin rate (`Costs.margin_rate`). Given `costs`, the summary says when that rate is not set
-(purchases are then counted at full value) or how much of the margin rests on it.
+(purchases are then counted at full value) or how much of the margin rests on it. The profit figures are
+margin less cost whatever the goal's objective, so the note applies to them for a revenue or conversion
+goal too. The MDE sentence and the margin note are in their own fields, not in `notes`.
 
 **When we say nothing.** If the agent group or the holdout has fewer than `min_group` measured
 customers, the incremental figures are None and a note says why; the same for the baseline and the
@@ -230,11 +232,14 @@ def proof_summary(
     if not refuse_goal and agent_n >= min_group and holdout_n >= min_group:
         rule = prof_b if baseline_n >= min_group else prof_b[:0]
         detectable = _detectable(usable, by_id, prof_a, prof_h, rev_a, rev_h, rule)
-        if detectable is not None:
-            notes.append(detectable.sentence)
+        if detectable is None:
+            notes.append(
+                "Profit per customer does not vary yet in either group (nobody bought, say), so there is "
+                "nothing to say about how small a gain this comparison could see."
+            )
+    # The two caveats have their own fields (`detectable.sentence`, `margin_note`), shown under the
+    # headline; they are not repeated in `notes`.
     margin_note = _margin_note(usable, costs)
-    if margin_note is not None:
-        notes.append(margin_note)
 
     return ProofSummary(
         goal_id=goal_id,

@@ -3153,7 +3153,8 @@ def build_agent_policy(
     customer with no margin of their own (in place of the built-in 0.4; recorded margins still move it),
     and, with `who` on, the rate the 90-day value label uses until a purchase reports a margin. None (the
     default) leaves every number as it was. With a `bundle` given, build it with
-    `build_bundle(margin_rate=...)`; one with another default margin is refused.
+    `build_bundle(margin_rate=...)`; one with another default margin is refused, and so is a `who` given
+    as a `WhoBook` whose 90-day value label uses another margin.
     """
     if (
         margin_rate is not None
@@ -3177,6 +3178,10 @@ def build_agent_policy(
             who = WhoConfig(slow=SlowModelConfig(margin_rate=margin_rate))
         elif isinstance(who, WhoConfig) and who.slow.margin_rate is None:
             who = replace(who, slow=replace(who.slow, margin_rate=margin_rate))
+        elif isinstance(who, WhoBook) and who.config.slow.margin_rate != margin_rate:
+            raise ValueError(
+                "with a WhoBook given, build it with WhoConfig(slow=SlowModelConfig(margin_rate=...))"
+            )
     book = (
         who
         if isinstance(who, WhoBook)

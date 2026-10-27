@@ -82,7 +82,7 @@ def idle(did: str, at: datetime, *, cid: str, group: Group) -> Decision:
 
 
 def purchase(at: datetime, value: float, *, margin: float | None = None, order: str | None = "o1") -> Event:
-    attrs = {"order_id": order} if order is not None else {}
+    attrs: dict[str, str | int | float | bool] = {"order_id": order} if order is not None else {}
     return Event(
         event_id=stable_id("p", at, value, order),
         customer_id="c1",
@@ -208,6 +208,83 @@ def test_a_refund_nets_only_the_decisions_whose_window_holds_it() -> None:
     assert out["d2"].margin == pytest.approx(0.0) and not out["d2"].converted
 
 
+def test_a_refund_of_a_purchase_before_the_first_decision_leaves_the_earned_one_alone() -> None:
+    """The day -3 purchase was credited to no decision; its refund must not reverse the day-2 one."""
+    r = reward(
+        [
+            purchase(day(-3), 80.0, order=None),
+            purchase(day(2), 50.0, order=None),
+            refund(day(3), 80.0, order=None),
+        ]
+    )
+    assert r.converted and r.revenue == pytest.approx(50.0) and r.margin == pytest.approx(20.0)
+    # named, the same holds: the order is held even though no decision was credited with it
+    named = reward(
+        [purchase(day(-3), 80.0, order="old"), purchase(day(2), 50.0), refund(day(3), 80.0, order="old")]
+    )
+    assert named.converted and named.revenue == pytest.approx(50.0)
+
+
+def test_a_refund_of_a_purchase_after_the_last_touch_cutoff_leaves_the_counted_one_alone() -> None:
+    """With now on day 9 and a 7-day horizon the cutoff is day 2: the day-3 purchase is not counted."""
+    events = [
+        purchase(day(1), 50.0, order=None),
+        purchase(day(3), 50.0, order=None),
+        refund(day(4), 50.0, order=None),
+    ]
+    out = proof_rewards([act()], {"c1": events}, HORIZON, Objective.GROSS_PROFIT, MARGIN, now=day(9))
+    assert len(out) == 1
+    assert out[0].converted and out[0].revenue == pytest.approx(50.0)
+
+
+def _line(at: datetime, value: float, n: int, order: str = "o1") -> Event:
+    return Event(
+        event_id=f"line-{order}-{n}",
+        customer_id="c1",
+        type=EventType.PURCHASE,
+        ts=at,
+        source="csv",
+        value=value,
+        attrs={"order_id": order},
+    )
+
+
+def test_an_order_in_several_lines_is_reversed_in_full() -> None:
+    lines = [_line(day(2), 30.0, 1), _line(day(2), 30.0, 2), _line(day(2), 40.0, 3)]
+    whole = reward([*lines, refund(day(4), 100.0)])
+    assert whole.revenue == pytest.approx(0.0) and whole.margin == pytest.approx(0.0)
+    assert not whole.converted
+    half = reward([*lines, refund(day(4), 50.0)])  # spread over the lines in proportion
+    assert half.converted and half.revenue == pytest.approx(50.0) and half.margin == pytest.approx(20.0)
+    rto = reward([*lines, refund(day(4), 1.0, rto=True)])
+    assert rto.revenue == pytest.approx(0.0) and not rto.converted
+
+
+def test_a_negative_refund_is_netted_like_a_positive_one() -> None:
+    r = reward([purchase(day(2), 100.0), refund(day(4), -100.0)])
+    assert r.revenue == pytest.approx(0.0) and r.margin == pytest.approx(0.0) and not r.converted
+    part = reward([purchase(day(2), 100.0), refund(day(4), -25.0)])
+    assert part.revenue == pytest.approx(75.0) and part.converted
+
+
+def test_a_refund_at_the_same_instant_as_its_purchase_is_netted() -> None:
+    r = reward([refund(day(2), 100.0), purchase(day(2), 100.0)])  # store order: refund first
+    assert r.revenue == pytest.approx(0.0) and not r.converted
+
+
+def test_two_full_refunds_take_a_conversion_back_once() -> None:
+    """A second order still converts after the first is refunded twice over."""
+    r = reward(
+        [
+            purchase(day(1), 100.0, order="a"),
+            purchase(day(2), 10.0, order="b"),
+            refund(day(3), 100.0, order="a"),
+            refund(day(4), 100.0, order="a"),
+        ]
+    )
+    assert r.converted and r.revenue == pytest.approx(10.0)
+
+
 # --- one shop margin -----------------------------------------------------------------------------
 
 
@@ -258,7 +335,7 @@ def test_the_proof_says_so_when_no_shop_margin_is_set() -> None:
     s = _summary(Costs())
     assert s.margin_rate is None
     assert s.margin_note is not None and s.margin_note.startswith("No shop margin is set")
-    assert s.margin_note in s.notes
+    assert s.margin_note not in s.notes  # shown under the headline, not repeated in the notes
     shop = _summary(Costs(margin_rate=0.35))
     assert shop.margin_rate == 0.35
     assert shop.margin_note is not None and "35%" in shop.margin_note
@@ -377,7 +454,7 @@ def test_every_proof_carries_its_mde_next_to_the_numbers() -> None:
     assert d.profit == pytest.approx(per_customer * len(agent))  # the unit of incremental_profit
     assert d.relative == pytest.approx(per_customer / holdout.mean())
     assert d.revenue is not None and d.lift_vs_baseline is not None and d.period_days == 7
-    assert "only see" in d.sentence and d.sentence in s.notes
+    assert "only see" in d.sentence and d.sentence not in s.notes
 
 
 def test_no_mde_is_claimed_when_the_groups_are_too_small() -> None:
@@ -448,3 +525,143 @@ def test_the_ledger_summary_shows_the_mde_of_the_conversion_comparison() -> None
     assert out.causal_metrics.minimum_detectable_lift_pct == pytest.approx(expected, rel=1e-4)
     assert out.financial_impact.minimum_detectable_profit is not None
     assert out.financial_impact.margin_note is not None  # no shop margin was given
+
+
+# --- the shown numbers: the API proof and the ledger -----------------------------------------------
+
+
+@pytest.mark.parametrize(("rate", "per_order"), [(0.35, 35.0), (None, 100.0)])
+def test_the_api_proof_prices_a_purchase_with_no_margin_at_the_setting(
+    rate: float | None, per_order: float
+) -> None:
+    """`StoreReadModels.proof` (what the proof page shows) counts an unmargined order at value x rate."""
+    from api.v2.deps import build_services_from_runtime
+
+    env = {"AUTONOMY_MARGIN_RATE": str(rate)} if rate is not None else {}
+    runtime = build_runtime(RuntimeSettings.from_env(env), engine=memory_engine())
+    decisions = [
+        idle(f"d-{g.value}-{i}", T0, cid=f"{g.value}-{i}", group=g)
+        for g in (Group.AGENT, Group.HOLDOUT)
+        for i in range(30)
+    ]
+    runtime.decisions.record(decisions)
+    runtime.events.append(
+        Event(
+            event_id=f"p-{i}",
+            customer_id=f"agent-{i}",
+            type=EventType.PURCHASE,
+            ts=day(2),
+            source="shopify",
+            value=100.0,
+            attrs={"order_id": f"o-{i}"},
+        )
+        for i in range(30)
+    )
+    services = build_services_from_runtime(runtime, clock=lambda: day(60))
+    proof = services.proof(None)
+    assert proof is not None and proof.incremental_profit is not None
+    assert proof.incremental_profit.point == pytest.approx(30 * per_order)
+    assert proof.margin_rate == rate
+    assert proof.margin_note is not None
+    assert proof.margin_note.startswith("No shop margin is set") is (rate is None)
+
+
+def test_a_who_book_with_another_margin_is_refused() -> None:
+    from autonomy.decide.who import WhoBook, WhoConfig
+
+    with pytest.raises(ValueError, match="WhoBook"):
+        build_agent_policy([], [], who=WhoBook(), margin_rate=0.35)
+    same = WhoBook(WhoConfig(slow=SlowModelConfig(margin_rate=0.35)))
+    policy: Any = build_agent_policy([], [], who=same, margin_rate=0.35)
+    assert policy.who is same
+
+
+def _ledger(customers: int, base_rate: float) -> Any:
+    """The ledger summary over `customers` split 80 / 10 / 10, the holdout buying at `base_rate`."""
+    from api.v2.engines.measurement import measurement_summary
+
+    decisions: list[Decision] = []
+    events: list[Event] = []
+    for group, share in ((Group.AGENT, 0.8), (Group.HOLDOUT, 0.1), (Group.BASELINE, 0.1)):
+        n = round(customers * share)
+        for i in range(n):
+            cid = f"{group.value}-{i}"
+            decisions.append(idle(f"d-{cid}", T0, cid=cid, group=group))
+            if i < round(n * base_rate):
+                events.append(
+                    Event(
+                        event_id=f"p-{cid}",
+                        customer_id=cid,
+                        type=EventType.PURCHASE,
+                        ts=day(2),
+                        source="t",
+                        value=50.0,
+                        attrs={"order_id": f"o-{cid}"},
+                    )
+                )
+    return measurement_summary(
+        decisions, events, horizon_days=7, objective=Objective.GROSS_PROFIT, costs=Costs(), now=day(30)
+    )
+
+
+@pytest.mark.parametrize(("base_rate", "shown"), [(0.05, 45.8), (0.20, 21.0)])
+def test_the_ledger_shows_the_review_mde_for_8k_customers(base_rate: float, shown: float) -> None:
+    got = _ledger(8_000, base_rate).causal_metrics.minimum_detectable_lift_pct
+    assert got == pytest.approx(_expected(8_000, base_rate) * 100, rel=1e-6)
+    assert round(got, 1) == shown  # docs/v3/PROOF_PROFIT.md, from the review's section 5c
+
+
+@pytest.mark.parametrize(("base_rate", "shown"), [(0.05, 7.5), (0.20, 3.4)])
+def test_the_ledger_mde_for_300k_customers(base_rate: float, shown: float) -> None:
+    """The function the ledger calls, on 240,000 agent and 30,000 holdout conversion flags."""
+    from api.v2.engines.measurement import _detectable_lift_pct
+
+    holdout = np.zeros(30_000)
+    holdout[: round(30_000 * base_rate)] = 1.0
+    got = _detectable_lift_pct(np.zeros(240_000), holdout)
+    assert got is not None
+    assert got == pytest.approx(_expected(300_000, base_rate) * 100, rel=1e-6)
+    assert round(got, 1) == shown
+
+
+@pytest.mark.slow
+def test_the_ledger_shows_the_review_mde_for_300k_customers() -> None:
+    got = _ledger(300_000, 0.05).causal_metrics.minimum_detectable_lift_pct
+    assert got is not None and round(got, 1) == 7.5
+
+
+def test_no_mde_is_claimed_when_nobody_varies() -> None:
+    """Nobody bought in either group: a zero spread must not read as 'it can see any gain'."""
+    assert minimum_detectable_difference([0.0] * 40, [0.0] * 40) is None
+    rewards: list[Reward] = []
+    decisions: list[Decision] = []
+    for group in (Group.AGENT, Group.HOLDOUT):
+        for i in range(40):
+            cid = f"{group.value}-{i}"
+            decisions.append(idle(f"d-{cid}", T0, cid=cid, group=group))
+            rewards.append(
+                Reward(
+                    decision_id=f"d-{cid}",
+                    customer_id=cid,
+                    goal_id=None,
+                    window_end=day(7),
+                    converted=False,
+                    net=0.0,
+                )
+            )
+    s = proof_summary(rewards, decisions, day(10))
+    assert s.detectable is None
+    assert any("does not vary yet" in n for n in s.notes)
+
+
+def test_the_briefing_states_the_revenue_and_rule_mde() -> None:
+    s = _summary(Costs(margin_rate=0.4))
+    assert s.detectable is not None and s.detectable.revenue is not None
+    health = HealthStatus(
+        as_of=day(10), delivery_rate=1.0, complaint_rate=0.0, contacts_per_customer_week=0.4
+    )
+    b = template_briefing(sample_goal(day(10)), s, health, {}, "weekly", day(10))
+    money = next(x for x in b.sections if "detectable_profit" in x.numbers)
+    assert "detectable_revenue" in money.numbers and "revenue gain below about" in money.body
+    rule = next(x for x in b.sections if "detectable_lift_per_customer" in x.numbers)
+    assert "simple rule below about" in rule.body

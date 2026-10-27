@@ -61,17 +61,25 @@ whole of the holdout group's record.
 
 **Refunds.** A REFUND event reverses a purchase of the same customer: the one whose `attrs["order_id"]`
 it names (Shopify refunds and voids both do), else, when it names none, the customer's latest earlier
-purchase that still has money left to refund. The refunded share of the purchase's value comes off the
-revenue, and the same share of its margin comes off the margin, of every decision that was credited with
-that purchase, **if the refund falls inside that decision's window**. A refund after the window has
-closed is not netted: the window was judged on what was known by its end. A REFUND naming no purchase
-we hold (an order from before the history, or one the last-touch cutoff leaves out) is ignored. A
-purchase refunded in full no longer counts as a conversion for those decisions.
+purchase with exactly the refund's amount left to refund, else the latest earlier purchase that still has
+money left (a partial refund naming no order can still land on the wrong purchase). Every PURCHASE of the customer is a candidate, including
+one that no decision was credited with (made before the first decision, outside every window, or left
+out by the last-touch cutoff): a refund of such a purchase then finds it and changes nothing, rather
+than reversing an earlier purchase that was earned. An order sent as several PURCHASE lines with the
+same `order_id` is reversed across all its lines, each in proportion to what is left of it. The amount
+is the size of the refund's `value`, whatever its sign (some sources write refunds as negative values).
+The refunded share of a purchase's value comes off the revenue, and the same share of its margin comes
+off the margin, of every decision that was credited with that purchase, **if the refund falls inside
+that decision's window**. A refund after the window has closed is not netted: the window was judged on
+what was known by its end. A REFUND naming no purchase we hold (an order from before the history) is
+ignored. A purchase refunded in full no longer counts as a conversion for those decisions. A purchase
+and a refund at the same instant are taken purchase first.
 
 *Cash on delivery and return to origin (RTO).* A COD parcel the customer refuses comes back as a voided
 or cancelled order, which the connectors already turn into a REFUND naming the order, so it is netted
 like any refund. A REFUND whose `attrs` say `rto` (or `return_to_origin`) is true, or whose `reason` is
-`rto` or `return_to_origin`, reverses the whole of the order whatever amount it carries. The lost
+`rto` or `return_to_origin`, reverses the whole of the order whatever amount it carries. These attrs are a
+convention for a loader or courier feed to set; no connector sets them yet. The lost
 shipping on such a parcel is not charged separately: it is part of the shop's contribution margin
 (`Costs.margin_rate`), which is meant to be after shipping, gateway fees and RTO.
 
@@ -80,6 +88,7 @@ An offer's cost is still charged when its order is later refunded: the discount 
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -173,7 +182,10 @@ class _Tally:
 
 @dataclass
 class _Order:
-    """One purchase that was credited to some decisions, kept so that a later refund can reverse it."""
+    """One purchase (one line of an order), kept so that a later refund can reverse it.
+
+    `credited` lists the decisions it was credited to; it is empty for a purchase no decision was
+    credited with, which is kept only so that its refund finds it."""
 
     order_id: str | None
     ts: datetime
@@ -182,10 +194,12 @@ class _Order:
     margin_assumed: float
     credited: list[Decision]
     refunded: float = 0.0
+    gone: bool = False
+    """Refunded in full: its conversion has been taken back."""
 
     @property
     def left(self) -> float:
-        return max(self.value - self.refunded, 0.0)
+        return 0.0 if self.gone else max(self.value - self.refunded, 0.0)
 
 
 def build_rewards(
@@ -225,7 +239,11 @@ def build_rewards(
     out: list[Reward] = []
     for customer_id, mine in by_customer.items():
         mine.sort(key=lambda d: (d.made_at, d.decision_id))
-        events = sorted(events_by_customer.get(customer_id, ()), key=lambda e: e.ts)
+        # A purchase and its refund at the same instant: the purchase first.
+        events = sorted(
+            events_by_customer.get(customer_id, ()),
+            key=lambda e: (e.ts, e.type is EventType.REFUND),
+        )
         tallies = _tally(mine, events, horizon, costs, attribution, cutoff)
         sent = sent_decisions(events)
         for d in mine:
@@ -322,18 +340,16 @@ def _tally(
 ) -> dict[str, _Tally]:
     """Hand each purchase, unsubscribe and complaint to the decisions it belongs to.
 
-    Purchases at or after `cutoff` (when given) are not counted at all.
+    Purchases at or after `cutoff` (when given) are not counted at all. Every purchase is still kept in
+    `orders`, so that a refund of an uncounted purchase finds it instead of reversing a counted one.
     """
     tallies = {d.decision_id: _Tally() for d in mine}
     orders: list[_Order] = []
     for e in events:
         covering = [d for d in mine if _covers(d, e.ts, horizon)]
         if e.type is EventType.PURCHASE:
-            if cutoff is not None and e.ts >= cutoff:
-                continue
-            order = _purchase(e, covering, tallies, costs, attribution)
-            if order is not None:
-                orders.append(order)
+            counted = cutoff is None or e.ts < cutoff
+            orders.append(_purchase(e, covering if counted else (), tallies, costs, attribution))
         elif e.type is EventType.REFUND:
             _refund(e, orders, tallies, horizon)
         elif e.type in (EventType.UNSUBSCRIBE, EventType.COMPLAINT):
@@ -353,10 +369,9 @@ def _purchase(
     tallies: dict[str, _Tally],
     costs: Costs,
     attribution: Attribution,
-) -> _Order | None:
-    """Credit one purchase to its decisions; the `_Order` that records it, None when no window holds it."""
-    if not covering:
-        return None
+) -> _Order:
+    """Credit one purchase to its decisions and return the `_Order` that records it (credited to no
+    decision when no window holds it)."""
     value = float(e.value or 0.0)
     assumed = 0.0
     if e.margin is not None:
@@ -371,16 +386,16 @@ def _purchase(
     # The one decision that "owns" this purchase: it pays the offer cost, and under last touch it
     # is the only one credited with the money.
     owner = _named(e, covering) or _latest(with_offer) or _latest(acts) or _latest(covering)
-    if owner is None:  # pragma: no cover - covering is non-empty
-        return None
-    credited = [owner] if attribution == "last_touch" else list(covering)
+    credited: list[Decision] = []
+    if owner is not None:
+        credited = [owner] if attribution == "last_touch" else list(covering)
     for d in credited:
         t = tallies[d.decision_id]
         t.live_orders += 1
         t.revenue += value
         t.margin += margin
         t.margin_assumed += assumed
-    if used_offer is not None and _offer_of(owner) == used_offer:
+    if owner is not None and used_offer is not None and _offer_of(owner) == used_offer:
         tallies[owner.decision_id].offer_cost += float(costs.offer.get(used_offer, 0.0))
     named = e.attrs.get("order_id")
     return _Order(
@@ -394,6 +409,8 @@ def _purchase(
 
 
 _RTO_REASONS: Final[frozenset[str]] = frozenset({"rto", "return_to_origin"})
+_CENT: Final[float] = 0.005
+"""How close an unnamed refund's amount must be to what is left of a purchase to be taken as its refund."""
 
 
 def _is_rto(e: Event) -> bool:
@@ -406,22 +423,39 @@ def _is_rto(e: Event) -> bool:
 
 
 def _refund(e: Event, orders: Sequence[_Order], tallies: dict[str, _Tally], horizon: timedelta) -> None:
-    """Take a refund off the purchase it reverses, for every decision whose window it falls in."""
+    """Take a refund off the purchase it reverses (all the lines of a named order), for every decision
+    whose window it falls in."""
+    asked = abs(float(e.value or 0.0))
     named = e.attrs.get("order_id")
     if named is not None:
-        order = next((o for o in orders if o.order_id == str(named)), None)
+        lines = [o for o in orders if o.order_id == str(named)]
     else:
-        order = next((o for o in reversed(orders) if o.ts <= e.ts and o.left > 0), None)
-    if order is None or order.left <= 0 or order.value <= 0:
+        earlier = [o for o in orders if o.ts <= e.ts and o.left > 0]
+        exact = [o for o in earlier if math.isclose(o.left, asked, abs_tol=_CENT)]
+        lines = (exact or earlier)[-1:]
+    lines = [o for o in lines if o.value > 0 and o.left > 0]
+    left = sum(o.left for o in lines)
+    if left <= 0:
         return
-    amount = order.left if _is_rto(e) else min(max(float(e.value or 0.0), 0.0), order.left)
+    amount = left if _is_rto(e) else min(asked, left)
     if amount <= 0:
         return
+    parts = [(o, amount * o.left / left) for o in lines]
+    for order, part in parts:
+        _reverse(order, part, e.ts, tallies, horizon)
+
+
+def _reverse(
+    order: _Order, amount: float, at: datetime, tallies: dict[str, _Tally], horizon: timedelta
+) -> None:
+    """Take `amount` off one purchase line, for the credited decisions whose window holds `at`."""
     order.refunded += amount
     share = amount / order.value
     whole = order.refunded >= order.value - 1e-9
+    if whole:
+        order.gone = True
     for d in order.credited:
-        if not _covers(d, e.ts, horizon):
+        if not _covers(d, at, horizon):
             continue  # the window had closed: it was judged on what was known by its end
         t = tallies[d.decision_id]
         t.revenue -= amount

@@ -60,11 +60,14 @@ def minimum_detectable_difference(
     """The smallest true difference of the means that this data could reliably tell from zero.
 
     `MDE_MULTIPLIER x` Welch's standard error of `mean(agent) - mean(holdout)`; None when either side
-    has fewer than two values (no variance can be estimated)."""
+    has fewer than two values (no variance can be estimated) or neither side varies at all (nobody
+    bought in either group, say): a standard error of 0 would claim any gain could be seen."""
     a, b = np.asarray(agent, dtype=np.float64), np.asarray(holdout, dtype=np.float64)
     if len(a) < 2 or len(b) < 2:
         return None
     se = math.sqrt(float(a.var(ddof=1)) / len(a) + float(b.var(ddof=1)) / len(b))
+    if se <= 0.0:
+        return None
     return MDE_MULTIPLIER * se
 
 
