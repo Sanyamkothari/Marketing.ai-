@@ -89,6 +89,29 @@ class ProposeSqlArgs(_Args):
     )
 
 
+class ProposeFeaturesArgs(_Args):
+    """`propose_features` (`engine.doctor.tools_features`): the file is the action's `file`; the outcome column and
+    the as-of date are the case's (`decisions`), filled in by code, so no feature can read the outcome."""
+
+    entity_key: str = Field()
+    time_column: str = Field()
+    preset: Literal["rfm", "rfm_plus"] | None = Field(default=None)
+    features: list[dict[str, Any]] = Field(
+        default_factory=list, description="your own: name, agg, column, window_days, where"
+    )
+    amount_column: str | None = Field(default=None)
+    order_column: str | None = Field(default=None)
+    product_column: str | None = Field(default=None)
+    output_name: str | None = Field(default=None)
+    as_of: str | None = Field(default=None)
+    as_of_rule: Literal["latest_date_in_file", "last_complete_month_end"] | None = Field(default=None)
+    replaces: str | None = Field(
+        default=None,
+        description="the id of your change this swaps out",
+        json_schema_extra={"surface": "chat"},
+    )
+
+
 class AskReviewArgs(_Args):
     question: str = Field(description="a question id below")
     column: str | None = Field(default=None)
@@ -184,6 +207,13 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
         ProposeSqlArgs,
         "when no typed change fits, one SELECT building a new table.",
         _BOTH,
+    ),
+    ActionSpec(
+        "propose_features",
+        ProposeFeaturesArgs,
+        "behaviour features per customer from an order file (rows up to `$as_of`).",
+        _BOTH,
+        needs_file=True,
     ),
     ActionSpec("join_files", CombineArgs, "join the files on their key; code counts.", frozenset({"chat"})),
     ActionSpec(
