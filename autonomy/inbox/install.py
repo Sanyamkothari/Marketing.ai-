@@ -239,7 +239,7 @@ def zero_touch_for_runtime(
     policy: WatchdogPolicy | None = None,
     mandate_for: Callable[[str], Mandate | None] | None = None,
     mandate_ledger_head: Callable[[], str] | None = None,
-    margin_rate: float = 1.0,
+    margin_rate: float | None = None,
     channel_costs: Mapping[Any, float] | None = None,
     store: InboxStore | None = None,
     ledger: AutonomyLedger | None = None,
@@ -317,7 +317,7 @@ def zero_touch_for_runtime(
         governed=source is not None,
         data_trusted=watchdog.trusted,
         channel_costs=channel_costs if channel_costs is not None else getattr(runtime, "channel_costs", None),
-        margin_rate=margin_rate,
+        margin_rate=margin_rate if margin_rate is not None else getattr(runtime, "margin_rate", None),
         timezone=timezone,
     )
     inbox = Inbox(inbox_store, business)

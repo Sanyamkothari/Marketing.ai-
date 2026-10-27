@@ -60,7 +60,15 @@ from autonomy.contracts import (
     ProofSummary,
     Reward,
 )
-from autonomy.proof import MIN_GROUP, Z_95, Costs, assign_group, proof_rewards, proof_summary
+from autonomy.proof import (
+    MIN_GROUP,
+    Z_95,
+    Costs,
+    assign_group,
+    minimum_detectable_lift,
+    proof_rewards,
+    proof_summary,
+)
 from autonomy.proof.estimate import welch_difference
 from autonomy.proof.ope import OpeResult, evaluate
 
@@ -119,7 +127,12 @@ class SummaryRequest(_Body):
     offer_costs: dict[str, float] = Field(default_factory=dict, description="Cost per redemption")
     now: AwareDatetime = Field(description="Measure as of this moment; windows must close by then")
     goal_id: str | None = Field(default=None, description="None: the whole programme")
-    margin_rate: float = Field(default=1.0, ge=0, le=1, description="Margin share when a purchase has none")
+    margin_rate: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="The shop's contribution margin, used when a purchase has none; unset: full value, and the summary says so",
+    )
     value_per_conversion: float | None = Field(default=None, description="For yes/no objectives")
     min_group: int = Field(default=MIN_GROUP, ge=2, description="Fewest customers per group to claim")
     alpha: float = Field(default=0.05, gt=0, lt=1, description="Significance level for the status")
@@ -138,6 +151,11 @@ class CausalMetrics(_Out):
     conversion_rate_difference: Estimate | None = Field(
         default=None, description="Treated rate minus holdout rate, with its 95% interval"
     )
+    minimum_detectable_lift_pct: float | None = Field(
+        default=None,
+        description="Smallest lift in percent that this many customers at this holdout rate could see "
+        "(95% confidence, 80% power); a lift below it reads as noise",
+    )
 
 
 class FinancialImpact(_Out):
@@ -147,6 +165,12 @@ class FinancialImpact(_Out):
     net_incremental_profit: Estimate | None = Field(description="Margin - costs, agent vs holdout")
     net_incremental_profit_p_value: float | None = None
     roi_ratio: Estimate | None = Field(description="Net incremental profit / spend")
+    minimum_detectable_profit: float | None = Field(
+        default=None, description="Smallest net incremental profit this comparison could tell from zero"
+    )
+    margin_note: str | None = Field(
+        default=None, description="Says the shop margin is not set, or how much profit rests on it"
+    )
 
 
 class MeasurementSummary(_Out):
@@ -215,6 +239,15 @@ def _lift(
     return lift, ((ratio - Z_95 * se - 1.0) * 100.0, (ratio + Z_95 * se - 1.0) * 100.0)
 
 
+def _detectable_lift_pct(
+    treated: np.ndarray[Any, np.dtype[np.float64]], holdout: np.ndarray[Any, np.dtype[np.float64]]
+) -> float | None:
+    """`minimum_detectable_lift` in percent, at the holdout's own conversion rate."""
+    rate = float(holdout.mean())
+    lift = minimum_detectable_lift(len(treated), len(holdout), rate)
+    return lift * 100.0 if lift is not None else None
+
+
 def measurement_summary(
     decisions: Sequence[Decision],
     events: Iterable[Event],
@@ -236,7 +269,7 @@ def measurement_summary(
 
     by_id = {d.decision_id: d for d in decisions}
     rewards = proof_rewards(by_id.values(), by_customer, horizon_days, objective, costs, now=now)
-    proof: ProofSummary = proof_summary(rewards, by_id, now, goal_id, min_group=min_group)
+    proof: ProofSummary = proof_summary(rewards, by_id, now, goal_id, min_group=min_group, costs=costs)
     notes = list(proof.notes)
 
     group_of = _group_of(by_id.values())
@@ -263,6 +296,7 @@ def measurement_summary(
         confidence_interval_95=lift_ci,
         p_value=p,
         conversion_rate_difference=diff,
+        minimum_detectable_lift_pct=_detectable_lift_pct(treated, holdout) if enough else None,
     )
     if enough and lift is None:
         notes.append("No holdout customer converted, so the lift has no percentage to show.")
@@ -275,6 +309,8 @@ def measurement_summary(
         net_incremental_profit=proof.incremental_profit,
         net_incremental_profit_p_value=p_value(proof.incremental_profit),
         roi_ratio=proof.roi,
+        minimum_detectable_profit=proof.detectable.profit if proof.detectable is not None else None,
+        margin_note=proof.margin_note,
     )
 
     status = _status(diff, p, alpha)
@@ -394,6 +430,7 @@ def get_goal_summary(goal_id: str, request: Request) -> MeasurementSummary:
     costs = Costs(
         channel=SEND_COST,
         offer={o.offer_id: o.cost_per_redemption for b in briefs for o in b.envelope.offers},
+        margin_rate=services.margin_rate,
     )
     return measurement_summary(
         decisions,

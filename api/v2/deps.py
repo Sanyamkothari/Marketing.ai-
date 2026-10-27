@@ -201,6 +201,9 @@ class Services:
     """item_id -> product name, for the words "Due for a refill of ..."; empty: names come from events."""
     data_doctor: Callable[[], Mapping[str, Any] | None] | None = None
     """The Data Doctor's latest report (`fixes`, `problems`, `questions`), when one is wired in."""
+    margin_rate: float | None = None
+    """The shop's contribution margin (`RuntimeSettings.margin_rate`), which every proof figure counts a
+    purchase with no margin at. None: the shop has not set it and the proof says so."""
     _tick_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     # goals and briefs ---------------------------------------------------------------------------
@@ -1204,6 +1207,8 @@ class StoreReadModels:
     briefings_log: list[Briefing] = field(default_factory=list)
     notes: tuple[str, ...] = ()
     """Added to every proof summary, e.g. that the data is simulated."""
+    margin_rate: float | None = None
+    """The shop's contribution margin for the proof (`RuntimeSettings.margin_rate`); None: not set."""
     seed: int = 0
     alert_store: Any = None
     """Anything with `list(...) -> Sequence[Alert]`, e.g. `autonomy.runtime.stores`' alert store."""
@@ -1237,9 +1242,10 @@ class StoreReadModels:
         costs = self.costs or Costs(
             channel=SEND_COST,
             offer={o.offer_id: o.cost_per_redemption for b in briefs for o in b.envelope.offers},
+            margin_rate=self.margin_rate,
         )
         rewards = proof_rewards(closed, by_customer, horizon, objective, costs, now=now)
-        summary = proof_summary(rewards, closed, now, goal_id, seed=self.seed)
+        summary = proof_summary(rewards, closed, now, goal_id, seed=self.seed, costs=costs)
         if not closed:
             wait = f"Outcomes count once a decision's {horizon}-day window has closed; none has yet."
             summary = summary.model_copy(update={"notes": (*summary.notes, wait)})
@@ -1373,6 +1379,7 @@ def build_services_from_runtime(
     alert_store: Any = None,
     briefing_store: Any = None,
     catalogue: Mapping[str, str] | None = None,
+    margin_rate: float | None = None,
 ) -> Services:
     """Services over a running `AutonomyRuntime` and its stores (SQL in production).
 
@@ -1384,7 +1391,11 @@ def build_services_from_runtime(
     `alert_store` and `briefing_store` default to the runtime's own (`runtime.alert_store` and
     `runtime.briefing_store`, when it has them); `alerts` and `briefings` are served alongside.
     `catalogue` (item_id -> product name) is what product ids are shown as; none: names come from events.
+    `margin_rate` is the shop's contribution margin for the proof, by default the runtime's own
+    (`runtime.margin_rate`, from `RuntimeSettings.margin_rate`); None: not set, and the proof says so.
     """
+    if margin_rate is None:
+        margin_rate = getattr(runtime, "margin_rate", None)
     if alert_store is None:
         alert_store = _runtime_store(runtime, ("alert_store", "alerts_store"), "list")
     if briefing_store is None:
@@ -1402,6 +1413,7 @@ def build_services_from_runtime(
         alerts_log=list(alerts),
         briefings_log=list(briefings),
         notes=tuple(notes),
+        margin_rate=margin_rate,
         seed=seed,
         alert_store=alert_store,
         briefing_store=briefing_store,
@@ -1432,6 +1444,7 @@ def build_services_from_runtime(
         runtime=_RecordingRuntime(runtime, reads),
         allow_tick=allow_tick,
         catalogue=dict(catalogue or {}),
+        margin_rate=margin_rate,
     )
 
 

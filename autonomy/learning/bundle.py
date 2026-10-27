@@ -155,9 +155,15 @@ def build_bundle(
     *,
     strength: float = DEFAULT_PRIOR_STRENGTH,
     value_prior_orders: float = DEFAULT_VALUE_PRIOR_ORDERS,
+    margin_rate: float | None = None,
 ) -> ModelBundle:
-    """A fresh bundle: the decide defaults, overridden by `priors` where it has a key (see module)."""
+    """A fresh bundle: the decide defaults, overridden by `priors` where it has a key (see module).
+
+    `margin_rate` is the shop's own contribution margin: when given it is the value model's default margin
+    rate, ahead of the decide default and of a pooled prior's `value/margin_rate`."""
     given = dict(priors or {})
+    if margin_rate is not None:
+        given["value/margin_rate"] = margin_rate
     rates = {k: v for k, v in given.items() if k.startswith(("treated/", "control/"))}
     response = BetaResponseModel(BetaResponseModel.priors_from_rates(rates, strength))
 

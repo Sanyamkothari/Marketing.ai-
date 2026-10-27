@@ -24,6 +24,11 @@ class Reward(Contract):
     net: float = Field(description="margin - cost (or revenue - cost, by objective)")
     unsubscribed: bool = False
     complained: bool = False
+    margin_assumed: float = Field(
+        default=0.0,
+        description="The part of `margin` worked out from the shop's margin rate, because the purchase "
+        "carried no margin of its own",
+    )
 
 
 class Estimate(Contract):
@@ -40,6 +45,24 @@ class Estimate(Contract):
         return self
 
 
+class Detectable(Contract):
+    """What this comparison could see at all: the minimum detectable effect, next to the numbers it
+    qualifies (`autonomy.proof.power`, 95% confidence, 80% power). Same units as the figure beside it."""
+
+    profit: float = Field(description="Smallest true incremental profit it could tell from zero")
+    revenue: float | None = Field(default=None, description="The same, for incremental revenue")
+    lift_vs_baseline: float | None = Field(
+        default=None, description="The same, for profit per customer against the simple rule"
+    )
+    relative: float | None = Field(
+        default=None,
+        description="Smallest lift in profit per customer, as a share of the holdout's (0.5 is 50%); "
+        "None when the holdout earned nothing per customer",
+    )
+    period_days: int = Field(default=0, description="Days the closed windows behind the figures span")
+    sentence: str = ""
+
+
 class ProofSummary(Contract):
     goal_id: str | None = Field(description="None: the whole programme")
     as_of: AwareDatetime
@@ -52,6 +75,16 @@ class ProofSummary(Contract):
     spend: float = 0.0
     roi: Estimate | None = None
     notes: tuple[str, ...] = ()
+    detectable: Detectable | None = Field(
+        default=None, description="The smallest effect this size of comparison can see; None: not enough data"
+    )
+    margin_rate: float | None = Field(
+        default=None,
+        description="The shop's contribution margin used for purchases with no margin of their own",
+    )
+    margin_note: str | None = Field(
+        default=None, description="Says the margin was not set, or how much of the profit rests on it"
+    )
 
 
 class PriorSource(StrEnum):

@@ -100,8 +100,13 @@ class SlowModelConfig:
     min_value_skill: float = 0.05
     """The bar for 90-day value: held-out error at least this much below the guess of the mean."""
     rounds: int = 30
+    margin_rate: float | None = None
+    """The shop's contribution margin (`RuntimeSettings.margin_rate`): the rate a purchase with no reported
+    margin is valued at, until some purchase reports one. None: 1.0 (revenue), as before."""
 
     def __post_init__(self) -> None:
+        if self.margin_rate is not None and not 0.0 < self.margin_rate <= 1.0:
+            raise ValueError("margin_rate must be in (0, 1]")
         if min(self.risk_window_days, self.value_window_days, self.active_days) < 1:
             raise ValueError("windows must be at least one day")
         if self.risk_ridge <= 0 or self.value_ridge <= 0:
@@ -142,8 +147,8 @@ class TrainingSet:
     order), else 0.0; NaN when the window is not over (censored) or the customer was not active."""
     value: _FloatArray
     """Margin in the value window, at least 0: as reported, else order value (read signed, as the
-    profile does) less refunds at the shop's margin rate known at the window's end (1, revenue, while
-    no purchase reports a margin); NaN when the window is not over or the customer had never ordered."""
+    profile does) less refunds at the shop's margin rate known at the window's end (the shop's setting, else 1,
+    revenue, while no purchase reports a margin); NaN when the window is not over or the customer had never ordered."""
     censored_risk: int = 0
     """Active customer-month-ends whose risk window was not over at `as_of`, left without a label."""
     censored_value: int = 0
@@ -163,10 +168,12 @@ def _reported(e: Event) -> bool:
 
 class _MarginRate:
     """The shop's margin rate as it stood at any instant: the share of order value kept as margin over
-    the purchases up to then that report one; 1 (revenue) while none does. A label read at the end of
-    its window uses the rate known then, so no label reads a margin reported after its window."""
+    the purchases up to then that report one; the shop's own setting (else 1, revenue) while none does.
+    A label read at the end of its window uses the rate known then, so no label reads a margin reported
+    after its window."""
 
-    def __init__(self, events: Sequence[Event]) -> None:
+    def __init__(self, events: Sequence[Event], fallback: float = 1.0) -> None:
+        self._fallback = fallback
         rows = sorted(
             (e.ts.timestamp(), float(e.margin or 0.0), max(_amount(e.value), 0.0))
             for e in events
@@ -179,7 +186,7 @@ class _MarginRate:
     def at(self, t: float) -> float:
         i = int(np.searchsorted(self._ts, t, side="right"))
         kept, total = float(self._kept[i]), float(self._total[i])
-        return kept / total if total > 0 and kept > 0 else 1.0
+        return kept / total if total > 0 and kept > 0 else self._fallback
 
 
 def build_training_set(
@@ -208,7 +215,7 @@ def build_training_set(
     )
     if not kept:
         return empty
-    rate = _MarginRate(kept)
+    rate = _MarginRate(kept, 1.0 if cfg.margin_rate is None else cfg.margin_rate)
     # Per customer and in time order: (when, margin as reported, order value without a reported margin
     # less refunds). A purchase's value is read signed, as the profile reads it (a negative purchase
     # takes money off); a refund always takes its amount off. The value label is the reported margin in

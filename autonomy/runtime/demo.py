@@ -1390,7 +1390,7 @@ class HeroLayer:
         shop's when they have no revenue yet); the margin floor is checked with the offer's full
         cost per redemption, because an order that converts redeems it."""
         revenue = state.avg_order_value if state.purchases and state.revenue > 0 else None
-        rate = state.margin / state.revenue if state.revenue > 0 else self.costs.margin_rate
+        rate = state.margin / state.revenue if state.revenue > 0 else self.costs.margin_share
         offer = self.offers.get(offer_id)
         per = offer.cost_per_redemption if offer is not None else 0.0
         return ActionCosts(

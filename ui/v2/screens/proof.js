@@ -224,6 +224,27 @@ export function notesGloss(notes) {
 }
 
 /**
+ * Two cautions that sit under the headline number, both worded by the API: the smallest gain this size of
+ * comparison could see at all (so a flat result is not read as "no effect"), and a warning when the shop's
+ * margin is not set (so the profit is overstated). Empty when the API sends neither.
+ */
+export function proofCaveats(proof) {
+  const out = [];
+  if (proof?.detectable?.sentence) out.push(h("p", { class: "pf-caveat pf-mde" }, String(proof.detectable.sentence)));
+  if (proof?.margin_note) out.push(h("p", { class: "notice pf-caveat pf-margin" }, String(proof.margin_note)));
+  return out;
+}
+
+/**
+ * The smallest gain this comparison could see for one figure (`detectable.revenue` or
+ * `detectable.lift_vs_baseline`), as a sentence for that figure's description; "" when the API sends none.
+ */
+export function detectableAbout(seen, m, what) {
+  if (seen == null || !Number.isFinite(Number(seen))) return "";
+  return ` With this many customers, ${what} below about ${m(Number(seen))} would not show up yet.`;
+}
+
+/**
  * The shareable paragraph. Plain text, every estimate with its range (in the same precision as the page), and
  * plain words where the data is not there yet. `goal` may be null (the whole programme), then money has no
  * currency sign.
@@ -264,6 +285,8 @@ export function proofSummaryText(proof, goal) {
   );
   const spend = `Spend so far: ${m(proof.spend)}`;
   out.push(complete(proof.roi) ? `${spend}; return on spend ${rangeText(proof.roi, times)}.` : `${spend}.`);
+  if (proof.detectable?.sentence) out.push(String(proof.detectable.sentence));
+  if (proof.margin_note) out.push(String(proof.margin_note));
   const gloss = notesGloss(proof.notes);
   if (gloss) out.push(gloss);
   for (const note of proof.notes || []) out.push(String(note));
@@ -627,7 +650,7 @@ function ruleCardFor(proof, m, span) {
     verdictLine(rv, "pf-rule-verdict", "sm"),
     h("p", { class: "pf-verdict-text" }, sentence),
     complete(lift) &&
-      kpis([estimateCell(described("Extra profit per customer", "How much more profit each customer brought in with the agent than with the simple rule, with its 95% range."), lift, m)], "pf-single"),
+      kpis([estimateCell(described("Extra profit per customer", `How much more profit each customer brought in with the agent than with the simple rule, with its 95% range.${detectableAbout(proof.detectable?.lift_vs_baseline, m, "a difference per customer")}`), lift, m)], "pf-single"),
   );
 }
 
@@ -793,7 +816,11 @@ export async function render(root, ctx) {
     resultCard.append(h("h2", { class: "card-title" }, "Extra profit compared with people we never contact"), failedBox("proof", proofError, retry));
   } else {
     const verdict = profitVerdict(proof?.incremental_profit);
-    resultCard.append(verdictLine(verdict, "pf-verdict"), profitLede(verdict, proof?.incremental_profit, m, goal, proof));
+    resultCard.append(
+      verdictLine(verdict, "pf-verdict"),
+      profitLede(verdict, proof?.incremental_profit, m, goal, proof),
+      ...proofCaveats(proof),
+    );
     if (proof && verdict.key === "early") {
       early = true;
       resultCard.append(h("div", { class: "pf-figure" }, earlyStrip(proof, forecast, shadow, m)));
@@ -806,7 +833,7 @@ export async function render(root, ctx) {
         "Extra money compared with people we never contact, with 95% ranges");
       resultCard.append(figure(
         kpis([
-          measured && estimateCell(described("Extra revenue", "Extra sales compared with people we never contact, before the cost of discounts and messages."), proof.incremental_revenue, m),
+          measured && estimateCell(described("Extra revenue", `Extra sales compared with people we never contact, before the cost of discounts and messages.${detectableAbout(proof.detectable?.revenue, m, "a real gain in revenue")}`), proof.incremental_revenue, m),
           complete(proof.roi) && estimateCell(described("Return on spend", `Extra profit for each ${m(1)} spent on discounts and messages.`), proof.roi, times),
           plainCell(described("Spend so far", "On discounts and messages, for this goal."), m(proof.spend)),
         ], "pf-hero-strip"),

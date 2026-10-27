@@ -66,6 +66,7 @@ from autonomy.proof.estimate import MIN_GROUP, welch_difference
 
 __all__ = [
     "ANCHOR_TYPES",
+    "DEFAULT_MARGIN_RATE",
     "FEATURE_NAMES",
     "Backtest",
     "CohortResult",
@@ -86,6 +87,8 @@ __all__ = [
 FloatArray = npt.NDArray[np.float64]
 
 DAY: Final[float] = 86400.0
+DEFAULT_MARGIN_RATE: Final[float] = 0.3
+"""The margin share assumed when the shop has not set one (`EarlySignalConfig.margin_rate` is None)."""
 
 ANCHOR_TYPES: Final[frozenset[EventType]] = frozenset({EventType.SIGNUP, EventType.VISIT, EventType.PURCHASE})
 """What the customer did on their own that starts their clock. Messages we sent do not."""
@@ -130,13 +133,21 @@ class EarlySignalConfig:
     min_cohort_size: int = 30
     min_train: int = 200
     ridge: float = 1.0
-    margin_rate: float = 0.3
-    """Margin share assumed for a purchase or refund that carries no margin of its own."""
+    margin_rate: float | None = None
+    """The shop's contribution margin (`RuntimeSettings.margin_rate`), assumed for a purchase or refund
+    that carries no margin of its own. None: `DEFAULT_MARGIN_RATE` (0.3), as before."""
     floor_share: float = 0.1
     """The error denominator is at least this share of the mean absolute margin of the training
     labels used for that month."""
 
+    @property
+    def margin_share(self) -> float:
+        """The margin share used for an event with none: the shop's setting, else `DEFAULT_MARGIN_RATE`."""
+        return DEFAULT_MARGIN_RATE if self.margin_rate is None else self.margin_rate
+
     def __post_init__(self) -> None:
+        if self.margin_rate is not None and not 0.0 < self.margin_rate <= 1.0:
+            raise ValueError("margin_rate must be in (0, 1]")
         if self.signal_days < 1 or self.horizon_days < 1:
             raise ValueError("signal_days and horizon_days must be at least 1")
         if self.cutoff_every_days < 0:
@@ -170,7 +181,7 @@ def _features(
     week: Sequence[Event], before: Sequence[Event], anchor: float, config: EarlySignalConfig
 ) -> list[float]:
     """The ten inputs: six from the week (already cut to `[anchor, T]`), four from `before` it."""
-    rate = config.margin_rate
+    rate = config.margin_share
     days = {int(e.ts.timestamp() // DAY) for e in week if e.type in (EventType.VISIT, EventType.PURCHASE)}
     buys = [e for e in week if e.type is EventType.PURCHASE]
     value = sum(e.value or 0.0 for e in buys)
@@ -296,7 +307,7 @@ def build_examples(
                 labels.append(math.nan)
             else:
                 end = bisect_right(stamps, t + horizon)
-                labels.append(sum(_margin_of(e, config.margin_rate) for e in evs[hi:end]))
+                labels.append(sum(_margin_of(e, config.margin_share) for e in evs[hi:end]))
     width = len(FEATURE_NAMES)
     return Examples(
         customer_ids=tuple(ids),
