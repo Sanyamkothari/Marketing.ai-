@@ -55,6 +55,7 @@ from api.v2.inbox import router as inbox_router
 from api.v2.onboarding import router as onboarding_router
 from api.v2.onboarding_brand import BrandServices, attach_brand_services
 from api.v2.onboarding_brand import router as brand_router
+from api.v2.order_import import router as order_import_router
 from api.v2.routes import router
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -143,6 +144,7 @@ def create_app(
     app.include_router(inbox_autopilot_router)  # Shadow -> Autopilot in one click
     app.include_router(images_router)  # batch approval of generated images (docs/v3/IMAGES.md)
     app.include_router(engines_router)  # the six standalone engines, /v2/engines/... (docs/v2/ENGINES.md)
+    app.include_router(order_import_router)  # order-history CSV into the event store (docs/v4/ORDER_IMPORT.md)
     return app
 
 
