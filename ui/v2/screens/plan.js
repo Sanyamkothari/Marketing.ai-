@@ -205,7 +205,7 @@ export function messageState(item, review) {
     case "draft":
       if (failed) return { label: "Failed the editor: never sent", tone: "critical", key: "failed", about: FAILED_ABOUT };
       if (passed) return { label: "Passed the editor, waiting for you", tone: "info", key: "waiting" };
-      return { label: "Not checked by the editor yet", tone: "info", key: "waiting", about: "It is not sent unless you read it and approve it yourself." };
+      return { label: "Not checked by the editor yet", tone: "info", key: "waiting", about: "It is not sent until the editor has checked it and passed it. There is no Approve button before then." };
     default:
       return { label: humanize(item.status), tone: statusTone(item.status), key: "other" };
   }
@@ -604,7 +604,15 @@ function contentCard(ctx, item, review, hasFacts, offers, onChange, grouped = fa
   /** Approve / Reject. A message the editor failed has none: its pill's description says why. */
   function actions() {
     if (item.status === "retired") return null;
-    if (review && review.passed === false && item.status !== "approved") return null;
+    // The server refuses to approve a message the editor did not pass (docs/v2/PROMISE_MAP.md row 23), so the
+    // screen offers Approve only on one it passed. A draft the editor has not finished may still be turned off.
+    const editorPassed = Boolean(review && review.passed === true);
+    if (!editorPassed && item.status !== "approved") {
+      if (item.status !== "draft" || (review && review.passed === false)) return null;
+      const turnOff = button("Reject", null, { kind: "ghost", size: "sm", ariaLabel: `Reject message ${item.content_id}` });
+      turnOff.addEventListener("click", () => set("rejected", [turnOff]));
+      return el("div", { class: "message-actions" }, turnOff);
+    }
     const approve = button(item.status === "rejected" ? "Use it again" : "Approve", null, { kind: "secondary", size: "sm", ariaLabel: `Approve message ${item.content_id}` });
     const reject = button(item.status === "approved" ? "Don't use this one" : "Reject", null, { kind: "ghost", size: "sm", ariaLabel: `Reject message ${item.content_id}` });
     approve.addEventListener("click", () => set("approved", [approve, reject]));

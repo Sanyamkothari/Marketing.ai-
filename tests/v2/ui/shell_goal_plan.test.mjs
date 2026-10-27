@@ -482,11 +482,13 @@ test("Plan screen: the brief in plain words, the messages, the dial", async () =
   const detail = await api.getGoal("goal_winback");
   assert.equal(root.querySelectorAll("article").length, detail.content.length);
   assert.ok(text.includes("Save autonomy level"), "an approved plan offers to change the level");
-  // approve a draft message from its card
+  // a draft the editor has not checked has no Approve button (the server refuses it); it can be turned off from its card
   const draft = detail.content.find((c) => c.status === "draft");
-  const approveBtn = root.querySelectorAll("button").find((b) => b.getAttribute("aria-label") === `Approve message ${draft.content_id}`);
-  await approveBtn.click();
-  assert.equal((await api.getContent("goal_winback")).find((c) => c.content_id === draft.content_id).status, "approved");
+  const buttons = root.querySelectorAll("button");
+  assert.ok(!buttons.some((b) => b.getAttribute("aria-label") === `Approve message ${draft.content_id}`));
+  const rejectBtn = buttons.find((b) => b.getAttribute("aria-label") === `Reject message ${draft.content_id}`);
+  await rejectBtn.click();
+  assert.equal((await api.getContent("goal_winback")).find((c) => c.content_id === draft.content_id).status, "rejected");
 });
 
 test("Plan screen: approving a new plan with the chosen autonomy", async () => {

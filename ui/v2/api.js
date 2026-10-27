@@ -630,6 +630,11 @@ export function createApi(options = {}) {
         for (const d of s.details.values()) {
           const i = d.content.findIndex((c) => c.content_id === id);
           if (i >= 0) {
+            // The server's rule (api/v2/deps.py editor_passed): only a message whose last editor note says "approved" can be approved.
+            const notes = d.content[i].critic_notes || [];
+            if (status === "approved" && !(notes.length && String(notes[notes.length - 1]).startsWith("approved"))) {
+              throw new ApiError(409, "CONFLICT", "The editor has not passed this message; edit it and run it through the editor again.", null);
+            }
             d.content[i] = { ...d.content[i], status };
             return clone(d.content[i]);
           }
