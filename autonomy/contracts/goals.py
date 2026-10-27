@@ -189,7 +189,9 @@ DEFAULT_STOP_RULES: tuple[StopRule, ...] = (
     StopRule(metric=StopMetric.UNSUBSCRIBE_MULTIPLE, threshold=3.0),
     StopRule(metric=StopMetric.DELIVERY_RATE_BELOW, threshold=0.95, action="pause_channel"),
     StopRule(metric=StopMetric.SPEND_PACE, threshold=1.2),
-    StopRule(metric=StopMetric.WHATSAPP_QUALITY, threshold=1, action="pause_channel"),
+    StopRule(
+        metric=StopMetric.WHATSAPP_QUALITY, threshold=2, action="pause_channel"
+    ),  # red; yellow halves the budget (docs/v4/WHATSAPP.md)
 )
 
 

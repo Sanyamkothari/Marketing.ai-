@@ -144,7 +144,9 @@ def create_app(
     app.include_router(inbox_autopilot_router)  # Shadow -> Autopilot in one click
     app.include_router(images_router)  # batch approval of generated images (docs/v3/IMAGES.md)
     app.include_router(engines_router)  # the six standalone engines, /v2/engines/... (docs/v2/ENGINES.md)
-    app.include_router(order_import_router)  # order-history CSV into the event store (docs/v4/ORDER_IMPORT.md)
+    app.include_router(
+        order_import_router
+    )  # order-history CSV into the event store (docs/v4/ORDER_IMPORT.md)
     return app
 
 

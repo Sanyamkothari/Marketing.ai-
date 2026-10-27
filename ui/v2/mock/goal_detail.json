@@ -96,7 +96,7 @@
         },
         {
           "metric": "whatsapp_quality",
-          "threshold": 1.0,
+          "threshold": 2.0,
           "action": "pause_channel"
         }
       ]

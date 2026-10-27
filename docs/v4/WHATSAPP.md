@@ -101,10 +101,8 @@ Tests: `tests/v4/whatsapp/test_templates.py`.
 - A quality webhook naming another number of the same business account is ignored when the adapter knows
   its own number (`display_phone_number`, given or read by `get_phone_status`). Before the first
   `get_phone_status`, with no number given, every report on the account is applied.
-- **Known conflict, not changed here:** the default stop rules (`contracts/goals.py`) carry
-  `whatsapp_quality` with threshold 1, which pauses the channel on YELLOW. With the account-level event,
-  that rule now sees YELLOW reports, so in a runtime that runs the default breakers YELLOW pauses WhatsApp
-  instead of halving it. Changing the shared default to 2 is the integrator's call.
+- The default stop rule (`contracts/goals.py`) pauses WhatsApp on RED (threshold 2). YELLOW halves the weekly
+  budget instead of pausing (changed at integration; it was threshold 1, which paused on YELLOW).
 
 **Error codes** (`configs/v4/whatsapp.yaml`; from a status webhook or from the send response):
 
