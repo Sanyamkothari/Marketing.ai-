@@ -76,7 +76,8 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     _R(28, "describe_duplicates", "read", "rules", "existing"),
     # C. Understanding
     _R(29, "find_file_role", "read", "rules", "wrapper"),
-    _R(30, "read_headers", "read", "rules", "wrapper"),
+    # #30 `read_headers` was dropped: `find_roles` (#17) already reads the headers (`engine.agent.headers.rank_roles`)
+    # and returns its `header_candidates`, so a second tool would only repeat it. The number is not reused.
     _R(31, "second_opinion", "propose", "ai", "wrapper"),
     _R(32, "advise", "read", "rules", "wrapper"),
     _R(33, "first_look", "read", "rules", "wrapper"),
@@ -146,6 +147,8 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     _R(85, "preview_working_copy", "read", "ai", "new"),
     # P. Behaviour features from the point-in-time library (Step 7)
     _R(86, "propose_features", "propose", "rules + ai", "new"),
+    # Q. Guided setup's reshape question, as a Data Doctor tool (merging Guided setup into the Data Doctor)
+    _R(87, "propose_combine_rows", "propose", "rules", "new"),
 )
 """The design §5.5, row by row."""
 

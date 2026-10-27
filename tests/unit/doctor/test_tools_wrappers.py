@@ -156,11 +156,10 @@ def test_every_m236_tool_is_registered_by_its_catalogue_row() -> None:
         if tool.kind is DataToolKind.PROPOSE:
             assert tool.policy_kind == f"data.{name}", name
     wrappers = {entry.name for entry in CATALOGUE if entry.status == "wrapper"}
-    # The plan's §M236 names fourteen wrappers; four catalogue wrappers are in no milestone's list yet.
+    # The plan's §M236 names fourteen wrappers; three catalogue wrappers are in no milestone's list yet.
     assert wrappers - set(registry.names()) == {
         "read_file",
         "list_sheets",
-        "read_headers",
         "propose_renamed_copy",
     }
 

@@ -51,6 +51,7 @@ VALID_PARAMS: dict[RecipeStepKind, dict[str, Any]] = {
     RecipeStepKind.REMOVE_ROWS: {"operator": "equals", "values": ["test"]},
     RecipeStepKind.NORMALISE_KEY: {"zeros": True},
     RecipeStepKind.KEEP_LATEST_PER_ID: {"time_column": WHEN, "ties": "refuse"},
+    RecipeStepKind.COMBINE_ROWS: {"time_column": WHEN},
 }
 _NOT_ALLOWED_CANDIDATES = (
     RecipeStepKind.DROP_COLUMN,

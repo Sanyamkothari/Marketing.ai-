@@ -1010,3 +1010,7 @@ def register_all(registry: DataToolRegistry) -> None:
     from engine.doctor.tools_preview import register_preview_tools
 
     register_preview_tools(registry)
+    # Guided setup's combine question (#87): several rows per ID into one, the rules and the screen only.
+    from engine.doctor.tools_reshape import register_reshape_tools
+
+    register_reshape_tools(registry)

@@ -46,7 +46,7 @@ proposals:
 # data.tried, data.never_ticked, data.change_share, data.setting, data.approve_class, data.reshape_guard.
 data:
   # Only the person ticks these, whoever proposed them (advisor.NEVER_TICKED_STEPS; M238 adds keep_latest_per_id).
-  never_ticked_steps: [set_missing, valid_range, keep_latest_per_id, sql_query]
+  never_ticked_steps: [set_missing, valid_range, keep_latest_per_id, combine_rows, sql_query]
   # Settings no suggestion may change: hiding a column is a step (loop.NEVER_SUGGESTED_BY_CHAT), safeguards and
   # thresholds are the person's (recommend.NEVER_RECOMMENDED), and settings no stage reads (config.ADVISORY_PATHS).
   settings_never_suggested:
@@ -183,6 +183,21 @@ data:
           allowed: [time_column, snapshot_column, dayfirst, ties]
           one_of: {ties: [refuse, first_in_file, last_in_file]}
       approve: above_drop_share
+    # Guided setup's combine question as a tool: several rows per ID into one (reshape level, decision O3), through
+    # its question, never ticked, the guards at Approve. Rows are combined, not left out: not APPROVE-class.
+    data.propose_combine_rows:
+      proposes: steps
+      rules:
+        - data.step_kind
+        - data.step_params
+        - data.protected_columns
+        - data.level
+        - data.never_ticked
+        - data.reshape_guard
+      step_kinds: [combine_rows]
+      params:
+        combine_rows:
+          allowed: [time_column, snapshot_column, dayfirst, outcome, features]
     # A query Data Doctor wrote (rules or AI; engine.agent.sql_step keeps it read-only and sandboxed): never
     # ticked, tried on the first rows, APPROVE-class when its table has over 2% fewer rows than the file read.
     data.propose_sql_step:

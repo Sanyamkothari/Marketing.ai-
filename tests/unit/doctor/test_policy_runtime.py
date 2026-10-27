@@ -416,7 +416,7 @@ def test_the_never_ticked_kinds_are_read_from_the_policy_too(
     shutil.copytree(config_root, copy)
     path = copy / "agentic" / "policy.yaml"
     text = path.read_text(encoding="utf-8")
-    old = "never_ticked_steps: [set_missing, valid_range, keep_latest_per_id, sql_query]"
+    old = "never_ticked_steps: [set_missing, valid_range, keep_latest_per_id, combine_rows, sql_query]"
     assert old in text, "the shipped never-ticked list changed; update this test's copy of it"
     path.write_text(text.replace(old, old[:-1] + f", {extra.value}]"), encoding="utf-8")
     ctx = context_for(frame, config_root=copy)
