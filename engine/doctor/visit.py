@@ -1947,7 +1947,12 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                 )
             ]
             if not likely:
-                likely = _built_outcomes(current, brief) or _prepared_outcomes(case, brief, files, current)
+                built_likely = _built_outcomes(current, brief, case)
+                likely = built_likely + [
+                    pair
+                    for pair in _prepared_outcomes(case, brief, files, current)
+                    if pair not in built_likely
+                ]
             if likely:
                 choices = [
                     (
@@ -2075,7 +2080,9 @@ def _query_tables(
     return found
 
 
-def _built_outcomes(current: CurrentTables, brief: GoalBrief) -> list[tuple[LoadedFile, str]]:
+def _built_outcomes(
+    current: CurrentTables, brief: GoalBrief, case: Case | None = None
+) -> list[tuple[LoadedFile, str]]:
     """The columns of the tables the case's queries really build that read as the goal's outcome, best first: the
     same ranking as :func:`_prepared_outcomes` (a name like the outcome's or a synonym, then a name sharing two of its
     words), but on the built tables' own columns, and each must be two-valued on the rows built (a yes/no), so an order
@@ -2085,15 +2092,24 @@ def _built_outcomes(current: CurrentTables, brief: GoalBrief) -> list[tuple[Load
     words = _stems(f"{brief.outcome.definition} {brief.outcome.column or ''}")
     ranked: list[tuple[int, int, LoadedFile, str]] = []
     for table in current.built:
+        maker = next((i for i in case.items if i.item_id == table.made_by), None) if case is not None else None
+        step = maker.payload.get("step") if maker is not None else None
+        given = step.get("params") if isinstance(step, dict) else None
+        said = _stems(
+            f"{step.get('reason') or '' if isinstance(step, dict) else ''} "
+            f"{given.get('description') or '' if isinstance(given, dict) else ''}"
+        )
         for column in table.columns:
             mine = _stems(column)
             if _norm(column) in named or set(_named([column], [*named], parts=True)):
                 tier = 0
             elif len(mine & words) >= 2:
                 tier = 1
+            elif len(mine & words) >= 1 and len(said & words) >= 2:
+                tier = 2  # the AI names its columns freely: the step's own words say what it is
             else:
                 continue
-            if column not in table.two_valued:
+            if tier and column not in table.two_valued:
                 continue
             ranked.append((tier, len(ranked), table.origin, column))
     ranked.sort(key=lambda r: (r[0], r[1]))

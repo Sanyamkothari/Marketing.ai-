@@ -238,6 +238,8 @@ class _Review:
         from engine.doctor.current_tables import current_for, labels_for
 
         self.case, self.brief, self.meter, self.registry = case, brief, meter, registry
+        self._context_for = context_for
+        self._raw: dict[int, tuple[AgentContext, Any]] = {}
         self.principal, self.config_root = principal, config_root
         # The AI looks at the current tables: F1..Fn are the files as the plan's accepted fixes leave them, T1..Tn the
         # tables its queries build. The uploads (`self.files`) stay what the tools that read a file by id are given.
@@ -373,15 +375,23 @@ class _Review:
             return self.ctxs[index].upload_id
         return self.built[index - len(self.files)].origin.upload_id
 
-    def _context(self, index: int, **extra: Any) -> DataToolContext:
+    def _raw_of(self, index: int) -> tuple[AgentContext, Any]:
+        """The upload as it came in (`raw: true` on a look), with its own gate from its own profile."""
+        if index not in self._raw:
+            ctx = self._context_for(self.case, (self.files[index],))
+            self._raw[index] = (ctx, _gate(ctx))
+        return self._raw[index]
+
+    def _context(self, index: int, *, raw: bool = False, **extra: Any) -> DataToolContext:
         from engine.doctor.visit import active_section
 
         given = case_as_of(self.case)
+        agent, egress = self._raw_of(index) if raw else (self.ctxs[index], self.gates[index])
         return DataToolContext(
-            agent=self.ctxs[index],
+            agent=agent,
             principal=self.principal,
             caller="ai",
-            egress=self.gates[index],
+            egress=egress,
             files=self.files,
             case_items=active_section(self.case)[0],  # the plan so far, for `preview_working_copy`
             as_of=date.fromisoformat(given) if given is not None else None,
@@ -520,11 +530,12 @@ class _Review:
     def _look(self, name: str, action: dict[str, Any], args: dict[str, Any]) -> None:
         turn = self.turn
         index = self._index(action, args)
-        gate = self.gates[index]
+        raw = bool(args.pop("raw", False)) and index < self.nfiles  # the upload as it came in, explicitly
+        gate = self._raw_of(index)[1] if raw else self.gates[index]
         args = dict(gate.unalias_args(args))
         if name == "find_values":
             _limit_searches(
-                self.ctxs[index],
+                self._raw_of(index)[0] if raw else self.ctxs[index],
                 self.sessions[index],
                 [r for r in turn.looks if turn.files_of[r.evidence_id] == index],
                 args,
@@ -540,7 +551,7 @@ class _Review:
         evidence_id = f"r{len(turn.looks) + 1}"
         result: ToolResult
         if name in M_PREVIEW_TOOLS or name == GOAL_BRIEF_TOOL:  # a registry READ tool of its own
-            made = self.registry.call(name, args, self._context(index))
+            made = self.registry.call(name, args, self._context(index, raw=raw))
             result = ToolResult(
                 evidence_id=evidence_id,
                 tool=name,
@@ -550,16 +561,18 @@ class _Review:
                 created_at=made.computed_at,
             )
         else:
-            result = self.registry.session_call(name, args, self._context(index), evidence_id=evidence_id)
+            result = self.registry.session_call(
+                name, args, self._context(index, raw=raw), evidence_id=evidence_id
+            )
         turn.looks.append(result)
         turn.files_of[evidence_id] = index
         self.checker.grounded = self.checker.grounded | evidence_numbers(result.result, result.typed_args)
-        self._record(index, result, frozenset())
+        self._record(index, result, frozenset(), gate=gate)
 
-    def _record(self, index: int, result: ToolResult, keys: frozenset[str]) -> None:
+    def _record(self, index: int, result: ToolResult, keys: frozenset[str], *, gate: Any = None) -> None:
         """Put one result in the next prompt through its file's gate, noting what is sent."""
         sent: list[SentItem | None] = []
-        gate, feedback = self.gates[index], self.turn.feedback
+        gate, feedback = gate or self.gates[index], self.turn.feedback
         _record(gate, {}, feedback, sent, result, keys)
         feedback[-1]["file"] = self.labels[index]
         self.turn.sent.extend(s for s in sent if s is not None)

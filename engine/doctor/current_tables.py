@@ -22,6 +22,7 @@ the gate finds it so on its own), and long text and sensitive columns are found 
 from __future__ import annotations
 
 import logging
+import threading
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Final
 import pandas as pd
 
 from engine.agent.contracts import ProposalSource, ProposalState, RecipeStep, RecipeStepKind
+from engine.agent.recipe import STEP_PHASE
 from engine.agent.sql_step import SqlStepError, sql_params
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 
@@ -50,8 +52,12 @@ __all__ = [
 _LOG = logging.getLogger(__name__)
 BUILT_PREFIX: Final[str] = "built:"
 """A built table's `upload_id` is this and its name: it is no upload, and no stored item may name it as one."""
-_CACHE_SIZE: Final[int] = 16
+_CACHE_SIZE: Final[int] = 8
 _DATE_NAMED: Final[tuple[str, ...]] = ("date", "time", "_at", "day")
+_VALUE_PHASE: Final[int] = 3
+"""The last phase of the steps that fix values and rows (parse, set missing, fill, remove rows): the files are shown
+after these only. Combining, deriving, dropping and renaming come later in the run, so a fix proposed on a table
+that had them applied would name columns and rows that do not exist yet when it runs."""
 
 
 def is_built(upload_id: str | None) -> bool:
@@ -100,14 +106,15 @@ class CurrentTables:
 
 
 _CACHE: OrderedDict[str, CurrentTables] = OrderedDict()
+_LOCK = threading.Lock()
 
 
 def two_valued_columns(frame: pd.DataFrame) -> tuple[str, ...]:
-    """The columns with at most two different values (blanks aside) and at least one: the shape of a yes/no."""
+    """The columns with exactly two different values (blanks aside): the shape of a yes/no."""
     found: list[str] = []
     for name in frame.columns:
         try:
-            if 1 <= frame[name].nunique(dropna=True) <= 2:
+            if frame[name].nunique(dropna=True) == 2:
                 found.append(str(name))
         except (TypeError, ValueError):
             continue
@@ -128,22 +135,34 @@ def _live(item: CaseItem) -> bool:
 
 
 def _fix_items(items: Sequence[CaseItem]) -> list[CaseItem]:
-    """The plan that leaves each file as a file: accepted steps only, without a query and what runs after one."""
+    """The plan that leaves each file as a file, for a fix proposed on it: accepted value and row fixes only (up to
+    :data:`_VALUE_PHASE`), without a query and what runs after one, so a trial is the plan plus the candidate.
+    """
     return [
-        i for i in items if i.state is ProposalState.ACCEPTED and not _is_query(i) and not _is_after_build(i)
+        i
+        for i in items
+        if i.state is ProposalState.ACCEPTED
+        and not _is_query(i)
+        and not _is_after_build(i)
+        and _phase_of(i) <= _VALUE_PHASE
     ]
 
 
-def _proposed_items(items: Sequence[CaseItem]) -> list[CaseItem]:
-    """The plan as it stands if every step not left out is ticked (accepted ones, and those waiting)."""
+def _phase_of(item: CaseItem) -> int:
+    step = item.payload.get("step")
+    try:
+        return STEP_PHASE[RecipeStepKind(str(step["kind"]))] if isinstance(step, dict) else 0
+    except (KeyError, ValueError):
+        return 0
+
+
+def _built_plan(items: Sequence[CaseItem], queries: Sequence[CaseItem]) -> list[CaseItem]:
+    """The plan a built table is made by: what the person accepted, plus the queries as if accepted (the AI's waits
+    for a yes). Other steps that wait stay out: a table must not show a change nobody approved."""
     return [
-        (
-            i.model_copy(update={"state": ProposalState.ACCEPTED})
-            if _live(i) and i.state is not ProposalState.ACCEPTED
-            else i
-        )
+        i.model_copy(update={"state": ProposalState.ACCEPTED}) if i in queries else i
         for i in items
-        if i.state is not ProposalState.REJECTED
+        if i.state is ProposalState.ACCEPTED or i in queries
     ]
 
 
@@ -155,10 +174,28 @@ def _rows_hash(frame: pd.DataFrame) -> int:
         return len(frame)
 
 
-def _cache_key(case: Case, items: Sequence[CaseItem], files: Sequence[LoadedFile], as_of: str | None) -> str:
-    steps = sorted((i.item_id, i.state.value, i.payload_digest) for i in items if _live(i))
+def _config_identity(config: UseCaseConfig | None) -> str:
+    if config is None:
+        return ""
+    try:
+        return sha256_hex(config.model_dump_json().encode())[:16]
+    except Exception:  # an odd config is told apart by its id alone
+        return str(getattr(config, "id", ""))
+
+
+def _cache_key(
+    case: Case,
+    items: Sequence[CaseItem],
+    files: Sequence[LoadedFile],
+    as_of: str | None,
+    config: UseCaseConfig | None = None,
+) -> str:
+    """Everything the tables and their profiles read: every item of the plan (the key and outcome decisions too),
+    the rows read, the as-of date and the use case."""
+    plan = sorted((i.item_id, i.state.value, i.payload_digest) for i in items)
     shape = [(f.upload_id, _rows_hash(f.frame), [str(c) for c in f.frame.columns]) for f in files]
-    return sha256_hex(canonical_bytes([[f.upload_id for f in case.files], steps, shape, as_of]))[:32]
+    identity = [str(getattr(config, "id", "")), _config_identity(config)]
+    return sha256_hex(canonical_bytes([[f.upload_id for f in case.files], plan, shape, as_of, identity]))[:32]
 
 
 def _reprofiled(
@@ -243,11 +280,12 @@ def current_tables(
     files = tuple(files)
     if raw or config is None or not files:
         return CurrentTables(files=files, built=(), raw=files, digest="raw")
-    key = _cache_key(case, items, files, case_as_of(case))
-    cached = _CACHE.get(key)
-    if cached is not None:
-        _CACHE.move_to_end(key)
-        return cached
+    key = _cache_key(case, items, files, case_as_of(case), config)
+    with _LOCK:
+        cached = _CACHE.get(key)
+        if cached is not None:
+            _CACHE.move_to_end(key)
+            return cached
 
     names: dict[str, str] = {}
     failed: tuple[str, ...] = ()
@@ -297,9 +335,10 @@ def current_tables(
         digest=key,
         failed=tuple(failed),
     )
-    _CACHE[key] = found
-    while len(_CACHE) > _CACHE_SIZE:
-        _CACHE.popitem(last=False)
+    with _LOCK:
+        _CACHE[key] = found
+        while len(_CACHE) > _CACHE_SIZE:
+            _CACHE.popitem(last=False)
     return found
 
 
@@ -319,7 +358,7 @@ def _built_tables(
     ]
     if not queries:
         return ()
-    plan = _proposed_items([i for i in items if not _is_query(i) or i in queries])
+    plan = _built_plan(items, queries)
     try:
         prepared = materialize(case, plan, files, Full(), twice=False)
     except Exception as exc:
@@ -344,6 +383,9 @@ def _built_tables(
         columns = [str(c) for c in frame.columns]
         name = params.output_name
         try:
+            from engine.doctor.built_lineage import personal_outputs
+
+            marks = personal_outputs(params.sql, columns, personal)
             profile = _reprofiled(
                 frame,
                 config,
@@ -351,7 +393,7 @@ def _built_tables(
                 upload_id=BUILT_PREFIX + name,
                 file_name=name,
                 row_count=len(frame),
-                personal=personal,
+                personal=marks,
             )
         except Exception as exc:
             _LOG.info("doctor.built_profile_failed error=%s", type(exc).__name__)
