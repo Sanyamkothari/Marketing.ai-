@@ -1292,13 +1292,14 @@ function todayView(today, { brief, currency, proof, proofError }) {
     rangeLine && h("dd", { class: "kpi-range lv-kpi-range" }, rangeLine),
     proofError && h("dd", { class: "kpi-note" }, "Couldn't load the proof"));
 
-  // The runtime's ledger (what the budget limit counts) prices the messages sent; the discounts customers used
-  // are counted on Proof, so the two spend figures differ and the description says which one this is.
+  // The runtime's budget ledger (what the budget limit counts): every message and every matched discount as it
+  // happens, for the agent and the simple-rule groups. Proof counts the agent group's closed contacts only, so the
+  // two spend figures differ and the description says which one this is.
   const spent = present(today.spend_to_date);
   const spentShare = spent && present(today.budget) && Number(today.budget) > 0
     ? Math.min(100, Math.max(0, (100 * Number(today.spend_to_date)) / Number(today.budget))) : null;
   const spentCell = h("div", { class: "kpi lv-spent" },
-    h("dt", { class: "kpi-label" }, explained("Spent on messages", "The cost of every message sent so far, as the budget limit counts it. Proof's spend counts a different set: the discounts customers used as well, but only contacts whose results are in, so the two can differ.")),
+    h("dt", { class: "kpi-label" }, explained("Budget spent", "What the budget limit counts: every message sent and every discount a customer used from an offer it sent, so far, for the simple-rule group as well as the agent group. Proof's spend counts only the agent group, and only contacts whose results are in, so the two can differ.")),
     spent
       ? h("dd", { class: "kpi-value" }, money(today.spend_to_date, cur), h("span", { class: "lv-kpi-of" }, ` of ${money(today.budget, cur)}`))
       : h("dd", { class: "kpi-value is-missing" }, DASH),

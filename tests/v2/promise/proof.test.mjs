@@ -369,10 +369,11 @@ test("spend agrees with Live: the same number is named, and what each one counts
   const { root } = await draw({ proof, getToday: async () => live });
   const cell = byClass(root, "kpi").find((k) => k.textContent.startsWith("Spend so far"));
   assert.equal(byClass(cell, "kpi-value")[0].textContent, "$17.25");
-  assert.equal(byClass(cell, "kpi-note")[0].textContent, "Live: $24.14 of messages sent so far");
+  assert.equal(byClass(cell, "kpi-note")[0].textContent, "Live: $24.14 of the budget spent so far");
   const tip = tipFor(cell, "Spend so far");
   assert.match(tip, /counting only contacts whose results are in/);
-  assert.match(tip, /Live's "Spent on messages" \(\$24\.14\) counts every message sent so far/);
+  assert.match(tip, /Live's "Budget spent" \(\$24\.14\) is what the budget limit counts: every message and every used discount so far, for the simple-rule group as well/);
+  assert.ok(!/no discounts/.test(tip), "Live's figure does count the discounts it matched");
   // when the two counts are the same number there is nothing to reconcile
   const same = await draw({ proof: { ...mock("proof.json"), spend: 1840 }, getToday: async () => ({ ...mock("today.json"), spend_to_date: 1840 }) });
   const sameCell = byClass(same.root, "kpi").find((k) => k.textContent.startsWith("Spend so far"));

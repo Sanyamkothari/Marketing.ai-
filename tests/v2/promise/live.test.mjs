@@ -247,10 +247,11 @@ test("Live says Simulated shop first, and says what its spend counts", async () 
   assert.ok(label && label.textContent.startsWith("Simulated shop."), "a Simulated shop label on the sample data");
   const text = root.textContent;
   assert.ok(text.indexOf("Simulated shop.") < text.indexOf("Made a decision for each of"), "before the numbers");
-  const spent = all(root).find((n) => n.textContent === "Spent on messages" && n.getAttribute("aria-describedby"));
+  const spent = all(root).find((n) => n.textContent === "Budget spent" && n.getAttribute("aria-describedby"));
   const tip = all(root).find((n) => n.getAttribute("role") === "tooltip" && spent.getAttribute("aria-describedby").split(" ").includes(n.id));
-  assert.match(tip.textContent, /every message sent so far/);
-  assert.match(tip.textContent, /Proof's spend counts a different set/);
+  assert.match(tip.textContent, /every message sent and every discount a customer used/);
+  assert.match(tip.textContent, /for the simple-rule group as well as the agent group/);
+  assert.match(tip.textContent, /Proof's spend counts only the agent group, and only contacts whose results are in/);
   // a real shop: no label
   const real = await draw({ isMock: () => false, getDataReport: async () => ({ sources: [{ name: "shopify", kind: "shop" }] }) });
   assert.equal(byClass(real.root, "simulated-label").length, 0);

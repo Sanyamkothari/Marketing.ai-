@@ -7,7 +7,7 @@
   "sections": [
     {
       "title": "Extra profit vs people we never contact",
-      "body": "It made an extra $4,300 in profit compared with people we never contact (likely range $900 to $7,700). Extra revenue: $14,200 (likely range $6,100 to $22,300). Spend so far is $1,840 of the $5,000 budget, leaving $3,160. It looks after 8,120 customers; 1,015 people we never contact are kept for comparison.",
+      "body": "It made an extra $4,300 in profit compared with people we never contact (likely range $900 to $7,700). Extra revenue: $14,200 (likely range $6,100 to $22,300). The agent group's contacts whose results are in cost $1,840, messages and the discounts used. It looks after 8,120 customers; 1,015 people we never contact are kept for comparison.",
       "numbers": {
         "agent_customers": 8120.0,
         "holdout_customers": 1015.0,
@@ -18,9 +18,7 @@
         "incremental_revenue": 14200.0,
         "incremental_revenue_low": 6100.0,
         "incremental_revenue_high": 22300.0,
-        "spend": 1840.0,
-        "budget": 5000.0,
-        "budget_left": 3160.0
+        "spend": 1840.0
       }
     },
     {

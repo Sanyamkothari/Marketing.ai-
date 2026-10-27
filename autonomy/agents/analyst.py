@@ -171,7 +171,7 @@ def _estimate(draft: SectionDraft, name: str, est: Estimate, fmt: str, currency:
     )
 
 
-def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> SectionDraft:
+def _money_section(proof: ProofSummary, currency: str) -> SectionDraft:
     d = SectionDraft("money", MONEY_TITLE)
     agent_n = d.add("agent_customers", proof.agent_n, format_count(proof.agent_n))
     holdout_n = d.add("holdout_customers", proof.holdout_n, format_count(proof.holdout_n))
@@ -216,15 +216,13 @@ def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> Sec
         r, lo, hi = _estimate(d, "incremental_revenue", proof.incremental_revenue, "money", currency)
         d.sentences.append(f"Extra revenue: {r} (likely range {lo} to {hi}).")
 
+    # The proof's spend is the agent group's contacts whose results are in. It is not what the budget limit counts
+    # (the runtime's ledger: every send and matched discount as it happens, every group), so no "budget left" is
+    # derived from it: Live shows the ledger's figure and what is left of the budget.
     spend = d.add("spend", proof.spend, format_money(proof.spend, currency))
-    if goal is not None:
-        budget = d.add("budget", goal.budget, format_money(goal.budget, currency))
-        left = d.add(
-            "budget_left", goal.budget - proof.spend, format_money(goal.budget - proof.spend, currency)
-        )
-        d.sentences.append(f"Spend so far is {spend} of the {budget} budget, leaving {left}.")
-    else:
-        d.sentences.append(f"Spend so far is {spend}.")
+    d.sentences.append(
+        f"The agent group's contacts whose results are in cost {spend}, messages and the discounts used."
+    )
 
     # No return-on-spend multiple is written. It divides profit by the cost the proof managed to charge, and a
     # discount redeemed under a code the agent did not issue is not charged (ARCHITECTURE_REVIEW section 4 row 4),
@@ -460,7 +458,7 @@ def build_sections(
     then the early read, what it learned and other facts when there are any."""
     currency = goal.currency if goal else "USD"
     drafts = [
-        _money_section(goal, proof, currency),
+        _money_section(proof, currency),
         _baseline_section(proof, currency),
         _health_section(health),
     ]

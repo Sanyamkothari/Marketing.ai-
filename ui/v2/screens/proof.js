@@ -708,21 +708,22 @@ function shareCardFor(proof, goal, ctx, announcer, span, simulated = false) {
 }
 
 /**
- * What "Spend so far" counts, so it can be read next to Live's "Spent on messages". Proof counts the agent group's
- * contacts whose results are in (their window has closed), with the discounts customers used; Live counts every
- * message sent so far, as the budget limit does. The two are different counts, and the page says so.
+ * What "Spend so far" counts, so it can be read next to Live's "Budget spent". Proof counts the agent group only, and
+ * only contacts whose results are in (their window has closed), messages and the discounts customers used. Live's
+ * figure is the budget ledger: every message and every used discount as it happens, for the agent group and the
+ * simple-rule group alike. The two are different counts, and the page says so.
  */
 export function spendWords(proof, today, fmt) {
   const base = "What the agent group's contacts cost, messages and the discounts customers used, counting only contacts whose results are in. Extra profit above is already after this cost.";
   return present(today?.spend_to_date) && differs(today.spend_to_date, proof?.spend)
-    ? `${base} Live's "Spent on messages" (${fmt(today.spend_to_date)}) counts every message sent so far, including contacts still waiting for their result, and no discounts.`
+    ? `${base} Live's "Budget spent" (${fmt(today.spend_to_date)}) is what the budget limit counts: every message and every used discount so far, for the simple-rule group as well as the agent group, including contacts still waiting for their result.`
     : base;
 }
 
-/** The line under the spend when Live's count of messages sent differs from it: the same number Live shows. */
+/** The line under the spend when Live's budget figure differs from it: the same number Live shows. */
 export function sentSoFar(proof, today, fmt) {
   return present(today?.spend_to_date) && differs(today.spend_to_date, proof?.spend)
-    ? `Live: ${fmt(today.spend_to_date)} of messages sent so far`
+    ? `Live: ${fmt(today.spend_to_date)} of the budget spent so far`
     : null;
 }
 
