@@ -283,11 +283,12 @@ def test_a_typed_as_of_answer_is_the_dollar_as_of_of_a_query_that_froze_none() -
     assert counted(case, items) == 31  # the step keeps `$as_of` symbolic; the materialiser binds the answer
 
 
-def test_a_later_as_of_answer_reaches_a_query_step_already_in_the_plan() -> None:
+def test_a_later_as_of_answer_reaches_a_query_step_without_a_date_but_not_one_with_its_own() -> None:
     items = [query_item(frozen="2025-03-01")]
     assert counted(case_of(items), items) == 60  # nothing decided: the step keeps its own frozen date
     later = case_of(items, [as_of_question("c1", "2025-01-10")])
-    assert counted(later, items) == 10  # the person answered later: the answer, not the old frozen date
+    assert counted(later, items) == 60  # the step's own date is never overwritten by a later answer
+    assert counted(later, [query_item()]) == 10  # a step with none reads the answer
 
 
 def test_a_query_that_needs_an_as_of_date_nobody_gave_is_a_stop_not_a_guess() -> None:

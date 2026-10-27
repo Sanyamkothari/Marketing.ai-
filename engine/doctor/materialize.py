@@ -258,12 +258,14 @@ def materialize(
     section). `candidate` is `(upload id, step)`: a step to try as if it were accepted (a query trial)."""
     from engine.doctor.decisions import decisions
 
+    decided = decisions(case)
     return materialize_plan(
         case.files,
         items,
         files,
         scope,
-        as_of=decisions(case).as_of_date,
+        as_of=decided.as_of_date,
+        training_as_of=decided.training_as_of_date,
         candidate=candidate,
         twice=twice,
         watch=watch,
@@ -277,6 +279,7 @@ def materialize_plan(
     scope: Scope,
     *,
     as_of: date | None = None,
+    training_as_of: date | None = None,
     candidate: tuple[str, RecipeStep] | None = None,
     twice: bool = True,
     watch: Watch | None = None,
@@ -323,7 +326,7 @@ def materialize_plan(
         frame = tables[name]
         key, target = roles_of(items, loaded.upload_id, {str(c) for c in frame.columns})
         file_name = loaded.file_name or "the file"
-        ordered = [_reads_own_table(step, name) for step in ordered]
+        ordered = [bound_as_of(_reads_own_table(step, name), as_of, training_as_of) for step in ordered]
 
         def seen_by(
             step: RecipeStep,
@@ -344,7 +347,7 @@ def materialize_plan(
             tables,
             agent.max_conversion_failure_pct,
             twice,
-            as_of,
+            None,  # every query step carries its date (`bound_as_of`)
             seen_by if watch is not None else None,
         )
 
@@ -450,6 +453,22 @@ def _guarded(
         outcome_open=outcome is None,  # one column of a query that reads the future is the outcome-to-be
         watch=watch,
     )
+
+
+def bound_as_of(step: RecipeStep, as_of: date | None, training_as_of: date | None = None) -> RecipeStep:
+    """A query step with the case's dates in it: `$as_of` stays symbolic in the plan and is bound here (and in the
+    prescription) so a trial, a check and a run count the same rows. A step's own explicit date is never changed
+    (it is shown to the person in the item's sentence); a step without one reads the scoring date, or - when it
+    builds the outcome from later rows (`reads_future`) - the training snapshot. The decided date also wins over the
+    step's `as_of_rule`, so the rule is dropped from the copy."""
+    params = step.params
+    if step.kind is not RecipeStepKind.SQL_QUERY or (params.get("as_of") and not params.get("as_of_rule")):
+        return step
+    chosen = (training_as_of if params.get("reads_future") else None) or as_of
+    if chosen is None or (params.get("as_of") == chosen.isoformat() and "as_of_rule" not in params):
+        return step
+    kept = {k: v for k, v in params.items() if k != "as_of_rule"}
+    return step.model_copy(update={"params": {**kept, "as_of": chosen.isoformat()}})
 
 
 def _reads_own_table(step: RecipeStep, table: str) -> RecipeStep:

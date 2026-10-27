@@ -397,7 +397,9 @@ def _propose(
 
     def plan_so_far() -> Prepared:
         """Every row of every file as the plan leaves it, before the query (the as-of rule and the window read it)."""
-        whole = materialize_plan((), items, ctx.files, Full(), twice=False, as_of=ctx.as_of)
+        whole = materialize_plan(
+            (), items, ctx.files, Full(), twice=False, as_of=ctx.as_of, training_as_of=ctx.training_as_of
+        )
         if (refusal := _refused(whole, given.upload_ids, ctx.files)) is not None:
             raise refusal
         return whole
@@ -443,6 +445,7 @@ def _propose(
         Sample(limits().trial.dry_run_rows),
         candidate=(first_upload, tried),
         as_of=ctx.as_of,
+        training_as_of=ctx.training_as_of,
         watch=watch,
     )
     if (refusal := _refused(prepared, given.upload_ids, ctx.files)) is not None:
@@ -458,7 +461,9 @@ def _propose(
     ]
     if given.reads_future:
         whole = whole or plan_so_far()
-        if late := _window_finding(given, as_of or ctx.as_of, {n: whole.tables[n] for n in asked}):
+        if late := _window_finding(
+            given, as_of or ctx.training_as_of or ctx.as_of, {n: whole.tables[n] for n in asked}
+        ):
             findings.append(late)
     first = seen["before"]
     key = ctx.primary_key
@@ -488,6 +493,12 @@ def _propose(
     )
     if receipt.keys_in is not None:
         sentence += f" Customers: {receipt.keys_in:,} before, {receipt.keys_out:,} after ({receipt.keys_lost:,} lost, {receipt.keys_repeated:,} repeated)."
+    own = step.params.get("as_of")
+    decided = (ctx.training_as_of if given.reads_future else None) or ctx.as_of
+    if own and decided is not None and own != decided.isoformat():
+        sentence += (
+            f" It reads the data as of {own}, not {decided.isoformat()}."  # shown, never silently changed
+        )
     return SqlStepProposal(
         source="ai" if ctx.caller == "ai" else "rules",
         title=given.description.rstrip("."),

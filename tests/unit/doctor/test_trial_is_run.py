@@ -287,8 +287,10 @@ def test_the_trial_runs_with_the_cases_as_of_date() -> None:
     waiting = parse_date(ProposalState.PENDING)
     proposal = propose(files, (waiting,), sql, ["up-1"], as_of="2025-12-31", as_of_of_case=given)
     own = propose(files, (waiting,), sql, ["up-1"], as_of="2025-12-31")
-    assert proposal["rows_out"] < own["rows_out"], "the case's date, not the query's own, bounds the rows"
+    assert proposal["rows_out"] == own["rows_out"], "the query's own date is never overwritten by the case's"
     agree([parse_date(), query_item(proposal)], files, proposal, as_of=given)
+    bare = propose(files, (waiting,), sql, ["up-1"], as_of_of_case=given)
+    assert bare["rows_out"] < own["rows_out"], "a query with no date of its own reads the case's"
 
 
 def test_the_trial_counts_by_the_plans_id_only_as_the_run_does() -> None:
