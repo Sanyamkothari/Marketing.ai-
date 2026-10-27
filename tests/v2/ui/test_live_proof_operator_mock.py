@@ -156,7 +156,8 @@ def test_briefing_numbers_all_come_from_the_numbers_field() -> None:
     """The contract: every number in a section's body appears in its `numbers` (computed by code)."""
     for section in Briefing.model_validate(load("briefing.json")).sections:
         allowed = set(section.numbers.values())
-        allowed |= {round(v * 100, 1) for v in section.numbers.values() if 0 < v < 1}
+        # The Analyst shows a rate under 1% with two places (`format_rate`: 0.02%), otherwise with one.
+        allowed |= {round(v * 100, places) for v in section.numbers.values() if 0 < v < 1 for places in (1, 2)}
         assert _numbers_in(section.body) <= allowed, section.title
 
 

@@ -201,6 +201,9 @@ class Services:
     """item_id -> product name, for the words "Due for a refill of ..."; empty: names come from events."""
     data_doctor: Callable[[], Mapping[str, Any] | None] | None = None
     """The Data Doctor's latest report (`fixes`, `problems`, `questions`), when one is wired in."""
+    follow_ups_run: bool = False
+    """Whether the running agent sends a plan's follow-up steps. Only the v3 journeys do; the plain agent makes
+    one decision per customer and never sends a later step, so the Plan screen must not promise one."""
     _tick_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     # goals and briefs ---------------------------------------------------------------------------
@@ -735,7 +738,7 @@ def template_strategist(goal: Goal) -> Brief:
         rationale=(
             f"A starting plan for a {goal.kind.value.replace('_', ' ')} goal: reach "
             f"{_AUDIENCES[goal.kind].description.lower()} by email or WhatsApp, without discounts "
-            "until the agent learns who needs one, and follow up once if they have not bought."
+            "until the agent learns who needs one."
         ),
         created_by="template-strategist",
         created_at=goal.created_at,

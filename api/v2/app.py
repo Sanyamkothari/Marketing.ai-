@@ -202,6 +202,7 @@ def _production_parts(
     runtime = build_runtime(settings, environ=env, engine=db, run_send_jobs=False, connectors=wiring)
     public = (settings.public_url or env.get("AUTONOMY_PUBLIC_URL") or "").strip().rstrip("/") or None
     services, connector_services = _services_for(runtime, wiring, now, public, settings.business_id)
+    services.follow_ups_run = settings.v3  # the journeys are what send a follow-up; off, none is sent
     return services, connector_services, wiring, db
 
 

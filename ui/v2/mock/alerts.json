@@ -18,15 +18,6 @@
     "auto_paused": false
   },
   {
-    "alert_id": "alert_offer_shift_1019",
-    "at": "2026-10-19T07:00:00Z",
-    "goal_id": "goal_winback",
-    "severity": "info",
-    "code": "learning",
-    "message": "Free shipping is beating 10% off for lapsed coffee buyers, so more of them now get free shipping.",
-    "auto_paused": false
-  },
-  {
     "alert_id": "alert_bounces_1018",
     "at": "2026-10-18T16:20:00Z",
     "goal_id": null,

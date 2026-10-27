@@ -175,7 +175,7 @@ def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> Sec
     d = SectionDraft("money", MONEY_TITLE)
     agent_n = d.add("agent_customers", proof.agent_n, format_count(proof.agent_n))
     holdout_n = d.add("holdout_customers", proof.holdout_n, format_count(proof.holdout_n))
-    if any(e is not None for e in (proof.incremental_profit, proof.incremental_revenue, proof.roi)):
+    if any(e is not None for e in (proof.incremental_profit, proof.incremental_revenue)):
         d.add("interval_level", INTERVAL_LEVEL, format_rate(INTERVAL_LEVEL))
 
     profit = proof.incremental_profit
@@ -226,10 +226,9 @@ def _money_section(goal: Goal | None, proof: ProofSummary, currency: str) -> Sec
     else:
         d.sentences.append(f"Spend so far is {spend}.")
 
-    if proof.roi is not None:
-        roi, lo, hi = _estimate(d, "roi", proof.roi, "ratio", currency)
-        d.sentences.append(f"Return on spend: {roi} (likely range {lo} to {hi}).")
-
+    # No return-on-spend multiple is written. It divides profit by the cost the proof managed to charge, and a
+    # discount redeemed under a code the agent did not issue is not charged (ARCHITECTURE_REVIEW section 4 row 4),
+    # so the multiple would be larger than the truth. `ProofSummary.roi` is still computed for those who read it.
     d.sentences.append(
         f"It looks after {agent_n} customers; {holdout_n} people we never contact are kept for comparison."
     )

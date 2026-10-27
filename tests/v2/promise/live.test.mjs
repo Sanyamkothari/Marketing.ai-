@@ -235,7 +235,9 @@ test("Live leads with yesterday: contacted, left alone and why, from GET /v2/tod
   assert.ok(tipFor(purchases).textContent.includes("Every purchase by these customers, not only extra ones"));
   const profitLabel = all(profit).find((n) => n.textContent === "Extra profit so far" && n.getAttribute("aria-describedby"));
   assert.match(tipFor(profitLabel).textContent, /small random group of customers it never contacts/);
-  assert.ok(text.includes(today.learned[0]), "what it learned");
+  // The sample no longer carries a lesson the engine cannot write; the card says so honestly.
+  assert.deepEqual(today.learned, []);
+  assert.ok(text.includes("Nothing new yet"), "what it learned: nothing invented");
   assert.ok(noJunk(text), "no stray false/null/undefined text");
 });
 

@@ -472,13 +472,15 @@ test("Plan screen: the brief in plain words, the messages, the dial", async () =
     "$5,000",
     "If complaints go above 0.08% of delivered messages, pause the whole goal.",
     "If delivery falls below 95%, pause that channel.",
-    "After 3 days, if they have not bought, follow up on the channel that suits them best.",
     "Lapsed buyers respond to a reminder",
     "Shadow",
     "Approve each batch",
     "Autopilot",
   ]) assert.ok(text.includes(s), s);
   for (const a of planScreen.AUTONOMY) assert.ok(text.includes(a.text), a.value);
+  // The plain agent sends no later step, so the plan does not list "After 3 days, follow up" as something that will happen.
+  assert.ok(!text.includes("follow up on the channel that suits them best"));
+  assert.ok(text.includes("Follow-ups") && text.includes("Not sent"));
   const detail = await api.getGoal("goal_winback");
   assert.equal(root.querySelectorAll("article").length, detail.content.length);
   assert.ok(text.includes("Save autonomy level"), "an approved plan offers to change the level");
@@ -601,5 +603,17 @@ test("the shell boots in mock mode: bar, nav, switcher, banner, a screen, one-cl
     delete globalThis.window;
     delete globalThis.location;
     delete globalThis.history;
+  }
+});
+
+test("follow-ups are listed only when the server sends them (journeys on)", () => {
+  const steps = [{ after_days: 3, when: "no_purchase", channel: null }];
+  const text = (n) => (typeof n === "string" ? n : n.textContent);
+  assert.match(text(planScreen.followUpsFact(steps, { follow_ups_run: true })), /After 3 days, if they have not bought, follow up/);
+  assert.equal(text(planScreen.followUpsFact([], { follow_ups_run: true })), "None");
+  for (const facts of [{ follow_ups_run: false }, {}, null]) {
+    const shown = text(planScreen.followUpsFact(steps, facts));
+    assert.ok(shown.startsWith("Not sent"), JSON.stringify(facts));
+    assert.ok(!shown.includes("After 3 days, if they have not bought, follow up"), "a follow-up that never goes out is not promised");
   }
 });

@@ -294,5 +294,6 @@
   "not_reviewed": 1,
   "rejected_by_person": 0,
   "autonomy": "approve",
-  "autonomy_since": "2026-10-01T09:00:00Z"
+  "autonomy_since": "2026-10-01T09:00:00Z",
+  "follow_ups_run": false
 }

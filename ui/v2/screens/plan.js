@@ -306,6 +306,17 @@ function channelsFact(env) {
   return fact("Channels", described(channels.map(channelName).join(", "), about));
 }
 
+/**
+ * The follow-up steps, only when this server sends them (`facts.follow_ups_run`, true only with the v3 journeys on).
+ * The plain agent decides once per customer and never sends a later step, so listing "After 3 days, follow up" would
+ * promise a message that never goes out. Without the plan facts (an older API) nothing is promised either.
+ */
+export function followUpsFact(followUps, facts) {
+  if (facts && facts.follow_ups_run === true && followUps.length) return el("ul", { class: "plain-list" }, followUps.map((s) => el("li", {}, followUpWords(s))));
+  if (facts && facts.follow_ups_run === true) return "None";
+  return described("Not sent", "Each decision sends at most one message. The agent decides again every day, so someone who has not bought may be contacted again then, inside the weekly limit. A planned follow-up step is not sent by this version.");
+}
+
 function briefCard(goal, brief, facts) {
   const env = brief.envelope || {};
   const cur = goal.currency;
@@ -345,7 +356,7 @@ function briefCard(goal, brief, facts) {
         "Proof built in",
         described(`${pct(env.holdout_share, 1)} are people we never contact; ${pct(env.baseline_share, 1)} get a simple fixed rule`, proofAbout),
       ),
-      fact("Follow-ups", followUps.length ? el("ul", { class: "plain-list" }, followUps.map((s) => el("li", {}, followUpWords(s)))) : "None"),
+      fact("Follow-ups", followUpsFact(followUps, facts)),
     ),
   });
   return withId(node, "plan-brief");

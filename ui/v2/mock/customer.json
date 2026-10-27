@@ -195,7 +195,7 @@
       "probability": 0.82,
       "expected_net": 0.0,
       "attention_price": 0.15,
-      "reason": "Left alone: she clicked Wednesday's email, so we wait before following up rather than tire her.",
+      "reason": "Left alone: she clicked Wednesday's email, so we wait rather than tire her.",
       "bids": [],
       "blocked_by": [],
       "policy_version": "v0.3",

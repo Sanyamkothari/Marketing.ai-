@@ -235,6 +235,13 @@ class PlanFacts(Contract):
     rejected_by_person: int = Field(ge=0)
     autonomy: AutonomyLevel
     autonomy_since: AwareDatetime | None = None
+    follow_ups_run: bool = Field(
+        default=False,
+        description=(
+            "Whether this server sends the plan's follow-up steps. False (the plain agent): the brief lists "
+            "them, nothing sends them, and the Plan screen does not promise them"
+        ),
+    )
 
 
 class Expected(Contract):
@@ -1197,6 +1204,7 @@ def plan_facts(services: Services, goal_id: str) -> PlanFacts:
         ),
         autonomy=goal.autonomy,
         autonomy_since=autonomy_since(services, goal),
+        follow_ups_run=services.follow_ups_run,
     )
 
 
