@@ -16,8 +16,8 @@ customer where the decision says so:
   "no bids"; the offer price is only in the bids' costs), so `part_snapshot` reads their counters off the
   built policy after the run instead: customers left alone, the offer budget price, journey events.
 
-The tally never changes a decision and never reads the world's truth. `RecordingPolicy` wraps any policy for
-the Gym (which builds policies from factories); the bench feeds its decision loop directly.
+The tally never changes a decision and never reads the world's truth. `RunRecorder` watches a policy for
+the Gym (through `autonomy.gym.score.observing`); the bench feeds its decision loop directly.
 """
 
 from __future__ import annotations
@@ -27,11 +27,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from autonomy.contracts import CustomerState, Decision, DecisionContext, DecisionKind, Group
+from autonomy.contracts import CustomerState, Decision, DecisionContext, DecisionKind
 from autonomy.decide import rules
 from autonomy.decide.explain import BLOCK_ORDER
 
-__all__ = ["DecisionTally", "RecordingPolicy", "format_block", "part_snapshot", "reason_code"]
+__all__ = ["DecisionTally", "RunRecorder", "format_block", "part_snapshot", "reason_code"]
 
 PREFIX = "DIAG "
 
@@ -39,14 +39,16 @@ _STEMS: tuple[tuple[str, str], ...] = (
     ("Left alone this time: testing whether a rest", "rest_draw"),
     ("Left alone this time: resting is still being tested", "explore_rest"),
     ("Left alone this time: not sure enough yet", "restraint_hold"),
-    ("Left alone: no message is worth more than the cost", "price_beats_value"),
+    ("Left alone: no message is worth more than the cost of contacting (", "price_beats_value"),
+    ("Left alone: no message is worth more than the cost of contacting.", "net_not_positive"),
     ("Left alone: we are slowing down", "pacing"),
     ("Left alone: no active goal has anything", "no_bids"),
 )
 """The first words of the "do nothing" sentences `autonomy.decide.explain` writes when no hard rule decided
 it, and the short code each stands for. `rest_draw`: the auction drew "do nothing" although a message was
 worth sending; `explore_rest`: the exploration floor chose rest; `restraint_hold`: restraint kept the best
-message out of the draw; `price_beats_value`: no message beat the attention price; `no_bids`: the bidders
+message out of the draw; `price_beats_value`: the best message earns something but not more than the
+attention price; `net_not_positive`: no message earns more than its own channel and offer cost, price aside; `no_bids`: the bidders
 offered nothing (no goal, or a customer left alone before the auction: who, harm, pruning)."""
 
 
@@ -166,26 +168,28 @@ class DecisionTally:
         }
 
 
-class RecordingPolicy:
-    """Wraps a policy and tallies the decisions it makes for the agent group; everything else passes through.
+class RunRecorder:
+    """A Gym decision observer (`autonomy.gym.score.observing`) that tallies one policy's decisions.
 
-    The Gym calls `decide` for the holdout too (to log its "do nothing"), so only decisions on a state in the
-    agent group are counted. `nightly`, `learn`, `prepare_day` and the rest are the wrapped policy's own."""
+    It counts the decisions of the run's policy named `policy` for the agent group, over every run of it (every
+    seed), and keeps the last agent it saw so `part_snapshot` can read its counters after the run. It changes
+    nothing: the scoreboard shows it each decision after the policy has made it."""
 
-    def __init__(self, inner: Any, tally: DecisionTally | None = None) -> None:
-        self.inner = inner
-        self.tally = tally if tally is not None else DecisionTally()
+    def __init__(self, policy: str) -> None:
+        self.policy = policy
+        self.tally = DecisionTally()
+        self.agent: Any = None
+        self.runs = 0
 
-    def decide(self, state: CustomerState, ctx: DecisionContext, *args: Any, **kwargs: Any) -> Decision:
-        d: Decision = self.inner.decide(state, ctx, *args, **kwargs)
-        if state.group is Group.AGENT:
-            self.tally.add(d, state, ctx)
-        return d
-
-    def __getattr__(self, name: str) -> Any:
-        if name.startswith("_") or name in ("inner", "tally"):
-            raise AttributeError(name)
-        return getattr(self.inner, name)
+    def __call__(
+        self, name: str, agent: Any, decision: Decision, state: CustomerState, ctx: DecisionContext
+    ) -> None:
+        if name != self.policy:
+            return
+        if agent is not self.agent:
+            self.agent = agent
+            self.runs += 1
+        self.tally.add(decision, state, ctx)
 
 
 def part_snapshot(policy: Any) -> dict[str, object]:

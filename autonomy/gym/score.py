@@ -43,7 +43,8 @@ from __future__ import annotations
 import hashlib
 import math
 from bisect import bisect_right
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal, Protocol, TypeAlias, cast
@@ -92,6 +93,26 @@ SEGMENT_ORACLE = "segment_oracle"
 BASELINE_NAMES: frozenset[str] = frozenset({ORACLE, EVERYONE, RULE, NOTHING, BEST_FIXED, SEGMENT_ORACLE})
 
 IntervalMethod = Literal["normal", "bootstrap"]
+
+DecisionObserver: TypeAlias = Callable[[str, Policy, Decision, CustomerState, DecisionContext], None]
+"""(the run's policy name, the policy, one decision of the agent group, the state it was made on, its
+context). It may count and print but never change anything (docs/v3/DIAGNOSE.md)."""
+_OBSERVER: DecisionObserver | None = None
+
+
+@contextmanager
+def observing(observer: DecisionObserver) -> Iterator[None]:
+    """While active, every decision the policy under test makes for the agent group, "do nothing" included,
+    is shown to `observer`, in every `run_policy` call. Scores, decisions and the world are unchanged; with no
+    observer (the default) nothing extra runs."""
+    global _OBSERVER
+    previous, _OBSERVER = _OBSERVER, observer
+    try:
+        yield
+    finally:
+        _OBSERVER = previous
+
+
 Z95 = 1.959963984540054
 
 
@@ -525,6 +546,7 @@ def _simulate(
     salt: str,
     learn: bool,
     refresh_all: bool,
+    observe: Callable[[Decision, CustomerState, DecisionContext], None] | None = None,
 ) -> _Run:
     raw_history = world.reset(seed)
     history = policy_view(raw_history)
@@ -595,6 +617,8 @@ def _simulate(
                     logged.append(held if held.group is g else held.model_copy(update={"group": g}))
                 continue
             d = (agent if g is Group.AGENT else baseline).decide(s, ctx)
+            if observe is not None and g is Group.AGENT:
+                observe(d, s, ctx)
             if d.kind is not DecisionKind.ACT or d.action is None:
                 continue
             if d.group is not g:
@@ -705,6 +729,7 @@ def run_policy(
     agent = _resolve(policy, world)
     name = policy_name or agent.version
     salt = split_salt if split_salt is not None else f"gym-split:{spec.name}:{seed}"
+    seen = _OBSERVER
     run = _simulate(
         world,
         agent,
@@ -718,6 +743,7 @@ def run_policy(
         salt=salt,
         learn=learn,
         refresh_all=refresh_all,
+        observe=(lambda d, s, c: seen(name, agent, d, s, c)) if seen is not None else None,
     )
 
     members: dict[Group, list[str]] = {g: [] for g in Group}

@@ -41,6 +41,7 @@ __all__ = [
     "loosen_caps",
     "names",
     "switches",
+    "uses_who",
     "variant_briefs",
 ]
 
@@ -67,7 +68,7 @@ class Variant:
     """What the brief's weekly contact cap is multiplied by (1: the brief as it is)."""
 
 
-def _preset(**off: bool) -> Callable[[], dict[str, Any]]:
+def _preset(**off: Any) -> Callable[[], dict[str, Any]]:
     return lambda: {"v3": V3Preset(**off)}
 
 
@@ -249,6 +250,15 @@ def build_variant(
     if clash:
         raise ValueError(f"variant {name!r} sets {', '.join(clash)} itself")
     return build_agent_policy(list(briefs), list(content), **set_here, **extra)
+
+
+def uses_who(name: str) -> bool:
+    """Whether the variant has the who book on (the bench then hands it every customer's pre-campaign events)."""
+    kwargs = VARIANTS[name].kwargs()
+    preset = kwargs.get("v3")
+    if isinstance(preset, V3Preset):
+        return bool(preset.who)
+    return bool(preset) or bool(kwargs.get("who"))
 
 
 def switches(policy: AgentPolicy) -> dict[str, object]:
