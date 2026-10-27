@@ -1220,6 +1220,7 @@ class StoreReadModels:
         self.briefings_log.extend(report.briefings)
 
     def proof(self, goal_id: str | None) -> ProofSummary | None:
+        from autonomy.contracts.offer_codes import OfferCodeTable
         from autonomy.proof import Costs, proof_rewards, proof_summary
 
         now = self.clock()
@@ -1243,6 +1244,7 @@ class StoreReadModels:
             channel=SEND_COST,
             offer={o.offer_id: o.cost_per_redemption for b in briefs for o in b.envelope.offers},
             margin_rate=self.margin_rate,
+            codes=OfferCodeTable(o for b in briefs for o in b.envelope.offers),  # typed code -> offer id
         )
         rewards = proof_rewards(closed, by_customer, horizon, objective, costs, now=now)
         summary = proof_summary(rewards, closed, now, goal_id, seed=self.seed, costs=costs)

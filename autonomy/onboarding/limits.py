@@ -354,8 +354,18 @@ def _channels(h: ShopHistory) -> tuple[Channel, ...]:
     return tuple(ch for ch in MESSAGE_CHANNELS if ch in found) or (Channel.EMAIL,)
 
 
-def offer_for(depth: float, order_value: float) -> OfferOption:
-    """The one offer the mandate may approve: the shop's usual percentage off, priced on its order."""
+def offer_for(
+    depth: float,
+    order_value: float,
+    *,
+    codes: Sequence[str] = (),
+    code_prefixes: Sequence[str] = (),
+) -> OfferOption:
+    """The one offer the mandate may approve: the shop's usual percentage off, priced on its order.
+
+    `codes` / `code_prefixes` are the shop's discount code(s) for it, as the owner names them, so a
+    redemption is charged to the budget (`autonomy.contracts.offer_codes`, docs/v3/OFFER_CODES.md).
+    Left out, the offer has none and its redemptions are listed as unattributed discounts."""
     pct = round(depth * 100)
     return OfferOption(
         offer_id=f"pct{pct}",
@@ -363,6 +373,8 @@ def offer_for(depth: float, order_value: float) -> OfferOption:
         kind=OfferKind.PERCENT_OFF,
         amount=float(pct),
         cost_per_redemption=round(order_value * depth, 2),
+        codes=tuple(codes),
+        code_prefixes=tuple(code_prefixes),
     )
 
 

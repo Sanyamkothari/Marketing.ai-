@@ -134,6 +134,13 @@ from autonomy.contracts import (
     Reward,
     StopMetric,
 )
+from autonomy.contracts.offer_codes import (
+    OfferCodeTable,
+    UnattributedBook,
+    UnattributedDiscount,
+    redemption_tokens,
+    unknown_tokens,
+)
 from autonomy.decide import rules
 from autonomy.decide.bidders import AssetOf, GoalBidder, ItemLookup, contact_harm_of
 from autonomy.decide.frequency import FrequencyConfig, FrequencyPlanner, LookalikeHazard, lerp
@@ -1656,7 +1663,10 @@ class AgentPolicy:
         self.offer_prices: dict[str, BudgetPrice] = {}
         self._offer_spend: dict[str, float] = {}
         self._channel_spend: dict[str, float] = {}
-        self._offer_goal: dict[tuple[str, str], str] = {}
+        self._offers_sent: dict[str, dict[tuple[str, str], None]] = {}
+        """customer -> (goal, offer id) of the agent's offer sends, the latest last."""
+        self._code_tables: dict[str, tuple[Brief, OfferCodeTable]] = {}
+        self._unattributed = UnattributedBook()
         self._priced_sends: set[str] = set()
         self._priced_day: date | None = None
         self.version = version
@@ -2859,17 +2869,31 @@ class AgentPolicy:
             cost = bidder.costs.get(d.action.channel, 0.0) + bidder.format_costs.get(d.action.format, 0.0)
             self._channel_spend[goal] = self._channel_spend.get(goal, 0.0) + cost
         if d.action.offer_id != NO_OFFER.offer_id:
-            self._offer_goal[(d.customer_id, d.action.offer_id)] = goal
+            sent = self._offers_sent.setdefault(d.customer_id, {})
+            sent.pop((goal, d.action.offer_id), None)
+            sent[(goal, d.action.offer_id)] = None
 
     def _price_redemption(self, e: Event) -> None:
         """Charge a purchase that used one of our offers to the goal that sent it: the cost the shop
-        reported (`attrs["offer_cost"]`), else the offer's own `cost_per_redemption`."""
-        offer_id = e.attrs.get("offer_id")
-        if not isinstance(offer_id, str) or offer_id == NO_OFFER.offer_id:
+        reported (`attrs["offer_cost"]`), else the offer's own `cost_per_redemption`.
+
+        The shop reports the code the customer typed, so the purchase is traced to our offer through
+        the offers' codes (`autonomy.contracts.offer_codes`), read with the table of the goal that sent
+        the offer, as the `SpendLedger` does. The latest matching send pays. Every code that no
+        brief's offers name is counted in `unattributed_discounts()`, charged order or not."""
+        tokens = redemption_tokens(e.attrs)
+        if not tokens:
             return
-        goal = self._offer_goal.get((e.customer_id, offer_id))
-        if goal is None:
-            return
+        tables = {g: self._code_table(g, b) for g, b in self.briefs.items()}
+        for goal, offer_id in reversed(self._offers_sent.get(e.customer_id, {})):
+            table = tables.get(goal)
+            # Our own id is a token as the Gym and some shops report it; else the goal's codes map it.
+            if offer_id in tokens or (table is not None and offer_id in table.offers_for(e.attrs)):
+                self._charge_redemption(e, goal, offer_id)
+                break
+        self._unattributed.add(e, unknown_tokens(e.attrs, tables.values()))
+
+    def _charge_redemption(self, e: Event, goal: str, offer_id: str) -> None:
         reported = e.attrs.get("offer_cost")
         if isinstance(reported, int | float) and not isinstance(reported, bool):
             cost = max(float(reported), 0.0)
@@ -2880,6 +2904,19 @@ class AgentPolicy:
             )
             cost = found.cost_per_redemption if found is not None else 0.0
         self._offer_spend[goal] = self._offer_spend.get(goal, 0.0) + cost
+
+    def _code_table(self, goal: str, brief: Brief) -> OfferCodeTable:
+        known = self._code_tables.get(goal)
+        if known is None or known[0] is not brief:
+            known = self._code_tables[goal] = (brief, OfferCodeTable(brief.envelope.offers))
+        return known[1]
+
+    def unattributed_discounts(self) -> list[UnattributedDiscount]:
+        """Discount codes seen on purchases that none of the briefs' offers name (offer pricing on).
+
+        It covers the purchases the agent still remembers (`learn_horizon_days` plus a margin; `_prune`
+        forgets older ones), not all time; the `SpendLedger`'s list covers the whole log."""
+        return self._unattributed.rows()
 
     def _roll_offer_prices(self, now: datetime) -> None:
         """Close the day for every goal's budget price, once per calendar day (UTC) of `now`."""
@@ -3060,6 +3097,7 @@ class AgentPolicy:
             else:
                 del self._events[cid]
         self._seen_events = {e.event_id for evs in self._events.values() for e in evs}
+        self._unattributed.prune(keep_from)
         self._sends = {k: v for k, v in self._sends.items() if v[2] >= keep_from}
         self._send_keys = {k: v for k, v in self._send_keys.items() if k in self._sends}
         self._tired_profiles = {k: v for k, v in self._tired_profiles.items() if k in self._sends}

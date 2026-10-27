@@ -9,8 +9,8 @@ window has closed (its end is at or before `now`), the decision gets a `Reward`:
   part of a reward's margin that came from that assumption is in `Reward.margin_assumed`.
 * **cost** is the channel cost if the message was actually sent (a SEND or DELIVER event carries the
   decision's id; an ACT decision that never went out, as in shadow mode, cost nothing) plus the
-  offer's cost when a purchase used the decision's offer (the purchase's `attrs["offer_id"]` matches
-  the action's `offer_id`). A redemption is charged once, to one decision, however many windows it
+  offer's cost when a purchase used the decision's offer (the purchase's `attrs["offer_id"]` or discount code
+  maps to the action's `offer_id`, through `Costs.codes`). A redemption is charged once, to one decision, however many windows it
   falls in. A SEND does **not** carry the channel cost when the message then failed and was never
   delivered (`sent_decisions`): a FAIL for the decision at or after its last SEND and no DELIVER.
   That is how a hand-off the customer's own tool never delivered reads (Klaviyo: a FAIL with
@@ -104,6 +104,7 @@ from autonomy.contracts import (
     Objective,
     Reward,
 )
+from autonomy.contracts.offer_codes import OfferCodeTable
 
 __all__ = [
     "Attribution",
@@ -138,6 +139,9 @@ class Costs:
     offer: Mapping[str, float] = field(default_factory=dict)
     margin_rate: float | None = None
     value_per_conversion: float | None = None
+    codes: OfferCodeTable | None = None
+    """Maps the discount codes a shop reports to offer ids (`autonomy.contracts.offer_codes`). Unset,
+    a purchase's `attrs["offer_id"]` must be the offer id itself, as before."""
 
     @property
     def margin_share(self) -> float:
@@ -159,6 +163,7 @@ class Costs:
             offer={o.offer_id: o.cost_per_redemption for o in brief.envelope.offers},
             margin_rate=margin_rate,
             value_per_conversion=value_per_conversion,
+            codes=OfferCodeTable(brief.envelope.offers),
         )
 
 
@@ -379,9 +384,11 @@ def _purchase(
     else:
         margin = assumed = value * costs.margin_share
     used = e.attrs.get("offer_id")
-    used_offer = str(used) if used is not None and str(used) != "none" else None
+    used_offers: tuple[str, ...] = (str(used),) if used is not None and str(used) != "none" else ()
+    if costs.codes is not None:  # the shop reports the typed code; map it to our offer id
+        used_offers = tuple(dict.fromkeys((*used_offers, *costs.codes.offers_for(e.attrs))))
     acts = [d for d in covering if d.kind is DecisionKind.ACT]
-    with_offer = [d for d in acts if used_offer is not None and _offer_of(d) == used_offer]
+    with_offer = [d for d in acts if _offer_of(d) in used_offers]
 
     # The one decision that "owns" this purchase: it pays the offer cost, and under last touch it
     # is the only one credited with the money.
@@ -395,8 +402,9 @@ def _purchase(
         t.revenue += value
         t.margin += margin
         t.margin_assumed += assumed
-    if owner is not None and used_offer is not None and _offer_of(owner) == used_offer:
-        tallies[owner.decision_id].offer_cost += float(costs.offer.get(used_offer, 0.0))
+    owner_offer = _offer_of(owner) if owner is not None else None
+    if owner is not None and owner_offer is not None and owner_offer in used_offers:
+        tallies[owner.decision_id].offer_cost += float(costs.offer.get(owner_offer, 0.0))
     named = e.attrs.get("order_id")
     return _Order(
         order_id=str(named) if named is not None else None,
