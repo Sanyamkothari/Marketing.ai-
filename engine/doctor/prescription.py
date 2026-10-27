@@ -605,6 +605,25 @@ def case_tables(frames: Mapping[str, pd.DataFrame], parts: Sequence[FilePart]) -
     return tables
 
 
+def _slot_tables(
+    files: Sequence[LoadedFile],
+    upload_ids: Sequence[str],
+    prepared_by_slot: Mapping[str, pd.DataFrame],
+    parts: Sequence[FilePart],
+) -> dict[str, pd.DataFrame]:
+    """What a file's query may read besides its own rows: every other file by its name (as uploaded), and a slot
+    already prepared as it was prepared (:func:`case_tables`)."""
+    from engine.agent.dataset_recipe import consistent_types
+
+    tables = {
+        slot_name(Path(f.file_name).stem): consistent_types(f.frame)
+        for f in files
+        if f.upload_id not in upload_ids and f.file_name
+    }
+    tables.update(case_tables(prepared_by_slot, parts))
+    return tables
+
+
 def _off_own_table(step: RecipeStep) -> RecipeStep:
     """A query step that runs after a build, or beside other files, reads each file by name from the prepared
     tables the run gives it: the one-file shortcut (`this_table`, the working frame under the file's name) no longer
@@ -769,8 +788,13 @@ def _learn(
     target: str | None,
     tables: Mapping[str, pd.DataFrame] | None = None,
     guards: list[GuardedRun] | None = None,
+    part: str | None = None,
 ) -> tuple[pd.DataFrame | None, DataContract | None]:
-    """The prepared sample and its contract; none when the approved recipe cannot run on the sample.
+    """The prepared sample and its contract; none when there are no rows to learn from.
+
+    An approved recipe that cannot run on the sample is a :class:`PrescriptionError` (naming `part`), never a missing
+    contract nobody is told about: the plan check stops such a step long before approval, so reaching it here is a
+    difference between the two worlds that must be seen.
 
     The recipe runs under the guards (`engine.doctor.guards`): a receipt for each step, the plan's ledger, and the
     plan run twice. The result is added to `guards` when given; the prepared sample is the same as a plain run's.
@@ -796,8 +820,8 @@ def _learn(
                 tables=tables,
                 twice=guards is not None,  # the second run only pays off when someone reads the findings
             )
-        except RecipeError:
-            return None, None
+        except RecipeError as exc:
+            raise PrescriptionError(exc.code, exc.message, part=part) from exc
         prepared = guarded.run.frame
         if guards is not None:
             guards.append(guarded)
@@ -940,7 +964,13 @@ def prescription_from_case(
             acknowledged_stops=acked,
         )
         frame, contract = _learn(
-            _frames(files, upload_ids), recipe, primary_key=key, target=target, guards=guards
+            _frames(files, upload_ids),
+            recipe,
+            primary_key=key,
+            target=target,
+            guards=guards,
+            tables=_slot_tables(files, upload_ids, prepared_by_slot, parts),
+            part=slot,
         )
         if frame is not None:
             prepared.append(frame)
@@ -988,6 +1018,7 @@ def prescription_from_case(
             target=built.target,
             tables=case_tables(prepared_by_slot, parts),
             guards=guards,
+            part="post_build",
         )
     profile: LocaleProfile | None = None
     if case.locale_profile is not None:

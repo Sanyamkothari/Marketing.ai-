@@ -25,7 +25,8 @@ file. Findings hold counts, codes and names only - never a cell value.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Collection, Sequence
+import functools
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -37,7 +38,7 @@ from engine.agent.dataset_recipe import consistent_types
 from engine.agent.recipe import STEP_PHASE, RecipeError
 from engine.agent.sql_step import SqlStepError, sql_params
 from engine.agentic.canonical import canonical_bytes, sha256_hex
-from engine.doctor.guards import Finding, Ledger, Receipt, run_guarded
+from engine.doctor.guards import Finding, GuardedRun, Ledger, Receipt, run_guarded
 from engine.doctor.visit_contracts import PlanFinding
 
 if TYPE_CHECKING:
@@ -47,12 +48,15 @@ if TYPE_CHECKING:
     from engine.doctor.diagnose import LoadedFile
 
 __all__ = [
+    "CANDIDATE",
     "SAMPLE_SEED",
     "Full",
     "Prepared",
     "PreparedFile",
     "Sample",
     "Scope",
+    "StepFailure",
+    "Watch",
     "materialize",
     "materialize_plan",
     "open_findings",
@@ -64,6 +68,8 @@ __all__ = [
 
 SAMPLE_SEED: Final[int] = 20_260_101
 """The seed every sample of the plan is drawn with: the same rows for every caller of the same scope."""
+CANDIDATE: Final[str] = "candidate"
+"""The item id of the step a caller asks about (:func:`materialize`'s `candidate`)."""
 _HARD_CODES: Final[frozenset[str]] = frozenset({"PLAN_STEP_CANNOT_RUN"})
 """The guards' stops no yes can lift: a step that cannot run is not a loss a person may accept."""
 _SHAPING: Final[frozenset[RecipeStepKind]] = frozenset({RecipeStepKind.SQL_QUERY})
@@ -86,6 +92,21 @@ Scope = Sample | Full
 
 
 @dataclass(frozen=True)
+class StepFailure:
+    """A step that could not run, as the engine said it: the code and the plain-English sentence (never a cell)."""
+
+    upload_id: str
+    code: str
+    message: str
+    order: int | None
+    item_id: str | None
+
+
+Watch = Callable[[str, str, RecipeStep, "pd.DataFrame", "pd.DataFrame"], None]
+"""`(upload id, item id, step, rows before, rows after)` after each step, for a caller that samples what it did."""
+
+
+@dataclass(frozen=True)
 class PreparedFile:
     """What the plan did to one file: its table, the roles it was counted by, each step's receipt, its ledger."""
 
@@ -100,6 +121,8 @@ class PreparedFile:
     rows_total: int
     """The file's rows (the rows loaded, or the file's own count when those are a sample of it)."""
     sampled: bool = False
+    findings: tuple[PlanFinding, ...] = ()
+    """What the guards found about this file's steps (also in :attr:`Prepared.findings`)."""
 
 
 @dataclass(frozen=True)
@@ -116,6 +139,8 @@ class Prepared:
     """The table each file's upload became."""
     failed: tuple[str, ...] = ()
     """The uploads with a step that could not run: not prepared, and never to be read as if no step touched them."""
+    failures: tuple[StepFailure, ...] = ()
+    """Why each of them could not run (the engine's own code and sentence)."""
 
     @property
     def stopped(self) -> bool:
@@ -224,6 +249,7 @@ def materialize(
     *,
     candidate: tuple[str, RecipeStep] | None = None,
     twice: bool = True,
+    watch: Watch | None = None,
 ) -> Prepared:
     """The case's plan run over `files` at `scope`, with the case's as-of date. `items` are the plan's (the active
     section). `candidate` is `(upload id, step)`: a step to try as if it were accepted (a query trial)."""
@@ -238,6 +264,7 @@ def materialize(
         as_of=date.fromisoformat(given) if given is not None else None,
         candidate=candidate,
         twice=twice,
+        watch=watch,
     )
 
 
@@ -250,14 +277,16 @@ def materialize_plan(
     as_of: date | None = None,
     candidate: tuple[str, RecipeStep] | None = None,
     twice: bool = True,
+    watch: Watch | None = None,
+    fallback_key: str | None = None,
 ) -> Prepared:
-    """:func:`materialize` for a caller that has the case's files and as-of date rather than the case itself."""
-    from engine.doctor.plan_check import (
-        _tried_before_change,
-        guard_levels,
-        plan_digest,
-        recipe_steps_of,
-    )
+    """:func:`materialize` for a caller that has the case's files and as-of date rather than the case itself.
+
+    `as_of` is a run's own date; with none, a query step keeps the date (or the rule) it carries. `fallback_key` is
+    the ID column of the candidate's file when the plan has no accepted ID for it (a trial by a caller that knows
+    it). `watch` sees each step's input and output once (the preview samples what each step did from it).
+    """
+    from engine.doctor.plan_check import plan_digest, recipe_steps_of
 
     digest = plan_digest(case_files, items)
     if candidate is not None:
@@ -274,12 +303,13 @@ def materialize_plan(
     findings: list[PlanFinding] = []
     seen: dict[tuple[str, str], int] = {}
     failed: list[str] = []
+    failures: list[StepFailure] = []
 
     plans: list[tuple[LoadedFile, list[tuple[RecipeStep, str]]]] = []
     for loaded in files:
         mine = recipe_steps_of(items, loaded.upload_id, only_file=len(files) == 1)
         if candidate is not None and candidate[0] == loaded.upload_id:
-            phased = sorted([*mine, (candidate[1], "candidate")], key=lambda pair: STEP_PHASE[pair[0].kind])
+            phased = sorted([*mine, (candidate[1], CANDIDATE)], key=lambda pair: STEP_PHASE[pair[0].kind])
             mine = [(s.model_copy(update={"order": n}), i) for n, (s, i) in enumerate(phased, start=1)]
         if mine:
             plans.append((loaded, mine))
@@ -292,72 +322,78 @@ def materialize_plan(
         name = names[loaded.upload_id]
         frame = tables[name]
         key, target = roles_of(items, loaded.upload_id, {str(c) for c in frame.columns})
+        if key is None and candidate is not None and candidate[0] == loaded.upload_id:
+            key = fallback_key if fallback_key in frame.columns else None
         file_name = loaded.file_name or "the file"
+        ordered = [_reads_own_table(step, name) for step in ordered]
+
+        def seen_by(
+            step: RecipeStep,
+            was: pd.DataFrame,
+            became: pd.DataFrame,
+            *,
+            upload_id: str = loaded.upload_id,
+            by_order: dict[int, str] = by_order,
+        ) -> None:
+            if watch is not None:
+                watch(upload_id, by_order[step.order], step, was, became)
+
+        run = functools.partial(
+            _guarded,
+            frame,
+            ordered,
+            loaded,
+            tables,
+            agent.max_conversion_failure_pct,
+            twice,
+            as_of,
+            seen_by if watch is not None else None,
+        )
+
         try:
-            guarded = run_guarded(
-                frame,
-                ordered,
-                primary_key=key,
-                target=target,
-                tables=tables,
-                upload_id=loaded.upload_id,
-                source_name=loaded.file_name or None,
-                levels=guard_levels(ordered),
-                max_failure_pct=agent.max_conversion_failure_pct,
-                twice=twice,
-                as_of=as_of,
-                leak_check="full",
-            )
+            try:
+                guarded = run(key, target)
+            except RecipeError as exc:
+                # A query being tried makes a new table: the file's ID and outcome move onto it only when the person
+                # says yes (`prepared_key`), so a trial that drops them is not yet a stop; the plan check after
+                # the yes holds the new table to them.
+                dropped = (
+                    by_order.get(exc.order or 0) == CANDIDATE
+                    and exc.column is not None
+                    and exc.column in (key, target)
+                )
+                if not dropped:
+                    raise
+                key = target = None
+                guarded = run(None, None)
         except (RecipeError, SqlStepError, ValueError, KeyError, TypeError) as exc:
             order = getattr(exc, "order", None)
             item_id = by_order.get(order or 0)
             said = getattr(exc, "message", None) or type(exc).__name__
-            if _tried_before_change(ordered, order):
-                found = Finding(
-                    level="stop",
-                    code="PLAN_QUERY_TRIED_BEFORE_CHANGE",
-                    order=order,
-                    message=f"The query was tried before the fixes now in the plan for {file_name} were "
-                    "settled, and it cannot run after them. Ask for the query again.",
-                )
-            else:
-                found = Finding(
-                    level="stop",
-                    code="PLAN_STEP_CANNOT_RUN",
-                    order=order,
-                    message=f"A step could not run on {'a sample of ' if isinstance(scope, Sample) else ''}"
-                    f"{file_name}: {said}",
-                )
+            found = Finding(
+                level="stop",
+                code="PLAN_STEP_CANNOT_RUN",
+                order=order,
+                message=f"A step could not run on {'a sample of ' if isinstance(scope, Sample) else ''}"
+                f"{file_name}: {said}",
+            )
+            failures.append(
+                StepFailure(loaded.upload_id, getattr(exc, "code", type(exc).__name__), said, order, item_id)
+            )
             # a step that cannot run is a rule whichever sentence says why: the file is not prepared, so no yes may
             # let the plan go on as if it were
             findings.append(_finding(found, item_id, scope, seen, hard=True, file=loaded.upload_id))
             failed.append(loaded.upload_id)
             continue
-        for order in (st.order for st in ordered if _tried_before_change(ordered, st.order)):
-            findings.append(  # it runs, but not on what it was tried on: the person says yes to that
-                _finding(
-                    Finding(
-                        level="stop",
-                        code="PLAN_QUERY_TRIED_BEFORE_CHANGE",
-                        order=order,
-                        message=f"A query was tried on {file_name} before the other steps now in the plan "
-                        "were settled, and it now runs after them, so its result may differ. "
-                        "Ask for the query again (name the earlier query in `replaces`).",
-                    ),
-                    by_order.get(order),
-                    scope,
-                    seen,
-                    file=loaded.upload_id,
-                )
-            )
         made = [(by_order[r.order], r) for r in guarded.receipts]
         receipts.extend(made)
-        findings.extend(
+        mine_found = tuple(
             _finding(
                 f, by_order.get(f.order) if f.order is not None else None, scope, seen, file=loaded.upload_id
             )
             for f in guarded.findings
         )
+        findings.extend(mine_found)
         tables[name] = guarded.run.frame  # the prepared file is what every later step reads
         for step in reversed(ordered):
             if step.kind is RecipeStepKind.SQL_QUERY:
@@ -375,6 +411,7 @@ def materialize_plan(
                 ledger=guarded.ledger,
                 rows_total=loaded.file_rows or len(loaded.frame),
                 sampled=bool(loaded.file_rows) or (isinstance(scope, Sample) and len(loaded.frame) > scope.n),
+                findings=mine_found,
             )
         )
     return Prepared(
@@ -386,7 +423,67 @@ def materialize_plan(
         scope=scope,
         by_upload=names,
         failed=tuple(failed),
+        failures=tuple(failures),
     )
+
+
+def _guarded(
+    frame: pd.DataFrame,
+    steps: Sequence[RecipeStep],
+    loaded: LoadedFile,
+    tables: dict[str, pd.DataFrame],
+    max_failure_pct: float,
+    twice: bool,
+    as_of: date | None,
+    watch: Callable[[RecipeStep, pd.DataFrame, pd.DataFrame], None] | None,
+    primary_key: str | None,
+    outcome: str | None,
+) -> GuardedRun:
+    """One file's steps under the guards, with the tables the plan has made so far."""
+    from engine.doctor.plan_check import guard_levels
+
+    return run_guarded(
+        frame,
+        steps,
+        primary_key=primary_key,
+        target=outcome,
+        tables=tables,
+        upload_id=loaded.upload_id,
+        source_name=loaded.file_name or None,
+        levels=guard_levels(steps),
+        max_failure_pct=max_failure_pct,
+        twice=twice,
+        as_of=as_of,
+        leak_check=None if outcome is None and _reads_future(steps) else "full",
+        watch=watch,
+    )
+
+
+def _reads_own_table(step: RecipeStep, table: str) -> RecipeStep:
+    """A query that names the file it is prepared on reads that file as the steps before it left it (never the raw
+    upload): the step is run with the file's table name as its `this_table`. In memory only; the stored step is
+    not changed, and a stored `this_table` (an older step's) says the same."""
+    if step.kind is not RecipeStepKind.SQL_QUERY:
+        return step
+    try:
+        params = sql_params(step.params)
+    except SqlStepError:
+        return step  # the run says why it is not valid
+    if params.this_table is not None or table not in params.inputs:
+        return step
+    return step.model_copy(update={"params": {**step.params, "this_table": table}})
+
+
+def _reads_future(steps: Sequence[RecipeStep]) -> bool:
+    """Whether a query builds the outcome from rows after the as-of date. Until the outcome column is decided the
+    future-rows check cannot tell it from a leak (only the outcome column is let off), so it waits for the decision;
+    the trial still checks that the data reaches as far as the query looks."""
+    for step in steps:
+        if step.kind is RecipeStepKind.SQL_QUERY:
+            with contextlib.suppress(SqlStepError):
+                if sql_params(step.params).reads_future:
+                    return True
+    return False
 
 
 def stop_finding(

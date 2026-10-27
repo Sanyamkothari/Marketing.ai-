@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from collections.abc import Collection, Sequence
 from datetime import date
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import JsonValue
@@ -19,13 +18,11 @@ from pydantic import JsonValue
 from engine.agent.config import AgentConfig, AgentLevel
 from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind
 from engine.agent.recipe import STEP_PHASE
-from engine.agent.sql_step import SqlStepError, sql_params
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.doctor.case import CaseFile, CaseItem
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.guards import Receipt, holds, names_a_log_row
 from engine.doctor.materialize import Sample, materialize_plan
-from engine.doctor.prescription import slot_name
 from engine.doctor.visit_contracts import Acknowledgement, CaseVisit, PlanCheck, PlanFinding
 
 if TYPE_CHECKING:
@@ -35,7 +32,6 @@ __all__ = [
     "SAMPLE_ROWS",
     "accepted_column",
     "acknowledged_codes",
-    "case_tables",
     "check_plan",
     "guard_levels",
     "ledger_view",
@@ -44,9 +40,7 @@ __all__ = [
     "plan_digest",
     "readiness_acknowledged",
     "recipe_steps_of",
-    "steps_digest",
     "stop_is_open",
-    "trial_steps_of",
     "with_full_findings",
 ]
 
@@ -86,50 +80,6 @@ def recipe_steps_of(
     ]
 
 
-_SHAPING: Final[frozenset[RecipeStepKind]] = frozenset(
-    {
-        RecipeStepKind.SQL_QUERY,
-        RecipeStepKind.COMBINE_ROWS,
-        RecipeStepKind.UNPIVOT,
-        RecipeStepKind.KEEP_LATEST_PER_ID,
-    }
-)
-"""The steps that make other rows or another table: a query's trial never applies one that is only proposed."""
-
-
-def trial_steps_of(
-    items: Sequence[CaseItem], upload_id: str, *, only_file: bool, replacing: Collection[str] = ()
-) -> list[tuple[RecipeStep, str]]:
-    """What a new query is tried after: the accepted steps and the waiting per-column fixes (dates parsed, numbers
-    read), never a waiting query, combine or reshape, and never an item named in `replacing` (the chat swaps or
-    takes it back at the end of its turn). Numbered 1..n."""
-    state = {i.item_id: i.state for i in items}
-    everything = recipe_steps_of(items, upload_id, only_file=only_file, pending=True)
-    left_out = [
-        STEP_PHASE[step.kind]
-        for step, item_id in everything
-        if step.kind in _SHAPING and (item_id in replacing or state[item_id] is not ProposalState.ACCEPTED)
-    ]
-    cut = min(left_out, default=None)  # a waiting fix that reads what a left-out step makes would not run
-    kept = [
-        (step, item_id)
-        for step, item_id in everything
-        if item_id not in replacing
-        and (state[item_id] is ProposalState.ACCEPTED or step.kind not in _SHAPING)
-        and (state[item_id] is ProposalState.ACCEPTED or cut is None or STEP_PHASE[step.kind] <= cut)
-    ]
-    return [
-        (step.model_copy(update={"order": n}), item_id) for n, (step, item_id) in enumerate(kept, start=1)
-    ]
-
-
-def steps_digest(steps: Sequence[RecipeStep]) -> str:
-    """A short digest of what steps do (kind, columns, parameters), not of their number or who proposed them: how a
-    query step remembers the fixes it was tried after."""
-    shape = [[s.kind.value, s.column, s.new_column, s.params] for s in steps]
-    return sha256_hex(canonical_bytes(shape))[:16]
-
-
 def accepted_column(
     items: Sequence[CaseItem], kind: str, upload_id: str, columns: Collection[str]
 ) -> str | None:
@@ -155,11 +105,6 @@ def guard_levels(steps: Sequence[RecipeStep]) -> tuple[AgentLevel, ...]:
     return levels
 
 
-def case_tables(files: Sequence[LoadedFile]) -> dict[str, Any]:
-    """Each file's first `SAMPLE_ROWS` rows by table name: what a query step may read besides its own table."""
-    return {slot_name(Path(f.file_name).stem): f.frame.head(SAMPLE_ROWS) for f in files}
-
-
 def _step_row(receipt: Receipt, item_id: str) -> dict[str, JsonValue]:
     counted = receipt.keys_in is not None
     return {
@@ -174,18 +119,6 @@ def _step_row(receipt: Receipt, item_id: str) -> dict[str, JsonValue]:
             {"column": t.column, "before": t.before, "after": t.after} for t in receipt.totals[:_TOTALS_SHOWN]
         ],
     }
-
-
-def _tried_before_change(ordered: Sequence[RecipeStep], order: int | None) -> bool:
-    """Whether the step that failed is a query tried on the file after other fixes than those it now runs after."""
-    step = next((s for s in ordered if s.order == order), None)
-    if step is None or step.kind is not RecipeStepKind.SQL_QUERY:
-        return False
-    try:
-        tried = sql_params(step.params).tried_after
-    except SqlStepError:
-        return False
-    return tried is not None and tried != steps_digest([s for s in ordered if s.order < step.order])
 
 
 def plan_check_of(prepared: Prepared, *, basis: str | None = None) -> PlanCheck:

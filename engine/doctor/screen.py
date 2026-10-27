@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Final, Literal
 
@@ -391,13 +391,18 @@ def _preview(case: Case, load_files: Callable[[Case], Sequence[LoadedFile]] | No
     if load_files is None or not case.files:
         return None
     items, _ = active_section(case)
+    from engine.doctor.agent_review import case_as_of
+
+    given = case_as_of(case)
+    as_of = date.fromisoformat(given) if given is not None else None
     try:
         return cached_preview(
             case.client_id,
             case.case_id,
             case.files,
             items,
-            lambda: preview_rows(tuple(load_files(case)), items),
+            lambda: preview_rows(tuple(load_files(case)), items, as_of=as_of),
+            as_of=as_of,
         )
     except Exception:
         _LOG.warning("preview_unavailable", exc_info=True)
