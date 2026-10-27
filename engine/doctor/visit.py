@@ -141,6 +141,7 @@ from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
     from engine.access.roles import Principal
+    from engine.doctor.current_tables import CurrentTables
     from engine.doctor.diagnose import LoadedFile, Offer
     from engine.storage import Storage
 
@@ -578,6 +579,20 @@ class _Run:
         if self._full is None or tuple(f.upload_id for f in self._full) != case.upload_ids():
             self._full = tuple(self.deps.load_full(case))
         return self._full
+
+    def current(self, case: Case) -> CurrentTables:
+        """The case's current tables (:mod:`engine.doctor.current_tables`): the files as the plan's accepted fixes leave
+        them and the tables its queries build. What the rules, the detectors and the goal check read; the uploads
+        (:meth:`files`) are for the tools that read a file as it came in."""
+        from engine.doctor.current_tables import current_tables
+
+        offers = self.deps.offers
+        return current_tables(
+            case,
+            active_section(case)[0],
+            self.files(case),
+            config=offers[0].config if offers else None,
+        )
 
     def context(self, case: Case, **extra: Any) -> DataToolContext:
         files = extra.pop("files") if "files" in extra else self.files(case)
@@ -1065,7 +1080,7 @@ def _treat(run: _Run, case: Case) -> _Step:
         # A decided outcome whose query the person left out is asked about again (the rules run once more).
         goal is not None
         and (decided := decisions(case).pair("outcome", goal.goal_id)) is not None
-        and _outcome_is_gone(case, run.files(case), decided),
+        and _outcome_is_gone(case, run.files(case), decided, run.current(case)),
     )
     visit = case.visit or CaseVisit()
     step = _Step(to=VisitState.PREVIEW)
@@ -1783,8 +1798,9 @@ def _id_named(unique: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _base_rules(run: _Run, case: Case, step: _Step) -> None:
     """What does not depend on a goal: which column names each row of each file (the key)."""
     now = run.deps.clock()
-    ctx = run.context(case)
-    for loaded in run.files(case):
+    current = run.current(case)
+    ctx = run.context(case, files=current.files)
+    for loaded in current.files:
         upload_id = loaded.upload_id
         if decisions(case).key(upload_id) is not None:
             continue
@@ -1842,7 +1858,7 @@ def _generic_rules(run: _Run, case: Case, step: _Step) -> None:
     """No goal: what the data can power, and what is missing for the other goals (the design §3.1)."""
     if not run.deps.offers:
         return
-    ctx = run.context(case)
+    ctx = run.context(case, files=run.current(case).files)
     power = run.call("what_can_this_power", {}, ctx)
     verdicts = list(power.output["use_cases"])
     missing = tuple(
@@ -1880,10 +1896,13 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
     """The goal's own checks and questions: the outcome column, the date each row describes, consent."""
     now = run.deps.clock()
     goal = brief.goal_id
-    files = run.files(case)
-    # The outcome: the configured column where it is; otherwise one question over the files' likely columns.
+    current = run.current(
+        case
+    )  # the tables as the plan leaves them: the files, and the tables its queries build
+    files = current.files
+    # The outcome: the configured column where it is; otherwise one question over the current tables' likely columns.
     outcome = decisions(case).pair("outcome", goal)
-    if outcome is not None and _outcome_is_gone(case, files, outcome):
+    if outcome is not None and _outcome_is_gone(case, files, outcome, current):
         step.doubts.append(
             CaseDoubt(
                 doubt_id=f"d.outcome_gone.{goal}"[:128],
@@ -1926,7 +1945,12 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                 )
             ]
             if not likely:
-                likely = _prepared_outcomes(case, brief, files)
+                built_likely = _built_outcomes(current, brief, case)
+                likely = built_likely + [
+                    pair
+                    for pair in _prepared_outcomes(case, brief, files, current)
+                    if pair not in built_likely
+                ]
             if likely:
                 choices = [
                     (
@@ -1979,8 +2003,11 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
 
         # The table an approved join made from the outcome's file is where the date and consent are looked for now.
         table = current_upload(case, outcome[0])
-        _time_rule(run, case, brief, table, step, now)
-        _consent_rule(case, brief, table, step, files, now)
+        # ... and a table a query built is where they are looked for first, when it holds the outcome.
+        built = current.built_with(outcome[1])
+        look = built.loaded if built is not None and built.origin.upload_id == table else None
+        _time_rule(run, case, brief, table, step, now, look=look, current=current)
+        _consent_rule(case, brief, table, step, files, now, look=look)
 
 
 _STEM: Final[int] = 5
@@ -2051,18 +2078,62 @@ def _query_tables(
     return found
 
 
+def _built_outcomes(
+    current: CurrentTables, brief: GoalBrief, case: Case | None = None
+) -> list[tuple[LoadedFile, str]]:
+    """The columns of the tables the case's queries really build that read as the goal's outcome, best first: the
+    same ranking as :func:`_prepared_outcomes` (a name like the outcome's or a synonym, then a name sharing two of its
+    words), but on the built tables' own columns, and each must be two-valued on the rows built (a yes/no), so an order
+    count or a date is never offered. Candidates for the person's question only. Each is a `(file, column)` pair, the
+    file being the upload the query reads."""
+    named = {_norm(n) for n in (brief.outcome.column, *brief.outcome.synonyms) if n}
+    words = _stems(f"{brief.outcome.definition} {brief.outcome.column or ''}")
+    ranked: list[tuple[int, int, LoadedFile, str]] = []
+    for table in current.built:
+        maker = (
+            next((i for i in case.items if i.item_id == table.made_by), None) if case is not None else None
+        )
+        step = maker.payload.get("step") if maker is not None else None
+        given = step.get("params") if isinstance(step, dict) else None
+        said = _stems(
+            f"{step.get('reason') or '' if isinstance(step, dict) else ''} "
+            f"{given.get('description') or '' if isinstance(given, dict) else ''}"
+        )
+        for column in table.columns:
+            mine = _stems(column)
+            if _norm(column) in named or set(_named([column], [*named], parts=True)):
+                tier = 0
+            elif len(mine & words) >= 2:
+                tier = 1
+            elif len(mine & words) >= 1 and len(said & words) >= 2:
+                tier = 2  # the AI names its columns freely: the step's own words say what it is
+            else:
+                continue
+            if tier and column not in table.two_valued:
+                continue
+            ranked.append((tier, len(ranked), table.origin, column))
+    ranked.sort(key=lambda r: (r[0], r[1]))
+    return [(origin, column) for _t, _i, origin, column in ranked]
+
+
 def _prepared_outcomes(
-    case: Case, brief: GoalBrief, files: Sequence[LoadedFile]
+    case: Case, brief: GoalBrief, files: Sequence[LoadedFile], current: CurrentTables | None = None
 ) -> list[tuple[LoadedFile, str]]:
     """The columns the case's own query steps make that read as the goal's outcome, best first: a column named like
     it or a synonym, then one whose name shares two of the outcome's words, then one sharing one word while the
     step's description shares two (the AI names its columns freely). Except for the first kind, the column must be
     two-valued on the rows the step was tried on (a yes/no), so an order count or a date is never offered. Only
-    candidates for the person's question, never a decision. Each is a `(file, column)` pair."""
+    candidates for the person's question, never a decision. Each is a `(file, column)` pair.
+
+    This reads a step's recorded column names, so it is the fallback for a query that built no table (one that could
+    not run on the rows read): a table that was built is read by :func:`_built_outcomes`."""
     named = {_norm(n) for n in (brief.outcome.column, *brief.outcome.synonyms) if n}
     words = _stems(f"{brief.outcome.definition} {brief.outcome.column or ''}")
     ranked: list[tuple[int, int, LoadedFile, str]] = []
+    built = {t.made_by for t in current.built} if current is not None else set()
     for item, origin, step, columns in _query_tables(case, files):
+        if item.item_id in built:
+            continue
         given = step.get("params")
         params: dict[str, Any] = given if isinstance(given, dict) else {}
         said = _stems(f"{step.get('reason') or ''} {params.get('description') or ''}")
@@ -2084,22 +2155,40 @@ def _prepared_outcomes(
     return [(origin, column) for _t, _i, origin, column in ranked]
 
 
-def _outcome_is_gone(case: Case, files: Sequence[LoadedFile], decided: tuple[str, str]) -> bool:
-    """True when the decided outcome column is in no file and in no query step still in the plan (the person left
-    the step out, or the AI proposed it again with other names)."""
+def _outcome_is_gone(
+    case: Case, files: Sequence[LoadedFile], decided: tuple[str, str], current: CurrentTables | None = None
+) -> bool:
+    """True when the decided outcome column is in no file, in no table the plan builds and in no query step still in
+    the plan (the person left the step out, or the AI proposed it again with other names)."""
     upload_id, column = decided
     raw = next((lf for lf in files if lf.upload_id == upload_id), None)
     if raw is None or column in {str(c) for c in raw.frame.columns}:
         return False
+    if current is not None and current.built_with(column) is not None:
+        return False
     return not any(column in made for _i, _o, _s, made in _query_tables(case, files))
 
 
-def _time_rule(run: _Run, case: Case, brief: GoalBrief, upload_id: str, step: _Step, now: datetime) -> None:
-    """The date each row describes, for a goal whose split or outcome window needs one."""
+def _time_rule(
+    run: _Run,
+    case: Case,
+    brief: GoalBrief,
+    upload_id: str,
+    step: _Step,
+    now: datetime,
+    *,
+    look: LoadedFile | None = None,
+    current: CurrentTables | None = None,
+) -> None:
+    """The date each row describes, for a goal whose split or outcome window needs one.
+
+    `look` is the table the date is looked for in when it is not the file itself (the table a query built, which holds
+    the outcome); the item is still recorded against `upload_id`, the file it is made from."""
     need = brief.column("time")
     if need is None or decisions(case).pair("as_of_column", brief.goal_id) is not None:
         return
-    loaded = next((lf for lf in run.files(case) if lf.upload_id == upload_id), None)
+    pool = current.files if current is not None else run.files(case)
+    loaded = look or next((lf for lf in pool if lf.upload_id == upload_id), None)
     if loaded is None:
         return
     named = _named([str(c) for c in loaded.frame.columns], need.names, parts=False)
@@ -2120,7 +2209,11 @@ def _time_rule(run: _Run, case: Case, brief: GoalBrief, upload_id: str, step: _S
         return
     if not need.required:
         return
-    result = run.call("find_time_columns", {"upload_id": upload_id}, run.context(case))
+    result = run.call(
+        "find_time_columns",
+        {"upload_id": loaded.upload_id},
+        run.context(case, files=(*pool, loaded) if look is not None else pool),
+    )
     step.evidence.append(result)
     candidates = [str(c["column"]) for c in result.output.get("columns", []) if isinstance(c, dict)]
     if not candidates:
@@ -2159,13 +2252,21 @@ def _time_rule(run: _Run, case: Case, brief: GoalBrief, upload_id: str, step: _S
 
 
 def _consent_rule(
-    case: Case, brief: GoalBrief, upload_id: str, step: _Step, files: tuple[LoadedFile, ...], now: datetime
+    case: Case,
+    brief: GoalBrief,
+    upload_id: str,
+    step: _Step,
+    files: Sequence[LoadedFile],
+    now: datetime,
+    *,
+    look: LoadedFile | None = None,
 ) -> None:
-    """A contacting goal's consent column: proposed, never ticked (it decides who may be contacted)."""
+    """A contacting goal's consent column: proposed, never ticked (it decides who may be contacted). `look` is the
+    table a query built that holds the outcome, when the column is looked for there."""
     need = brief.column("consent")
     if need is None or decisions(case).pair("consent", brief.goal_id) is not None:
         return
-    loaded = next((lf for lf in files if lf.upload_id == upload_id), None)
+    loaded = look or next((lf for lf in files if lf.upload_id == upload_id), None)
     if loaded is None:
         return
     named = _named([str(c) for c in loaded.frame.columns], need.names, parts=False)
@@ -2447,11 +2548,15 @@ def _detect(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> None
     """The detectors' findings (M245 fills the port): asks settled by the protocol, grounded doubts, requests."""
     if not run.deps.detectors:
         return
-    files = run.files(case)
-    names = sorted({str(c) for loaded in files for c in loaded.frame.columns})
+    raw = run.files(case)
+    # The detectors that propose fixes (`reads_current`) read the files as the accepted changes leave them, so a fix
+    # already in the plan is not found again (a date already parsed, a placeholder already blanked); the others
+    # (what the file is: its identity, its personal data, how files relate) read the upload as it came in.
+    current = run.current(case).files
+    names = sorted({str(c) for loaded in (*raw, *current) for c in loaded.frame.columns})
     asks: list[Ask] = []
     for detector in run.deps.detectors:
-        found = detector(case, files, brief)
+        found = detector(case, current if getattr(detector, "reads_current", False) else raw, brief)
         step.evidence.extend(found.evidence)
         step.items.extend(found.items)
         outputs = {result.evidence_id: result.output for result in found.evidence}

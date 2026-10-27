@@ -15,7 +15,7 @@ Make these tables ready for AutoML (the tool that learns who is likely to respon
 
 Reply with one JSON object and nothing else, one action per reply:
 
-- `{"action": "<look tool>", "file": "F2", "args": {...}}` - look at a table with a tool below.
+- `{"action": "<look tool>", "file": "F2", "args": {...}}` - look at a table with a tool below (F1.. files, T1.. built; `"raw": true`: upload).
 {% for line in actions %}
 - {{ line }}
 {% endfor %}

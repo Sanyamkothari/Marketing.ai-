@@ -688,12 +688,12 @@ def test_the_next_turn_reads_the_conversation_the_case_and_its_earlier_looks(
                     "args": {
                         "kind": "remove_rows",
                         "column": "customer_id",
-                        "params": {"operator": "starts_with", "values": ["99901"]},
+                        "params": {"operator": "starts_with", "values": ["10000"]},
                         "reason": "Your other test accounts.",
                         "evidence_ids": ["e1"],  # a look from an earlier turn
                     },
                 },
-                reply("I explained, and also left out ids starting 99901."),
+                reply("I explained, and also left out your other test accounts."),
             ],
         }
     )
@@ -711,7 +711,7 @@ def test_the_next_turn_reads_the_conversation_the_case_and_its_earlier_looks(
     # It cited only an earlier look (e1) and the change was made: grounded, applied, and the look is not stored twice.
     assert not any(r.get("error") for r in client.seen[-1].results)
     second = [
-        i for i in ai_items(talk.case) if i.title == "Leave out rows where 'customer_id' starts with 99901"
+        i for i in ai_items(talk.case) if i.title == "Leave out rows where 'customer_id' starts with 10000"
     ]
     assert len(second) == 1 and second[0].state is ProposalState.ACCEPTED and second[0].decided_by == AGENT
     assert (

@@ -159,12 +159,15 @@ class AiGuard(Meter):
         super()._check_budget()
 
 
-def file_overviews(contexts: Sequence[AgentContext]) -> list[tuple[dict[str, Any], SentItem]]:
+def file_overviews(
+    contexts: Sequence[AgentContext], labels: Sequence[str] | None = None
+) -> list[tuple[dict[str, Any], SentItem]]:
     """An overview of each file, made safe for a prompt by that file's own gate, with the note of what it sent.
 
     One gate per file: its own columns, its own personal-data columns, the use case's settings. The overview is
     a short form of the chat's `get_profile` result, so it holds counts, types and roles, and no cell. Files past
-    :data:`MAX_OVERVIEW_CHARS` are left out.
+    :data:`MAX_OVERVIEW_CHARS` are left out. `labels` name the tables (`F1`.. for files, `T1`.. for the tables a query
+    made); without them each is its number.
     """
     from engine.agent.egress import Egress, sent_item
     from engine.agent.tools import call_tool
@@ -182,7 +185,12 @@ def file_overviews(contexts: Sequence[AgentContext]) -> list[tuple[dict[str, Any
             shape_only=ctx.long_text,
             mode=agent.ai_data_access,
         )
-        profile: dict[str, Any] = dict(call_tool(ctx, "get_profile", {}, evidence_id=f"f{number}").result)
+        label = labels[number - 1] if labels is not None else number
+        profile: dict[str, Any] = dict(
+            call_tool(
+                ctx, "get_profile", {}, evidence_id=f"f{number}" if labels is None else str(label).lower()
+            ).result
+        )
         short = {
             **{key: profile[key] for key in ("file_name", "rows", "columns_total", "primary_key_candidates")},
             "columns": [{key: c[key] for key in _OVERVIEW_COLUMN_KEYS} for c in profile["columns"]],
@@ -193,5 +201,10 @@ def file_overviews(contexts: Sequence[AgentContext]) -> list[tuple[dict[str, Any
         room -= len(text)
         if room < 0:
             break
-        found.append(({"file": number, **overview}, sent_item(gate, "get_profile", {}, text)))
+        found.append(
+            (
+                {"file": number if str(label).startswith("F") else label, **overview},
+                sent_item(gate, "get_profile", {}, text),
+            )
+        )
     return found

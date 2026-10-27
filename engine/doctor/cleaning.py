@@ -74,6 +74,7 @@ def cleaning_detector(
             asks.extend(found_asks)
         return Detected(asks=tuple(asks), items=tuple(items))
 
+    detect.reads_current = True  # type: ignore[attr-defined]  # a fix already in the plan is not found again
     return detect
 
 
