@@ -440,6 +440,19 @@ def _install_case_visit(app: FastAPI) -> None:
 PHASE_APP_HOOKS.append(_install_case_visit)
 
 
+# Next month's recheck (/cases/{id}/recheck): mounted beside the visit's routes.
+def _install_case_recheck(app: FastAPI) -> None:
+    from engine.doctor import case as doctor_case
+
+    if doctor_case.data_doctor_unified(app.state.config_root):
+        from api.routes.case_recheck import router as case_recheck_router
+
+        app.include_router(case_recheck_router)
+
+
+PHASE_APP_HOOKS.append(_install_case_recheck)
+
+
 # Plan O M246 (DEC-1816): the protocol's routes outside a case (Guided setup's Approve with the sentence read,
 # standing answers per client, candidate rules), mounted only when `data_doctor.unified` is on. Off: nothing is
 # imported and docs/API.md is unchanged.
