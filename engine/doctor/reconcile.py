@@ -55,6 +55,9 @@ __all__ = [
 Effects = tuple[Any, ...]
 
 NO_LONGER_EMITTED: Final[str] = "it is no longer proposed: what it rested on has changed"
+AI_PRODUCERS: Final[frozenset[str]] = frozenset({"review", "chat"})
+"""The AI's proposals are taken back only by an explicit withdraw/replace or by the person, never by omission: a
+later review or another turn is not the pass that made them, so what it does not mention says nothing."""
 REPLACED: Final[str] = "a newer proposal about the same thing took its place"
 
 
@@ -259,7 +262,7 @@ def _fold_items(case: Case, emission: Emission, work: Reconciled, now: datetime)
             items.append(item)
         work.added.append(item)
     _pair_replacements(case, emission, work, swapped)
-    if emission.complete:
+    if emission.complete and emission.producer not in AI_PRODUCERS:
         for n, current in enumerate(items):
             if (
                 current.producer == emission.producer
