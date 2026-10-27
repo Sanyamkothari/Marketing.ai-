@@ -366,6 +366,13 @@ class CaseItem(StrictBase):
         description="Waiting for someone who would know (one of `PARK_ROLES`): the step is left out until it is "
         "resumed. Unticked or ticked again, it is no longer parked.",
     )
+    requested_by: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="The person whose chat message asked for it (user id), recorded when the agent made it for "
+        "them. Separation of duties reads this, not the order of the chat; an item the rules or the review "
+        "proposed on their own has none.",
+    )
 
 
 class CaseOption(StrictBase):

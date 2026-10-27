@@ -46,7 +46,8 @@ from engine.agent.contracts import ProposalState
 from engine.config import ConfigError, StrictBase, load_engine_config
 from engine.doctor.case import Case, CaseItem, CaseQuestion, TimelineEvent, TimelineKind
 from engine.doctor.goal_names import goal_display_name
-from engine.doctor.plan_check import open_stops, plan_digest
+from engine.doctor.ledger import blocking
+from engine.doctor.plan_check import plan_digest
 from engine.doctor.protocol import AGENT, REQUEST_CODES
 from engine.doctor.visit import (
     CARRIED_KINDS,
@@ -572,12 +573,16 @@ def _ready(
         visit = case.visit
         check = visit.plan_check if visit is not None else None
         stops: tuple[ReadyStop, ...] = ()
-        if visit is not None and check is not None and _current(case, check.digest):
-            stops = tuple(
+        if visit is not None and (check is None or _current(case, check.digest)):
+            stops = tuple(  # every source's open stop (`engine.doctor.ledger`), not the plan check's alone
                 ReadyStop(
-                    key=f.key, text=f.text, detail=f.detail, item_id=f.item_id, acknowledgeable=not f.hard
+                    key=f.key,
+                    text=f.text,
+                    detail=f.detail,
+                    item_id=f.item_id,
+                    acknowledgeable=f.acknowledgeable,
                 )
-                for f in open_stops(check, visit.acknowledged)
+                for f in blocking(case)
             )
         return ReadyCard(
             stage="approve",
