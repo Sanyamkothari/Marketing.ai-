@@ -54,9 +54,11 @@ from autonomy.uplift.learner import ArmModel, SharedBaselineLogit, UpliftLearner
 from autonomy.uplift.score import UpliftScore
 
 __all__ = [
+    "ArmFit",
     "ArmReport",
     "FittedUplift",
     "UpliftReport",
+    "calibrate_arm",
     "fit_uplift",
     "grouped_slope",
     "shrunk_slope",
@@ -246,6 +248,73 @@ def shrunk_slope(b: float, b_se: float) -> float:
     return 0.0
 
 
+@dataclass(frozen=True)
+class ArmFit:
+    """One arm's calibration from out-of-fold predictions (step 5 of the module docstring)."""
+
+    ate: float
+    ate_se: float
+    own_se: float
+    """The part of `ate_se` from the arm's own rows (the treated residuals)."""
+    slope: float
+    slope_se: float
+    slope_used: float
+    """`slope` shrunk by its noise (`shrunk_slope`)."""
+    centre: float
+    """Mean of the scored raw uplift (the average of the fold models), subtracted before the slope."""
+    low: float
+    high: float
+    """Winsorisation bounds of the centred out-of-fold uplift."""
+
+    def apply(self, raw: FloatArray) -> FloatArray:
+        """The calibrated uplift of raw (fold-model-averaged) scores: `ate + slope_used x clip(raw - centre)`."""
+        c = np.clip(raw - self.centre, self.low, self.high)
+        out: FloatArray = np.clip(self.ate + self.slope_used * c, -1.0, 1.0)
+        return out
+
+
+def calibrate_arm(
+    tau: FloatArray,
+    avg: FloatArray,
+    mu0: FloatArray,
+    mu_k: FloatArray,
+    y: FloatArray,
+    in_k: npt.NDArray[np.bool_],
+    control: npt.NDArray[np.bool_],
+    prop: FloatArray,
+) -> ArmFit:
+    """Calibrate one arm (step 5 of the module docstring), the one place `fit_uplift` and
+    `autonomy.decide.uplift_threshold` do it.
+
+    `tau` is each customer's out-of-fold uplift of the arm, `avg` the same customers' uplift averaged over
+    every fold model (the scale that is scored later, so the centre is its mean), `mu0` and `mu_k` the
+    out-of-fold chances of buying with no message and with the arm, `prop` each customer's propensity of
+    the arm they got."""
+    n = len(tau)
+    own_part = np.zeros(n)
+    own_part[in_k] = (y[in_k] - mu_k[in_k]) / prop[in_k]
+    phi = tau + own_part
+    phi[control] -= (y[control] - mu0[control]) / prop[control]
+    ate = float(phi.mean())
+    ate_se = float(phi.std(ddof=1) / math.sqrt(n))
+    own_se = min(float(own_part.std(ddof=1) / math.sqrt(n)), ate_se)
+    centre = float(avg.mean())
+    low, high = (float(v) for v in np.quantile(tau - centre, [WINSOR, 1.0 - WINSOR]))
+    c = np.clip(tau - centre, low, high)
+    b, b_se = _grouped_slope(c, phi)
+    return ArmFit(
+        ate=ate,
+        ate_se=ate_se,
+        own_se=own_se,
+        slope=b,
+        slope_se=b_se,
+        slope_used=shrunk_slope(b, b_se),
+        centre=centre,
+        low=low,
+        high=high,
+    )
+
+
 def _effective(w: FloatArray) -> float:
     s = float(w.sum())
     return s * s / float((w * w).sum()) if s > 0 else 0.0
@@ -325,43 +394,31 @@ def fit_uplift(
     cals: list[_ArmCalibration] = []
     control = arm == 0
     for k in range(k_arms):
-        tau = mu[:, k] - mu0
         in_k = arm == k + 1
-        own_part = np.zeros(n)
-        own_part[in_k] = (y[in_k] - mu[in_k, k]) / prop[in_k]
-        phi = tau + own_part
-        phi[control] -= (y[control] - mu0[control]) / prop[control]
-        ate = float(phi.mean())
-        ate_se = float(phi.std(ddof=1) / math.sqrt(n))
-        own_se = min(float(own_part.std(ddof=1) / math.sqrt(n)), ate_se)
-        centre = float(avg[:, k].mean())
-        low, high = (float(v) for v in np.quantile(tau - centre, [WINSOR, 1.0 - WINSOR]))
-        c = np.clip(tau - centre, low, high)
-        b, b_se = _grouped_slope(c, phi)
-        used = shrunk_slope(b, b_se)
-        used_se = b_se * used / b if used > 0 else 0.0
+        fit = calibrate_arm(mu[:, k] - mu0, avg[:, k], mu0, mu[:, k], y, in_k, control, prop)
+        used_se = fit.slope_se * fit.slope_used / fit.slope if fit.slope_used > 0 else 0.0
         arms.append(
             ArmReport(
                 key=table.arm_keys[k],
                 treated=int(in_k.sum()),
                 control=int(control.sum()),
-                ate=ate,
-                ate_se=ate_se,
-                slope=b,
-                slope_se=b_se,
-                slope_used=used,
+                ate=fit.ate,
+                ate_se=fit.ate_se,
+                slope=fit.slope,
+                slope_se=fit.slope_se,
+                slope_used=fit.slope_used,
             )
         )
         cals.append(
             _ArmCalibration(
-                ate=ate,
-                ate_se=ate_se,
-                own_se=own_se,
-                slope=used,
+                ate=fit.ate,
+                ate_se=fit.ate_se,
+                own_se=fit.own_se,
+                slope=fit.slope_used,
                 slope_se=used_se,
-                centre=centre,
-                low=low,
-                high=high,
+                centre=fit.centre,
+                low=fit.low,
+                high=fit.high,
             )
         )
     report = UpliftReport(
