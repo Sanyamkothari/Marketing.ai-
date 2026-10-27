@@ -10,22 +10,26 @@ names only.
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence
+from datetime import date
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import JsonValue
 
 from engine.agent.config import AgentConfig, AgentLevel
 from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind
-from engine.agent.dataset_recipe import consistent_types
-from engine.agent.recipe import STEP_PHASE, RecipeError
+from engine.agent.recipe import STEP_PHASE
 from engine.agent.sql_step import SqlStepError, sql_params
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.doctor.case import CaseFile, CaseItem
 from engine.doctor.diagnose import LoadedFile
-from engine.doctor.guards import Finding, Receipt, names_a_log_row, run_guarded
+from engine.doctor.guards import Receipt, holds, names_a_log_row
+from engine.doctor.materialize import Sample, materialize_plan
 from engine.doctor.prescription import slot_name
 from engine.doctor.visit_contracts import Acknowledgement, CaseVisit, PlanCheck, PlanFinding
+
+if TYPE_CHECKING:
+    from engine.doctor.materialize import Prepared
 
 __all__ = [
     "SAMPLE_ROWS",
@@ -36,10 +40,13 @@ __all__ = [
     "guard_levels",
     "ledger_view",
     "open_stops",
+    "plan_check_of",
     "plan_digest",
     "recipe_steps_of",
     "steps_digest",
+    "stop_is_open",
     "trial_steps_of",
+    "with_full_findings",
 ]
 
 SAMPLE_ROWS: Final[int] = 1_000
@@ -152,17 +159,6 @@ def case_tables(files: Sequence[LoadedFile]) -> dict[str, Any]:
     return {slot_name(Path(f.file_name).stem): f.frame.head(SAMPLE_ROWS) for f in files}
 
 
-def _finding(found: Finding, item_id: str | None) -> PlanFinding:
-    return PlanFinding(
-        key=sha256_hex(canonical_bytes([found.key, item_id]))[:16],
-        level=found.level,
-        code=found.code,
-        text=found.message,
-        item_id=item_id,
-        detail=found.detail,
-    )
-
-
 def _step_row(receipt: Receipt, item_id: str) -> dict[str, JsonValue]:
     counted = receipt.keys_in is not None
     return {
@@ -191,117 +187,35 @@ def _tried_before_change(ordered: Sequence[RecipeStep], order: int | None) -> bo
     return tried is not None and tried != steps_digest([s for s in ordered if s.order < step.order])
 
 
-def check_plan(
-    files: Sequence[LoadedFile], case_files: Sequence[CaseFile], items: Sequence[CaseItem]
-) -> PlanCheck:
-    """Run the accepted steps on each file's sample under the guards (run twice) and keep what was counted.
+def plan_check_of(prepared: Prepared, *, basis: str | None = None) -> PlanCheck:
+    """What the guards counted when the plan was materialised, as the case keeps it (the ledger and the findings).
+    `basis` is set when every row of the files was counted (see :attr:`PlanCheck.basis`).
 
-    A plan with no steps has an empty ledger. A step that cannot run on the sample is a stop, not a silence.
+    A plan with no steps has an empty ledger. A step that cannot run is a stop in the findings, not a silence.
     """
-    digest = plan_digest(case_files, items)
-    tables = case_tables(files)
-    steps: list[dict[str, JsonValue]] = []
-    findings: list[PlanFinding] = []
+    steps = [_step_row(receipt, item_id) for item_id, receipt in prepared.receipts]
+    if not steps:
+        return PlanCheck(digest=prepared.digest, findings=prepared.findings, basis=basis)
     totals = {"rows_in": 0, "rows_out": 0, "customers_in": 0, "customers_out": 0}
     counted = True
     customer_tables = 0  # a log's rows (orders, payments) are never added to the customers
     rates: tuple[float | None, float | None] = (None, None)
     sampled = 0
-    for loaded in files:
-        mine = recipe_steps_of(items, loaded.upload_id, only_file=len(files) == 1)
-        if not mine:
+    for done in prepared.files:
+        ledger = done.ledger
+        if ledger is None:
             continue
-        ordered = [step for step, _ in mine]
-        by_order = {step.order: item_id for step, item_id in mine}
-        frame = consistent_types(loaded.frame.head(SAMPLE_ROWS))
-        columns = {str(c) for c in frame.columns}
-        key = accepted_column(items, "key", loaded.upload_id, columns)
-        target = accepted_column(items, "outcome_column", loaded.upload_id, columns)
-        if target is None:  # the outcome may come from a query's table (one row per customer): its ID follows
-            from engine.doctor.prescription import prepared_key, query_makes
-
-            declared = next(
-                (
-                    str(i.payload["column"])
-                    for i in items
-                    if i.kind == "outcome_column"
-                    and i.state is ProposalState.ACCEPTED
-                    and i.upload_id in (loaded.upload_id, None)
-                    and isinstance(i.payload.get("column"), str)
-                ),
-                None,
-            )
-            if declared is not None and query_makes(items, declared):
-                target, key = declared, prepared_key(items, declared, key)
-        agent = AgentConfig()
-        levels = guard_levels(ordered)
-        drifted = [st.order for st in ordered if _tried_before_change(ordered, st.order)]
-        try:
-            guarded = run_guarded(
-                frame,
-                ordered,
-                primary_key=key,
-                target=target,
-                tables=tables,
-                upload_id=loaded.upload_id,
-                source_name=loaded.file_name or None,
-                levels=levels,
-                max_failure_pct=agent.max_conversion_failure_pct,
-            )
-        except (RecipeError, SqlStepError, ValueError, KeyError, TypeError) as exc:
-            item_id = by_order.get(getattr(exc, "order", None) or 0)
-            failed = Finding(
-                level="stop",
-                code="PLAN_STEP_CANNOT_RUN",
-                order=getattr(exc, "order", None),
-                message=f"A step could not run on a sample of {loaded.file_name or 'the file'}: "
-                f"{getattr(exc, 'message', None) or type(exc).__name__}",
-            )
-            if _tried_before_change(ordered, getattr(exc, "order", None)):
-                failed = failed.model_copy(
-                    update={
-                        "code": "PLAN_QUERY_TRIED_BEFORE_CHANGE",
-                        "message": f"The query was tried before the fixes now in the plan for "
-                        f"{loaded.file_name or 'the file'} were settled, and it cannot run after them. "
-                        "Ask for the query again.",
-                    }
-                )
-            findings.append(_finding(failed, item_id))
-            continue
-        for order in drifted:  # it runs, but not on what it was tried on: the person says yes to that
-            findings.append(
-                _finding(
-                    Finding(
-                        level="stop",
-                        code="PLAN_QUERY_TRIED_BEFORE_CHANGE",
-                        order=order,
-                        message=f"A query was tried on {loaded.file_name or 'the file'} before the other steps "
-                        "now in the plan were settled, and it now runs after them, so its result may differ. "
-                        "Ask for the query again (name the earlier query in `replaces`).",
-                    ),
-                    by_order.get(order),
-                )
-            )
-        for receipt in guarded.receipts:
-            steps.append(_step_row(receipt, by_order[receipt.order]))
-        findings.extend(
-            _finding(f, by_order.get(f.order) if f.order is not None else None) for f in guarded.findings
-        )
-        ledger = guarded.ledger
-        if ledger is not None:
-            totals["rows_in"] += next(iter(guarded.receipts[0].rows_in.values()), 0)
-            totals["rows_out"] += guarded.receipts[-1].rows_out
-            if not names_a_log_row(key):
-                customer_tables += 1
-                counted = counted and ledger.unit == "customers"
-                totals["customers_in"] += ledger.start
-                totals["customers_out"] += ledger.end
-            if rates == (None, None):
-                rates = (ledger.rate_start, ledger.rate_end)
-            # Only files counted in `rows_in` count here, so "the first N of M rows" compares like with like.
-            sampled += loaded.file_rows or len(loaded.frame)
-    if not steps:
-        return PlanCheck(digest=digest, findings=tuple(findings))
+        totals["rows_in"] += next(iter(done.receipts[0][1].rows_in.values()), 0)
+        totals["rows_out"] += done.receipts[-1][1].rows_out
+        if not names_a_log_row(done.key):
+            customer_tables += 1
+            counted = counted and ledger.unit == "customers"
+            totals["customers_in"] += ledger.start
+            totals["customers_out"] += ledger.end
+        if rates == (None, None):
+            rates = (ledger.rate_start, ledger.rate_end)
+        # Only files counted in `rows_in` count here, so "the first N of M rows" compares like with like.
+        sampled += done.rows_total
     counted = counted and customer_tables > 0
     view: dict[str, JsonValue] = {
         "rows_in": totals["rows_in"],
@@ -313,15 +227,48 @@ def check_plan(
         "sampled_from": sampled if sampled > totals["rows_in"] else None,
         "steps": list(steps),
     }
-    return PlanCheck(digest=digest, ledger=view, findings=tuple(findings))
+    return PlanCheck(digest=prepared.digest, ledger=view, findings=prepared.findings, basis=basis)
+
+
+def check_plan(
+    files: Sequence[LoadedFile],
+    case_files: Sequence[CaseFile],
+    items: Sequence[CaseItem],
+    *,
+    as_of: date | None = None,
+) -> PlanCheck:
+    """Run the accepted steps on a seeded sample of each file under the guards (run twice) and keep what was
+    counted: :func:`materialize_plan` at :class:`Sample` of `SAMPLE_ROWS`, as a stored check."""
+    return plan_check_of(materialize_plan(case_files, items, files, Sample(SAMPLE_ROWS), as_of=as_of))
+
+
+def stop_is_open(found: PlanFinding, acknowledged: Sequence[Acknowledgement]) -> bool:
+    """Whether a finding is a stop nobody has said yes to. A hard stop is never lifted; a yes holds while the count
+    stays at or below the one said yes to (a bigger loss needs a new yes)."""
+    if found.level != "stop":
+        return False
+    if found.hard:
+        return True
+    return not any(a.key == found.key and holds(a.count, found.count) for a in acknowledged)
+
+
+def with_full_findings(check: PlanCheck, found: Sequence[PlanFinding]) -> PlanCheck:
+    """The check with what VERIFY found on the whole file in place of every earlier whole-file finding of the same
+    plan, and the sample's findings of the same kind and subject taken over by them (same key: the whole file is
+    what counts). It is marked `verified`: the screen reads those findings as the reasons the data is not ready.
+    """
+    keys = {f.key for f in found}
+    kept = tuple(f for f in check.findings if f.scope == "sample" and f.key not in keys)
+    return check.model_copy(
+        update={"findings": (*kept, *found), "basis": check.basis or check.digest, "verified": True}
+    )
 
 
 def open_stops(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement]) -> list[PlanFinding]:
-    """The stops nobody has said yes to."""
+    """The stops nobody has said yes to (:func:`stop_is_open`)."""
     if check is None:
         return []
-    said = {a.key for a in acknowledged}
-    return [f for f in check.findings if f.level == "stop" and f.key not in said]
+    return [f for f in check.findings if stop_is_open(f, acknowledged)]
 
 
 def acknowledged_codes(visit: CaseVisit | None) -> tuple[str, ...] | None:
@@ -330,8 +277,15 @@ def acknowledged_codes(visit: CaseVisit | None) -> tuple[str, ...] | None:
     """
     if visit is None or visit.plan_check is None:
         return None
-    said = {a.key for a in visit.acknowledged}
-    return tuple(sorted({f.code for f in visit.plan_check.findings if f.level == "stop" and f.key in said}))
+    return tuple(
+        sorted(
+            {
+                f.code
+                for f in visit.plan_check.findings
+                if f.level == "stop" and not f.hard and not stop_is_open(f, visit.acknowledged)
+            }
+        )
+    )
 
 
 def ledger_view(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement]) -> dict[str, Any] | None:
@@ -339,14 +293,13 @@ def ledger_view(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement]
     to is shown as a flag that says so, and carries `acknowledged`; every finding carries its `key`."""
     if check is None:
         return None
-    said = {a.key for a in acknowledged}
     shown: list[dict[str, Any]] = []
     for found in sorted(check.findings, key=lambda f: _ORDER[f.level]):
-        ack = found.level == "stop" and found.key in said
+        ack = found.level == "stop" and not found.hard and not stop_is_open(found, acknowledged)
         shown.append(
             {
                 "level": "flag" if ack else found.level,
-                "kind": "guard",
+                "kind": "guard" if found.source == "guard" else "readiness",
                 "key": found.key,
                 "text": " ".join(
                     filter(None, [found.text, found.detail, "(confirmed by a person)" if ack else ""])
@@ -354,6 +307,10 @@ def ledger_view(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement]
                 "acknowledged": ack,
                 "item_id": found.item_id,
                 "code": found.code,
+                "count": found.count,
+                "scope": found.scope,
+                "hard": found.hard,
+                "acknowledgeable": found.level == "stop" and not found.hard,
             }
         )
     worst: dict[str, str] = {}  # the worst level said about each step, for its receipt

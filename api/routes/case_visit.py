@@ -10,7 +10,7 @@ off - the default - none of these paths exists and docs/API.md is unchanged.
 | `POST /cases/{case_id}/answers` | Analyst | Answers a question with one of its options. |
 | `POST /cases/{case_id}/decisions` | Analyst | Ticks or unticks a suggestion of the active section; unticked with `park_for`, it waits for the one who would know and is left out until resumed. |
 | `POST /cases/{case_id}/approval` | Analyst | Approves what the preview showed; recorded with the user id and the sentence shown. |
-| `POST /cases/{case_id}/acknowledgements` | Analyst | Says yes to one stop of the plan, by its `key` (`view.ledger.findings[].key`), with an optional reason; Approve is refused while a stop has no yes, and a changed plan takes the yes away. |
+| `POST /cases/{case_id}/acknowledgements` | Analyst | Says yes to one stop of the plan, by its `key` (`view.ledger.findings[].key`), with an optional reason; the stop may have been found on a sample, on the whole file before approval, or by the final check (`scope`). Approve is refused while a stop has no yes; a yes holds while the stop's count stays at or below the one said yes to, and a changed plan takes it away; a hard rule (`acknowledgeable` false) takes no yes (`409 STOP_NOT_ACKNOWLEDGEABLE`). |
 | `POST /cases/{case_id}/chat` | Analyst | Writes to Data Doctor; with no AI service the reply says so and nothing else changes. |
 | `POST /cases/{case_id}/confirmations` | Analyst | Plan O M246: the own yes of one APPROVE-class item, with the exact sentence read (the item's role is checked). |
 | `POST /cases/{case_id}/standing-answers/{answer_id}/revoke` | Analyst | Plan O M246: revokes a standing answer; its question is asked again. |
@@ -375,14 +375,19 @@ def _review(
 
 def _prepared_verify(storage: Storage, root: Path) -> Any:
     """VERIFY on the file as a run would read it once the approved changes are applied: the readiness check must not
-    fail a file for what the person has just fixed (haan/nahi as consent, money as text)."""
+    fail a file for what the person has just fixed (haan/nahi as consent, money as text).
+
+    The plan is materialised on every row of the files (`engine.doctor.materialize`); a bound prescription prepares
+    the upload the run reads, and without one the plan's own table is stored and checked. The raw upload is never
+    checked in place of a prepared file that could not be made: that is a stop with a name."""
     from fastapi import HTTPException
 
+    from api.routes.agent_recipes import write_prepared_frame
     from api.routes.run_prescriptions import prescribed_training
     from api.routes.uploads import load_upload
     from engine.agent.recipe import RecipeError
 
-    def prepare(config: Any, upload_id: str, primary_key: Any, target: str) -> str:
+    def prepare(config: Any, upload_id: str, primary_key: Any, target: str) -> str | None:
         try:
             made = prescribed_training(
                 storage,
@@ -395,12 +400,62 @@ def _prepared_verify(storage: Storage, root: Path) -> Any:
         except HTTPException as exc:
             detail: Any = exc.detail
             said = detail.get("message") or detail.get("code") if isinstance(detail, dict) else detail
-            raise doctor_visit.PrepareError(str(said or "the approved changes cannot be applied.")) from exc
+            code = detail.get("code") if isinstance(detail, dict) else None
+            raise doctor_visit.PrepareError(
+                str(said or "the approved changes cannot be applied."),
+                **({"code": str(code)} if isinstance(code, str) and code else {}),
+            ) from exc
         except RecipeError as exc:
-            raise doctor_visit.PrepareError(exc.message) from exc
-        return made.upload.upload_id if made is not None and made.upload is not None else upload_id
+            raise doctor_visit.PrepareError(exc.message, code=exc.code) from exc
+        return made.upload.upload_id if made is not None and made.upload is not None else None
 
-    return doctor_visit.readiness_verify(storage, root, prepare)
+    def store_frame(config: Any, upload_id: str, frame: Any) -> str:
+        try:
+            return write_prepared_frame(storage, config, load_upload(storage, upload_id), frame).upload_id
+        except RecipeError as exc:
+            raise doctor_visit.PrepareError(exc.message, code=exc.code) from exc
+
+    def full_files(case: Case) -> tuple[LoadedFile, ...]:
+        return _load_full(storage, case.upload_ids(), root)
+
+    return doctor_visit.readiness_verify(
+        storage, root, prepare, full_files=full_files, store_frame=store_frame
+    )
+
+
+def _load_full(storage: Storage, upload_ids: Sequence[str], root: Path) -> tuple[LoadedFile, ...]:
+    """The case's files with every row, up to the profile row cap, IDs as text: what the whole plan is counted on
+    before APPROVE and at VERIFY (a run reads the same rows)."""
+    from api.routes.doctor import offers as doctor_offers
+    from engine.intake.contracts import IntakeReport
+    from engine.stages import ingest
+
+    cap = min((ingest.profile_row_cap(offer.config) for offer in doctor_offers(root)), default=DIAGNOSIS_ROWS)
+    loaded: list[LoadedFile] = []
+    for upload_id in upload_ids:
+        record = load_upload(storage, upload_id)
+        profile = load_upload_profile(storage, upload_id)
+        read = ingest.read_upload(
+            storage,
+            record.source_key,
+            file_format=record.file_format,
+            row_cap=cap,
+            keep_all_rows=True,
+            keep_leading_zeros=True,
+        )
+        notes: tuple[str, ...] = ()
+        if record.intake_key is not None and storage.exists(record.intake_key):
+            notes = storage.read_model(record.intake_key, IntakeReport).notes
+        loaded.append(
+            LoadedFile(
+                upload_id=upload_id,
+                file_name=record.file_name,
+                frame=read.all_rows if read.all_rows is not None else read.frame,
+                profile=profile,
+                notes=notes,
+            )
+        )
+    return tuple(loaded)
 
 
 def first_rows_loader(storage: Storage) -> Callable[[Case], tuple[LoadedFile, ...]]:
@@ -459,9 +514,13 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
     def load_files(case: Case) -> tuple[LoadedFile, ...]:
         return _load_files(storage, case.upload_ids(), cap)
 
+    def load_full(case: Case) -> tuple[LoadedFile, ...]:
+        return _load_full(storage, case.upload_ids(), root)
+
     return VisitDeps(
         storage=storage,
         load_files=load_files,
+        load_full=load_full,
         # Plan O M243 (DEC-1813): PRESCRIBE writes `prescriptions/<hash>.json` and binds the case's files to it.
         prescribe=CasePrescriber(storage, load_files=load_files, config_root=root),
         verify=_prepared_verify(storage, root),

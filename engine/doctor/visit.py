@@ -94,7 +94,14 @@ from engine.doctor.case import (
     payload_digest,
 )
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL, GoalBrief, load_goal_brief, register_goal_brief_tool
-from engine.doctor.plan_check import check_plan, open_stops, plan_digest
+from engine.doctor.materialize import Full, materialize, stop_finding
+from engine.doctor.plan_check import (
+    open_stops,
+    plan_check_of,
+    plan_digest,
+    stop_is_open,
+    with_full_findings,
+)
 from engine.doctor.protocol import (
     DATA_DECISION,
     DATA_PRESCRIPTION_APPROVED,
@@ -122,6 +129,8 @@ from engine.doctor.visit_contracts import (
     CaseVisit,
     HandOffRecord,
     OptionEffect,
+    PlanCheck,
+    PlanFinding,
     VisitStop,
     WaitingFor,
 )
@@ -314,6 +323,10 @@ class VerifyResult:
     verdict: str
     reason: str
     ref: CaseReadinessRef | None = None
+    findings: tuple[PlanFinding, ...] = ()
+    """What the whole-file check found, for the case's ledger: the guards' counts on every row and each readiness
+    requirement that fails. A verdict that is not ready with findings rests at APPROVE with them to read and, unless
+    hard, to say yes to; with none it goes back to TREAT."""
 
 
 class VerifyPort(Protocol):
@@ -372,6 +385,9 @@ class VisitDeps:
     storage: Storage
     load_files: Callable[[Case], Sequence[LoadedFile]]
     """The case's files as the Doctor reads them (rows capped, profile, intake notes)."""
+    load_full: Callable[[Case], Sequence[LoadedFile]] | None = None
+    """The case's files with every row (up to the profile row cap), for the whole-file count before APPROVE and at
+    VERIFY. None: the rows `load_files` gives (the whole file when it fits)."""
     registry: DataToolRegistry | None = None
     """None: :func:`visit_registry`."""
     offers: Sequence[Offer] = ()
@@ -546,11 +562,20 @@ class _Run:
         self.registry = deps.tools()
         self.tool_calls = 0
         self._files: tuple[LoadedFile, ...] | None = None
+        self._full: tuple[LoadedFile, ...] | None = None
 
     def files(self, case: Case) -> tuple[LoadedFile, ...]:
         if self._files is None or tuple(f.upload_id for f in self._files) != case.upload_ids():
             self._files = tuple(self.deps.load_files(case))
         return self._files
+
+    def full_files(self, case: Case) -> tuple[LoadedFile, ...]:
+        """The files with every row, for the count of the whole plan (read once per call)."""
+        if self.deps.load_full is None:
+            return self.files(case)
+        if self._full is None or tuple(f.upload_id for f in self._full) != case.upload_ids():
+            self._full = tuple(self.deps.load_full(case))
+        return self._full
 
     def context(self, case: Case, **extra: Any) -> DataToolContext:
         files = extra.pop("files") if "files" in extra else self.files(case)
@@ -1261,7 +1286,7 @@ def _preview(run: _Run, case: Case) -> _Step:
     files = run.files(case)
     summary = run.deps.preview(case, files) if run.deps.preview is not None else _count_preview(case, files)
     items, _ = active_section(case)
-    check = check_plan(files, case.files, items)  # counted once per plan; the screen and Approve read it
+    check = _counted(run, case, items)  # counted once per plan; the screen and Approve read it
     visit = case.visit or CaseVisit()
     same_plan = visit.plan_check is not None and visit.plan_check.digest == check.digest
     return _Step(
@@ -1281,6 +1306,21 @@ def _preview(run: _Run, case: Case) -> _Step:
             )
         ],
     )
+
+
+def _counted(run: _Run, case: Case, items: Sequence[CaseItem]) -> PlanCheck:
+    """The plan counted on every row of its files (:class:`Full`), so the whole file's stops are known BEFORE the
+    person approves, not after. Kept by the plan's digest and the as-of date it was counted under: the same plan
+    is not counted again (the stops VERIFY adds to it stay)."""
+    from engine.doctor.agent_review import case_as_of
+
+    visit = case.visit or CaseVisit()
+    digest = plan_digest(case.files, items)
+    basis = _digest(digest, case_as_of(case))
+    kept = visit.plan_check
+    if kept is not None and kept.digest == digest and kept.basis == basis:
+        return kept
+    return plan_check_of(materialize(case, items, run.full_files(case), Full()), basis=basis)
 
 
 def _count_preview(case: Case, files: tuple[LoadedFile, ...]) -> PreviewSummary:
@@ -1450,9 +1490,18 @@ def prescription_digest(case: Case, brief: GoalBrief | None) -> str:
 
 
 def _verify(run: _Run, case: Case) -> _Step:
-    """VERIFY: the readiness verdict for the active goal (M234), or straight on with no goal."""
+    """VERIFY: the readiness verdict for the active goal (M234), or straight on with no goal.
+
+    A verdict that is not ready never throws its reason away. What the whole-file check found (the guards' stops on
+    every row, each readiness requirement that fails) is written into the plan's ledger as whole-file findings and
+    the visit rests at APPROVE with them: the person reads each one on the screen and says yes to it
+    (`acknowledge_stop`) unless it is a hard rule, or changes the plan. A not-ready verdict with nothing to show
+    goes back to TREAT once; the same plan and the same reason again rests at APPROVE with a stop that says so
+    (no-progress guard), so the visit never goes round TREAT, APPROVE and VERIFY on its own."""
     brief = stored_brief(run.deps.storage, case)
-    port = run.deps.verify or readiness_verify(run.deps.storage, run.deps.config_root)
+    port = run.deps.verify or readiness_verify(
+        run.deps.storage, run.deps.config_root, full_files=run.full_files
+    )
     if brief is None:
         result = VerifyResult(verdict="no_goal", reason="No goal is chosen: pick one to check it will train.")
     else:
@@ -1462,12 +1511,15 @@ def _verify(run: _Run, case: Case) -> _Step:
         ref = result.ref.model_copy(update={"plan_digest": prescription_digest(case, brief)})
         updates["readiness"] = (*(r for r in case.readiness if r.goal_id != ref.goal_id), ref)
     ready = result.verdict in {"ready", "ready_with_warnings", "no_goal"}
+    to: VisitState = VisitState.HAND_OFF
+    visit_update: dict[str, Any] = {}
+    found = result.findings
+    if not ready:
+        to, visit_update, found = _not_ready(case, result)
     return _Step(
-        to=VisitState.HAND_OFF if ready else VisitState.TREAT,
+        to=to,
         updates=updates,
-        visit=(
-            {} if ready else {"approved_before": ()}
-        ),  # not ready: the plan comes back whole, with the reason
+        visit=visit_update,  # not ready: the plan comes back whole, with the reason
         events=[
             EventDraft(
                 kind=TimelineKind.READINESS,
@@ -1475,11 +1527,52 @@ def _verify(run: _Run, case: Case) -> _Step:
                 details={
                     "verdict": result.verdict,
                     "reason": result.reason[:200],
+                    "stops": sum(1 for f in found if f.level == "stop"),
                     # Ties this check to the stored report it made, so the screen never shows an older check's reasons.
                     "report_hash": result.ref.report_hash if result.ref is not None else None,
                 },
             )
         ],
+    )
+
+
+def _not_ready(
+    case: Case, result: VerifyResult
+) -> tuple[VisitState, dict[str, Any], tuple[PlanFinding, ...]]:
+    """Where a verdict that is not ready goes, what the visit keeps, and the findings it writes to the ledger."""
+    items, _ = active_section(case)
+    visit = case.visit or CaseVisit()
+    digest = plan_digest(case.files, items)
+    found = result.findings
+    again = _digest(digest, result.reason)
+    if not found and visit.done.get("verify_back") == again:
+        # Back from TREAT with the same plan and the same reason: nothing the visit can do by itself changed it.
+        found = (
+            stop_finding(
+                "VERIFY_NOT_READY",
+                f"{result.reason.removeprefix('Not ready: ')} Nothing in the plan changed since the last check "
+                "said so: change the plan, or the data.",
+                Full(),
+            ),
+        )
+    if not found:
+        return (
+            VisitState.TREAT,
+            {"approved_before": (), "done": {**visit.done, "verify_back": again}},
+            (),
+        )
+    kept = visit.plan_check
+    current = kept is not None and kept.digest == digest
+    check = with_full_findings(kept if current and kept is not None else PlanCheck(digest=digest), found)
+    return (
+        VisitState.APPROVE,
+        {
+            "plan_check": check,
+            "acknowledged": visit.acknowledged if current else (),
+            "approved_before": (),
+            "done": {**visit.done, "verify_back": again},
+        },
+        found,
     )
 
 
@@ -2073,20 +2166,106 @@ def _consent_rule(
 # The default VERIFY: M234's readiness report on the file holding the outcome
 # ---------------------------------------------------------------------------
 class PrepareError(Exception):
-    """`readiness_verify`'s `prepare` cannot prepare the file under the approved changes; the message is the reason."""
+    """`readiness_verify`'s `prepare` cannot prepare the file under the approved changes; the message is the reason.
+
+    `code` is the refusal's own code when it has one (a `RECIPE_*` or `PRESCRIPTION_*` code): the ledger shows it as
+    a hard stop, since a yes would not make the file preparable."""
+
+    def __init__(self, message: str, *, code: str = "VERIFY_NOT_PREPARED") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _acknowledged_entries(visit: CaseVisit | None) -> tuple[str, ...]:
+    """The readiness findings a person said yes to, as `validation.acknowledged` entries (`CODE` or `CODE:column`),
+    for the plan as counted: the readiness check then holds them as acknowledged."""
+    if visit is None or visit.plan_check is None:
+        return ()
+    return tuple(
+        dict.fromkeys(
+            f.code if f.column is None else f"{f.code}:{f.column}"
+            for f in visit.plan_check.findings
+            if f.source == "readiness"
+            and f.level == "stop"
+            and not f.hard
+            and not stop_is_open(f, visit.acknowledged)
+        )
+    )
+
+
+def _readiness_findings(report: Any) -> tuple[PlanFinding, ...]:
+    """Each requirement of the readiness report that fails, as a whole-file stop for the ledger.
+
+    The run's own checks that a person may acknowledge (`ValidationCheck.acknowledgeable`) are stops a yes lifts;
+    every other failure (too few rows or positives, future data in a feature, consent, a requirement of the run, a
+    probe) is a hard rule: shown, never acknowledgeable. Names, counts and the checks' own sentences only."""
+    from engine.agentic.canonical import canonical_bytes, sha256_hex
+    from engine.contracts import Severity
+
+    found: list[PlanFinding] = []
+    covered: set[str] = set()
+
+    def add(code: str, column: str | None, text: str, *, hard: bool, detail: str | None = None) -> None:
+        subject = code if column is None else f"{code}:{column}"
+        found.append(
+            PlanFinding(
+                key=sha256_hex(canonical_bytes([code, subject]))[:16],
+                level="stop",
+                code=code,
+                text=text,
+                detail=detail,
+                column=column,
+                scope="full",
+                hard=hard,
+                source="readiness",
+            )
+        )
+
+    dry = report.dry_run_report
+    for check in () if dry is None else dry.checks:
+        if check.severity is Severity.ERROR and not check.acknowledged:
+            covered.add(check.code)
+            add(
+                check.code,
+                check.column,
+                check.message,
+                hard=not check.acknowledgeable,
+                detail=check.suggestion or None,
+            )
+    for requirement in report.requirements:
+        code = requirement.engine_code or requirement.id
+        if requirement.status == "fail" and requirement.blocking and code not in covered:
+            covered.add(code)
+            add(
+                code, requirement.column, requirement.message or f"The run needs {requirement.id}.", hard=True
+            )
+    for probe in report.probes:
+        if probe.status == "fail":
+            add(probe.code, probe.column, probe.message, hard=True, detail=probe.fix or None)
+    return tuple(found)
 
 
 def readiness_verify(
     storage: Storage,
     config_root: Path | None,
-    prepare: Callable[[Any, str, Any, str], str] | None = None,
+    prepare: Callable[[Any, str, Any, str], str | None] | None = None,
+    *,
+    full_files: Callable[[Case], Sequence[LoadedFile]] | None = None,
+    store_frame: Callable[[Any, str, Any], str] | None = None,
 ) -> VerifyPort:
     """VERIFY with M234's `check_readiness` on the prepared copy of the file holding the goal's outcome.
 
+    The prepared copy is the plan materialised on every row (:func:`engine.doctor.materialize.materialize`, `Full`),
+    the one place the plan is worked out. The guards' stops on the whole file come first: one nobody said yes to is
+    a not-ready verdict that carries it as a finding, so the visit rests at APPROVE with it. `full_files(case)` reads
+    the files with every row (default: the files the visit already holds).
+
     `prepare(config, upload_id, primary_key, target)` gives the id of the upload a run would read once the approved
-    changes are applied to `upload_id` (the same preparation `POST /runs` does), or raises :class:`PrepareError`.
-    Without it the stored file is checked as it is, so a file the approved changes make fine (haan/nahi read as
-    yes/no, money as text) would be called not ready for what the person has just fixed."""
+    changes are applied to `upload_id` (the same preparation `POST /runs` does), or raises :class:`PrepareError`;
+    None means no prescription is bound (or they are off). Then the materialised table itself is stored with
+    `store_frame(config, upload_id, frame)` and checked. A plan that changes nothing has the upload as its table.
+    The raw upload is never checked in place of a prepared table that could not be made: that is a named stop.
+    """
 
     def verify(case: Case, brief: GoalBrief | None, files: tuple[LoadedFile, ...]) -> VerifyResult:
         from engine.config import RunMode, load_use_case
@@ -2115,11 +2294,59 @@ def readiness_verify(
 
         key = prepared_key(case.items, column, key)
         config = load_use_case(brief.goal_id, config_root)
+        visit = case.visit
+        items, _ = active_section(case)
+        prepared = materialize(
+            case, items, full_files(case) if full_files is not None else files, Full(), twice=False
+        )  # repeatability was checked at approval
+        said = () if visit is None else visit.acknowledged
+        found = prepared.findings
+        stops = [f for f in found if stop_is_open(f, said)]
+        if stops:
+            return VerifyResult(
+                verdict="not_ready",
+                reason=f"Not ready: {' '.join(f.text for f in stops[:3])}",
+                findings=found,
+            )
+        made: str | None = None
         if prepare is not None:
             try:
-                upload_id = prepare(config, upload_id, key, column)
+                made = prepare(config, upload_id, key, column)
             except PrepareError as exc:
-                return VerifyResult(verdict="not_ready", reason=f"Not ready: {exc}")
+                hard = stop_finding(exc.code, str(exc), Full())
+                return VerifyResult(verdict="not_ready", reason=f"Not ready: {exc}", findings=(*found, hard))
+        if made is None:  # nothing is bound to a prescription: the plan's own table is what is checked
+            table = prepared.by_upload.get(upload_id)
+            changed = any(done.upload_id == upload_id for done in prepared.files)
+            if not changed:
+                made = upload_id  # no step touches this file: its table is the upload as it is
+            elif store_frame is None or table is None:
+                none = stop_finding(
+                    "VERIFY_NOT_PREPARED",
+                    "The file the plan makes could not be put together to check it, so it was not checked. "
+                    "Try again, or change the plan.",
+                    Full(),
+                )
+                return VerifyResult(
+                    verdict="not_ready", reason=f"Not ready: {none.text}", findings=(*found, none)
+                )
+            else:
+                made = store_frame(config, upload_id, prepared.tables[table])
+        upload_id = made
+        entries = _acknowledged_entries(visit)
+        if entries:  # what a person said yes to at APPROVE is acknowledged for the run's own checks
+            config = config.model_copy(
+                update={
+                    "validation": config.validation.model_copy(
+                        update={
+                            "acknowledged": (
+                                *config.validation.acknowledged,
+                                *(e for e in entries if e not in config.validation.acknowledged),
+                            )
+                        }
+                    )
+                }
+            )
         inputs = inputs_for_upload(
             storage,
             upload_id,
@@ -2137,7 +2364,13 @@ def readiness_verify(
             verdict=report.verdict,
             created_at=utc_now(),
         )
-        return VerifyResult(verdict=report.verdict, reason=report.verdict_reason, ref=ref)
+        ready = report.verdict in {"ready", "ready_with_warnings"}
+        return VerifyResult(
+            verdict=report.verdict,
+            reason=report.verdict_reason,
+            ref=ref,
+            findings=found if ready else (*found, *_readiness_findings(report)),
+        )
 
     return verify
 
@@ -2802,8 +3035,10 @@ def _approval(
     items, questions = active_section(case)
     visit = case.visit or CaseVisit()
     check, said = visit.plan_check, visit.acknowledged
-    if check is None or check.digest != plan_digest(case.files, items):  # never another plan's counts
-        check, said = check_plan(run.files(case), case.files, items), ()
+    if check is None or check.basis is None or check.digest != plan_digest(case.files, items):
+        # never another plan's counts, nor a count of a sample only (a case kept before the whole file was counted)
+        said = said if check is not None and check.digest == plan_digest(case.files, items) else ()
+        check = _counted(run, case, items)
     stops = open_stops(check, said)
     if stops:
         raise CaseError(
@@ -2905,8 +3140,10 @@ def acknowledge_stop(
 ) -> Case:
     """The person's explicit yes to one stop of the plan, by its key (`view.ledger.findings[].key`), with a reason.
 
-    Only while the visit waits for approval, only for a stop of the plan as it stands, and it holds for that plan
-    alone: any change to the plan counts the checks again and the yes is gone (:func:`_preview`)."""
+    Only while the visit waits for approval, only for a stop of the plan as it stands (found on a sample or on the
+    whole file), and never for a hard one. The yes records the count it was given at and holds for that plan alone,
+    while a new count of the stop is at or below it: a bigger loss needs a new yes, and any change to the plan
+    counts the checks again and the yes is gone (:func:`_preview`)."""
     run = _Run(deps, actor)
     now = deps.clock()
 
@@ -2918,9 +3155,15 @@ def acknowledge_stop(
         check = visit.plan_check
         if check is None or check.digest != plan_digest(case.files, items):
             raise _unknown("The plan changed since its checks were counted. Look at the checks again.")
-        if not any(f.key == key and f.level == "stop" for f in check.findings):
+        found = next((f for f in check.findings if f.key == key and f.level == "stop"), None)
+        if found is None:
             raise _unknown("There is no such stop in the plan now.")
-        said = Acknowledgement(key=key, by=actor, at=now, reason=reason.strip()[:500])
+        if found.hard:
+            raise CaseError(
+                "STOP_NOT_ACKNOWLEDGEABLE",
+                "No one can say yes to this one: it is a rule the data must meet. Change the plan or the file.",
+            )
+        said = Acknowledgement(key=key, count=found.count, by=actor, at=now, reason=reason.strip()[:500])
         return _Step(
             to=case.state,
             visit={"acknowledged": (*(a for a in visit.acknowledged if a.key != key), said)},

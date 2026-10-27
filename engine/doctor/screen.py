@@ -50,7 +50,7 @@ from engine.doctor.case import Case, CaseError, CaseStore, TimelineEvent, Timeli
 from engine.doctor.combine_run import current_upload
 from engine.doctor.conversation import ConversationCard, build_conversation
 from engine.doctor.diagnose import LoadedFile
-from engine.doctor.plan_check import ledger_view, plan_digest
+from engine.doctor.plan_check import ledger_view, open_stops, plan_digest
 from engine.doctor.preview import PreviewView, cached_preview, preview_rows
 from engine.doctor.protocol import (
     DEFAULT_SETTINGS,
@@ -72,7 +72,7 @@ from engine.doctor.visit import (
     prescription_digest,
     stored_brief,
 )
-from engine.doctor.visit_contracts import HandOffRecord
+from engine.doctor.visit_contracts import HandOffRecord, PlanFinding
 from engine.storage import Storage, StorageError
 from engine.utils.logging import get_logger
 
@@ -687,6 +687,18 @@ def _last_readiness_failure(storage: Storage, case: Case) -> tuple[tuple[str, ..
     return ((plain,) if plain else ()), (said or None)
 
 
+def _verify_stops(case: Case) -> list[PlanFinding] | None:
+    """The stops still open, when the last whole-file check wrote what it found into this plan's ledger; None when
+    it did not (it passed, none ran, or the plan changed since)."""
+    visit = case.visit
+    check = visit.plan_check if visit is not None else None
+    if visit is None or check is None or not check.verified:
+        return None
+    if check.digest != plan_digest(case.files, active_section(case)[0]):
+        return None
+    return open_stops(check, visit.acknowledged)
+
+
 def _verdict(storage: Storage, case: Case, approve_class: tuple[ScreenApproveClass, ...]) -> ScreenVerdict:
     visit = case.visit
     if not case.files or (visit is not None and visit.waiting_for == "files"):
@@ -716,6 +728,23 @@ def _verdict(storage: Storage, case: Case, approve_class: tuple[ScreenApproveCla
             key="needs_approval",
             title="Needs your approval",
             next=f"{_plural(len(waiting), 'change needs', 'changes need')} your own yes before you approve.",
+        )
+    counted = _verify_stops(case) if case.state.value == "approve" else None
+    if counted is not None:
+        # The last whole-file check wrote what it found into the plan's ledger: those are the reasons, each with
+        # its own yes (none for a rule). Once every one has its yes the plan is ready for approval again.
+        if counted:
+            return ScreenVerdict(
+                key="not_ready",
+                title="Not ready yet",
+                next="The last check found what is below. Say yes to each one you accept, or change the plan.",
+                reasons=tuple(_plain(f.text) for f in counted[:_REASONS]),
+                technical="; ".join(sorted({f.code for f in counted})),
+            )
+        return ScreenVerdict(
+            key="needs_approval",
+            title="Ready for your approval",
+            next="Read the changes below, then approve them.",
         )
     current = _current_readiness(storage, case)
     if current is not None:

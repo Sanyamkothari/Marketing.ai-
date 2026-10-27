@@ -75,6 +75,7 @@ __all__ = [
     "scoring_source",
     "write_derived_rows",
     "write_derived_upload",
+    "write_prepared_frame",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -240,6 +241,18 @@ def write_derived_rows(
     return _store_derived(
         storage, config, source, rows, derived_id=new_upload_id(), recipe=recipe, receipt=receipt
     )
+
+
+def write_prepared_frame(
+    storage: Storage, config: UseCaseConfig, source: UploadRecord, frame: Any
+) -> UploadRecord:
+    """The table the Doctor's plan makes from `source`, stored as a new upload (no recipe: no prescription is bound
+    to carry one), so the readiness check reads what the plan makes and never the file as it was sent. Raises
+    `RecipeError`."""
+    record, _profile = _store_derived(
+        storage, config, source, frame, derived_id=new_upload_id(), recipe=None, receipt=None
+    )
+    return record
 
 
 def _store_derived(

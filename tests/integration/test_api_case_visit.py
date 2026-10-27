@@ -460,7 +460,8 @@ def test_an_invoice_log_with_an_ai_query_reaches_a_computed_readiness_verdict_on
         np.concatenate([again, again]), "2026-08-15", "2026-06-02"
     )[customers:]
     sql = (
-        "SELECT customer_id, ROUND(SUM(amount), 2) AS total_spend, "
+        "SELECT customer_id, "
+        "ROUND(SUM(CASE WHEN invoice_date <= CAST($as_of AS VARCHAR) THEN amount ELSE 0 END), 2) AS total_spend, "
         "CASE WHEN MAX(invoice_date) > CAST($as_of AS VARCHAR) THEN 1 ELSE 0 END AS ordered_again_90d "
         "FROM t_invoices GROUP BY customer_id"
     )
@@ -478,6 +479,10 @@ def test_an_invoice_log_with_an_ai_query_reaches_a_computed_readiness_verdict_on
                 "output_name": "customer_training",
                 "files": ["F1"],
                 "as_of": "2026-08-01",
+                # the outcome is read from the rows after the as-of date: said so, or the future-data check (now run
+                # on the whole plan before the person approves) stops the plan
+                "reads_future": True,
+                "outcome_window_days": 14,
                 "expect": {"keys_unique": True, "max_keys_lost_pct": 0},
             },
         },
