@@ -558,10 +558,15 @@ def _step_of(item: CaseItem) -> RecipeStep | None:
 def _bound_as_of(step: RecipeStep, as_of: str | None) -> RecipeStep:
     """A query step with the case's as-of date (`decisions(case).as_of`) in it: the plan keeps `$as_of` symbolic and
     the materialiser binds the date when it runs the step, so the prescription (which a run replays on its own)
-    carries the very date the plan was checked with, however late the person answered."""
-    if as_of is None or step.kind is not RecipeStepKind.SQL_QUERY or step.params.get("as_of") == as_of:
+    carries the very date the plan was checked with, however late the person answered. The decided date also wins over
+    the step's `as_of_rule` (the materialiser binds it over the rule), so the rule is dropped from the copy: a run
+    resolves a rule before `params.as_of`, and would count other rows than the plan check did."""
+    if as_of is None or step.kind is not RecipeStepKind.SQL_QUERY:
         return step
-    return step.model_copy(update={"params": {**step.params, "as_of": as_of}})
+    if step.params.get("as_of") == as_of and "as_of_rule" not in step.params:
+        return step
+    params = {k: v for k, v in step.params.items() if k != "as_of_rule"}
+    return step.model_copy(update={"params": {**params, "as_of": as_of}})
 
 
 def _column(item: CaseItem) -> str | None:
@@ -952,7 +957,7 @@ def prescription_from_case(
     from engine.doctor.visit import active_section
 
     briefs = dict(briefs or {})
-    section_items, _ = active_section(case)
+    section_items, section_questions = active_section(case)
     approved = _accepted(section_items)
     active = next((goal for goal in case.goals if goal.active), None)
     created_at = max((a.approved_at for a in case.approvals), default=case.updated_at)
@@ -960,7 +965,7 @@ def prescription_from_case(
     build = _build(approved)
     acked = acknowledged_codes(case.visit)
     # A decision made on a file goes on the table an approved join or stack made from it (the outcome, the date).
-    decided = decisions_from(approved, case.questions)
+    decided = decisions_from(approved, section_questions)
     _log_ignored(decided, "plan")
     keys: dict[str, str] = {}
     for key_decision in decided.of("key"):

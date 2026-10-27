@@ -23,7 +23,7 @@ def case_as_of(case: Case) -> str | None:
 
 
 def _case(items: list[Any] = (), questions: list[Any] = ()) -> Case:  # type: ignore[assignment]
-    return cast(Case, SimpleNamespace(items=list(items), questions=list(questions)))
+    return cast(Case, SimpleNamespace(items=list(items), questions=list(questions), goals=[]))
 
 
 def _item(payload: dict[str, Any], state: ProposalState = ProposalState.ACCEPTED) -> Any:

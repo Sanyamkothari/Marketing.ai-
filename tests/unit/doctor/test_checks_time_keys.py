@@ -444,7 +444,7 @@ def test_the_date_that_says_how_far_the_data_reaches_is_not_a_birth_or_signup_da
             "month_start": ["2026-01-01"] * 3,
         }
     )
-    case = SimpleNamespace(items=())
+    case = SimpleNamespace(items=(), questions=(), goals=())
     # A last-order date is one per customer: its newest rows are the most active customers, not unfinished data.
     assert _date_column(case, frame, "u") == "month_start"  # type: ignore[arg-type]
     assert _date_column(case, frame.drop(columns="month_start"), "u") is None  # type: ignore[arg-type]

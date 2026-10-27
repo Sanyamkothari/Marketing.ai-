@@ -75,8 +75,13 @@ def as_of_question(
     )
 
 
-def case_of(items: list[CaseItem] = (), questions: list[CaseQuestion] = ()) -> Case:  # type: ignore[assignment]
-    return cast(Case, SimpleNamespace(items=list(items), questions=list(questions), files=()))
+def case_of(
+    items: list[CaseItem] = (),  # type: ignore[assignment]
+    questions: list[CaseQuestion] = (),  # type: ignore[assignment]
+    active: str | None = None,
+) -> Case:
+    goals = [] if active is None else [SimpleNamespace(goal_id=active, active=True)]
+    return cast(Case, SimpleNamespace(items=list(items), questions=list(questions), files=(), goals=goals))
 
 
 # -- precedence -------------------------------------------------------------------------------------------------
@@ -100,15 +105,13 @@ def test_the_first_accepted_key_of_a_file_wins_and_the_rest_are_counted() -> Non
 
 
 def test_the_outcome_the_as_of_column_and_the_consent_are_per_goal() -> None:
-    found = decisions(
-        case_of(
-            [
-                item("o1", "outcome_column", {"upload_id": "up-1", "column": "bought"}, goal_id="g1"),
-                item("o2", "outcome_column", {"upload_id": "up-1", "column": "churned"}, goal_id="g2"),
-                item("t1", "as_of_column", {"upload_id": "up-1", "column": "when"}, goal_id="g1"),
-                item("c1", "consent_column", {"upload_id": "up-1", "column": "ok"}, goal_id="g1"),
-            ]
-        )
+    found = decisions_from(
+        [
+            item("o1", "outcome_column", {"upload_id": "up-1", "column": "bought"}, goal_id="g1"),
+            item("o2", "outcome_column", {"upload_id": "up-1", "column": "churned"}, goal_id="g2"),
+            item("t1", "as_of_column", {"upload_id": "up-1", "column": "when"}, goal_id="g1"),
+            item("c1", "consent_column", {"upload_id": "up-1", "column": "ok"}, goal_id="g1"),
+        ]
     )
     assert found.pair("outcome", "g1") == ("up-1", "bought")
     assert found.pair("outcome", "g2") == ("up-1", "churned")
@@ -131,7 +134,7 @@ def test_the_outcome_window_is_the_newest_accepted_setting() -> None:
     newer = item("w2", "setting", {"path": "uplift.outcome_window_days", "value": 60}, goal_id="g1")
     object.__setattr__(older, "decided_at", datetime(2026, 10, 1, tzinfo=UTC))
     object.__setattr__(newer, "decided_at", datetime(2026, 10, 5, tzinfo=UTC))
-    found = decisions(case_of([older, newer]))
+    found = decisions(case_of([older, newer], active="g1"))
     assert found.window_days("g1") == 60
     assert found.window_days("other") is None
 
@@ -174,17 +177,36 @@ def test_an_option_that_is_a_note_sets_nothing_even_when_its_label_has_a_date() 
     assert decisions(case_of(questions=[question.model_copy(update={"options": options})])).as_of is None
 
 
-def test_the_item_beats_the_answer_and_a_frozen_query_date_is_only_the_last_resort() -> None:
+def test_the_item_beats_the_answer_and_a_date_a_query_step_froze_is_not_a_decision() -> None:
     step = {"kind": "sql_query", "params": {"as_of": "2025-06-01"}}
     frozen = item("q", "recipe_step", {"step": step})
-    assert decisions(case_of([frozen])).as_of_iso == "2025-06-01"  # an old step's own date, when nothing else
+    assert (
+        decisions(case_of([frozen])).as_of is None
+    )  # the step keeps its own date; it is not the whole case's
     answered = case_of([frozen], [as_of_question("c1", "2025-02-01")])
-    assert decisions(answered).as_of_iso == "2025-02-01"  # a later answer wins over it
+    assert decisions(answered).as_of_iso == "2025-02-01"
     with_item = case_of(
         [frozen, item("a", "recipe_step", {"as_of": "2025-02-28"})], [as_of_question("c1", "2025-02-01")]
     )
     assert decisions(with_item).as_of_iso == "2025-02-28"
-    assert decisions(with_item).ignored == 2
+    assert decisions(with_item).ignored == 1
+
+
+def test_one_scope_the_shared_base_and_the_active_goals_section() -> None:
+    mine = item("a", "recipe_step", {"as_of": "2025-02-28"}, goal_id="g1")
+    other = item("b", "outcome_column", {"upload_id": "up-1", "column": "x"}, goal_id="g2")
+    case = case_of([mine, other], active="g1")
+    assert decisions(case).as_of_iso == "2025-02-28" and decisions(case).pair("outcome", "g2") is None
+    assert decisions(case_of([mine, other], active="g2")).as_of is None
+
+
+def test_a_second_accepted_key_is_found_when_the_first_names_a_column_the_file_lacks() -> None:
+    found = decisions(
+        case_of([item("k1", "key", {"column": "Gone"}), item("k2", "key", {"column": "CustomerID"})])
+    )
+    assert found.key("up-1") == "Gone"
+    assert found.column("key", "up-1", {"CustomerID", "x"}) == "CustomerID"
+    assert found.column("key", "up-1", {"nothing"}) is None
 
 
 def test_the_ai_never_sees_an_unreal_date() -> None:
@@ -231,19 +253,6 @@ def test_every_declared_target_is_one_the_decisions_model_knows() -> None:
     assert sets_of_effect("stack") is None
 
 
-def test_a_typed_column_for_a_key_question_is_a_key_decision() -> None:
-    question = CaseQuestion(
-        question_id="q.key",
-        code="KEY_AMBIGUOUS",
-        upload_id="up-1",
-        text="Which column?",
-        options=(CaseOption(option_id="c0", label="I will type it", sets="key", value_kind="text"),),
-        answer="c0",
-        answer_value="CustomerID",
-    )
-    assert decisions(case_of(questions=[question])).key("up-1") == "CustomerID"
-
-
 # -- the as-of date reaches a query step through the materialiser ------------------------------------------------
 DAYS = pd.date_range("2025-01-01", periods=120, freq="D")
 SQL = "SELECT Customer, COUNT(*) AS n FROM t_log WHERE day <= $as_of GROUP BY Customer"
@@ -276,9 +285,7 @@ def test_a_typed_as_of_answer_is_the_dollar_as_of_of_a_query_that_froze_none() -
 
 def test_a_later_as_of_answer_reaches_a_query_step_already_in_the_plan() -> None:
     items = [query_item(frozen="2025-03-01")]
-    assert (
-        counted(case_of(items), items) == 60
-    )  # nothing else decided: the step's own date is read as the decision
+    assert counted(case_of(items), items) == 60  # nothing decided: the step keeps its own frozen date
     later = case_of(items, [as_of_question("c1", "2025-01-10")])
     assert counted(later, items) == 10  # the person answered later: the answer, not the old frozen date
 
@@ -345,3 +352,25 @@ def test_the_old_private_readers_are_gone(name: str) -> None:
         if name == "_decided" and path.name in {"agent_review.py", "tools_time.py"}:
             continue
         assert name not in defined, f"{path.name} still defines {name}"
+
+
+def test_a_decided_date_wins_over_a_steps_rule_in_the_prescription_copy_too() -> None:
+    from engine.doctor.prescription import _bound_as_of
+
+    rule: dict[str, Any] = {"rule": "latest_date_in_file", "table": "log", "column": "day"}
+    step = RecipeStep(
+        order=1,
+        kind=RecipeStepKind.SQL_QUERY,
+        column="made",
+        params={
+            "sql": SQL,
+            "inputs": ["log"],
+            "output_name": "made",
+            "as_of": "2025-03-01",
+            "as_of_rule": rule,
+        },
+        reason="counts",
+    )
+    bound = _bound_as_of(step, "2025-01-31")
+    assert bound.params["as_of"] == "2025-01-31" and "as_of_rule" not in bound.params
+    assert _bound_as_of(step, None) is step  # nothing decided: the rule stands

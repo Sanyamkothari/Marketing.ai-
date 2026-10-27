@@ -25,9 +25,9 @@ Older cases stored no `sets`: Q8's options are read as `as_of` (the lazy migrati
 * key, outcome, as-of column, consent: the first accepted item in the case's order; a later one for the same place is
   ignored (and counted in :attr:`Decisions.ignored`). The prescription used to let the *last* one win; it now reads
   this, and says so in the log when the two differ.
-* as-of date: the newest accepted item that carries one, else the answer to Q8, else - for a case that stored the
-  date only inside a query - the newest accepted query step's own frozen date. A query keeps `$as_of` symbolic; the
-  materialiser binds this date when it runs the step, so a later answer reaches a step already in the plan.
+* as-of date: the newest accepted item that carries one, else the answer to Q8. A query keeps `$as_of` symbolic; the
+  materialiser binds this date when it runs the step, so a later answer reaches a step already in the plan. With
+  none decided, a step keeps its own frozen date or rule (a date one step carries is never the whole case's).
 * outcome window: the newest accepted `setting` that sets it.
 
 Nothing here reads a cell: values are column names, dates and whole numbers.
@@ -118,6 +118,9 @@ class Decisions:
     records: tuple[Decided, ...] = ()
     ignored: int = 0
     """Accepted decisions left out because an earlier one already holds that place (first accepted wins)."""
+    shadowed: tuple[Decided, ...] = ()
+    """Those left-out decisions themselves: :meth:`column` reads them after the first, so a second accepted key that
+    fits the file is found when the first names a column the file lacks."""
 
     # -- generic -----------------------------------------------------------------------------------------------
     def of(self, kind: DecisionKind) -> tuple[Decided, ...]:
@@ -128,7 +131,7 @@ class Decisions:
     ) -> str | None:
         """The column decided for `kind` that the file `upload_id` holds (an item of no file counts for any file);
         with `columns`, only one of them."""
-        for record in self.records:
+        for record in (*self.records, *self.shadowed):
             if (
                 record.kind == kind
                 and record.upload_id in (upload_id, None)
@@ -273,8 +276,12 @@ class Decisions:
 # Reading
 # ---------------------------------------------------------------------------
 def decisions(case: Case) -> Decisions:
-    """What the case's accepted items and answered questions decide. The one reader."""
-    return decisions_from(case.items, getattr(case, "questions", ()))
+    """What the case's accepted items and answered questions decide, in the shared base and the active goal's section
+    (other goals' sections are set aside, as everywhere else). The one reader."""
+    from engine.doctor.visit import active_section
+
+    items, questions = active_section(case)
+    return decisions_from(items, questions)
 
 
 def decisions_from(items: Iterable[CaseItem], questions: Sequence[CaseQuestion] = ()) -> Decisions:
@@ -283,12 +290,14 @@ def decisions_from(items: Iterable[CaseItem], questions: Sequence[CaseQuestion] 
     accepted = [i for i in listed if i.state is ProposalState.ACCEPTED]
     records: list[Decided] = []
     ignored = 0
+    shadowed: list[Decided] = []
     seen: set[tuple[Any, ...]] = set()
 
     def add(record: Decided, place: tuple[Any, ...]) -> None:
         nonlocal ignored
         if place in seen:
             ignored += 1
+            shadowed.append(record)
             return
         seen.add(place)
         records.append(record)
@@ -313,11 +322,9 @@ def decisions_from(items: Iterable[CaseItem], questions: Sequence[CaseQuestion] 
             ),
             (kind, item.upload_id, item.goal_id, in_upload),
         )
-    for question in questions:
-        _from_answer(question, add)
     _as_of(accepted, questions, add)
     _window(accepted, add)
-    return Decisions(records=tuple(records), ignored=ignored)
+    return Decisions(records=tuple(records), ignored=ignored, shadowed=tuple(shadowed))
 
 
 def _option_of(question: CaseQuestion) -> CaseOption | None:
@@ -330,35 +337,6 @@ def _target_of(question: CaseQuestion, option: CaseOption) -> str | None:
     if option.sets is not None:
         return option.sets
     return "as_of" if question.code == AS_OF_QUESTION else None
-
-
-def _from_answer(question: CaseQuestion, add: Any) -> None:
-    """A column the person typed with an answer to a question whose option sets the key or the outcome (a choice
-    among the file's columns makes its own accepted item, read as an item)."""
-    if question.answer is None:
-        return
-    option = _option_of(question)
-    typed = getattr(question, "answer_value", None)
-    if option is None or not isinstance(typed, str) or not typed.strip():
-        return
-    target = _target_of(question, option)
-    if target not in ("key", "outcome"):
-        return
-    kind: DecisionKind = "key" if target == "key" else "outcome"
-    upload_id = question.upload_id
-    add(
-        Decided(
-            kind=kind,
-            value=typed.strip(),
-            by=question.answered_by,
-            at=question.answered_at,
-            source=f"question:{question.question_id}:{option.option_id}",
-            upload_id=upload_id,
-            in_upload=upload_id,
-            goal_id=question.goal_id,
-        ),
-        (kind, upload_id, question.goal_id, upload_id),
-    )
 
 
 def _valid_date(text: object) -> str | None:
@@ -408,22 +386,6 @@ def _as_of(accepted: Sequence[CaseItem], questions: Sequence[CaseQuestion], add:
                     at=question.answered_at,
                     source=f"question:{question.question_id}:{option.option_id}",
                     goal_id=question.goal_id,
-                )
-            )
-    for item in reversed(accepted):
-        step = item.payload.get("step")
-        params = step.get("params") if isinstance(step, dict) else None
-        frozen = _valid_date(params.get("as_of")) if isinstance(params, dict) else None
-        if isinstance(step, dict) and step.get("kind") == "sql_query" and frozen is not None:
-            candidates.append(
-                Decided(
-                    kind="as_of",
-                    value=frozen,
-                    by=item.decided_by,
-                    at=item.decided_at,
-                    source=f"item:{item.item_id}",
-                    upload_id=item.upload_id,
-                    goal_id=item.goal_id,
                 )
             )
     for record in candidates:

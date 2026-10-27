@@ -30,7 +30,7 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import ProposalSource, ProposalState
@@ -257,11 +257,13 @@ def agent_applies(
     fresh: Sequence[CaseItem],
     now: datetime,
     roles: Roles = NO_ROLES,
+    as_of: date | None = None,
 ) -> list[Applied]:
     """`fresh`, each with the agent's tick when it may apply and `None` for why it waits when it may not.
 
     `plan` is the active items as they stand (with the agent's withdrawals); it grows with each change applied, so
-    the second change is judged with the first in place."""
+    the second change is judged with the first in place. `as_of` is the case's decided as-of date, so the check binds
+    `$as_of` as the materialiser does."""
     active = list(plan)
     out: list[Applied] = []
     counted = None
@@ -278,8 +280,8 @@ def agent_applies(
             expected = EXPECTED_FLAGS.get(
                 str(step.get("kind")) if isinstance(step, dict) else "", frozenset()
             )
-            counted = counted or check_plan(files, case_files, active)
-            after = check_plan(files, case_files, [*active, trial])
+            counted = counted or check_plan(files, case_files, active, as_of=as_of)
+            after = check_plan(files, case_files, [*active, trial], as_of=as_of)
             seen_keys = {f.key for f in counted.findings}
             seen_codes = {(f.code, f.item_id) for f in counted.findings}
             found = [
