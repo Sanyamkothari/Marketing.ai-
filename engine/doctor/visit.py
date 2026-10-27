@@ -1803,7 +1803,9 @@ def _hand_off(run: _Run, case: Case) -> _Step:
     port = run.deps.hand_off
     record = port(case, brief) if port is not None else _default_hand_off(case, brief)
     # What the client's data looked like when it was approved: next visit's files are compared with it.
-    remembered = record_fingerprint(run.deps.storage, case, run.files(case), brief, at=run.deps.clock())
+    files = run.files(case)
+    remembered = record_fingerprint(run.deps.storage, case, files, brief, at=run.deps.clock())
+    _remember_treatment(run, case, files)
     return _Step(
         to=VisitState.FOLLOW_UP,
         visit={"hand_off": record},
@@ -1820,6 +1822,18 @@ def _hand_off(run: _Run, case: Case) -> _Step:
             )
         ],
     )
+
+
+def _remember_treatment(run: _Run, case: Case, files: tuple[LoadedFile, ...]) -> None:
+    """Same-treatment memory: what the person approved is written down for the next file of the same shape
+    (`recall_treatment`). A convenience: it never stops the hand-off."""
+    from engine.doctor.memory import remember_approved_case
+
+    try:
+        for loaded in files:
+            remember_approved_case(run.deps.storage, case=case, loaded=loaded, clock=run.deps.clock)
+    except Exception as exc:
+        _LOG.warning("doctor.memory.remember_failed case=%s error=%s", case.case_id, type(exc).__name__)
 
 
 def _default_hand_off(case: Case, brief: GoalBrief | None) -> HandOffRecord:

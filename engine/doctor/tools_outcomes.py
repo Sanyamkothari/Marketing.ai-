@@ -80,7 +80,7 @@ def _refused(exc: OutcomeError) -> DataToolError:
 def _decided_target(ctx: DataToolContext) -> str | None:
     """The outcome column decided in the session or the file's context, else the use case's when the file has it.
     Never guessed from the values."""
-    from engine.agent.session import roles_of
+    from engine.agent.proposals import roles_of
 
     agent = ctx.require_agent()
     if agent.target:

@@ -326,11 +326,18 @@ def test_a_name_is_registered_once() -> None:
 # ---------------------------------------------------------------------------
 # Role per call
 # ---------------------------------------------------------------------------
+@dataclasses.dataclass(frozen=True)
+class _Handle:
+    case_id: str = "case-1"
+    client_id: str = "default"
+
+
 def _full_context(
     agent: AgentContext, principal: Principal, caller: str = "person", **more: Any
 ) -> DataToolContext:
     session = start_session(agent, session_id="s-1")
     return DataToolContext(
+        case=_Handle(),
         agent=agent,
         principal=principal,
         caller=caller,  # type: ignore[arg-type]

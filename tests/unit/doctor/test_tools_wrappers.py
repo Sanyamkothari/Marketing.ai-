@@ -28,8 +28,6 @@ import pytest
 from engine.access.roles import Principal, Role
 from engine.agent.advisor import advise
 from engine.agent.assist import assist_session
-from engine.agent.contracts import SessionStatus
-from engine.agent.egress import cap_sent
 from engine.agent.session import start_session
 from engine.agent.tools import AgentContext
 from engine.connections import limits
@@ -541,77 +539,64 @@ def test_preflight_names_each_file_by_the_words_that_name_a_table() -> None:
 # ---------------------------------------------------------------------------
 # #31 second_opinion
 # ---------------------------------------------------------------------------
-def test_second_opinion_is_assist_session_and_ticks_nothing() -> None:
-    frame = pd.DataFrame(
-        {
-            "customer_id": [f"C{i}" for i in range(600)],
-            "churn_flg": [1 if i % 4 == 0 else 0 for i in range(600)],
-            "final_status": [("open", "closed", "pending")[i % 3] for i in range(600)],
-            "monthly_spend": [float(10 + i % 90) for i in range(600)],
-        }
+@dataclasses.dataclass(frozen=True)
+class _Handle:
+    case_id: str = "case-1"
+    client_id: str = "default"
+
+
+_CHURN = pd.DataFrame(
+    {
+        "customer_id": [f"C{i}" for i in range(600)],
+        "churn_flg": [1 if i % 4 == 0 else 0 for i in range(600)],
+        "final_status": [("open", "closed", "pending")[i % 3] for i in range(600)],
+        "monthly_spend": [float(10 + i % 90) for i in range(600)],
+    }
+)
+
+
+def _assist_case(config_root: Path | None) -> tuple[DataToolContext, AssistClient, AgentContext]:
+    agent = context_for(_CHURN, target="churn_flg", config_root=config_root)
+    client = AssistClient(
+        columns=[{"column": "final_status", "why": "It may be set when the customer leaves."}]
     )
-    agent = context_for(frame, target="churn_flg", config_root=header_help_root())
-    session = start_session(agent, session_id="s-1")
-    scripted = [{"column": "final_status", "why": "It may be set when the customer leaves."}]
-    saved: list[Any] = []
     ctx = DataToolContext(
         agent=agent,
         principal=ANALYST,
         caller="person",
-        session=session,
-        save_session=saved.append,
-        meter=meter_for(AssistClient(columns=scripted)),
+        case=_Handle(),
+        meter=meter_for(client),
         guardrails=guardrails(),
         clock=lambda: NOW,
     )
+    return ctx, client, agent
+
+
+def test_second_opinion_works_from_the_case_and_ticks_nothing() -> None:
+    ctx, _client, agent = _assist_case(header_help_root())
+    assert ctx.session is None and ctx.save_session is None, "no Guided-setup session is given or kept"
     out = _call("second_opinion", {}, ctx)
     direct = assist_session(
         agent,
-        session,
-        meter=meter_for(AssistClient(columns=scripted)),
+        start_session(agent, session_id="case-second-opinion", clock=lambda: NOW),
+        meter=meter_for(
+            AssistClient(
+                columns=[{"column": "final_status", "why": "It may be set when the customer leaves."}]
+            )
+        ),
         guardrails=guardrails(),
         clock=lambda: NOW,
     )
     assert out["llm_calls"] == direct.llm_calls and out["leak_questions"] == direct.leak_questions
     assert tuple(out["reordered"]) == direct.reordered and out["blocked_by"] == direct.blocked_by
     assert (out["source"], out["ticked"], out["state"]) == ("ai", False, "pending")
-    assert len(saved) == 1 and saved[0].questions == direct.session.questions
-    assert saved[0].transcript == cap_sent(direct.session.transcript), "capped as the route caps it"
-    added = [p for q in saved[0].questions for o in q.options if (p := o.proposal) is not None]
-    assert added and all(p.state.value == "pending" for p in added)
-
-
-def _assist_case(
-    config_root: Path | None, **session_update: Any
-) -> tuple[DataToolContext, AssistClient, list[Any]]:
-    frame = pd.DataFrame(
-        {
-            "customer_id": [f"C{i}" for i in range(600)],
-            "churn_flg": [1 if i % 4 == 0 else 0 for i in range(600)],
-            "final_status": [("open", "closed", "pending")[i % 3] for i in range(600)],
-        }
-    )
-    agent = context_for(frame, target="churn_flg", config_root=config_root)
-    session = start_session(agent, session_id="s-2").model_copy(update=session_update)
-    client = AssistClient(columns=[{"column": "final_status", "why": "Set when the customer leaves."}])
-    saved: list[Any] = []
-    ctx = DataToolContext(
-        agent=agent,
-        principal=ANALYST,
-        caller="person",
-        session=session,
-        save_session=saved.append,
-        meter=meter_for(client),
-        guardrails=guardrails(),
-        clock=lambda: NOW,
-    )
-    return ctx, client, saved
+    assert out["questions"], "the AI's questions come back for the visit to put to the person"
 
 
 def test_second_opinion_is_off_with_agentic_enabled_off_as_the_assist_route() -> None:
     """DEC-1409 (g): with `agentic.enabled` off (the shipped default) the AI is never asked for a second
     opinion; the registry does not offer the tool and a direct run is `404 AGENTIC_DISABLED`."""
-    ctx, client, saved = _assist_case(None)
+    ctx, client, _agent = _assist_case(None)
     assert data_registry().find("second_opinion", ctx) is None
     with pytest.raises(DataToolError) as caught:
         _call("second_opinion", {}, ctx)
@@ -620,20 +605,13 @@ def test_second_opinion_is_off_with_agentic_enabled_off_as_the_assist_route() ->
     with pytest.raises(DataToolError) as direct:
         tool.run(tool.input_model(), ctx)
     assert (direct.value.code, direct.value.status) == ("AGENTIC_DISABLED", 404)
-    assert not client.calls and not saved, "no AI call, nothing saved"
+    assert not client.calls, "no AI call"
 
 
-def test_second_opinion_refuses_an_applied_session_as_the_assist_route() -> None:
-    ctx, client, saved = _assist_case(header_help_root(), status=SessionStatus.APPLIED)
-    with pytest.raises(DataToolError) as caught:
-        _call("second_opinion", {}, ctx)
-    assert (caught.value.code, caught.value.status) == ("AGENT_SESSION_APPLIED", 409)
-    assert not client.calls and not saved, "no AI call, the approved session is not changed"
-
-
-def test_second_opinion_needs_an_ai_service(case: DataToolContext) -> None:
-    ctx = dataclasses.replace(case, session=start_session(case.agent, session_id="s"), save_session=lambda _s: None)  # type: ignore[arg-type]
-    assert data_registry().find("second_opinion", ctx) is None
+def test_second_opinion_needs_a_case_and_an_ai_service(case: DataToolContext) -> None:
+    assert data_registry().find("second_opinion", case) is None, "no AI service"
+    ctx, _client, _agent = _assist_case(header_help_root())
+    assert data_registry().find("second_opinion", dataclasses.replace(ctx, case=None)) is None
 
 
 # ---------------------------------------------------------------------------

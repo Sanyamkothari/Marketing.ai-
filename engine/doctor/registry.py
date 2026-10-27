@@ -282,6 +282,7 @@ class DataToolContext:
 
 Need = Literal[
     "agent",
+    "case",
     "files",
     "storage",
     "session",
@@ -620,6 +621,8 @@ def _check_output(kind: str, output: Mapping[str, Any], ctx: DataToolContext) ->
 def _met(tool: DataTool[Any, Any], ctx: DataToolContext) -> bool:
     for need in tool.needs:
         if need == "agent" and ctx.agent is None:
+            return False
+        if need == "case" and ctx.case is None:
             return False
         if need == "files" and not ctx.files:
             return False

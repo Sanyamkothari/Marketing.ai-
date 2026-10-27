@@ -44,6 +44,8 @@ from engine.utils.time import utc_now
 if TYPE_CHECKING:
     from engine.agent.contracts import AgentSession, DataRecipe
     from engine.agent.tools import AgentContext
+    from engine.doctor.case import Case
+    from engine.doctor.diagnose import LoadedFile
     from engine.intake.contracts import IntakeReport
 
 __all__ = [
@@ -56,6 +58,7 @@ __all__ = [
     "offer_for",
     "recall",
     "remember",
+    "remember_approved_case",
     "remembered",
     "remembered_recipe",
     "shape_of",
@@ -74,6 +77,9 @@ MEMORY_TOOL: Final[str] = "doctor_memory"
 _SHAPE_HEADER: Final[bytes] = b"marketing-ai/doctor-shape/v1\n"
 _RECIPE_FILENAME: Final[str] = "data_recipe.json"
 """`engine.agent.contracts.DATA_RECIPE_FILENAME`, spelled here so this module imports nothing heavy."""
+TREATMENT_RECIPE_FILENAME: Final[str] = "treatment_recipe.json"
+"""The recipe a Data Doctor approval keeps beside its source upload. Not `data_recipe.json`: that name marks an
+upload as prepared, and the source upload is not."""
 
 
 class TreatmentMemory(StrictBase):
@@ -88,7 +94,12 @@ class TreatmentMemory(StrictBase):
     )
     intake_enabled: bool = Field(default=True, description="False when the file was read as it arrived.")
     recipe_id: str = Field(description="The approved recipe.")
-    recipe_upload_id: str = Field(description="The prepared upload whose `data_recipe.json` holds the steps.")
+    recipe_upload_id: str = Field(description="The upload whose recipe file holds the steps.")
+    recipe_file: str = Field(
+        default=_RECIPE_FILENAME,
+        description="The recipe's file name in that upload: `data_recipe.json` for a prepared upload (Guided "
+        "setup), `treatment_recipe.json` for the Data Doctor's, which must not read as a prepared upload.",
+    )
     source_upload_id: str = Field(description="The upload the treatment was approved on.")
     steps: int = Field(ge=1, description="How many steps the recipe has.")
     approved_at: AwareDatetime = Field(description="When the recipe was approved.")
@@ -151,6 +162,7 @@ def remember(
     recipe: DataRecipe,
     recipe_upload_id: str,
     source_upload_id: str,
+    recipe_file: str = _RECIPE_FILENAME,
     clock: Callable[[], datetime] = utc_now,
 ) -> TreatmentMemory:
     """Write down that files of this shape were treated with `recipe`; the latest approval wins."""
@@ -163,6 +175,7 @@ def remember(
         intake_enabled=intake_enabled,
         recipe_id=recipe.recipe_id,
         recipe_upload_id=recipe_upload_id,
+        recipe_file=recipe_file,
         source_upload_id=source_upload_id,
         steps=len(recipe.steps),
         approved_at=recipe.created_at,
@@ -171,6 +184,53 @@ def remember(
     storage.write_model(memory_key(use_case_id, shape), memory)
     _LOG.info("doctor.memory.remembered use_case=%s steps=%d", use_case_id, memory.steps)
     return memory
+
+
+def remember_approved_case(
+    storage: Storage,
+    *,
+    case: Case,
+    loaded: LoadedFile,
+    clock: Callable[[], datetime] = utc_now,
+) -> TreatmentMemory | None:
+    """Data Doctor approval: write down the treatment of a one-file case for its goal, so `recall_treatment` offers
+    it for the next file of the same shape. None when there is nothing to remember: no goal, several files, a
+    build, or no step (a join or stack is not a treatment of one file's shape).
+
+    The recipe is the case's stored prescription's, kept beside the source upload as `treatment_recipe.json`.
+    """
+    from engine.doctor.prescription import load_prescription
+
+    goal = next((g for g in case.goals if g.active), None)
+    if (
+        goal is None
+        or len(case.files) != 1
+        or not case.prescriptions
+        or loaded.upload_id != case.files[0].upload_id
+    ):
+        return None
+    prescription = load_prescription(
+        storage, case.client_id, case.case_id, case.prescriptions[-1].prescription_hash
+    )
+    recipes = prescription.recipes()
+    if prescription.build is not None or len(recipes) != 1:
+        return None
+    intake = prescription.files[0].intake if prescription.files else None
+    storage.write_model(upload_key(loaded.upload_id, TREATMENT_RECIPE_FILENAME), recipes[0])
+    return remember(
+        storage,
+        use_case_id=goal.goal_id,
+        columns=[
+            str(c) for c in loaded.frame.columns
+        ],  # the columns `recall_treatment` reads the next file by
+        sheet=None,
+        intake_enabled=not (intake is not None and intake.turned_off),
+        recipe=recipes[0],
+        recipe_upload_id=loaded.upload_id,
+        source_upload_id=loaded.upload_id,
+        recipe_file=TREATMENT_RECIPE_FILENAME,
+        clock=clock,
+    )
 
 
 def recall(storage: Storage, use_case_id: str, shape_hash: str) -> TreatmentMemory | None:
@@ -183,14 +243,14 @@ def recall(storage: Storage, use_case_id: str, shape_hash: str) -> TreatmentMemo
     except (StorageError, ValueError):
         _LOG.info("doctor.memory.unreadable use_case=%s", use_case_id)
         return None
-    return memory if storage.exists(upload_key(memory.recipe_upload_id, _RECIPE_FILENAME)) else None
+    return memory if storage.exists(upload_key(memory.recipe_upload_id, memory.recipe_file)) else None
 
 
 def remembered_recipe(storage: Storage, memory: TreatmentMemory) -> DataRecipe | None:
     """The steps a memory points at, read from the prepared upload that holds them; None when gone."""
     from engine.agent.contracts import DataRecipe
 
-    key = upload_key(memory.recipe_upload_id, _RECIPE_FILENAME)
+    key = upload_key(memory.recipe_upload_id, memory.recipe_file)
     try:
         recipe = storage.read_model(key, DataRecipe)
     except (StorageError, ValueError):
@@ -362,8 +422,8 @@ def use_same_treatment(
         SessionStatus,
         ToolResult,
     )
+    from engine.agent.proposals import SessionError, identity, roles_of, with_summary
     from engine.agent.recipe import RecipeError, check_recipe
-    from engine.agent.session import SessionError, identity, roles_of, with_summary
     from engine.agent.untrusted import display_name
 
     # Steps that change the rows come back only through their own blocking question (decision O3): memory

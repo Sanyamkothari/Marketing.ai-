@@ -57,7 +57,7 @@ from engine.agent.loop import (
     billed_call,
     unavailable_reply,
 )
-from engine.agent.session import roles_of, with_summary
+from engine.agent.proposals import roles_of, with_summary
 from engine.agent.tools import AgentContext
 from engine.agent.untrusted import display_name, for_prompt, resolve_column
 from engine.generative.contracts import GenerativePurpose

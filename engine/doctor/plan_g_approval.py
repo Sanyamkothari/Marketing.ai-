@@ -227,7 +227,7 @@ class PlanGApproval:
 
 def _question_answered(session: AgentSession, proposal: Proposal) -> bool:
     """Whether `proposal` was added by answering its question with the option that adds it (guard 1)."""
-    from engine.agent.session import identity
+    from engine.agent.proposals import identity
 
     wanted = identity(proposal)
     return any(
