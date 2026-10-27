@@ -436,3 +436,18 @@ test("the smallest visible gain sits next to profit, revenue and the simple rule
   assert.ok(share.includes(sentence) && share.includes(margin));
   assert.ok(noJunk(text));
 });
+
+test("the agent's forecast check is one plain sentence under the headline, and says nothing without a verdict", async () => {
+  for (const [status, words] of [["ok", /hold up/], ["over_1_5x", /optimistic/], ["over_2x", /more than twice/]]) {
+    const proof = { ...mock("proof.json"), calibration: status };
+    const { text } = await draw({ proof });
+    assert.match(text, words, status);
+    assert.match(proofScreen.proofSummaryText(proof, mock("goal_detail.json").goal), words, status);
+    assert.ok(noJunk(text));
+  }
+  for (const status of [undefined, null, "not_enough_data"]) {
+    const proof = { ...mock("proof.json"), calibration: status };
+    const { text } = await draw({ proof });
+    assert.doesNotMatch(text, /Autopilot stays closed|hold up against the people|expects up to twice/);
+  }
+});

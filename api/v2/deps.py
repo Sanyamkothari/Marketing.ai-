@@ -90,6 +90,7 @@ from autonomy.interfaces import (
     Workspace,
 )
 from autonomy.loop import run_days
+from autonomy.runtime.evidence_gate import MIN_WINDOW_DAYS, autopilot_gate, unproven_start
 
 if TYPE_CHECKING:  # imported lazily below, so `import api.v2.deps` stays light
     from api.v2 import insights
@@ -170,6 +171,33 @@ class ConflictError(ServiceError):
     status_code = 409
 
 
+# --- the audit of Autopilot decisions -------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AutonomyAuditEntry:
+    """One Autopilot decision the evidence gate made: that it was switched on and on what evidence, or that
+    the shop owner confirmed starting without proof (docs/v4/CALIBRATION.md)."""
+
+    at: datetime
+    goal_id: str
+    from_level: AutonomyLevel | None
+    to_level: AutonomyLevel
+    actor: str
+    reason: str
+    words: str
+    evidence: Mapping[str, float] = field(default_factory=dict)
+
+
+REASON_PROOF_GATE = "evidence_gate_passed"
+REASON_UNPROVEN_START = "start_without_proof_confirmed"
+"""`AutonomyAuditEntry.reason` for a switch the gate let through on proof, and for the owner's explicit
+confirmation of a start without proof (email-only goals; DECISIONS V-1)."""
+
+AuditSink: TypeAlias = Callable[[AutonomyAuditEntry], None]
+"""Where entries also go beside `Services.audit_log`: the autonomy ledger when the inbox is wired."""
+
+
 # --- the container --------------------------------------------------------------------------------
 
 
@@ -210,6 +238,12 @@ class Services:
     entry point leaves it False: the plain agent makes one decision per customer and never sends a later step, and
     the v3 journeys (AUTONOMY_V3) run the steps of configs/v3/journeys.yaml, not the brief's. Set it only once a
     sender reads `Brief.follow_ups`; until then the Plan screen must not promise one."""
+    audit_log: list[AutonomyAuditEntry] = field(default_factory=list)
+    """Every Autopilot switch the evidence gate allowed, and every confirmed start without proof, in order."""
+    audit_sink: AuditSink | None = None
+    """Also told of each entry (the autonomy ledger, hash-chained, once the inbox is wired). None: only `audit_log`."""
+    autopilot_min_days: float = MIN_WINDOW_DAYS
+    """Days a goal must have been acting before its holdout comparison can open Autopilot."""
     _tick_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     # goals and briefs ---------------------------------------------------------------------------
@@ -358,8 +392,16 @@ class Services:
         """The one big Pause button: pause every active goal; returns the goals it paused."""
         return [self.pause(g.goal_id) for g in self.list_goals() if g.status is GoalStatus.ACTIVE]
 
-    def approve(self, goal_id: str, autonomy: AutonomyLevel) -> tuple[Goal, Brief]:
-        """The marketer signs off the plan once and picks how much the agent may do without asking."""
+    def approve(
+        self, goal_id: str, autonomy: AutonomyLevel, *, start_without_proof: bool = False
+    ) -> tuple[Goal, Brief]:
+        """The marketer signs off the plan once and picks how much the agent may do without asking.
+
+        Autopilot is gated on proof (`autonomy.runtime.evidence_gate`): the holdout must show the goal pays
+        and the agent's forecasts must hold up, else this refuses (409) and the goal keeps its level. An
+        email-only goal being approved for the first time may skip that, but only with
+        `start_without_proof=True`, which is the shop owner's explicit confirmation and is written to the
+        audit log."""
         goal = self.get_goal(goal_id)
         if goal.status is GoalStatus.DONE:
             raise ConflictError("this goal is finished; start a new one instead")
@@ -368,11 +410,71 @@ class Services:
             raise ConflictError("this goal has no plan to approve yet")
         self._check_prices(goal)
         now = self.clock()
+        allowed: AutonomyAuditEntry | None = None
+        if autonomy is AutonomyLevel.AUTOPILOT and goal.autonomy is not AutonomyLevel.AUTOPILOT:
+            allowed = self._gate_autopilot(goal, brief, now, start_without_proof=start_without_proof)
         approved: Brief = brief.model_copy(update={"approved_by": APPROVER, "approved_at": now})
         active: Goal = goal.model_copy(update={"autonomy": autonomy, "status": GoalStatus.ACTIVE})
         self.workspace.put_brief(approved)
         self.workspace.put_goal(active)
+        if (
+            allowed is not None
+        ):  # logged only once the switch is stored: the ledger never shows one that failed
+            self._audit(allowed)
         return active, approved
+
+    def _gate_autopilot(
+        self, goal: Goal, brief: Brief, now: datetime, *, start_without_proof: bool
+    ) -> AutonomyAuditEntry:
+        """Let Autopilot through or raise `ConflictError` with the plain reason; return the audit entry for
+        what was allowed, for the caller to log once the switch is stored."""
+        window = None if brief.approved_at is None else (now - brief.approved_at).total_seconds() / 86400
+        proof = self.proof(goal.goal_id)
+        verdict = autopilot_gate(
+            proof,
+            window,
+            min_days=self.autopilot_min_days,
+            money=lambda v: f"{v:,.0f} {goal.currency}",
+        )
+        if verdict.allowed:
+            evidence: dict[str, float] = {"window_days": window or 0.0}
+            if proof is not None and proof.incremental_profit is not None:
+                evidence.update(
+                    incremental_profit=proof.incremental_profit.point,
+                    incremental_profit_low=proof.incremental_profit.low,
+                    incremental_profit_high=proof.incremental_profit.high,
+                )
+            return self._entry(goal, now, REASON_PROOF_GATE, verdict.reason, evidence)
+        if not start_without_proof:
+            raise ConflictError(verdict.reason)
+        if brief.approved_at is not None:
+            raise ConflictError(
+                "Starting without proof is only for a plan approved for the first time. " + verdict.reason
+            )
+        exempt = unproven_start(brief.envelope.channels, confirmed=True)
+        if not exempt.allowed:
+            raise ConflictError(f"{exempt.reason} {verdict.reason}")
+        return self._entry(goal, now, REASON_UNPROVEN_START, exempt.reason, {"confirmed": 1.0})
+
+    @staticmethod
+    def _entry(
+        goal: Goal, now: datetime, reason: str, words: str, evidence: Mapping[str, float]
+    ) -> AutonomyAuditEntry:
+        return AutonomyAuditEntry(
+            at=now,
+            goal_id=goal.goal_id,
+            from_level=goal.autonomy,
+            to_level=AutonomyLevel.AUTOPILOT,
+            actor=APPROVER,
+            reason=reason,
+            words=words,
+            evidence=dict(evidence),
+        )
+
+    def _audit(self, entry: AutonomyAuditEntry) -> None:
+        self.audit_log.append(entry)
+        if self.audit_sink is not None:
+            self.audit_sink(entry)
 
     def pause(self, goal_id: str) -> Goal:
         """Stop the agent acting for this goal. Pausing a paused goal is harmless."""
@@ -1325,7 +1427,9 @@ class StoreReadModels:
 
     def proof(self, goal_id: str | None) -> ProofSummary | None:
         from autonomy.contracts.offer_codes import OfferCodeTable
+        from autonomy.decide.calibration import proof_calibration
         from autonomy.proof import Costs, proof_rewards, proof_summary
+        from autonomy.proof.rewards import sent_decisions
 
         now = self.clock()
         briefs = self.workspace.briefs()
@@ -1352,6 +1456,9 @@ class StoreReadModels:
         )
         rewards = proof_rewards(closed, by_customer, horizon, objective, costs, now=now)
         summary = proof_summary(rewards, closed, now, goal_id, seed=self.seed, costs=costs)
+        acted = closed if goal_id is None else [d for d in closed if _touches_goal(d, goal_id)]
+        sent = {i for events in by_customer.values() for i in sent_decisions(events)}
+        summary = summary.model_copy(update={"calibration": proof_calibration(summary, acted, sent)})
         if not closed:
             wait = f"Outcomes count once a decision's {horizon}-day window has closed; none has yet."
             summary = summary.model_copy(update={"notes": (*summary.notes, wait)})

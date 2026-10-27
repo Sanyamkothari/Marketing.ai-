@@ -75,11 +75,13 @@ from autonomy.contracts import (
     Group,
     Objective,
 )
+from autonomy.decide.calibration import proof_calibration
 from autonomy.interfaces import DecisionLog, EventStore, Workspace
 from autonomy.mandate.models import Mandate, MandateStatus
 from autonomy.mandate.signing import GENESIS_HASH, ChainReport, body_hash, canonical_bytes
 from autonomy.proof.estimate import MIN_GROUP, proof_summary
 from autonomy.proof.rewards import Costs, proof_rewards, sent_decisions
+from autonomy.runtime.evidence_gate import GateVerdict, autopilot_gate
 from autonomy.store.schema import UtcDateTime
 
 __all__ = [
@@ -906,6 +908,7 @@ class AutopilotGuard:
         channel_costs: Mapping[Any, float] | None = None,
         margin_rate: float | None = None,
         timezone: str = "UTC",
+        require_evidence: bool = False,
     ) -> None:
         self.business_id = business_id
         self.workspace = workspace
@@ -923,6 +926,10 @@ class AutopilotGuard:
         self.channel_costs = dict(channel_costs or {})
         self.margin_rate = margin_rate
         self.timezone = timezone
+        self.require_evidence = require_evidence
+        """The evidence gate (`autonomy.runtime.evidence_gate`, docs/v4/CALIBRATION.md): with it on, Autopilot
+        (a click, or the mandate's pre-authorisation) also needs the holdout's incremental profit clear of zero
+        and the agent's forecasts calibrated (`ok` or `over_1_5x`). Off: only the bar above, as before."""
         self._proof: dict[tuple[str, AutonomyLevel], _Proof] = {}
         self._lock = threading.RLock()
 
@@ -959,7 +966,12 @@ class AutopilotGuard:
         out: list[Readiness] = []
         for goal in self.workspace.goals():
             r = self.readiness(goal.goal_id, now)
-            if r is not None and r.ready and not self._auto_allowed(goal, now):
+            if (
+                r is not None
+                and r.ready
+                and not self._auto_allowed(goal, now)
+                and self._evidence_ok(goal, now)
+            ):
                 out.append(r)
         return out
 
@@ -1008,7 +1020,7 @@ class AutopilotGuard:
                         self._maybe_demote(goal, now, report)
                     elif goal.status is GoalStatus.ACTIVE and self._auto_allowed(goal, now):
                         r = self.readiness(goal.goal_id, now)
-                        if r is not None and r.ready:
+                        if r is not None and r.ready and self._evidence_ok(goal, now):
                             self._set_level(goal, r, now, actor=GUARD_ACTOR, reason=REASON_AUTO_PROMOTED)
                             report.promoted.append(goal.goal_id)
                 except Exception as err:  # one goal's failure never stops the others
@@ -1030,7 +1042,30 @@ class AutopilotGuard:
             r = self.readiness(goal_id, now)
             if r is None or not r.ready:
                 raise ValueError(r.sentence if r is not None else "This goal is not running.")
+            if self.require_evidence:
+                verdict = self.evidence(goal, now)
+                if not verdict.allowed:
+                    raise ValueError(verdict.reason)
             return self._set_level(goal, r, now, actor=f"person:{by}", reason=REASON_PROMOTED)
+
+    def evidence(self, goal: Goal, now: datetime) -> GateVerdict:
+        """The evidence gate for this goal now: the holdout's incremental profit and the agent's calibration."""
+        brief = self.brief(goal.goal_id)
+        if brief is None:
+            return autopilot_gate(None, None, min_days=self.rule.min_days)
+        since = self.since(goal)
+        decisions, by_customer = self._logs(goal, since, now)
+        costs = Costs.from_brief(brief, channel=self.channel_costs, margin_rate=self.margin_rate)
+        rewards = proof_rewards(decisions, by_customer, brief.horizon_days, brief.objective, costs, now=now)
+        summary = proof_summary(rewards, decisions, now, goal.goal_id, min_group=self.rule.min_group)
+        cutoff = now - timedelta(days=brief.horizon_days)
+        closed = [d for d in decisions if d.made_at <= cutoff]
+        sent = {i for events in by_customer.values() for i in sent_decisions(events)}
+        summary = summary.model_copy(update={"calibration": proof_calibration(summary, closed, sent)})
+        return autopilot_gate(summary, (now - since).total_seconds() / 86400, min_days=self.rule.min_days)
+
+    def _evidence_ok(self, goal: Goal, now: datetime) -> bool:
+        return not self.require_evidence or self.evidence(goal, now).allowed
 
     def record(
         self,
@@ -1042,6 +1077,7 @@ class AutopilotGuard:
         actor: str,
         reason: str,
         words: str,
+        evidence: Mapping[str, float] | None = None,
     ) -> AutonomyChange:
         """Log a change made elsewhere (a person's click in the inbox) against the goal's mandate."""
         return self.ledger.append(
@@ -1053,6 +1089,7 @@ class AutopilotGuard:
             actor=actor,
             reason=reason,
             words=words,
+            evidence=evidence or {},
             mandate=self._mandate(goal_id),
             mandate_ledger_head=self._head(),
         )

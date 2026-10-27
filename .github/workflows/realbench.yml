@@ -40,7 +40,7 @@ jobs:
       fail-fast: false
       matrix:
         dataset: [hillstrom, x5, criteo, megafon]
-        policy: [agent, agent_v3, uplift_threshold, agent_greedy, agent_uplift_only, agent_who, agent_who_notrait, agent_who_noprune]   # docs/v4/METHOD.md, docs/v4/BASELINES.md
+        policy: [agent, agent_v3, uplift_threshold, agent_greedy, agent_uplift_only, agent_who, agent_who_notrait, agent_who_noprune, agent_calibrated]   # docs/v4/METHOD.md, docs/v4/BASELINES.md, docs/v4/CALIBRATION.md
     env:
       DATA_DIR: ${{ github.workspace }}/.realbench-data   # inside the workspace: actions/cache rejects ".." paths
     steps:
@@ -126,6 +126,7 @@ jobs:
               ("uplift_threshold", "realbench-uplift_threshold.json"),
               ("agent_greedy", "realbench-agent_greedy.json"),
               ("agent_uplift_only", "realbench-agent_uplift_only.json"),
+              ("agent_calibrated", "realbench-agent_calibrated.json"),  # docs/v4/CALIBRATION.md
           ):
               merged = None
               for p in sorted(pathlib.Path("parts").glob(f"*-{policy}.json")):

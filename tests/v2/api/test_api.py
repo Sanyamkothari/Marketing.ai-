@@ -135,8 +135,12 @@ def test_approve_then_pause_and_resume(services: Services) -> None:
     goal, _ = services.create_goal("Get one-time buyers to buy again", 1000)
     with pytest.raises(ConflictError):
         services.resume(goal.goal_id)  # not approved yet
-    active, brief = services.approve(goal.goal_id, AutonomyLevel.AUTOPILOT)
-    assert active.status is GoalStatus.ACTIVE and active.autonomy is AutonomyLevel.AUTOPILOT
+    with pytest.raises(
+        ConflictError
+    ):  # Autopilot needs proof (docs/v4/CALIBRATION.md); tests/v4/calibrate covers the gate
+        services.approve(goal.goal_id, AutonomyLevel.AUTOPILOT)
+    active, brief = services.approve(goal.goal_id, AutonomyLevel.APPROVE)
+    assert active.status is GoalStatus.ACTIVE and active.autonomy is AutonomyLevel.APPROVE
     assert brief.approved_at == NOW and brief.approved_by == "marketer"
     assert services.latest_brief(goal.goal_id) == brief
     assert services.pause(goal.goal_id).status is GoalStatus.PAUSED

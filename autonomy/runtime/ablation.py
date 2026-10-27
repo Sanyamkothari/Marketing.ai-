@@ -61,6 +61,7 @@ GUARD = "guard"
 REFERENCE = "reference"
 METHOD = "method"
 WHO_PROBE = "who_probe"
+CALIBRATION = "calibration"
 
 
 @dataclass(frozen=True)
@@ -251,6 +252,14 @@ def _variants() -> dict[str, Variant]:
             dict,
             after=_detach_click_model,
         ),
+        # calibration (docs/v4/CALIBRATION.md): the plain agent with its bids shrunk by the measured over-valuation
+        Variant(
+            "agent_calibrated",
+            CALIBRATION,
+            "does shrinking every bid by the holdout-measured over-valuation (1.14x to 1.52x, never inflating) "
+            "beat the plain agent",
+            lambda: {"calibrate": True},
+        ),
     ]
     return {x.name: x for x in v}
 
@@ -341,6 +350,7 @@ def switches(policy: AgentPolicy) -> dict[str, object]:
         "greedy": inner.greedy,
         "click_model": not score_only(policy.bundle.response),
         "attention_price": inner.attention_price_fn is not None and inner.channel_price_fn is not None,
+        "calibrate": policy.value_calibration is not None,
         "weekly_cap": policy.contact_price.cap(),
     }
     if policy.who is not None:

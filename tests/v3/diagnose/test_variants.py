@@ -52,6 +52,7 @@ def test_the_plain_agent_variant_is_the_default_build() -> None:
         "greedy": False,
         "click_model": True,
         "attention_price": True,
+        "calibrate": False,
         "weekly_cap": default_brief().envelope.max_contacts_per_week,
     }
     assert inspect.signature(build_agent_policy).parameters["attention_price"].default is True
@@ -96,6 +97,7 @@ def test_part_alone_turns_on_that_part_and_nothing_else(name: str, on: set[str])
         ("agent_no_weekly_budget", {"weekly_budget": False}),
         ("agent_no_explore", {"exploration_floor": 0.0}),
         ("agent_no_attention_price", {"attention_price": False}),
+        ("agent_calibrated", {"calibrate": True}),
         (
             "agent_no_guards",
             {"restraint": False, "weekly_budget": False, "exploration_floor": 0.0, "attention_price": False},

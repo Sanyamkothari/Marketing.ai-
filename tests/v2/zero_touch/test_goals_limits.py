@@ -577,6 +577,28 @@ def test_api_two_person_path_waits_and_keeps_shadow(client: TestClient) -> None:
     )
 
 
+def test_api_autopilot_needs_proof_so_the_plan_starts_in_approve(client: TestClient) -> None:
+    """docs/v4/CALIBRATION.md: a fresh shop has no holdout comparison, so Autopilot is refused with the reason."""
+    r = client.post("/v2/onboarding/accept", json={"autonomy": "autopilot"})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["goal"]["autonomy"] == "approve" and out["goal"]["status"] == "active"
+    assert any("Autopilot needs proof first" in n for n in out["notes"])
+    assert "runs in approve" in out["words"]
+
+
+def test_api_starting_on_autopilot_without_proof_is_an_explicit_email_only_choice(client: TestClient) -> None:
+    r = client.post("/v2/onboarding/accept", json={"autonomy": "autopilot", "start_without_proof": True})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    channels = set(out["brief"]["envelope"]["channels"])
+    if channels == {"email"}:
+        assert out["goal"]["autonomy"] == "autopilot"
+    else:  # WhatsApp is never exempt, confirmed or not
+        assert out["goal"]["autonomy"] == "approve"
+        assert any("email alone" in n for n in out["notes"])
+
+
 def test_api_margin_is_asked_once_and_used_after(client: TestClient) -> None:
     before = client.get("/v2/onboarding/proposals").json()
     assert not before["margin"]["from_data"]

@@ -319,6 +319,7 @@ def zero_touch_for_runtime(
         channel_costs=channel_costs if channel_costs is not None else getattr(runtime, "channel_costs", None),
         margin_rate=margin_rate if margin_rate is not None else getattr(runtime, "margin_rate", None),
         timezone=timezone,
+        require_evidence=True,  # no Autopilot without proof (docs/v4/CALIBRATION.md)
     )
     inbox = Inbox(inbox_store, business)
     paused: Callable[[], Iterable[Channel]] | None = None
