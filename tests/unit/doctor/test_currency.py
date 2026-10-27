@@ -584,6 +584,55 @@ def test_a_currency_column_holding_inr_and_usd_stops_with_counts_only() -> None:
     ).to_convert == ("USD",)
 
 
+_CCY = ["INR", "USD", "INR", "USD"]
+
+
+@pytest.mark.parametrize(
+    ("amount", "name", "kwargs"),
+    [
+        ([100.0, 250.0, 75.0, 9.0], "amount", {"confirmed_units": {"amount": "INR"}}),
+        ([100.0, 250.0, 75.0, 9.0], "amount_inr", {}),
+        (["\u20b9100", "\u20b9250", "\u20b975", "\u20b99"], "amount", {}),
+    ],
+    ids=["confirmed_unit", "header_unit", "sign_on_every_cell"],
+)
+def test_a_mixed_currency_column_stops_even_when_the_amount_names_one_unit(
+    amount: list[object], name: str, kwargs: dict[str, object]
+) -> None:
+    frame = pd.DataFrame({"id": [1, 2, 3, 4], name: amount, "currency": _CCY})
+    check = check_currency(frame, workspace_currency="INR", primary_key="id", **kwargs)  # type: ignore[arg-type]
+    assert check.stopped
+    assert check.units == {}
+    (finding,) = check.findings
+    assert (finding.code, finding.column, finding.currencies) == ("CURRENCY_MIXED", name, ("INR", "USD"))
+
+
+@pytest.mark.parametrize(
+    ("header", "values"),
+    [
+        ("currency", ["INR", "USD", "N/A", "INR"]),
+        ("currency", ["INR", "USD", "NA", "INR"]),
+        ("currency", ["Rs", "$", "Rs", "$"]),
+        ("currency", ["rupee", "dollar", "rupee", "dollar"]),
+        ("unit", ["INR", "USD", "INR", "USD"]),
+        ("CurrencyCode", ["INR", "USD", "N/A", "USD"]),
+    ],
+)
+def test_a_currency_column_is_found_despite_placeholders_symbols_or_another_header(
+    header: str, values: list[str]
+) -> None:
+    frame = pd.DataFrame({"id": [1, 2, 3, 4], "amount": [100.0, 250.0, 75.0, 9.0], header: values})
+    check = check_currency(frame, workspace_currency="INR", primary_key="id")
+    assert check.stopped
+    (finding,) = check.findings
+    assert (finding.code, finding.currencies) == ("CURRENCY_MIXED", ("INR", "USD"))
+
+
+def test_a_headerless_column_with_stray_text_is_not_a_currency_column() -> None:
+    frame = pd.DataFrame({"id": [1, 2, 3], "amount": [1.0, 2.0, 3.0], "note": ["INR", "USD", "late"]})
+    assert not check_currency(frame, workspace_currency="INR", primary_key="id").stopped
+
+
 def test_a_country_column_alone_gives_a_question_not_a_stop() -> None:
     frame = pd.DataFrame(
         {"id": [1, 2, 3], "amount": [100.0, 250.0, 75.0], "country": ["India", "Germany", "India"]}

@@ -147,6 +147,12 @@ _SELECTOR_HEADER: Final[re.Pattern[str]] = re.compile(r"(?i)(currency|curr\b|ccy
 """A column that may say which rows are in which currency."""
 _CURRENCY_HEADER: Final[re.Pattern[str]] = re.compile(r"(?i)(?:^|[^a-z])(currency|curr|ccy)(?:$|[^a-z])")
 """A column that names, for each row, the currency its amount is in."""
+_CURRENCY_HEADER_CAMEL: Final[re.Pattern[str]] = re.compile(r"[a-z](?:Currency|Curr|Ccy)(?:$|[^a-z])")
+"""The same for camelCase headers (`CurrencyCode` starts the name, `amountCurrency` ends it)."""
+_PLACEHOLDERS: Final[frozenset[str]] = frozenset(
+    {"n/a", "na", "nan", "none", "null", "unknown", "-", "--", "?", "tbd"}
+)
+"""Values that say nothing about a row's currency; a selector column may hold them without losing its meaning."""
 _COUNTRY_HEADER: Final[re.Pattern[str]] = re.compile(r"(?i)(?:^|[^a-z])(country|market|region)(?:$|[^a-z])")
 """A column that names a country; several countries beside an amount hint at several currencies."""
 _COUNTRY_CODES: Final[dict[str, str]] = {
@@ -402,16 +408,38 @@ def _selector_values(frame: pd.DataFrame, name: str) -> dict[str, int]:
     return counts
 
 
+def _value_code(text: str) -> str | None:
+    """The one currency a selector value names (`INR`, `usd`, `Rs`, `$`, `rupees`), else None (a placeholder)."""
+    named = currency_codes(text)
+    if len(named) == 1:
+        return next(iter(named))
+    if len(named) > 1:
+        return None
+    upper = text.upper()
+    if upper in CURRENCY_NAMES or is_currency_code(upper):
+        return upper
+    return _header_unit(text)
+
+
 def _currency_column(frame: pd.DataFrame, skip: set[str]) -> tuple[str, dict[str, int]] | None:
-    """A `currency` column whose values are all ISO codes and more than one: (name, rows per code), else None."""
+    """A column that names each row's currency, with two or more currencies: (name, rows per code), else None.
+
+    A `currency`-like header or values that are all currency codes mark it; placeholders (`N/A`, `-`) are left out
+    of the counts, and a headerless column must hold nothing but codes and placeholders.
+    """
     for name in (str(c) for c in frame.columns):
-        if name in skip or not _CURRENCY_HEADER.search(name):
+        if name in skip:
             continue
-        values = _selector_values(frame, name)
+        by_header = bool(_CURRENCY_HEADER.search(name) or _CURRENCY_HEADER_CAMEL.search(name))
         counts: dict[str, int] = {}
-        for text, n in values.items():
-            counts[text.upper()] = counts.get(text.upper(), 0) + n
-        if len(counts) > 1 and all(is_currency_code(code) for code in counts):
+        stray = False
+        for text, n in _selector_values(frame, name).items():
+            code = _value_code(text)
+            if code is not None:
+                counts[code] = counts.get(code, 0) + n
+            elif text.casefold() not in _PLACEHOLDERS:
+                stray = True
+        if len(counts) > 1 and (by_header or not stray):
             return name, counts
     return None
 
@@ -620,10 +648,12 @@ def check_currency(
             findings.append(_mixed(column, _candidates(frame, column.column, skip), codes))
             continue
         code = next(iter(codes)) if codes else held if held and is_currency_code(held) else None
-        if code is None:
-            if currency_col is not None:
-                findings.append(_by_currency_column(column, *currency_col))
-            elif country_col is not None:
+        if currency_col is not None and set(currency_col[1]) - ({code} if code else set()):
+            findings.append(
+                _by_currency_column(column, *currency_col)
+            )  # the file's own column beats any one unit
+        elif code is None:
+            if country_col is not None:
                 findings.append(_by_countries(column, *country_col, workspace_currency))
             else:
                 findings.append(_unstated(column, workspace_currency))
