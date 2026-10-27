@@ -7,9 +7,15 @@ exactly as it scores the agent: the same TEST half, the same baselines, the same
 on TRAIN only (a cross-fitted uplift model, a cost threshold, and the gate against the best simple rule);
 there is no agent, no warm start and no seed, so it decides once per test customer and reports `seeds=1`.
 
-It prints the agent's DIAG block (counts of decisions by kind and reason, the figures line) plus one line:
+It prints the agent's DIAG block (counts of decisions by kind and reason, the figures line) plus one line
+(string values JSON-quoted):
 
-    UPLIFT_GATE chose=<model|rule:name> lb=... best_rule=...
+    UPLIFT_GATE chose="<model|rule:name>" lb=... diff=... best_rule="<name>" ...
+
+and adds one row to the scoreboard, `uplift model (ungated)`: the cost threshold on the model refitted on all
+of TRAIN whatever the gate chose, so the report shows what the method itself is worth next to the gated
+output. A customer's purchase is priced with `BenchData.conversion_value` when the dataset knows it before
+the campaign (X5), else with each arm's mean margin of a buyer on TRAIN.
 """
 
 from __future__ import annotations
@@ -22,7 +28,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from autonomy.contracts import DecisionKind
-from autonomy.decide.uplift_threshold import UpliftData, UpliftThresholdPolicy, fit_uplift_threshold
+from autonomy.decide.uplift_threshold import (
+    UNGATED,
+    UpliftData,
+    UpliftThresholdPolicy,
+    fit_uplift_threshold,
+    one_hot,
+)
 from autonomy.runtime.diagnostics import DecisionTally
 
 if TYPE_CHECKING:
@@ -53,6 +65,9 @@ def uplift_data(data: BenchData, rows: IntArray, *, attach_features: bool = True
         arm_names=tuple(data.arm_names),
         features=frame,
         attributes=attributes,
+        conversion_value=(
+            None if data.conversion_value is None else data.conversion_value[rows].astype(np.float64)
+        ),
     )
 
 
@@ -76,11 +91,13 @@ def run_uplift_threshold(
         policy = fit_uplift_threshold(train_data, segment_candidates=data.segment_candidates, seed=SEED)
     t0 = time.perf_counter()
     with timings.step(f"uplift_threshold: decide for {len(test)} test customers"):
-        arms = policy.arms(test_data.attributes, test_data.features)
-        nets = policy.net(test_data.attributes)
+        value = test_data.conversion_value
+        arms = policy.arms(test_data.attributes, test_data.features, value)
+        nets = policy.net(test_data.attributes, value)
     elapsed = time.perf_counter() - t0
-    pi = np.zeros((len(test), data.n_arms), dtype=np.float64)
-    pi[np.arange(len(test)), arms] = 1.0
+    pi = one_hot(arms, data.n_arms)
+    ungated = policy.ungated_arms(test_data.attributes, value)
+    extra = {} if ungated is None else {UNGATED: one_hot(ungated, data.n_arms)}
     contacted = arms > 0
     expected: float | None = None
     if nets is not None and contacted.any():
@@ -109,9 +126,13 @@ def run_uplift_threshold(
         },
         snapshot={"uplift_gate": policy.gate.chose},
         gate_line=policy.gate.line(),
+        extra_policies=extra,
         gate={
             "chose": policy.gate.chose,
             "lb": policy.gate.lb,
+            "diff": None if policy.gate.diff is None else list(policy.gate.diff),
+            "model_contact": policy.gate.model_contact,
+            "chosen_on": dict(policy.gate.chosen_on),
             "model_value": policy.gate.model_value,
             "best_rule": policy.gate.best_rule,
             "best_rule_value": policy.gate.best_rule_value,

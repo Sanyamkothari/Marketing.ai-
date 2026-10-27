@@ -101,12 +101,12 @@ def criteo_shaped(n: int = 4000) -> C.BenchData:
     )
 
 
-def megafon_shaped(n: int = 2500) -> C.BenchData:
+def megafon_shaped(n: int = 2500, *, base: float = 0.1, lift: float = 0.2) -> C.BenchData:
     rng = np.random.default_rng(6)
     ids = np.array([f"mf{i}" for i in range(n)], dtype=object)
     arm = rng.integers(0, 2, n).astype(np.int64)
     feats = pd.DataFrame({f"X_{i}": rng.normal(size=n) for i in range(1, 51)})
-    conv = (rng.random(n) < 0.1 + 0.2 * arm * (feats["X_1"].to_numpy() > 0)).astype(float)
+    conv = (rng.random(n) < base + lift * arm * (feats["X_1"].to_numpy() > 0)).astype(float)
     return A._feature_rct(
         "megafonshaped",
         ids,
@@ -139,6 +139,7 @@ def test_the_policy_runs_through_the_bench_like_the_agent(shape: str) -> None:
     pol = out["policies"]
     assert "AGENT" in pol and "T-learner (logistic)" in pol and "send to none" in pol
     assert any(k.startswith("segment rule (") for k in pol)
+    assert ut.UNGATED in pol and "agent_minus_this" in pol[ut.UNGATED]  # the method itself, ungated
     assert pol["AGENT"]["dr"]["low"] <= pol["AGENT"]["dr"]["point"] <= pol["AGENT"]["dr"]["high"]
     assert abs(sum(agent["arm_shares"]) - 1.0) < 1e-9
     assert agent["diag"]["total"] == out["test"]  # one deterministic decision per test customer
@@ -147,12 +148,12 @@ def test_the_policy_runs_through_the_bench_like_the_agent(shape: str) -> None:
     lines = agent["diag_text"].splitlines()
     assert lines[0].startswith("DIAG run bench dataset=") and "policy=uplift_threshold" in lines[0]
     assert all(line.startswith("DIAG ") for line in lines[:-1])
-    gate = re.fullmatch(
-        r"UPLIFT_GATE chose=(model|rule:.+?) lb=(\S+) best_rule=(.+?) best_rule_value=\S+ .*", lines[-1]
-    )
-    assert gate is not None, lines[-1]
-    assert agent["uplift_gate"]["chose"] == gate.group(1)
-    assert agent["uplift_gate"]["best_rule"] == gate.group(3)
+    gate = ut.parse_gate_line(lines[-1])
+    assert gate["chose"] == "model" or gate["chose"].startswith("rule:")
+    assert agent["uplift_gate"]["chose"] == gate["chose"]
+    assert agent["uplift_gate"]["best_rule"] == gate["best_rule"]
+    assert agent["uplift_gate"]["reason"] == gate["reason"]
+    assert {"lb", "diff", "best_rule_value", "model_value", "gate_rows", "fit_rows"} <= set(gate)
     md = render({"datasets": {data.name: out}})
     assert f"| {data.name} |" in md and f"### {data.name}" in md
 
@@ -176,18 +177,43 @@ def test_the_policy_is_fitted_on_train_only_and_is_repeatable(monkeypatch: pytes
     assert first.pi.shape == (len(test), data.n_arms) and set(np.unique(first.pi)) <= {0.0, 1.0}
 
 
+@pytest.mark.slow  # about 5 s single-threaded: an 8,000-row MegaFon-shaped frame, 50 features
 def test_planted_strong_signal_is_found_through_the_bench_path() -> None:
-    """MegaFon-shaped data where the message helps X_1 > 0 and costs more than it earns elsewhere: the policy
-    messages mostly the customers it helps, and the gate says which branch it took."""
-    data = megafon_shaped(6000)
+    """MegaFon-shaped data where the message helps X_1 > 0 a lot and nobody else, at the break-even cost of
+    a blanket send. No segment candidate reads X_1, so no simple rule can find who to message: the gate
+    deploys the model, and it messages the customers it helps."""
+    data = dataclasses.replace(
+        megafon_shaped(8000, base=0.05, lift=0.4), segment_candidates=(("X_2",), ("X_3",))
+    )
     train, test = C.split_by_hash(data.customer_ids)
     result = U.run_uplift_threshold(data, train, test, timings=C.Timings(quiet=True))
-    assert result.gate is not None and result.gate["chose"]
+    assert result.gate is not None and result.gate["chose"] == "model", result.gate_line
     x1 = data.features["X_1"].to_numpy()[test]
     contacted = result.pi[:, 1] > 0
-    if result.gate["chose"] == "model":
-        assert contacted[x1 > 0].mean() > contacted[x1 <= 0].mean()
-    assert result.expected_net_per_contact is None or np.isfinite(result.expected_net_per_contact)
+    assert contacted[x1 > 0].mean() > 0.8 and contacted[x1 <= 0].mean() < 0.2
+    assert np.array_equal(result.extra_policies[ut.UNGATED], result.pi)
+    assert result.expected_net_per_contact is not None and result.expected_net_per_contact > 0
+
+
+def test_on_x5_only_customers_worth_enough_clear_the_sms_cost() -> None:
+    """X5-shaped data where the SMS adds 0.1 to everyone's chance of buying and the margin of a purchase is
+    known per customer (`conversion_value`): only customers whose 0.1 x margin is above the SMS cost (2.0)
+    are worth a message. The policy reads that value; pricing everyone with the mean buyer would not."""
+    rng = np.random.default_rng(8)
+    base = x5_shaped(8000)
+    n = base.n
+    margin = np.where(rng.random(n) < 0.5, 40.0, 8.0)  # 0.1 x 40 = 4 > 2 > 0.8 = 0.1 x 8
+    conv = (rng.random(n) < 0.1 + 0.1 * base.arm).astype(float)
+    data = dataclasses.replace(
+        base, conversion=conv, margin_value=margin * conv, conversion_value=margin, arm_cost=(0.0, 2.0)
+    )
+    train, test = C.split_by_hash(data.customer_ids)
+    result = U.run_uplift_threshold(data, train, test, timings=C.Timings(quiet=True))
+    ungated = result.extra_policies[ut.UNGATED][:, 1] > 0
+    high = margin[test] == 40.0
+    assert ungated[high].mean() == 1.0 and ungated[~high].mean() == 0.0
+    assert result.gate is not None and result.gate["chose"] == "model", result.gate_line
+    assert np.array_equal(result.pi[:, 1] > 0, ungated)
 
 
 def test_the_bench_cli_and_ci_know_the_policy() -> None:

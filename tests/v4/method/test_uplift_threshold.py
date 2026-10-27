@@ -7,6 +7,7 @@ customers a lot and hurts others).
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping, Sequence
 
 import numpy as np
@@ -115,9 +116,10 @@ def test_fold_models_are_fitted_on_the_other_folds_only() -> None:
     assert model is not None
     sizes = [int((model.fold == f).sum()) for f in range(4)]
     assert spy.fitted == [data.n - s for s in sizes]
-    assert (
-        spy.predicted == sizes
-    )  # each model is asked about its own held-out fold, at fit time, and no one else
+    # each model is asked about its own held-out fold (the per-customer scores); then once about everyone,
+    # whose average is used only for one number per arm, the calibration's centre (as in `fit_uplift`)
+    assert spy.predicted[:4] == sizes
+    assert spy.predicted[4:] == [data.n] * 4
     assert sum(sizes) == data.n
 
 
@@ -193,9 +195,11 @@ def test_the_gate_falls_back_to_the_rule_when_the_message_does_nothing(seed: int
     gate = policy.gate
     assert gate.chose.startswith("rule:") and policy.model is None
     assert gate.lb is not None and gate.model_value is not None  # a model was fitted and judged ...
-    assert gate.lb <= gate.best_rule_value  # ... and its lower bound did not beat the best simple rule
-    assert gate.line().startswith("UPLIFT_GATE chose=rule:")
-    assert " lb=" in gate.line() and " best_rule=" in gate.line()
+    assert gate.diff is not None and gate.lb == gate.diff[1]
+    assert gate.lb <= 0.0  # ... and it did not beat the best simple rule, paired, at its lower bound
+    parsed = ut.parse_gate_line(gate.line())
+    assert parsed["chose"] == gate.chose and parsed["best_rule"] == gate.best_rule
+    assert float(parsed["lb"]) == pytest.approx(gate.lb, rel=1e-5, abs=1e-9)
     # a message that does nothing costs money: nobody should be contacted by the rule either
     pi = policy.pi(data.attributes, data.features)
     assert pi[:, 1].mean() < 0.5
@@ -207,8 +211,8 @@ def test_the_gate_chooses_the_model_on_planted_strong_heterogeneity() -> None:
     policy = ut.fit_uplift_threshold(data, segment_candidates=(("noise",),), seed=5)
     gate = policy.gate
     assert gate.chose == "model", gate.line()
-    assert gate.lb is not None and gate.lb > gate.best_rule_value
-    assert policy.model is not None and policy.belief is policy.model
+    assert gate.lb is not None and gate.lb > 0.0
+    assert policy.model is not None and policy.belief is policy.model and policy.ungated is policy.model
     # it messages groups 2 and 3 (positive net: 0.10 x 10 - 0.5 and 0.30 x 10 - 0.5) and leaves 0 and 1 alone
     group = data.features["group"].to_numpy()
     sent = policy.arms(data.attributes, data.features) > 0
@@ -225,6 +229,12 @@ def test_the_gate_names_what_it_judged_and_the_model_comes_first() -> None:
     assert policy.gate.best_rule in names and policy.gate.gate_rows + policy.gate.fit_rows == data.n
     for point, low, high in policy.gate.values.values():
         assert low <= point <= high
+    # the comparison rule was ranked on the fit part (the bench's way), not picked on the gate rows
+    assert policy.gate.best_rule == max(policy.gate.chosen_on, key=lambda k: policy.gate.chosen_on[k])
+    assert policy.gate.best_rule_value == policy.gate.values[policy.gate.best_rule][0]
+    assert policy.gate.diff is not None
+    model_point, rule_point = policy.gate.values["model"][0], policy.gate.best_rule_value
+    assert policy.gate.diff[0] == pytest.approx(model_point - rule_point, abs=1e-9)
 
 
 def test_a_campaign_too_small_for_a_model_gets_the_best_simple_rule() -> None:
@@ -234,15 +244,17 @@ def test_a_campaign_too_small_for_a_model_gets_the_best_simple_rule() -> None:
     policy = ut.fit_uplift_threshold(tiny, segment_candidates=(("group",),), seed=3)
     assert policy.gate.chose.startswith("rule:") and policy.gate.lb is None
     assert "customers" in policy.gate.reason and "lb=n/a" in policy.gate.line()
+    assert policy.ungated is None and policy.ungated_arms(tiny.attributes) is None
     assert policy.pi(tiny.attributes, tiny.features).sum(axis=1).tolist() == [1.0] * tiny.n
 
 
 def test_a_segment_rule_that_wins_is_refitted_on_all_of_train_and_used_as_is() -> None:
+    # the segment rule on `group` captures all the heterogeneity there is, so the model cannot beat it
     data = planted(8000, strong=True, seed=11)
     policy = ut.fit_uplift_threshold(data, segment_candidates=(("group",),), seed=11)
-    if policy.gate.chose != "rule:segment rule (group)":
-        pytest.skip("the model won this draw; the segment rule path is covered by the null test")
+    assert policy.gate.chose == "rule:segment rule (group)", policy.gate.line()
     assert policy.rule_segment is not None and policy.model is None
+    assert policy.ungated is not None  # the model is still there for the ungated report row
     arms = policy.arms(data.attributes, data.features)
     group = data.features["group"].to_numpy()
     assert arms[group == 3].mean() > 0.9 and arms[group == 0].mean() < 0.1
@@ -271,3 +283,89 @@ def test_scoring_customers_outside_the_fit_does_not_change_the_model() -> None:
     again = model.score(attrs)
     assert np.array_equal(first, again)
     assert first[0, 0] > first[1, 0]  # group 3 is helped far more than group 0
+
+
+# --- no leak from the gate part ----------------------------------------------------------------------
+
+
+def _scaled_gate_margins(data: ut.UpliftData, seed: int, factor: float) -> ut.UpliftData:
+    """The same campaign with the margins of the gate part's buyers multiplied by `factor`."""
+    _fit_pos, gate_pos = ut._split(data.customer_ids, f"{ut.GATE_SALT}:{seed}", ut.GATE_SHARE)
+    margin = data.margin.copy()
+    margin[gate_pos] *= factor
+    return dataclasses.replace(data, margin=margin)
+
+
+def test_the_gate_prices_the_model_with_the_fit_part_only() -> None:
+    """Gate-part margins are the outcome the gate judges with; they must not also set the model's threshold.
+    With buyers in the gate part worth 100 times more, a threshold read from all of train would message
+    everyone there; read from the fit part, the model's decisions on the gate part do not move."""
+    data = planted(8000, strong=True, seed=13)
+    base = ut.fit_uplift_threshold(data, segment_candidates=(("noise",),), seed=13)
+    rich = ut.fit_uplift_threshold(
+        _scaled_gate_margins(data, 13, 100.0), segment_candidates=(("noise",),), seed=13
+    )
+    assert base.gate.model_contact is not None and 0.0 < base.gate.model_contact < 1.0
+    assert rich.gate.model_contact == base.gate.model_contact
+    assert rich.gate.chosen_on == base.gate.chosen_on  # the comparison rule is chosen on the fit part too
+    assert rich.gate.best_rule == base.gate.best_rule
+
+
+# --- a per-customer value of a purchase ---------------------------------------------------------------
+
+
+def valued(n: int, seed: int = 0) -> ut.UpliftData:
+    """X5-like: one SMS (cost 2) adds 0.1 to everyone's chance of buying, and a purchase is worth the
+    customer's own known value, 5 or 50. Only the 50s clear the cost (0.1 x 50 > 2 > 0.1 x 5). The value
+    is not a feature, so no segment rule can find them."""
+    rng = np.random.default_rng(seed)
+    noise = rng.integers(0, 3, n)
+    rich = rng.random(n) < 0.5
+    worth = np.where(rich, 50.0, 5.0)
+    arm = rng.integers(0, 2, n).astype(np.int64)
+    conv = (rng.random(n) < 0.1 + 0.1 * arm).astype(np.float64)
+    return ut.UpliftData(
+        customer_ids=np.array([f"v{seed}_{i}" for i in range(n)], dtype=object),
+        arm=arm,
+        propensity=np.full(n, 0.5),
+        converted=conv,
+        margin=conv * worth,
+        arm_cost=np.array([0.0, 2.0]),
+        arm_names=("no SMS", "SMS"),
+        features=pd.DataFrame({"noise": noise.astype(float)}),
+        attributes=tuple({"noise": str(int(z))} for z in noise),
+        conversion_value=worth,
+    )
+
+
+def test_a_known_per_customer_value_sets_who_clears_the_cost() -> None:
+    data = valued(12000, seed=1)
+    policy = ut.fit_uplift_threshold(data, segment_candidates=(("noise",),), seed=1)
+    assert policy.ungated is not None
+    worth = data.conversion_value
+    assert worth is not None
+    sent = policy.ungated_arms(data.attributes, worth)
+    assert sent is not None
+    assert sent[worth == 50.0].mean() == 1.0 and sent[worth == 5.0].mean() == 0.0
+    net = policy.net(data.attributes, worth)
+    assert net is not None and (net[worth == 50.0, 0] > 0).all() and (net[worth == 5.0, 0] < 0).all()
+    # without the per-customer value every customer is priced alike (the arm's mean buyer, about 27.5)
+    alike = policy.ungated_arms(data.attributes)
+    assert alike is not None and len(set(alike.tolist())) == 1
+    # on the gate part too: messaging only the 50s beats every rule, paired, so the model is deployed
+    assert policy.gate.chose == "model", policy.gate.line()
+    assert policy.gate.model_contact == pytest.approx(0.5, abs=0.05)
+    assert np.array_equal(policy.arms(data.attributes, data.features, worth), sent)
+
+
+# --- the calibration is fit_uplift's ---------------------------------------------------------------------
+
+
+def test_the_calibration_centres_on_the_scored_scale() -> None:
+    """`calibrate_arm` (shared with `fit_uplift`) centres on the mean of the K-model average, the scale
+    `score` reads, not on the out-of-fold raw scores."""
+    data = planted(3000, strong=True, seed=4)
+    model = ut.CrossFitUplift.fit(data, seed=4)
+    assert model is not None
+    averaged = model.raw(data.attributes)
+    assert model.calibration[0].centre == pytest.approx(float(averaged[:, 0].mean()), abs=1e-12)

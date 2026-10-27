@@ -324,6 +324,8 @@ class AgentResult:
     """The `UPLIFT_GATE ...` log line of the uplift_threshold policy (scripts/v2_realbench/uplift_policy.py)."""
     gate: dict[str, Any] | None = None
     """The uplift_threshold gate's numbers (which branch, the model's lower bound, the best simple rule)."""
+    extra_policies: dict[str, FloatArray] = field(default_factory=dict)
+    """More rows for the scoreboard, scored like every other policy (uplift_threshold: the ungated model)."""
 
 
 def _learned(policy: object) -> tuple[str, ...]:
@@ -988,6 +990,7 @@ def evaluate_dataset(
     policies[rule_name] = rule_pi
     policies["T-learner (logistic)"] = t_pi
     policies["AGENT"] = agent.pi
+    policies.update(agent.extra_policies)  # docs/v4/METHOD.md: uplift_threshold's ungated model row
     best_policy = rule_name if best_name == "segment rule" else best_name
     # send to all: the sent arm with the best mean profit on TRAIN (a randomised trial: plain means)
     tr_means = [float(profit[train][data.arm[train] == a].mean()) for a in range(1, k)]
