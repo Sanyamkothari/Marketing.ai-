@@ -461,7 +461,11 @@ export function readyHtml(r, ctx) {
       attrs: `data-dds-approve-start aria-describedby="dds-approve-sentence"`,
       disabled: ctx.busy || !ok,
       busy: ctx.busy === "approve",
-    })}<span class="dds-why">The only approval. Your files are not changed.</span></div></section>`,
+    })}<span class="dds-why">The only approval. Your files are not changed.</span>${button({
+      label: "Review everything first",
+      kind: "tertiary",
+      attrs: "data-dds-open-review",
+    })}</div></section>`,
   );
 }
 
