@@ -3803,6 +3803,27 @@
    "currency": "USD"
   }
  },
+ "GET /data-doctor/cases": {
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "cases": []
+  }
+ },
+ "GET /data-doctor/cases?goal_id=hillstrom-email": {
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "cases": []
+  }
+ },
+ "GET /data-doctor/cases?goal_id=win-back-campaign": {
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "cases": []
+  }
+ },
  "GET /datasets": {
   "status": 200,
   "content_type": "application/json",

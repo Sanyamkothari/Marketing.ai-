@@ -566,7 +566,7 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path, patient_ex
     at = time.monotonic()
     console.phase1 = True
     page.goto(f"{server.base_url}/ui/#/uc/{USE_CASE}", wait_until="domcontentloaded")
-    page.get_by_role("button", name="Manual setup").click()  # Plan H M82: Setup opens on Guided setup
+    page.get_by_role("button", name="Manual setup").click()  # Plan H M82: Setup opens on the Data Doctor
     expect(page.locator("#f-file")).to_be_attached()
     page.get_by_role("button", name="Make a contact list", exact=True).click()  # Plan M M172: the score mode
     expect(page.locator("#f-scorerun")).to_be_visible()

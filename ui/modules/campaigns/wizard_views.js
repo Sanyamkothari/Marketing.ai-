@@ -211,9 +211,9 @@ export function customersLead(first) {
 }
 
 /**
- * Step 2 before anything has started: the lead, the two places Guided setup (Plan G/L, unchanged) mounts
+ * Step 2 before anything has started: the lead, the two places the Data Doctor mounts
  * into, and the last refusal. The card is
- * a calm frame around Guided setup: the goal's icon and name, one sentence, then Guided setup as it is.
+ * a calm frame around the Data Doctor: the goal's icon and name, one sentence, then the Data Doctor as it is.
  */
 export function customersHtml({ uc, first, canStart = true, hasGuided = true, problem = null, busy = "" }) {
   const name = goalName(uc);
@@ -227,7 +227,7 @@ export function customersHtml({ uc, first, canStart = true, hasGuided = true, pr
   }
   if (!hasGuided) {
     return noticeHtml({
-      title: "Guided setup is not available here",
+      title: "The Data Doctor is not available here",
       text: [`Add the customers for "${name}" on the goal's own page.`],
       action: { label: "Open the goal's page", href: `#/uc/${encodeURIComponent(uc.id)}` },
       attrs: "data-cw-no-guided",

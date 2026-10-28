@@ -21,7 +21,7 @@ import { count } from "../../format.js";
 import { goalName, userText } from "../../labels.js";
 import { AI_SETTINGS_HREF } from "../../availability.js";
 import { minutesText } from "../campaigns/run_rules.js";
-import { sentHtml, plain, TOOL_PHRASES } from "../agent/sent.js";
+import { sentHtml, plain, TOOL_PHRASES } from "../ask/sent.js";
 import { samplesHtml } from "./plan_view.js";
 import { AI_CONSENT_BUTTON, AI_CONSENT_LINE, AI_SPENT_LINE, VERDICTS, columnNote, namesOf, standingHtml, userTextIn as nameIn } from "./view.js";
 

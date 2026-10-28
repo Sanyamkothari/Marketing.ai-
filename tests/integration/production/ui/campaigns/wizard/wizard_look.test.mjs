@@ -133,13 +133,13 @@ test("Goal: each card has a line icon, its name and its stage as a quiet tag; no
   assert.equal($$(".btn.primary").length, 0);
 });
 
-test("Customers: a calm card around Guided setup, with the goal's icon", () => {
+test("Customers: a calm card around the Data Doctor, with the goal's icon", () => {
   draw(V.customersHtml({ uc: { id: "win-back-campaign", name: "Win-back" }, first: true }));
   const card = $("[data-cw-customers=first]");
   assert.ok(card.classList.contains("card"));
   assert.ok(card.querySelector(".cw-card-head .cw-card-icon svg[aria-hidden=true]"));
   assert.equal(text(card.querySelector(".cw-card-head h2")), 'Customers for "Win back lapsed customers"');
-  assert.ok(card.querySelector("[data-cw-guided] [data-cw-guided-main]"), "Guided setup's place is unchanged");
+  assert.ok(card.querySelector("[data-cw-guided] [data-cw-guided-main]"), "the Data Doctor's place is unchanged");
 });
 
 test("notices are the design system's attention items, the action a primary button", () => {

@@ -2,7 +2,7 @@
 // URL and the server, so a refresh resumes where the person was.
 //
 //   #/campaigns/new                              1 Goal
-//   #/campaigns/new/customers/<goal>              2 Customers: Guided setup (Plan G/L), unchanged
+//   #/campaigns/new/customers/<goal>              2 Customers: the Data Doctor
 //   #/campaigns/new/review/<campaign>             3 Audience and 4 Review on one screen (a Draft campaign),
 //                                                   then "Approve and download"
 //   #/campaigns/new/audience/<campaign>           (the address of step 3 before M181 part C: opens Review)
@@ -87,7 +87,7 @@ const ui = {
   parts: null,
   timer: null,
   screen: null, // { step, body() , after?() } - redrawn in place for a local change (busy, error)
-  started: null, // the upload id the last start used, so Guided setup knows its approval was taken
+  started: null, // the upload id the last start used, so the Data Doctor knows its approval was taken
   customers: { problem: null, busy: "" },
   // The Review screen's one button: `busy` is its label while its calls are on their way (else ""), `own` says
   // the server refused this person's approval of the new model because they started the learning.
@@ -119,7 +119,7 @@ function go(hash, { replace = false } = {}) {
   else window.location.hash = hash;
 }
 
-/** Draw the current screen: the page, its step, then whatever mounts into it (Guided setup). */
+/** Draw the current screen: the page, its step, then whatever mounts into it (the Data Doctor). */
 function draw() {
   const screen = ui.screen;
   if (!screen || !ui.app || !onRoute()) return;
@@ -199,8 +199,8 @@ async function goalStep(token) {
 
 // --- 2 Customers -------------------------------------------------------------------------------------------
 
-/** Guided setup as its module registered it (`registerSetupMode`, Plan G M75), or null when not loaded. */
-const guidedMode = (uc) => setupModes(uc).find((mode) => mode.name === "guided") || null;
+/** The Data Doctor as its module registered it (`registerSetupMode`, Plan G M75), or null when not loaded. */
+const doctorMode = (uc) => setupModes(uc).find((mode) => mode.name === "datadoctor") || null;
 
 async function customersStep(token, route) {
   const uc = await getUseCase(route.ucId);
@@ -221,7 +221,7 @@ async function customersStep(token, route) {
 }
 
 function showCustomers(token, uc, current) {
-  const mode = guidedMode(uc);
+  const mode = doctorMode(uc);
   const allowed = canStart();
   show(
     token,
@@ -258,7 +258,7 @@ function showCustomers(token, uc, current) {
 }
 
 /**
- * Approve in Guided setup or the Data Doctor: ask the server to run the campaign and go to its progress page.
+ * Approve in the Data Doctor: ask the server to run the campaign and go to its progress page.
  * The learning time the person chose (`fill.speed`) goes with it; a goal that has a model skips the learning.
  */
 async function start({ uc, current, fill }) {
@@ -281,7 +281,7 @@ async function start({ uc, current, fill }) {
     ui.customers = { problem: null, busy: "" };
     if (window.location.hash === here) go(runHref(created.record.campaign_run_id));
   } catch (error) {
-    ui.started = null; // Guided setup then offers "Use the prepared file", which starts again
+    ui.started = null; // the Data Doctor then offers "Use the prepared file", which starts again
     ui.customers = { problem: { error }, busy: "" };
     if (window.location.hash === here) draw();
   }

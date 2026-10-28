@@ -1,14 +1,12 @@
 """Data Doctor's intake notes (`ui/modules/intake/notes.js`, Plan L M150, DEC-1505) in jsdom, against REAL API responses.
 
-The node test (`production/ui/intake/notes.test.mjs`, sharing that directory's jsdom install) draws Guided
-setup on the Targeted Advertisement page and uploads a report-style workbook. Everything its fake API
-answers was answered by the app below:
+The node test (`production/ui/intake/notes.test.mjs`, sharing that directory's jsdom install) draws the notes
+box for a report-style workbook. Everything it draws from was answered by the app below:
 
 * **upload_report** - the workbook as intake reads it: the "Customers" sheet, its title rows and its
   total and note rows left out, and a "Summary" sheet it could read instead;
 * **upload_asis** - the same file uploaded again with `intake=false` ("Read it as it is instead");
 * **upload_sheet** - the same file with `sheet=Summary` ("Read the sheet "Summary" instead");
-* **start_*** - Guided setup's session started on each of the three uploads.
 """
 
 from __future__ import annotations
@@ -60,9 +58,6 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
                 201,
             )
             ids[name] = upload["upload_id"]
-            bodies[f"start_{name}"] = _ok(
-                client.post(f"/uploads/{upload['upload_id']}/agent-session", json={"use_case": USE_CASE}), 201
-            )
         bodies["ids"] = ids
     for name, body in bodies.items():
         (out / f"{name}.json").write_text(json.dumps(body, indent=1), encoding="utf-8")

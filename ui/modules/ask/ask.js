@@ -3,14 +3,14 @@
 //
 // WHAT THE PERSON SEES
 //   * A question box ("Try “Churn rate by state” or “Who are the top 10% spenders?”") and the chat,
-//     in the Guided-setup chat's own bubbles. Every reply is the API's text, escaped and never reworded;
-//     under it, "What the AI looked at" (`sent.js`) as in Guided setup.
+//     in the generative assistant's chat bubbles. Every reply is the API's text, escaped and never reworded;
+//     under it, "What the AI looked at" (`sent.js`) as in the Data Doctor chat.
 //   * Under a reply whose turn grouped the rows (`rate_by`), a bar chart per grouping: one bar per group,
 //     with the group's rate, mean or rows. Every number on a bar is the tool result's own (the API's
 //     `charts`, read from the stored result), never a number from the reply's text. A group too small to
 //     show reads "fewer than N rows" and draws no bar.
-//   * With no AI service connected, the box is replaced by the same "Connect an AI service" line Guided
-//     setup shows; nothing else on the page needs one.
+//   * With no AI service connected, the box is replaced by the same "Connect an AI service" line the Data
+//     Doctor shows; nothing else on the page needs one.
 //
 // The helper here cannot suggest a setting or change anything (the API refuses it), so this panel has no
 // buttons but Ask and New chat. State is kept per upload in this module, the panel redraws itself in
@@ -21,8 +21,7 @@ import { canAccess } from "../router.js";
 import { aiNotConnectedFor, aiNotConnectedHtml, campaignLayoutNow } from "../../availability.js"; // Plan M M192 (DEC-1622)
 import { clearAsk, getAsk, postAsk } from "./api.js";
 import { plain, sentHtml, statusHtml } from "./sent.js";
-import { guidedApplies } from "./guided.js";
-import { injectAgentStyles } from "./styles.js";
+import { injectAskStyles } from "./styles.js";
 
 export const ASK_PLACEHOLDER = "Try “Churn rate by state” or “Who are the top 10% spenders?”";
 const PRODUCT_AI_HREF = "#/connections/ai/product";
@@ -31,9 +30,13 @@ const ASK_ROUTE = "/uploads/{upload_id}/ask/messages";
 
 const states = new Map();
 
+/** Which use cases offer the data helper: the ones that train a model on a table (Plan G G10, DEC-1003). */
+const trainsOnTable = (uc) =>
+  Boolean(uc && uc.trainable_in_phase_1 && uc.advanced_settings && (uc.advanced_settings.stages || []).length);
+
 /** The Data page of a run made from an uploaded file, in a use case that has the data helper. */
 export const askApplies = (kind, uc, run) =>
-  kind === "data" && !!run && !!run.upload_id && guidedApplies(uc) && run.problem_type !== "uplift";
+  kind === "data" && !!run && !!run.upload_id && trainsOnTable(uc) && run.problem_type !== "uplift";
 
 function stateFor(uploadId) {
   let st = states.get(uploadId);
@@ -236,7 +239,7 @@ function bindOnce() {
 
 /** The panel's markup for a run's page; registering is `index.js`'s. */
 export function askPanelHtml(kind, uc, run) {
-  injectAgentStyles();
+  injectAskStyles();
   bindOnce();
   return panelHtml(stateFor(run.upload_id));
 }

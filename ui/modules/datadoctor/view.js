@@ -17,7 +17,7 @@
 //   earlier answers   (the plan itself, in sections, is `plan_view.js`)
 //   approve     the sentence approved, word for word, and Approve
 //   goals       with no goal yet: what this data can be used for, and "Choose this goal"
-//   chat        the chat, "What the AI looked at" under each reply (`../agent/sent.js`, as built), or the way
+//   chat        the chat, "What the AI looked at" under each reply (`../ask/sent.js`, as built), or the way
 //               to Settings › AI service when none is connected
 //   timeline    what happened, newest last, with the receipt of each approval
 
@@ -26,7 +26,7 @@ import { esc, fmtStamp, techDetails } from "../../dom.js";
 import { count, day } from "../../format.js";
 import { findNeverShown, goalName, userText } from "../../labels.js";
 import { AI_SETTINGS_HREF, AI_NOT_CONNECTED_SENTENCE } from "../../availability.js";
-import { sentHtml, plain } from "../agent/sent.js";
+import { sentHtml, plain } from "../ask/sent.js";
 
 /** The option every question offers, mapped to its safe choice (hide, leave as text, stop), never to a guess. */
 export const DONT_KNOW = "I don't know";

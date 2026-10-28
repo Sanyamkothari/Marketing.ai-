@@ -86,7 +86,7 @@ test("one H1, one sentence, one primary button", async () => {
   assert.equal(text($("h1")), "Data");
   assert.equal(text($(".desc")), "Where your customer data comes from, and whether it is ready to use.");
   assert.equal($$(".btn.primary").length, 1);
-  assert.equal(text($(".btn.primary")), "+ Add a source");
+  assert.equal(text($(".btn.primary")), "Connect your data", "the connect card holds the one primary action");
 });
 
 test("connections and uploaded files are one list, each with its health and date", async () => {

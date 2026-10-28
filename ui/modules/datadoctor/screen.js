@@ -10,8 +10,8 @@
 //                          Data page;
 //   a goal's setup         the Setup tab of `#/uc/<goal>`, in the same two places Guided setup mounts into.
 //
-// The wizard and a goal's setup reach it through Guided setup's own mount (`../agent/guided.js` `mountGuided` hands
-// over), so the screen sits where Guided setup sat and no route or page changes.
+// The wizard and a goal's setup reach it through the setup mode `index.js` registers (`mountDataDoctorSetup`), so the
+// screen sits where Guided setup used to be and no route or page changes.
 //
 // The way in is a chat (`chat.js`): the server's `view.conversation` as cards, a composer, the data beside it and ONE
 // "Approve and start" card (`approveAndStart`). "See details (for experts)" opens the full plan view below it, as it
@@ -30,8 +30,8 @@ import { createConnectionPicker } from "../connections/picker.js";
 import { getModelOffer, postCampaignRun } from "../campaigns/wizard_api.js";
 import { DEFAULT_SPEED, SPEEDS, applySpeedMinutes, minutesText, modelChoice, runHref, startSentenceHtml } from "../campaigns/run_rules.js";
 import { TABLE_FILE_TYPES } from "../intake/notes.js";
-import { injectAgentStyles } from "../agent/styles.js";
-import { plain } from "../agent/sent.js";
+import { injectAskStyles } from "../ask/styles.js";
+import { plain } from "../ask/sent.js";
 import { userText } from "../../labels.js";
 import {
   acknowledgeStop,
@@ -1070,7 +1070,7 @@ async function open(entry) {
  * each fresh mount point, so a page that repaints keeps the case, the busy state and the chat draft.
  */
 export function mountDataDoctor(slots, host) {
-  injectAgentStyles();
+  injectAskStyles();
   injectDataDoctorStyles();
   const goalId = host.goalId || (host.uc && host.uc.id) || null;
   const full = { ...host, goalId };

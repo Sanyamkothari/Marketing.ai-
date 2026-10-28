@@ -37,7 +37,7 @@ if (!process.env.DDS_FIXTURES) {
   );
   await import("../../../../../ui/app.js");
   await import("../../../../../ui/modules/production/index.js");
-  await import("../../../../../ui/modules/agent/index.js");
+  await import("../../../../../ui/modules/datadoctor/index.js");
   await import("../../../../../ui/modules/decide/index.js");
   await import("../../../../../ui/modules/data/index.js");
   void fx;

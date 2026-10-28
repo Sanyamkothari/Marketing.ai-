@@ -13,7 +13,7 @@ import { button, icon } from "../../components.js";
 import { esc } from "../../dom.js";
 import { count } from "../../format.js";
 import { userText } from "../../labels.js";
-import { plain } from "../agent/sent.js";
+import { plain } from "../ask/sent.js";
 import {
   BLOCKING_AT_ONCE,
   HIDDEN,

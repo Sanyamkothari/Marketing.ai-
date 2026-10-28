@@ -2,7 +2,7 @@
 
    The Data page with no goal (`#/data/check`) -> answer -> "Choose this goal" -> the "New campaign" wizard's
    Customers step on the same case, inside the card's mount points, with nothing asked twice -> the same case in the
-   goal's setup (`#/uc/<goal>`, where Guided setup mounts). The fake API serves one case through the states the real
+   goal's setup (`#/uc/<goal>`, where the setup mode mounts). The fake API serves one case through the states the real
    visit gave (`common.mjs`). */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -19,7 +19,7 @@ if (!process.env.DDS_FIXTURES) {
   installPage(serverFor(world), { hash: "#/data/check" });
   await import("../../../../../ui/app.js");
   await import("../../../../../ui/modules/production/index.js");
-  await import("../../../../../ui/modules/agent/index.js");
+  await import("../../../../../ui/modules/datadoctor/index.js");
   await import("../../../../../ui/modules/decide/index.js");
   await import("../../../../../ui/modules/data/index.js");
 
@@ -65,10 +65,24 @@ if (!process.env.DDS_FIXTURES) {
     assert.equal($$('[data-dds-place="wizard"] [data-dds-approve-start]').length, 1, "and there is one approval");
   });
 
-  test("a goal's setup opens the same case where Guided setup mounts", async () => {
+  test("a goal's setup opens the same case in the setup mode's place", async () => {
     await go(`#/uc/${GOAL}`);
     await until(() => $('[data-dds-place="setup"] [data-dds-verdict]'), 6000, "the screen in the goal's setup");
     assert.equal($('[data-dds-place="setup"]').dataset.ddsCase, CASE);
-    assert.ok(!$(".ag-chat"), "Guided setup itself is not drawn as well");
+    assert.ok(!$(".ag-chat"), "no second helper is drawn beside it");
+  });
+
+  test("with NO AI service connected the goal's setup still loads, and the rules still run", async () => {
+    // `makeWorld` serves the recorded `ai_service` answer of an app with no AI service connected.
+    assert.equal(world.ai.slots.product.connected, false, "the recorded app has no AI service");
+    await go(`#/uc/${GOAL}`);
+    await until(() => $('[data-dds-place="setup"] [data-dds-verdict]'), 6000, "the screen with no AI service");
+    const here = $('[data-dds-place="setup"]');
+    assert.ok(here.querySelector("[data-dds-verdict]"), "the rules' verdict is drawn");
+    assert.ok(here.querySelector("[data-dds-question]"), "the rules' questions are asked");
+    const chat = here.querySelector("[data-dds-composer]");
+    assert.ok(chat && chat.querySelector("a[data-ai-settings-link]"), "the chat says it needs the AI service, with the way to Settings");
+    assert.equal(chat.querySelector('a[href^="#/connections"]'), null, "never Connections");
+    assert.equal(here.querySelectorAll(".apierr").length, 0, "no error: the AI service is not needed to start");
   });
 }
