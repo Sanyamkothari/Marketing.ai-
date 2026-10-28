@@ -79,3 +79,35 @@ def test_the_prescription_replay_applies_no_steps() -> None:
     assert _called(
         path, REPLAYERS
     ), "the prescription replay reaches the recipe through run_saved_recipe/run_replay"
+
+
+def test_a_new_yes_no_spelling_stops_every_stored_recipe_replay_not_only_the_prescription_one() -> None:
+    """The recipe-only checks live in `replay_recipe`, so scoring and a firing meet them too (the scoring routes answer
+    the `RecipeError` with `recipe_failure_report`)."""
+    from datetime import UTC, datetime
+
+    import pandas as pd
+    import pytest
+
+    from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
+    from engine.agent.dataset_recipe import run_replay
+    from engine.agent.recipe import RecipeError
+
+    step = RecipeStep(
+        order=1,
+        kind=RecipeStepKind.MAP_BOOLEAN,
+        column="active",
+        params={"true_values": ["yes"], "false_values": ["no"]},
+    )
+    recipe = DataRecipe(
+        recipe_id="r1",
+        use_case_id="u",
+        source_fingerprint="f",
+        steps=(step,),
+        recipe_hash=recipe_hash((step,)),
+        created_at=datetime.now(UTC),
+    )
+    frame = pd.DataFrame({"active": ["yes", "no", "ha", "yes"]})
+    with pytest.raises(RecipeError) as stopped:
+        run_replay(frame, recipe, levels=("safe",), max_failure_pct=5.0, upload_id="up")
+    assert stopped.value.code == "RECIPE_NEW_VALUE" and stopped.value.column == "active"

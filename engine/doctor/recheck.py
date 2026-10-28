@@ -26,10 +26,12 @@ again for a yes of their own, an item whose payload moved with the dates needs i
 case goes through the visit (UNDERSTAND/ASK/TREAT/PREVIEW/APPROVE with its approvals and `taken_in` carried), never
 straight to an approved state.
 
-**One replay path.** A stored recipe (training, scoring, a scheduled firing, `prescription_replay`) is applied to a
-file by `materialize.replay_recipe`, the same module this one calls; `prescription_replay` keeps only what is a
-prescription's own (the intake, locale, currency and spelling checks, the build, the outcome, the contract) and
-calls it for the steps. `fingerprint` is the in-visit detector for a case that has no approved plan to replay (a
+**One place a stored recipe is applied.** A stored recipe (training, scoring, a scheduled firing,
+`prescription_replay`) is applied to a file by `materialize.replay_recipe`, the same module this one calls, with the
+checks a recipe alone allows (yes/no spellings, the guards' stops, a step that cannot run: `materialize.step_drift`).
+`prescription_replay` keeps what needs the prescription's frozen facts (the intake, locale and currency checks, the
+build, the outcome, the contract) and calls it for the steps. It is not the same applier as `materialize_plan`: a
+plan being decided is bound to the run's as-of date and checked `full` at every visit (see `replay_recipe`). `fingerprint` is the in-visit detector for a case that has no approved plan to replay (a
 first look at a file against last time's facts); `carry.last_month` starts a *new* case of a client from the steps
 another case's person approved (it carries marks, never files or items); `add_files` only adds a file to the case
 it belongs to. None of them applies steps. See "Replay paths" in `docs/plans/DATA_DOCTOR_ROOT_CAUSES.md`.

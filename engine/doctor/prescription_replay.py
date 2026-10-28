@@ -40,6 +40,7 @@ from engine.agent.recipe import RecipeError
 from engine.config import StrictBase
 from engine.doctor.build_driver import BuildDriveError, BuildDriveResult, replay_build
 from engine.doctor.locale import SETTINGS, detect_locale
+from engine.doctor.materialize import step_drift
 from engine.doctor.outcome_definition import OutcomeError, OutcomeReceipt, apply_outcome_values
 from engine.doctor.prescription import (
     PRESCRIPTION_DRIFT,
@@ -55,7 +56,6 @@ from engine.doctor.prescription_contract import (
     DriftFinding,
     check_contract,
     drift_question,
-    value_text,
 )
 from engine.intake.contracts import IntakeReport
 
@@ -319,33 +319,6 @@ def _frames_by_slot(files: Sequence[ReplayFile]) -> dict[str, pd.DataFrame]:
 # ---------------------------------------------------------------------------
 # Recipes
 # ---------------------------------------------------------------------------
-def _check_spellings(recipe: DataRecipe, frame: pd.DataFrame, *, slot: str | None) -> None:
-    """A `map_boolean` step's frozen spellings: a value it has no meaning for stops (never a quiet failure)."""
-    for step in recipe.steps:
-        if step.kind is not RecipeStepKind.MAP_BOOLEAN or step.column not in frame.columns:
-            continue
-        known = {
-            str(v).strip().casefold()
-            for v in (*step.params.get("true_values", []), *step.params.get("false_values", []))  # type: ignore[misc]
-        }
-        texts = frame[step.column].dropna().map(value_text)
-        texts = texts[texts != ""]
-        unknown = sorted({t for t in texts if t.casefold() not in known})
-        if unknown:
-            rows = sum(1 for t in texts if t.casefold() not in known)
-            raise drift_stop(
-                "NEW_VALUE",
-                f"'{step.column}' holds {len(unknown)} spelling{'s' if len(unknown) != 1 else ''} the approved yes/no "
-                f"step has no meaning for, in {rows:,} row{'s' if rows != 1 else ''}.",
-                f"'{step.column}' has {len(unknown)} new spelling{'s' if len(unknown) != 1 else ''}. Does each mean "
-                "yes or no?",
-                part="recipe",
-                slot=slot,
-                column=step.column,
-                examples=unknown,
-            )
-
-
 def run_part_recipe(
     recipe: DataRecipe,
     frame: pd.DataFrame,
@@ -364,7 +337,6 @@ def run_part_recipe(
     from engine.agent.config import AgentConfig
     from engine.agent.dataset_recipe import run_replay, run_saved_recipe
 
-    _check_spellings(recipe, frame, slot=slot)
     try:
         if config is not None:
             return run_saved_recipe(
@@ -386,34 +358,6 @@ def run_part_recipe(
         )
     except RecipeError as exc:
         raise step_drift(exc, contract, part=part, slot=slot) from exc
-
-
-def step_drift(
-    exc: RecipeError, contract: DataContract | None, *, part: str, slot: str | None = None
-) -> PrescriptionError:
-    """A step that cannot run: `PRESCRIPTION_DRIFT` when the column it reads is one the contract knows (the column
-    is gone, or changed), else the step's own code."""
-    column = exc.column
-    if contract is None or column is None or contract.column(column) is None:
-        return PrescriptionError(exc.code, exc.message, part=part)
-    if exc.code == "RECIPE_COLUMN_MISSING":
-        return drift_stop(
-            "MISSING_COLUMN",
-            f"'{column}' is not in this file; step {exc.order} of the approved preparation reads it.",
-            f"This file has no column '{column}'. Is it called something else now?",
-            part=part,
-            slot=slot,
-            column=column,
-        )
-    return drift_stop(
-        "MEANING_CHANGED",
-        f"Step {exc.order} of the approved preparation cannot run on '{column}' any more ({exc.code}): {exc.message}",
-        f"'{column}' changed since the preparation was approved, and step {exc.order} cannot run on it. What does the "
-        "column hold now?",
-        part=part,
-        slot=slot,
-        column=column,
-    )
 
 
 def _leak(mode: Mode) -> LeakCheck:

@@ -49,11 +49,14 @@ if TYPE_CHECKING:
     from engine.agent.reshape import LeakCheck
     from engine.doctor.case import Case, CaseFile, CaseItem
     from engine.doctor.diagnose import LoadedFile
+    from engine.doctor.prescription import PrescriptionError
+    from engine.doctor.prescription_contract import DataContract
 
 __all__ = [
     "CANDIDATE",
     "SAMPLE_SEED",
     "Full",
+    "NewSpellingError",
     "Prepared",
     "PreparedFile",
     "Sample",
@@ -61,12 +64,14 @@ __all__ = [
     "StepFailure",
     "Watch",
     "aliased",
+    "check_spellings",
     "materialize",
     "materialize_plan",
     "open_findings",
     "replay_recipe",
     "roles_of",
     "scoped",
+    "step_drift",
     "stop_finding",
     "table_names",
 ]
@@ -474,6 +479,87 @@ def materialize_plan(
     )
 
 
+class NewSpellingError(RecipeError):
+    """A yes/no step meets spellings it has no meaning for (`RECIPE_NEW_VALUE`): asked, never failed quietly under
+    the conversion limit."""
+
+    def __init__(self, column: str, order: int, unknown: Sequence[str], rows: int) -> None:
+        count = len(unknown)
+        super().__init__(
+            "RECIPE_NEW_VALUE",
+            f"'{column}' holds {count} spelling{'s' if count != 1 else ''} the approved yes/no step has no meaning "
+            f"for, in {rows:,} row{'s' if rows != 1 else ''}. Does each mean yes or no?",
+            column=column,
+            order=order,
+        )
+        self.unknown = tuple(unknown)
+        self.rows = rows
+
+
+def check_spellings(recipe: DataRecipe, frame: Any) -> None:
+    """A `map_boolean` step's frozen spellings: a value it has no meaning for raises :class:`NewSpellingError`."""
+    from engine.doctor.prescription_contract import value_text
+
+    for step in recipe.steps:
+        if step.kind is not RecipeStepKind.MAP_BOOLEAN or step.column not in frame.columns:
+            continue
+        known = {
+            str(v).strip().casefold()
+            for v in (*step.params.get("true_values", []), *step.params.get("false_values", []))  # type: ignore[misc]
+        }
+        texts = frame[step.column].dropna().map(value_text)
+        texts = texts[texts != ""]
+        unknown = sorted({t for t in texts if t.casefold() not in known})
+        if unknown:
+            rows = sum(1 for t in texts if t.casefold() not in known)
+            raise NewSpellingError(str(step.column), step.order, unknown, rows)
+
+
+def step_drift(
+    exc: RecipeError, contract: DataContract | None, *, part: str, slot: str | None = None
+) -> PrescriptionError:
+    """A stored recipe that cannot run, as the prescription replay says it: a new yes/no spelling is `NEW_VALUE`;
+    a step that fails on a column the contract knows is `PRESCRIPTION_DRIFT` (the column is gone, or changed);
+    otherwise the step's own code. A scoring route answers the same `RecipeError` with its one-error report
+    (`recipe_failure_report`), so a replay without a prescription raises it as it is."""
+    from engine.doctor.prescription import PrescriptionError
+    from engine.doctor.prescription_replay import drift_stop
+
+    column = exc.column
+    if isinstance(exc, NewSpellingError):
+        count = len(exc.unknown)
+        return drift_stop(
+            "NEW_VALUE",
+            f"'{column}' holds {count} spelling{'s' if count != 1 else ''} the approved yes/no "
+            f"step has no meaning for, in {exc.rows:,} row{'s' if exc.rows != 1 else ''}.",
+            f"'{column}' has {count} new spelling{'s' if count != 1 else ''}. Does each mean yes or no?",
+            part=part,
+            slot=slot,
+            column=column,
+            examples=exc.unknown,
+        )
+    if contract is None or column is None or contract.column(column) is None:
+        return PrescriptionError(exc.code, exc.message, part=part)
+    if exc.code == "RECIPE_COLUMN_MISSING":
+        return drift_stop(
+            "MISSING_COLUMN",
+            f"'{column}' is not in this file; step {exc.order} of the approved preparation reads it.",
+            f"This file has no column '{column}'. Is it called something else now?",
+            part=part,
+            slot=slot,
+            column=column,
+        )
+    return drift_stop(
+        "MEANING_CHANGED",
+        f"Step {exc.order} of the approved preparation cannot run on '{column}' any more ({exc.code}): {exc.message}",
+        f"'{column}' changed since the preparation was approved, and step {exc.order} cannot run on it. What does the "
+        "column hold now?",
+        part=part,
+        slot=slot,
+        column=column,
+    )
+
+
 def replay_recipe(
     frame: Any,
     recipe: DataRecipe,
@@ -486,7 +572,16 @@ def replay_recipe(
     tables: Mapping[str, Any] | None = None,
 ) -> RecipeRun:
     """An approved recipe's steps on new rows (next month's file, a scoring file, a firing's dataset). Raises
-    `RecipeError`. This is the one place a stored recipe is applied to a file; every replay path calls it.
+    `RecipeError`. This is the one place a stored recipe is applied to a file; every stored-recipe replay calls it.
+
+    The checks that need only the recipe run on every such replay: a yes/no step's frozen spellings
+    (:func:`check_spellings`, `NewSpellingError`) and the guards' stops. The prescription's raw-file checks (locale,
+    currency) compare against a profile and a money basis the *prescription* froze, which a recipe does not carry,
+    so they run in `engine.doctor.prescription_replay.check_files`, before this, wherever a prescription exists.
+    It differs from :func:`materialize_plan` (a plan still being decided, checked at every visit) on purpose: its
+    steps already carry the dates the person approved, so nothing is bound to a run's as-of date or compared for
+    date differences, and the leak check is the caller's (training `full`, scoring `narrow`) where a plan is
+    always checked `full`.
 
     A recipe approved under the guards (Data Doctor: `recipe.acknowledged_stops` is not None) replays under them:
     every step is counted by :func:`engine.doctor.guards.run_guarded`, and a *stop* raises `RECIPE_GUARD_STOP` instead
@@ -495,6 +590,7 @@ def replay_recipe(
     the guards (Guided setup, or one saved before them) replays as it was approved: its intended losses were never
     counted, so they cannot be told from new ones.
     """
+    check_spellings(recipe, frame)
     args: dict[str, Any] = {
         "upload_id": upload_id,
         "primary_key": recipe.primary_key,
