@@ -54,6 +54,12 @@ export function serverFor(world) {
       return ok({ cases: [{ case_id: CASE, title: c.title, goal_id: goal ? goal.goal_id : null, state: c.state, files: [], updated_at: c.updated_at }] });
     }
     if (method === "GET" && p === `/cases/${CASE}/screen`) return ok(world.patch ? world.patch(screen(world.at)) : screen(world.at));
+    if (method === "GET" && p === `/cases/${CASE}_other/screen`) {
+      // a second case of the same shape, for the tests that switch or reopen a case
+      const other = JSON.parse(JSON.stringify(screen(world.at)));
+      other.case.case_id = `${CASE}_other`;
+      return ok(other);
+    }
     if (method === "GET" && /^\/uploads\/[^/]+\/profile$/.test(p)) return ok({ rows: 1200, row_count: 1200, columns: [] });
     if (method === "GET" && p === "/campaign-runs/model-offer") {
       return world.offer ? ok(world.offer) : { status: 404, body: { detail: { code: "NOT_FOUND", message: "No offer." } } };

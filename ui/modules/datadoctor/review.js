@@ -41,7 +41,7 @@ export function waitingFor(review, ctx) {
   if (!review || review.approve.stage !== "approve") return [];
   const out = [...review.approve.waiting];
   for (const d of review.decisions) {
-    if (d.answered && d.needs_yes && !ctx.yes.has(keyOf(d))) out.push(`Say yes or change: ${d.title}`);
+    if (d.answered && d.needs_yes) out.push(`Say yes or change: ${d.title}`); // the server's own: a yes is saved there
   }
   for (const p of review.problems) {
     if (p.hard || !p.acknowledgeable || p.acknowledged) continue; // the server's own reasons above already say a rule is not met
@@ -92,7 +92,7 @@ function optionsHtml(d, names, busy) {
 
 function decisionHtml(d, ctx, names) {
   const k = keyOf(d);
-  const said = ctx.yes.has(k);
+  const said = !d.needs_yes; // the yes is the server's record, so it survives a reload and shows in the approval
   const changing = ctx.changing.has(k);
   const open = !d.answered || changing;
   const label = KIND_LABEL[d.kind] || KIND_LABEL.other;
@@ -102,7 +102,7 @@ function decisionHtml(d, ctx, names) {
       }</span></p>`
     : `<p class="dds-state" data-rv-open>${icon("info", { size: 14 })}<span>Not answered yet.</span></p>`;
   const actions = [];
-  if (d.answered && d.needs_yes && !said) {
+  if (d.answered && d.needs_yes) {
     actions.push(button({ label: "Yes, that is right", kind: "primary", size: "sm", attrs: `data-rv-yes="${esc(k)}"`, disabled: Boolean(ctx.busy) }));
   }
   if (d.answered && d.question_id) {

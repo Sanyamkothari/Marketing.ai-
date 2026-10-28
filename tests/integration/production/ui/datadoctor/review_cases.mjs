@@ -85,15 +85,28 @@ test("an assumption needs a yes (or a change) before Approve is on; a typed answ
   );
 });
 
-test("saying yes to an assumption turns Approve on", async () => {
+test("saying yes to an assumption is saved on the server, turns Approve on and survives a redraw", async () => {
+  // the fake server answers as the real one: once the person's yes is posted, the decision is theirs
+  const said = (tail) => world.posted.some((p) => p.path === `/cases/${CASE}/${tail}`);
   await show("approve_class", (a) => {
-    a.view.review.decisions = [{ kind: "consent", title: "Who may be contacted", why: "", current: "marketing opt in", decided_by: "rules", question_id: null, item_id: "i-c", options: [], answer: null, answer_value: null, needs_yes: true, answered: true, blocking: false }];
+    a.view.review.decisions = [
+      { kind: "consent", title: "Who may be contacted", why: "", current: "marketing opt in", decided_by: said("decisions") ? "person" : "rules", question_id: null, item_id: "i-c", options: [], answer: null, answer_value: null, needs_yes: !said("decisions"), answered: true, blocking: false },
+      { kind: "date", title: "Which date is the data true as of", why: "", current: "Another date: 2011-11-30", decided_by: said("answers") ? "person" : "rules", question_id: "q-date", item_id: null, options: [option("typed", "Another date", { value_kind: "date" })], answer: "typed", answer_value: "2011-11-30", needs_yes: !said("answers"), answered: true, blocking: false },
+    ];
     return a;
   });
   assert.equal(approve().disabled, true);
   $('[data-rv-yes="i-c"]').click();
-  await settle(1);
+  await until(() => posts("decisions").length === 1, 4000, "the item's yes");
+  assert.deepEqual({ id: posts("decisions")[0].body.item_id, accept: posts("decisions")[0].body.accept }, { id: "i-c", accept: true });
+  await settle(3);
+  $('[data-rv-yes="q-date"]').click();
+  await until(() => posts("answers").length === 1, 4000, "the question's yes");
+  const sent = posts("answers")[0].body;
+  assert.deepEqual([sent.question_id, sent.option_id, sent.value], ["q-date", "typed", "2011-11-30"]);
+  await settle(3);
   assert.equal(approve().disabled, false);
+  assert.equal($$("[data-rv-yes]").length, 0, "the yes is the server's: nothing left to say yes to after a redraw");
 });
 
 test("a hard stop is drawn apart with its reason and fix, and no yes; a stop needs yes or no, and no keeps Approve off", async () => {
@@ -139,10 +152,19 @@ test("waitingFor reads the server's reasons first, then the person's", () => {
   const ctx = { yes: new Set(), nos: new Set(), stops: new Set() };
   assert.deepEqual(review.waitingFor(r, ctx), ["Choose what the campaign is for.", "Say yes or change: T", "Answer yes or no: X"]);
   r.approve.waiting = [];
-  ctx.yes.add("q");
+  r.decisions = [{ ...r.decisions[0], needs_yes: false }]; // the person's yes, saved on the server
   ctx.stops.add("k");
   assert.equal(review.reviewAllowed(r, ctx), true);
   assert.equal(review.reviewAllowed({ ...r, approve: { ...r.approve, stage: "start" } }, ctx), false);
   const stopped = { key: "v", text: "V", hard: false, acknowledgeable: false, acknowledged: false };
   assert.deepEqual(review.waitingFor({ ...r, problems: [stopped], approve: { stage: "approve", waiting: ["1 rule is not met."], enabled: false } }, ctx), ["1 rule is not met."], "a stop nobody can say yes to is never asked yes or no");
+});
+
+test("another case, or a reopened one, opens on its chat, not on the last case's review", async () => {
+  await show("approve_class");
+  assert.ok($("[data-rv]"), "the review is open");
+  // the same place drawn again for a case a link names (a reopen): the review is not carried over
+  mountDataDoctor({ main: $("#m"), aside: $("#a") }, { place: "data", caseId: `${CASE}_other` });
+  await settle(4);
+  assert.ok(!$("[data-rv]"), "the reopened case starts on its chat");
 });

@@ -868,8 +868,20 @@ function reviewClick(entry, target) {
     entry.review = false;
     redraw();
   } else if (d.rvYes) {
-    s.yes.add(d.rvYes);
-    redraw();
+    // The person's yes to an assumption or an earlier answer is saved on the server: the question answered again
+    // with its current answer (its value too), or the item ticked by them. It survives a reload and is on record.
+    const review = reviewOf(entry.state.screen);
+    const decision = review && review.decisions.find((x) => (x.question_id || x.item_id || x.title) === d.rvYes);
+    if (!decision) return;
+    act(
+      entry,
+      "answer",
+      () =>
+        decision.question_id
+          ? answerQuestion(theCase(entry), decision.question_id, decision.answer, decision.answer_value || "")
+          : decideItem(theCase(entry), decision.item_id, true),
+      { announce: "Saved: you said yes", pending: `yes:${d.rvYes}` },
+    );
   } else if (d.rvChange) {
     if (s.changing.has(d.rvChange)) s.changing.delete(d.rvChange);
     else s.changing.add(d.rvChange);
@@ -887,7 +899,6 @@ function reviewClick(entry, target) {
       async () => {
         await answerQuestion(theCase(entry), d.rvQ, d.rvAnswer, typed);
         s.changing.delete(d.rvQ);
-        s.yes.add(d.rvQ);
       },
       { announce: "Answer saved", pending: `answer:${d.rvQ}|${d.rvAnswer}` },
     );
@@ -1011,6 +1022,7 @@ function bind(entry) {
     else if (target.hasAttribute("data-dds-expert") && entry.host.manual) entry.host.manual();
     else if (target.hasAttribute("data-dds-new")) {
       entry.state = { ...fresh(), loading: false, ai: entry.state.ai };
+      entry.review = false; // another case opens on its chat, never on the last case's approval review
       draw(entry);
     }
   });
@@ -1218,7 +1230,10 @@ export function mountDataDoctor(slots, host) {
   entry.linked = full.caseId || null;
   // Files chosen on the Data page ("Connect your data") start a new check: no earlier case is opened first.
   const handed = Boolean(full.files && full.files.length);
-  if (reopen || handed) entry.state = { ...fresh(), loading: !handed, ai: entry.state.ai };
+  if (reopen || handed) {
+    entry.state = { ...fresh(), loading: !handed, ai: entry.state.ai };
+    entry.review = false; // a reopened or handed-off case starts on its chat
+  }
   draw(entry);
   slots.main.replaceChildren(entry.main);
   if (slots.aside) slots.aside.replaceChildren(entry.aside);
