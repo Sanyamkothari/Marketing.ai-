@@ -5,8 +5,9 @@ journey_label: Shopper Lifecycle
 
 # Two public datasets carry this industry today: the UCI Online Retail invoice log, aggregated to
 # one row per lapsed shopper, at Win-back, and the MineThatData e-mail test (Hillstrom), randomised
-# into three groups, at Retention (Plan J M110). The two planned entries are the stages a transaction log
-# cannot answer until Phase 2's aggregation lets the engine build the rows itself.
+# into three groups, at Retention (Plan J M110). Growth holds the customer-spend amount goal, whose
+# outcome the Data Doctor works out from an order history. The two planned entries are the stages a
+# transaction log cannot answer until Phase 2's aggregation lets the engine build the rows itself.
 
 stages:
   - id: awareness
@@ -30,6 +31,11 @@ stages:
     ai_type: predictive
     use_cases:
       - {id: hillstrom-email, status: available}   # Plan J M110: the public randomised e-mail test (library/hillstrom-email)
+  - id: growth
+    name: Growth
+    ai_type: predictive
+    use_cases:
+      - {id: customer-spend, status: available}    # an amount goal: spend in the 90 days after the snapshot date
   - id: win_back
     name: Win-back
     ai_type: predictive
