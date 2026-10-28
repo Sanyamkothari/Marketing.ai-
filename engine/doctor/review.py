@@ -28,7 +28,7 @@ from pydantic import Field
 from engine.agent.contracts import ProposalState
 from engine.config import StrictBase
 from engine.doctor.case import Case, CaseItem, CaseOption, CaseQuestion
-from engine.doctor.conversation import _counts, _is_agent
+from engine.doctor.conversation import _counts, _is_agent, approval_holds
 from engine.doctor.decisions import AS_OF_QUESTION, decisions
 from engine.doctor.ledger import findings_of
 from engine.doctor.protocol import AGENT, REQUEST_CODES
@@ -369,13 +369,13 @@ def build_review(case: Case, view: CaseScreenView) -> ApprovalReview:
         if not a.confirmed
     )
     waiting: list[str] = []
-    if view.goal_id is None:
+    holds = approval_holds(case, view)  # the same rule as the chat card's Approve
+    if "goal" in holds:
         waiting.append("Choose what the campaign is for.")
-    open_q = [d for d in shown if not d.answered and d.question_id]
-    if open_q:
-        waiting.append(
-            f"{len(open_q)} {'question is' if len(open_q) == 1 else 'questions are'} not answered."
-        )
+    open_q = [d for d in shown if not d.answered and d.question_id and d.blocking]
+    if "questions" in holds:
+        count = max(len(open_q), 1)
+        waiting.append(f"{count} {'question is' if count == 1 else 'questions are'} not answered.")
     pending = [s for s in swaps if s.state == "pending"]
     if pending:
         waiting.append(f"Choose between the old and the new step ({len(pending)}).")
@@ -384,7 +384,7 @@ def build_review(case: Case, view: CaseScreenView) -> ApprovalReview:
         waiting.append(f"{len(unmet)} {'rule is' if len(unmet) == 1 else 'rules are'} not met.")
     if any(a.required and not a.can_agree for a in agreements):
         waiting.append("A change needs someone else's own yes.")
-    if view.verdict.key == "not_ready":
+    if "not_ready" in holds:
         waiting.append("Fix what the last check found.")
     stage: Literal["approve", "start", "blocked", "waiting"]
     if view.approval_sentence:

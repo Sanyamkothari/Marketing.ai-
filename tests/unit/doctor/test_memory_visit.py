@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from engine.access.roles import LOCAL_OPERATOR
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, RecipeStep, RecipeStepKind
 from engine.agent.tools import AgentContext
@@ -108,5 +110,19 @@ def test_a_plan_with_no_steps_remembers_nothing(tmp_path: Path) -> None:
         )
         if name == "approve":
             break
+    assert case.visit is not None and case.visit.hand_off is not None, "the approval reached the hand-off"
+    columns = [str(c) for c in w.files[vs.FIRST].frame.columns]
+    assert recall(storage, vs.GOAL_A, shape_of(columns)) is None
+
+
+def test_a_memory_that_cannot_be_written_never_stops_the_hand_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*_: object, **__: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("engine.doctor.memory.remember_approved_case", broken)
+    storage, case, w = _approved(tmp_path)
+    assert case.visit is not None and case.visit.hand_off is not None
     columns = [str(c) for c in w.files[vs.FIRST].frame.columns]
     assert recall(storage, vs.GOAL_A, shape_of(columns)) is None

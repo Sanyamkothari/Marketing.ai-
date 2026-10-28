@@ -71,8 +71,13 @@ def test_the_plan_is_one_line_per_change(storage: LocalStorage, world: World) ->
     screen = scenario("approve", storage, world)
     review = screen.view.review
     assert review is not None
+    from engine.doctor.visit import CARRIED_KINDS, plan_change_items
+
     accepted = [i for i in screen.case.items if i.state is ProposalState.ACCEPTED]
-    assert {line.item_id for line in review.plan} <= {i.item_id for i in accepted}
+    changes = [i.item_id for i in plan_change_items(screen.case) if i.kind not in CARRIED_KINDS]
+    assert changes, "the scenario's plan has changes"
+    assert [line.item_id for line in review.plan] == changes
+    assert set(changes) <= {i.item_id for i in accepted}
     assert all(line.text for line in review.plan)
 
 
@@ -87,10 +92,8 @@ def test_a_change_needing_its_own_yes_is_an_agreement_with_who_may_give_it(
     assert by_item == {a.item_id: by_item[a.item_id] for a in screen.view.approve_class if not a.confirmed}
     refused = [a for a in review.agreements if not a.can_agree]
     assert refused and all(a.cannot_agree in {"role", "separation"} for a in refused)
-    if any(a.required for a in refused):
-        assert not review.approve.enabled and "needs someone else's own yes" in " ".join(
-            review.approve.waiting
-        )
+    assert any(a.required for a in refused), "the scenario has a required change this person cannot agree"
+    assert not review.approve.enabled and "needs someone else's own yes" in " ".join(review.approve.waiting)
 
 
 def test_a_rule_assumed_decision_needs_the_persons_yes(storage: LocalStorage, world: World) -> None:
@@ -190,11 +193,23 @@ def test_a_pending_swap_shows_old_beside_new_and_holds_approve(storage: LocalSto
 
 
 def test_a_typed_answer_carries_its_value_kind(storage: LocalStorage, world: World) -> None:
+    from engine.doctor.case import CaseOption, CaseQuestion
+
     screen = scenario("question", storage, world)
-    review = screen.view.review
-    assert review is not None
-    typed = {o.value_kind for d in review.decisions for o in d.options if o.value_kind}
-    assert typed <= {"date", "number", "text"}
+    typed = CaseQuestion(
+        question_id="q.typed_window.base",
+        code="Q_TYPED",
+        text="How many days should the outcome window be?",
+        options=(
+            CaseOption(option_id="days", label="This many days", value_kind="number"),
+            CaseOption(option_id="when", label="Until this date", value_kind="date"),
+        ),
+    )
+    case = screen.case.model_copy(update={"questions": (*screen.case.questions, typed)})
+    review = build_review(case, screen.view)
+    shown = next(d for d in review.decisions if d.question_id == "q.typed_window.base")
+    assert [(o.id, o.value_kind) for o in shown.options] == [("days", "number"), ("when", "date")]
+    assert shown.kind == "date"
 
 
 def test_review_is_served_in_the_screen_payload(storage: LocalStorage, world: World) -> None:
@@ -202,3 +217,35 @@ def test_review_is_served_in_the_screen_payload(storage: LocalStorage, world: Wo
     body = screen.model_dump(mode="json")
     assert set(body["view"]["review"]) == {"plan", "decisions", "problems", "agreements", "swaps", "approve"}
     assert ReviewApprove.model_validate(body["view"]["review"]["approve"]).stage == "approve"
+
+
+def test_a_non_blocking_open_question_holds_neither_approve(storage: LocalStorage, world: World) -> None:
+    from engine.doctor.case import CaseOption, CaseQuestion
+    from engine.doctor.conversation import _hold, approval_holds
+
+    screen = scenario("approve_class", storage, world)
+    aside = CaseQuestion(
+        question_id="q.aside.base",
+        code="Q_ASIDE",
+        text="Should the notes column be kept for later?",
+        options=(
+            CaseOption(option_id="keep", label="Keep it"),
+            CaseOption(option_id="drop", label="Drop it"),
+        ),
+        blocking=False,
+    )
+    case = screen.case.model_copy(update={"questions": (*screen.case.questions, aside)})
+    review = build_review(case, screen.view)
+    assert any(d.question_id == "q.aside.base" and not d.answered for d in review.decisions)
+    assert approval_holds(case, screen.view) == () and _hold(case, screen.view) == ""
+    assert review.approve.enabled and review.approve.waiting == ()
+
+
+def test_a_blocking_open_question_holds_both(storage: LocalStorage, world: World) -> None:
+    from engine.doctor.conversation import _hold, approval_holds
+
+    screen = scenario("question", storage, world)
+    review = screen.view.review
+    assert review is not None
+    assert "questions" in approval_holds(screen.case, screen.view) and _hold(screen.case, screen.view)
+    assert not review.approve.enabled

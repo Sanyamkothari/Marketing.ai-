@@ -527,19 +527,35 @@ def _chosen_speed(case: Case, config_root: Path | None) -> str | None:
     return None
 
 
-def _hold(case: Case, view: CaseScreenView) -> str:
-    """Why Approve waits: nothing to approve it for yet, or something to fix first. Empty: it may go.
+APPROVAL_HOLDS: Final[dict[str, str]] = {
+    "goal": "Choose what the campaign is for first.",
+    "questions": "Answer the questions above first.",
+    "not_ready": "Fix what the last check found first.",
+}
 
-    A check that found the data not ready for this goal says the same again until the plan changes (a change makes
-    that check old, and the card goes back to asking); a visit that was stopped by something else may try again.
+
+def approval_holds(case: Case, view: CaseScreenView) -> tuple[str, ...]:
+    """Why Approve waits, as keys of `APPROVAL_HOLDS`: the one rule both Approve buttons (the chat's card and the
+    review screen) read, so they never disagree. Empty: it may go.
+
+    Only blocking questions hold it. A check that found the data not ready for this goal holds it until the plan
+    changes (a change makes that check old, and the card goes back to asking); a visit that was stopped by something
+    else may try again.
     """
+    holds: list[str] = []
     if view.goal_id is None:
-        return "Choose what the campaign is for first."
+        holds.append("goal")
     if open_blocking(case):
-        return "Answer the questions above first."
+        holds.append("questions")
     if view.verdict.key == "not_ready" and not (case.visit is not None and case.visit.stopped is not None):
-        return "Fix what the last check found first."
-    return ""
+        holds.append("not_ready")
+    return tuple(holds)
+
+
+def _hold(case: Case, view: CaseScreenView) -> str:
+    """The first reason Approve waits (`approval_holds`), in words; empty when it may go."""
+    holds = approval_holds(case, view)
+    return APPROVAL_HOLDS[holds[0]] if holds else ""
 
 
 def _ready(

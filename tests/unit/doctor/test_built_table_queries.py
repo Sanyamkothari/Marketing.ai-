@@ -114,3 +114,8 @@ def test_features_are_built_on_a_built_table() -> None:
     )
     # the refunded invoice is gone from the built table, so C2 has one invoice of 20
     assert out["rows_out"] == 3 and out["state"] == "pending" and out["ticked"] is False
+    assert out["rows_in"] == 4 and [(t["name"], t["rows"]) for t in out["inputs"]] == [("paid", 4)]
+    by_name = {f["name"]: f for f in out["features"]}
+    # on the raw file C2 would have two invoices in 90 days and spend 15 (the median of 110, 15, 10)
+    assert by_name["spend_365d"]["median"] == 20.0  # 110, 20, 10
+    assert by_name["orders_90d"]["state"] == "constant"  # one paid invoice each in the last 90 days
