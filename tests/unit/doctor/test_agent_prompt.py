@@ -14,9 +14,10 @@ from engine.generative.contracts import GenerativePurpose
 from engine.generative.prompts import load_prompt, prompts_dir, render
 
 NAME = "data_doctor_agent"
-MAX_WORDS = 2550
+MAX_WORDS = 2580
 """The rendered instructions with the question list, before the tool list: a cap on what the model must hold in
-mind every turn."""
+mind every turn. Raised from 2550 when the combine-rows, unpivot and lessons actions (built in parallel) met: about
+2570 words together, after their lines were shortened."""
 
 OUT_OF_SCOPE_CODES = (
     "PDF_OR_SCAN",
