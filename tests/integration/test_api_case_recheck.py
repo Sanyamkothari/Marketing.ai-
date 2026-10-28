@@ -64,3 +64,17 @@ def test_the_new_upload_must_match_the_case(client: TestClient) -> None:
     case = client.post("/cases", json={"upload_ids": [first]}).json()
     wrong = client.post(f"/cases/{case['case_id']}/recheck", json={"uploads": {"nope": first}})
     assert wrong.status_code == 422 and code_of(wrong) == "RECHECK_FILES_MISMATCH"
+
+
+def test_a_retried_recheck_answers_the_case_it_opened(client: TestClient, tmp_path: Path) -> None:
+    first, second = upload(client, "customers.csv"), upload(client, "customers.csv", seed=3)
+    case = client.post("/cases", json={"upload_ids": [first]}).json()
+    make_ready(tmp_path, case["case_id"])
+    made = client.post(f"/cases/{case['case_id']}/recheck", json={"upload_id": second})
+    again = client.post(f"/cases/{case['case_id']}/recheck", json={"upload_id": second})
+    assert made.status_code == 201 and again.status_code == 201
+    assert again.json()["case_id"] == made.json()["case_id"]
+    linked = [
+        c for c in CaseStore(LocalStorage(tmp_path / "data")).list("default") if c.recheck_of is not None
+    ]
+    assert len(linked) == 1

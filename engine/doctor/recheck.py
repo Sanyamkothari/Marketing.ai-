@@ -47,7 +47,7 @@ from pydantic import Field
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.agentic.canonical import canonical_bytes, sha256_hex
-from engine.config import StrictBase
+from engine.config import ProblemType, StrictBase, UseCaseConfig, ValidationConfig, load_use_case
 from engine.doctor.case import (
     Case,
     CaseApproval,
@@ -91,8 +91,7 @@ if TYPE_CHECKING:
     from engine.storage import Storage
 
 __all__ = [
-    "MIN_POSITIVES",
-    "MIN_ROWS",
+    "RECHECK_STATES",
     "DateMove",
     "RecheckError",
     "RecheckFinding",
@@ -104,9 +103,8 @@ __all__ = [
     "report_key",
 ]
 
-MIN_ROWS: Final[int] = 1_000
-MIN_POSITIVES: Final[int] = 200
-"""The hard floor of a training file: below either, no yes lifts the stop."""
+RECHECK_STATES: Final[frozenset[str]] = frozenset({"hand_off", "follow_up"})
+"""A case is rechecked only once it reached ready: handed off, or followed up."""
 ROW_COUNT_BAND: Final[tuple[float, float]] = (0.5, 2.0)
 """A new file with fewer than half or more than twice the rows of the approved one is asked about."""
 MISSING_CATEGORY_SHARE: Final[float] = 0.05
@@ -556,6 +554,7 @@ def _content(
     key: str | None,
     target: str | None,
     protected: frozenset[str],
+    config: UseCaseConfig | None,
 ) -> None:
     """What the prepared columns look like now against the approved run's (the contract learnt from it).
 
@@ -574,7 +573,7 @@ def _content(
         elif drift.detector in ("NEW_VALUE", "NEW_CATEGORY"):
             code = "NEW_CATEGORY"
         else:
-            code = "NULL_RATE_JUMP" if " is empty in " in drift.summary else "VALUE_SHIFT"
+            code = "NULL_RATE_JUMP" if drift.measure == "empty_share" else "VALUE_SHIFT"
         if drift.stops:
             found.stop(
                 code, drift.summary, upload_id=upload_id, column=drift.column, hard=drift.column in protected
@@ -597,6 +596,9 @@ def _content(
             )
     if target is None or target not in new.columns:
         return
+    if config is not None and config.problem_type is ProblemType.REGRESSION:
+        _amount_content(found, old, new, upload_id=upload_id, target=target, config=config)
+        return
     after = _yes_rate(new[target])
     if after is None:
         found.stop(
@@ -617,14 +619,65 @@ def _content(
             column=target,
         )
     positives = int(pd.to_numeric(new[target], errors="coerce").fillna(0).sum())
-    if positives < MIN_POSITIVES:
+    need = (config.validation if config is not None else ValidationConfig()).min_positive
+    if positives < need:
         found.stop(
             "TOO_FEW_POSITIVES",
-            f"'{target}' has {positives:,} yes outcomes; at least {MIN_POSITIVES:,} are needed.",
+            f"'{target}' has {positives:,} yes outcomes; at least {need:,} are needed.",
             upload_id=upload_id,
             column=target,
             hard=True,
         )
+
+
+def _amount_content(
+    found: _Found,
+    old: pd.DataFrame,
+    new: pd.DataFrame,
+    *,
+    upload_id: str,
+    target: str,
+    config: UseCaseConfig,
+) -> None:
+    """A regression goal's outcome is an amount: its floor is `amount_minimums` (rows and customers with a non-zero
+    amount, from the config), a hard rule; a big move in the share with a non-zero amount is a stop a person lifts.
+    """
+    from engine.doctor.amount_outcome import amount_minimums
+
+    floor = amount_minimums(new[target], config)
+    if floor.non_zero < floor.min_non_zero:
+        found.stop(
+            "TOO_FEW_POSITIVES",
+            f"'{target}' has {floor.non_zero:,} customers with a non-zero amount; at least "
+            f"{floor.min_non_zero:,} are needed.",
+            upload_id=upload_id,
+            column=target,
+            hard=True,
+        )
+    after = _non_zero_share(new[target])
+    before = _non_zero_share(old[target]) if target in old.columns else None
+    if after is None:
+        found.stop(
+            "OUTCOME_NOT_AN_AMOUNT",
+            f"'{target}' cannot be read as an amount in this file, so the outcome cannot be measured.",
+            upload_id=upload_id,
+            column=target,
+            hard=True,
+        )
+        return
+    if before is not None and abs(after - before) > max(OUTCOME_RATE_FLOOR, OUTCOME_RATE_MOVE * before):
+        found.stop(
+            "OUTCOME_RATE_SHIFT",
+            f"The share of customers with a non-zero '{target}' is {after:.1%}; it was {before:.1%} when the plan "
+            "was approved. A shift this big needs a person to look before anything is trained.",
+            upload_id=upload_id,
+            column=target,
+        )
+
+
+def _non_zero_share(series: pd.Series[Any]) -> float | None:
+    numbers = pd.to_numeric(series.dropna(), errors="coerce").dropna()
+    return None if numbers.empty else float((numbers != 0).mean())
 
 
 # ---------------------------------------------------------------------------
@@ -689,7 +742,26 @@ def _ask_again(
     return tuple(out), frozenset(again)
 
 
-def _remap_questions(questions: Sequence[CaseQuestion], dates: Mapping[str, str]) -> tuple[CaseQuestion, ...]:
+def date_reason(moved: DateMove, window: int | None) -> str:
+    """Why the dates are proposed where they are, in plain words (dates and day counts only)."""
+    if not moved.moved or moved.data_end_before is None or moved.data_end_after is None:
+        return ""
+    days = (moved.data_end_after - moved.data_end_before).days
+    text = f"The data now ends {moved.data_end_after.isoformat()}, {days} day{'s' if days != 1 else ''} later"
+    if moved.training_as_of_after is not None and window:
+        text += f"; the training date stays {window} days before the end so the outcome window fits"
+    return (
+        text
+        + ". Say yes to these dates, or type another one (a backfill or a partial last month moves less)."
+    )
+
+
+def _remap_questions(
+    questions: Sequence[CaseQuestion], dates: Mapping[str, str], reason: str = ""
+) -> tuple[CaseQuestion, ...]:
+    """A date question the person answered is not answered for them with the moved date: the moved date becomes the
+    recheck's proposal (`assumed`, so the review shows it as the rules' answer that needs the person's yes), with
+    the reason, and the person confirms it or types another date."""
     out: list[CaseQuestion] = []
     for q in questions:
         if q.answer is not None and dates:
@@ -698,7 +770,16 @@ def _remap_questions(questions: Sequence[CaseQuestion], dates: Mapping[str, str]
             if value is None and option is not None:
                 value = next((d for d in dates if d in option.label), None)
             if value is not None and value in dates:
-                q = q.model_copy(update={"answer_value": dates[value]})
+                q = q.model_copy(
+                    update={
+                        "answer_value": dates[value],
+                        "assumed": True,
+                        "standing_answer_id": None,
+                        "answered_by": None,
+                        "recommended": q.answer,
+                        "why": reason or q.why,
+                    }
+                )
         out.append(q)
     return tuple(out)
 
@@ -717,11 +798,15 @@ def recheck(
     new_files: Sequence[LoadedFile],
     *,
     now: datetime,
+    config: UseCaseConfig | None = None,
 ) -> Rechecked:
     """Replay the ready `case`'s approved plan on `new_files` (`uploads`: old upload id -> new upload id) and say what
     differs from the approved run. The case is not changed; :func:`open_recheck_case` makes the follow-up case.
+
+    `config` is the goal's use case (its `validation` floors and `problem_type`); read from the shipped configs
+    by the case's goal when not given.
     """
-    if not is_approved(case):
+    if case.state.value not in RECHECK_STATES or not is_approved(case):
         raise RecheckError(
             "RECHECK_NOT_READY", "Only a case the person approved and took to ready can be rechecked."
         )
@@ -736,6 +821,10 @@ def recheck(
     items, _ = active_section(case)
     active_ids = {i.item_id for i in items}
     decided = decisions(case)
+    if config is None:
+        goal = active_goal(case)
+        config = load_use_case(goal.goal_id) if goal is not None else None
+    floors = config.validation if config is not None else ValidationConfig()
     baseline = materialize(case, items, list(old_files), Full())
     if baseline.failed:
         raise RecheckError(
@@ -835,31 +924,36 @@ def recheck(
         elif finding.level == "flag" and (was is None or not holds(was.count, finding.count)):
             found.ask(finding.code, finding.text, upload_id=first_new, column=finding.column, key=finding.key)
     rows_before = rows_after = 0
+    # each file that ran is compared, even when another one failed (one broken file must not hide drift elsewhere)
+    targets: dict[str, str | None] = {}
+    for old_id, new_id in uploads.items():
+        name = baseline.by_upload[old_id]
+        if new_id in run.failed or name not in run.tables:
+            continue
+        key, target = roles_of(items, old_id, {str(c) for c in baseline.tables[name].columns})
+        targets[name] = target
+        _content(
+            found,
+            baseline.tables[name],
+            run.tables[name],
+            upload_id=new_id,
+            key=key,
+            target=target,
+            protected=protected[old_id],
+            config=config,
+        )
     if run.failed:
         rows_before = sum(f.file_rows or len(f.frame) for f in old_files)
         rows_after = sum(f.file_rows or len(f.frame) for f in new_files)
     else:
-        targets: dict[str, str | None] = {}
-        for old_id, new_id in uploads.items():
-            name = baseline.by_upload[old_id]
-            key, target = roles_of(items, old_id, {str(c) for c in baseline.tables[name].columns})
-            targets[name] = target
-            _content(
-                found,
-                baseline.tables[name],
-                run.tables[name],
-                upload_id=new_id,
-                key=key,
-                target=target,
-                protected=protected[old_id],
-            )
         names = [baseline.by_upload[u] for u in uploads]
         rows_before = _training_rows({n: baseline.tables[n] for n in names}, targets)
         rows_after = _training_rows({n: run.tables[n] for n in names}, targets)
-        if rows_after < MIN_ROWS:
+        need_rows = floors.min_rows
+        if rows_after < need_rows:
             found.stop(
                 "TOO_FEW_ROWS",
-                f"The prepared training table has {rows_after:,} rows; at least {MIN_ROWS:,} are needed.",
+                f"The prepared training table has {rows_after:,} rows; at least {need_rows:,} are needed.",
                 upload_id=None,
                 hard=True,
             )
@@ -886,7 +980,7 @@ def recheck(
     return Rechecked(
         report=report,
         items=(*follow_items, *({c.item_id: c for c in found.checks}.values())),
-        questions=(*_remap_questions(case.questions, mapping), *found.questions),
+        questions=(*_remap_questions(case.questions, mapping, date_reason(dates, window)), *found.questions),
         approvals=tuple(a for a in case.approvals if not (a.approve_class and reopened & set(a.item_ids))),
         reopened=tuple(sorted(reopened)),
         offers=found.offers,

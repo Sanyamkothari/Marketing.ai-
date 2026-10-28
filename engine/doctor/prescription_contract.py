@@ -142,6 +142,9 @@ class DriftFinding(StrictBase):
     column: str | None = None
     summary: str = Field(description="What moved, in plain words; counts and shares only.")
     question: Question
+    measure: Literal["empty_share"] | None = Field(
+        default=None, description="What a `VALUE_DRIFT` measured, when it is not the values themselves."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +316,7 @@ def _finding(
     slot: str | None,
     column: str | None,
     examples: Sequence[str] = (),
+    measure: Literal["empty_share"] | None = None,
 ) -> DriftFinding:
     return DriftFinding(
         detector=detector,
@@ -321,6 +325,7 @@ def _finding(
         column=column,
         summary=summary,
         question=drift_question(detector, question, stops=stops, slot=slot, column=column, examples=examples),
+        measure=measure,
     )
 
 
@@ -407,6 +412,7 @@ def _check_column(
                 stops=False,
                 slot=slot,
                 column=name,
+                measure="empty_share",
             )
         )
     if frozen.p50 is not None and frozen.p1 is not None and frozen.p99 is not None:

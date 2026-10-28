@@ -160,9 +160,7 @@ def test_a_big_outcome_rate_shift_is_a_stop() -> None:
     report = run(month(OLD_START + timedelta(days=30), seed=2, rate=0.6)).report
     stops = report.stops
     assert [f.code for f in stops] == ["OUTCOME_RATE_SHIFT"]
-    assert stops[0].subject.startswith("data_check@recheck_outcome_rate_shift") or "OUTCOME_RATE_SHIFT" in (
-        stops[0].subject.upper()
-    )
+    assert stops[0].subject == "data_check@OUTCOME_RATE_SHIFT:up-new:churned"
     assert not report.passed
 
 
@@ -458,3 +456,115 @@ def test_the_follow_up_case_goes_on_through_the_visit_without_a_new_round(tmp_pa
     assert parse.state is ProposalState.ACCEPTED and parse.decided_by == "asha"
     assert any(i.kind == "column_alias" and i.state is ProposalState.ACCEPTED for i in after.items)
     assert after.approvals[: len(case.approvals)] == case.approvals
+
+
+# -- the state, the amount goal, the dates the person says yes to, one broken file -------------------------------
+def test_a_case_past_approve_but_not_ready_is_refused() -> None:
+    for state in (VisitState.PRESCRIBE, VisitState.VERIFY):
+        with pytest.raises(RecheckError) as refused:
+            run(
+                month(OLD_START + timedelta(days=30), seed=2),
+                ready_case().model_copy(update={"state": state}),
+            )
+        assert refused.value.code == "RECHECK_NOT_READY"
+
+
+def spend_month(start: date, *, seed: int, spenders: float = 0.3) -> pd.DataFrame:
+    frame = month(start, seed=seed)
+    rng = np.random.default_rng(seed + 100)
+    frame["churned"] = np.where(rng.random(ROWS) < spenders, np.round(rng.uniform(5, 900, ROWS), 2), 0.0)
+    return frame
+
+
+def test_an_amount_goal_is_rechecked_by_its_amount_floor_not_as_yes_no() -> None:
+    config = load_use_case("customer-spend", CONFIGS)
+    old = loaded(spend_month(OLD_START, seed=1), "up-old")
+    same = recheck(
+        ready_case(),
+        {"up-old": "up-new"},
+        [old],
+        [loaded(spend_month(OLD_START + timedelta(days=30), seed=2), "up-new")],
+        now=NOW,
+        config=config,
+    ).report
+    assert not {"OUTCOME_NOT_YES_NO", "TOO_FEW_POSITIVES", "OUTCOME_RATE_SHIFT"} & {
+        f.code for f in same.stops
+    }
+    few = recheck(
+        ready_case(),
+        {"up-old": "up-new"},
+        [old],
+        [loaded(spend_month(OLD_START + timedelta(days=30), seed=2, spenders=0.03), "up-new")],
+        now=NOW,
+        config=config,
+    ).report
+    stops = {f.code: f for f in few.stops}
+    assert stops["TOO_FEW_POSITIVES"].hard and "non-zero amount" in stops["TOO_FEW_POSITIVES"].text
+    assert "OUTCOME_RATE_SHIFT" in stops
+
+
+def test_the_floors_are_the_configured_ones() -> None:
+    config = load_use_case("rca", CONFIGS)
+    strict = config.model_copy(
+        update={"validation": config.validation.model_copy(update={"min_rows": 5_000, "min_positive": 2_000})}
+    )
+    old = loaded(month(OLD_START, seed=1), "up-old")
+    new = loaded(month(OLD_START + timedelta(days=30), seed=2), "up-new")
+    report = recheck(ready_case(), {"up-old": "up-new"}, [old], [new], now=NOW, config=strict).report
+    assert {"TOO_FEW_ROWS", "TOO_FEW_POSITIVES"} <= {f.code for f in report.stops if f.hard}
+
+
+def test_an_answered_date_is_proposed_again_for_the_persons_yes() -> None:
+    from engine.doctor.case import CaseOption, CaseQuestion
+
+    question = CaseQuestion(
+        question_id="q.as_of.base",
+        code="Q08_AS_OF",
+        text="What date is this data true as of?",
+        options=(CaseOption(option_id="typed", label="Another date", sets="as_of"),),
+        answer="typed",
+        answered_by="asha",
+        answered_at=NOW,
+        answer_value="2024-06-01",
+    )
+    case = ready_case().model_copy(update={"questions": (question,)})
+    result = run(month(OLD_START + timedelta(days=30), seed=2), case)
+    moved = next(q for q in result.questions if q.question_id == "q.as_of.base")
+    assert moved.answer_value == result.report.dates.as_of_after.isoformat()  # type: ignore[union-attr]
+    assert moved.assumed and moved.answered_by is None and moved.recommended == "typed"
+    assert moved.why.startswith("The data now ends ")
+    from engine.doctor.review import _question_decision
+
+    shown = _question_decision(moved)
+    assert shown.decided_by == "rules" and shown.needs_yes
+
+
+def test_one_file_that_fails_does_not_hide_drift_in_the_other() -> None:
+    case = ready_case()
+    other = pd.DataFrame({"customer_id": [f"C1-{n}" for n in range(ROWS)], "score": ["12"] * ROWS})
+    broken = other.assign(score=["not a number"] * ROWS)
+    parse = RecipeStep(order=1, kind=RecipeStepKind.PARSE_NUMBER, column="score", params={}, reason="r")
+    step = item("item_score", "recipe_step", {"step": parse.model_dump(mode="json")}).model_copy(
+        update={"upload_id": "up-old2"}
+    )
+    two = case.model_copy(
+        update={
+            "files": (
+                *case.files,
+                CaseFile(upload_id="up-old2", file_name="scores.csv", added_at=NOW, added_by="asha"),
+            ),
+            "items": (*case.items, step),
+        }
+    )
+    report = recheck(
+        two,
+        {"up-old": "up-new", "up-old2": "up-new2"},
+        [loaded(month(OLD_START, seed=1), "up-old"), loaded(other, "up-old2", "scores.csv")],
+        [
+            loaded(month(OLD_START + timedelta(days=30), seed=2, rate=0.6), "up-new"),
+            loaded(broken, "up-new2", "scores.csv"),
+        ],
+        now=NOW,
+    ).report
+    assert report.rows_after == 2 * ROWS  # the run failed (raw rows are counted), and still the drift is said
+    assert "OUTCOME_RATE_SHIFT" in {f.code for f in report.stops}

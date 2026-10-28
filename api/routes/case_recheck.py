@@ -14,6 +14,7 @@ RECHECK_BASELINE_FAILED` (the approved plan no longer runs on the approved files
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Query, Request
@@ -28,7 +29,14 @@ from api.routes.uploads import http_error
 from api.schemas import ErrorResponse
 from engine.access.roles import Role
 from engine.config import StrictBase
-from engine.doctor.case import CLIENT_ID_PATTERN, DEFAULT_CLIENT_ID, CaseError, CaseStore
+from engine.doctor.case import (
+    CLIENT_ID_PATTERN,
+    DEFAULT_CLIENT_ID,
+    Case,
+    CaseError,
+    CaseStore,
+    _process_lock,
+)
 from engine.doctor.recheck import (
     RecheckError,
     RecheckReport,
@@ -37,6 +45,7 @@ from engine.doctor.recheck import (
     recheck,
     report_key,
 )
+from engine.storage import Storage
 from engine.utils.time import utc_now
 
 __all__ = ["POLICIES", "router"]
@@ -125,21 +134,52 @@ def recheck_case(
             raise RecheckError(
                 "RECHECK_FILES_MISMATCH", "Give one new file for each file of the case, and no others."
             )
-        new_ids = [uploads[f.upload_id] for f in case.files]
-        new_case_files = [_case_file(storage, upload_id, principal.user_id) for upload_id in new_ids]
-        rechecked = recheck(
-            case,
-            uploads,
-            _load_full(storage, case.upload_ids(), root),
-            _load_full(storage, new_ids, root),
-            now=utc_now(),
-        )
-        made = open_recheck_case(store, case, rechecked, new_case_files, actor=principal.user_id)
+        with _process_lock(f"recheck/{body.client_id}/{case_id}"):
+            report = _recheck_once(store, storage, root, case, uploads, body.client_id, principal.user_id)
     except (CaseError, RecheckError) as exc:
         raise _error(exc) from exc
+    set_audit_context(request, object_id=report.case_id, object_type="case")
+    return report
+
+
+def _recheck_once(
+    store: CaseStore,
+    storage: Storage,
+    root: Path | None,
+    case: Case,
+    uploads: dict[str, str],
+    client_id: str,
+    actor: str,
+) -> RecheckReport:
+    """One follow-up case per (source case, new uploads): a retried request answers the case it already opened, and
+    a report that was not written (the request died between the two writes) is written then."""
+    made = next(
+        (
+            c
+            for c in store.list(client_id)
+            if c.recheck_of is not None
+            and c.recheck_of.source_case_id == case.case_id
+            and c.recheck_of.uploads == uploads
+        ),
+        None,
+    )
+    if made is not None:
+        kept = read_report(storage, client_id, made.case_id)
+        if kept is not None:
+            return kept
+    new_ids = [uploads[f.upload_id] for f in case.files]
+    rechecked = recheck(
+        case,
+        uploads,
+        _load_full(storage, case.upload_ids(), root),
+        _load_full(storage, new_ids, root),
+        now=utc_now(),
+    )
+    if made is None:
+        new_case_files = [_case_file(storage, upload_id, actor) for upload_id in new_ids]
+        made = open_recheck_case(store, case, rechecked, new_case_files, actor=actor)
     report = rechecked.report.model_copy(update={"case_id": made.case_id})
-    storage.write_model(report_key(body.client_id, made.case_id), report)
-    set_audit_context(request, object_id=made.case_id, object_type="case")
+    storage.write_model(report_key(client_id, made.case_id), report)
     return report
 
 
