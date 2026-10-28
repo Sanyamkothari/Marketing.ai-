@@ -37,6 +37,8 @@ pytestmark = pytest.mark.integration
 
 NODE_DIR: Final[Path] = Path(__file__).resolve().parent / "production" / "ui"
 SUITE: Final[Path] = NODE_DIR / "run_progress" / "run_progress.test.mjs"
+PAGE_SUITE: Final[Path] = NODE_DIR / "run_progress" / "run_page.test.mjs"
+"""The campaign progress page moving on to the review by itself (no fixtures needed)."""
 
 
 def _dump(status: RunStatus, *, without_estimate: bool = False) -> dict[str, Any]:
@@ -83,7 +85,7 @@ def test_the_running_bar_in_jsdom(monkeypatch, resolved, storage, registry, cloc
     out = tmp_path / "fixtures"
     write_fixtures(out, monkeypatch, resolved, storage, registry, clock)
     result = subprocess.run(
-        [node, "--test", str(SUITE)],
+        [node, "--test", "--test-concurrency=1", str(SUITE), str(PAGE_SUITE)],
         cwd=NODE_DIR,
         env={**os.environ, "PB_FIXTURES": str(out)},
         capture_output=True,

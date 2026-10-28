@@ -88,13 +88,13 @@ TASK1_CLICKS: Final[tuple[str, ...]] = (
     "overview: + New campaign",
     "wizard goal: the goal card",
     "customers: Approve (Data Doctor)",
-    "progress: Review the list",
     "review: Approve the new model and this plan, then download",
 )
 """Every click from the Overview to the downloaded file, in order, for a goal's first campaign (the file is chosen
 between the 2nd and the 3rd). Before M181 part C it was 7: the new model's own "Approve and continue", Audience's
-"Continue", Review's "Approve" and Send's "Download" are now the one last click."""
-TASK1_CLICKS_PINNED: Final[int] = 5
+"Continue", Review's "Approve" and Send's "Download" are now the one last click; the progress page moves on to the
+review by itself once the list is built."""
+TASK1_CLICKS_PINNED: Final[int] = 4
 TASK1_FILE_CHOICES_PINNED: Final[int] = 1
 TASK1_WIZARD_DECISIONS_PINNED: Final[int] = 2
 """M177's own measure (`test_campaign_wizard_journey.py` DECISIONS_PINNED): the decisions after the goal and the file
@@ -105,15 +105,13 @@ LATER_CAMPAIGN_CLICKS: Final[tuple[str, ...]] = (
     "wizard goal: the goal card",
     "customers: Approve (Data Doctor)",
     "customers: Start the campaign (last month's model)",
-    "progress: Review the list",
     "review: Approve and download",
 )
-LATER_CAMPAIGN_CLICKS_PINNED: Final[int] = 6
+LATER_CAMPAIGN_CLICKS_PINNED: Final[int] = 5
 """A goal that already has an approved model: no learning, so no model to approve; the last click is the same one,
 worded without the model. The Data Doctor asks which model to use (last month's, already chosen) and the person starts
-the campaign: one more click than a first campaign. PRODUCT GAP: with the progress page's link counted (it is a
-mouse click like any other) a later campaign takes 6, one above the Plan M target of 5. Closing it means the progress
-page moving on to Review by itself, or the model choice and the start folding into the Data Doctor's Approve."""
+the campaign. The progress page moves on to the review by itself once the list is built (`run_page.js`), so a later
+campaign meets the Plan M target of 5 clicks."""
 LATER_LAST_BUTTON: Final[str] = "Approve and download"
 
 # Reports is out of the v1 menu (the sidebar shows only the flow); its way in is Settings, More tools.
@@ -405,9 +403,8 @@ def task1(
             walk.choose_file("the prepared customer file", "#dds-file", win_back_customers)
             page.locator("[data-dds-approve-start]:not([disabled])").wait_for(timeout=180_000)
             walk.click(TASK1_CLICKS[2], "[data-dds-approve-start]")
-            # The model learns, then the list is built with it; Audience and Review on one screen
-            page.locator("[data-run-ready]").wait_for(timeout=WAIT_MS)
-            walk.click(TASK1_CLICKS[3], "[data-run-ready]")
+            # The model learns, then the list is built with it, and the progress page moves on to the review by
+            # itself (Audience and Review on one screen)
             page.locator("[data-cw-review] [data-cw-approve]").wait_for(timeout=WAIT_MS)
             assert page.locator("[data-cw-audience]").count() == 1, "Audience is on the Review screen"
             campaign_id = str(page.evaluate("location.hash")).rsplit("/", 1)[-1]
@@ -415,7 +412,7 @@ def task1(
                 base,
                 page,
                 walk,
-                TASK1_CLICKS[4],
+                TASK1_CLICKS[3],
                 TASK1_LAST_BUTTON,
                 workdir / "task1_contact_list.csv",
                 campaign_id=campaign_id,
@@ -452,16 +449,14 @@ def task1_later(pristine_store: Path, workdir: Path, playwright_driver: Any, lat
             walk.click(LATER_CAMPAIGN_CLICKS[2], "[data-dds-approve-start]")
             page.locator("[data-dds-continue]:not([disabled])").wait_for(timeout=180_000)
             walk.click(LATER_CAMPAIGN_CLICKS[3], "[data-dds-continue]:not([disabled])")
-            # the list is built; Audience and Review on one screen
-            page.locator("[data-run-ready]").wait_for(timeout=300_000)
-            walk.click(LATER_CAMPAIGN_CLICKS[4], "[data-run-ready]")
+            # the list is built and the progress page moves on to the review by itself: no click
             page.locator("[data-cw-review] [data-cw-approve]").wait_for(timeout=300_000)
             campaign_id = str(page.evaluate("location.hash")).rsplit("/", 1)[-1]
             saved, served, run_id, proof = approve_and_download(
                 base,
                 page,
                 walk,
-                LATER_CAMPAIGN_CLICKS[5],
+                LATER_CAMPAIGN_CLICKS[4],
                 LATER_LAST_BUTTON,
                 workdir / "task1_later_contact_list.csv",
                 campaign_id=campaign_id,
@@ -505,7 +500,7 @@ def test_task_1_approves_the_new_model_then_freezes_the_plan_before_the_file_is_
 
 def test_task_1_meets_plan_ms_target_of_five_clicks(task1: Task1) -> None:
     """Plan M section 0: at most 5 clicks from Home to a downloaded contact list (file already prepared), for the
-    first campaign of a goal. A later campaign is above it (see LATER_CAMPAIGN_CLICKS)."""
+    first campaign of a goal, and a later one (see LATER_CAMPAIGN_CLICKS)."""
     assert len(task1.walk.clicks) <= TASK1_TARGET, task1.walk.clicks
 
 
@@ -513,11 +508,12 @@ def test_task_1_for_a_later_campaign_takes_one_more_click_and_ends_in_the_same_l
     task1_later: Task1,
 ) -> None:
     """Secondary pin: a goal that already has an approved model needs no approval of a new one; its last click is
-    "Approve and download", after the Data Doctor's choice of model: one more click than a first campaign (a known
-    gap against the Plan M target, pinned so a change either way shows)."""
+    "Approve and download", after the Data Doctor's choice of model: one more click than a first campaign, and within
+    the Plan M target of 5."""
     walk = task1_later.walk
     assert tuple(walk.clicks) == LATER_CAMPAIGN_CLICKS, walk.clicks
     assert len(walk.clicks) == LATER_CAMPAIGN_CLICKS_PINNED == TASK1_CLICKS_PINNED + 1, walk.clicks
+    assert len(walk.clicks) <= TASK1_TARGET, walk.clicks
     assert len(walk.file_choices) == TASK1_FILE_CHOICES_PINNED
     assert task1_later.saved and task1_later.saved == task1_later.served
     assert_plan_frozen_before_the_file(task1_later, approves_model=False)

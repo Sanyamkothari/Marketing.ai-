@@ -161,10 +161,8 @@ def test_new_campaign_to_a_downloaded_contact_list_within_five_decisions(
             page.locator("[data-dds-approve-start]:not([disabled])").wait_for(timeout=180_000)
 
             decide("[data-dds-approve-start]")  # 1
-            # The server learns, builds the list and records the campaign on its own; its progress page then leads
-            # to Audience and Review on one screen (following the link is not a decision).
-            page.locator("[data-run-ready]").wait_for(timeout=WAIT_MS)
-            page.locator("[data-run-ready]").click()
+            # The server learns, builds the list and records the campaign on its own; its progress page then moves on
+            # to Audience and Review on one screen by itself.
             page.locator("[data-cw-review] [data-cw-approve]").wait_for(timeout=WAIT_MS)
             size = (page.locator("[data-cw-test-size]").text_content() or "").strip()
             assert re.fullmatch(r"Enough to see a \d+\.\d-point change\.", size), size

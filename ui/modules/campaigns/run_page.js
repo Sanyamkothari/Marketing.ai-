@@ -2,18 +2,20 @@
 // campaign run is (`GET /campaign-runs/{id}`) every few seconds and shows its steps in plain names with the time left.
 // The work runs on the server, so closing the page loses nothing. When it is done the page leads to the campaign,
 // where "Approve and download" stays the person's own decision; a run the server restarted under shows Restart.
+// A person who watched the run finish is taken on to the review by itself (one click fewer); a run opened once it
+// was already done shows its page and its button as before.
 
 import { canAccess } from "../router.js";
 import { errorBox, safeDecode } from "../../dom.js";
 import { getCampaignRun, getTreatListSummary, restartCampaignRun } from "./wizard_api.js";
-import { needsCostYes, runHref } from "./run_rules.js";
+import { needsCostYes, readyHref, runHref } from "./run_rules.js";
 import { injectRunStyles, runPageHtml } from "./run_views.js";
 import { contactSentence } from "./summary_rules.js";
 import { injectWizardStyles } from "./wizard_styles.js";
 
 export const RUN_POLL_MS = 3000;
 
-const ui = { seq: 0, timer: null, app: null, id: null, view: null, busy: false, error: null, headline: "", headlineOf: null };
+const ui = { seq: 0, timer: null, app: null, id: null, view: null, busy: false, error: null, headline: "", headlineOf: null, watched: null };
 
 const hashParts = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
 const onPage = (id) => {
@@ -50,6 +52,13 @@ async function poll(token) {
     const view = await getCampaignRun(ui.id);
     if (token !== ui.seq || !onPage(ui.id)) return;
     ui.view = view;
+    if (view.record.state === "running") ui.watched = ui.id;
+    if (view.record.state === "done" && ui.watched === ui.id && view.record.campaign_id) {
+      // watched to the end: on to the review, where "Approve and download" is still the person's own click
+      ui.watched = null;
+      window.location.hash = readyHref(view.record);
+      return;
+    }
     draw();
     if (view.record.state === "done") await loadHeadline(view.record, token);
     if (view.record.state === "running") ui.timer = setTimeout(() => poll(token), RUN_POLL_MS);

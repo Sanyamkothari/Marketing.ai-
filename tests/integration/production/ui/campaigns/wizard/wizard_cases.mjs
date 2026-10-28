@@ -384,11 +384,17 @@ test("the progress page: steps in plain words, the time left, and that the page 
   assert.equal(primaries().length, 0);
 });
 
-test("the progress page: when the run is done it leads to the campaign's review, where the person approves and downloads", async () => {
+test("the progress page: watched to the end, it moves on to the campaign's review, where the person approves and downloads", async () => {
   world.campaignRuns.cr_4 = crView("cr_4", "running", { at: 3, eta: 20 });
   await open("#/campaigns/run/cr_4");
   await until(() => $("[data-run-steps]"), 3000, "the steps");
   world.campaignRuns.cr_4 = crView("cr_4", "done", { campaignId: CID });
+  await until(() => w.location.hash === `#/campaigns/new/review/${CID}`, 6000, "the review, with no click");
+});
+
+test("the progress page: a run opened once it was done shows its page and the way to the review", async () => {
+  world.campaignRuns.cr_4b = crView("cr_4b", "done", { campaignId: CID });
+  await open("#/campaigns/run/cr_4b");
   await until(() => $("[data-run-ready]"), 6000, "the finished page");
   assert.equal($("h1").textContent, "Your campaign is ready");
   assert.equal($("[data-run-ready]").getAttribute("href"), `#/campaigns/new/review/${CID}`);
