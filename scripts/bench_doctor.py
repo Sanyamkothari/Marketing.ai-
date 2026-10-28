@@ -87,16 +87,19 @@ def _first_option(question: dict[str, Any]) -> str | None:
     return recommended if recommended in options else (options[0] if options else None)
 
 
-def _pick_goal(case: dict[str, Any], wanted: str) -> tuple[str | None, list[str]]:
-    """The first goal the diagnosis offers (the use case the file was made for, when it is among them)."""
+def _pick_goal(case: dict[str, Any], wanted: str) -> tuple[str | None, list[dict[str, str]]]:
+    """The first goal the screen offers (the use case the file was made for, when it is among them).
+
+    Only `ready` and `check` goals are offered to the person; `missing` and `too_small` are not."""
     offered = [
-        u["use_case_id"]
+        {"goal_id": str(u["use_case_id"]), "status": str(u["status"])}
         for u in (case.get("diagnosis") or {}).get("use_cases", [])
-        if u.get("status") not in ("blocked", "not_ready", "unavailable")
+        if u.get("status") in ("ready", "check")
     ]
-    if wanted in offered:
+    ids = [g["goal_id"] for g in offered]
+    if wanted in ids:
         return wanted, offered
-    return (offered[0] if offered else None), offered
+    return (ids[0] if ids else None), offered
 
 
 def run_visit(
@@ -147,11 +150,24 @@ def run_visit(
             goal, offered = _pick_goal(case, use_case)
             record["goals_offered"] = offered
             record["goal"] = goal
-            record["expected_goal_offered"] = use_case in offered
+            record["expected_goal_offered"] = any(g["goal_id"] == use_case for g in offered)
             if goal is not None:
                 post("goal", {"goal_id": goal, "op_id": "bench-goal"})
             hard: list[str] = []
-            refused = 0
+
+            def sweep_stops() -> bool:
+                """Acknowledge the stops that may be; note the ones that may not. True if anything was acknowledged."""
+                acted = False
+                view = client.get(f"/cases/{cid}/screen").json().get("view", {})
+                for f in (view.get("ledger") or {}).get("findings", []):
+                    if f.get("level") != "stop" or f.get("acknowledged"):
+                        continue
+                    if f.get("acknowledgeable", True):
+                        acted |= post("acknowledgements", {"key": f["key"], "reason": "bench"})
+                    elif f.get("code") not in hard:
+                        hard.append(str(f.get("code")))
+                return acted
+
             confirmed: set[str] = set()
             for _round in range(MAX_ROUNDS):
                 acted = False
@@ -169,20 +185,12 @@ def run_visit(
                     confirmed.add(it["item_id"])
                     sentence = item_sentence(it.get("title", ""), it.get("payload", {}))
                     acted |= post("confirmations", {"item_id": it["item_id"], "sentence": sentence})
-                view = client.get(f"/cases/{cid}/screen").json().get("view", {})
-                for f in (view.get("ledger") or {}).get("findings", []):
-                    if f.get("level") != "stop" or f.get("acknowledged"):
-                        continue
-                    if f.get("acknowledgeable", True):
-                        acted |= post("acknowledgements", {"key": f["key"], "reason": "bench"})
-                    elif f.get("code") not in hard:
-                        hard.append(str(f.get("code")))
-                if (
-                    not acted
-                ):  # nothing left to do: approve; a refusal may show stops only the final check finds
-                    refused += 0 if post("approval", {}) else 1
-                    if refused == 0 or refused > 2:
-                        break
+                acted |= sweep_stops()
+                if not acted:  # nothing left to do: approve, then read what the final check found
+                    post("approval", {})  # 200 even when the final check fails: look at the screen either way
+                    acted = sweep_stops()
+                if not acted:
+                    break
             record["hard_stops"] = hard
             screen = client.get(f"/cases/{cid}/screen").json()
             return _finish(record, case, screen.get("view", {}), started, None)

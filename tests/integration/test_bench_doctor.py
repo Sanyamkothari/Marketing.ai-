@@ -23,7 +23,12 @@ def _customers(path: Path, rows: int = 1_200) -> Path:
     return path
 
 
-def test_a_visit_over_a_synthetic_file_gives_a_complete_record(tmp_path: Path) -> None:
+def test_a_visit_over_a_synthetic_file_gives_a_complete_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # run_visit sets these for good; monkeypatch puts the environment back afterwards
+    monkeypatch.setenv("MARKETING_AI_ALLOW_FAKE_AI", "true")
+    monkeypatch.setenv("MARKETING_AI_DATA_DOCTOR_UNIFIED", "true")
     record = bench_doctor.run_visit(
         _customers(tmp_path / "customers.csv"), "telco-churn", data_dir=tmp_path / "data"
     )

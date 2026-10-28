@@ -25,7 +25,7 @@ plumbing, not the quality or the cost of a real model (the AI call and token col
 | Dataset | Rows (file) | Ready | State | Why not | Wall s | Peak MB | AI calls | AI tokens |
 |---|---|---|---|---|---|---|---|---|
 | uci-bank-marketing | 41,188 | no | approve | hard stop PLAN_STEP_CANNOT_RUN ("'y' is the ID or the outcome") | 293 | 450 | 8 | 57,333 |
-| hillstrom-email | 64,000 | no | approve | verdict not_ready: the last check found stops the scripted person did not clear | 173 | 439 | 12 | 82,943 |
+| hillstrom-email | 64,000 | no | approve | verdict not_ready: the final whole-file check found stops (codes not recorded by the first harness version) | 173 | 439 | 12 | 82,943 |
 | uci-credit-default | 30,000 | no | approve | verdict not_ready: same as Hillstrom | 66 | 467 | 10 | 72,823 |
 | telco-customer-churn | 7,043 | no | approve | hard stop PLAN_STEP_CANNOT_RUN ("'Churn' is the ID or the outcome") | 275 | 298 | 8 | 58,209 |
 | health-insurance-cross-sell | 381,109 | no result | - | worker killed by the operating system (out of memory) on the two attempts made under load | - | - | - | - |
@@ -47,9 +47,11 @@ column as the reliable one; treat nothing here as a performance baseline until t
   - `PLAN_STEP_CANNOT_RUN` on bank marketing and telco churn: a step in the plan touches the outcome column and the plan check
     refuses it (not acknowledgeable). It may be an artefact of the scripted person accepting every pending proposal, including a
     recoding of the outcome; it still shows the visit offering a proposal that the plan check then refuses. Needs a look.
-  - Hillstrom and credit default end `not_ready` after the final whole-file check finds stops. The first version of the harness
-    did not clear stops that only appear after a refused approval; it now tries approval again after acknowledging. The table
-    above is from the first version, so these two reasons are not yet itemised by stop code.
+  - Hillstrom and credit default end `not_ready` after the final whole-file check finds stops. Approval answers 200 even
+    when that check fails, so the first version of the harness never looked at the stops it added. It now re-reads the screen
+    after every approval, acknowledges what may be acknowledged and approves again, and records the stops that may not be as
+    hard stops. The table above is from the first version, so these two reasons are not yet itemised by stop code; they are
+    probably hard stops, not stops the script missed.
 - **Goal offered.** Telco churn offered `rca` first, not `telco-churn` (the roadmap's `skip: [telco-churn]` list); the harness
   took the first offered goal there. Hillstrom offered `targeted-advertisement` first, not its own `hillstrom-email` use case.
 - **Fetching.** All six files fetched from the network. The canonical Hillstrom URL did not resolve; the fetcher fell back to its
