@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import io
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import date
@@ -10,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from engine.config import load_use_case
 from engine.doctor.buildable import buildable_outcome, compile_build, snapshot_for
@@ -221,3 +223,36 @@ def test_a_goal_that_names_no_audience_is_counted_one_way(config_root: Path) -> 
 
     named = {k for k, t in load_outcome_catalogue(root_of(config_root)).templates.items() if t.audience}
     assert named == {GOAL}, "only the goals whose configuration names a narrower audience"
+
+
+@pytest.mark.parametrize("file_format", ["csv", "parquet"])
+def test_the_whole_file_reader_reads_only_the_named_columns_over_every_row(
+    tmp_path: Path, file_format: str
+) -> None:
+    from engine.doctor.sample_rows import column_chunks
+    from engine.storage import LocalStorage
+
+    storage = LocalStorage(tmp_path / "data")
+    frame = pd.DataFrame(
+        {"customer_id": [f"{i:06d}" for i in range(2_500)], "order_date": ["2024-01-02"] * 2_500, "x": 1}
+    )
+    buffer = io.BytesIO()
+    if file_format == "csv":
+        frame.to_csv(buffer, index=False)
+    else:
+        frame.to_parquet(buffer, index=False)
+    storage.write_bytes(f"uploads/u/source.{file_format}", buffer.getvalue())
+    read = column_chunks(
+        storage,
+        f"uploads/u/source.{file_format}",
+        file_format=file_format,  # type: ignore[arg-type]
+        delimiter="," if file_format == "csv" else None,
+        encoding="utf-8",
+        chunk_rows=1_000,
+    )
+    parts = list(read(["customer_id", "order_date"]))
+    whole = pd.concat(parts, ignore_index=True)
+    assert len(parts) == 3 and list(whole.columns) == ["customer_id", "order_date"]
+    assert len(whole) == 2_500 and whole["customer_id"].iloc[7] == "000007", "an ID keeps its leading zeros"
+    with pytest.raises(KeyError):
+        list(read(["customer_id", "renamed"]))
