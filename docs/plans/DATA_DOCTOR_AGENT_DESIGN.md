@@ -368,7 +368,7 @@ All 18 are *existing*, READ, rules, `session-only`, and keep their limits (`docs
 | # | Tool | Kind | Mode | Wraps (file:line) | Status |
 |---|---|---|---|---|---|
 | 29 | `find_file_role` | READ | rules | `engine/onboarding/sources.py:305` `detect_roles`, `:360/:135/:200`; `configs/roles.yaml` | wrapper |
-| 30 | `read_headers` | READ | rules | `engine/agent/headers.py:252/:405`; `configs/agent/header_lexicon.yaml` (on by default, O4) | wrapper |
+| 30 | ~~`read_headers`~~ | dropped: `find_roles` (#17) already returns the header reading (`header_candidates`) | |
 | 31 | `second_opinion` | PROPOSE | AI | `engine/agent/assist.py:365` (rerank, leak reviewer) | wrapper |
 | 32 | `advise` | READ | rules | `engine/agent/advisor.py:1422` `advise`; `recommend.py:538/:422`; `STOP_CODES` | wrapper |
 | 33 | `first_look` | READ | rules | `engine/doctor/first_look.py:308/:430/:550` | wrapper |

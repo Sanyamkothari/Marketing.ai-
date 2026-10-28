@@ -114,6 +114,20 @@ class ProposeFeaturesArgs(_Args):
     )
 
 
+class ProposeCombineRowsArgs(_Args):
+    """`propose_combine_rows` (`engine.doctor.tools_reshape`): the file is the action's `file`. Code builds the plan
+    (counts, totals, averages, latest value) from these names alone; the model never writes its parameters."""
+
+    time_column: str | None = Field(default=None)
+    snapshot_column: str | None = Field(default=None)
+    carry: list[str] = Field(default_factory=list, description="one value per ID")
+    replaces: str | None = Field(
+        default=None,
+        description="the id of your change this swaps out",
+        json_schema_extra={"surface": "chat"},
+    )
+
+
 class ReadGuideArgs(_Args):
     """`read_guide` (`engine.doctor.guides`): read-only; the guide's rules, plus one section when named."""
 
@@ -219,6 +233,13 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
         "propose_features",
         ProposeFeaturesArgs,
         "customer behaviour features, up to `$as_of`.",
+        _BOTH,
+        needs_file=True,
+    ),
+    ActionSpec(
+        "propose_combine_rows",
+        ProposeCombineRowsArgs,
+        "one row per ID; code builds it.",
         _BOTH,
         needs_file=True,
     ),

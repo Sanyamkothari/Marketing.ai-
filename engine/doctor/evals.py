@@ -209,7 +209,6 @@ BUILT_BY: Final[dict[str, str]] = {
             "propose_import",
             "check_refresh",
             "preflight",
-            "read_headers",
             "second_opinion",
             "explain",
             "propose_role",

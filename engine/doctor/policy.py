@@ -1152,7 +1152,7 @@ def _read_units(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
     return [_step_proposal(kind, step) for step in _present(output.get("step"))]
 
 
-def _read_keep_latest(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+def _read_reshape(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
     return [
         _step_proposal(
             kind,
@@ -1348,7 +1348,8 @@ OUTPUT_READERS: Final[Mapping[str, _Reader]] = {
     "data.synonym_clusters": _read_synonyms,
     "data.impossible_values": _read_impossible,
     "data.detect_units": _read_units,
-    "data.keep_latest_per_id": _read_keep_latest,
+    "data.keep_latest_per_id": _read_reshape,
+    "data.propose_combine_rows": _read_reshape,
     "data.split_file": _read_split,
     "data.excel_serial_dates": _read_excel_serial,
     "data.parse_indian_numbers": _read_locale,

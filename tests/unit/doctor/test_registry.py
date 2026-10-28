@@ -53,6 +53,7 @@ from engine.doctor.tools import LookOutput
 from engine.doctor.tools_features import M_FEATURE_TOOLS
 from engine.doctor.tools_outcomes import M239_TOOLS
 from engine.doctor.tools_preview import M_PREVIEW_TOOLS
+from engine.doctor.tools_reshape import M_RESHAPE_TOOLS
 from engine.doctor.tools_sql import M_SQL_TOOLS
 from engine.doctor.tools_time import M244_TOOLS
 from engine.doctor.tools_wave_one import WAVE_ONE_TOOLS
@@ -133,6 +134,7 @@ def test_the_registry_holds_the_22_existing_tools_and_the_first_wrappers() -> No
         *M_SQL_TOOLS,  # the sandboxed SQL step
         *M_FEATURE_TOOLS,  # behaviour features
         *M_PREVIEW_TOOLS,  # the agent looks at its own work
+        *M_RESHAPE_TOOLS,  # Guided setup's combine question
     }
     assert len(LOOK_TOOLS) == 18
     # The 22nd existing tool is the conversation loop: it is the caller, not a tool kind.
@@ -161,6 +163,7 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
             *M_SQL_TOOLS,
             *M_FEATURE_TOOLS,
             *M_PREVIEW_TOOLS,
+            *M_RESHAPE_TOOLS,  # Guided setup's combine question
         }
         assert entry.status in {"existing", "wrapper"} or tool.name in built_new, tool.name
         if tool.number in FIRST_WRAPPERS:
@@ -171,22 +174,24 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
 def test_the_catalogue_is_the_designs_eighty_tools() -> None:
     """The design's 80 tools in 81 rows, and since Plan O M236 (DEC-1806) M240's two READ tools as #82, #83."""
     counted = [entry for entry in CATALOGUE if entry.counted_with is None]
-    assert len(CATALOGUE) == 86 and [e.number for e in CATALOGUE] == list(range(1, 87))
+    assert len(CATALOGUE) == 86
+    assert [e.number for e in CATALOGUE] == [n for n in range(1, 88) if n != 30]  # #30 was dropped
     assert len(counted) == 85
-    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 29, "new": 34}
+    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 28, "new": 35}
     kinds = Counter(e.kind for e in counted)
-    assert kinds["propose"] == 26 and kinds["ask"] == 4
+    assert kinds["propose"] == 27 and kinds["ask"] == 4
     assert {e.name for e in CATALOGUE if e.exposure == "aggregate"} == {
         "what_can_this_power",
         "check_readiness",
     }
     assert len({e.name for e in CATALOGUE}) == 86
-    assert [(e.number, e.name, e.kind) for e in CATALOGUE[81:]] == [
+    assert [(e.number, e.name, e.kind) for e in CATALOGUE[80:]] == [
         (82, "read_workbook_sheets", "read"),
         (83, "find_excel_serial_dates", "read"),
         (84, "propose_sql_step", "propose"),
         (85, "preview_working_copy", "read"),
         (86, "propose_features", "propose"),
+        (87, "propose_combine_rows", "propose"),
     ]
     assert not EXECUTOR_NAMES & {e.name for e in CATALOGUE}, "an executor is never in the catalogue"
 

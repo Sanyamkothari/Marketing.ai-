@@ -772,7 +772,7 @@ class _Chat(_Review):
 
 _STEP_KEYS: Final[frozenset[str]] = frozenset({"kind", "column"})
 _MAKES_CHANGES: Final[frozenset[str]] = frozenset(
-    {"propose_step", "propose_sql", "propose_features", "join_files", "stack_files"}
+    {"propose_step", "propose_sql", "propose_features", "propose_combine_rows", "join_files", "stack_files"}
 )
 
 

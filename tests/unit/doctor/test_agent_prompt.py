@@ -14,7 +14,7 @@ from engine.generative.contracts import GenerativePurpose
 from engine.generative.prompts import load_prompt, prompts_dir, render
 
 NAME = "data_doctor_agent"
-MAX_WORDS = 2500
+MAX_WORDS = 2550
 """The rendered instructions with the question list, before the tool list: a cap on what the model must hold in
 mind every turn."""
 

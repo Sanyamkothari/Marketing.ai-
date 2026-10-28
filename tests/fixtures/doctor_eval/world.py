@@ -290,6 +290,7 @@ CALLS: Final[dict[str, Calls | None]] = {
     "impossible_values": _fixed({}),
     "detect_units": _each("column"),
     "keep_latest_per_id": _fixed({"time_column": "snapshot_date"}),
+    "propose_combine_rows": _fixed({}),
     "split_file": _fixed({"rule": {"column": "snapshot_date", "by": "date", "cut": "2026-03-31"}}),
     "normalise_key": _fixed(
         {

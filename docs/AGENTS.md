@@ -1252,8 +1252,8 @@ is also the explanation with no AI service.
 
 ### 18.3 Not done here
 
-- The design's wrappers #1 `read_file`, #2 `list_sheets`, #30 `read_headers` and #50 `propose_renamed_copy` are in
-  no milestone's list yet.
+- The design's wrappers #1 `read_file`, #2 `list_sheets` and #50 `propose_renamed_copy` are in no milestone's list
+  yet. (#30 `read_headers` was dropped: `find_roles` already returns the header reading as `header_candidates`.)
 - `request_approval` asks; storing the request and deciding it are M246's (with `ApprovalFacts`, §16.6).
 - The tools serve the rules and the screen. Offering them to the AI (the visit, M235/M246) also means adding their
   output field names to `engine.agent.egress.RESULT_KEYS`.
