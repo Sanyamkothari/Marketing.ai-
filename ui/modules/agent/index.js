@@ -12,15 +12,14 @@
 import { registerPagePanel, registerSetupMode } from "../router.js";
 import { askApplies, askPanelHtml } from "./ask.js";
 import { guidedApplies, mountGuided } from "./guided.js";
-import { dataDoctorOnNow } from "../datadoctor/switch.js";
 
 registerSetupMode({
   name: "guided",
   label: "Guided setup (recommended)",
   applies: guidedApplies,
   mount: mountGuided,
-  // With the one Data Doctor on, Manual setup is its "Expert view": what is changed there is not in the Doctor's record.
-  manualNote: () => (dataDoctorOnNow() ? "Changes made here are not part of the Data Doctor's record." : ""),
+  // Manual setup is the Data Doctor's "Expert view": what is changed there is not in the Doctor's record.
+  manualNote: () => "Changes made here are not part of the Data Doctor's record.",
 });
 
 registerPagePanel({ name: "ask", applies: askApplies, html: askPanelHtml });

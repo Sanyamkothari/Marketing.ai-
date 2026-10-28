@@ -8,14 +8,14 @@ The node suites in `production/ui/datadoctor/` (sharing the jsdom install of `pr
   what each answer changes, a doubt in three parts, a request for more data, a small choice decided for the person,
   Approve with its exact sentence, changes that need their own yes, ready, not ready, a remembered answer with its
   date, and the same answer revoked;
-* `me_on.json` / `me_off.json` - `GET /auth/me` with `data_doctor.unified` on and off (the switch the UI follows);
+* `me_on.json` - `GET /auth/me`, which says the one Data Doctor screen is on;
 * `use_case.json`, `industries.json`, `models.json`, `runs.json`, `ai_service.json` - what the wizard, a goal's
   setup and the chat read, from the same app with no AI service connected.
 
 `screen.test.mjs` checks each question, approval and doubt shape, Approve's exact sentence, Revoke, the chat with
 no AI service (the way to Settings › AI service, not Connections), the accessibility checks of Plan M M181 and the
 visible-text check; `places.test.mjs` opens the same case in the three places - the Data page, the wizard's
-Customers step and a goal's setup - and shows that with the switch off today's screens are drawn unchanged.
+Customers step and a goal's setup.
 """
 
 from __future__ import annotations
@@ -30,7 +30,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from engine.doctor import case as doctor_case
 from tests.fixtures.node import skip_without_jsdom
 from tests.unit.doctor.screen_support import SCENARIOS, build_all
 
@@ -50,9 +49,6 @@ def write_fixtures(root: Path, config_root: Path, monkeypatch: pytest.MonkeyPatc
     out = root / "fixtures"
     out.mkdir(parents=True)
     bodies: dict[str, Any] = {}
-    with TestClient(create_app(config_root=config_root, data_dir=root / "off")) as client:
-        bodies["me_off"] = _ok(client.get("/auth/me"))
-    monkeypatch.setattr(doctor_case, "data_doctor_unified", lambda root=None: True)
     # No AI service: the suite's stand-in AI (tests/conftest.py) is left out, as a new deployment has none.
     monkeypatch.delenv("MARKETING_AI_ALLOW_FAKE_AI", raising=False)
     with TestClient(create_app(config_root=config_root, data_dir=root / "on")) as client:
@@ -78,7 +74,7 @@ def test_the_fixtures_are_the_world_the_screen_is_tested_in(
     def read(name: str) -> Any:
         return json.loads((out / f"{name}.json").read_text(encoding="utf-8"))
 
-    assert read("me_on")["data_doctor"] is True and "data_doctor" not in read("me_off")
+    assert read("me_on")["data_doctor"] is True
     assert read("ai_service")["slots"]["product"]["connected"] is False, "no AI service connected"
     keys = {name: read(f"screen_{name}")["view"]["verdict"]["key"] for name in SCENARIOS}
     assert keys == {

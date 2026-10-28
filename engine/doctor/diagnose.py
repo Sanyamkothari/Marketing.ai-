@@ -83,6 +83,8 @@ class Offer:
 
     config: UseCaseConfig
     stage: str
+    also_fits: str | None = None
+    """The name of the Home goal this one overlaps (same lifecycle stage); None for Home's own goals."""
 
 
 ID_MAX_BLANK_SHARE: Final[float] = 0.5
@@ -231,7 +233,10 @@ def readiness(
 ) -> tuple[UseCaseReadiness, ...]:
     """Each offered use case's verdict over all files, best first: ready before check before not enough,
     a question after a plain check, then the most 'yes' examples."""
-    verdicts = [_one_use_case(files, offer, root) for offer in offers]
+    verdicts = [
+        v.model_copy(update={"also_fits": offer.also_fits}) if offer.also_fits else v
+        for v, offer in ((_one_use_case(files, offer, root), offer) for offer in offers)
+    ]
     order = {offer.config.id: index for index, offer in enumerate(offers)}
     ranked = tuple(
         sorted(

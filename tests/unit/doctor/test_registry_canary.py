@@ -8,7 +8,7 @@ No planted value a pattern can recognise survives, no personal-data column yield
 nothing left to do, and in `summaries_only` no word that only lives in a cell survives either.
 
 The chat's two suggestions run inside a chat turn: they are called by whole chat sessions through the registry
-(`data_doctor.unified` on), and every prompt and everything stored is searched.
+, and every prompt and everything stored is searched.
 
 A tool registered without a canary entry fails `test_every_registered_tool_has_a_canary_entry`: adding a tool
 means adding its canary calls (the design §5.4).
@@ -32,7 +32,6 @@ from engine.agent.session import start_session
 from engine.agent.tools import TOOLS, AgentContext, AgentToolError
 from engine.agent.untrusted import for_prompt
 from engine.contracts import RunMode
-from engine.doctor import registry as registry_module
 from engine.doctor.case import CaseFile, CaseStore
 from engine.doctor.case_files import CaseFiles
 from engine.doctor.diagnose import LoadedFile
@@ -600,7 +599,6 @@ def _suggestions(frame: pd.DataFrame) -> list[dict[str, Any]]:
 
 @pytest.mark.parametrize("mode", MODES)
 def test_the_chat_suggestions_pass_the_canary(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(registry_module, "unified_on", lambda _config: True)
     ctx = canary_context(mode=mode, rows=600)
     client = ToolingClient(_suggestions(ctx.frame), per_turn=2)
     session = start_session(ctx, session_id="canary")

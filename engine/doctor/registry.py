@@ -32,9 +32,9 @@ the `RoutePolicy` whose role every call is checked against, and a run function. 
   run and every process, which is what pass^k needs (the design §5.2; Plan G's counter ids block it).
 
 Plan G's chat and rules advisor keep their session ids (`c1-e1`, `e3`): the screen, Ask your data's charts and
-every stored session cite them. Behind `data_doctor.unified` (default off) they call their tools through this
+every stored session cite them. They call their tools through this
 registry (`session_call`, `call`); the content-hash id is what the registry's own callers - the visit (M235), the
-readiness report (M234), the evals (M248) - cite. With the switch off nothing here is reached.
+readiness report (M234), the evals (M248) - cite.
 
 Errors: :class:`DataToolError` is a Plan G `AgentToolError`, so the chat loop feeds it back to the model as it does
 any refusal. The registry's own refusals use Plan K's codes, which have help entries: `TOOL_UNKNOWN`,
@@ -68,7 +68,7 @@ if TYPE_CHECKING:
     from engine.agent.egress import Egress
     from engine.agentic.ledger import DecisionLedger
     from engine.clients import ClientStore
-    from engine.config import RoleCatalogue, UseCaseConfig
+    from engine.config import RoleCatalogue
     from engine.connections.store import ConnectionStore
     from engine.doctor.case import CaseItem
     from engine.doctor.diagnose import LoadedFile, Offer
@@ -99,7 +99,6 @@ __all__ = [
     "data_registry",
     "evidence_id_of",
     "output_size",
-    "unified_on",
 ]
 
 ROW_LEVEL_BUDGET: Final[int] = 5_500
@@ -395,20 +394,6 @@ def evidence_id_of(result: ToolResult) -> str:
     return data_evidence_id(result.tool, result.args, result.result)
 
 
-def unified_on(config: UseCaseConfig | None) -> bool:
-    """Whether `data_doctor.unified` (M230; default off) is on for `config`.
-
-    Read defensively: before M230's setting is merged a configuration has no `data_doctor` section, which reads
-    as off. Callers look it up on this module at call time, so a test can switch it on.
-    """
-    from engine.settings import settings
-
-    if settings().data_doctor_unified:  # MARKETING_AI_DATA_DOCTOR_UNIFIED: the test installation turns it on
-        return True
-    section = getattr(config, "data_doctor", None)
-    return bool(getattr(section, "unified", False))
-
-
 class DataToolRegistry:
     """The data tools, by name, in registration order: `register`, `get`, `list`, `find`, `call`."""
 
@@ -571,7 +556,7 @@ class DataToolRegistry:
     ) -> ToolResult:
         """A Plan G look tool through the registry, returning Plan G's own `ToolResult`, byte for byte.
 
-        What Plan G's chat and rules advisor call behind `data_doctor.unified`: the registry decides whether the
+        What Plan G's chat and rules advisor call: the registry decides whether the
         tool exists for this caller here and whether the principal may call it; Plan G's `call_tool` runs it with
         the caller's session id, so every stored session, prompt and digest is what it was. An unknown tool is
         Plan G's `AGENT_TOOL_UNKNOWN`, with Plan G's message.

@@ -94,9 +94,14 @@ def test_every_tool_a_guide_names_in_backticks_exists(name: str) -> None:
     prompts = GUIDES.parents[1] / "prompts"
     known |= {
         word
-        for prompt in ("data_doctor_agent.v1.md", "data_doctor_chat.v1.md")
+        for prompt in ("data_doctor_agent.v2.md", "data_doctor_chat.v2.md")
         for word in re.findall(r"[a-z_]{3,}", (prompts / prompt).read_text(encoding="utf-8"))
     }
+    from engine.doctor.actions import action_names, argument_names
+    from engine.doctor.guards import Expectations
+
+    known |= {argument for action in action_names() for argument in argument_names(action)}
+    known |= set(Expectations.model_fields)  # what a step says it expects (`rows_out_equals`, ...)
     # Step parameters the policy allows (`indian_scale_words`, `dayfirst`, ...).
     policy = GUIDES.parents[1] / "agentic" / "policy.yaml"
     known |= set(re.findall(r"[a-z_]{3,}", policy.read_text(encoding="utf-8")))

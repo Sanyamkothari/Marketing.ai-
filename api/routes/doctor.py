@@ -24,7 +24,6 @@ import secrets
 from pathlib import Path
 from typing import Final
 
-import yaml
 from fastapi import APIRouter, Request, Response
 
 from api.access import set_audit_context
@@ -114,22 +113,11 @@ register(
 )
 
 
-SUGGESTIONS_PATH: Final[str] = "doctor/suggestions.yaml"
-"""Under the configuration root: the trainable use cases the suggestions leave out (`skip:`)."""
-
-
-def skipped_use_cases(root_path: Path) -> frozenset[str]:
-    """The use cases the owners took off the suggestions, read from configuration (the code names none)."""
-    path = root_path / SUGGESTIONS_PATH
-    if not path.exists():
-        return frozenset()
-    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return frozenset(str(item) for item in document.get("skip") or ())
-
-
 def offers(root_path: Path) -> tuple[Offer, ...]:
     """The trainable use cases the files are checked against: Home's, in Home's order, then every other
-    shipped one that learns from a yes/no column (not Telco Churn, not the uplift-only ones)."""
+    shipped one that learns from a yes/no column (not the uplift-only ones). None is left out: the diagnosis ranks
+    them best fit first with the reason, and one that repeats a Home goal (its config's `duplicates`) is kept and says
+    which goal it also fits (`Offer.also_fits`)."""
     industries = list_industries(root_path)
     chosen = DEFAULT_INDUSTRY if DEFAULT_INDUSTRY in industries else (industries[0] if industries else None)
     refs = (
@@ -140,7 +128,8 @@ def offers(root_path: Path) -> tuple[Offer, ...]:
     candidates = [(stage, ref.id) for stage, ref in refs if ref.status is UseCaseStatus.AVAILABLE]
     candidates += [("", use_case_id) for use_case_id in list_use_case_ids(root_path)]
     found: list[Offer] = []
-    seen: set[str] = set(skipped_use_cases(root_path))
+    seen: set[str] = set()
+    home_names: dict[str, str] = {}  # use case id -> name, for the Home goals
     for stage, use_case_id in candidates:
         if use_case_id in seen:
             continue
@@ -150,7 +139,17 @@ def offers(root_path: Path) -> tuple[Offer, ...]:
             continue
         if config.trainable_in_phase_1 and config.target.column and config.uplift.treatment_column is None:
             seen.add(use_case_id)
-            found.append(Offer(config=config, stage=stage or config.lifecycle_stage))
+            if stage:
+                home_names[config.id] = config.name
+            found.append(
+                Offer(
+                    config=config,
+                    stage=stage or config.lifecycle_stage,
+                    also_fits=(
+                        None if stage or config.duplicates is None else home_names.get(config.duplicates)
+                    ),
+                )
+            )
     return tuple(found)
 
 

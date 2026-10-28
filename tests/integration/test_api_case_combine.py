@@ -14,7 +14,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from engine.doctor import case as doctor_case
 
 GOAL = "targeted-advertisement"
 CUSTOMERS = 250
@@ -22,7 +21,6 @@ CUSTOMERS = 250
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch, config_root: Path, tmp_path: Path) -> Iterator[TestClient]:
-    monkeypatch.setattr(doctor_case, "data_doctor_unified", lambda root=None: True)
     with TestClient(create_app(config_root=config_root, data_dir=tmp_path / "data")) as test_client:
         yield test_client
 
@@ -119,7 +117,6 @@ def test_a_join_then_approve_ends_ready_with_the_decisions_carried_and_nothing_d
     """The main customers + orders path: accept 'Combine', approve; the case goes on with the combined table, its
     outcome and consent decisions follow it, the readiness check reads that table with its changes applied, and the
     conversation does not draw the files' earlier fixes beside the table's own."""
-    monkeypatch.setenv("MARKETING_AI_DATA_DOCTOR_UNIFIED", "true")
     customers = _walk_customers()
     ids = [
         _upload(client, "customers.csv", customers),

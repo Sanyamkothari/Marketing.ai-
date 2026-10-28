@@ -1,7 +1,6 @@
 """The Data Doctor visit over a case (Plan O M235, DEC-1805): resume it, choose a goal, answer, decide, approve, chat.
 
-Mounted only when `data_doctor.unified` is on (the `PLAN-O (M235)` hook in `api/main.py`, beside M231's): with it
-off - the default - none of these paths exists and docs/API.md is unchanged.
+Mounted by the `PLAN-O (M235)` hook in `api/main.py`, beside M231's.
 
 | Method and path | Role | Does |
 |---|---|---|

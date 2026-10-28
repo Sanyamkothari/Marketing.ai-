@@ -251,8 +251,7 @@ _WRAPS: Final[Mapping[str, str]] = {
         "_StatusWriter.finish); configs/engine.yaml model_search.time_limit_minutes"
     ),
     "propose_training_budget": (
-        "engine/agent/recommend.py _time_rules (replaced behind data_doctor.unified); "
-        "model_search.time_limit_minutes"
+        "engine/agent/recommend.py _time_rules (replaced by the budget); " "model_search.time_limit_minutes"
     ),
     "propose_time_settings": (
         "engine/stages/prepare.py _part_sizes/_tie_boundary; engine/agent/label_drafts.py draft_labels; "

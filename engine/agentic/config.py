@@ -140,7 +140,7 @@ class PolicyConfig(_Strict):
     consent: ConsentThresholds = Field(default_factory=ConsentThresholds)
     proposals: ProposalSettings = Field(default_factory=ProposalSettings)
     # Plan O M233 (DEC-1803): Data Doctor's rule sets, one per PROPOSE kind. Read and checked by
-    # `engine.doctor.policy.load_data_policy` (only behind `data_doctor.unified`); kept as plain data here so Plan K's
+    # `engine.doctor.policy.load_data_policy` ; kept as plain data here so Plan K's
     # policy neither imports nor changes with them. A file without the section reads exactly as before.
     data: dict[str, Any] = Field(
         default_factory=dict,

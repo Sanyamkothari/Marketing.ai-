@@ -38,8 +38,8 @@ Key                                     Written by                             D
 `doctor_memory/<use case>/<shape>.json` `api/routes/agent.py` on Approve        `remembered_at`; column
                                         (Plan L M159, `engine.doctor.memory`)  names and ids, no rows
 `cases/<client>/<case>/case.json`,      `api/routes/cases.py` (Plan O M231,    `case.json` updated_at;
-`.../timeline.jsonl`,                   `engine.doctor.case`), only while      uploads by `files[]`;
-`.../evidence/<id>.json`, ...           `data_doctor.unified` is on            corrections by their key
+`.../timeline.jsonl`,                   `engine.doctor.case`)                  uploads by `files[]`;
+`.../evidence/<id>.json`, ...                                                  corrections by their key
 ======================================  =====================================  =========================
 
 Root-level files (`registry.db`, `clients.db`, `platform.db` and their journals) are databases, not

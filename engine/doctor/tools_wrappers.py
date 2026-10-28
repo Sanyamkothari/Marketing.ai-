@@ -739,26 +739,13 @@ class SecondOpinion(Pending):
     blocked_by: str | None = Field(description="Why it stopped early: budget, unavailable, prompt_too_large.")
 
 
-def _agentic_on(ctx: DataToolContext) -> bool:
-    """`agentic.enabled` under the context's configuration root; an `agentic.yaml` that does not read leaves it
-    off, as `POST /uploads/{id}/agent-session/assist` does (DEC-1409 (g))."""
-    from engine.agentic.config import agentic_enabled
-    from engine.agentic.errors import AgenticError
-
-    try:
-        return agentic_enabled(ctx.root())
-    except AgenticError:
-        return False
-
-
 def _second_opinion(_parsed: _Args, ctx: DataToolContext) -> SecondOpinion:
     """`assist_session`: the AI reranks candidates the rules listed and asks about possible leaks. Every
     question it adds is pending; it decides, ticks and applies nothing. The session is handed to
     `save_session`, as `edit_by_hand`'s is.
 
-    It refuses what the route it wraps (`POST /uploads/{id}/agent-session/assist`) refuses: with
-    `agentic.enabled` off the tool is unavailable and a direct call is `404 AGENTIC_DISABLED`, before any AI
-    call; an approved session is `409 AGENT_SESSION_APPLIED`. The saved transcript is capped with
+    It refuses what the route it wraps (`POST /uploads/{id}/agent-session/assist`) refuses: an approved
+    session is `409 AGENT_SESSION_APPLIED`. The saved transcript is capped with
     `engine.agent.egress.cap_sent`, as the route caps it. The AI's usage stays on `ctx.meter`: the caller that
     supplied the meter records `meter.usage()` (the route writes it to the upload's `llm_usage.json`)."""
     from engine.agent.assist import assist_session
@@ -769,12 +756,6 @@ def _second_opinion(_parsed: _Args, ctx: DataToolContext) -> SecondOpinion:
     session, save = ctx.session, ctx.save_session
     if session is None or save is None:  # unreachable through the registry: `needs` makes it unavailable
         raise DataToolError("TOOL_UNKNOWN", "second_opinion needs a session.", status=404)
-    if not _agentic_on(ctx):  # unreachable through the registry: `available` makes it unavailable
-        raise DataToolError(
-            "AGENTIC_DISABLED",
-            "Second opinions on the columns are switched off for this deployment (agentic.enabled is false).",
-            status=404,
-        )
     if session.status is SessionStatus.APPLIED:
         raise DataToolError(
             "AGENT_SESSION_APPLIED", "This setup was already approved. Start again to change it.", status=409
@@ -1337,7 +1318,7 @@ def _entries() -> tuple[_Entry, ...]:
             SecondOpinion,
             _second_opinion,
             ("agent", "session", "save_session", "meter"),
-            {"available": _agentic_on, "wraps": "engine/agent/assist.py:365 assist_session"},
+            {"wraps": "engine/agent/assist.py:365 assist_session"},
         ),
         (
             39,

@@ -129,7 +129,7 @@ def test_a_viewer_can_read_a_session_but_not_chat_decide_or_approve(
     from api import access_policy
 
     # Plan O M246 (DEC-1816) registers its policies when `api.routes.data_protocol` is imported, and
-    # `create_app` imports it only with `data_doctor.unified` on. Import it here so the set counted does
+    # `create_app` imports it. Import it here so the set counted does
     # not depend on which tests ran earlier in the same process.
     from api.routes import data_protocol
 
@@ -141,7 +141,7 @@ def test_a_viewer_can_read_a_session_but_not_chat_decide_or_approve(
     # Plan L M154 (DEC-1541) added two Analyst POSTs: an edit by hand, and the table view's rows; Plan L
     # M159 (DEC-1594) one more: use the same treatment as last time. Plan K M142 (DEC-1409) one more:
     # `…/agent-session/assist`, the optional second opinion. Plan O M246 (DEC-1816 (g)) two more, both
-    # Analyst and mounted only with `data_doctor.unified` on: `POST …/agent-session/approve` (Approve with
+    # Analyst: `POST …/agent-session/approve` (Approve with
     # the sentence read) and `GET …/agent-session/approval` (what Approve will record). That GET is the one
     # read a viewer is refused: it is part of approving, so it needs the role that approves.
     approving_reads = {("GET", "/uploads/{upload_id}/agent-session/approval")}

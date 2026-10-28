@@ -89,8 +89,6 @@ __all__ = [
     "Tool",
     "ToolKind",
     "call_tool",
-    "header_help_on",
-    "tool_available",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -163,7 +161,7 @@ class AgentContext:
     """The deployment's store, for Plan O M244's training budget only (DEC-1814): the advisor reads this
     deployment's past runs from it and keeps the three choices it offered beside the file, so the run that takes
     one is promised exactly what was shown. None (every context but Guided setup's): the library's runs are the
-    prior and nothing is kept. Read only while `data_doctor.unified` is on; no tool reads it."""
+    prior and nothing is kept. No tool reads it."""
 
     def __post_init__(self) -> None:
         """A column about religion, caste, health and the like counts as personal data; long free text is shape only.
@@ -700,21 +698,18 @@ def _find_roles(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
 
     # M142 (DEC-1409): abbreviated and romanised-Hindi headers, read by `engine.agent.headers`. The use case's
     # own hints come first in each list; a header-read column is added after them when the rules rate it
-    # `medium` or better, and the whole short list per role is in `header_candidates`. Only with Plan K's
-    # `agentic.enabled` on (`header_help_on`): off, nothing is read and the result is what it was before M142.
-    reading = header_help_on(ctx)
+    # `medium` or better, and the whole short list per role is in `header_candidates`. Rules only, always read.
     ranked: dict[str, tuple[HeaderCandidate, ...]] = dict.fromkeys(HEADER_ROLES, ())
-    if reading:
-        try:
-            ranked = rank_roles(
-                ctx.profile.columns,
-                rows=ctx.profile.row_count,
-                extra_anchors={"outcome": [w for w in (configured, *hints.target_synonyms) if w]},
-                root=ctx.config_root,
-            )
-        except HeaderLexiconError as exc:
-            # A lexicon an operator broke must not take Guided setup down: it works from the use case's hints.
-            _LOGGER.warning("header lexicon not used: %s", exc)
+    try:
+        ranked = rank_roles(
+            ctx.profile.columns,
+            rows=ctx.profile.row_count,
+            extra_anchors={"outcome": [w for w in (configured, *hints.target_synonyms) if w]},
+            root=ctx.config_root,
+        )
+    except HeaderLexiconError as exc:
+        # A lexicon an operator broke must not take Guided setup down: it works from the use case's hints.
+        _LOGGER.warning("header lexicon not used: %s", exc)
 
     by_hints = {
         "consent": [n for n in names if _name_matches(n, hints.consent)],
@@ -738,53 +733,19 @@ def _find_roles(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
         "opt_out": hinted("opt_out"),
         "recently_contacted": hinted("last_contact"),
     }
-    if reading:
-        found["header_candidates"] = [
-            {
-                "kind": role,
-                "column": candidate.column,
-                "score": candidate.score,
-                "confidence": candidate.confidence,
-                "label": "reads as " + ", ".join(candidate.reads_as),
-                "hinted": candidate.column in by_hints.get(role, ()),
-            }
-            for role in HEADER_ROLES
-            for candidate in ranked[role]
-        ]
+    found["header_candidates"] = [
+        {
+            "kind": role,
+            "column": candidate.column,
+            "score": candidate.score,
+            "confidence": candidate.confidence,
+            "label": "reads as " + ", ".join(candidate.reads_as),
+            "hinted": candidate.column in by_hints.get(role, ()),
+        }
+        for role in HEADER_ROLES
+        for candidate in ranked[role]
+    ]
     return found
-
-
-def header_help_on(ctx: AgentContext) -> bool:
-    """Whether M142's setup help for new sources is on: Plan O's `data_doctor.unified` in the use case, or else
-    Plan K's `agentic.enabled` under the session's root.
-
-    Off (the default), Guided setup reads no header with the lexicon, drafts no lapse outcome and asks no mapping
-    question, `find_roles` has no `header_candidates` key and `draft_outcome_labels` is not a tool, so the advice,
-    the tool results and what is sent to an AI service are byte-identical to before M142 (DEC-1409 (f)). An
-    `agentic.yaml` that cannot be read leaves the help off and is logged: it never takes Guided setup down.
-    """
-    from engine.agentic.config import agentic_enabled
-    from engine.agentic.errors import AgenticError
-
-    if ctx.config.data_doctor.unified:
-        # Plan O O4 (DEC-1811 (k)): with Data Doctor on, the rules-only header reading is on by default, whatever
-        # Plan K's switch says. Its suggestions stay "please check" and are never ticked; the AI second opinion
-        # (`POST …/agent-session/assist`) still follows `agentic.enabled`. Off, this line changes nothing.
-        return True
-    try:
-        return agentic_enabled(ctx.config_root)
-    except AgenticError as exc:
-        _LOGGER.warning("setup help for new sources left off: %s", exc)
-        return False
-
-
-PLAN_K_TOOLS: Final[frozenset[str]] = frozenset({"draft_outcome_labels"})
-"""Tools that exist only while `header_help_on` (M142): off, each is an unknown tool, and the chat is not told of it."""
-
-
-def tool_available(ctx: AgentContext, name: str) -> bool:
-    """Whether `name` is a tool of this session: every tool, except M142's while Plan K is off."""
-    return name in TOOLS and (name not in PLAN_K_TOOLS or header_help_on(ctx))
 
 
 HEADER_LOW: Final[str] = "low"
@@ -1952,7 +1913,7 @@ def call_tool(
 ) -> ToolResult:
     """Validate, run and record one tool call. Raises `AgentToolError` on refusal."""
     tool = TOOLS.get(name)
-    if tool is None or (name in PLAN_K_TOOLS and not header_help_on(ctx)):
+    if tool is None:
         raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name!r}.")
     try:
         parsed = tool.args_model.model_validate(dict(args or {}))

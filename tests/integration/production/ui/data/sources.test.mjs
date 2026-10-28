@@ -15,7 +15,6 @@ const world = {
   uploadsStatus: 200,
   connectionsStatus: 200,
   cases: [], // the Data Doctor checks (GET /data-doctor/cases)
-  doctor: false, // whether /auth/me says the Data Doctor switch is on
   total: null, // the `total` the fake API answers with; null means "every upload", like the real route
   gate: null, // a promise the connection test waits for, to answer after the person has left
 };
@@ -30,7 +29,7 @@ const server = async (request) => {
     }
     return { status: 200, body: { connections: world.connections } };
   }
-  if (method === "GET" && path === "/auth/me" && world.doctor) {
+  if (method === "GET" && path === "/auth/me") {
     return { status: 200, body: { principal: "p", auth_mode: "off", permissions: [], data_doctor: true } };
   }
   if (method === "GET" && path === "/data-doctor/cases") return { status: 200, body: { cases: world.cases } };
@@ -185,7 +184,6 @@ test("a name that carries markup is shown as text", async () => {
 
 test("files that belong to a Data Doctor check are listed once, under the check, with a link to it", async () => {
   const [a, b] = world.uploads;
-  world.doctor = true;
   await session.loadMe();
   world.cases = [
     { case_id: "case_one", title: "a and 1 more", goal_id: null, state: "open", files: [a.file_name, b.file_name], upload_ids: [a.upload_id, b.upload_id], updated_at: a.created_at },
@@ -201,7 +199,6 @@ test("files that belong to a Data Doctor check are listed once, under the check,
   assert.ok(row(world.uploads[2].upload_id), "a file outside any check stays listed");
   assert.ok(row(ids.s3), "connections stay listed");
   world.cases = [];
-  world.doctor = false;
   await session.loadMe();
 });
 
@@ -212,7 +209,6 @@ test("prepared copies sit under the check that holds their source; unrelated fil
   const copies = [copy("up_prep_a", combined.created_at), copy("up_prep_b", combined.created_at)];
   const stray = { ...orders, upload_id: "up_stray", file_name: "orders.csv", made_by: "file", source_upload_id: null };
   world.uploads = [...saved, ...copies, stray];
-  world.doctor = true;
   await session.loadMe();
   world.cases = [
     { case_id: "case_combo", title: "combined", goal_id: null, state: "open", files: [combined.file_name], upload_ids: [combined.upload_id], updated_at: combined.created_at },
@@ -224,13 +220,11 @@ test("prepared copies sit under the check that holds their source; unrelated fil
   assert.ok(row("up_stray"), "a file no check holds stays listed");
   world.uploads = saved;
   world.cases = [];
-  world.doctor = false;
   await session.loadMe();
 });
 
 test("older Data Doctor checks are folded: the newest 3 show, the rest open on one button", async () => {
   const [a] = world.uploads;
-  world.doctor = true;
   await session.loadMe();
   world.cases = Array.from({ length: 5 }, (_, i) => ({
     case_id: `case_${i}`,
@@ -255,7 +249,6 @@ test("older Data Doctor checks are folded: the newest 3 show, the rest open on o
   assert.equal($$("[data-dt-source='check']").length, 5);
   assert.equal($("[data-dt-show-older]"), null);
   world.cases = [];
-  world.doctor = false;
   await session.loadMe();
 });
 
@@ -300,34 +293,24 @@ test("Delete asks first; Keep it changes nothing; Delete removes the connection 
   assert.ok(row(ids.imported), "files already imported stay");
 });
 
-test("+ Add a source opens the kinds; each links to the existing form; a file goes to Data Doctor", async () => {
+test("the other kinds of source open from the connect card; each links to the existing form", async () => {
   await show("#/data");
   const chooser = $("#dt-chooser");
   assert.equal(chooser.hidden, true, "closed until asked for");
-  $("#dt-add").click();
+  $("[data-dt-open-chooser]").click();
   assert.equal(chooser.hidden, false);
-  assert.equal($("#dt-add").getAttribute("aria-expanded"), "true");
   const links = Object.fromEntries($$("[data-dt-new]").map((a) => [a.dataset.dtNew, a.getAttribute("href")]));
   for (const kind of kinds.kinds.filter((k) => k.creatable && k.available)) {
     assert.equal(links[kind.kind], `#/connections/new/${kind.kind}`, `${kind.label} has its set-up form`);
   }
-  assert.equal(links.file, "#/doctor");
+  assert.equal(links.file, undefined, "a file is chosen on the connect card, not here");
   assert.equal(links.ai_service, undefined, "the AI service is not a data source");
-  $("#dt-add").click();
-  assert.equal(chooser.hidden, true, "and closes again");
 });
 
-test("Data Doctor is one click away", async () => {
-  await show("#/data");
-  const link = $("[data-dt-doctor]");
-  assert.equal(text(link), "Check my data");
-  assert.equal(link.getAttribute("href"), "#/doctor");
-});
-
-test("the tabs link to Sources and Check my data", async () => {
+test("the tabs link to Sources and Data Doctor", async () => {
   await show("#/data");
   const tabs = $$("[data-dt-tab]");
-  assert.deepEqual(tabs.map(text), ["Sources", "Check my data"]);
+  assert.deepEqual(tabs.map(text), ["Sources", "Data Doctor"]);
   assert.deepEqual(tabs.map((t) => t.getAttribute("href")), ["#/data", "#/data/check"]);
   assert.equal($("[data-dt-tab][aria-current='page']").dataset.dtTab, "sources");
   await show("#/data/sources");
@@ -415,7 +398,7 @@ test("drawing the page asks only for what it shows", async () => {
   await show("#/data");
   assert.deepEqual(
     calls.map((c) => `${c.method} ${c.path}`).sort(),
-    ["GET /connections", "GET /connections/kinds", "GET /uploads"],
+    ["GET /connections", "GET /connections/kinds", "GET /data-doctor/cases", "GET /uploads"],
   );
 });
 
@@ -428,7 +411,7 @@ test("no never-shown word appears on the page, with a saved connection, a failed
   await until(() => row(ids.pg).querySelector("[data-cn-report]"), 2000, "the report");
   row(ids.s3).querySelector("[data-dt-test]").click();
   await until(() => row(ids.s3).querySelector("[data-cn-report]"), 2000, "the second report");
-  $("#dt-add").click();
+  $("[data-dt-open-chooser]").click();
   const found = findNeverShown(visibleText($("main.dt")));
   assert.deepEqual(found, {}, "an empty allow-list: this page shows none of the glossary's never-shown words");
   await show("#/data/check");

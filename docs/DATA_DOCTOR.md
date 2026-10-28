@@ -195,8 +195,7 @@ the column it misses. The dataset itself is never changed.
 ### Joining, stacking and building, done for you (Plan O M237, DEC-1807)
 
 **Status: engine core (M237).** Available in Data Doctor once its tool registry (M232) and approval rules (M233)
-are integrated, behind `data_doctor.unified`. Until then no screen or route reaches these tools; the outcome offer
-below is the one part you can already see.
+are integrated. The outcome offer below is the part you can see today.
 
 What section 5 measures, Data Doctor will also be able to do - always as a suggestion you approve, never on its own:
 
@@ -416,8 +415,8 @@ by the product owner on 12 October 2026 (decisions O1–O19 as recommended). **D
 [`plans/DATA_DOCTOR_AGENT_DESIGN.md`](plans/DATA_DOCTOR_AGENT_DESIGN.md). **Decisions:** DEC-1800 … DEC-1899 in
 [`DECISIONS.md`](DECISIONS.md).
 
-**Built so far, all behind the switch below (off): §13-§17 and "Joining, stacking and building" in §5** (Plan O
-wave 1: M231, M232, M234, M237, M238, M240, M241). None of it is on a screen yet; the rest of this section says what
+**Built so far: §13-§17 and "Joining, stacking and building" in §5** (Plan O
+wave 1: M231, M232, M234, M237, M238, M240, M241). The rest of this section says what
 is still coming. Each milestone fills in its own part, in plain words, when it lands.
 
 ### What is coming
@@ -439,34 +438,22 @@ and the screens around them. Plan O makes them **one Data Doctor**:
   no rule covers may be fixed only with your approval, and only with a step from the fixed list.
 - **One Data Doctor screen**, in three places (M247), after the visual redesign.
 
-### The switch
+### No switch
 
-All of this is built behind one switch, `data_doctor.unified`, in each use case's configuration (default in
-[`configs/engine.yaml`](../configs/engine.yaml) under `defaults.data_doctor`):
-
-```yaml
-data_doctor:
-  unified: false   # the default
-```
-
-- **While it is off (the default), nothing changes.** Guided setup and the Doctor page work exactly as the
-  sections above describe; every run, file and result is the same as before Plan O. The switch is not even written
-  into a run's `run_config.json` while it is off.
-- It cannot be changed for a single run; it is a setting of the use case.
-- It is turned on at M249, and only once the plan's parity checklist is met (§3.2 of the plan): the same results
-  as today on the golden files and the benchmark, and every existing test passing through the new Data Doctor.
+The one Data Doctor is always on. The old `data_doctor.unified` switch (and `MARKETING_AI_DATA_DOCTOR_UNIFIED`) is
+gone, with the Guided-setup path it guarded: safety is held by rules in code and by tests, never by hiding a feature
+behind a flag. `data_doctor:` in a use case still holds the workspace currency, the AI limits and the training-time
+settings, all at defaults that leave a run's `run_config.json` unchanged.
 
 ### For developers
 
-`engine/doctor/config.py` holds `DataDoctorConfig` (the switch; `UseCaseConfig.data_doctor`), and
+`engine/doctor/config.py` holds `DataDoctorConfig` (`UseCaseConfig.data_doctor`), and
 `engine/doctor/codes.py` holds `PLAN_O_CODES`, which `engine.pilot.help.known_codes()` includes: a code added there
 needs its entry in `configs/pilot/help.yaml` in the same change (DEC-1800). Every Data Doctor capability is a tool in
 one registry, `engine/doctor/registry.py` (M232, DEC-1802; `docs/AGENTS.md` §14): wave 1 registered the tools of
 M234, M237, M238, M240 and M241 there (`engine/doctor/tools_wave_one.py`), for the rules and the screen only.
 
 ## 13. Plan O: one case per piece of work (M231, DEC-1801)
-
-*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
 
 A **case** keeps everything about one piece of data work in one place: the files (by upload, never a copy of
 their cells), what Data Doctor found, every suggestion with who made it, the questions with who answered,
@@ -499,13 +486,11 @@ the latest version are also kept inside `case.json` and replayed by the next loc
 erasure rewrite included, so a crash between the two writes loses no event), `evidence/<id>.json`. A stored
 case that no longer validates answers `409 CASE_UNREADABLE`, never a server error. **Not yet on AWS:** `cases/`
 is not among the S3 prefixes the task role may write (`infra/naming.py`) nor the version-purge prefixes
-(`engine/privacy/layout.py`), so keep the switch off on an AWS deployment until those are added (requested
+(`engine/privacy/layout.py`), so do not use this on an AWS deployment until those are added (requested
 before M249). Tests: `tests/unit/doctor/test_case.py`, `tests/unit/production/test_case_privacy.py`,
 `tests/integration/test_api_cases.py`.
 
 ## 14. Will it train? One readiness verdict (Plan O M234, DEC-1804)
-
-*Behind the switch `data_doctor.unified` (off by default). Nothing on screen shows it yet.*
 
 Before a run starts, Data Doctor can say whether the prepared file **will** train (or score) to the end - not just
 whether the first checks pass. It runs the same checks the run itself makes, then fifteen more that try the steps
@@ -531,9 +516,8 @@ The tool `check_readiness` (#69, aggregate) is in the registry; its inputs come 
 
 ## 15. Row and value tools (Plan O M238, DEC-1808)
 
-Five more things Data Doctor will look at or suggest once it is the data agent (the setting
-`data_doctor.unified`) and these tools are wired into its tool list and planner (Plan O integration). They are
-built and tested; until then nothing on screen offers them. Each works with no AI service, and nothing changes
+Five more things Data Doctor will look at or suggest once it is the data agent and these tools are wired into its tool list and planner (Plan O integration). They are
+built and tested. Each works with no AI service, and nothing changes
 until you tick it and approve.
 
 - **One row per customer, the latest.** When a customer list was exported every month, Data Doctor will offer to
@@ -562,7 +546,7 @@ until you tick it and approve.
 ### For developers
 
 - Step: `keep_latest_per_id` (`engine/agent/latest.py`; `docs/AGENTS.md` step table). Reshape level, which
-  decision O3 turns on for every goal only when `data_doctor.unified` is on (`engine/doctor/reshape_guard.py`
+  decision O3 turns on for every goal (`engine/doctor/reshape_guard.py`
   `doctor_levels`), with four guards: a blocking question, never ticked, the full point-in-time probe at a training
   Approve, and the preview receipt (`check_reshape_guards`, `RESHAPE_GUARD_MISSING`). `doctor_levels` and
   `check_reshape_guards` are defined and tested here; wiring them into level resolution and Approve is Plan O
@@ -587,10 +571,9 @@ until you tick it and approve.
 
 ## 16. Indian numbers, yes/no words and IDs (Plan O M241, DEC-1811)
 
-*The tools below are behind the switch `data_doctor.unified` (off by default) and not on a screen yet. Two parts
-work today whatever the switch: a GSTIN or a voter ID is hidden before anything is sent to an AI service, and a
-saved step can read lakh and crore when it asks to (`indian_scale_words`). With the switch on, Hinglish headers
-are read whether or not the agents' setting is on.*
+*Two parts work everywhere: a GSTIN or a voter ID is hidden before anything is sent to an AI service, and a
+saved step can read lakh and crore when it asks to (`indian_scale_words`). Hinglish headers are read whether or
+not the agents' setting is on.*
 
 Data Doctor reads Indian files as they are written. `₹2.5 L` is 2,50,000, `1.2 Cr` is 1,20,00,000, `Rs 3,50,000/-`
 is 3,50,000 and `12K` is 12,000 - exactly. A yes/no column written `haan` / `nahi` or `हाँ` / `नहीं` is read as yes and
@@ -604,9 +587,6 @@ note saying so; a file that disagrees is asked about, never silently changed. No
 currencies here.
 
 ## 17. More file formats, and lines a reader drops (Plan O M240, DEC-1810)
-
-*Behind the switch `data_doctor.unified` (off by default). Uploads still take CSV, Parquet and Excel as before;
-routing the other formats through upload comes later.*
 
 - **JSON, JSON Lines, and a `.gz` or `.zip` holding one table** can be read as a table. Nested fields become
   columns named `outer.inner`. A zip with two tables, or JSON that is not a table, is refused with the reason.
@@ -628,8 +608,7 @@ over M231's case). `read_other_format` (#4) and `check_parser_loss` (#5) are in 
 
 ## 18. A rule for everything Data Doctor suggests (Plan O M233, DEC-1803)
 
-**Status: built, behind `data_doctor.unified` (off by default).** With the switch off nothing here is read and
-everything works as the sections above describe.
+**Status: built.**
 
 Every kind of suggestion Data Doctor can make - a data fix, a setting, your own edit, joining or stacking files,
 keeping each customer's latest row, cutting one file in two, reading lakh and crore or `haan`/`nahi` - has its own
@@ -660,8 +639,6 @@ applies them (`docs/AGENTS.md` §16).
 
 ## 19. Plan O: the visit, with or without a goal (M235, DEC-1805)
 
-*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
-
 Data Doctor is **one helper with an optional goal**. You can start without choosing anything, and choose a goal
 later without starting again.
 
@@ -690,7 +667,7 @@ With an AI service connected, the chat feels like any assistant that just does t
 conversation (the last twelve messages), sees the whole case - every file, what the rules decided, its own earlier
 changes, the questions and your answers - and uses its tools: it looks at the data, makes changes on the working
 copy, asks, suggests an answer, says when it is unsure, asks for a missing file, takes back its own earlier change and
-replies in plain words. Its instructions are one short prompt, `configs/prompts/data_doctor_chat.v1.md`.
+replies in plain words. Its instructions are one short prompt, `configs/prompts/data_doctor_chat.v2.md`.
 
 - **It does the safe work itself.** A fix the guards pass (nothing new that stops or flags the plan) is *applied for
   you*: ticked by the agent, one **Undo**, on the timeline with the counts of its trial on your first 1,000 rows.
@@ -735,7 +712,7 @@ Tests: `tests/unit/doctor/test_goal_brief.py`, `tests/unit/doctor/test_visit.py`
 
 The chat: `engine/doctor/agent_chat.py` (`doctor_converse`: the review's loop with the conversation in front of it and
 a `reply` at the end), `engine/doctor/agent_apply.py` (`AGENT_APPLIED_STEPS`, `agent_applies`: what the agent applies for
-the person), `configs/prompts/data_doctor_chat.v1.md`. A reply in `case.chat` (`CaseChatEntry`) names what it did:
+the person), `configs/prompts/data_doctor_chat.v2.md`. A reply in `case.chat` (`CaseChatEntry`) names what it did:
 `item_ids` (its changes in `case.items`: `accepted` with `decided_by: agent:data-doctor` is applied for the person,
 `pending` waits for their tick), `withdrawn` (its own earlier changes it took back), `tools` (what it did, in order) and
 `suggestion` (`question_id`, `option_id`, `label`: an answer for the person to click); each is left out of the JSON
@@ -750,8 +727,6 @@ conversation, with the turn-keyed scripted model `tests/fixtures/doctor_eval/cha
 `tests/unit/doctor/test_agent_apply.py`, `tests/unit/doctor/test_chat_prompt.py`.
 
 ## 20. More of what Data Doctor can look at, and explanations you can trust (Plan O M236, DEC-1806)
-
-*Behind the switch `data_doctor.unified` (off by default) and not on a screen yet.*
 
 Data Doctor can now do, as one of its own steps, what other screens of the product already do: say what kind of
 file each file is and which column is its ID, suggest how a file's columns map onto the goal's columns, keep how
@@ -777,8 +752,6 @@ also what you see when no AI service is connected.
 M240's `read_workbook_sheets` and `find_excel_serial_dates` are catalogue rows #82 and #83 and are registered.
 
 ## 21. Asking, approving and saying "I'm not sure" (Plan O M246, DEC-1816)
-
-*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
 
 - **One clear question at a time, only when it matters.** Data Doctor asks only when the choices give really
   different data - more than 1 row in 200 changes, or the share of yes outcomes moves by more than half a point.
@@ -807,14 +780,12 @@ M240's `read_workbook_sheets` and `find_excel_serial_dates` are catalogue rows #
 ### For developers
 
 `engine/doctor/protocol.py` (the rules), `standing.py` (remembered answers), `plan_g_approval.py` (Guided setup's
-Approve with the switch on), `patterns.py` (candidate rules), the visit's `confirm`, `revoke_standing` and the
+Approve), `patterns.py` (candidate rules), the visit's `confirm`, `revoke_standing` and the
 `detectors` and `ledger` ports; routes in `api/routes/case_visit.py` and `api/routes/data_protocol.py`.
 `docs/AGENTS.md` §19. Tests: `tests/unit/doctor/test_protocol.py`, `test_protocol_visit.py`,
 `test_plan_g_approval.py`, `tests/integration/test_api_data_protocol.py`.
 
 ## 22. Currency (Plan O M242, DEC-1812)
-
-*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below runs.*
 
 Money keeps its currency. Each workspace has a currency (`data_doctor.workspace_currency`, rupees unless set; a
 client's confirmed currency wins for that client), and every money column of a file is read for its own: the signs
@@ -836,8 +807,8 @@ and codes in its values (`₹`, `Rs`, `$`, `USD`, `€`, `£`) and the words in 
 
 A recipe records the currency: `parse_number` with `unit` stops (`CURRENCY_MIXED`) if next month's file has an
 amount in another currency, and `convert_currency` keeps the rate, its date and source frozen, so replay converts
-exactly as approved. With `data_doctor.unified` off, nothing here runs and every report is as it was; an INR
-workspace with nothing converted prints exactly as before.
+exactly as approved. An INR
+workspace with nothing converted prints exactly as it always did.
 
 ### For developers
 
@@ -851,8 +822,7 @@ code and the question to answer, not as `RECIPE_STEP_INVALID`. `ui/format.js` `s
 
 ## 23. How we check Data Doctor: the evals (Plan O M248, DEC-1818)
 
-*A tool for the team, not a screen. It switches `data_doctor.unified` on in its own process only; nothing a client
-sees changes.*
+*A tool for the team, not a screen. Nothing a client sees changes.*
 
 `make agent-eval` (`python -m scripts.plan_o_benchmark`) writes `reports/plan_o_benchmark.md` and `.json`. It
 measures:
@@ -905,8 +875,6 @@ fails `test_every_registered_tool_has_eval_calls`.
 
 ## 24. Saying what the outcome is (Plan O M239, DEC-1809)
 
-*Behind the switch `data_doctor.unified` (off by default) and not on a screen yet.*
-
 The outcome is what the model learns, so Data Doctor never picks it on its own and never changes it with a fix.
 It writes it down instead, in a sentence you approve word for word:
 
@@ -940,8 +908,6 @@ are `data.define_outcome` and `data.map_outcome_values` in `configs/agentic/poli
 
 ## 25. How long will it take, and which dates? (Plan O M244, DEC-1814)
 
-*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
-
 - **A plain choice, never a minutes box.** Data Doctor offers **Quick (about 5 min)**, **Balanced (about 15 min,
   recommended)** or **Thorough (about 40 min)**, each with what it buys, for example "Thorough has found a better
   model on 2 of 9 similar past runs". Balanced is where similar past runs stopped finding better models.
@@ -970,9 +936,6 @@ are `data.define_outcome` and `data.map_outcome_values` in `configs/agentic/poli
 `data_doctor.time_settings` (defaults in `engine/doctor/config.py`; a use case overrides them under `data_doctor:`).
 
 ## 26. One prescription, used every time (Plan O M243, DEC-1813)
-
-*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below happens and every run is
-exactly as before.*
 
 When you approve what Data Doctor prepared, everything you agreed is kept together as one **prescription**: how each
 file is read, the fixes for each file, how several files are joined into one dataset, what the outcome means, how the
@@ -1013,9 +976,6 @@ rate you approved in it too.
 `engine/doctor/prescription_runs.py` and `api/routes/run_prescriptions.py` (`docs/AGENTS.md` §23).
 
 ## 27. One Data Doctor screen, in the three places you work (Plan O M247, DEC-1817)
-
-*Behind the switch `data_doctor.unified` (off by default). With it off, the Data page, the wizard's Customers step
-and a goal's setup are exactly as before.*
 
 Data Doctor is one screen, and it is where you already are. It opens on one piece of work (a *check*) in three
 places, and it is the same check in all three:
@@ -1079,8 +1039,7 @@ top of `ui/modules/datadoctor/plan.js` (`view.ledger`, `item.payload.receipt`).
 
 ### For developers
 
-`ui/modules/datadoctor/` (`screen.js` the component, `view.js` its markup, `plan.js` / `plan_view.js` / `who.js` the plan screen, `switch.js` the switch read from
-`GET /auth/me` `data_doctor`), mounted by `ui/modules/data/page.js` and, through Guided setup's own mount
+`ui/modules/datadoctor/` (`screen.js` the component, `view.js` its markup, `plan.js` / `plan_view.js` / `who.js` the plan screen), mounted by `ui/modules/data/page.js` and, through Guided setup's own mount
 (`ui/modules/agent/guided.js` `mountGuided`), by the wizard and a goal's setup. The server side is
 `engine/doctor/screen.py` (the verdict with `note` under `ready_with_warnings`, the approval sentence, APPROVE-class
 items with `can_agree` / `cannot_agree` for the reader - the rule `visit.confirm` applies,

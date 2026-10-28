@@ -381,7 +381,7 @@ def read_roi(
         client_name=client_name,
         campaign_title=campaign.title if campaign else "",
         simulated_note=campaign.simulated_effect if campaign else "",
-        # Plan O M242 (DEC-1812 (h)): only a run the Data Doctor flow (`data_doctor.unified`) gave a money basis has
+        # Plan O M242 (DEC-1812 (h)): only a run the Data Doctor flow  gave a money basis has
         # one; every other run reads None and the document is byte-identical.
         money=report_money(load_money_basis(storage, run_id)),
     )

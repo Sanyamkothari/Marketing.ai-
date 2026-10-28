@@ -367,11 +367,11 @@ def test_accepting_the_recommended_ones_never_accepts_two_values_for_one_setting
 
 
 def _helper_and_chat_minutes() -> tuple[AgentContext, AgentSession]:
-    """The helper suggests a 10-minute search (sure, so ticked); the person asks in chat for 30."""
+    """The helper suggests a time limit worked out for the file; the person asks in chat for 30."""
     ctx = context_for(generate(GenerationSpec(use_case_id="targeted-advertisement", rows=3_000)))
     session = start_session(ctx, session_id="s1")
     helper = next(p for p in session.proposals if p.path == "model_search.time_limit_minutes")
-    assert (helper.value, helper.confidence) == (10, AgentConfidence.SURE)
+    assert helper.value != 30
     evidence = session.tool_results[0].evidence_id
     chat = _chat_setting("c1-p1", "model_search.time_limit_minutes", 30, evidence)
     return ctx, session.model_copy(update={"proposals": (*session.proposals, chat)})
@@ -391,11 +391,19 @@ def test_accepting_the_recommended_ones_never_overrides_a_value_the_person_accep
 
 
 def test_preview_with_a_chat_request_and_the_helpers_ticked_suggestion_keeps_the_chat_request() -> None:
-    """Preview sends every box as it stands: the helper's 10 minutes (ticked by default) and the
+    """Preview sends every box as it stands: the helper's time limit (ticked here) and the
     person's own 30. The later suggestion - the chat request - wins, and the session is ready."""
     ctx, session = _helper_and_chat_minutes()
     session = _answer_all(ctx, session)
-    ticked = {p.proposal_id for p in session.proposals if p.confidence is AgentConfidence.SURE} | {"c1-p1"}
+    helper = next(
+        p
+        for p in session.proposals
+        if p.path == "model_search.time_limit_minutes" and p.proposal_id != "c1-p1"
+    )
+    ticked = {p.proposal_id for p in session.proposals if p.confidence is AgentConfidence.SURE} | {
+        "c1-p1",
+        helper.proposal_id,
+    }
     boxes = [
         (p.proposal_id, ProposalState.ACCEPTED if p.proposal_id in ticked else ProposalState.REJECTED, None)
         for p in session.proposals
@@ -502,7 +510,14 @@ def test_a_date_column_with_too_few_dates_is_not_called_unreadable() -> None:
     assert "read" not in split.reason
     # Its values are dates, so the Run button's date check passes: the column is not cleared.
     assert not any(p.path == "split.time_column" for p in session.proposals)
-    ready = accept_recommended(_answer_all(ctx, session), ctx)
+    # The time limit is worked out for the file and offered to check, not ticked: accept what is left for the person.
+    answered = _answer_all(ctx, session)
+    pending = [
+        (p.proposal_id, ProposalState.ACCEPTED, None)
+        for p in answered.proposals
+        if p.state is ProposalState.PENDING
+    ]
+    ready = decide(answered, ctx, pending)
     assert ready.status.value == "ready"
     assert _apply_errors(ctx, ready) == []
 

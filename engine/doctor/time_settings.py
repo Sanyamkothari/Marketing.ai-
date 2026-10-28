@@ -47,8 +47,7 @@ per client for the as-of date, the cut points, the maturity choice and the caden
 the recipe step that leaves the newest rows out (with its cut-off, worked out again on each file), the build's
 snapshot frequency - and :func:`time_setting_changes` / :func:`apply_time_settings` read them back.
 
-Everything here is behind `data_doctor.unified`: with the switch off nothing calls it, `_time_rules` and the
-budgets are byte-identical, and the progress bar is M189's.
+The budgets replace the old file-size rule (`_time_rules`, removed), and the progress bar follows them.
 """
 
 from __future__ import annotations
@@ -1195,8 +1194,7 @@ class PromiseTracker(ProgressTracker):
 
 def promised_tracker(flow: Any, keys: Sequence[StageKey]) -> ProgressTracker | None:
     """The tracker of a training run on data Data Doctor offered training-time choices for, or None (then M189's own
-    estimate stands: a run on data no offer was made for). Writes the promise into the run directory. Behind
-    `data_doctor.unified`.
+    estimate stands: a run on data no offer was made for). Writes the promise into the run directory.
 
     The run's limit is looked up among every kept offer, newest first: a choice the person took is promised exactly
     what was shown, even after a newer run has moved the next offer's minutes. A limit that is none of them (set in
@@ -1208,7 +1206,7 @@ def promised_tracker(flow: Any, keys: Sequence[StageKey]) -> ProgressTracker | N
 
     ctx = flow._ctx
     config = ctx.config
-    if ctx.mode is not RunMode.TRAIN or not config.data_doctor.unified:
+    if ctx.mode is not RunMode.TRAIN:
         return None
     budget = train_budget_seconds(config)
     if budget is None:

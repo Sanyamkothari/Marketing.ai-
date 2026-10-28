@@ -102,7 +102,7 @@ def _role_states(session: AgentSession, path: str) -> list[tuple[Any, ProposalSt
     return [(p.value, p.state) for p in session.proposals if p.kind is ProposalKind.ROLE and p.path == path]
 
 
-@pytest.mark.parametrize("make", [context_for, header_help_context], ids=["switch_off", "header_reading_on"])
+@pytest.mark.parametrize("make", [context_for, header_help_context], ids=["default_root", "agentic_root"])
 def test_rejecting_the_outcome_asks_for_it_instead_of_saying_ready(make: Any) -> None:
     """in_02's shape: the ID is ticked, the outcome suggestion ("check") is rejected. Before DEC-1821: ready."""
     ctx = make(in_02_shaped())

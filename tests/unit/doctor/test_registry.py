@@ -48,7 +48,6 @@ from engine.doctor.registry import (
     data_evidence_id,
     data_registry,
     evidence_id_of,
-    unified_on,
 )
 from engine.doctor.tools import LookOutput
 from engine.doctor.tools_features import M_FEATURE_TOOLS
@@ -406,7 +405,7 @@ def test_the_ai_never_sees_a_person_only_tool_or_a_wrapper_in_m232(agent: AgentC
         data_registry().call("edit_by_hand", {"kind": "drop_column", "column": "x"}, ctx)
     assert refused.value.code == "TOOL_UNKNOWN"
     listed = [t.name for t in data_registry().listed_for(ctx, DataToolKind.READ)]
-    assert listed == [name for name in LOOK_TOOLS if name != "draft_outcome_labels"]  # Plan K off
+    assert listed == LOOK_TOOLS
 
 
 def test_ai_and_person_calls_must_say_who_is_asking(agent: AgentContext) -> None:
@@ -744,15 +743,3 @@ def test_a_table_that_powers_many_goals_still_gets_its_verdicts_with_the_best_fi
     assert len(verdicts) == 5, "every goal still has its verdict"
     assert verdicts[0]["first_look"] is not None, "the best goal keeps its first look"
     assert verdicts[-1]["first_look"] is None, "the last ones give theirs up to fit"
-
-
-def test_unified_on_reads_the_switch_and_is_off_without_it(agent: AgentContext) -> None:
-    class Section:
-        unified = True
-
-    class Config:
-        data_doctor = Section()
-
-    assert unified_on(agent.config) is False, "the shipped configuration has the switch off"
-    assert unified_on(None) is False
-    assert unified_on(Config()) is True  # type: ignore[arg-type]

@@ -121,6 +121,15 @@ class UseCaseReadiness(StrictBase):
         default=(), description="For a question: the columns that might name the outcome."
     )
 
+    also_fits: str | None = Field(
+        default=None,
+        description=(
+            "The Home goal this one repeats (its config's `duplicates`), by name: this goal is still offered, and the "
+            "person sees that the same files also fit that goal. Null for Home's own goals."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+
     # DEC-1596: an added, defaulted field - what the file already says about the outcome, with no AI.
     first_look: FirstLook | None = Field(
         default=None,

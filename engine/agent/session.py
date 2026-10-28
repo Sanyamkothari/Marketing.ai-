@@ -38,7 +38,6 @@ from datetime import datetime
 from typing import Any
 
 from engine.agent.advisor import (
-    NEVER_TICKED_STEPS,
     ROLE_PRIMARY_KEY,
     ROLE_TARGET,
     Advice,
@@ -548,14 +547,10 @@ def _one_value_per_setting(proposals: Sequence[Proposal], decided_now: set[str])
 
 
 def _never_ticked(ctx: AgentContext) -> frozenset[RecipeStepKind]:
-    """`NEVER_TICKED_STEPS`, and - behind `data_doctor.unified` - the data policy's list too (Plan O M233)."""
-    from engine.doctor import registry as doctor_registry
-
-    if not doctor_registry.unified_on(ctx.config):
-        return NEVER_TICKED_STEPS  # the switch off: nothing of the policy is read
+    """`NEVER_TICKED_STEPS`, and the data policy's list too (Plan O M233)."""
     from engine.doctor.policy import never_ticked_steps
 
-    return never_ticked_steps(ctx.config, ctx.config_root)
+    return never_ticked_steps(ctx.config_root)
 
 
 def accept_recommended(

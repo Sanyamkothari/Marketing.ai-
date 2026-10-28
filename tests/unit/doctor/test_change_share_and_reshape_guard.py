@@ -67,9 +67,8 @@ def test_measure_step_runs_the_step_on_a_copy() -> None:
 def test_the_reshape_level_is_on_for_every_goal_only_with_data_doctor_on() -> None:
     default = AgentConfig().levels
     assert default == (AgentLevel.CLEAN, AgentLevel.DERIVE)  # the switch off changes nothing
-    assert doctor_levels(default, unified=False) == default
-    assert doctor_levels(default, unified=True) == (AgentLevel.CLEAN, AgentLevel.DERIVE, AgentLevel.RESHAPE)
-    assert doctor_levels((AgentLevel.CLEAN,), unified=True) == (AgentLevel.CLEAN, AgentLevel.RESHAPE)
+    assert doctor_levels(default) == (AgentLevel.CLEAN, AgentLevel.DERIVE, AgentLevel.RESHAPE)
+    assert doctor_levels((AgentLevel.CLEAN,)) == (AgentLevel.CLEAN, AgentLevel.RESHAPE)
 
 
 def _item(**changes: object) -> ReshapeItem:

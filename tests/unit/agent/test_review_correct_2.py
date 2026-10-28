@@ -19,6 +19,7 @@ from engine.agent.loop import chat_turn
 from engine.agent.session import start_session
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.llm import LLMCompletion, _helper_sections
+from tests.unit.agent.analyst import ANALYST
 from tests.unit.agent.helpers import context_for
 
 
@@ -42,7 +43,12 @@ def _turn(
     ctx: Any, session: Any, script: Callable[[int], dict[str, Any]], message: str = "look at plan"
 ) -> tuple[Any, Scripted]:
     meter = Scripted(script)
-    return chat_turn(ctx, session, message, meter=meter, guardrails=Guardrails(load_policy())), meter
+    return (
+        chat_turn(
+            ctx, session, message, meter=meter, guardrails=Guardrails(load_policy()), principal=ANALYST
+        ),
+        meter,
+    )
 
 
 def _looks_then_reply(

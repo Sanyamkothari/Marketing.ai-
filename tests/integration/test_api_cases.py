@@ -34,18 +34,12 @@ ROUTES = {
 
 
 @pytest.fixture
-def unified(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`data_doctor.unified: true`. M230 adds the switch to `configs/engine.yaml`; until then the reader is patched."""
-    monkeypatch.setattr(doctor_case, "data_doctor_unified", lambda root=None: True)
-
-
-@pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
     return tmp_path / "data"
 
 
 @pytest.fixture
-def client(unified: None, config_root: Path, data_dir: Path) -> Iterator[TestClient]:
+def client(config_root: Path, data_dir: Path) -> Iterator[TestClient]:
     with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as test_client:
         yield test_client
 
@@ -251,7 +245,7 @@ def test_the_routes_have_their_policies(client: TestClient) -> None:
     assert {"/cases", "/cases/{case_id}", "/cases/{case_id}/files", "/cases/{case_id}/timeline"} <= set(paths)
 
 
-def test_a_viewer_reads_a_case_but_cannot_change_it(unified: None, tmp_path: Path) -> None:
+def test_a_viewer_reads_a_case_but_cannot_change_it(tmp_path: Path) -> None:
     app = local_app(tmp_path)
     viewer = make_user(app, "vera", [Role.VIEWER])
     analyst = make_user(app, "asha", [Role.ANALYST])
@@ -265,13 +259,3 @@ def test_a_viewer_reads_a_case_but_cannot_change_it(unified: None, tmp_path: Pat
         assert client.get(f"/cases/{case_id}", headers=bearer(app, viewer)).status_code == 200
         events = client.get(f"/cases/{case_id}/timeline", headers=bearer(app, viewer)).json()["events"]
         assert [e["actor"] for e in events] == [analyst], "the timeline records the user id"
-
-
-def test_with_the_switch_off_there_is_no_cases_path(config_root: Path, tmp_path: Path) -> None:
-    app = create_app(config_root=config_root, data_dir=tmp_path / "data")
-    paths = app.openapi()["paths"]
-    assert not [path for path in paths if path.startswith("/cases")]
-    with TestClient(app) as client:
-        response = client.post("/cases", json={})
-        assert response.status_code == 404 and "CASE" not in response.text
-    assert not (tmp_path / "data" / "cases").exists()

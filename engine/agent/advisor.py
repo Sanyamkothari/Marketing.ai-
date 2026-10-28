@@ -67,7 +67,7 @@ from engine.agent.recommend import (
     suggest_reason_phrases,
 )
 from engine.agent.reshape import choose_dates, plan_combine
-from engine.agent.tools import AgentContext, AgentToolError, call_tool, header_help_on
+from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.unpivot import find_wide_columns
 from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name, quoted
 from engine.config import (
@@ -175,12 +175,10 @@ class Advice:
 def _call_tool(
     ctx: AgentContext, tool: str, args: Mapping[str, Any] | None, *, evidence_id: str
 ) -> ToolResult:
-    """One look tool for the rules: Plan G's `call_tool`, or, with `data_doctor.unified` on (Plan O M232), the
-    same tool through Data Doctor's registry (`session_call`), which returns the same result byte for byte."""
+    """One look tool for the rules, called through Data Doctor's registry (`session_call`; Plan O M232), which
+    returns the same result as Plan G's `call_tool` byte for byte."""
     from engine.doctor import registry as doctor_registry
 
-    if not doctor_registry.unified_on(ctx.config):
-        return call_tool(ctx, tool, args, evidence_id=evidence_id)
     return doctor_registry.data_registry().session_call(
         tool, args, doctor_registry.DataToolContext(agent=ctx, caller="rules"), evidence_id=evidence_id
     )
@@ -552,8 +550,6 @@ def _label_draft(builder: _Builder, primary_key: str | None = None) -> str:
     describes, so the person adds that column and uploads again. The sentence is returned for the stop
     reason, because a stopped session shows no questions.
     """
-    if not header_help_on(builder.ctx):
-        return ""  # Plan K off: no draft, and the stop reason is what it was before M142 (DEC-1409 (f))
     if primary_key is not None and _repeats(builder, primary_key):
         # The drafts count rows as customers; on an order log that is invoice lines ("432,638 of 541,909"), so none.
         return ""
@@ -1004,14 +1000,10 @@ def _ticked(
 
 
 def _never_ticked(ctx: AgentContext) -> frozenset[RecipeStepKind]:
-    """`NEVER_TICKED_STEPS`, and - behind `data_doctor.unified` - the data policy's list too (Plan O M233)."""
-    from engine.doctor import registry as doctor_registry
-
-    if not doctor_registry.unified_on(ctx.config):
-        return NEVER_TICKED_STEPS  # the switch off: nothing of the policy is read
+    """`NEVER_TICKED_STEPS`, and the data policy's list too (Plan O M233)."""
     from engine.doctor.policy import never_ticked_steps
 
-    return never_ticked_steps(ctx.config, ctx.config_root)
+    return never_ticked_steps(ctx.config_root)
 
 
 def ordered_steps(steps: Iterable[RecipeStep]) -> tuple[RecipeStep, ...]:
@@ -1355,8 +1347,6 @@ def _mapping_notes(builder: _Builder, roles: ToolResult) -> None:
     suppression rules read is fixed by the use case (`actions.suppression.*_column`) and is not a per-run
     setting, so the person renames the column in the file and uploads again. Nothing is ticked.
     """
-    if not header_help_on(builder.ctx):
-        return  # Plan K off: no header is read, so no mapping question (DEC-1409 (f))
     suppression = builder.ctx.config.actions.suppression
     present = {str(c) for c in builder.ctx.frame.columns}
     template_consent = next(
@@ -1727,12 +1717,12 @@ def _settings(
 
 
 def _training_budget(ctx: AgentContext, facts: DataFacts) -> TrainingBudget | None:
-    """Plan O M244 (DEC-1814), behind `data_doctor.unified`, with the deployment's store: the three training-time
+    """Plan O M244 (DEC-1814), with the deployment's store: the three training-time
     choices worked out on this deployment's past runs, and kept beside the file as the offer, so the setting the
     advisor suggests and the promise the run is held to come from one computation. None without a store (the
     library's runs are then the prior, `recommend._budget_rules`) or for a learner that takes no time limit.
     """
-    if not ctx.config.data_doctor.unified or ctx.run_history is None:
+    if ctx.run_history is None:
         return None
     from engine.doctor.time_settings import (
         TimeOffer,

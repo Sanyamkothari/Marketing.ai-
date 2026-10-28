@@ -19,6 +19,7 @@ from engine.agent.grounding import evidence_numbers, grounded_numbers, ungrounde
 from engine.agent.tools import TOOLS, AgentToolError, ToolKind, call_tool
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.llm import FakeLLMClient, FakeLLMMode
+from tests.unit.agent.analyst import ANALYST
 from tests.unit.agent.helpers import context_for
 
 LOOK_TOOLS = (
@@ -818,7 +819,14 @@ def test_a_chat_turn_can_look_at_rows_and_values_and_the_reply_is_grounded(messa
 
     ctx = context_for(synthetic(rows=400))
     session = start_session(ctx, session_id="s-look")
-    turn = chat_turn(ctx, session, message, meter=_FakeClientMeter(), guardrails=Guardrails(load_policy()))
+    turn = chat_turn(
+        ctx,
+        session,
+        message,
+        meter=_FakeClientMeter(),
+        guardrails=Guardrails(load_policy()),
+        principal=ANALYST,
+    )
     assert turn.blocked_by is None, turn.reply.text
     assert [r.tool for r in turn.tool_results] == [tool]
     assert turn.reply.evidence_ids == (turn.tool_results[0].evidence_id,)

@@ -11,7 +11,7 @@ from engine.agent.advisor import advise, recipe_steps
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import ProposalState, RecipeStepKind, SessionStatus
 from engine.agent.recipe import run_recipe
-from engine.agent.session import accept_recommended, answer, start_session, unpivot_declined
+from engine.agent.session import accept_recommended, answer, decide, start_session, unpivot_declined
 from engine.agent.tools import AgentContext
 from engine.config import RunMode
 from tests.fixtures.agent_bench.make_wide import wide_frame
@@ -107,6 +107,12 @@ def test_turn_into_rows_then_combine_reaches_ready(ctx: AgentContext) -> None:
     combined = answer(turned, ctx, combine_question.question_id, "combine")
     assert combined.stop_reason is None
     decided = accept_recommended(combined, ctx)
+    pending = [
+        (p.proposal_id, ProposalState.ACCEPTED, None)
+        for p in decided.proposals
+        if p.state is ProposalState.PENDING
+    ]
+    decided = decide(decided, ctx, pending)  # the training time is offered to check, not ticked
     assert decided.status is SessionStatus.READY
     steps = recipe_steps(p for p in decided.proposals if p.state is ProposalState.ACCEPTED)
     assert [s.kind for s in steps] == [RecipeStepKind.UNPIVOT, RecipeStepKind.COMBINE_ROWS]

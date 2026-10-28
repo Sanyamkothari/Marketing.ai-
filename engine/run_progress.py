@@ -498,10 +498,10 @@ def _make_tracker(flow: Any) -> ProgressTracker | None:
     mode: RunMode = ctx.mode
     keys = tuple(row.key for row in flow._status.status.stages)
     train = mode is RunMode.TRAIN
-    if train and config.data_doctor.unified:
+    if train:
         # Plan O M244 (DEC-1814): a budget chosen from Data Doctor's three choices brings the expectation it was
         # shown with, so the first ETA is the promise; when the run ends, actual against expected is recorded.
-        # Behind the switch; any other run (and any failure here) keeps the estimate below.
+        # Any failure here keeps the estimate below.
         try:
             from engine.doctor.time_settings import promised_tracker
 

@@ -14,7 +14,7 @@ M240's tools (`engine.doctor.tools_formats`) name a file by its id in the case a
   `make_upload` (the API layer's `finish_upload`, so the sheet is profiled and kept like any upload) and adds it
   to the case with the workbook as its `original_upload_id`.
 
-Nothing here is reached while `data_doctor.unified` is off: only the registry's callers build a `CaseFiles`.
+Only the registry's callers build a `CaseFiles`.
 """
 
 from __future__ import annotations

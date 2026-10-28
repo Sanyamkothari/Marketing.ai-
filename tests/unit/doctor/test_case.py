@@ -10,14 +10,12 @@ from __future__ import annotations
 
 import json
 import multiprocessing
-import shutil
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -49,7 +47,6 @@ from engine.doctor.case import (
     case_from_diagnosis,
     case_from_session,
     case_key,
-    data_doctor_unified,
     forget_upload,
     payload_digest,
     remove_principal,
@@ -657,32 +654,6 @@ def test_forgetting_an_upload_keeps_the_rest_of_the_case() -> None:
     assert counts["files"] == 1 and counts["items"] == 2 and counts["prescriptions_orphaned"] == 1
     last, _ = forget_upload(out, "u_2")
     assert last["files"] == [] and last["chat"] == []
-
-
-# ---------------------------------------------------------------------------
-# The switch
-# ---------------------------------------------------------------------------
-def test_the_switch_is_off_by_default(config_root: Path) -> None:
-    assert data_doctor_unified(config_root) is False
-
-
-def test_the_switch_reads_the_engine_defaults(config_root: Path, tmp_path: Path) -> None:
-    root = tmp_path / "configs"
-    shutil.copytree(config_root, root)
-    path = root / "engine.yaml"
-    document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    document["defaults"]["data_doctor"] = {"unified": True}
-    path.write_text(yaml.safe_dump(document), encoding="utf-8")
-    assert data_doctor_unified(root) is True
-
-
-def test_the_switch_can_be_turned_on_by_the_environment(
-    config_root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("MARKETING_AI_DATA_DOCTOR_UNIFIED", "true")
-    assert data_doctor_unified(config_root) is True
-    monkeypatch.setenv("MARKETING_AI_DATA_DOCTOR_UNIFIED", "false")
-    assert data_doctor_unified(config_root) is False
 
 
 def test_a_chat_entry_written_before_the_agent_changed_the_plan_reads_and_dumps_as_it_did() -> None:

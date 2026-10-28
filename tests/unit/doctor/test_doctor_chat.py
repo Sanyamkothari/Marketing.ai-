@@ -18,7 +18,6 @@ import pytest
 from engine.agent.contracts import ProposalSource, ProposalState
 from engine.agent.loop import UNAVAILABLE
 from engine.doctor import agent_chat, visit
-from engine.doctor import registry as doctor_registry
 from engine.doctor.case import Case, CaseChatEntry, TimelineKind, VisitState
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.limits import limits
@@ -36,12 +35,6 @@ from tests.unit.doctor.visit_support import ANALYST, World
 SALE = "a sale only counts if the order was over 500"
 TEST_ACCOUNTS = "drop test accounts, ids start with 999"
 THIS_YEAR = "actually only this year's orders"
-
-
-@pytest.fixture(autouse=True)
-def unified(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The Doctor's routes exist only with `data_doctor.unified` on, and so do the policy's checks of an AI's change."""
-    monkeypatch.setattr(doctor_registry, "unified_on", lambda _config: True)
 
 
 @pytest.fixture

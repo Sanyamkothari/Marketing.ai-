@@ -312,8 +312,7 @@ def test_levels_follow_the_use_case_and_the_rule_set() -> None:
 def test_decision_o3_puts_reshape_in_every_goals_levels_only_with_data_doctor_on() -> None:
     from engine.doctor.reshape_guard import doctor_levels
 
-    assert AgentLevel.RESHAPE in doctor_levels((AgentLevel.CLEAN, AgentLevel.DERIVE), unified=True)
-    assert AgentLevel.RESHAPE not in doctor_levels((AgentLevel.CLEAN, AgentLevel.DERIVE), unified=False)
+    assert AgentLevel.RESHAPE in doctor_levels((AgentLevel.CLEAN, AgentLevel.DERIVE))
 
 
 def test_the_setting_allow_list() -> None:

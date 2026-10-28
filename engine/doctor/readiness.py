@@ -32,8 +32,7 @@ recipe - and composes, never re-implements:
 Storage: the report is to be stored in the case at `cases/<client>/<case>/readiness/<goal>_<hash>.json`
 (`store_readiness`) and copied into the run directory beside `data_recipe.json`
 (`attach_readiness_to_run`). This module writes nothing on its own. The case (M231) and the run route
-(`POST /runs` and `POST /uplift/runs`, beside `attach_recipe_to_run`) are to call these two helpers,
-behind `data_doctor.unified`; until they are wired, nothing calls them.
+(`POST /runs` and `POST /uplift/runs`, beside `attach_recipe_to_run`) are to call these two helpers.
 
 `check_readiness` is registered as a READ tool of exposure `aggregate` through
 `register_readiness_tool`, which the Plan O registry (M232) calls; the tool returns `ReadinessSummary`,

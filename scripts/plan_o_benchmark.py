@@ -18,8 +18,7 @@ What it runs, each part selectable with `--parts` (all by default):
 * **multi** - several files through the registry's `stack_files` and `join_files`: every row counted.
 * **golden** - Plan G's golden digests through the unified runtime.
 
-The harness runs with `data_doctor.unified` on in its own process (a copy of the configuration with the switch on
-for the API journey, the registry's hook for the rest); a deployment's switch is never touched. Training each
+The API journey runs over a copy of the configuration. Training each
 `ready` file to the end (`--train`) is the gate run, which waits for M247.
 
     python -m scripts.plan_o_benchmark                  # writes reports/plan_o_benchmark.{md,json}
@@ -243,61 +242,57 @@ def evaluate_tools(registry: Any, work: Path, *, k: int, only: Sequence[str] | N
         pass_k,
         row_accounting,
         ticked_by_rules,
-        unified_switch,
     )
 
     out: list[Any] = []
-    with unified_switch():
-        control = tool_world(work / "control", "control")
-        planted = tool_world(work / "planted", "planted")
-        for status in discover_tools(registry):
-            evaluated = ToolEval(status=status)
-            if not status.built or (only is not None and status.name not in only):
-                out.append(evaluated)
-                continue
-            if status.name not in CALLS:
-                missing = pass_k(status.name, [RunOutcome(digests=(), unacceptable=("no eval calls",))], k=k)
-                out.append(evaluated.model_copy(update={"pass_k": missing}))
-                continue
-            calls = CALLS[status.name]
-            if calls is None:  # a chat suggestion: the AI part evaluates it
-                out.append(evaluated)
-                continue
-            given_list = calls(columns_of(control))
-            outcomes: list[RunOutcome] = []
-            first: list[Any] = []
-            for run in range(k):
-                digests: list[str] = []
-                harmful: list[str] = []
-                for given in given_list:
-                    result = _call(registry, status.name, given, control)
-                    if run == 0:
-                        first.append(result)
-                    digests.append(decision_digest(result))
-                    if status.kind == "propose":
-                        events = row_accounting(result, where=status.name)
-                        if status.callers != (
-                            "person",
-                        ):  # a person's own edit is their decision, ticked by them
-                            events += ticked_by_rules(result, where=status.name)
-                        harmful += [f"{e.metric}: {e.detail}" for e in events]
-                outcomes.append(RunOutcome(digests=tuple(digests), harmful=tuple(harmful)))
-            pairs = [
-                (
-                    json.dumps(given, ensure_ascii=False)[:100],
-                    first[i],
-                    _call(registry, status.name, planted_args(given), planted),
-                )
-                for i, given in enumerate(given_list)
-            ]
-            out.append(
-                evaluated.model_copy(
-                    update={
-                        "pass_k": pass_k(status.name, outcomes, k=k),
-                        "injection": injection_check(status.name, pairs),
-                    }
-                )
+    control = tool_world(work / "control", "control")
+    planted = tool_world(work / "planted", "planted")
+    for status in discover_tools(registry):
+        evaluated = ToolEval(status=status)
+        if not status.built or (only is not None and status.name not in only):
+            out.append(evaluated)
+            continue
+        if status.name not in CALLS:
+            missing = pass_k(status.name, [RunOutcome(digests=(), unacceptable=("no eval calls",))], k=k)
+            out.append(evaluated.model_copy(update={"pass_k": missing}))
+            continue
+        calls = CALLS[status.name]
+        if calls is None:  # a chat suggestion: the AI part evaluates it
+            out.append(evaluated)
+            continue
+        given_list = calls(columns_of(control))
+        outcomes: list[RunOutcome] = []
+        first: list[Any] = []
+        for run in range(k):
+            digests: list[str] = []
+            harmful: list[str] = []
+            for given in given_list:
+                result = _call(registry, status.name, given, control)
+                if run == 0:
+                    first.append(result)
+                digests.append(decision_digest(result))
+                if status.kind == "propose":
+                    events = row_accounting(result, where=status.name)
+                    if status.callers != ("person",):  # a person's own edit is their decision, ticked by them
+                        events += ticked_by_rules(result, where=status.name)
+                    harmful += [f"{e.metric}: {e.detail}" for e in events]
+            outcomes.append(RunOutcome(digests=tuple(digests), harmful=tuple(harmful)))
+        pairs = [
+            (
+                json.dumps(given, ensure_ascii=False)[:100],
+                first[i],
+                _call(registry, status.name, planted_args(given), planted),
             )
+            for i, given in enumerate(given_list)
+        ]
+        out.append(
+            evaluated.model_copy(
+                update={
+                    "pass_k": pass_k(status.name, outcomes, k=k),
+                    "injection": injection_check(status.name, pairs),
+                }
+            )
+        )
     return out
 
 
@@ -377,7 +372,7 @@ def ai_session(case: str, model: Model) -> AiRun:
     from engine.agent.contracts import ProposalSource, ProposalState
     from engine.agent.loop import chat_turn
     from engine.agent.session import accept_recommended, roles_of, start_session
-    from engine.doctor.evals import ai_proposal_harms, ai_step_share, ticked_harms, unified_switch
+    from engine.doctor.evals import ai_proposal_harms, ai_step_share, ticked_harms
     from engine.generative.guardrails import Guardrails, load_policy
 
     ctx = ai_context(case)
@@ -385,13 +380,12 @@ def ai_session(case: str, model: Model) -> AiRun:
     meter = model.meter()
     guardrails = Guardrails(load_policy())
     unanswered = 0
-    with unified_switch():
-        for message in AI_MESSAGES:
-            turn = chat_turn(ctx, session, message, meter=meter, guardrails=guardrails, principal=ANALYST)
-            unanswered += turn.blocked_by == "unavailable"
-            session = _after(session, message, turn)
-        key, target = roles_of(session)
-        ticked = accept_recommended(session, ctx)
+    for message in AI_MESSAGES:
+        turn = chat_turn(ctx, session, message, meter=meter, guardrails=guardrails, principal=ANALYST)
+        unanswered += turn.blocked_by == "unavailable"
+        session = _after(session, message, turn)
+    key, target = roles_of(session)
+    ticked = accept_recommended(session, ctx)
     personal = {c.name for c in ctx.profile.columns if c.pii_kinds} | set(
         ctx.config.agent.always_hide_columns
     )
@@ -797,7 +791,7 @@ def heldout_jobs(folder: Path | None = None) -> list[Job]:
 
 @contextmanager
 def unified_app(config_root: Path) -> Iterator[tuple[Any, Path]]:
-    """The API with `data_doctor.unified` on, over a copy of `config_root`, and its data folder."""
+    """The API over a copy of `config_root`, and its data folder."""
     from fastapi.testclient import TestClient
 
     from api.main import create_app
@@ -805,12 +799,6 @@ def unified_app(config_root: Path) -> Iterator[tuple[Any, Path]]:
     with tempfile.TemporaryDirectory() as work:
         root = Path(work) / "configs"
         shutil.copytree(config_root, root)
-        engine_yaml = root / "engine.yaml"
-        text = engine_yaml.read_text(encoding="utf-8")
-        switched = re.sub(r"(\n  data_doctor:[^\n]*\n    unified:) false", r"\1 true", text, count=1)
-        if switched == text:
-            raise RuntimeError("could not switch data_doctor.unified on in the copied engine.yaml")
-        engine_yaml.write_text(switched, encoding="utf-8")
         data_dir = Path(work) / "data"
         with TestClient(create_app(config_root=root, data_dir=data_dir)) as client:
             yield client, data_dir
@@ -1264,11 +1252,11 @@ def run_files(jobs: Sequence[Job], *, config_root: Path, available: set[str], tr
 def run_multi(registry: Any, available: set[str]) -> list[Any]:
     """Each multi-file case through its registry tool; every row in and out must be counted."""
     from tests.fixtures.doctor_eval.extended import MULTI_FILE
-    from tests.fixtures.doctor_eval.world import ANALYST, unified
+    from tests.fixtures.doctor_eval.world import ANALYST
     from tests.unit.agent.helpers import context_for
 
     from engine.doctor.diagnose import LoadedFile
-    from engine.doctor.evals import BenchFile, HarmEvent, row_accounting, ticked_by_rules, unified_switch
+    from engine.doctor.evals import BenchFile, HarmEvent, row_accounting, ticked_by_rules
     from engine.doctor.registry import DataToolContext
 
     out: list[Any] = []
@@ -1280,13 +1268,13 @@ def run_multi(registry: Any, available: set[str]) -> list[Any]:
             )
             continue
         frames = case.frames()
-        ctx = unified(context_for(frames[0]))
+        ctx = context_for(frames[0])
         files = tuple(
             LoadedFile(
                 upload_id=f"up-{case.name}-{i}",
                 file_name=f"{case.name}-{i}.csv",
                 frame=frame,
-                profile=ctx.profile if i == 0 else unified(context_for(frame)).profile,
+                profile=ctx.profile if i == 0 else context_for(frame).profile,
             )
             for i, frame in enumerate(frames)
         )
@@ -1299,8 +1287,7 @@ def run_multi(registry: Any, available: set[str]) -> list[Any]:
             if case.tool == "stack_files"
             else {"base_upload_id": ids[0], "base_key_column": "customer_id", "upload_ids": ids[1:]}
         )
-        with unified_switch():
-            output = _call(registry, case.tool, given, world)
+        output = _call(registry, case.tool, given, world)
         events = row_accounting(output, where=case.name) + ticked_by_rules(output, where=case.name)
         why = f"refused: {output['error']}" if "error" in output else ""
         lost = sum(e.count for e in events if e.metric == "silent_row_loss")
@@ -1322,14 +1309,11 @@ def golden_changes() -> list[str]:
     """Plan G's golden cases whose advice digest changes through the unified runtime."""
     from tests.fixtures.agent_bench.cases import CASES, EXPECTED, run_case
 
-    from engine.doctor.evals import unified_switch
-
     expected = json.loads(EXPECTED.read_text(encoding="utf-8"))
     changed: list[str] = []
-    with unified_switch():
-        for name in CASES:
-            if run_case(name) != expected.get(name):
-                changed.append(name)
+    for name in CASES:
+        if run_case(name) != expected.get(name):
+            changed.append(name)
     return changed
 
 

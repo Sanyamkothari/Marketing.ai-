@@ -29,6 +29,7 @@ from engine.agent.loop import (
 from engine.agent.session import start_session
 from engine.agent.tools import AgentToolError, call_tool
 from engine.agent.untrusted import quoted
+from tests.unit.agent.analyst import ANALYST
 from tests.unit.agent.egress_canary import (
     ToolingClient,
     canary_context,
@@ -287,7 +288,9 @@ def test_find_values_is_capped_per_column() -> None:
     client = ToolingClient(turn, per_turn=20)
     session = start_session(ctx, session_id="fix-cap")
 
-    result = chat_turn(ctx, session, "look", meter=meter_for(client), guardrails=guardrails())
+    result = chat_turn(
+        ctx, session, "look", meter=meter_for(client), guardrails=guardrails(), principal=ANALYST
+    )
     used = [r for r in result.tool_results if r.tool == "find_values"]
     assert len(used) == MAX_FIND_VALUES_PER_COLUMN_TURN
     assert MAX_FIND_VALUES_PER_COLUMN_SESSION > MAX_FIND_VALUES_PER_COLUMN_TURN

@@ -4,7 +4,7 @@ PRESCRIBE (`engine.doctor.prescription.CasePrescriber`) binds each upload of the
 build made, and the onboarding spec that built it, to the prescription it wrote: a small reference
 (`prescription_ref.json`: client, case, hash; no value, no user id). A file added to the case later is bound to the
 case's latest prescription (`engine.doctor.visit.add_files`), so next month's file replays it. The run paths read the
-references, **only while `data_doctor.unified` is on**:
+references:
 
 * **Training from a built dataset** (`POST /runs` with `dataset_id`, and a scheduled training firing):
   :func:`dataset_for_training` finds the prescription bound to the dataset - or, for a dataset a firing built fresh
@@ -86,7 +86,6 @@ __all__ = [
     "check_for_scoring",
     "check_prepared",
     "dataset_for_training",
-    "prescriptions_on",
     "recipe_money_basis",
     "resolve",
     "run_ref",
@@ -103,13 +102,6 @@ class PrescriptionRef(StrictBase):
     client_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
     case_id: str = Field(min_length=1, max_length=80)
     prescription_hash: str = Field(pattern=HASH_PATTERN)
-
-
-def prescriptions_on(config: UseCaseConfig | None) -> bool:
-    """Whether `data_doctor.unified` is on for `config`: every hook here is a no-op while it is off."""
-    from engine.doctor.registry import unified_on
-
-    return unified_on(config)
 
 
 def _dataset_ref_key(dataset_id: str) -> str:
@@ -288,7 +280,7 @@ def attach_recipe_basis(
 ) -> MoneyBasis | None:
     """With the switch on, a run prepared by a recipe under no stored prescription keeps that recipe's money basis
     (`money_basis.json`); nothing otherwise. Returns what was saved."""
-    if recipe is None or not prescriptions_on(config):
+    if recipe is None:
         return None
     from engine.doctor.currency import save_money_basis
 
@@ -397,8 +389,6 @@ def dataset_for_training(
     the rest of its key (`RECIPE_ROLES_MISMATCH`, before anything is prepared), the outcome cannot run (`OUTCOME_*`),
     a step cannot run on the dataset (a column it needs is gone or changed), or the rows break the contract.
     """
-    if not prescriptions_on(config):
-        return None
     ref = _dataset_ref(storage, dataset_id, manifest)
     if ref is None:
         return None
@@ -485,8 +475,6 @@ def upload_for_training(
     report, for the intake, locale and currency checks - each called only once the switch and the binding are
     confirmed. A stop raises.
     """
-    if not prescriptions_on(config):
-        return None
     ref = bound(storage, upload_id=upload_id)
     if ref is None and fallback is not None:
         ref = fallback()
@@ -542,7 +530,6 @@ class ScoringCheck:
 
 def check_for_scoring(
     storage: Storage,
-    config: UseCaseConfig,
     training_run_id: str,
     prepared: pd.DataFrame,
     *,
@@ -553,8 +540,6 @@ def check_for_scoring(
     as sent, read only now, for a one-file prescription), then the contract on `prepared` (the rows the model reads;
     the outcome is not read). Raises `PrescriptionError` on a stop; returns the warnings. None - before anything is
     read - with the switch off or for a model trained with no prescription."""
-    if not prescriptions_on(config):
-        return None
     ref = run_ref(storage, training_run_id)
     if ref is None:
         return None

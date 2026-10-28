@@ -18,7 +18,6 @@ files.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -29,7 +28,6 @@ import pandas as pd
 from engine.access.roles import Principal, Role
 from engine.agent.tools import TOOLS, AgentContext
 from engine.config import RunMode
-from engine.doctor.config import DataDoctorConfig
 from engine.doctor.evals import INJECTION_HEADER, control_of, plant_injection
 from tests.fixtures.make_data import GenerationSpec, generate
 
@@ -43,7 +41,6 @@ __all__ = [
     "ai_context",
     "planted_args",
     "tool_world",
-    "unified",
 ]
 
 ANALYST: Final[Principal] = Principal(
@@ -71,16 +68,10 @@ PERSONAL_VALUES: Final[tuple[str, ...]] = (GSTIN_VALUE, "ABCDE1234F", PHONE_VALU
 Calls = Callable[[Sequence[str]], list[dict[str, Any]]]
 
 
-def unified(ctx: AgentContext) -> AgentContext:
-    """`ctx` with `data_doctor.unified` on in its own configuration: the harness evaluates the unified runtime."""
-    config = ctx.config.model_copy(update={"data_doctor": DataDoctorConfig(unified=True)})
-    return dataclasses.replace(ctx, config=config)
-
-
 def _context(frame: pd.DataFrame, use_case: str = USE_CASE, target: str | None = None) -> AgentContext:
     from tests.unit.agent.helpers import context_for
 
-    return unified(context_for(frame, use_case, target=target))
+    return context_for(frame, use_case, target=target)
 
 
 # ---------------------------------------------------------------------------

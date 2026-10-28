@@ -31,7 +31,6 @@ from api.main import create_app
 from engine.agent.loop import UNAVAILABLE
 from engine.ai_service import TEST_MAX_TOKENS
 from engine.config import LlmConfig
-from engine.doctor import case as doctor_case
 from engine.llm_http import PROBLEMS
 from engine.settings import Settings
 from tests.fixtures.make_data import GenerationSpec, generate
@@ -70,11 +69,6 @@ def _reasoning_model(sent: Sent) -> Reply:
     if allowance <= THINKING_TOKENS:
         return _stopped_while_thinking(allowance)
     return chat_reply(ANSWER, prompt_tokens=40, completion_tokens=THINKING_TOKENS + 12)
-
-
-@pytest.fixture(autouse=True)
-def _unified(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(doctor_case, "data_doctor_unified", lambda root=None: True)
 
 
 @pytest.fixture

@@ -11,6 +11,7 @@ from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalStat
 from engine.agent.loop import chat_turn
 from engine.agent.session import start_session
 from tests.fixtures.agent_bench.make_messy import messy_frame
+from tests.unit.agent.analyst import ANALYST
 from tests.unit.agent.helpers import context_for
 from tests.unit.agent.test_session_and_loop import ScriptedMeter, _guardrails
 
@@ -49,7 +50,12 @@ def started() -> tuple[Any, Any]:
 def turn(started: tuple[Any, Any], *script: str) -> Any:
     ctx, session = started
     return chat_turn(
-        ctx, session, "Bombay is Mumbai", meter=ScriptedMeter(list(script)), guardrails=_guardrails()
+        ctx,
+        session,
+        "Bombay is Mumbai",
+        meter=ScriptedMeter(list(script)),
+        guardrails=_guardrails(),
+        principal=ANALYST,
     )
 
 
@@ -111,7 +117,7 @@ def test_a_bad_parameter_is_refused_by_the_recipe_engine(started: tuple[Any, Any
 def test_the_prompt_teaches_the_action(started: tuple[Any, Any]) -> None:
     ctx, session = started
     meter = ScriptedMeter([reply()])
-    chat_turn(ctx, session, "hello", meter=meter, guardrails=_guardrails())
+    chat_turn(ctx, session, "hello", meter=meter, guardrails=_guardrails(), principal=ANALYST)
     system = meter.rendered[0].system
     assert "propose_step" in system and "map_values" in system and "never a mean or median" in system
 

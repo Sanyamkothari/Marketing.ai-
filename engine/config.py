@@ -1329,6 +1329,9 @@ class UseCaseConfig(_Base):
     name: Annotated[str, Field(min_length=1)]
     description: str = ""
     lifecycle_stage: Annotated[str, Field(min_length=1)]
+    # The id of the use case this one repeats (the same outcome, offered twice): Data Doctor still offers it and says
+    # the same files also fit that goal. Empty for a goal that stands on its own.
+    duplicates: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$")] | None = None
     ai_type: AiType = AiType.PREDICTIVE
     problem_type: ProblemType = ProblemType.BINARY_CLASSIFICATION
     entity: Annotated[str, Field(min_length=1)] = "customer"
@@ -1379,7 +1382,7 @@ class UseCaseConfig(_Base):
     # --- Plan O (Data Doctor) ----------------------------------------------------------------------
     # The one declaration Plan O adds above its block, for Phase 2's, 3b's and Plan G's reason: `_Base`
     # forbids unknown keys, so a use case cannot carry a `data_doctor:` section until the model has a
-    # field for it. Defaulted (the switch `data_doctor.unified` is off), not overridable per run, outside
+    # field for it. Defaulted (its values stay at their defaults), not overridable per run, outside
     # `Recipe.recipe_hash`, and left out of a dump while it holds only defaults, so no run, recipe hash,
     # `run_config.json` or golden digest moves while the switch is off. The type lives in
     # `engine/doctor/config.py`, which imports nothing from this file (DEC-1800 (c)).
@@ -1972,7 +1975,18 @@ def leaf_paths(document: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 IMMUTABLE_PATHS: Final[frozenset[str]] = frozenset(
-    {"id", "name", "description", "lifecycle_stage", "ai_type", "entity", "template", "ui", "output"}
+    {
+        "id",
+        "name",
+        "description",
+        "lifecycle_stage",
+        "duplicates",
+        "ai_type",
+        "entity",
+        "template",
+        "ui",
+        "output",
+    }
 )
 EXTRA_OVERRIDABLE_PATHS: Final[frozenset[str]] = frozenset(
     {
@@ -3993,7 +4007,7 @@ def _plan_k_foundation_warnings(config: UseCaseConfig) -> tuple[str, ...]:
 # ---- END PLAN-M ----
 # ---- PLAN-O (Data Doctor) — append only below this line ----
 # Plan O M230 (DEC-1800 (c)): `UseCaseConfig.data_doctor` is the one in-place edit: a model field cannot live in a
-# block, so it is declared on the model after Plan G's `agent`, defaulted (`data_doctor.unified: false`) and left out
+# block, so it is declared on the model after Plan G's `agent`, defaulted and left out
 # of a dump while it holds only defaults. Its type is `engine/doctor/config.py`. It is listed in the register of
 # in-place declarations (docs/plans/MARKETING_AI_PLAN_J_LAYER.md §3.5).
 # ---- END PLAN-O ----

@@ -12,7 +12,7 @@ Acceptance (Plan O §M244):
 * With no run history, the estimate is labelled "from similar public datasets", and Balanced is `check`, not `sure`.
 
 And: the budget and the questions go through M246's protocol (AUTO when sure, one question otherwise) and the time
-answers are remembered per client; with `data_doctor.unified` off, `_time_rules` and the progress bar are unchanged.
+answers are remembered per client.
 """
 
 from __future__ import annotations
@@ -40,7 +40,6 @@ from engine.config import (
 )
 from engine.contracts import RunRecord, RunState, RunStatus, StageKey, StageStatus
 from engine.doctor import time_settings as ts
-from engine.doctor.config import DataDoctorConfig
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.goal_brief import load_goal_brief
 from engine.doctor.protocol import settle
@@ -70,7 +69,7 @@ T0 = datetime(2026, 10, 12, 9, 0, tzinfo=UTC)
 
 
 def _on(config: UseCaseConfig, **model_search: Any) -> UseCaseConfig:
-    update: dict[str, Any] = {"data_doctor": DataDoctorConfig(unified=True)}
+    update: dict[str, Any] = {}
     if model_search:
         update["model_search"] = config.model_search.model_copy(update=model_search)
     return config.model_copy(update=update)
@@ -370,34 +369,6 @@ def test_the_progress_bars_first_eta_equals_the_promise_and_the_run_records_actu
         assert record.stages[row.key.value].actual == row.duration_seconds
         assert record.stages[row.key.value].expected == chosen.stages[row.key.value]
     assert record.actual_seconds is not None and record.ratio is not None
-
-
-def test_with_the_switch_off_the_progress_bar_is_m189s_and_nothing_is_promised(
-    monkeypatch: pytest.MonkeyPatch,
-    resolved: ResolvedConfig,
-    storage: RecordingStorage,
-    registry: LocalModelRegistry,
-    clock: FakeClock,
-) -> None:
-    StageStubs().install(monkeypatch)
-    budget = _offer_for(storage, _on(resolved.config))
-    balanced = next(c for c in budget.choices if c.choice == "balanced")
-    off = resolved.config.model_copy(
-        update={
-            "model_search": resolved.config.model_search.model_copy(
-                update={"time_limit_minutes": balanced.minutes}
-            )
-        }
-    )
-    assert off.data_doctor.unified is False
-    pipeline_for(storage, registry).run_train(make_context(resolved, storage, registry, config=off))
-    first = next(s for s in storage.statuses() if s.estimated_pct is not None)
-    assert first.eta_seconds != balanced.expected_seconds
-    assert (
-        first.eta_seconds is not None and first.eta_seconds >= balanced.minutes * 60
-    )  # the budget, M189's rule
-    assert not storage.exists(run_key(RUN_ID, ts.PROMISE_FILENAME))
-    assert not storage.exists(run_key(RUN_ID, ts.RECORD_FILENAME))
 
 
 def test_a_custom_budget_not_among_the_choices_is_promised_the_estimate_from_the_same_history(
@@ -827,7 +798,7 @@ def test_an_event_file_offers_monthly_or_weekly_snapshots() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The switch: `_time_rules` byte-identical off; the budget replaces it on
+# The budget sets the time limit
 # ---------------------------------------------------------------------------
 def _facts(rows: int) -> DataFacts:
     return DataFacts(
@@ -848,16 +819,7 @@ def _time_recs(config: UseCaseConfig, rows: int) -> list[Any]:
     return [r for r in found if r.path == "model_search.time_limit_minutes"]
 
 
-def test_with_the_switch_off_time_rules_are_unchanged() -> None:
-    config = load_use_case("targeted-advertisement")
-    small = _time_recs(config, 1_200)
-    assert [(r.value, r.title, r.confidence) for r in small] == [
-        (10, "Limit the model search to 10 minutes", AgentConfidence.SURE)
-    ]
-    assert _time_recs(config, 50_000) == []
-
-
-def test_with_the_switch_on_the_budget_replaces_the_file_size_rule() -> None:
+def test_the_budget_sets_the_time_limit() -> None:
     config = _on(load_use_case("targeted-advertisement"))
     recs = _time_recs(config, 1_200)
     assert len(recs) == 1

@@ -100,8 +100,8 @@ def test_a_clients_confirmed_currency_wins_and_a_detected_one_does_not(tmp_path:
 
 
 def test_the_workspace_setting_is_a_code_and_rupees_leave_no_trace_in_a_dump() -> None:
-    assert DataDoctorConfig().model_dump() == {"unified": False}
-    assert DataDoctorConfig(workspace_currency="INR").model_dump() == {"unified": False}
+    assert DataDoctorConfig().model_dump() == {}
+    assert DataDoctorConfig(workspace_currency="INR").model_dump() == {}
     assert DataDoctorConfig(workspace_currency="USD").model_dump()["workspace_currency"] == "USD"
     for bad in ("usd", "dollars", "US$", ""):
         with pytest.raises(ValueError):

@@ -30,8 +30,6 @@ The fields are the design's table (§3.2):
 (configuration alone), so its result keeps the 16 KB budget, as `data_request` does. :func:`register_goal_brief_tool`
 hands it to a registry; until the integrator adds it to `engine.doctor.tools.register_all`, the visit
 (`engine.doctor.visit`) registers it on its own registry.
-
-Nothing here is reachable while `data_doctor.unified` is off.
 """
 
 from __future__ import annotations

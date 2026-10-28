@@ -1,9 +1,7 @@
 """The `data_doctor:` block of a use case (Plan O): the switch that turns the one Data Doctor agent on.
 
 Plan O (`docs/plans/MARKETING_AI_PLAN_O_DATA_DOCTOR.md`) builds one agent, Data Doctor, whose tools are every data
-capability the product has. It is built behind one switch, `data_doctor.unified`, which stays off until the plan's
-parity checklist (§3.2) is met at M249 (decision O14). While it is off, nothing the product does changes: every
-existing test and golden digest stays byte-identical. Defaults live in `configs/engine.yaml` under
+capability the product has. There is no on/off switch: it is always on. Defaults live in `configs/engine.yaml` under
 `defaults.data_doctor`; a use-case file overrides only what differs.
 
 This module imports nothing from `engine`, for the reason `engine/agent/config.py` gives: `engine.config.UseCaseConfig`
@@ -21,7 +19,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
     "AiLimitsConfig",
@@ -48,7 +46,7 @@ _SETTINGS: Final[ConfigDict] = ConfigDict(
 class TimeSettingsConfig(BaseModel):
     """`data_doctor.time_settings` (Plan O M244, DEC-1814): how the training budget's three choices are made.
 
-    Read only while `unified` is on. The defaults are left out of a dump, so nothing moves while they hold."""
+    The defaults are left out of a dump, so nothing moves while they hold."""
 
     model_config = _SETTINGS
 
@@ -267,20 +265,13 @@ class DataDoctorConfig(BaseModel):
 
     model_config = _SETTINGS
 
-    unified: StrictBool = Field(
-        default=False,
-        description=(
-            "Plan O (DEC-1800): when true, Guided setup and the Doctor page are the one Data Doctor agent. Off "
-            "until the parity checklist is met (M249); while off, nothing changes."
-        ),
-    )
     workspace_currency: str = Field(
         default="INR",
         pattern=r"^[A-Z]{3}$",
         exclude_if=lambda value: value == "INR",
         description=(
             "Plan O M242 (DEC-1812): the currency this workspace's reports use, as a code (INR, USD, EUR). A client's "
-            "confirmed locale profile overrides it for that client. Read only while `unified` is on; INR, the "
+            "confirmed locale profile overrides it for that client. INR, the "
             "default, is left out of a dump so nothing moves."
         ),
     )
@@ -289,7 +280,7 @@ class DataDoctorConfig(BaseModel):
         exclude_if=lambda value: value == TimeSettingsConfig(),
         description=(
             "Plan O M244 (DEC-1814): the training budget's diminishing-returns step and the ratios of its three "
-            "choices. Read only while `unified` is on; the defaults are left out of a dump so nothing moves."
+            "choices. The defaults are left out of a dump so nothing moves."
         ),
     )
     limits: DataDoctorLimits = Field(
@@ -305,7 +296,7 @@ class DataDoctorConfig(BaseModel):
         default_factory=AiLimitsConfig,
         exclude_if=lambda value: value == AiLimitsConfig(),
         description=(
-            "The most tokens and calls the Doctor's AI may use on one case. Read only while `unified` is on; "
+            "The most tokens and calls the Doctor's AI may use on one case. "
             "the defaults are left out of a dump so nothing moves."
         ),
     )

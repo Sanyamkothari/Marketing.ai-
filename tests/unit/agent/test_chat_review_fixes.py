@@ -8,13 +8,14 @@ from typing import Any
 
 import pytest
 
-from engine.agent import loop
 from engine.agent.grounding import evidence_numbers, grounded_numbers, ungrounded_numbers
 from engine.agent.loop import FALLBACK, chat_turn
 from engine.agent.session import start_session
 from engine.agent.tools import call_tool
+from engine.doctor import registry
 from engine.generative.guardrails import Guardrails, load_policy
 from tests.fixtures.agent_bench.make_messy import messy_frame
+from tests.unit.agent.analyst import ANALYST
 from tests.unit.agent.helpers import context_for, synthetic
 from tests.unit.agent.test_session_and_loop import ScriptedMeter
 
@@ -39,7 +40,9 @@ def started() -> tuple[Any, Any]:
 
 def _turn(started: tuple[Any, Any], replies: Sequence[str], message: str = "hi") -> Any:
     ctx, session = started
-    return chat_turn(ctx, session, message, meter=ScriptedMeter(replies), guardrails=_guardrails())
+    return chat_turn(
+        ctx, session, message, meter=ScriptedMeter(replies), guardrails=_guardrails(), principal=ANALYST
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +74,7 @@ def test_an_unexpected_error_in_a_step_ends_the_turn_and_keeps_the_call_count(
     def broken(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("a tool bug")
 
-    monkeypatch.setattr(loop, "call_tool", broken)
+    monkeypatch.setattr(registry, "call_tool", broken)
     turn = _turn(started, [_act("describe_outcome", column="converted_30d")])
     assert turn.reply.text.startswith(FALLBACK)
     assert turn.blocked_by == "AGENT_TURN_FAILED"
@@ -140,6 +143,7 @@ def test_a_number_passed_as_an_argument_in_an_earlier_turn_does_not_ground_a_lat
         "what is churn?",
         meter=ScriptedMeter([_reply("Churn is 73%.")]),
         guardrails=_guardrails(),
+        principal=ANALYST,
     )
     assert turn.blocked_by == "numbers_grounded"
 

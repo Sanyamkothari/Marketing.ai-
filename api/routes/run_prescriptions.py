@@ -1,7 +1,7 @@
 """`POST /runs` replays a Data Doctor prescription (Plan O M243, DEC-1813).
 
 Three hooks `api.routes.runs.create_run_endpoint` calls, each a no-op - returning None before anything is read - while
-`data_doctor.unified` is off or nothing is bound to a prescription (`engine.doctor.prescription_runs`), so every run is
+nothing is bound to a prescription (`engine.doctor.prescription_runs`), so every run is
 exactly as before:
 
 * :func:`prescribed_training` - a training run of a built dataset bound to a prescription (or built from a spec bound
@@ -112,10 +112,7 @@ def prescribed_training(
     """The rows a training run reads under its prescription, or None (switch off, nothing bound) before anything is
     read."""
     from engine.doctor.prescription import PrescriptionError
-    from engine.doctor.prescription_runs import dataset_for_training, prescriptions_on
-
-    if not prescriptions_on(config):
-        return None
+    from engine.doctor.prescription_runs import dataset_for_training
 
     try:
         if dataset_id is not None:
@@ -262,10 +259,7 @@ def prescribed_scoring(
     """A scoring file checked against the prescription its model was trained under, or None (before anything is
     read while the switch is off)."""
     from engine.doctor.prescription import PrescriptionError
-    from engine.doctor.prescription_runs import check_for_scoring, prescriptions_on
-
-    if not prescriptions_on(config):
-        return None
+    from engine.doctor.prescription_runs import check_for_scoring
 
     raw: Callable[[], Any] | None = None
     if sent is not None:
@@ -278,7 +272,6 @@ def prescribed_scoring(
     try:
         checked = check_for_scoring(
             storage,
-            config,
             version.run_id,
             prepared,
             raw=raw,
@@ -309,10 +302,10 @@ def attach(
     prepared with, read only then) keeps that recipe's money basis; nothing otherwise. A dataset's post-build recipe
     is attached by the route itself, with every other dataset recipe (`attach_dataset_recipe`).
     """
-    from engine.doctor.prescription_runs import attach_recipe_basis, attach_to_run, prescriptions_on
+    from engine.doctor.prescription_runs import attach_recipe_basis, attach_to_run
 
     if prescribed is None:
-        if config is None or not prescriptions_on(config):
+        if config is None:
             return
         if recipe is None and upload_id is not None:
             from api.routes.agent_recipes import load_recipe

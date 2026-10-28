@@ -24,7 +24,7 @@ the sign and every report assumed rupees; a column holding ₹ and $ became one 
    once ("Is `amount` in Indian rupees?"); a unit the client confirmed (the locale profile's `money_units`) answers it.
 
 Reports read a :class:`MoneyBasis` stored beside the run (`runs/<run_id>/money_basis.json`, written by the Data Doctor
-flow only, so with `data_doctor.unified` off no file exists and every report is byte-identical). :func:`report_money`
+flow only). :func:`report_money`
 turns it into the lines a report shows under "Currency": one per column naming its unit and, when converted, the rate,
 its date, its source and who approved it. A report's own amounts keep the currency they were worked out in - the value
 view's are the person's value inputs (`RoiInputs.currency`, rupees) times measured counts - so a column of the file in
@@ -979,7 +979,7 @@ def _basis_key(run_id: str) -> str:
 
 
 def save_money_basis(storage: Storage, run_id: str, basis: MoneyBasis) -> None:
-    """Store the basis beside the run. Only the Data Doctor flow (`data_doctor.unified` on) calls this."""
+    """Store the basis beside the run. Only the Data Doctor flow calls this."""
     storage.write_model(_basis_key(run_id), basis)
 
 

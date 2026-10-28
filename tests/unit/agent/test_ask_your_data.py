@@ -24,6 +24,7 @@ from engine.agent.egress import Egress
 from engine.agent.explore import EXPLORE_NOTE, charts_of, start_explore
 from engine.agent.loop import EXPLORE_READ_ONLY, PROPOSE_TOOL, chat_turn
 from engine.agent.tools import MIN_GROUP_ROWS, TOOLS, AgentToolError, ToolKind, call_tool
+from tests.unit.agent.analyst import ANALYST
 from tests.unit.agent.egress_canary import (
     EMAIL,
     HARD_SECRETS,
@@ -244,7 +245,14 @@ def test_explore_refuses_propose_setting_and_lists_no_setting() -> None:
             }
         ]
     )
-    turn = chat_turn(ctx, session, "Make training faster", meter=meter_for(client), guardrails=guardrails())
+    turn = chat_turn(
+        ctx,
+        session,
+        "Make training faster",
+        meter=meter_for(client),
+        guardrails=guardrails(),
+        principal=ANALYST,
+    )
     assert turn.proposals == ()
     assert turn.reply.turn is not None and EXPLORE_READ_ONLY in turn.reply.turn.error_codes
     prompt = client.sent_text[0]
@@ -268,7 +276,14 @@ def test_a_guided_session_still_takes_a_setting_suggestion() -> None:
             }
         ]
     )
-    turn = chat_turn(ctx, session, "Make training faster", meter=meter_for(client), guardrails=guardrails())
+    turn = chat_turn(
+        ctx,
+        session,
+        "Make training faster",
+        meter=meter_for(client),
+        guardrails=guardrails(),
+        principal=ANALYST,
+    )
     assert [p.path for p in turn.proposals] == ["model_search.strategy"]
 
 
@@ -295,6 +310,7 @@ def test_a_reply_may_quote_a_rate_by_figure_but_not_invent_one() -> None:
         "Churn rate by state",
         meter=meter_for(client := _QuotingClient("New York churns most: 0.5 of its 120 customers.")),
         guardrails=guardrails(),
+        principal=ANALYST,
     )
     assert ok.blocked_by is None and "0.5 of its 120" in ok.reply.text
     assert client.calls
@@ -304,6 +320,7 @@ def test_a_reply_may_quote_a_rate_by_figure_but_not_invent_one() -> None:
         "Churn rate by state",
         meter=meter_for(_QuotingClient("New York churns most: 0.73 of its 120 customers.")),
         guardrails=guardrails(),
+        principal=ANALYST,
     )
     assert bad.blocked_by == "numbers_grounded" and "0.73" not in bad.reply.text
 
@@ -320,7 +337,9 @@ def test_each_reply_gets_the_charts_of_its_own_turn_from_the_tool_result() -> No
             if "rate" in message
             else ToolingClient([{"action": "get_profile", "args": {}}], per_turn=1)
         )
-        turn = chat_turn(ctx, session, message, meter=meter_for(client), guardrails=guardrails())
+        turn = chat_turn(
+            ctx, session, message, meter=meter_for(client), guardrails=guardrails(), principal=ANALYST
+        )
         session = after(session, message, turn)
     charts = charts_of(session)
     assert [c.message_index for c in charts] == [3]  # the second reply; the first used no rate_by
@@ -344,5 +363,12 @@ def test_a_refused_rate_by_draws_no_chart() -> None:
     frame["contact_email"] = [f"user{i}@example.test" for i in range(len(frame))]
     ctx = canary_context(frame=frame)
     client = ToolingClient([{"action": "rate_by", "args": {"column": "contact_email"}}], per_turn=1)
-    turn = chat_turn(ctx, _explore(ctx), "Rate by email", meter=meter_for(client), guardrails=guardrails())
+    turn = chat_turn(
+        ctx,
+        _explore(ctx),
+        "Rate by email",
+        meter=meter_for(client),
+        guardrails=guardrails(),
+        principal=ANALYST,
+    )
     assert charts_of(after(_explore(ctx), "Rate by email", turn)) == ()
