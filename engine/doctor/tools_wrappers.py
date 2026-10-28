@@ -752,12 +752,16 @@ def _second_opinion(_parsed: _Args, ctx: DataToolContext) -> SecondOpinion:
     from engine.agent.assist import assist_session
     from engine.agent.proposals import rules_session
     from engine.agentic.claims import guardrails_for
+    from engine.ai_consent import AI_CONSENT_REQUIRED, AI_CONSENT_REQUIRED_MESSAGE, AiConsentStore
     from engine.doctor.case import CaseError, CaseStore
     from engine.doctor.decisions import decisions
 
     if ctx.case is None:  # unreachable through the registry: `needs` makes it unavailable
         raise DataToolError("TOOL_UNKNOWN", "second_opinion needs a case.", status=404)
     agent = ctx.require_agent()
+    if ctx.storage is not None and AiConsentStore(ctx.storage).get(ctx.case.client_id) is None:
+        # The meter's client refuses the call too (`engine.ai_consent`); this says so before the rules' work.
+        raise DataToolError(AI_CONSENT_REQUIRED, AI_CONSENT_REQUIRED_MESSAGE, status=409)
     key, outcome = ctx.primary_key, None
     if ctx.storage is not None:
         try:

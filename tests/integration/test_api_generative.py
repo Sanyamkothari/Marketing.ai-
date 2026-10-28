@@ -24,6 +24,7 @@ from engine.generative.errors import GENERATIVE_ERRORS, JOB_FAILED
 from engine.llm import LLMError
 from engine.llm_http import PROBLEMS, LLMHttpError
 from engine.storage import LocalStorage
+from tests.ai_consent_support import consented
 from tests.fixtures.make_run import RunSpec, write_run
 
 pytestmark = pytest.mark.integration
@@ -62,7 +63,7 @@ def storage(data_dir: Path) -> LocalStorage:
 
 @pytest.fixture
 def client(config_root: Path, data_dir: Path) -> Iterator[TestClient]:
-    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as test_client:
+    with TestClient(create_app(config_root=config_root, data_dir=consented(data_dir))) as test_client:
         yield test_client
 
 

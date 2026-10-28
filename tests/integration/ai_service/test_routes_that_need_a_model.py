@@ -15,6 +15,7 @@ from api.main import create_app
 from engine.config import RunMode
 from engine.settings import Settings
 from engine.storage import LocalStorage
+from tests.ai_consent_support import consented
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.fixtures.make_run import RunSpec, write_run
 from tests.unit.ai_service.server import FakeService, chat_reply, message_reply, serve
@@ -33,7 +34,7 @@ def data_dir(tmp_path: Path) -> Path:
 
 def _client(config_root: Path, data_dir: Path, *, allow_fake: bool) -> TestClient:
     settings = Settings(connections_key=SecretStr("F" * 40), allow_fake_ai=allow_fake)
-    return TestClient(create_app(config_root=config_root, data_dir=data_dir, settings=settings))
+    return TestClient(create_app(config_root=config_root, data_dir=consented(data_dir), settings=settings))
 
 
 @pytest.fixture

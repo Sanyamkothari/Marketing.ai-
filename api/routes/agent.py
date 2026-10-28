@@ -77,6 +77,7 @@ from engine.agent.session import (
     with_summary,
 )
 from engine.agent.tools import AgentContext, AgentToolError
+from engine.ai_consent import client_scope
 from engine.ai_service import effective_service
 from engine.config import PrimaryKey, RunMode, StrictBase, UseCaseConfig, resolve_config, sole_key
 from engine.contracts import FeatureSchema, ModelVersion, ValidationReport
@@ -879,7 +880,13 @@ def message_agent_session(
         generative = ctx.config.generative
         # The Product AI, before anything is stored: no AI service means 409 AI_NOT_CONNECTED and a
         # session exactly as it was (the suggestions and questions do not need one).
-        ai = resolve_slot(generative.llm, slot="product", storage=storage, settings=get_settings(request))
+        ai = resolve_slot(
+            generative.llm,
+            slot="product",
+            storage=storage,
+            settings=get_settings(request),
+            consent=client_scope(storage, upload_ids=(upload_id,)),
+        )
         meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
         guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
         text = redact_text(body.text)[0]
@@ -932,7 +939,13 @@ def assist_agent_session(
             storage, root, request, upload_id, session.use_case_id, session.model_version_id
         ).ctx
         generative = ctx.config.generative
-        ai = resolve_slot(generative.llm, slot="product", storage=storage, settings=get_settings(request))
+        ai = resolve_slot(
+            generative.llm,
+            slot="product",
+            storage=storage,
+            settings=get_settings(request),
+            consent=client_scope(storage, upload_ids=(upload_id,)),
+        )
         meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
         guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
         result = assist_session(ctx, session, meter=meter, guardrails=guardrails, config_root=root)
@@ -1561,7 +1574,13 @@ def ask_message(
                 409, "AGENT_CHAT_FULL", "This chat has used all its questions. Start a new chat to ask more."
             )
         generative = ctx.config.generative
-        ai = resolve_slot(generative.llm, slot="product", storage=storage, settings=get_settings(request))
+        ai = resolve_slot(
+            generative.llm,
+            slot="product",
+            storage=storage,
+            settings=get_settings(request),
+            consent=client_scope(storage, upload_ids=(upload_id,)),
+        )
         meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
         guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
         text = redact_text(body.text)[0]

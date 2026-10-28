@@ -82,7 +82,9 @@ def test_the_product_slot_is_resolved_as_the_doctor_does(
 ) -> None:
     seen: dict[str, Any] = {}
 
-    def resolve(llm: LlmConfig, *, slot: str, storage: Any, settings: Any, profile: Any = None) -> Any:
+    def resolve(
+        llm: LlmConfig, *, slot: str, storage: Any, settings: Any, consent: Any, profile: Any = None
+    ) -> Any:
         seen.update(slot=slot, settings=settings)
         return SimpleNamespace(source="saved", llm=LlmConfig(), client=ReferenceModel())
 

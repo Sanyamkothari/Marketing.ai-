@@ -131,6 +131,13 @@ train and score - those never call a language model.
 features that need it say so (`409 AI_NOT_CONNECTED`, naming the slot) instead of answering with made-up
 text; Guided setup's rules-based suggestions and questions keep working, and only the chat box is off.
 
+**Every AI call needs the client's consent.** A call that carries a client's data (Guided setup's chat and second
+opinion, Ask your data, the Doctor's chat, review and second opinion, the document assistant, campaign copy, the
+planner) is refused with `409 AI_CONSENT_REQUIRED`, before anything is sent, until that client has allowed it once
+(Data Doctor, "Let the Doctor's AI read masked summaries", kept at `cases/<client_id>/ai_consent.json`). Work that
+names no case is the `default` client's. Only calls that carry no client data, such as the "Test connection" button,
+skip it, and the code says so (`engine/ai_consent.py`; `tests/unit/architecture/test_ai_consent_gate.py` fails on any other way in).
+
 **Providers:** Amazon Bedrock (no key; the AWS sign-in of this computer or role, region and model
 names), OpenAI, Claude (Anthropic), OpenRouter, Hugging Face, and *Other / local* for any
 OpenAI-compatible server (Ollama, vLLM, LiteLLM, Together, Groq, an Azure-compatible gateway; the key

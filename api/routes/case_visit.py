@@ -316,22 +316,30 @@ def _load_files(storage: Storage, upload_ids: Sequence[str], cap_of: int) -> tup
 
 
 def _ai_parts(
-    storage: Storage, root: Path, request: Request, offers: Sequence[Any]
+    storage: Storage, root: Path, request: Request, offers: Sequence[Any], client_id: str
 ) -> tuple[Any, Any, Callable[[Case, tuple[LoadedFile, ...]], Any]] | None:
     """What every Doctor AI call shares: the guarded meter (the case's spending limit and the client's consent),
     the guardrails, and each file's context. None when no AI service is connected."""
     from api.routes.ai_service import resolve_slot
     from engine.agent.tools import AgentContext
+    from engine.ai_consent import AiConsentStore, ClientData
     from engine.config import RunMode, load_use_case
-    from engine.doctor.ai_guard import AiConsentStore, AiGuard
+    from engine.doctor.ai_guard import AiGuard
     from engine.generative.guardrails import Guardrails, load_policy
 
     if not offers:
         return None
     default = offers[0].config
     try:
+        # The consent is the request's client's. It is not asked for here: the guard asks per case and the chat
+        # tells the person in its own words; the client refuses the call itself all the same.
         ai = resolve_slot(
-            default.generative.llm, slot="product", storage=storage, settings=get_settings(request)
+            default.generative.llm,
+            slot="product",
+            storage=storage,
+            settings=get_settings(request),
+            consent=ClientData(client_id),
+            ask_now=False,
         )
     except HTTPException:
         return None
@@ -364,12 +372,17 @@ def _ai_parts(
 
 
 def _converse(
-    storage: Storage, root: Path, request: Request, principal: Principal, offers: Sequence[Any]
+    storage: Storage,
+    root: Path,
+    request: Request,
+    principal: Principal,
+    offers: Sequence[Any],
+    client_id: str,
 ) -> ConversePort | None:
     """The Doctor's chat when an AI service is connected; None (the chat says it needs one) otherwise."""
     from engine.doctor.agent_chat import doctor_converse
 
-    parts = _ai_parts(storage, root, request, offers)
+    parts = _ai_parts(storage, root, request, offers, client_id)
     if parts is None:
         return None
     meter, guardrails, context_for = parts
@@ -384,12 +397,17 @@ def _converse(
 
 
 def _review(
-    storage: Storage, root: Path, request: Request, principal: Principal, offers: Sequence[Any]
+    storage: Storage,
+    root: Path,
+    request: Request,
+    principal: Principal,
+    offers: Sequence[Any],
+    client_id: str,
 ) -> DetectorPort | None:
     """The AI review (one more check after the rules' pass) when an AI service is connected; None otherwise."""
     from engine.doctor.agent_review import agent_review
 
-    parts = _ai_parts(storage, root, request, offers)
+    parts = _ai_parts(storage, root, request, offers, client_id)
     if parts is None:
         return None
     meter, guardrails, context_for = parts
@@ -528,7 +546,9 @@ def first_rows_loader(storage: Storage) -> Callable[[Case], tuple[LoadedFile, ..
     return load_files
 
 
-def _deps(storage: Storage, root: Path, request: Request, principal: Principal | None) -> VisitDeps:
+def _deps(
+    storage: Storage, root: Path, request: Request, principal: Principal | None, client_id: str
+) -> VisitDeps:
     """Every visit route carries the CONVERSE port, connected only when a chat turn runs: a visit resumed in
     CONVERSE (the process died during the AI call) is answered by the AI service, not told there is none."""
     from api.routes.case_combine import case_combiner
@@ -570,14 +590,16 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
         converse=(
             None
             if principal is None
-            else doctor_visit.lazy_converse(lambda: _converse(storage, root, request, principal, offers))
+            else doctor_visit.lazy_converse(
+                lambda: _converse(storage, root, request, principal, offers, client_id)
+            )
         ),
         # The AI review: one more check after the rules; it runs only with an AI service, the client's yes and
         # spending left, otherwise it finds nothing and the rules stand alone.
         agent=(
             None
             if principal is None
-            else lazy_review(lambda: _review(storage, root, request, principal, offers))
+            else lazy_review(lambda: _review(storage, root, request, principal, offers, client_id))
         ),
         ledger=ledger_for(request, root),
         # Plan O M244 (DEC-1814): the time settings - the training budget's three choices and the data time
@@ -614,7 +636,10 @@ def resume_visit(
 ) -> Case:
     try:
         case = doctor_visit.resume(
-            body.client_id, case_id, _deps(storage, root, request, principal), actor=principal.user_id
+            body.client_id,
+            case_id,
+            _deps(storage, root, request, principal, body.client_id),
+            actor=principal.user_id,
         )
     except CaseError as exc:
         raise _error(exc) from exc
@@ -635,7 +660,7 @@ def choose_goal(
             body.client_id,
             case_id,
             body.goal_id,
-            _deps(storage, root, request, principal),
+            _deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
@@ -662,7 +687,7 @@ def answer_question(
             case_id,
             body.question_id,
             body.option_id,
-            _deps(storage, root, request, principal),
+            _deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
@@ -693,7 +718,7 @@ def decide_item(
             case_id,
             body.item_id,
             body.accept,
-            _deps(storage, root, request, principal),
+            _deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
@@ -719,7 +744,7 @@ def approve_changes(
         case = doctor_visit.approve(
             body.client_id,
             case_id,
-            _deps(storage, root, request, principal),
+            _deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
@@ -753,7 +778,7 @@ def acknowledge_stop(
             body.client_id,
             case_id,
             body.key,
-            _deps(storage, root, request, principal),
+            _deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             reason=body.reason,
@@ -784,7 +809,7 @@ def confirm_item(
             body.client_id,
             case_id,
             body.item_id,
-            _deps(storage, root, request, principal),
+            _deps(storage, root, request, principal, body.client_id),
             principal=principal,
             sentence=body.sentence,
             expected_version=body.version,
@@ -816,7 +841,7 @@ def revoke_standing_answer(
             body.client_id,
             case_id,
             answer_id,
-            _deps(storage, root, request, principal),
+            _deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
@@ -840,7 +865,7 @@ def chat_message(
             body.client_id,
             case_id,
             body.message,
-            _deps(storage, root, request, principal),
+            _deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,

@@ -81,6 +81,7 @@ from api.schemas import (
     RootCauseRequest,
 )
 from engine.access.roles import Principal, Role
+from engine.ai_consent import WORKSPACE_CLIENT, ClientData, ConsentScope, client_scope
 from engine.ai_service import ResolvedAi
 from engine.audit.events import content_hash
 from engine.config import (
@@ -659,8 +660,18 @@ def _new_job_id(prefix: str) -> str:
     return f"{prefix}_{utc_now().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}"
 
 
+def _run_scope(storage: Storage, run: RunRecord) -> ConsentScope:
+    """Whose data a run's model calls carry: the client of its built dataset, else the clients of the cases that
+    hold the upload it read."""
+    upload_ids = (run.upload_id,) if run.upload_id is not None else ()
+    return client_scope(storage, client_id=run.client_id, upload_ids=upload_ids)
+
+
 def _with_deliverable_ai(
-    use_case: UseCaseConfig, storage: Storage, settings: Settings
+    use_case: UseCaseConfig,
+    storage: Storage,
+    settings: Settings,
+    scope: ConsentScope | None = None,
 ) -> tuple[UseCaseConfig, ResolvedAi]:
     """The use case as it will really run - `generative.llm` naming the Deliverable AI's models - and the
     client that answers it; `409 AI_NOT_CONNECTED` when there is none.
@@ -670,7 +681,13 @@ def _with_deliverable_ai(
     Bedrock client runs as is read per request (`profile_in_force`): a person may switch profile on the
     connection screen between two jobs, and the next job should run as whoever they chose.
     """
-    ai = resolve_slot(use_case.generative.llm, slot="deliverable", storage=storage, settings=settings)
+    ai = resolve_slot(
+        use_case.generative.llm,
+        slot="deliverable",
+        storage=storage,
+        settings=settings,
+        consent=scope if scope is not None else ClientData(WORKSPACE_CLIENT),
+    )
     generative = use_case.generative.model_copy(update={"llm": ai.llm})
     return use_case.model_copy(update={"generative": generative}), ai
 
@@ -1445,7 +1462,9 @@ def create_root_cause(
     _require_finished_run(run, needs_explanations=True)
     generative = _merged_generative_sub(config.generative, body.overrides, block="root_cause")
     config = config.model_copy(update={"generative": generative})
-    config, ai = _with_deliverable_ai(config, storage, current)  # 409 before anything is written
+    config, ai = _with_deliverable_ai(
+        config, storage, current, _run_scope(storage, run)
+    )  # 409 before anything is written
 
     started = utc_now()
     stages = (_stage("summarize", RunState.PENDING),)
@@ -1566,7 +1585,9 @@ def create_campaign_copy(
     generative = _merged_generative_sub(config.generative, body.overrides, block="campaign_copy")
     _require_copy_segments(run, generative.campaign_copy.segment_by, storage)
     config = config.model_copy(update={"generative": generative})
-    config, ai = _with_deliverable_ai(config, storage, current)  # 409 before anything is written
+    config, ai = _with_deliverable_ai(
+        config, storage, current, _run_scope(storage, run)
+    )  # 409 before anything is written
 
     started = utc_now()
     stages = (_stage("generate", RunState.PENDING),)
@@ -1832,7 +1853,7 @@ def regenerate_copy_template(
     config = use_case_config(run.use_case_id, root)
     batch = _load_copy_batch(storage, run_id)
     _find_template(batch, template_id)  # 404 before a model is called
-    config, ai = _with_deliverable_ai(config, storage, current)
+    config, ai = _with_deliverable_ai(config, storage, current, _run_scope(storage, run))
     meter, guardrails = _client_meter_guardrails(config, ai=ai, job_id=f"regen_{run_id}", config_root=root)
     try:
         replacement = regenerate_template(

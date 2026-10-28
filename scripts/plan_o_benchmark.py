@@ -117,6 +117,7 @@ def product_model(
     does not count, so a green gate always means a real model answered. Answers are never cached (every
     run is a fresh answer, which is what pass^k needs).
     """
+    from engine.ai_consent import NoClientData
     from engine.ai_service import AiNotConnectedError, resolve_client
     from engine.aws_connection import profile_in_force
     from engine.config import BudgetConfig, load_use_case
@@ -134,6 +135,7 @@ def product_model(
             slot="product",
             storage=storage,
             settings=settings,
+            consent=NoClientData("the benchmark reads the committed synthetic files, no client's data"),
             profile=profile_in_force(),
         )
     except AiNotConnectedError as exc:
@@ -185,12 +187,16 @@ def choose_model(
             "EVAL_MODEL_NOT_CONFIGURED",
             "No real model is configured (generative.llm.backend is the fake); use --model recorded or reference.",
         )
+    from engine.ai_consent import ConsentGatedClient, NoClientData
     from engine.config import load_use_case
     from engine.generative.budget import Meter
     from engine.llm import build_client
 
     generative = load_use_case("targeted-advertisement", config_root).generative
-    client = build_client(generative.llm)
+    client = ConsentGatedClient(
+        build_client(generative.llm),
+        scope=NoClientData("the evaluation reads the committed synthetic files, no client's data"),
+    )
     meter = Meter(client, job_id="agent-eval", llm=generative.llm, budget=generative.budget)
     return Model("real", Cassette(recorded_from=generative.llm.generation_model), meter)
 

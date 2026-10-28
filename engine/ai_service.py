@@ -65,6 +65,7 @@ import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, ConfigDict, Field
 
+from engine.ai_consent import ConsentGatedClient, ConsentScope, NoClientData
 from engine.config import LlmBackend, LlmConfig, config_root, load_engine_config, load_yaml
 from engine.connections.base import ConnectorError
 from engine.connections.store import connections_key, key_fingerprint
@@ -958,7 +959,7 @@ class Effective:
 
 @dataclass(frozen=True)
 class ResolvedAi(Effective):
-    client: LLMClient
+    client: ConsentGatedClient
 
 
 def _saved_effective(
@@ -1121,11 +1122,16 @@ def resolve_client(
     slot: str,
     storage: Storage,
     settings: Settings,
+    consent: ConsentScope,
     profile: str | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> ResolvedAi:
     """The client for a language call of `slot`, and the `LlmConfig` to meter it with; see the module
-    docstring for the order. `AiNotConnectedError` when nothing can answer."""
+    docstring for the order. `AiNotConnectedError` when nothing can answer.
+
+    `consent` says what the calls carry (`engine.ai_consent`): the client's data, whose consent the returned
+    client looks for before every call, or an explicit `NoClientData(reason)`. It has no default.
+    """
     effective, info, record, key = _plan(llm, slot, storage, settings)
     client: LLMClient
     if record is not None and info is not None:
@@ -1143,6 +1149,7 @@ def resolve_client(
         )
     else:
         client = build_client(llm, profile=profile)
+    client = ConsentGatedClient(client, scope=consent, storage=storage)
     return ResolvedAi(
         llm=effective.llm,
         slot=effective.slot,
@@ -1298,6 +1305,10 @@ def run_test(
         max_retries=0,
         profile=profile,
         transport=transport,
+    )
+    # The test sends the fixed greeting `TEST_PROMPT` and nothing of any client's.
+    client = ConsentGatedClient(
+        client, scope=NoClientData("the settings connection test sends a fixed greeting")
     )
     began = time.monotonic()
     try:
