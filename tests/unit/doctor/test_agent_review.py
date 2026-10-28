@@ -171,7 +171,9 @@ def test_the_ai_proposes_a_join_and_it_is_a_pending_item_with_our_receipt(
     item = found.items[0]
     assert item.source is ProposalSource.AI
     assert item.state is ProposalState.PENDING and item.confidence is AgentConfidence.CHECK
-    assert item.payload["stage"] == "post_build" and item.upload_id is None
+    # recorded against the file its tables come from, with every file it reads, so a case of several files builds it
+    assert item.payload["stage"] == "post_build" and item.upload_id == FIRST
+    assert len(item.payload["input_uploads"]) == 2 and item.payload["input_uploads"][0] == FIRST
     receipt = item.payload["receipt"]
     assert receipt["rows_out"] == 1_200 and receipt["keys_repeated"] == 0, "counted by our code"
     assert item.payload["step"]["kind"] == "sql_query"

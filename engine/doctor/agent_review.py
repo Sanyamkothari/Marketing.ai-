@@ -940,17 +940,24 @@ class _Review:
                 )
             )
         out = list(evidence.values())
+        from engine.doctor.tools_sql import query_uploads
+
         for query in turn.queries.values():
             made = parse_query_output(query.result.output)
             payload = made.payload()
             payload["findings"] = [f.model_dump(mode="json") for f in query.findings]
             payload["needs_yes"] = made.needs_yes or any(f.level == "stop" for f in query.findings)
+            # Recorded against the upload its tables come from, so a case of several files builds it (an item of no
+            # upload is used only when the case has one file); a query over several files names them all.
+            reads = query_uploads(made.step, self.files, (*self.case.items, *items))
+            if len(reads) > 1:
+                payload["input_uploads"] = reads
             items.append(
                 _item(
                     "recipe_step",
                     payload,
                     title=made.title,
-                    upload_id=None,
+                    upload_id=reads[0] if reads else None,
                     confidence=AgentConfidence.CHECK,
                     evidence=(query.result.evidence_id,),
                     now=now,

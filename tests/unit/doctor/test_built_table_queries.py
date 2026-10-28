@@ -119,3 +119,56 @@ def test_features_are_built_on_a_built_table() -> None:
     # on the raw file C2 would have two invoices in 90 days and spend 15 (the median of 110, 15, 10)
     assert by_name["spend_365d"]["median"] == 20.0  # 110, 20, 10
     assert by_name["orders_90d"]["state"] == "constant"  # one paid invoice each in the last 90 days
+
+
+def test_a_case_of_two_files_records_the_query_against_its_file_and_builds_on_it() -> None:
+    from engine.doctor.tools_sql import query_uploads
+
+    people = pd.DataFrame({"Customer": ["C1", "C2", "C3"], "Region": ["N", "S", "N"]})
+    second = LoadedFile(upload_id="up-2", file_name="people.csv", frame=people, profile=cast(Any, None))
+    files = (second, FIRST)  # the invoices are not the case's first file
+    made = (
+        data_registry()
+        .call(
+            "propose_sql_step",
+            {
+                "description": "Keep the paid invoices.",
+                "sql": "SELECT * FROM t_invoices WHERE Amount > 0",
+                "output_name": "paid",
+                "upload_ids": ["up-1"],
+            },
+            DataToolContext(files=files, caller="ai", principal=PRINCIPAL),
+        )
+        .output
+    )
+    assert query_uploads(made["step"], files) == ["up-1"]
+    item = CaseItem.model_validate(
+        {
+            "item_id": "q1",
+            "kind": "recipe_step",
+            "source": "ai",
+            "confidence": "check",
+            "state": "accepted",
+            "upload_id": query_uploads(made["step"], files)[0],
+            "payload": {"step": made["step"]},
+            "payload_digest": "q1",
+            "proposed_at": NOW,
+        }
+    )
+    ctx = DataToolContext(files=files, caller="ai", principal=PRINCIPAL, case_items=(item,), as_of=AS_OF)
+    out = (
+        data_registry()
+        .call(
+            "propose_features",
+            {
+                "upload_id": "built:paid",
+                "entity_key": "Customer",
+                "time_column": "InvoiceDate",
+                "preset": "rfm",
+                "amount_column": "Amount",
+            },
+            ctx,
+        )
+        .output
+    )
+    assert out["rows_in"] == 4 and out["rows_out"] == 3

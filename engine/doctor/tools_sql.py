@@ -269,14 +269,43 @@ def _built_query(items: Sequence[CaseItem], name: str, replacing: Collection[str
     return None
 
 
+def query_uploads(
+    step: Mapping[str, Any], files: Sequence[LoadedFile], items: Sequence[CaseItem] = (), depth: int = 0
+) -> list[str]:
+    """The uploads a query step reads, in the order its `inputs` name them: a file's table by its name, a table
+    another query built by the uploads that query reads (followed a few levels at most)."""
+    from engine.doctor.materialize import table_names
+
+    names = {name: upload for upload, name in table_names(files).items()}
+    params = step.get("params") if isinstance(step, Mapping) else None
+    wanted = params.get("inputs") if isinstance(params, Mapping) else None
+    found: list[str] = []
+    for name in wanted if isinstance(wanted, list) else []:
+        if str(name) in names:
+            found.append(names[str(name)])
+            continue
+        maker = _built_query(items, str(name), ())
+        if maker is None or depth > 4:
+            continue
+        found.extend(
+            maker.payload.get("input_uploads")
+            or ([maker.upload_id] if maker.upload_id else [])
+            or query_uploads(maker.payload.get("step") or {}, files, items, depth + 1)
+        )
+    return list(dict.fromkeys(found))
+
+
 def built_source(ctx: DataToolContext, upload_id: str) -> tuple[LoadedFile, CaseItem]:
-    """The file a built table (`built:<name>`) was made from, and the query item that makes it."""
+    """The file a built table (`built:<name>`) was made from, and the query item that makes it: the upload the query
+    is recorded against, else the first file its inputs read (never simply the case's first file)."""
     maker = _built_query(ctx.case_items or (), upload_id[len(BUILT_PREFIX) :], ctx.replacing)
-    origin = (
-        next((f for f in ctx.files if f.upload_id == (maker.upload_id or ctx.files[0].upload_id)), None)
-        if maker is not None and ctx.files
-        else None
-    )
+    home = None
+    if maker is not None:
+        reads = query_uploads(maker.payload.get("step") or {}, ctx.files, ctx.case_items or ())
+        home = maker.upload_id or (reads[0] if reads else None)
+        if home is None and len(ctx.files) == 1:
+            home = ctx.files[0].upload_id
+    origin = next((f for f in ctx.files if f.upload_id == home), None) if home is not None else None
     if maker is None or origin is None:
         raise DataToolError("TOOL_INPUT_INVALID", "That table is not in this case.", status=422)
     return origin, maker
