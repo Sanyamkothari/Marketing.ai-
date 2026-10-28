@@ -146,6 +146,8 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     _R(85, "preview_working_copy", "read", "ai", "new"),
     # P. Behaviour features from the point-in-time library (Step 7)
     _R(86, "propose_features", "propose", "rules + ai", "new"),
+    # Q. An amount as the outcome (a regression goal): the spend in the days after the snapshot
+    _R(87, "propose_amount_outcome", "propose", "rules", "new"),
 )
 """The design §5.5, row by row."""
 

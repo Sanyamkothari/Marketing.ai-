@@ -93,6 +93,8 @@ PER_USE_CASE: dict[str, dict[str, Any]] = {
     "retail-win-back": {"metric": "pr_auc"},
     # Plan J M110 (DEC-1320): the randomised e-mail test. The lever and the two-week outcomes are never
     # features, and a conversion is rare (under 1 in 100), so the bands sit at 2 % and 1 %.
+    # A regression goal (predicted spend): the typical miss in money, (its bands are shares of the scored customers).
+    "customer-spend": {"metric": "mae"},
     "hillstrom-email": {"excl": ["segment", "visit", "spend", "value_inr"], "hi": 0.02, "md": 0.01},
 }
 

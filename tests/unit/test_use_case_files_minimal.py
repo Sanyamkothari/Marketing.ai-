@@ -73,7 +73,9 @@ def test_every_leaf_outside_the_identity_block_differs_from_the_engine_default(
 def test_no_redundant_ai_type_or_problem_type(use_case_id: str) -> None:
     document = load_yaml(use_case_path(use_case_id))
     assert document.get("ai_type") != "predictive"
-    assert "problem_type" not in document
+    # `problem_type: regression` is the one legitimate value (a goal that predicts an amount); the default
+    # `binary_classification` would only restate the engine default.
+    assert document.get("problem_type", "regression") != "binary_classification"
 
 
 def test_every_use_case_file_is_covered() -> None:

@@ -109,6 +109,15 @@ def test_a_score_just_below_a_boundary_stays_in_the_lower_band(config: UseCaseCo
     assert list(assign_bands(scores, config)) == ["Medium", "Low"]
 
 
+def test_a_regression_goal_bands_on_the_rank_of_the_amount_not_on_the_amount() -> None:
+    config = load_use_case("customer-spend")
+    amounts = [0.0, 5.0, 20.0, 35.0, 90.0, 120.0, 250.0, 600.0, 1500.0, 9000.0]  # all above 0.80 but one
+    bands = list(assign_bands(pd.Series(amounts), config))
+    assert bands == ["Low"] * 5 + ["Medium"] * 3 + ["High"] * 2
+    tied = list(assign_bands(pd.Series([40.0] * 4), config))
+    assert tied == ["Low"] * 4  # the same amount is the same band
+
+
 def test_scores_outside_zero_to_one_are_clamped_into_the_nearest_band(config: UseCaseConfig) -> None:
     scores = pd.Series([-0.25, -1e-9, 1.0, 1.5, 42.0])
     assert list(assign_bands(scores, config)) == ["Low", "Low", "High", "High", "High"]

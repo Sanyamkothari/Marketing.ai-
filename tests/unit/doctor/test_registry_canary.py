@@ -242,6 +242,16 @@ SPECS: dict[str, Calls | None] = {
             "amount_column": "amount",
         },
     ],
+    "propose_amount_outcome": lambda _columns: [
+        {
+            "upload_id": EVENTS,
+            "entity_key": "customer_id",
+            "time_column": "bill_date",
+            "amount_column": "amount",
+            "window_days": 30,
+            "as_of": "2025-09-01",
+        },
+    ],
     "propose_sql_step": lambda _columns: [
         {
             "description": "Every customer row",

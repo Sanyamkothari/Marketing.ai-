@@ -51,6 +51,7 @@ __all__ = [
     "UpliftScope",
     "check_treatment_balance",
     "control_level",
+    "treatment_column_of",
     "uplift_scope",
 ]
 
@@ -77,6 +78,13 @@ _CONTROL_NAME: Final[re.Pattern[str]] = re.compile(
     r"|^no[ _-]|control|hold[ _-]?out|untreated",
     re.IGNORECASE,
 )
+_TREATMENT_NAME: Final[re.Pattern[str]] = re.compile(
+    r"^(treatment|treated|treatment[ _-]?group|test[ _-]?group|group|arm|variant|experiment[ _-]?group|"
+    r"campaign[ _-]?group|cell)$",
+    re.IGNORECASE,
+)
+MAX_ARMS: Final[int] = 10
+"""A campaign test has a handful of groups; a column of many values is a category, not an assignment."""
 _ID_LIKE: Final[float] = 0.9
 """A text column with this share of distinct values is an ID or free text, not a description of the customer."""
 
@@ -285,10 +293,45 @@ def check_treatment_balance(
     )
 
 
+def _configured_levels(levels: Sequence[object], config: UseCaseConfig) -> tuple[str, ...]:
+    """`uplift.treatment_levels` when the column carries them; else none, so a column named otherwise
+    (`group`, `arm`) is read by the names of its groups."""
+    configured = tuple(config.uplift.treatment_levels)
+    names = {_text(level) for level in levels}
+    return configured if configured and {_text(level) for level in configured} <= names else ()
+
+
+def treatment_column_of(frame: pd.DataFrame, config: UseCaseConfig) -> str | None:
+    """The column of `frame` that looks like the assignment of a campaign test, or None.
+
+    A column qualifies when it is the configured treatment column or named like one (`treatment`, `group`,
+    `arm`, `variant`) **and** reads like an experiment: it carries the configured treatment levels, or it has
+    two to ten groups of which one is named like a control group and the use case's outcome is in the file. A
+    plain customer column that merely shares the name (a `segment` of Gold, Silver and Bronze) is not one.
+    """
+    from engine.doctor.diagnose import outcome_columns
+
+    configured = config.uplift.treatment_column
+    for column in frame.columns:
+        name = str(column)
+        if name != configured and not _TREATMENT_NAME.match(name):
+            continue
+        levels = list(dict.fromkeys(frame[column].dropna().map(_text).tolist()))
+        if _configured_levels(levels, config):
+            return name
+        if (
+            2 <= len(levels) <= MAX_ARMS
+            and control_level(levels) is not None
+            and outcome_columns(frame, config)
+        ):
+            return name
+    return None
+
+
 def uplift_scope(frame: pd.DataFrame, treatment_column: str, config: UseCaseConfig) -> UpliftScope:
     """Whether the campaign test in `frame` is in scope for an uplift goal, with the numbers behind the answer."""
     levels = list(dict.fromkeys(frame[treatment_column].dropna().map(_text).tolist()))
-    control = control_level(levels, config.uplift.treatment_levels)
+    control = control_level(levels, _configured_levels(levels, config))
     balance = check_treatment_balance(frame, treatment_column, config, control=control)
     rule = out_of_scope("UPLIFT_NOT_RANDOM")
     if balance.control_group is None:

@@ -20,29 +20,50 @@ order history exactly as the yes/no outcomes are: **point in time**.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from datetime import date
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
+from api.access_policy import RoutePolicy
+from engine.access.roles import Role
 from engine.agent.sql_step import table_alias
 from engine.config import StrictBase
+from engine.doctor.contracts import AmountOutcomeOffer
 from engine.doctor.materialize import table_names
-from engine.doctor.registry import DataToolContext, DataToolError
+from engine.doctor.registry import (
+    DataTool,
+    DataToolContext,
+    DataToolError,
+    DataToolKind,
+    DataToolRegistry,
+    Exposure,
+)
 from engine.doctor.tools_features import _col, _refuse
-from engine.doctor.tools_sql import ProposeSqlStepArgs, SqlStepProposal, _propose
+from engine.doctor.tools_sql import MAX_OUTPUT_CHARS, ProposeSqlStepArgs, SqlStepProposal, _propose
 
 if TYPE_CHECKING:
     from engine.config import UseCaseConfig
+    from engine.doctor.diagnose import LoadedFile
 
 __all__ = [
+    "DEFAULT_WINDOW_DAYS",
+    "M_AMOUNT_TOOLS",
     "AmountMinimums",
     "ProposeAmountOutcomeArgs",
     "amount_minimums",
     "compile_amount_outcome",
+    "offer_amount_outcome",
     "propose_amount_outcome",
+    "register_amount_tools",
 ]
+
+M_AMOUNT_TOOLS: Final[tuple[str, ...]] = ("propose_amount_outcome",)
+DEFAULT_WINDOW_DAYS: Final[int] = 90
+"""The days a spend goal looks ahead when nothing else is said (the Customer Spend sentence says 90)."""
 
 _ENTITY: Final[str] = "entity_key"
 _EVENT_TIME: Final[str] = "event_time"
@@ -161,3 +182,118 @@ def amount_minimums(outcome: pd.Series[Any], config: UseCaseConfig) -> AmountMin
         min_non_zero=need_non_zero,
         message=message,
     )
+
+
+_AMOUNT_NAME: Final[re.Pattern[str]] = re.compile(
+    r"amount|spend|revenue|sales|total|price|paid|payment|value", re.IGNORECASE
+)
+_NOT_AMOUNT_NAME: Final[re.Pattern[str]] = re.compile(
+    r"count|qty|quantity|id$|number|rate|pct|percent", re.IGNORECASE
+)
+_DATE_NAME: Final[re.Pattern[str]] = re.compile(r"date|time|ordered|purchase|placed|day", re.IGNORECASE)
+_ID_NAME: Final[re.Pattern[str]] = re.compile(
+    r"(^|[^a-z])(id|key|code)$|^(customer|client|user|account)$", re.IGNORECASE
+)
+_READABLE: Final[float] = 0.8
+"""A column counts as numbers or dates when this share of its filled cells reads as one."""
+
+
+def _readable_share(parsed: pd.Series[Any], raw: pd.Series[Any]) -> float:
+    filled = int(raw.notna().sum())
+    return float(parsed.notna().sum()) / filled if filled else 0.0
+
+
+def _order_columns(file: LoadedFile, entity: str) -> tuple[str, str, str] | None:
+    """`(customer ID, date, amount)` columns of a file with a row per order, or None when it is not one."""
+    frame = file.frame
+    if frame.empty:
+        return None
+    amounts = [
+        c
+        for c in frame.columns
+        if _AMOUNT_NAME.search(str(c))
+        and not _NOT_AMOUNT_NAME.search(str(c))
+        and _readable_share(pd.to_numeric(frame[c], errors="coerce"), frame[c]) >= _READABLE
+    ]
+    dates = [
+        c
+        for c in frame.columns
+        if _DATE_NAME.search(str(c))
+        and c not in amounts
+        and _readable_share(pd.to_datetime(frame[c], errors="coerce", format="mixed"), frame[c]) >= _READABLE
+    ]
+    keys = [
+        c
+        for c in frame.columns
+        if c not in amounts
+        and c not in dates
+        and (_ID_NAME.search(str(c)) or entity in str(c).lower())
+        and frame[c].notna().mean() >= 0.5
+        and frame[c].nunique()
+        < frame[c].notna().sum()  # customers repeat: one row per order, not per customer
+    ]
+    if not (amounts and dates and keys):
+        return None
+    keys.sort(key=lambda c: (entity not in str(c).lower(), list(frame.columns).index(c)))
+    return str(keys[0]), str(dates[0]), str(amounts[0])
+
+
+def offer_amount_outcome(files: Sequence[LoadedFile], config: UseCaseConfig) -> AmountOutcomeOffer | None:
+    """For an amount goal that no file carries the outcome of: the order file that can define it, or None.
+
+    A file qualifies with a customer ID that repeats, a date column and an amount column. The outcome is named as
+    the goal's own target column, so Guided setup finds it. Nothing is proposed here; the person is shown the
+    sentence and `propose_amount_outcome` builds the pending step once they agree.
+    """
+    entity = config.entity or "customer"
+    for file in files:
+        found = _order_columns(file, entity)
+        if found is None:
+            continue
+        key, when, amount = found
+        outcome = config.target.column or f"spend_next_{DEFAULT_WINDOW_DAYS}d"
+        return AmountOutcomeOffer(
+            upload_id=file.upload_id,
+            entity_key=key,
+            time_column=when,
+            amount_column=amount,
+            window_days=DEFAULT_WINDOW_DAYS,
+            outcome_name=outcome,
+            sentence=(
+                f"{file.file_name} has an order per row. I can add up {amount} in the {DEFAULT_WINDOW_DAYS} days "
+                f"after the snapshot date for each {entity} ({key}), 0 for one who bought nothing, as {outcome}."
+            ),
+        )
+    return None
+
+
+def register_amount_tools(registry: DataToolRegistry) -> tuple[str, ...]:
+    """Register `propose_amount_outcome` (catalogue #87), for the rules; its names."""
+    registry.register(
+        DataTool(
+            number=87,
+            name="propose_amount_outcome",
+            kind=DataToolKind.PROPOSE,
+            description=(
+                "Propose the spend in the N days after the snapshot date, per customer, from a file of orders: "
+                "an amount, not a yes or no, 0 for a customer who bought nothing. Only the outcome column reads "
+                "past the date. Shown as a plain description with the rows made; nothing is changed until the "
+                "person approves the plan."
+            ),
+            input_model=ProposeAmountOutcomeArgs,
+            output_model=SqlStepProposal,
+            route_policy=RoutePolicy(
+                role=Role.ANALYST,
+                action="doctor.propose_amount_outcome",
+                purpose="ask Data Doctor for a suggestion",
+            ),
+            exposure=Exposure.SESSION_ONLY,
+            run=propose_amount_outcome,
+            callers=frozenset({"rules"}),
+            needs=("files",),
+            max_output_bytes=MAX_OUTPUT_CHARS,
+            policy_kind="data.propose_amount_outcome",
+            wraps="engine/agent/sql_step.py run_sql (DuckDB, sandboxed); the sql_query recipe step",
+        )
+    )
+    return M_AMOUNT_TOOLS

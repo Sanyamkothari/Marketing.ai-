@@ -2,7 +2,6 @@ id: customer-spend
 name: Customer Spend
 description: Predicts how much each customer will spend in the next 90 days, so a budget and a service level can follow the customers worth most.
 lifecycle_stage: Growth
-entity: customer
 problem_type: regression
 
 # A regression goal: the outcome is an amount, not a yes or no. Its file is usually the order history, and the
@@ -13,7 +12,7 @@ problem_type: regression
 target:
   column: spend_next_90d
   definition: The amount the customer spent in the 90 days after the snapshot date
-  label_source: Order history, added up after the snapshot date (Data Doctor builds it)
+  label_source: Order history, added up after the snapshot date (the Data Doctor proposes the query; the person approves it)
 
 model_search:
   metric: mae                               # the typical miss in money; a few very large customers do not dominate it
@@ -21,6 +20,8 @@ model_search:
 
 actions:
   score_field: predicted_spend
+  # The score here is an amount, not a probability, so a band edge is a share of the scored customers
+  # (engine/stages/actions.py): High is the fifth predicted to spend most, Medium the next three tenths.
   bands:
     - {name: High,   min_score: 0.80, action: "Dedicated account care and early access"}
     - {name: Medium, min_score: 0.50, action: "Standard loyalty offers"}
@@ -31,8 +32,8 @@ actions:
 
 output:
   kpi:
-    label: "Customers expected to spend a lot"
-    formula: 'count_where_band_in(["High","Medium"])'
+    label: "Top fifth by expected spend"
+    formula: 'count_where_band_in(["High"])'
 
 ui:
   pages:

@@ -80,7 +80,7 @@ def test_the_window_is_the_one_asked_for() -> None:
 
 def context(frame: pd.DataFrame, **more: Any) -> DataToolContext:
     loaded = LoadedFile(upload_id="up-1", file_name="orders.csv", frame=frame, profile=cast(Any, None))
-    return DataToolContext(files=(loaded,), caller="ai", principal=PRINCIPAL, **more)
+    return DataToolContext(files=(loaded,), **{"caller": "ai", "principal": PRINCIPAL, **more})
 
 
 def test_the_proposal_is_a_pending_future_reading_step_with_its_window() -> None:
@@ -153,3 +153,67 @@ def test_an_amount_goal_is_offered_with_its_spenders_counted(config_root: Path) 
     assert good.yes_count and good.yes_count > 200
     thin = verdict(spenders(1500, 0.05))
     assert thin.status == "too_small" and "who spent" in thin.summary
+
+
+def _history(customers: int = 40) -> pd.DataFrame:
+    rows = [
+        (f"C{i:03d}", f"2025-0{1 + (i + j) % 6}-1{j}", 10.0 * (j + 1))
+        for i in range(customers)
+        for j in range(3)
+    ]
+    return pd.DataFrame(rows, columns=["customer_id", "ordered_on", "order_total"])
+
+
+def test_the_registry_offers_the_tool_to_the_rules_only() -> None:
+    from engine.doctor.registry import data_registry
+
+    assert (
+        data_registry().find("propose_amount_outcome", context(orders())) is None
+    )  # the AI is not offered it
+    tool = data_registry().find("propose_amount_outcome", context(orders(), caller="rules"))
+    assert tool is not None and tool.number == 87 and tool.callers == frozenset({"rules"})
+    out = data_registry().call(
+        "propose_amount_outcome", args(as_of=AS_OF).model_dump(mode="json"), context(orders(), caller="rules")
+    )
+    assert out.output["rows_out"] == 3
+
+
+def test_an_order_file_makes_a_missing_spend_goal_offer_its_outcome(config_root: Path) -> None:
+    from engine.doctor.diagnose import Offer, readiness
+
+    config = load_use_case("customer-spend", config_root)
+    loaded = LoadedFile(upload_id="up-1", file_name="orders.csv", frame=_history(), profile=cast(Any, None))
+    found = readiness([loaded], [Offer(config=config, stage="Growth")], config_root)
+    verdict = next(v for v in found if v.use_case_id == "customer-spend")
+    offer = verdict.amount_outcome
+    assert verdict.status == "missing" and verdict.reason_code == "NO_OUTCOME"
+    assert offer is not None and verdict.first_fix == offer.sentence
+    assert (offer.entity_key, offer.time_column, offer.amount_column) == (
+        "customer_id",
+        "ordered_on",
+        "order_total",
+    )
+    assert offer.outcome_name == "spend_next_90d" and offer.window_days == 90
+    # the offer is exactly the tool's arguments: agreeing to it proposes the pending step
+    proposal = propose_amount_outcome(
+        ProposeAmountOutcomeArgs(
+            upload_id=offer.upload_id,
+            entity_key=offer.entity_key,
+            time_column=offer.time_column,
+            amount_column=offer.amount_column,
+            window_days=offer.window_days,
+            outcome_name=offer.outcome_name,
+            as_of=date(2025, 3, 31),
+        ),
+        DataToolContext(files=(loaded,), caller="rules", principal=PRINCIPAL),
+    )
+    assert offer.outcome_name in proposal.all_columns
+
+
+def test_a_file_without_orders_offers_nothing(config_root: Path) -> None:
+    from engine.doctor.amount_outcome import offer_amount_outcome
+
+    config = load_use_case("customer-spend", config_root)
+    flat = pd.DataFrame({"customer_id": [f"C{i}" for i in range(50)], "age": range(50)})
+    loaded = LoadedFile(upload_id="up-2", file_name="people.csv", frame=flat, profile=cast(Any, None))
+    assert offer_amount_outcome([loaded], config) is None

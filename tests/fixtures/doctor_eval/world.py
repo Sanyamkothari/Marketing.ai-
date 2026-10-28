@@ -334,6 +334,16 @@ CALLS: Final[dict[str, Calls | None]] = {
             "features": [{"name": "total_spend", "agg": "sum", "column": "amount"}],
         }
     ),
+    "propose_amount_outcome": _fixed(
+        {
+            "upload_id": EVENTS,
+            "entity_key": "customer_id",
+            "time_column": "bill_date",
+            "amount_column": "amount",
+            "window_days": 30,
+            "as_of": "2025-09-01",
+        }
+    ),
     # The agent's look at its own work: the first rows before and after the plan (nothing ticked here).
     "preview_working_copy": _fixed({}, {"rows": 3}),
     "detect_locale": _fixed({}),

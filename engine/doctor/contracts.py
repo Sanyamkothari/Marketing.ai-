@@ -19,6 +19,7 @@ from engine.doctor.sufficiency import NextSteps
 from engine.doctor.uplift_scope import TreatmentBalance
 
 __all__ = [
+    "AmountOutcomeOffer",
     "ColumnDrift",
     "ColumnRename",
     "Diagnosis",
@@ -69,6 +70,20 @@ class FileDiagnosis(StrictBase):
     )
 
 
+class AmountOutcomeOffer(StrictBase):
+    """An amount goal's outcome an order file can define: the arguments of `propose_amount_outcome`, for the
+    person to agree to. Names columns and numbers only; nothing is built until the person approves the plan.
+    """
+
+    upload_id: str = Field(description="The file of orders.")
+    entity_key: str = Field(description="Its customer ID column.")
+    time_column: str = Field(description="Its order date column.")
+    amount_column: str = Field(description="Its amount column.")
+    window_days: int = Field(description="Days after the snapshot the spend is added up over.")
+    outcome_name: str = Field(description="The outcome column the goal learns from.")
+    sentence: str = Field(description="One plain sentence saying what would be built.")
+
+
 class UseCaseReadiness(StrictBase):
     """Whether the files can power one use case, and the best file to start it from."""
 
@@ -94,6 +109,15 @@ class UseCaseReadiness(StrictBase):
     outcome_offer: OutcomeOffer | None = Field(
         default=None,
         description="The outcome an event file can define, as a sentence to agree; null when none.",
+    )
+
+    # An added, defaulted field: for a `missing` amount goal (spend) whose order file can define the outcome.
+    amount_outcome: AmountOutcomeOffer | None = Field(
+        default=None,
+        description=(
+            "For a missing amount goal: the spend in the days after the snapshot that an order file can define "
+            "(`propose_amount_outcome`), to agree to; null otherwise."
+        ),
     )
 
     # Plan L M158 (DEC-1580): an added, defaulted field - what to do when the data is not enough.

@@ -134,3 +134,33 @@ def test_a_targeted_campaign_file_is_out_of_scope_with_the_sentence(config_root:
     assert mine.status == "missing" and mine.reason_code == "NOT_RANDOM"
     assert mine.first_fix == out_of_scope("UPLIFT_NOT_RANDOM")
     assert mine.balance is not None and mine.balance.flagged
+
+
+def _hillstrom_verdicts(frame: pd.DataFrame, config_root: Path) -> list:  # type: ignore[type-arg]
+    found = list(readiness([loaded(frame, "email.csv", config_root)], offers(config_root), config_root))
+    return [v for v in found if v.use_case_id == "hillstrom-email"]
+
+
+def test_a_customer_segment_that_shares_the_name_is_not_a_campaign_test(config_root: Path) -> None:
+    frame = campaign().drop(columns=["conversion"])
+    frame["segment"] = np.random.default_rng(3).choice(["Gold", "Silver", "Bronze"], size=len(frame))
+    assert _hillstrom_verdicts(frame, config_root) == []
+    with_outcome = campaign()
+    with_outcome["segment"] = frame["segment"]
+    assert _hillstrom_verdicts(with_outcome, config_root) == []  # no control group by name: not an experiment
+
+
+def test_a_campaign_test_with_another_column_name_is_offered(config_root: Path) -> None:
+    for name in ("treatment", "group", "arm"):
+        frame = campaign(groups=["control", "mail"]).rename(columns={"segment": name})
+        mine = _hillstrom_verdicts(frame, config_root)
+        assert len(mine) == 1, name
+        assert mine[0].balance is not None and mine[0].balance.control_group == "control", name
+        assert mine[0].balance.balanced, name
+
+
+def test_a_column_named_like_a_treatment_without_the_outcome_is_not_offered(config_root: Path) -> None:
+    frame = (
+        campaign(groups=["control", "mail"]).rename(columns={"segment": "group"}).drop(columns=["conversion"])
+    )
+    assert _hillstrom_verdicts(frame, config_root) == []
