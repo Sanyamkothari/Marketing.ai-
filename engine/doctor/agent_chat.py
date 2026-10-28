@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, ToolResult
 from engine.agent.grounding import evidence_numbers, grounded_numbers
-from engine.agent.loop import MAX_MESSAGE_CHARS, UNAVAILABLE, _parse
+from engine.agent.loop import MAX_MESSAGE_CHARS, UNAVAILABLE, _parse, refused_sentence
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import clean_text, for_prompt
 from engine.doctor.actions import prompt_variables
@@ -86,6 +86,28 @@ NO_LAST_WORD: Final[frozenset[str]] = frozenset({"unavailable", "prompt_too_larg
 """Why a turn ended without a reply that is not worth one more call: the AI service did not answer (or the case's
 money ran out), the prompt cannot be sent, or a step broke in a way nobody can explain to the person."""
 NOTHING_SAID: Final[str] = "I could not answer that from what I have checked."
+STOPPED: Final[str] = (
+    "I started on that, but a step failed before I could finish it, so nothing was changed. "
+)
+TOO_BIG: Final[str] = (
+    "There is too much in this case for me to read in one message, so I could not act on that. "
+)
+ASK_AGAIN: Final[str] = "Ask me again and I will try once more."
+
+
+_ACTIONS: Final[dict[str, str]] = {
+    "propose_sql": "build a table with a query",
+    "propose_step": "prepare the file",
+    "propose_amount_outcome": "set up the outcome",
+    "propose_test_column": "set up the test column",
+    "join_files": "join the files",
+    "stack_files": "stack the files",
+    "withdraw": "take a change back",
+    "ask": "ask you a question",
+    "suggest_answer": "point at an answer",
+    "propose_lesson": "note a lesson",
+}
+"""What the AI was doing when a refusal ended the turn, in the person's words."""
 
 
 @dataclass(frozen=True)
@@ -137,6 +159,8 @@ class _Chosen:
 
 class _Chat(_Review):
     purpose = GenerativePurpose.DOCTOR_CHAT
+    person_why = ""
+    """Why the last reply the AI wrote was refused, in the person's words."""
 
     def __init__(self, *args: Any, chat_steps: int, storage: Storage | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -314,6 +338,11 @@ class _Chat(_Review):
         from engine.agent.egress import MAX_SENT_ITEMS, STATE_TOOL, scrub, sent_item
 
         turn, strikes, reply, blocked = self.turn, 0, "", None
+        refusal: AgentToolError | None = (
+            None  # the last thing the engine refused, for the person if no reply comes
+        )
+        wanted = ""  # the last action the AI tried
+        self.person_why = ""
         why: tuple[str, ...] = ()  # the codes and the sentence of an AI service that did not answer
         lead = UNAVAILABLE
         text = self._text(
@@ -330,6 +359,7 @@ class _Chat(_Review):
         self.turn.sent.append(sent_item(self.gates[0], STATE_TOOL, {}, shown))
 
         lessons = approved_lessons(self.storage)
+        self.checker.grounded = self.checker.grounded | grounded_numbers([list(lessons)])
 
         def variables_for(results: list[dict[str, Any]]) -> dict[str, Any]:
             return {
@@ -359,9 +389,11 @@ class _Chat(_Review):
                 if str(action["action"]) == "reply":
                     reply = self._reply(action)
                     break
+                wanted = str(action["action"])
                 self._act(action)
             except AgentToolError as exc:
                 strikes += 1
+                refusal = exc
                 # The message goes into the feedback even when this is the last strike: the last word reads it, so
                 # a reply refused for its number is not written again with the same number.
                 turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
@@ -383,7 +415,7 @@ class _Chat(_Review):
                     None  # the AI wrote this reply itself: nothing blocked it (the same as a guided session)
                 )
         if not reply:
-            reply = lead if blocked == "unavailable" else (OUT_OF_STEPS if blocked is None else NOTHING_SAID)
+            reply = lead if blocked == "unavailable" else self._unsaid(blocked, refusal, wanted)
         return ChatTurn(
             reply=reply,
             items=tuple(items),
@@ -398,6 +430,26 @@ class _Chat(_Review):
             blocked_by=blocked,
             error_codes=why,
         )
+
+    def _unsaid(self, blocked: str | None, refusal: AgentToolError | None, wanted: str) -> str:
+        """What the person reads when the turn ended without a reply of the AI's own: never a bare "could not
+        answer". A refusal is named with what would fix it, an action that was asked for is not hidden, and the
+        person may ask again."""
+        if blocked is None:
+            return OUT_OF_STEPS
+        if blocked == "failed":
+            return STOPPED + ASK_AGAIN
+        if blocked == "prompt_too_large":
+            return TOO_BIG + "Ask about one file or one step at a time."
+        if refusal is None:
+            return f"{NOTHING_SAID} {ASK_AGAIN}"
+        reason = self.person_why if refusal.code.endswith("_REFUSED") and self.person_why else refusal.message
+        did = (
+            f"I tried to {_ACTIONS.get(wanted, 'act on that')}. "
+            if wanted and refusal.code != "AGENT_TEXT_REFUSED"
+            else ""
+        )
+        return self.gates[0].person_text(did + refused_sentence(reason))
 
     def _spent(self) -> bool:
         """Whether the case's spending limit is reached (a meter without a limit never is)."""
@@ -462,9 +514,9 @@ class _Chat(_Review):
                     f"The reply is {len(said)} characters; the most allowed is {self.limits.turn.chat_reply_chars}. Say the same "
                     f"in fewer words, with the result first.{also}",
                 )
+            self.person_why = self.checker.why(said, failure, person=True)
             raise AgentToolError(
-                "AGENT_TEXT_REFUSED",
-                f"The reply failed a check ({failure}); use only numbers from a tool result or the person's words.",
+                "AGENT_TEXT_REFUSED", f"The reply was refused. {self.checker.why(said, failure)}"
             )
         return self.gates[0].person_text(said)
 
@@ -720,7 +772,7 @@ class _Chat(_Review):
             )
             if failure is not None:
                 raise AgentToolError(
-                    "AGENT_QUESTION_REFUSED", f"The question failed a check ({failure}); reword it."
+                    "AGENT_QUESTION_REFUSED", f"The question was refused. {self.checker.why(part, failure)}"
                 )
         gate = self.gates[index]
         shown = [gate.person_text(o) for o in options]

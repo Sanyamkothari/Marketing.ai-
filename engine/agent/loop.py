@@ -390,6 +390,20 @@ class _Checker:
         verdict = self.guardrails.check(text, CheckContext(target=target, max_chars=max_chars))
         return None if verdict.passed else (verdict.blocked_by or "guardrails")
 
+    def why(self, text: str, failure: str, *, person: bool = False) -> str:
+        """`failure` in words the AI can act on: for ungrounded numbers, which ones and how to fix them. With
+        `person`, in words for the person instead."""
+        if failure != "numbers_grounded":
+            return "it did not pass a safety check" if person else f"The text failed a check ({failure})."
+        if person:  # the number itself is not repeated: it is the one nobody checked
+            return "my answer quoted a number that I have not looked up in this case"
+        loose = list(dict.fromkeys(ungrounded_numbers(text, self.grounded, self.names)))
+        shown = ", ".join(f"'{token}'" for token in loose[:5]) or "a number"
+        return (
+            f"The text states {shown}, which no tool result, earlier message or the case state shows. Remove it, "
+            "or call a look tool first and quote what it returns; a number you worked out yourself is not accepted."
+        )
+
 
 def chat_turn(
     ctx: AgentContext,
@@ -634,7 +648,7 @@ def chat_turn(
             errors.append(exc.code)
             strikes += 1
             if strikes > 1:
-                return finish(FALLBACK, blocked_by=exc.code)
+                return finish(f"{FALLBACK} {refused_sentence(exc.message)}", blocked_by=exc.code)
             feedback.append(gate.prepare({"error": exc.code, "message": exc.message}))
             items.append(None)
         except Exception as exc:
@@ -1125,8 +1139,18 @@ def _reply(
         return finish(FALLBACK, blocked_by="empty_output")
     failure = checker.failure(text, target="helper reply", max_chars=MAX_REPLY_CHARS)
     if failure is not None:
-        return finish(_fallback(session), blocked_by=failure)
+        return finish(
+            f"{_fallback(session)} {refused_sentence(checker.why(text, failure, person=True))}",
+            blocked_by=failure,
+        )
     return finish(text, evidence)
+
+
+def refused_sentence(message: str, limit: int = 320) -> str:
+    """What the person is told when a turn ends on a refusal: what was refused and why (the engine's own message,
+    which says what would fix it), and that they can ask again."""
+    said = " ".join(message.split())[:limit].rstrip(" .")
+    return f"What I tried was refused: {said}. Ask me again and I will try another way."
 
 
 def _fallback(session: AgentSession) -> str:

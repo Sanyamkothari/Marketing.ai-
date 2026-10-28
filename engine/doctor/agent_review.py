@@ -225,6 +225,17 @@ def _active_goal(case: Case) -> Any:
     return next((goal for goal in case.goals if goal.active), None)
 
 
+def _expect_problems(exc: ValidationError) -> str:
+    """What was wrong with an `expect`, field by field, for the AI to fix: the field paths and the messages, never
+    the values sent (they may be cell text) and never a documentation link."""
+    found = [
+        f"`{'.'.join(str(part) for part in e['loc']) or 'expect'}`: {str(e['msg'])[:80]}"
+        for e in exc.errors(include_url=False, include_input=False, include_context=False)
+    ]
+    allowed = ", ".join(sorted(Expectations.model_fields))
+    return f"`expect` is not valid: {'; '.join(found[:6])}. Allowed fields: {allowed}."[:600]
+
+
 class _Review:
     def __init__(
         self,
@@ -637,7 +648,7 @@ class _Review:
         try:
             expectations = Expectations.model_validate(expect)
         except ValidationError as exc:
-            raise AgentToolError("AGENT_EXPECT_INVALID", str(exc).splitlines()[-1][:200]) from exc
+            raise AgentToolError("AGENT_EXPECT_INVALID", _expect_problems(exc)) from exc
         given: dict[str, Any] = {k: v for k, v in args.items() if k in SQL_ARGS}
         given["description"] = str(args.get("description") or args.get("reason") or "")[
             : self.limits.turn.description_chars
@@ -770,7 +781,7 @@ class _Review:
             if failure is not None:
                 raise AgentToolError(
                     "AGENT_QUESTION_REFUSED",
-                    f"The question failed a check ({failure}); use only numbers you looked up.",
+                    f"The question was refused. {self.checker.why(text, failure)}",
                 )
         if ask.blocking and turn.blocking >= self.limits.asks.blocking:
             raise AgentToolError(
@@ -792,7 +803,7 @@ class _Review:
             if failure is not None:
                 raise AgentToolError(
                     "AGENT_TEXT_REFUSED",
-                    f"The {target} failed a check ({failure}); use only numbers you looked up.",
+                    f"The {target} was refused. {self.checker.why(text, failure)}",
                 )
         return [self.gates[index].person_text(text) if text else "" for text in texts]
 
