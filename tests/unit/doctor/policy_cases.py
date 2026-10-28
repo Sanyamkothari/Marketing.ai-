@@ -52,6 +52,11 @@ VALID_PARAMS: dict[RecipeStepKind, dict[str, Any]] = {
     RecipeStepKind.NORMALISE_KEY: {"zeros": True},
     RecipeStepKind.KEEP_LATEST_PER_ID: {"time_column": WHEN, "ties": "refuse"},
     RecipeStepKind.COMBINE_ROWS: {"time_column": WHEN},
+    RecipeStepKind.UNPIVOT: {
+        "id_columns": [PK],
+        "value_columns": [["spend_jan", "spend", "jan"]],
+        "year": 2025,
+    },
 }
 _NOT_ALLOWED_CANDIDATES = (
     RecipeStepKind.DROP_COLUMN,

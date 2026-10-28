@@ -521,6 +521,8 @@ class _Review:
             self._features(action, args)
         elif name == "propose_combine_rows":
             self._combine_rows(action, args)
+        elif name == "propose_unpivot":
+            self._unpivot(action, args)
         elif name == "read_guide":
             self._guide(args)
         elif name == "ask_question":
@@ -607,9 +609,7 @@ class _Review:
 
     def _sql(self, args: dict[str, Any]) -> None:
         turn = self.turn
-        names = self.labels[
-            : self.nfiles
-        ]  # a query reads the files; a table another query built is not its input
+        names = self.labels  # a query reads the files and the tables other queries built (`T1`..)
         upload = {name: ctx.upload_id for name, ctx in zip(names, self.ctxs, strict=False)}
         wanted = args.get("files") or names[:1]
         if not isinstance(wanted, list) or not all(w in upload for w in wanted):
@@ -641,7 +641,8 @@ class _Review:
                 f"'{name[:60]}' has failed its own checks too often; it is left for the person.",
             )
         first = next(i for i, ctx in enumerate(self.ctxs) if ctx.upload_id == given["upload_ids"][0])
-        key = decisions(self.case).key(given["upload_ids"][0])
+        home = self._upload_of(first)
+        key = decisions(self.case).key(home) if home else None
         result = self.registry.call(
             "propose_sql_step", given, self._context(first, primary_key=key, replacing=self.replacing)
         )
@@ -703,6 +704,12 @@ class _Review:
             carried.add(RULES)
             shown["text"] = lines
         self.turn.feedback.append(shown)
+
+    def _unpivot(self, action: dict[str, Any], args: dict[str, Any]) -> None:
+        from engine.doctor.agent_unpivot import run_unpivot
+
+        index = self._index(action, args)
+        run_unpivot(self, index, dict(self.gates[index].unalias_args(args)))
 
     def _features(self, action: dict[str, Any], args: dict[str, Any]) -> None:
         from engine.doctor.agent_features import run_features

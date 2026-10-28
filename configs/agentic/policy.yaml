@@ -197,6 +197,21 @@ data:
       params:
         combine_rows:
           allowed: [time_column, snapshot_column, dayfirst, outcome, features]
+    # The AI's unpivot (engine/doctor/agent_unpivot.py): period columns turned into rows (reshape level, decision
+    # O3), offered only through its blocking question, never ticked.
+    data.unpivot:
+      proposes: steps
+      rules:
+        - data.step_kind
+        - data.step_params
+        - data.personal_data
+        - data.level
+        - data.never_ticked
+        - data.reshape_guard
+      step_kinds: [unpivot]
+      params:
+        unpivot:
+          allowed: [id_columns, value_columns, name_pattern, period_column, outcome, year]
     # A query Data Doctor wrote (rules or AI; engine.agent.sql_step keeps it read-only and sandboxed): never
     # ticked, tried on the first rows, APPROVE-class when its table has over 2% fewer rows than the file read.
     data.propose_sql_step:

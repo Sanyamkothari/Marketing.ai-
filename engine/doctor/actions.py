@@ -66,7 +66,9 @@ class ProposeSqlArgs(_Args):
     description: str = Field()
     sql: str = Field(description="one SELECT over `t_<file name>`; `$as_of` is the date")
     output_name: str = Field()
-    files: list[str] = Field(default_factory=list)
+    files: list[str] = Field(
+        default_factory=list, description="the tables it reads: F1.., or a table a query built (T1..)"
+    )
     expect: Expectations | None = Field(default=None)
     as_of: str | None = Field(default=None, description="YYYY-MM-DD the person said")
     as_of_rule: Literal["latest_date_in_file", "last_complete_month_end"] | None = Field(
@@ -126,6 +128,12 @@ class ProposeCombineRowsArgs(_Args):
         description="the id of your change this swaps out",
         json_schema_extra={"surface": "chat"},
     )
+
+
+class ProposeUnpivotArgs(_Args):
+    """`propose_unpivot` (`engine.doctor.agent_unpivot`): code finds the period columns and builds the step."""
+
+    reason: str | None = Field(default=None)
 
 
 class ReadGuideArgs(_Args):
@@ -241,6 +249,14 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
         ProposeCombineRowsArgs,
         "one row per ID; code builds it.",
         _BOTH,
+        needs_file=True,
+    ),
+    ActionSpec(
+        "propose_unpivot",
+        ProposeUnpivotArgs,
+        "a wide sheet (spend_jan..spend_dec) turned into one row per customer per period: the person is asked, and "
+        "says the year when the names have none.",
+        frozenset({"review"}),
         needs_file=True,
     ),
     ActionSpec(

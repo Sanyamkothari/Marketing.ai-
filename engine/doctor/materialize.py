@@ -189,6 +189,11 @@ def roles_of(
     key = decided.column("key", upload_id, columns)
     target = decided.column("outcome", upload_id, columns)
     also = () if candidate_made is None else (candidate_made,)
+    if key is None:
+        # an ID a query makes (the row number the person said yes to) is the file's once the steps have run
+        named = decided.declared("key", upload_id)
+        if named is not None and query_makes(items, named, also=also):
+            key = named
     if target is None:
         declared = decided.declared("outcome", upload_id)
         if declared is not None and query_makes(items, declared, also=also):

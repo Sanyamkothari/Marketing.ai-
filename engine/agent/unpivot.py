@@ -22,7 +22,8 @@ totals, averages and the latest value instead of a column per month.
 Every column of one step has the same kind of period (all months with a year, or all quarters, …), so
 the period column holds one kind of value. A period with a year is written as the date it starts, so the
 rows can be put in date order and combined; a period without one is written as it is in the column name,
-and nothing is guessed about its year.
+and nothing is guessed about its year. The person may give that year (`year`, for months or quarters only): the
+periods are then dated like `2024_Jan`, from the year the person gave and never one read off the file.
 
 **Frozen.** The parameters list every value column with its measure and period (`value_columns`), as they
 were when the person approved the step; `name_pattern` must rebuild each name from its parts, so a column
@@ -47,7 +48,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Final
 
 import numpy as np
@@ -58,6 +59,8 @@ from engine.agent.formats import masked_cut
 __all__ = [
     "MAX_ID_COLUMNS",
     "MAX_VALUE_COLUMNS",
+    "MAX_YEAR",
+    "MIN_YEAR",
     "NAME_PATTERNS",
     "Period",
     "UnpivotError",
@@ -70,6 +73,8 @@ __all__ = [
 ]
 
 MAX_ID_COLUMNS: Final[int] = 200
+MIN_YEAR: Final[int] = 1900
+MAX_YEAR: Final[int] = 2100
 MAX_VALUE_COLUMNS: Final[int] = 1000
 _SEPARATORS: Final[tuple[str, ...]] = ("_", "-", ".", " ")
 NAME_PATTERNS: Final[frozenset[str]] = frozenset(
@@ -79,7 +84,7 @@ NAME_PATTERNS: Final[frozenset[str]] = frozenset(
 """The only ways a column name may be read as a measure and a period."""
 
 _PARAMS: Final[frozenset[str]] = frozenset(
-    {"id_columns", "value_columns", "name_pattern", "period_column", "outcome"}
+    {"id_columns", "value_columns", "name_pattern", "period_column", "outcome", "year"}
 )
 _NAME: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_ .\-]{0,127}$")
 """A measure or period column name: starts with a letter, at most 128 characters."""
@@ -176,8 +181,13 @@ class Period:
         return pd.Timestamp(year=self.year, month=first_month, day=1)
 
 
-def parse_period(token: str) -> Period | None:
-    """`token` read by the grammar in the module docstring, or None when it is not a period."""
+def parse_period(token: str, year: int | None = None) -> Period | None:
+    """`token` read by the grammar in the module docstring, or None when it is not a period.
+
+    `year` is the year the person gave for months or quarters that name none (`Jan`, `Q1`): they are then dated
+    like `2024_Jan`. It is never applied to a token that names its own year.
+    """
+    year_given = year
     for kind, dated, pattern in _TOKENS:
         match = pattern.fullmatch(token)
         if match is None:
@@ -192,7 +202,8 @@ def parse_period(token: str) -> Period | None:
             index = int(parts["q"])
         else:
             index = 1
-        return Period(token=token, kind=kind, year=year, index=index)
+        period = Period(token=token, kind=kind, year=year, index=index)
+        return replace(period, year=year_given) if period.year is None and year_given else period
     return None
 
 
@@ -226,6 +237,8 @@ class UnpivotSpec:
     name_pattern: str
     period_column: str
     outcome: str | None
+    year: int | None = None
+    """The year the person gave for months or quarters whose names have none; `None` when the names carry it."""
 
     @property
     def measures(self) -> tuple[str, ...]:
@@ -263,7 +276,7 @@ class UnpivotSpec:
             parts = _split(name, self.name_pattern)
             if parts is None or parts[0] not in measures:
                 continue
-            period = parse_period(parts[1])
+            period = parse_period(parts[1], self.year)
             if period is not None and (period.kind, period.dated) == (kind.kind, kind.dated):
                 found.append(name)
         return tuple(found)
@@ -301,6 +314,11 @@ class UnpivotSpec:
         period_column = params.get("period_column")
         if not (isinstance(period_column, str) and _NAME.match(period_column)):
             raise refuse("name the new period column (a letter first, at most 128 characters).")
+        year = params.get("year")
+        if year is not None and not (
+            isinstance(year, int) and not isinstance(year, bool) and MIN_YEAR <= year <= MAX_YEAR
+        ):
+            raise refuse("the year is a four-digit year such as 2024, or null.")
         raw = params.get("value_columns")
         if not (isinstance(raw, list) and 2 <= len(raw) <= MAX_VALUE_COLUMNS):
             raise refuse(f"list 2 to {MAX_VALUE_COLUMNS} columns to turn into rows.")
@@ -316,6 +334,10 @@ class UnpivotSpec:
             period = parse_period(token)
             if period is None:
                 raise refuse(f"{token!r} is not a period this step reads (a month, a quarter or a year).")
+            if year is not None:
+                if period.dated:
+                    raise refuse(f"'{column}' already names its year, so no year is given for the step.")
+                period = parse_period(token, year) or period
             if pattern.replace("{measure}", measure).replace("{period}", token) != column:
                 raise refuse(f"'{column}' is not '{measure}' and '{token}' joined by the name pattern.")
             if column in ids or column == outcome:
@@ -338,6 +360,7 @@ class UnpivotSpec:
             name_pattern=str(pattern),
             period_column=period_column,
             outcome=outcome,
+            year=year,
         )
         if len({p.order for p in spec.periods}) < 2:
             raise refuse("the columns must cover at least two periods; one period is not a wide sheet.")
@@ -433,7 +456,13 @@ class WideGroup:
         return tuple(column for column, _, _ in self.value_columns)
 
     def params(
-        self, *, key: str, id_columns: Sequence[str], outcome: str | None, taken: Iterable[str]
+        self,
+        *,
+        key: str,
+        id_columns: Sequence[str],
+        outcome: str | None,
+        taken: Iterable[str],
+        year: int | None = None,
     ) -> dict[str, Any]:
         """The `unpivot` parameters for this group; the period column is named after the kind of period."""
         used = {name.casefold() for name in (*taken, *self.measures)}
@@ -448,6 +477,7 @@ class WideGroup:
             "name_pattern": self.name_pattern,
             "period_column": period_column,
             "outcome": outcome,
+            **({"year": year} if year is not None else {}),
         }
 
 

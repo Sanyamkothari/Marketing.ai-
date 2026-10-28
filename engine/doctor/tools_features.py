@@ -34,7 +34,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 from datetime import date
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
@@ -51,6 +51,7 @@ from engine.config import (
     WhereClause,
     WhereOp,
 )
+from engine.doctor.current_tables import BUILT_PREFIX, is_built
 from engine.doctor.guards import Finding
 from engine.doctor.materialize import CANDIDATE, Full, materialize_plan, table_names, tried_step
 from engine.doctor.registry import (
@@ -67,6 +68,8 @@ from engine.doctor.tools_sql import (
     SqlStepProposal,
     _propose,
     _trial_items,
+    built_source,
+    with_accepted,
 )
 from engine.onboarding.features import (
     FeatureError,
@@ -76,6 +79,9 @@ from engine.onboarding.features import (
     point_in_time_join_clause,
     quote_identifier,
 )
+
+if TYPE_CHECKING:
+    from engine.doctor.case import CaseItem
 
 __all__ = [
     "M_FEATURE_TOOLS",
@@ -210,7 +216,8 @@ class ProposeFeaturesArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 
     upload_id: str = Field(
-        min_length=1, description="The file of orders or events (one row per order or event)."
+        min_length=1,
+        description="The file of orders or events (one row per order or event), or a table another query built (`built:<its name>`).",
     )
     entity_key: str = Field(min_length=1, max_length=128, description="The customer ID column of that file.")
     time_column: str = Field(min_length=1, max_length=128, description="The date of each row.")
@@ -802,18 +809,33 @@ def _decided_outcome(ctx: DataToolContext, upload_id: str, columns: list[str]) -
 
 def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> FeatureProposal:
     loaded = {f.upload_id: f for f in ctx.files}
-    if given.upload_id not in loaded:
+    # The events may be a table a query built (`built:<name>`): read by its name, after its own query, which the
+    # trial counts as accepted; the features query then runs on the file that table was made from.
+    maker: CaseItem | None = None
+    home = given.upload_id
+    if is_built(given.upload_id):
+        origin, maker = built_source(ctx, given.upload_id)
+        home = origin.upload_id
+    elif given.upload_id not in loaded:
         raise DataToolError("TOOL_INPUT_INVALID", "That file is not in this case.", status=422)
     if given.as_of is None and given.as_of_rule is None and ctx.as_of is None:
         raise _refuse(
             "FEATURE_NEEDS_AS_OF",
             "Features are measured at a date: ask the person for the as-of date, or name `as_of_rule`.",
         )
-    outcome = given.outcome_column or _decided_outcome(
-        ctx, given.upload_id, [str(c) for c in loaded[given.upload_id].frame.columns]
-    )
     names = table_names(ctx.files)
-    table = names[given.upload_id]
+    table = given.upload_id[len(BUILT_PREFIX) :] if maker is not None else names[given.upload_id]
+    # What the query would drop without a word is counted on the table as the plan leaves it (before the query).
+    items = _trial_items(with_accepted(ctx.case_items or (), {maker.item_id} if maker else ()), ctx.replacing)
+    before = materialize_plan(
+        (), items, ctx.files, Full(), twice=False, as_of=ctx.as_of, training_as_of=ctx.training_as_of
+    )
+    source = before.tables.get(table)
+    outcome = given.outcome_column or _decided_outcome(
+        ctx,
+        home,
+        [str(c) for c in (source if source is not None else loaded[home].frame).columns],
+    )
     compiled = compile_features(given, table_alias(table), outcome=outcome)
     sql_args = _CompiledSqlArgs(
         description=compiled.description,
@@ -827,12 +849,6 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
         as_of_upload_id=given.upload_id if given.as_of_rule else None,
         as_of_column=given.time_column if given.as_of_rule else None,
     )
-    # What the query would drop without a word is counted on the file as the plan leaves it (before the query).
-    items = _trial_items(ctx.case_items or (), ctx.replacing)
-    before = materialize_plan(
-        (), items, ctx.files, Full(), twice=False, as_of=ctx.as_of, training_as_of=ctx.training_as_of
-    )
-    source = before.tables.get(table)
     inputs = _input_findings(given, table, source) if source is not None else []
     try:
         base = _propose(
@@ -861,14 +877,14 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
         items,
         ctx.files,
         Full(),
-        candidate=(given.upload_id, tried),
+        candidate=(home, tried),
         as_of=ctx.as_of,
         training_as_of=ctx.training_as_of,
     )
     own = next((f for f in whole.failures if f.item_id == CANDIDATE), None)
     if own is not None:
         raise DataToolError(own.code, own.message, status=422)
-    made = whole.tables.get(table)
+    made = whole.tables.get(names[home])
     if made is not None and len(made) == 0:
         raise _refuse(
             "FEATURE_NO_ROWS",

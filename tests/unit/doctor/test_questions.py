@@ -27,6 +27,10 @@ SAMPLE: dict[str, object] = {
     "columns": "last_order_value, orders_90d",
     "count": 412,
     "kind": "sheets",
+    "measures": "spend and visits",
+    "entity": "customer",
+    "rows_in": "1,000",
+    "rows_out": "12,000",
     "hint": "values between 100 and 5000000 (about 100 times larger than the other file)",
     "latest_date": "30 Sep 2026",
     "name_date": "31 Aug 2026",
@@ -47,13 +51,13 @@ CHOICES = ("customer_id", "account_no", "phone")
 
 
 def _ask(qid: str) -> Ask:
-    return build_ask(qid, SAMPLE, rows=3000, choices=CHOICES, recommended_choice=1)
+    return build_ask(qid, SAMPLE, rows=3000, choices=CHOICES, recommended_choice=1, by_code=True)
 
 
-def test_the_catalogue_holds_q1_to_q24() -> None:
-    assert list(CATALOGUE) == [f"Q{n}" for n in range(1, 25)]
+def test_the_catalogue_holds_q1_to_q26() -> None:
+    assert list(CATALOGUE) == [f"Q{n}" for n in range(1, 27)]
     codes = [spec.code for spec in CATALOGUE.values()]
-    assert len(set(codes)) == 24
+    assert len(set(codes)) == 26
 
 
 @pytest.mark.parametrize("qid", list(CATALOGUE))
@@ -119,7 +123,9 @@ def test_the_blocking_questions_are_few_and_decide_the_table_or_the_contact_list
         "Q10",
         "Q12",
         "Q14",
-    }, "Q24 is a note for the analyst until an outcome definition is built from it: it blocks nothing"
+        "Q25",
+        "Q26",
+    }, "Q25 and Q26 are asked by the review's unpivot, which blocks approval until the person says; Q24 is a note for the analyst until an outcome definition is built from it: it blocks nothing"
 
 
 def test_an_optional_answer_is_left_out_when_its_value_is_missing() -> None:
@@ -252,6 +258,8 @@ def test_an_answer_claims_an_outcome_only_when_it_carries_a_step(qid: str) -> No
         o.effect == NO_STEP for o in shown if o.value_kind is None and o.sets in (None, "note")
     ), "no step: nothing is claimed"
     step = OptionEffect(option_id="c0", kind="doctor.step", title="Fix it")
-    with_step = build_ask(qid, SAMPLE, rows=3000, choices=CHOICES, effects=[step] * (len(ask.options) - 1))
+    with_step = build_ask(
+        qid, SAMPLE, rows=3000, choices=CHOICES, effects=[step] * (len(ask.options) - 1), by_code=True
+    )
     first = _case_question(with_step, "q", with_step.options).options[0].effect
     assert first != NO_STEP and "{" not in first and "“customer_id” rows" not in first

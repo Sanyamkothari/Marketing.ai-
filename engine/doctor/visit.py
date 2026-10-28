@@ -2021,6 +2021,92 @@ def _base_rules(run: _Run, case: Case, step: _Step) -> None:
                     upload_id=upload_id,
                 )
             )
+        elif len(loaded.frame) > 0 and not _has_id_like(result.output, loaded):
+            made = _row_id_item(run, step, loaded, ctx, now, evidence=result.evidence_id)
+            if made is not None:
+                step.items.append(made)
+
+
+ROW_ID_WARNING: Final[str] = (
+    "This file has no column that names each row, so this adds a row number. A row number only counts the rows "
+    "of this file: predictions cannot be joined back to your CRM or customer list without a real ID. Say no and "
+    "send a file with an ID column to get that."
+)
+"""What the person is told with the proposed row number (never silently invented: it waits for their yes)."""
+
+
+_EVENT_ROLES: Final[frozenset[str]] = frozenset(
+    {"bills", "payments", "complaints", "usage", "campaign_events", "orders"}
+)
+"""The roles of a file with many rows per customer (events, transactions): such a file has an ID, repeated."""
+
+
+def _has_id_like(roles: dict[str, Any], loaded: LoadedFile) -> bool:
+    """True when the file has a column that could name its customers or accounts, even one that repeats or has
+    blanks, or reads as an events or transactions file: a row number would not be its ID, so none is offered.
+    """
+    if any(_ID_NAMED.search(str(c).strip()) for c in loaded.frame.columns):
+        return True
+    if any(
+        isinstance(k, dict) and float(k.get("rows_per_key") or 99.0) <= _UNIQUE for k in roles.get("keys", [])
+    ):
+        return True  # a different value on every row, though too many blanks to be decided as the ID
+    return any(
+        isinstance(r, dict) and r.get("role") in _EVENT_ROLES and float(r.get("confidence") or 0.0) >= 0.5
+        for r in roles.get("roles", [])
+    )
+
+
+_OUTPUT_NAME_CHARS: Final[int] = 64
+
+
+def _row_id_item(
+    run: _Run, step: _Step, loaded: LoadedFile, ctx: DataToolContext, now: datetime, *, evidence: str
+) -> CaseItem | None:
+    """A file with no ID column (one row per call, say): a pending ID decision whose yes adds a row number, with
+    the plain warning. The row number is made by the ordinary `sql_query` step (the trial and the checks are the
+    usual ones) and is recorded as the file's key with it. A query the trial refuses is skipped: the visit goes on.
+    """
+    from engine.agent.sql_step import table_alias
+    from engine.doctor.guards import Finding
+    from engine.doctor.materialize import table_names
+    from engine.doctor.registry import DataToolError
+    from engine.doctor.tools_sql import SqlStepProposal
+
+    taken = {str(c).casefold() for c in loaded.frame.columns}
+    column = next(name for name in ("row_id", *(f"row_id_{n}" for n in range(2, 100))) if name not in taken)
+    table = table_names(ctx.files)[loaded.upload_id]
+    safe = re.sub(r"[^A-Za-z0-9_]", "_", table)
+    try:
+        result = run.call(
+            "propose_sql_step",
+            {
+                "description": f"Add a row number “{column}” to each row, in the order of the file.",
+                "sql": f"SELECT row_number() OVER () AS {column}, * FROM {table_alias(table)}",
+                "output_name": f"with_row_id_{safe}"[:_OUTPUT_NAME_CHARS],
+                "upload_ids": [loaded.upload_id],
+            },
+            ctx,
+        )
+    except DataToolError:
+        return None
+    step.evidence.append(result)
+    made = SqlStepProposal.model_validate(result.output)
+    findings = [*made.findings, Finding(level="flag", code="ROW_ID_INVENTED", message=ROW_ID_WARNING)]
+    payload = made.payload()
+    payload["findings"] = [f.model_dump(mode="json") for f in findings]
+    payload["needs_yes"] = True
+    payload["column"] = column  # the yes also records it as the file's ID (the key decision)
+    payload["upload_id"] = loaded.upload_id
+    return _item(
+        "key",
+        payload,
+        title=f"Add a row number “{column}” to {loaded.file_name or 'this file'}: it has no ID column.",
+        upload_id=loaded.upload_id,
+        confidence=AgentConfidence.CHECK,
+        evidence=(evidence, result.evidence_id),
+        now=now,
+    )
 
 
 def _generic_rules(run: _Run, case: Case, step: _Step) -> None:
