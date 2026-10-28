@@ -145,7 +145,7 @@ def recheck_case(
 def _recheck_once(
     store: CaseStore,
     storage: Storage,
-    root: Path | None,
+    root: Path,
     case: Case,
     uploads: dict[str, str],
     client_id: str,

@@ -208,8 +208,8 @@ def aliased(files: Sequence[LoadedFile], items: Sequence[CaseItem]) -> list[Load
             and i.upload_id in (loaded.upload_id, None)
             and isinstance(i.payload.get("column"), str)
             and isinstance(i.payload.get("as"), str)
-            and i.payload["column"] in loaded.frame.columns
-            and i.payload["as"] not in loaded.frame.columns
+            and str(i.payload["column"]) in loaded.frame.columns
+            and str(i.payload["as"]) not in loaded.frame.columns
         }
         out.append(replace(loaded, frame=loaded.frame.rename(columns=names)) if names else loaded)
     return out

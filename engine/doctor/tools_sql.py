@@ -287,10 +287,16 @@ def query_uploads(
         maker = _built_query(items, str(name), ())
         if maker is None or depth > 4:
             continue
+        recorded = maker.payload.get("input_uploads")
+        made_by = maker.payload.get("step")
         found.extend(
-            maker.payload.get("input_uploads")
-            or ([maker.upload_id] if maker.upload_id else [])
-            or query_uploads(maker.payload.get("step") or {}, files, items, depth + 1)
+            [str(u) for u in recorded]
+            if isinstance(recorded, list) and recorded
+            else (
+                [maker.upload_id]
+                if maker.upload_id
+                else query_uploads(made_by if isinstance(made_by, Mapping) else {}, files, items, depth + 1)
+            )
         )
     return list(dict.fromkeys(found))
 
@@ -301,7 +307,10 @@ def built_source(ctx: DataToolContext, upload_id: str) -> tuple[LoadedFile, Case
     maker = _built_query(ctx.case_items or (), upload_id[len(BUILT_PREFIX) :], ctx.replacing)
     home = None
     if maker is not None:
-        reads = query_uploads(maker.payload.get("step") or {}, ctx.files, ctx.case_items or ())
+        made_by = maker.payload.get("step")
+        reads = query_uploads(
+            made_by if isinstance(made_by, Mapping) else {}, ctx.files, ctx.case_items or ()
+        )
         home = maker.upload_id or (reads[0] if reads else None)
         if home is None and len(ctx.files) == 1:
             home = ctx.files[0].upload_id

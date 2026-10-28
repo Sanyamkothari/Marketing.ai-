@@ -4385,7 +4385,13 @@ def chat(
 def _typed_unpivot_year(effect: OptionEffect) -> bool:
     """Whether a typed answer's change is an unpivot that takes the year (Q26's "Another year")."""
     step = effect.payload.get("step")
-    return isinstance(step, dict) and step.get("kind") == "unpivot" and "year" in (step.get("params") or {})
+    params = step.get("params") if isinstance(step, dict) else None
+    return (
+        isinstance(step, dict)
+        and step.get("kind") == "unpivot"
+        and isinstance(params, dict)
+        and "year" in params
+    )
 
 
 def _typed_value(kind: str | None, value: str | None) -> str | None:

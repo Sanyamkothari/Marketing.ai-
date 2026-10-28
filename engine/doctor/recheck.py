@@ -924,9 +924,9 @@ def recheck(
         *(
             a.model_copy(update={"key": found.key})
             for a in said
-            if (old := before.get(a.key)) is not None
+            if (prior := before.get(a.key)) is not None
             for found in run.findings
-            if found.key != a.key and same(old, found)
+            if found.key != a.key and same(prior, found)
         ),
     )
     for finding in run.findings:

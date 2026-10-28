@@ -63,8 +63,7 @@ def fetch(name: str, data_dir: Path, local: Path | None = None) -> Path:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.DATA = target  # the fetchers write wherever these point
-    module.RAW = target / module.RAW.name
+    vars(module).update(DATA=target, RAW=target / module.RAW.name)  # the fetchers write wherever these point
     if local is not None:
         shutil.copyfile(local, module.RAW)
     elif not module.RAW.exists():
@@ -113,7 +112,7 @@ def run_visit(
 
     record: dict[str, Any] = {"rows": None, "steps": []}
     owned = data_dir is None
-    work = Path(tempfile.mkdtemp(prefix="bench-doctor-")) if owned else data_dir
+    work = Path(tempfile.mkdtemp(prefix="bench-doctor-")) if data_dir is None else data_dir
     started = time.perf_counter()
     try:
         with TestClient(create_app(config_root=REPO / "configs", data_dir=work)) as client:

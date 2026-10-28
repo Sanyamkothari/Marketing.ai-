@@ -115,8 +115,10 @@ def typed_year_effect(effect: OptionEffect, typed: str) -> OptionEffect:
     Raises `ValueError` with a plain sentence when the year cannot be used."""
     from engine.agent.unpivot import UnpivotError, UnpivotSpec
 
-    step = dict(effect.payload.get("step") or {})
-    params = dict(step.get("params") or {})
+    raw_step = effect.payload.get("step")
+    step = dict(raw_step) if isinstance(raw_step, dict) else {}
+    raw_params = step.get("params")
+    params = dict(raw_params) if isinstance(raw_params, dict) else {}
     try:
         year = int(float(typed))
     except ValueError:
