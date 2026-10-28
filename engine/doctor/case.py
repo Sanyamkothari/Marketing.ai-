@@ -111,6 +111,7 @@ __all__ = [
     "CasePrescriptionRef",
     "CaseQuestion",
     "CaseReadinessRef",
+    "CaseRecheck",
     "CaseSource",
     "CaseStore",
     "ChatSuggestion",
@@ -633,6 +634,15 @@ class CaseReadinessRef(StrictBase):
     )
 
 
+class CaseRecheck(StrictBase):
+    """A case made by next month's recheck: the ready case whose approved plan it replays, and which new upload
+    stands in for which old one."""
+
+    source_case_id: str = Field(description="The ready case whose approved plan this case replays.")
+    source_version: int = Field(ge=1, description="That case's version when it was replayed.")
+    uploads: dict[str, str] = Field(description="Old upload id -> the new upload that stands in for it.")
+
+
 class CaseCounters(StrictBase):
     """What the case cost and how much it asked."""
 
@@ -690,6 +700,12 @@ class Case(Artefact):
         default=None,
         exclude_if=lambda value: value is None,
         description="Plan O M235: where the visit stands beyond its state (`engine.doctor.visit`).",
+    )
+    recheck_of: CaseRecheck | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Set when this case replays a ready case's approved plan on next month's file "
+        "(`engine.doctor.recheck`).",
     )
 
     @model_validator(mode="after")

@@ -58,6 +58,7 @@ __all__ = [
     "Scope",
     "StepFailure",
     "Watch",
+    "aliased",
     "materialize",
     "materialize_plan",
     "open_findings",
@@ -167,6 +168,36 @@ def table_names(files: Sequence[LoadedFile]) -> dict[str, str]:
         taken.add(name)
         names[loaded.upload_id] = name
     return names
+
+
+ALIAS_KIND: Final[str] = "column_alias"
+"""The item kind of a person's yes to "this column is the one the plan knew under another name" (next month's
+recheck): payload `{"column": <name in this file>, "as": <name the plan reads>}`."""
+
+
+def aliased(files: Sequence[LoadedFile], items: Sequence[CaseItem]) -> list[LoadedFile]:
+    """`files` with every accepted alias applied: a column the person said is the plan's column under a new name is
+    read by the plan's name, so the plan runs on next month's file exactly as it was approved (in memory only).
+    """
+    from dataclasses import replace
+
+    from engine.agent.contracts import ProposalState
+
+    out: list[LoadedFile] = []
+    for loaded in files:
+        names = {
+            str(i.payload["column"]): str(i.payload["as"])
+            for i in items
+            if i.kind == ALIAS_KIND
+            and i.state is ProposalState.ACCEPTED
+            and i.upload_id in (loaded.upload_id, None)
+            and isinstance(i.payload.get("column"), str)
+            and isinstance(i.payload.get("as"), str)
+            and i.payload["column"] in loaded.frame.columns
+            and i.payload["as"] not in loaded.frame.columns
+        }
+        out.append(replace(loaded, frame=loaded.frame.rename(columns=names)) if names else loaded)
+    return out
 
 
 def roles_of(
@@ -302,6 +333,7 @@ def materialize_plan(
     from engine.doctor.plan_check import plan_digest, recipe_steps_of
 
     digest = plan_digest(case_files, items)
+    files = aliased(files, items)
     if candidate is not None:
         digest = sha256_hex(canonical_bytes([digest, candidate[0], candidate[1].model_dump(mode="json")]))[
             :32

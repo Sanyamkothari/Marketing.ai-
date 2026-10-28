@@ -161,7 +161,7 @@ def _from_trials(
             code, text = entry.get("code"), entry.get("message")
             if not isinstance(code, str) or not isinstance(text, str) or (code, item.item_id) in told:
                 continue
-            if only is not None and code not in only:
+            if only is not None and code not in only and entry.get("kept") is not True:
                 continue
             hard = code in HARD_CODES or entry.get("hard") is True
             count = entry.get("count")

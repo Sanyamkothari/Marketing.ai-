@@ -1473,9 +1473,12 @@ def _preview(run: _Run, case: Case) -> _Step:
     check = _counted(run, case, items)  # counted once per plan; the screen and Approve read it
     visit = case.visit or CaseVisit()
     same_plan = visit.plan_check is not None and visit.plan_check.digest == check.digest
+    # a recheck's case holds the yeses of the approved run: they stay while the key and the count hold
+    # (`stop_is_open`), so a stop said yes to last month is not asked again on a same-shape file
+    keep = same_plan or case.recheck_of is not None
     return _Step(
         to=VisitState.APPROVE,
-        visit={"plan_check": check, "acknowledged": visit.acknowledged if same_plan else ()},
+        visit={"plan_check": check, "acknowledged": visit.acknowledged if keep else ()},
         events=[
             EventDraft(
                 kind=TimelineKind.PREVIEW,
