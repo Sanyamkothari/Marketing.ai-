@@ -410,7 +410,10 @@ def test_the_ai_never_sees_a_person_only_tool_or_a_wrapper_in_m232(agent: AgentC
         data_registry().call("edit_by_hand", {"kind": "drop_column", "column": "x"}, ctx)
     assert refused.value.code == "TOOL_UNKNOWN"
     listed = [t.name for t in data_registry().listed_for(ctx, DataToolKind.READ)]
-    assert listed == [name for name in LOOK_TOOLS if name != "draft_outcome_labels"]  # Plan K off
+    assert listed == [
+        *(name for name in LOOK_TOOLS if name != "draft_outcome_labels"),  # Plan K off
+        *M_HISTORY_TOOLS,
+    ]
 
 
 def test_ai_and_person_calls_must_say_who_is_asking(agent: AgentContext) -> None:
