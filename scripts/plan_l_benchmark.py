@@ -48,6 +48,13 @@ USE_CASES: Final[tuple[str, ...]] = (
 XLSX: Final[str] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MAX_ROUNDS: Final[int] = 40
 """Calls one visit may make before the benchmark gives up on it (each answer or tick is one)."""
+GOAL_DOUBTS: Final[tuple[str, ...]] = (
+    "d.outcome_missing.",
+    "d.outcome_gone.",
+    "d.time_missing.",
+    "d.consent_missing.",
+)
+"""The ids of the doubts that say the goal cannot go on: what its outcome, date or consent is is not found."""
 HANDED_ON: Final[frozenset[str]] = frozenset({"ready", "ready_with_warnings"})
 """The readiness verdicts the visit hands on."""
 
@@ -185,8 +192,8 @@ class Outcome:
     upload_error: str | None = None
     doctor_status: str | None = None
     session_status: str | None = None
-    """Where the Data Doctor visit got to: `ready` when it rested at APPROVE with no open blocking question
-    (the old Guided setup's `ready`), else `stopped` and why in `stop_reason`."""
+    """Where the Data Doctor visit got to: `ready` when it rests at APPROVE with an ID and an outcome settled and
+    nothing open that Approve would refuse (`not_ready_because`), else `stopped` and why in `stop_reason`."""
     stop_reason: str | None = None
     questions: int = 0
     ticks: int = 0
@@ -236,17 +243,55 @@ def _failed(response: Any, what: str, outcome: Outcome) -> None:
 
 
 def _stopped_because(case: dict[str, Any]) -> str:
-    """Why a case is not at the hand-off: the visit's stop, else what its plan found (stops first), else what it
-    waits for, else its state."""
+    """Why a case is not at the hand-off, in the Doctor's own words: the visit's stop, else what its plan found
+    (stops first), else the goal's doubts and the data it asks for, else what it waits for, else its state."""
     visit = case.get("visit") or {}
     if visit.get("stopped"):
         return str(visit["stopped"].get("message") or visit["stopped"].get("code"))
     found = (visit.get("plan_check") or {}).get("findings", [])
     texts = [f"{f['code']}: {f['text']}" for f in found if f.get("level") in ("stop", "flag", "note")]
+    texts += [
+        f"{d['doubt_id']}: {d['because']}"
+        for d in case.get("doubts") or []
+        if d["doubt_id"].startswith(GOAL_DOUBTS)
+    ]
+    texts += [
+        f"{q['code']}: {q['text']}"
+        for q in case.get("questions") or []
+        if q["answer"] is None and q["code"] == "DATA_REQUESTED"
+    ]
     if texts:
         return " ".join(texts)
     waiting = visit.get("waiting_for")
     return f"the visit rests at {case['state']}" + (f", waiting for {waiting}" if waiting else "")
+
+
+def not_ready_because(case: dict[str, Any], goal: str) -> str | None:
+    """Why a case is not ready to Approve, or None when it is: it rests at APPROVE; no blocking question is open;
+    no stop of the plan stands without the person's yes (Approve would answer `APPROVAL_STOP_OPEN`); an ID and the
+    goal's outcome are settled; and none of the goal's own doubts (the outcome, the date or the consent it cannot
+    find) and no data request is open. The other doubts are the Doctor's notes about the file (a column renamed since
+    last time, a date that is not newer): shown, not a reason to wait.
+    The driver never says that yes itself: a stop is the person's."""
+    if case["state"] != "approve":
+        return _stopped_because(case)
+    visit = case.get("visit") or {}
+    said = {a.get("key") for a in visit.get("acknowledged") or []}
+    stops = [
+        f
+        for f in (visit.get("plan_check") or {}).get("findings", [])
+        if (f.get("level") == "stop" or f.get("hard")) and f.get("key") not in said
+    ]
+    key, outcome = roles_of_case(case, goal)
+    asking = any(q["blocking"] and q["answer"] is None for q in case["questions"])
+    open_requests = any(d["doubt_id"].startswith(GOAL_DOUBTS) for d in case.get("doubts") or []) or any(
+        q["code"] == "DATA_REQUESTED" and q["answer"] is None for q in case["questions"]
+    )
+    if not (stops or asking or open_requests or key is None or outcome is None):
+        return None
+    reason = _stopped_because(case)
+    missing = [what for what, name in (("ID", key), ("outcome", outcome)) if name is None]
+    return reason if not missing or stops or open_requests else f"no {' or '.join(missing)} settled: {reason}"
 
 
 def _drive(
@@ -318,12 +363,10 @@ def _drive(
             break
     if case is None:
         return None
-    ready = case["state"] == "approve" and not any(
-        q["blocking"] and q["answer"] is None for q in case["questions"]
-    )
-    outcome.session_status = "ready" if ready else "stopped"
-    if not ready:
-        outcome.stop_reason = _stopped_because(case)
+    why_not = not_ready_because(case, use_case)
+    outcome.session_status = "ready" if why_not is None else "stopped"
+    if why_not is not None:
+        outcome.stop_reason = why_not
         return None
     approved = call(f"{path}/approval", {"version": case["version"]}, "approve")
     if approved is None:

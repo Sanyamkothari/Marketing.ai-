@@ -395,7 +395,7 @@ def test_dates_are_checked_for_a_swapped_day_and_month_against_the_truth() -> No
 
 
 def test_the_end_to_end_invariant_holds_ready_to_its_promise() -> None:
-    """The held-out in_01 shape: Guided setup says ready with no ID or outcome settled, Approve fails."""
+    """The held-out in_01 shape: the Data Doctor visit says ready with no ID or outcome settled, Approve fails."""
     in_01 = journey_invariant(
         doctor_status="missing",
         session_status="ready",
@@ -404,7 +404,7 @@ def test_the_end_to_end_invariant_holds_ready_to_its_promise() -> None:
         approved=False,
         why_not="apply 409: VALIDATION_FAILED",
     )
-    assert in_01 == "ready (said by Guided setup) but no ID or outcome settled"
+    assert in_01 == "ready (said by the Data Doctor visit) but no ID or outcome settled"
     refused = journey_invariant(
         doctor_status="ready",
         session_status="ready",
@@ -424,7 +424,7 @@ def test_the_end_to_end_invariant_holds_ready_to_its_promise() -> None:
     assert journey_invariant(**trained) is None
     assert journey_invariant(**trained, train=True, trained="done") is None
     assert journey_invariant(**trained, train=True, trained="failed") == (
-        "ready (said by Guided setup and the readiness report) but training ended failed"
+        "ready (said by the Data Doctor visit and the readiness report) but training ended failed"
     )
     assert (
         journey_invariant(
@@ -582,7 +582,7 @@ def test_the_gate_fails_on_harm_a_broken_invariant_a_moved_canary_a_blocking_too
         name="in_01",
         group="heldout",
         use_case="targeted-advertisement",
-        invariant_problem="ready (said by Guided setup) but no ID or outcome settled",
+        invariant_problem="ready (said by the Data Doctor visit) but no ID or outcome settled",
     )
     moved = tuple(
         (

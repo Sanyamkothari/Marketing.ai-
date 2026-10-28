@@ -985,7 +985,7 @@ def journey_invariant(
 ) -> str | None:
     """Why a file breaks the end-to-end readiness invariant, or None.
 
-    "Ready" is a promise: a file Data Doctor's diagnosis, Guided setup or the readiness report calls ready must reach
+    "Ready" is a promise: a file Data Doctor's diagnosis, the Data Doctor visit or the readiness report calls ready must reach
     Approve with an ID and an outcome settled, and, in the gate run (`train`), train to the end. A report that
     could not be built because its own invariant failed (`report_problem`) breaks it too.
     """
@@ -993,7 +993,7 @@ def journey_invariant(
         return report_problem
     said = [
         who
-        for who, status in (("Data Doctor", doctor_status), ("Guided setup", session_status))
+        for who, status in (("Data Doctor", doctor_status), ("the Data Doctor visit", session_status))
         if status == "ready"
     ] + (["the readiness report"] if verdict in READY_VERDICTS else [])
     if not said:
@@ -1234,7 +1234,7 @@ def kill_verdict(tool: ToolEval) -> str:
 
 
 class BenchFile(StrictBase):
-    """One benchmark file through upload, Data Doctor, Guided setup and Approve."""
+    """One benchmark file through upload, Data Doctor, the Data Doctor visit and Approve."""
 
     name: str
     group: Literal["plan_l", "extended", "heldout"]
@@ -1243,7 +1243,9 @@ class BenchFile(StrictBase):
     approved: bool = False
     questions: int = 0
     doctor_status: str | None = None
-    session_status: str | None = Field(default=None, description="Guided setup's last status.")
+    session_status: str | None = Field(
+        default=None, description="Where the Data Doctor visit got to: `ready` or `stopped`."
+    )
     roles_settled: bool = False
     verdict: str | None = Field(default=None, description="The readiness verdict on the prepared copy.")
     invariant_problem: str | None = Field(

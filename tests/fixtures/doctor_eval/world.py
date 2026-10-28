@@ -9,8 +9,9 @@ model (`planted`), once with the same column rotated (`control`, :func:`engine.d
 
 **The calls** (:data:`CALLS`) name, per registered tool, the arguments it is evaluated with. A tool registered
 without an entry fails `test_every_registered_tool_has_eval_calls`: adding a tool means adding its eval calls, as
-it means adding its canary calls (the design §5.4). The chat's two suggestions (`propose_setting`, `propose_step`)
-are made inside a chat turn: their calls are whole chat sessions on the AI cases (:data:`AI_CASES`).
+it means adding its canary calls (the design §5.4). The chat's suggestions (`propose_step`, and
+`propose_setting` where the Doctor has an equivalent) are made inside a chat turn: their calls are whole chats on the
+AI cases (:data:`AI_CASES`), each a Data Doctor case written to through `visit.chat` (:func:`ai_case`).
 
 **The AI cases** are tuning files (Plan G's benchmark files and the extended cases), never the held-out Indian
 files.
@@ -40,6 +41,8 @@ __all__ = [
     "CALLS",
     "CHAT_TOOLS",
     "PERSONAL_VALUES",
+    "AiCase",
+    "ai_case",
     "ai_context",
     "planted_args",
     "tool_world",
@@ -138,6 +141,92 @@ AI_CASES: Final[dict[str, Callable[[], pd.DataFrame]]] = {
 def ai_context(name: str) -> AgentContext:
     """The context of one AI case, with the switch on."""
     return _context(AI_CASES[name]())
+
+
+AI_UPLOAD: Final[str] = "up-eval-ai"
+
+
+@dataclasses.dataclass
+class AiCase:
+    """One AI case as a Data Doctor case: the file, the case at its first rest, and the person's way to write to it.
+
+    `say` is the case chat (`visit.chat`, which hands the message to the AI through the `converse` port, as
+    `POST /cases/{id}/chat` does): the AI's changes come back as pending items with `source=ai` and the receipt our
+    code counted, and the visit applies the clean ones for the person, undoably.
+    """
+
+    ctx: AgentContext
+    storage: Any
+    world: Any
+    case: Any
+    converse: Any
+
+    def deps(self) -> Any:
+        from engine.doctor.visit import visit_registry
+        from tests.unit.doctor.visit_support import deps_for
+
+        return deps_for(self.storage, self.world, registry=visit_registry(), converse=self.converse)
+
+    def say(self, message: str) -> Any:
+        from engine.doctor import visit
+
+        self.case = visit.chat(
+            "default",
+            self.case.case_id,
+            message,
+            self.deps(),
+            expected_version=self.case.version,
+            actor=ANALYST.user_id,
+        )
+        return self.case
+
+
+def ai_case(name: str, root: Path, converse_for: Callable[[AgentContext], Any]) -> AiCase:
+    """The AI case `name` as a Data Doctor case under `root`, with its goal chosen and every blocking question
+    answered by its recommended option (else its first), so the chat starts where a person's would.
+
+    `converse_for` builds the chat port from the case's context (the port needs the same context the case chat
+    gives it: `api.routes.case_visit._converse`).
+    """
+    from engine.doctor import visit
+    from engine.doctor.case import CaseStore
+    from engine.doctor.diagnose import Offer
+    from engine.storage import LocalStorage
+    from tests.unit.doctor import visit_support as vs
+
+    ctx = ai_context(name)
+    storage = LocalStorage(root)
+    file = vs.loaded(AI_UPLOAD, "eval.csv", ctx.frame, ctx.config)
+    world = vs.World(files={AI_UPLOAD: file}, offers=(Offer(config=ctx.config, stage="Acquire"),))
+    opened = CaseStore(storage, clock=world.clock).create(
+        client_id="default", created_by=ANALYST.user_id, files=[vs.case_file(AI_UPLOAD, world)]
+    )
+    made = AiCase(ctx, storage, world, opened, converse_for(ctx))
+    made.case = visit.resume("default", opened.case_id, made.deps(), actor=ANALYST.user_id)
+    made.case = visit.set_goal(
+        "default",
+        opened.case_id,
+        USE_CASE,
+        made.deps(),
+        expected_version=made.case.version,
+        actor=ANALYST.user_id,
+    )
+    for _ in range(20):
+        blocking = [q for q in made.case.questions if q.blocking and q.answer is None]
+        if not blocking:
+            break
+        question = blocking[0]
+        option = question.recommended or question.options[0].option_id
+        made.case = visit.answer(
+            "default",
+            opened.case_id,
+            question.question_id,
+            option,
+            made.deps(),
+            expected_version=made.case.version,
+            actor=ANALYST.user_id,
+        )
+    return made
 
 
 # ---------------------------------------------------------------------------
