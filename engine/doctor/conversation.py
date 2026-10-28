@@ -70,6 +70,7 @@ __all__ = [
     "GoalChoice",
     "GoalsCard",
     "MessageCard",
+    "MessageGoal",
     "QuestionCard",
     "ReadyCard",
     "ReadyConfirmation",
@@ -83,7 +84,15 @@ DONT_KNOW: Final[str] = "I don't know"
 """The label of the option every question offers, mapped to its safe choice."""
 GOALS_SHOWN: Final[int] = 3
 """Goal cards drawn at most; the rest are counted (`more_count`)."""
-_GOAL_STATUS_ORDER: Final[dict[str, int]] = {"ready": 0, "check": 1, "too_small": 2, "missing": 3}
+_GOAL_STATUS_ORDER: Final[dict[str, int]] = {
+    "ready": 0,
+    "check": 1,
+    "buildable": 2,
+    "too_small": 3,
+    "missing": 4,
+}
+_FITTING: Final[frozenset[str]] = frozenset({"ready", "check", "buildable"})
+"""Verdicts drawn as goal cards: `buildable` fits once Data Doctor builds the outcome (the person approves it)."""
 _REQUEST_CODES: Final[frozenset[str]] = frozenset(REQUEST_CODES.values())
 _FOLDED_CODES: Final[frozenset[str]] = frozenset({"TRAINING_BUDGET"})
 """Questions the chat does not ask: a default the ready card's speeds change (the plan view still asks them)."""
@@ -228,6 +237,15 @@ class MessageSuggestion(StrictBase):
     )
 
 
+class MessageGoal(StrictBase):
+    """The goal a reply proposes: the person's click on 'Choose this goal' sets it (the call the goal cards make)."""
+
+    goal_id: str
+    name: str
+    reason: str
+    chosen: bool = Field(default=False, description="A goal is chosen by now: there is nothing to click.")
+
+
 class MessageCard(StrictBase):
     type: Literal["message"] = "message"
     role: Literal["user", "agent"]
@@ -238,6 +256,7 @@ class MessageCard(StrictBase):
     )
     tools: tuple[str, ...] = ()
     suggestion: MessageSuggestion | None = None
+    goal: MessageGoal | None = None
     sent: tuple[dict[str, JsonValue], ...] = Field(default=(), description="What the AI looked at.")
     blocked_by: str | None = Field(
         default=None,
@@ -478,7 +497,7 @@ def _goals(case: Case) -> GoalsCard | None:
     found = sorted(_use_cases(case), key=lambda u: _GOAL_STATUS_ORDER.get(str(u.get("status")), 9))
     if not found:
         return None
-    fitting = [u for u in found if u.get("status") in {"ready", "check"}]
+    fitting = [u for u in found if u.get("status") in _FITTING]
     shown = fitting[:GOALS_SHOWN]
     cards = tuple(
         GoalChoice(
@@ -497,8 +516,19 @@ def _goals(case: Case) -> GoalsCard | None:
 def _fit(case: Case, goal_id: str, goal_name: str | None, verdict_key: str, verdict_next: str) -> FitCard:
     found = next((u for u in _use_cases(case) if u.get("use_case_id") == goal_id), None)
     if found is not None:
-        ok = found.get("status") in {"ready", "check"}
+        ok = found.get("status") in _FITTING
         sentence = str(found.get("why") or found.get("summary") or verdict_next)
+        if found.get("status") == "buildable" and any(
+            i.kind == "recipe_step"
+            and i.goal_id == goal_id
+            and i.state is ProposalState.REJECTED
+            and "buildable" in i.payload
+            for i in case.items
+        ):  # the build was declined: it fits only once the column comes some other way
+            ok = False
+            sentence = (
+                "You declined building the outcome from the order history, so it needs a column saying it."
+            )
     else:
         ok = verdict_key != "not_ready"
         sentence = verdict_next
@@ -730,6 +760,19 @@ def _message(
             used=question.answer is not None,
             others=others,
         )
+    proposed = getattr(entry, "goal", None)
+    goal: MessageGoal | None = None
+    if proposed is not None:
+        named = next(
+            (u for u in _use_cases(case) if u.get("use_case_id") == proposed.goal_id),
+            {},
+        )
+        goal = MessageGoal(
+            goal_id=proposed.goal_id,
+            name=goal_display_name(proposed.goal_id, str(named.get("name") or "")),
+            reason=proposed.reason,
+            chosen=bool(case.goals),
+        )
     return MessageCard(
         role=entry.role,
         text=entry.text,
@@ -737,6 +780,7 @@ def _message(
         withdrawn=tuple(titles.get(i, i) for i in (getattr(entry, "withdrawn", ()) or ())),
         tools=tuple(getattr(entry, "tools", ()) or ()),
         suggestion=suggestion,
+        goal=goal,
         sent=tuple(entry.sent),
         blocked_by=getattr(entry, "blocked_by", None),
         error_codes=tuple(getattr(entry, "error_codes", ()) or ()),

@@ -687,6 +687,15 @@ def _what_can_this_power(_parsed: NoArgs, ctx: DataToolContext) -> PowerVerdicts
         if fits():
             break
         verdicts[index] = verdicts[index].model_copy(update={"first_look": None})
+    # A buildable goal's counted facts repeat what its `why` says (the sentence), so they go before anything else is lost.
+    for index in range(len(verdicts) - 1, -1, -1):
+        if fits():
+            break
+        built = verdicts[index].buildable
+        if built is not None and built.sentence:
+            verdicts[index] = verdicts[index].model_copy(
+                update={"buildable": built.model_copy(update={"sentence": ""})}
+            )
     # Many goals the files cannot power each repeat "start this other goal instead" (the ones the files do power,
     # already listed above them): the last of them lose that list first, so twelve missing goals never stop a visit.
     for index in range(len(verdicts) - 1, -1, -1):

@@ -173,6 +173,14 @@ class ProposeTestColumnArgs(_Args):
     reason: str = Field()
 
 
+class ProposeGoalArgs(_Args):
+    """`propose_goal` (`engine.doctor.agent_chat`): a goal that fits the files, offered with a reason; the person's
+    click on "Choose this goal" sets it. Nothing is chosen by this action."""
+
+    goal_id: str = Field(description="a goal that fits (ready, check or buildable), by its id")
+    reason: str = Field(description="why this goal, in a sentence")
+
+
 class ReadGuideArgs(_Args):
     """`read_guide` (`engine.doctor.guides`): read-only; the guide's rules, plus one section when named."""
 
@@ -319,6 +327,12 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
         "an amount outcome (spend in N days after the snapshot) from a file of orders; say why.",
         frozenset({"chat"}),
         needs_file=True,
+    ),
+    ActionSpec(
+        "propose_goal",
+        ProposeGoalArgs,
+        "with no goal yet: one goal that fits the files (or can be built from them); the person confirms.",
+        frozenset({"chat"}),
     ),
     ActionSpec(
         "propose_test_column",

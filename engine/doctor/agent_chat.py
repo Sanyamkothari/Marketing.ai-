@@ -124,6 +124,8 @@ class ChatTurn:
     suggestions: tuple[tuple[str, str], ...] = ()
     """`(question_id, option_id)` for each open question the model pointed at, one per question; the visit checks the
     question is still open."""
+    goal: tuple[str, str] | None = None
+    """`(goal_id, reason)`: the goal it proposes while no goal is chosen; only the person's click sets it."""
     tools: tuple[str, ...] = ()
     sent: tuple[dict[str, Any], ...] = ()
     blocked_by: str | None = None
@@ -151,6 +153,8 @@ class _Chosen:
     quick: int = 0
     suggestions: dict[str, str] = field(default_factory=dict)
     """Question id -> the option the model points at; a second suggestion for a question replaces the first."""
+    goal: tuple[str, str] | None = None
+    """`(goal_id, reason)` of the goal the model proposes; a second proposal replaces the first."""
     used: list[str] = field(default_factory=list)
     reported: set[str] = field(default_factory=set)
     applied: list[CaseItem] = field(default_factory=list)
@@ -269,7 +273,31 @@ class _Chat(_Review):
             self._text(d.upload_id, clean_text(d.because, self.limits.turn.short_chars))
             for d in [d for d in self.case.doubts if d.status == "open"][-self.limits.turn.state_doubts :]
         ]
-        return {"plan": plan, "questions": asked, "doubts": doubts}
+        return {"plan": plan, "questions": asked, "doubts": doubts, **self._goals_state()}
+
+    def _goals_state(self) -> dict[str, Any]:
+        """While no goal is chosen, the goals that fit the files (`propose_goal` names one by its id): what the rules
+        counted, in their own words. Nothing from a cell; a buildable goal's counts are those of the build."""
+        from engine.doctor.visit import active_goal, fitting_goals
+
+        if active_goal(self.case) is not None:
+            return {}
+        fitting = fitting_goals(self.case)
+        return (
+            {
+                "goals_that_fit": [
+                    {
+                        "goal_id": str(u.get("use_case_id")),
+                        "status": str(u.get("status")),
+                        "customers": u.get("customers"),
+                        "yes_count": u.get("yes_count"),
+                    }
+                    for u in fitting[:6]
+                ]
+            }
+            if fitting
+            else {}
+        )
 
     def _reload_looks(self, storage: Storage | None) -> list[dict[str, Any]]:
         """The latest looks of earlier turns, back from the case's stored evidence, so the model can cite them
@@ -423,6 +451,7 @@ class _Chat(_Review):
             requests=tuple(turn.requests),
             withdrawn=tuple(withdrawn),
             suggestions=tuple(chosen.suggestions.items()),
+            goal=chosen.goal,
             tools=tuple(dict.fromkeys(chosen.used)),
             sent=tuple(s.model_dump(mode="json") for s in turn.sent[:MAX_SENT_ITEMS]),
             blocked_by=blocked,
@@ -532,6 +561,8 @@ class _Chat(_Review):
             self._suggest(args)
         elif name == "propose_lesson":
             self._lesson(args)
+        elif name == "propose_goal":
+            self._goal(args)
         elif name == "ask":
             self._ask(action, args)
         elif name in {"join_files", "stack_files"}:
@@ -657,6 +688,33 @@ class _Chat(_Review):
             self.turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
             return
         self.turn.feedback.append({"lesson": "proposed: waits for the owner", "status": lesson.status})
+
+    def _goal(self, args: dict[str, Any]) -> None:
+        """`propose_goal`: point at one goal that fits the files (ready, check, or buildable from their events) while
+        no goal is chosen. Nothing is chosen: the reply carries a "Choose this goal" button and only the click sets it
+        (the same call as choosing from the goal cards)."""
+        from engine.doctor.visit import active_goal, fitting_goals
+
+        goal = str(args.get("goal_id") or "").strip()
+        if active_goal(self.case) is not None:
+            raise AgentToolError("AGENT_GOAL_SET", "A goal is already chosen; only the person changes it.")
+        if goal not in {str(u.get("use_case_id")) for u in fitting_goals(self.case)}:
+            raise AgentToolError(
+                "AGENT_GOAL_UNKNOWN",
+                "Name a goal that fits these files, by its id (`goals_that_fit` in the case state).",
+            )
+        reason = str(args.get("reason") or "").strip()
+        if not reason:
+            raise AgentToolError("AGENT_REASON_MISSING", "Say why this goal, in a sentence.")
+        failure = self.checker.failure(reason, target="doctor reply", max_chars=self.limits.turn.effect_chars)
+        if failure is not None:
+            raise AgentToolError(
+                "AGENT_TEXT_REFUSED",
+                f"The reason failed a check ({failure}); at most {self.limits.turn.effect_chars} characters, "
+                "and only numbers from a tool result or the person's words.",
+            )
+        self.chosen.goal = (goal, self.gates[0].person_text(reason))
+        self.turn.feedback.append({"goal": "proposed: waits for the person's click", "goal_id": goal})
 
     def _case_words(self) -> list[str]:
         """The case's column names, file names and profile top values, for the lesson check only (never sent)."""
@@ -980,6 +1038,7 @@ def doctor_converse(
             withdrawn=done.withdrawn,
             suggestion=done.suggestion,
             suggestions=done.suggestions,
+            goal=done.goal,
             tools=done.tools,
             model_calls=meter.calls_used() - calls,
             tokens=meter.tokens_used() - tokens,

@@ -554,6 +554,13 @@ class ChatSuggestion(StrictBase):
     label: str = Field(description="That answer's button text.")
 
 
+class ChatGoal(StrictBase):
+    """The goal the agent proposes, with its reason. Only the person's click on "Choose this goal" sets it."""
+
+    goal_id: str = Field(description="A goal that fits the files (`diagnosis.use_cases`).")
+    reason: str = Field(description="Why this goal, in the agent's words (checked like any reply).")
+
+
 class CaseChatEntry(StrictBase):
     """One chat message, masked as it was stored, with what was sent to the AI service."""
 
@@ -589,6 +596,11 @@ class CaseChatEntry(StrictBase):
         default=(),
         exclude_if=lambda value: not value,
         description="Every answer it suggests, one per open question; `suggestion` is the first of them.",
+    )
+    goal: ChatGoal | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="A goal it proposes (`propose_goal`); the person's click on 'Choose this goal' sets it, nothing else.",
     )
     blocked_by: str | None = Field(
         default=None,

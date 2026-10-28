@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import Field
 
 from engine.config import StrictBase
+from engine.doctor.buildable import BuildableOutcome
 from engine.doctor.first_look import FirstLook
 from engine.doctor.outcomes import OutcomeOffer
 from engine.doctor.sufficiency import NextSteps
@@ -33,9 +34,16 @@ __all__ = [
     "UseCaseReadiness",
 ]
 
-ReadinessStatus = Literal["ready", "check", "missing", "too_small"]
+ReadinessStatus = Literal["ready", "check", "buildable", "missing", "too_small"]
 ReadinessReason = Literal[
-    "NO_OUTCOME", "GUESSED_COLUMN", "TWO_COLUMNS", "NOT_ENOUGH", "STOPPED", "NOT_RANDOM", "NO_TEST_COLUMN"
+    "NO_OUTCOME",
+    "GUESSED_COLUMN",
+    "TWO_COLUMNS",
+    "NOT_ENOUGH",
+    "STOPPED",
+    "NOT_RANDOM",
+    "NO_TEST_COLUMN",
+    "BUILDABLE",
 ]
 
 
@@ -97,6 +105,8 @@ class UseCaseReadiness(StrictBase):
     status: ReadinessStatus = Field(
         description=(
             "`ready`: Guided setup has nothing to ask; `check`: it will ask or suggest before training; "
+            "`buildable`: no file has the outcome, but an event table can define it and Data Doctor can build one "
+            "row per customer with it (the person approves the build); "
             "`missing`: something it needs is not in any file; `too_small`: there is not enough of it."
         )
     )
@@ -124,6 +134,15 @@ class UseCaseReadiness(StrictBase):
         ),
     )
 
+    # An added, defaulted field: for a goal whose outcome an event table can define, the counted facts of the build.
+    buildable: BuildableOutcome | None = Field(
+        default=None,
+        description=(
+            "For a `buildable` goal (or one `too_small` once built): the event table, the snapshot offered first, "
+            "and the customers and 'yes' counted for that build (`engine.doctor.buildable`). Null otherwise."
+        ),
+    )
+
     # Plan L M158 (DEC-1580): an added, defaulted field - what to do when the data is not enough.
     next_steps: NextSteps | None = Field(
         default=None,
@@ -140,7 +159,8 @@ class UseCaseReadiness(StrictBase):
             "Why it is not plainly ready: `NO_OUTCOME` (no file names the outcome), `GUESSED_COLUMN` (one "
             "column might be it: a question), `TWO_COLUMNS` (several might be it: a question), "
             "`NOT_ENOUGH` (too little history), `STOPPED` (Guided setup cannot use the file), `NOT_RANDOM` (a "
-            "campaign test with no control group or groups that already differed). Null otherwise."
+            "campaign test with no control group or groups that already differed), `BUILDABLE` (an event table can "
+            "define the outcome). Null otherwise."
         ),
     )
     customers: int | None = Field(default=None, description="Rows (customers) in the file to start from.")

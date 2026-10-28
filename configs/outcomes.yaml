@@ -75,6 +75,14 @@ templates:
     days: [30, 60, 90]
     default_days: 90
 
+  retail-win-back:
+    question: When has a shopper come back?
+    sentence: "{An_entity} has come back when there is {an_event} within {days} days after the snapshot."
+    label_type: event_presence
+    event_kinds: [orders, payments, activity, other_event]
+    days: [30, 60, 90]
+    default_days: 90
+
   targeted-advertisement:
     question: When has a customer converted?
     sentence: "{An_entity} has converted when there is {an_event} within {days} days after the snapshot."

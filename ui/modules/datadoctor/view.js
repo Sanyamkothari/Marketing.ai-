@@ -492,7 +492,7 @@ export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
   if (view.mode !== "generic") return "";
   const found = ((c.diagnosis && c.diagnosis.use_cases) || []).filter((u) => u && u.use_case_id);
   if (!found.length) return "";
-  const order = { ready: 0, check: 1, too_small: 2, missing: 3 };
+  const order = { ready: 0, check: 1, buildable: 2, too_small: 3, missing: 4 };
   const rows = found
     .slice()
     .sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9))
@@ -506,8 +506,8 @@ export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
       // The server's why already carries the counts; the separate counts line is only for a goal with no why.
       const notes = u.why ? [esc(plain(u.why))] : counts.length ? [esc(counts.join(", "))] : [];
       // A goal to check is chosen first; its question is asked then, so only a goal with a real gap shows a first fix.
-      const best = index === 0 && ["ready", "check"].includes(u.status);
-      const fix = u.status !== "ready" && u.status !== "check" && u.first_fix ? `<span class="dds-why" data-dds-goal-fix>To do first: ${esc(plain(u.first_fix))}</span>` : "";
+      const best = index === 0 && ["ready", "check", "buildable"].includes(u.status);
+      const fix = !["ready", "check", "buildable"].includes(u.status) && u.first_fix ? `<span class="dds-why" data-dds-goal-fix>To do first: ${esc(plain(u.first_fix))}</span>` : "";
       // A Home goal this one overlaps (roadmap section 0): said, so the person sees why both are listed.
       const also = u.also_fits ? `<span class="dds-why" data-dds-goal-also>Also fits: ${esc(plain(u.also_fits))}</span>` : "";
       // What the AI can propose for a missing goal; the person approves what it proposes (nothing is added here).
