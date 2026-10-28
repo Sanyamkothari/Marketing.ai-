@@ -635,12 +635,12 @@ def _propose(
     decided = ctx.training_as_of or ctx.as_of
     if own and decided is not None and own != decided.isoformat() and "as_of_rule" not in step.params:
         window = step.params.get("outcome_window_days")
-        if training_window_fits(step, decided):
+        if ctx.as_of is not None and training_window_fits(step, ctx.as_of, ctx.training_as_of):
             # The two dates of a training table: the rows up to its snapshot describe each customer and the days
             # after it give the outcome; the case date is where scoring reads (not a difference to stop at).
             sentence += (
                 f" It reads the data as of {own}, the date the training table is cut at: the {window} days after it "
-                f"give the outcome, and {decided.isoformat()} is the date your case is read at."
+                f"give the outcome, and {ctx.as_of.isoformat()} is the date your case is read at."
             )
         else:
             sentence += (

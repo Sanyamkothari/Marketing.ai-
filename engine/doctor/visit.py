@@ -2374,10 +2374,17 @@ def _event_roles(run: _Run) -> frozenset[str]:
 
 
 def _event_file(roles: dict[str, Any], event_roles: frozenset[str]) -> bool:
-    """The file reads as events or transactions: its most likely role is an event role of the catalogue, so a row
-    number would not be its ID. (An event log that fits no named role still has `other_event` first.)"""
+    """The file reads as events or transactions: an event role of the catalogue outscores every other role, so a
+    row number would not be its ID. A tie is no evidence (a file with no date and nothing that names a role ties
+    its event roles at the same low score), so it does not count as events."""
     ranked = [r for r in roles.get("roles", []) if isinstance(r, dict)]
-    return bool(ranked) and ranked[0].get("role") in event_roles
+    if not ranked or ranked[0].get("role") not in event_roles:
+        return False
+    top = ranked[0].get("confidence")
+    second = ranked[1].get("confidence") if len(ranked) > 1 else None
+    if not isinstance(top, (int, float)):
+        return False
+    return not isinstance(second, (int, float)) or top > second
 
 
 _OUTPUT_NAME_CHARS: Final[int] = 64

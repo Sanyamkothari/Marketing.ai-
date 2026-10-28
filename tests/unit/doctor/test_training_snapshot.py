@@ -249,3 +249,13 @@ def test_the_two_dates_of_a_training_build_are_not_a_stop_but_an_unexplained_dif
     assert [f.code for f in date_differences([(build, "i1")], SCORING, date(2011, 7, 31), Full())] == [
         "STEP_DATE_DIFFERS"
     ]
+
+
+def test_a_decided_training_date_is_matched_by_every_step_whatever_its_window() -> None:
+    from engine.doctor.materialize import Full, date_differences
+
+    earlier = query(as_of=date(2011, 5, 31).isoformat())  # 90 days from it are over by the case date
+    decided = date(2011, 8, 31)
+    assert [f.code for f in date_differences([(earlier, "i1")], SCORING, decided, Full())] == [
+        "STEP_DATE_DIFFERS"
+    ]

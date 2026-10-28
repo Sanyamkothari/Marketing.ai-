@@ -278,7 +278,9 @@ def acknowledged_codes(visit: CaseVisit | None, items: Sequence[CaseItem] = ()) 
     None when the plan was never counted (approved before the guards), so its recipe replays as it always did.
 
     A loss a person's yes to a step agreed to (`CaseItem.agreed_rows`, the count it showed) is a yes to that kind of
-    stop too, though no stop was left to say it to: the replay meets the same loss with no count to compare.
+    stop too, though no stop was left to say it to: the replay meets the same loss with no count to compare. Only
+    when what they agreed to leave out is itself over the plan's loss gate; a small, bounded yes (a few rows
+    dated after the snapshot) does not turn the loss stop off for every later file.
     """
     from engine.doctor.protocol import AGENT
 
@@ -289,13 +291,16 @@ def acknowledged_codes(visit: CaseVisit | None, items: Sequence[CaseItem] = ()) 
         for f in visit.plan_check.findings
         if f.level == "stop" and not f.hard and not stop_is_open(f, visit.acknowledged)
     }
-    if any(
-        i.state is ProposalState.ACCEPTED
-        and i.agreed_rows
+    ledger = visit.plan_check.ledger
+    start = ledger.get("customers_in") if ledger.get("customers_in") is not None else ledger.get("rows_in")
+    agreed = sum(
+        i.agreed_rows or 0
+        for i in items
+        if i.state is ProposalState.ACCEPTED
         and i.decided_by not in (None, AGENT)
         and i.standing_answer_id is None
-        for i in items
-    ):
+    )
+    if isinstance(start, int) and start > 0 and agreed / start * 100.0 > limits().gates.loss_stop_pct:
         codes.add("PLAN_LOSES_TOO_MUCH")
     return tuple(sorted(codes))
 

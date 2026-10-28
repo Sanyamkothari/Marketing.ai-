@@ -108,6 +108,21 @@ def test_the_customers_an_audience_leaves_out_are_agreed_up_to_the_count_it_show
     assert _agreed_update(case, plain, True) == {}
 
 
+def test_a_small_agreed_loss_does_not_turn_off_the_plan_loss_stop_for_a_replay() -> None:
+    from engine.doctor.plan_check import acknowledged_codes
+
+    def visit_of(customers: int) -> CaseVisit:
+        return CaseVisit(plan_check=PlanCheck(digest="d", ledger={"customers_in": customers}))
+
+    def agreed(rows: int) -> CaseItem:
+        return item("item_a", {"sentence": "s"}, ProposalState.ACCEPTED, upload_id="up-1").model_copy(
+            update={"agreed_rows": rows, "decided_by": "person"}
+        )
+
+    assert acknowledged_codes(visit_of(10_000), [agreed(25)]) == ()  # 0.25% of the customers: bounded
+    assert acknowledged_codes(visit_of(10_000), [agreed(2_000)]) == ("PLAN_LOSES_TOO_MUCH",)
+
+
 def test_a_key_that_repeats_by_design_is_not_expected_to_be_unique() -> None:
     from engine.doctor.checks_time_keys import key_quality
 
