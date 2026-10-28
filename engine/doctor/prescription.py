@@ -970,7 +970,7 @@ def prescription_from_case(
     created_at = max((a.approved_at for a in case.approvals), default=case.updated_at)
     approver = case.approvals[-1].approved_by if case.approvals else None
     build = _build(approved)
-    acked = acknowledged_codes(case.visit)
+    acked = acknowledged_codes(case.visit, approved)
     # A decision made on a file goes on the table an approved join or stack made from it (the outcome, the date).
     decided = decisions_from(approved, section_questions)
     _log_ignored(decided, "plan")

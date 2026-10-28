@@ -29,7 +29,7 @@ import contextlib
 import functools
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -79,6 +79,7 @@ __all__ = [
     "step_drift",
     "stop_finding",
     "table_names",
+    "training_window_fits",
 ]
 
 SAMPLE_SEED: Final[int] = 20_260_101
@@ -883,6 +884,23 @@ def tried_step(step: RecipeStep, as_of: date | None, training_as_of: date | None
     return bound.model_copy(update={"params": kept})
 
 
+def training_window_fits(step: RecipeStep, decided: date) -> bool:
+    """A query that reads the future (its outcome window follows its own date) whose window is over by the date
+    decided for the case: its date is the training table's snapshot, the case's date is where scoring reads, and the
+    two differ on purpose (the training window is the reason). Not so when the window runs past the decided date.
+    """
+    window = step.params.get("outcome_window_days")
+    own = step.params.get("as_of")
+    if step.kind is not RecipeStepKind.SQL_QUERY or not step.params.get("reads_future") or not own:
+        return False
+    if isinstance(window, bool) or not isinstance(window, int) or step.params.get("as_of_rule"):
+        return False
+    try:
+        return date.fromisoformat(str(own)) + timedelta(days=window) <= decided
+    except ValueError:
+        return False
+
+
 def date_differences(
     bound: Sequence[tuple[RecipeStep, str | None]],
     as_of: date | None,
@@ -895,10 +913,19 @@ def date_differences(
     decided = training_as_of or as_of
     if decided is None:
         return []
+    decided_training_unset = training_as_of is None
     out: list[PlanFinding] = []
     for step, item_id in bound:
         have = step.params.get("as_of")
-        if step.kind is RecipeStepKind.SQL_QUERY and have and have != decided.isoformat() and item_id:
+        if (
+            step.kind is RecipeStepKind.SQL_QUERY
+            and have
+            and have != decided.isoformat()
+            and item_id
+            # The two dates of a training table (its snapshot, and the case's later date) differ on purpose when
+            # no training date was decided and the outcome window is over by the case's date.
+            and not (decided_training_unset and training_window_fits(step, decided))
+        ):
             out.append(
                 _stop(
                     "STEP_DATE_DIFFERS",

@@ -9,7 +9,7 @@ names only.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -33,6 +33,7 @@ __all__ = [
     "acknowledged_codes",
     "check_plan",
     "guard_levels",
+    "item_sentence_now",
     "ledger_view",
     "open_stops",
     "plan_check_of",
@@ -85,6 +86,63 @@ def guard_levels(steps: Sequence[RecipeStep]) -> tuple[AgentLevel, ...]:
     return levels
 
 
+def item_sentence_now(item: CaseItem, check: PlanCheck | None) -> str:
+    """The sentence an APPROVE-class item is approved by, with the row count of the whole file once it is in: a
+    step tried on a sample says its count is an estimate (`sentence_estimate`), and the count of the whole file
+    (the plan check's `basis`) replaces it, so the sentence, the change card and the final table say one number.
+    """
+    from engine.doctor.protocol import item_sentence
+
+    said = item_sentence(item.title, item.payload)
+    estimate = item.payload.get("sentence_estimate")
+    if not isinstance(estimate, dict) or check is None or check.basis is None:
+        return said
+    steps = check.ledger.get("steps")
+    row = next(
+        (
+            r
+            for r in (steps if isinstance(steps, list) else [])
+            if isinstance(r, dict) and r.get("item_id") == item.item_id
+        ),
+        None,
+    )
+    rows = row.get("rows_out") if row is not None else None
+    if isinstance(rows, bool) or not isinstance(rows, int):
+        return said
+    return replace_estimate(said, estimate, rows, row)
+
+
+def replace_estimate(
+    sentence: str, estimate: Mapping[str, Any], rows: int, counted: Mapping[str, Any] | None = None
+) -> str:
+    """`sentence` with the counts a sample could only estimate replaced by the known ones: the table's rows (and the
+    note saying they were an estimate) and, when the whole file's customer counts are at hand (`counted`, a ledger
+    step), the customers clause; without them the clause is left out rather than said wrongly."""
+    out = sentence.replace(str(estimate.get("rows", "")), f"{rows:,} rows", 1)
+    out = _swap(out, str(estimate.get("note", "")), "")
+    clause = str(estimate.get("customers", ""))
+    if not clause:
+        return out
+    c = counted or {}
+    kept = (
+        f"Customers: {c['customers_in']:,} before, {c['customers_out']:,} after ({c['customers_lost']:,} lost, "
+        f"{c.get('customers_duplicated') or 0:,} repeated)."
+        if all(isinstance(c.get(k), int) for k in ("customers_in", "customers_out", "customers_lost"))
+        else ""
+    )
+    return _swap(out, clause, kept)
+
+
+def _swap(sentence: str, piece: str, instead: str) -> str:
+    """`piece` (stored without its surrounding spaces) replaced by `instead`, the space before it going with it."""
+    piece = piece.strip()
+    if not piece:
+        return sentence
+    if f" {piece}" in sentence:
+        return sentence.replace(f" {piece}", f" {instead}" if instead else "", 1)
+    return sentence.replace(piece, instead, 1)
+
+
 def _step_row(receipt: Receipt, item_id: str) -> dict[str, JsonValue]:
     counted = receipt.keys_in is not None
     return {
@@ -94,7 +152,9 @@ def _step_row(receipt: Receipt, item_id: str) -> dict[str, JsonValue]:
         "customers_in": receipt.keys_in if counted else None,
         "customers_out": receipt.keys_out if counted else None,
         "customers_lost": receipt.keys_lost if counted else None,
-        "customers_duplicated": receipt.keys_repeated if counted else None,
+        # Customers the step put on more than one row: only when each was on one row before. A log has its
+        # customers on many rows already, and that count says nothing about what the step did.
+        "customers_duplicated": receipt.keys_repeated if counted and receipt.one_row_per_key else None,
         "totals": [
             {"column": t.column, "before": t.before, "after": t.after} for t in receipt.totals[:_TOTALS_SHOWN]
         ],
@@ -213,21 +273,31 @@ def open_stops(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement])
     return [f for f in check.findings if stop_is_open(f, acknowledged)]
 
 
-def acknowledged_codes(visit: CaseVisit | None) -> tuple[str, ...] | None:
+def acknowledged_codes(visit: CaseVisit | None, items: Sequence[CaseItem] = ()) -> tuple[str, ...] | None:
     """The kinds of stop a person said yes to for the plan as counted: what an approved recipe may replay with.
     None when the plan was never counted (approved before the guards), so its recipe replays as it always did.
+
+    A loss a person's yes to a step agreed to (`CaseItem.agreed_rows`, the count it showed) is a yes to that kind of
+    stop too, though no stop was left to say it to: the replay meets the same loss with no count to compare.
     """
+    from engine.doctor.protocol import AGENT
+
     if visit is None or visit.plan_check is None:
         return None
-    return tuple(
-        sorted(
-            {
-                f.code
-                for f in visit.plan_check.findings
-                if f.level == "stop" and not f.hard and not stop_is_open(f, visit.acknowledged)
-            }
-        )
-    )
+    codes = {
+        f.code
+        for f in visit.plan_check.findings
+        if f.level == "stop" and not f.hard and not stop_is_open(f, visit.acknowledged)
+    }
+    if any(
+        i.state is ProposalState.ACCEPTED
+        and i.agreed_rows
+        and i.decided_by not in (None, AGENT)
+        and i.standing_answer_id is None
+        for i in items
+    ):
+        codes.add("PLAN_LOSES_TOO_MUCH")
+    return tuple(sorted(codes))
 
 
 def ledger_view(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement]) -> dict[str, Any] | None:

@@ -52,6 +52,7 @@ from engine.doctor.materialize import (
     Sample,
     materialize_plan,
     table_names,
+    training_window_fits,
     tried_step,
 )
 from engine.doctor.registry import (
@@ -166,6 +167,11 @@ class SqlStepProposal(StrictBase):
         default=(), description="Names of the columns with at most two values on the tried rows (names only)."
     )
     sampled: bool = Field(description="True when it was tried on the first rows of a bigger file.")
+    estimate: dict[str, str] = Field(
+        default_factory=dict,
+        description="When `sampled`: the two phrases of the sentence that are a sample's estimate (`rows`, `note`), "
+        "which the count of the whole file replaces (`engine.doctor.plan_check.item_sentence_now`).",
+    )
     receipt: Receipt = Field(
         description="What the query did, counted by our code: customers kept, lost, repeated."
     )
@@ -201,6 +207,7 @@ class SqlStepProposal(StrictBase):
             "compared_cells": self.compared_cells,
             "needs_yes": self.needs_yes,
             "detail": str(self.step["params"]["sql"]),  # the query, shown only as detail
+            **({"sentence_estimate": dict(self.estimate)} if self.estimate else {}),
         }
 
 
@@ -602,19 +609,43 @@ def _propose(
     sampled = any(len(file.frame) > limits().trial.dry_run_rows for file in asked.values())
     read = ", ".join(f"{t.file_name} ({t.rows:,} rows)" for t in inputs)
     columns = tuple(str(c) for c in made.columns)
+    # A count made on a sample is said to be one (never as the table's size), and the count of the whole file
+    # replaces it once it is in (`item_sentence_now`).
+    estimate = (
+        {
+            "rows": f"about {receipt.rows_out:,} rows",
+            "note": f" (an estimate from {limits().trial.dry_run_rows:,} sampled rows of each file: the count "
+            "of the whole file replaces it once it is in)",
+        }
+        if sampled
+        else {}
+    )
     sentence = (
         f"{given.description.rstrip('.')}. Reads {read}; the new table '{given.output_name}' would have "
-        f"{receipt.rows_out:,} rows and {len(columns):,} columns"
-        + (f" (tried on {limits().trial.dry_run_rows:,} sampled rows of each file)." if sampled else ".")
+        f"{estimate.get('rows', f'{receipt.rows_out:,} rows')} and {len(columns):,} columns"
+        + (estimate["note"] if estimate else "")
+        + "."
     )
     if receipt.keys_in is not None:
-        sentence += f" Customers: {receipt.keys_in:,} before, {receipt.keys_out:,} after ({receipt.keys_lost:,} lost, {receipt.keys_repeated:,} repeated)."
+        clause = f" Customers: {receipt.keys_in:,} before, {receipt.keys_out:,} after ({receipt.keys_lost:,} lost, {receipt.keys_repeated:,} repeated)."
+        sentence += clause
+        if estimate:
+            estimate["customers"] = clause
     own = step.params.get("as_of")
     decided = ctx.training_as_of or ctx.as_of
     if own and decided is not None and own != decided.isoformat() and "as_of_rule" not in step.params:
-        sentence += (
-            f" It reads the data as of {own}, not {decided.isoformat()}."  # shown, never silently changed
-        )
+        window = step.params.get("outcome_window_days")
+        if ctx.training_as_of is None and training_window_fits(step, decided):
+            # The two dates of a training table: the rows up to its snapshot describe each customer and the days
+            # after it give the outcome; the case date is where scoring reads (not a difference to stop at).
+            sentence += (
+                f" It reads the data as of {own}, the date the training table is cut at: the {window} days after it "
+                f"give the outcome, and {decided.isoformat()} is the date your case is read at."
+            )
+        else:
+            sentence += (
+                f" It reads the data as of {own}, not {decided.isoformat()}."  # shown, never silently changed
+            )
     return SqlStepProposal(
         source="ai" if ctx.caller == "ai" else "rules",
         title=given.description.rstrip("."),
@@ -628,6 +659,7 @@ def _propose(
         all_columns=columns[:MAX_COLUMNS_KEPT],
         two_valued=_two_valued(made)[:MAX_COLUMNS_KEPT],
         sampled=sampled,
+        estimate=estimate,
         receipt=receipt,
         changed_cells=changed_cells,
         compared_cells=compared_cells,

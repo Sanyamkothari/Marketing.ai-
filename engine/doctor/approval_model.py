@@ -29,13 +29,13 @@ from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import StrictBase
 from engine.doctor.case import Case, CaseError, VisitState
 from engine.doctor.ledger import blocking, findings_of
+from engine.doctor.plan_check import item_sentence_now
 from engine.doctor.protocol import (
     DEFAULT_SETTINGS,
     ProtocolSettings,
     approval_digest,
     approve_class_of,
     confirmation_refusal,
-    item_sentence,
     role_for,
 )
 
@@ -119,7 +119,7 @@ def needs_yes(
         rule = approve_class_of(item.kind, item.payload, settings)
         if item.state is not ProposalState.ACCEPTED or rule is None or confirmed(case, item):
             continue
-        sentence = item_sentence(item.title, item.payload)
+        sentence = item_sentence_now(item, case.visit.plan_check if case.visit is not None else None)
         role = role_for(rule, approval_required=separate)
         why_not: Literal["role", "separation"] | None = None
         if principal is not None:
