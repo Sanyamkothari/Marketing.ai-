@@ -96,22 +96,37 @@ leak check inside `materialize`, consent as a decision with its own approval cla
 A stored recipe's steps are applied to rows in one function, `engine/doctor/materialize.py::replay_recipe` (beside
 `materialize_plan`, which applies a case's plan). Every other path is a caller. `tests/unit/doctor/test_single_replay.py`
 fails when a module outside `engine/doctor` applies steps itself, or when `dataset_recipe` or `prescription_replay`
-gains a runner call.
+gains a runner call (imports are read with their aliases resolved); `test_single_materialisation.py` does the same for
+every module under `engine/doctor` (subpackages too) and `api/routes`.
 
-| Path | Before | After |
-|---|---|---|
-| Scoring a model's stored recipe (`POST /runs`, `replay_for_scoring`, readiness) | `run_saved_recipe` -> `run_replay` in `engine/agent/dataset_recipe.py` ran `run_recipe` / `run_guarded` itself | `run_replay` delegates to `materialize.replay_recipe` (same levels, limit, guards, acknowledged stops, leak check) |
-| Scheduled firing (`engine/scheduling/firing.py`, `prepare_dataset`) | same `run_saved_recipe` | same, now a thin caller |
-| Training from a file or built dataset with a prescription (`prescription_runs`, `api/routes/run_prescriptions.py`) | `prescription_replay.run_part_recipe` -> `run_saved_recipe` / `run_replay` | unchanged call chain; reaches `replay_recipe`. The prescription's own checks (intake, locale, currency, new yes/no spellings, step drift, outcome, contract) stay in `prescription_replay` and wrap the call; they are not steps |
-| `prescription_replay.replay_prescription` | orchestrates the parts, applied steps through `run_part_recipe` | same, no runner call of its own |
-| Next-month recheck (`recheck.py`) | `materialize_plan` | unchanged: it applies a case's plan, `replay_recipe` applies a stored recipe, both in `materialize.py` |
-| Onboarding replay (`engine/onboarding/replay.py`) | copies last month's column mapping onto the new file; reads no row | unchanged: not a recipe-step path (the build applies the mapping's transforms) |
-| `fingerprint.py`, `carry.py` | detect a known file; carry approved marks into a new case | unchanged: they apply no steps |
-| Evals, `api/routes/agent.py`, the Guided-setup agent loop, advisor, edits | try a step while it is written | unchanged: authoring trials, listed in the test |
+What a replay checks, for every caller, inside `replay_recipe`: a yes/no step's frozen spellings (`RECIPE_NEW_VALUE`),
+the number, date and currency settings the person approved (`check_approved_settings`: `LOCALE_CHANGED`,
+`CURRENCY_MIXED`, `CURRENCY_FOREIGN`), and the guards' stops (`RECIPE_GUARD_STOP`). A Data Doctor file recipe stores the
+approved locale profile and money basis beside its steps (`DataRecipe.locale_profile`, `money_basis`; the post-build
+recipe reads a built table and stores none). A recipe saved before they were kept loads and replays as it did, and its
+receipt says so (`RecipeReceipt.notes`). The scoring routes answer the `RecipeError` with `recipe_failure_report`; a
+firing records its code. The prescription's raw-file check (`prescription_replay.check_files`) calls the same
+`check_approved_settings`, jointly over a prescription's files, so there is one copy of the comparison.
 
-Left for later: the `TODO Step 4` entries of `test_single_materialisation.py` (modules that try steps on rows they
-prepare themselves), and moving the prescription's drift translation (`step_drift`) into `materialize`, which needs
-the scoring routes to accept a `PrescriptionError`.
+| Path | Callers | Applies steps? | How |
+|---|---|---|---|
+| `materialize.replay_recipe` | `run_replay`, `replay_steps` | yes: the one place | the steps (guarded when the recipe was approved under the guards), spelling and approved-settings checks |
+| `dataset_recipe.run_replay` / `run_saved_recipe` | `POST /runs` and readiness (`api/routes/agent_recipes.py`, `doctor/readiness.py`), `write_derived_upload` (training copy), `prepare_dataset` and scheduled firings (`engine/scheduling/firing.py`), `prescription_replay.run_part_recipe`, the Guided-setup preview helper in `api/routes/agent.py` | no: delegate | levels and limit from the recipe (`recipe_levels`) |
+| `materialize.replay_steps` | `split.split_file`, `time_settings.apply_time_settings` | no: builds an unguarded `DataRecipe` and calls `replay_recipe` | the caller names levels and limit |
+| `prescription_replay.replay_prescription` / `run_part_recipe` | training with a prescription (`prescription_runs`, `api/routes/run_prescriptions.py`), scoring a dataset | no: orchestrates the parts | intake check and the joint settings check wrap the calls; they are not steps |
+| `build_driver.replay_build` | `prescription_replay` (build part) | no: runs the approved build plan through the builder, not recipe steps | the plan's frozen stacks, keys and features |
+| `prescription._learn` | `prescription_from_case` (at approval) | yes, and differs on purpose | runs the recipe being approved, not a stored one: it keeps the guards' receipts and the plan's ledger, runs twice, never stops on a finding (the person is about to answer them), and learns the contract from the rows. `replay_recipe` returns only the rows and raises on a stop. Listed in `STILL_OWN_RUN` |
+| `engine.stages.prepare.replay` | `stages/score.py`, `scheduling/firing.py` (drift) | no: re-applies the training run's recorded `PrepareReport` (fill, clip, encode), not a recipe | measures nothing on the file |
+| `recheck.py` | next-month recheck | no: `materialize_plan` applies a case's plan | same module |
+| `engine/onboarding/replay.py` | onboarding replay | no: copies last month's column mapping to the new file; reads no row | the build applies the mapping's transforms |
+| `fingerprint.py`, `carry.py` | visit | no: detect a known file; carry approved marks into a new case | |
+| `api/routes/agent.py` helper | the Guided-setup agent's preview and recipe route | its own trials of a step while it is written; the stored recipe it previews goes through `run_saved_recipe` | listed in `AUTHORING` |
+| Evals, the Guided-setup agent loop, advisor, edits | authoring | try a step while it is written | listed in the tests |
+| `engine/pilot` | proof pack, readiness | no: reads runs and datasets already prepared | |
+
+Left for later: the other `TODO Step 4` entries of `test_single_materialisation.py` (`change_share`, `agent_unpivot`:
+modules that try a step on rows they prepare themselves), and moving the prescription's drift translation
+(`step_drift`) into `materialize`, which needs the scoring routes to accept a `PrescriptionError`.
 
 ## Order of work (each step ends with the Online Retail replay reaching further, and its tests)
 

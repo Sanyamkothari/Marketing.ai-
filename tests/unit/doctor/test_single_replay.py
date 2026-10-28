@@ -12,8 +12,9 @@ written, they are not a replay of an approved recipe). The list may only shrink.
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
+
+from tests.unit.doctor._ast_calls import function_calls, module_calls
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNNERS = frozenset({"run_recipe", "run_guarded", "run_sql"})
@@ -30,12 +31,8 @@ AUTHORING = {
 
 
 def _called(path: Path, names: frozenset[str]) -> bool:
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-        if isinstance(node, ast.Call):
-            func = node.func
-            if (func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")) in names:
-                return True
-    return False
+    """Whether the module calls one of `names`, as the original name when it was imported or assigned under another."""
+    return bool(module_calls(path) & names)
 
 
 def _outside_doctor() -> set[str]:
@@ -67,10 +64,21 @@ def test_the_list_of_authoring_trials_only_shrinks() -> None:
 def test_the_stored_recipe_replay_is_a_thin_caller_of_materialize() -> None:
     path = ROOT / "engine/agent/dataset_recipe.py"
     assert not _called(path, RUNNERS), "dataset_recipe applies steps itself"
-    assert "replay_recipe" in path.read_text(encoding="utf-8")
+    assert "replay_recipe" in function_calls(path, "run_replay"), "run_replay does not call replay_recipe"
     assert _called(ROOT / THE_ONE, frozenset({"run_recipe"})) and _called(
         ROOT / THE_ONE, frozenset({"run_guarded"})
     )
+
+
+def test_the_other_places_that_apply_an_approved_recipe_call_replay_recipe() -> None:
+    """A file split, a time setting's steps and the prescription's part recipes reach `replay_recipe`; none runs a
+    step itself (`_learn` is the one approval-time exception, listed in `test_single_materialisation`)."""
+    for rel, function in (
+        ("engine/doctor/split.py", "split_file"),
+        ("engine/doctor/time_settings.py", "apply_time_settings"),
+    ):
+        assert "replay_steps" in function_calls(ROOT / rel, function), rel
+    assert "replay_recipe" in function_calls(ROOT / THE_ONE, "replay_steps")
 
 
 def test_the_prescription_replay_applies_no_steps() -> None:
