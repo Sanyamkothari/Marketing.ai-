@@ -220,8 +220,16 @@ def unified_app(config_root: Path) -> Iterator[tuple[Any, Path]]:
         root = Path(work) / "configs"
         shutil.copytree(config_root, root)
         data_dir = Path(work) / "data"
-        with TestClient(create_app(config_root=root, data_dir=data_dir)) as client:
-            yield client, data_dir
+        app = create_app(config_root=root, data_dir=data_dir)
+        try:
+            with TestClient(app) as client:
+                yield client, data_dir
+        finally:
+            # a whole-file check still running in the background writes into the data folder: wait for it before
+            # the folder is removed
+            jobs = getattr(app.state, "jobs", None)
+            if jobs is not None:
+                jobs.shutdown(wait=True)
 
 
 def _failed(response: Any, what: str, outcome: Outcome) -> None:
