@@ -15,6 +15,7 @@ from pydantic import SecretStr
 
 from api.main import create_app
 from engine.settings import Settings
+from tests.ai_consent_support import consented
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.unit.ai_service.server import chat_reply, serve
 
@@ -114,6 +115,23 @@ def test_the_same_routes_work_once_the_client_has_said_yes(client: TestClient) -
         client.post(f"/uploads/{upload_id}/ask/messages", json={"text": "how many rows?"}).status_code == 200
     )
     assert _index(client).status_code == 202
+
+
+def test_an_upload_in_another_clients_case_needs_that_clients_consent(client: TestClient) -> None:
+    upload_id = _upload(client)
+    case = client.post("/cases", json={"upload_ids": [upload_id], "client_id": "acme"})
+    assert case.status_code in (200, 201), case.text
+    client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
+    text = {"text": "hello"}
+
+    data_dir = Path(client.app.state.data_dir)  # type: ignore[attr-defined]
+    consented(data_dir, "default")
+    _refused(client.post(f"/uploads/{upload_id}/agent-session/messages", json=text))
+    _refused(client.post(f"/uploads/{upload_id}/ask/messages", json=text))
+
+    consented(data_dir, "acme")
+    assert client.post(f"/uploads/{upload_id}/agent-session/messages", json=text).status_code == 200
+    assert client.post(f"/uploads/{upload_id}/ask/messages", json=text).status_code == 200
 
 
 def test_the_connection_test_carries_no_client_data_and_works_without_consent(client: TestClient) -> None:

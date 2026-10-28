@@ -321,9 +321,9 @@ class PlanView(StrictBase):
 
 
 def _meter(storage: Storage, settings: Settings, llm: Any, budget: Any, job_id: str) -> Any:
-    """The Product AI through a Meter with `llm` and `budget`, or None when no AI service answers or the client has
-    not allowed the AI to read its data."""
-    from engine.ai_consent import WORKSPACE_CLIENT, AiConsentRequiredError, ClientData
+    """The Product AI through a Meter with `llm` and `budget`, or None when no AI service answers. Raises
+    `AiConsentRequiredError` when one answers but the client has not allowed the AI to read its data."""
+    from engine.ai_consent import WORKSPACE_CLIENT, ClientData
     from engine.ai_service import AiNotConnectedError, resolve_client
     from engine.aws_connection import profile_in_force
     from engine.generative.budget import Meter
@@ -339,10 +339,7 @@ def _meter(storage: Storage, settings: Settings, llm: Any, budget: Any, job_id: 
         )
     except AiNotConnectedError:
         return None
-    try:
-        resolved.client.require()  # the planner's prompts carry the client's data
-    except AiConsentRequiredError:
-        return None  # without the client's yes the planner works from its rules, as with no AI service
+    resolved.client.require()  # the planner's prompts carry the client's data
     return Meter(resolved.client, job_id=job_id, llm=resolved.llm, budget=budget)
 
 
@@ -360,6 +357,7 @@ def get_planner_deps(
     rules-only summary. Tests replace this whole dependency (`app.dependency_overrides`)."""
     from api.deps import get_registry
     from engine.agentic.tools import default_registry
+    from engine.ai_consent import AiConsentRequiredError
     from engine.ai_service import yaml_bedrock
     from engine.config import BudgetConfig, ConfigError, LlmConfig, load_use_case
 
@@ -370,15 +368,26 @@ def get_planner_deps(
             generative = load_use_case(use_case_id, root).generative
         except ConfigError:
             return None
-        return _meter(storage, settings, generative.llm, generative.budget, job_id)
+        try:
+            return _meter(storage, settings, generative.llm, generative.budget, job_id)
+        except AiConsentRequiredError:
+            return None  # without the client's yes the narrative is the rules-only summary
 
-    words = _meter(storage, settings, yaml_bedrock(root) or LlmConfig(), BudgetConfig(), job_id)
+    consent_missing = False
+    try:
+        words = _meter(storage, settings, yaml_bedrock(root) or LlmConfig(), BudgetConfig(), job_id)
+    except AiConsentRequiredError:
+        words, consent_missing = None, True  # cards and the form still plan from the rules; words are refused
     try:
         model_registry: Any = get_registry(request)
     except Exception:  # no model registry on this deployment: no challenger card can be drawn
         model_registry = None
     return PlannerDeps(
-        registry=default_registry(), meter=words, model_registry=model_registry, meter_for=meter_for
+        registry=default_registry(),
+        meter=words,
+        model_registry=model_registry,
+        meter_for=meter_for,
+        consent_missing=consent_missing,
     )
 
 

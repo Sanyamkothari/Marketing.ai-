@@ -173,6 +173,24 @@ def test_words_need_an_ai_service_and_a_card_does_not(planner_world: PlannerWorl
         assert narrative["source"] == "rules" and narrative["failures"] == []
 
 
+def test_words_without_the_clients_consent_are_refused_for_consent_and_a_card_still_plans(
+    planner_world: PlannerWorld,
+) -> None:
+    pw = planner_world
+    settings = Settings(
+        connections_key=SecretStr("F" * 40), allow_fake_ai=True
+    )  # an AI answers; no yes was given
+    app = create_app(config_root=pw.world.config_root, data_dir=pw.world.data_dir, settings=settings)
+    with TestClient(app) as client:
+        words = client.post("/agentic/plans", json={"goal_text": "Win back lapsed customers by sms."})
+        assert (
+            words.status_code == 409 and words.json()["detail"]["code"] == "AI_CONSENT_REQUIRED"
+        ), words.text
+        card = client.post("/agentic/plans", json=_card(pw))
+        assert card.status_code == 201, card.text
+        assert card.json()["proposal"]["narrative"]["source"] == "rules"
+
+
 def _with_model(model: Any) -> Any:
     """`get_planner_deps` with `model` as the Product AI (FastAPI's dependency override: no hook in the API)."""
 

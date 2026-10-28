@@ -32,7 +32,14 @@ from typing import TYPE_CHECKING, Final
 from pydantic import AwareDatetime, Field
 
 from engine.config import StrictBase
-from engine.doctor.case import CASE_PREFIX, CLIENT_ID_PATTERN, DEFAULT_CLIENT_ID
+from engine.doctor.case import (
+    CASE_FILENAME,
+    CASE_PREFIX,
+    CLIENT_ID_PATTERN,
+    DEFAULT_CLIENT_ID,
+    CaseError,
+    CaseStore,
+)
 from engine.llm import LLMError
 from engine.storage import Storage, StorageError
 
@@ -47,9 +54,11 @@ __all__ = [
     "AiConsentRequiredError",
     "AiConsentStore",
     "ClientData",
+    "ClientsData",
     "ConsentGatedClient",
     "ConsentScope",
     "NoClientData",
+    "client_scope",
     "consent_key",
 ]
 
@@ -109,6 +118,18 @@ class ClientData:
 
 
 @dataclass(frozen=True)
+class ClientsData:
+    """The call carries data that belongs to several clients (an upload that sits in more than one client's case):
+    every one of them must have consented."""
+
+    client_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.client_ids:
+            raise ValueError("ClientsData needs at least one client")
+
+
+@dataclass(frozen=True)
 class NoClientData:
     """The call carries no client data, and `purpose` says why in a sentence (a fixed greeting, a model list)."""
 
@@ -119,7 +140,7 @@ class NoClientData:
             raise ValueError("NoClientData needs the reason the call carries no client data")
 
 
-ConsentScope = ClientData | NoClientData
+ConsentScope = ClientData | ClientsData | NoClientData
 
 
 class AiConsentRequiredError(LLMError):
@@ -133,6 +154,36 @@ class AiConsentRequiredError(LLMError):
         super().__init__(AI_CONSENT_REQUIRED, AI_CONSENT_REQUIRED_MESSAGE)
 
 
+def client_scope(
+    storage: Storage, *, client_id: str | None = None, upload_ids: Sequence[str] = ()
+) -> ClientData | ClientsData:
+    """Whose data a call carries, read from the data itself.
+
+    A named `client_id` (a run on a built dataset) is that client. Otherwise the clients are those of every case
+    that holds one of `upload_ids`; an upload no case names belongs to the workspace's `default` client.
+    """
+    if client_id is not None:
+        return ClientData(client_id)
+    wanted = set(upload_ids)
+    found: set[str] = set()
+    if wanted:
+        cases = CaseStore(storage)
+        for key in storage.list_keys(CASE_PREFIX):
+            parts = key.split("/")
+            if len(parts) != 4 or parts[3] != CASE_FILENAME:
+                continue
+            try:
+                case = cases.get(parts[1], parts[2])
+            except CaseError:
+                continue
+            if wanted.intersection(case.upload_ids()):
+                found.add(case.client_id)
+    if not found:
+        return ClientData(WORKSPACE_CLIENT)
+    ordered = tuple(sorted(found))
+    return ClientData(ordered[0]) if len(ordered) == 1 else ClientsData(ordered)
+
+
 class ConsentGatedClient:
     """A provider client that refuses every call carrying a client's data until that client has consented.
 
@@ -142,7 +193,7 @@ class ConsentGatedClient:
     """
 
     def __init__(self, inner: LLMClient, *, scope: ConsentScope, storage: Storage | None = None) -> None:
-        if isinstance(scope, ClientData) and storage is None:
+        if isinstance(scope, ClientData | ClientsData) and storage is None:
             raise ValueError("a call that carries a client's data needs the store that holds the consent")
         self._inner = inner
         self._scope = scope
@@ -159,9 +210,10 @@ class ConsentGatedClient:
 
     def require(self) -> None:
         """Raise :class:`AiConsentRequiredError` unless the call's client has consented (or it carries none)."""
-        if isinstance(self._scope, ClientData):
+        if isinstance(self._scope, ClientData | ClientsData):
             assert self._store is not None
-            if self._store.get(self._scope.client_id) is None:
+            ids = (self._scope.client_id,) if isinstance(self._scope, ClientData) else self._scope.client_ids
+            if any(self._store.get(client_id) is None for client_id in ids):
                 raise AiConsentRequiredError
 
     def complete(

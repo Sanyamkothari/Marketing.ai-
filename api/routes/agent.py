@@ -77,7 +77,7 @@ from engine.agent.session import (
     with_summary,
 )
 from engine.agent.tools import AgentContext, AgentToolError
-from engine.ai_consent import WORKSPACE_CLIENT, ClientData
+from engine.ai_consent import client_scope
 from engine.ai_service import effective_service
 from engine.config import PrimaryKey, RunMode, StrictBase, UseCaseConfig, resolve_config, sole_key
 from engine.contracts import FeatureSchema, ModelVersion, ValidationReport
@@ -885,7 +885,7 @@ def message_agent_session(
             slot="product",
             storage=storage,
             settings=get_settings(request),
-            consent=ClientData(WORKSPACE_CLIENT),
+            consent=client_scope(storage, upload_ids=(upload_id,)),
         )
         meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
         guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
@@ -944,7 +944,7 @@ def assist_agent_session(
             slot="product",
             storage=storage,
             settings=get_settings(request),
-            consent=ClientData(WORKSPACE_CLIENT),
+            consent=client_scope(storage, upload_ids=(upload_id,)),
         )
         meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
         guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
@@ -1579,7 +1579,7 @@ def ask_message(
             slot="product",
             storage=storage,
             settings=get_settings(request),
-            consent=ClientData(WORKSPACE_CLIENT),
+            consent=client_scope(storage, upload_ids=(upload_id,)),
         )
         meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
         guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)

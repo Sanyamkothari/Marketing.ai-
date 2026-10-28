@@ -85,6 +85,7 @@ from engine.agentic.policy import (
     evaluate,
 )
 from engine.agentic.registry import EvidenceLabel, ToolContext
+from engine.ai_consent import AI_CONSENT_REQUIRED, AI_CONSENT_REQUIRED_MESSAGE
 from engine.config import StrictBase
 from engine.measurement.plan import TestPlanInput
 
@@ -425,6 +426,9 @@ class PlannerDeps:
     service is connected, and words are refused."""
     model_registry: Any = None
     """The model registry for the challenger card; None draws no challenger card."""
+    consent_missing: bool = False
+    """An AI service is connected but the client has not allowed it to read its data: words are refused with
+    `AI_CONSENT_REQUIRED` (not `AI_NOT_CONNECTED`); cards and the form still plan from the rules."""
     meter_for: Callable[[str], Meter | None] | None = None
     """The Product AI metered under one use case's `generative.llm` and `generative.budget`, for the narrative
     once FRAME knows the use case; None uses `meter`. Returning None writes the rules-only narrative."""
@@ -445,6 +449,8 @@ def start_plan(request: PlanRequest, ctx: ToolContext, deps: PlannerDeps) -> Pla
 
     require_enabled(ctx.config_root)
     if request.goal_text is not None and deps.meter is None:
+        if deps.consent_missing:
+            raise AgenticError(AI_CONSENT_REQUIRED, AI_CONSENT_REQUIRED_MESSAGE, status=409)
         raise AgenticError(
             "AI_NOT_CONNECTED",
             "Typing a goal in words needs an AI service. Connect one under Connections, or use the form or a "
