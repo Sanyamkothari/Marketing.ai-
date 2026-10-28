@@ -135,9 +135,12 @@ class ProposeCombineRowsArgs(_Args):
 
 
 class ProposeUnpivotArgs(_Args):
-    """`propose_unpivot` (`engine.doctor.agent_unpivot`): code finds the period columns and builds the step."""
+    """`propose_unpivot` (`engine.doctor.agent_unpivot`): code lists the period-column groups (in its answer) and
+    checks the group and year the model proposes; the person answers the question it asks."""
 
     reason: str | None = Field(default=None)
+    columns: list[str] | None = Field(default=None, description="a group from its answer")
+    year: int | None = Field(default=None, description="undated months; evidence in reason")
 
 
 class ReadGuideArgs(_Args):
@@ -264,8 +267,7 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
     ActionSpec(
         "propose_unpivot",
         ProposeUnpivotArgs,
-        "wide period columns (spend_jan..spend_dec) as one row per period; the person is asked, and gives a "
-        "missing year.",
+        "period columns (spend_jan..) as rows.",
         frozenset({"review"}),
         needs_file=True,
     ),

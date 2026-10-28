@@ -562,12 +562,18 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             options=(
                 OptionSpec("{choice}", repeat=True),
                 OptionSpec(
+                    "Another year: I will type it",
+                    effect="The year you type is written into the step.",
+                    value_kind="number",
+                ),
+                OptionSpec(
                     "None of these: keep them as columns", effect="Each {kind} stays a separate column."
                 ),
             ),
             blocking=True,
             roles=(CRM_ADMIN,),
             safe_default="keep the columns as they are",
+            recommend_from_data=True,
             from_code=True,
         ),
     )

@@ -3356,6 +3356,13 @@ def answer(
         typed = _typed_value(chosen.value_kind, value)
         effects = {e.option_id: e for e in (case.visit or CaseVisit()).offers.get(question_id, ())}
         effect = effects.get(option_id)
+        if typed is not None and effect is not None and _typed_unpivot_year(effect):
+            from engine.doctor.agent_unpivot import typed_year_effect
+
+            try:
+                effect = typed_year_effect(effect, typed)  # the year the person typed, written into the step
+            except ValueError as exc:
+                raise CaseError("VISIT_ANSWER_VALUE_INVALID", str(exc)) from exc
         replaced = f"{question_id}:{question.answer}" if question.answer is not None else None
         items = [item for item in case.items if item.item_id != replaced]
         # The change of an earlier answer to this question (it was asked again: the option chosen was gone) is left out.
@@ -4074,6 +4081,12 @@ def chat(
         )
 
     return _person_step(run, client_id, case_id, expected_version, op_id, build)
+
+
+def _typed_unpivot_year(effect: OptionEffect) -> bool:
+    """Whether a typed answer's change is an unpivot that takes the year (Q26's "Another year")."""
+    step = effect.payload.get("step")
+    return isinstance(step, dict) and step.get("kind") == "unpivot" and "year" in (step.get("params") or {})
 
 
 def _typed_value(kind: str | None, value: str | None) -> str | None:

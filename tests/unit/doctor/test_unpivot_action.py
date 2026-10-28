@@ -132,3 +132,82 @@ def test_the_given_year_dates_the_months_in_the_rows() -> None:
     assert list(rows["month"].dt.strftime("%Y-%m")) == ["2025-01", "2025-02", "2025-03"] * 2
     with pytest.raises(UnpivotError):
         UnpivotSpec.from_params("cid", {**params, "year": 25})
+
+
+def test_the_ai_proposes_the_group_and_a_year_with_its_evidence(storage: LocalStorage) -> None:
+    world = _wide(vs.world())
+    picked = [f"spend_{m}" for m in MONTHS[:6]]
+    port = _review(_guard(Script([_unpivot(columns=picked, year=2019, reason="the file name says 2019")])))
+    case = _answer_key(storage, world, _opened(storage, world, port), port)
+    q = _asked(case, "Q26_UNPIVOT_YEAR")
+    labels = [o.label for o in q.options]
+    assert labels[0] == "They cover 2019" and q.recommended == q.options[0].option_id
+    typed = next(o for o in q.options if o.value_kind == "number")
+    deps = _deps(storage, world, port)
+    case = visit.answer(
+        vs.CLIENT, case.case_id, q.question_id, typed.option_id, deps,
+        expected_version=case.version, actor=vs.ANALYST, value="2017",
+    )  # fmt: skip
+    (item,) = [i for i in case.items if i.item_id.startswith(q.question_id)]
+    step = item.payload["step"]
+    assert isinstance(step, dict) and step["params"]["year"] == 2017 and "2017" in item.title
+    assert [v["column"] for v in step["params"]["value_columns"]] == picked
+
+
+def test_a_typed_year_out_of_range_is_refused(storage: LocalStorage) -> None:
+    from engine.doctor.case import CaseError
+
+    world = _wide(vs.world())
+    port = _review(_guard(Script([_unpivot()])))
+    case = _answer_key(storage, world, _opened(storage, world, port), port)
+    q = _asked(case, "Q26_UNPIVOT_YEAR")
+    typed = next(o for o in q.options if o.value_kind == "number")
+    with pytest.raises(CaseError) as refused:
+        visit.answer(
+            vs.CLIENT, case.case_id, q.question_id, typed.option_id, _deps(storage, world, port),
+            expected_version=case.version, actor=vs.ANALYST, value="1066",
+        )  # fmt: skip
+    assert refused.value.code == "VISIT_ANSWER_VALUE_INVALID"
+
+
+def test_a_group_that_is_not_one_is_refused_with_the_candidates(storage: LocalStorage) -> None:
+    world = _wide(vs.world())
+    port = _review(_guard(Script([_unpivot(columns=["spend_jan", "age"])])))
+    case = _answer_key(storage, world, _opened(storage, world, port), port)
+    assert not [q for q in case.questions if q.code == "Q26_UNPIVOT_YEAR"]
+
+
+def test_personal_columns_stay_on_every_row() -> None:
+    from engine.agent.unpivot import wide_column_groups
+
+    frame = pd.DataFrame(
+        {
+            "cid": ["a", "b"],
+            "email": ["a@example.com", "b@example.com"],
+            **{f"spend_{m}": [1.0, 2.0] for m in MONTHS[:3]},
+        }
+    )
+    (group,) = wide_column_groups(list(frame.columns), skip={"email", "cid"})
+    params = group.params(
+        key="cid", id_columns=["cid", "email"], outcome=None, taken=frame.columns, year=2025
+    )
+    rows = unpivot(frame, key="cid", params=params, max_failure_pct=1.0).frame
+    assert "email" in rows.columns and len(rows) == 6
+
+
+def test_a_financial_year_sheet_dates_the_months_after_the_turn_the_year_after() -> None:
+    from engine.doctor.agent_unpivot import first_month_of
+
+    fiscal = MONTHS[3:] + MONTHS[:3]  # apr .. mar
+    frame = pd.DataFrame({"cid": ["a"], **{f"spend_{m}": [1.0] for m in fiscal}})
+    group = find_wide_columns(list(frame.columns))
+    assert group is not None and first_month_of(group, list(frame.columns)) == 4
+    params = group.params(
+        key="cid", id_columns=["cid"], outcome=None, taken=frame.columns, year=2024, first_month=4
+    )
+    rows = unpivot(frame, key="cid", params=params, max_failure_pct=1.0).frame
+    dated = sorted(rows["month"].dt.strftime("%Y-%m"))
+    assert dated[0] == "2024-04" and dated[-1] == "2025-03" and "2024-01" not in dated
+    calendar = pd.DataFrame({"cid": ["a"], **{f"spend_{m}": [1.0] for m in MONTHS}})
+    plain = find_wide_columns(list(calendar.columns))
+    assert plain is not None and first_month_of(plain, list(calendar.columns)) is None

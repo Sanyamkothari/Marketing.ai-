@@ -70,6 +70,7 @@ __all__ = [
     "find_wide_columns",
     "parse_period",
     "unpivot",
+    "wide_column_groups",
 ]
 
 MAX_ID_COLUMNS: Final[int] = 200
@@ -84,7 +85,7 @@ NAME_PATTERNS: Final[frozenset[str]] = frozenset(
 """The only ways a column name may be read as a measure and a period."""
 
 _PARAMS: Final[frozenset[str]] = frozenset(
-    {"id_columns", "value_columns", "name_pattern", "period_column", "outcome", "year"}
+    {"id_columns", "value_columns", "name_pattern", "period_column", "outcome", "year", "first_month"}
 )
 _NAME: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_ .\-]{0,127}$")
 """A measure or period column name: starts with a letter, at most 128 characters."""
@@ -181,11 +182,13 @@ class Period:
         return pd.Timestamp(year=self.year, month=first_month, day=1)
 
 
-def parse_period(token: str, year: int | None = None) -> Period | None:
+def parse_period(token: str, year: int | None = None, first_month: int | None = None) -> Period | None:
     """`token` read by the grammar in the module docstring, or None when it is not a period.
 
     `year` is the year the person gave for months or quarters that name none (`Jan`, `Q1`): they are then dated
-    like `2024_Jan`. It is never applied to a token that names its own year.
+    like `2024_Jan`. It is never applied to a token that names its own year. `first_month` is the month a sheet
+    that runs across the turn of the year starts with (a financial year, `apr` to `mar`): `year` is the year of that
+    month, and a month before it in the calendar falls in the next year.
     """
     year_given = year
     for kind, dated, pattern in _TOKENS:
@@ -203,7 +206,10 @@ def parse_period(token: str, year: int | None = None) -> Period | None:
         else:
             index = 1
         period = Period(token=token, kind=kind, year=year, index=index)
-        return replace(period, year=year_given) if period.year is None and year_given else period
+        if period.year is None and year_given:
+            wrapped = first_month is not None and kind == "month" and index < first_month
+            return replace(period, year=year_given + (1 if wrapped else 0))
+        return period
     return None
 
 
@@ -239,6 +245,8 @@ class UnpivotSpec:
     outcome: str | None
     year: int | None = None
     """The year the person gave for months or quarters whose names have none; `None` when the names carry it."""
+    first_month: int | None = None
+    """With `year`, for months: the month the sheet starts with when it runs across the turn of the year."""
 
     @property
     def measures(self) -> tuple[str, ...]:
@@ -276,7 +284,7 @@ class UnpivotSpec:
             parts = _split(name, self.name_pattern)
             if parts is None or parts[0] not in measures:
                 continue
-            period = parse_period(parts[1], self.year)
+            period = parse_period(parts[1], self.year, self.first_month)
             if period is not None and (period.kind, period.dated) == (kind.kind, kind.dated):
                 found.append(name)
         return tuple(found)
@@ -319,6 +327,14 @@ class UnpivotSpec:
             isinstance(year, int) and not isinstance(year, bool) and MIN_YEAR <= year <= MAX_YEAR
         ):
             raise refuse("the year is a four-digit year such as 2024, or null.")
+        first_month = params.get("first_month")
+        if first_month is not None and not (
+            year is not None
+            and isinstance(first_month, int)
+            and not isinstance(first_month, bool)
+            and 1 <= first_month <= 12
+        ):
+            raise refuse("the first month (1 to 12) is given only with the year the sheet starts in.")
         raw = params.get("value_columns")
         if not (isinstance(raw, list) and 2 <= len(raw) <= MAX_VALUE_COLUMNS):
             raise refuse(f"list 2 to {MAX_VALUE_COLUMNS} columns to turn into rows.")
@@ -337,7 +353,9 @@ class UnpivotSpec:
             if year is not None:
                 if period.dated:
                     raise refuse(f"'{column}' already names its year, so no year is given for the step.")
-                period = parse_period(token, year) or period
+                if first_month is not None and period.kind != "month":
+                    raise refuse("a first month is given only for month columns.")
+                period = parse_period(token, year, first_month) or period
             if pattern.replace("{measure}", measure).replace("{period}", token) != column:
                 raise refuse(f"'{column}' is not '{measure}' and '{token}' joined by the name pattern.")
             if column in ids or column == outcome:
@@ -361,6 +379,7 @@ class UnpivotSpec:
             period_column=period_column,
             outcome=outcome,
             year=year,
+            first_month=first_month,
         )
         if len({p.order for p in spec.periods}) < 2:
             raise refuse("the columns must cover at least two periods; one period is not a wide sheet.")
@@ -463,6 +482,7 @@ class WideGroup:
         outcome: str | None,
         taken: Iterable[str],
         year: int | None = None,
+        first_month: int | None = None,
     ) -> dict[str, Any]:
         """The `unpivot` parameters for this group; the period column is named after the kind of period."""
         used = {name.casefold() for name in (*taken, *self.measures)}
@@ -478,10 +498,24 @@ class WideGroup:
             "period_column": period_column,
             "outcome": outcome,
             **({"year": year} if year is not None else {}),
+            **({"first_month": first_month} if year is not None and first_month is not None else {}),
         }
+
+    def only(self, columns: Iterable[str]) -> WideGroup | None:
+        """This group cut to `columns` (a subset of its own), or None when it is not one: the AI's choice of group."""
+        wanted = set(columns)
+        if not wanted or not wanted <= set(self.columns):
+            return None
+        return replace(self, value_columns=tuple(v for v in self.value_columns if v[0] in wanted))
 
 
 def find_wide_columns(columns: Sequence[str], *, skip: Iterable[str] = ()) -> WideGroup | None:
+    """The largest candidate of :func:`wide_column_groups`, or None."""
+    groups = wide_column_groups(columns, skip=skip)
+    return groups[0] if groups else None
+
+
+def wide_column_groups(columns: Sequence[str], *, skip: Iterable[str] = ()) -> tuple[WideGroup, ...]:
     """The largest group of columns that repeat a measure over periods, or None.
 
     A measure counts only when it appears for at least two different periods (one month's column is
@@ -509,7 +543,7 @@ def find_wide_columns(columns: Sequence[str], *, skip: Iterable[str] = ()) -> Wi
             pattern = f"{{period}}{sep}{{measure}}" if first else f"{{measure}}{sep}{{period}}"
             per_measure = groups.setdefault((pattern, period.kind, period.dated), {}).setdefault(measure, {})
             per_measure.setdefault(period.order, (name, token))
-    best: WideGroup | None = None
+    found: list[WideGroup] = []
     for (pattern, kind, dated), measures in sorted(groups.items()):
         chosen = [
             (column, measure, token)
@@ -519,7 +553,6 @@ def find_wide_columns(columns: Sequence[str], *, skip: Iterable[str] = ()) -> Wi
         ]
         if not chosen:
             continue
-        group = WideGroup(name_pattern=pattern, kind=kind, dated=dated, value_columns=tuple(chosen))
-        if best is None or len(group.value_columns) > len(best.value_columns):
-            best = group
-    return best
+        found.append(WideGroup(name_pattern=pattern, kind=kind, dated=dated, value_columns=tuple(chosen)))
+    # the most columns first; among equals the first pattern in the fixed order (a stable sort keeps it)
+    return tuple(sorted(found, key=lambda g: -len(g.value_columns)))
