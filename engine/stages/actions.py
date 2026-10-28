@@ -17,6 +17,11 @@ the one below it.
   no honest band for a row the model did not score, and the export must not invent one
   (plan section 13.3). The message carries counts only, never a value (plan section 13.7).
 
+* For a **regression** use case the score is an amount (the predicted spend), so a probability-style edge
+  such as 0.80 would put nearly every customer in the top band. There `min_score` is a share of the
+  scored rows instead: a row is in the first band whose `min_score` is at most the share of rows scoring
+  below it (`High` at 0.80 is the top fifth by predicted amount). Rows with the same score share a band.
+
 **Suppression precedence.** One row can break several rules at once, and the contract records one
 reason per row (`ScoreRow.suppressed_reason`, `SuppressionCount.reason`), so the rules are applied
 in a fixed order and the first match wins (DEC-A2):
@@ -81,6 +86,7 @@ import math
 import time
 from typing import TYPE_CHECKING, Final
 
+from engine.config import ProblemType
 from engine.utils.ids import seed_from
 from engine.utils.logging import get_logger, log_stage
 
@@ -161,7 +167,8 @@ def assign_bands(scores: pd.Series, config: UseCaseConfig) -> pd.Series:
 
     Returns an object-dtype series named `band`, aligned to `scores.index`. Boundaries are exact
     (`score >= min_score`), scores outside `0..1` are clamped into the nearest band, and a missing
-    or non-numeric score raises `ValueError` - see the module docstring.
+    or non-numeric score raises `ValueError` - see the module docstring. A regression use case bands
+    on the rank of the amount instead (see the module docstring).
     """
     import pandas as pd
 
@@ -173,6 +180,8 @@ def assign_bands(scores: pd.Series, config: UseCaseConfig) -> pd.Series:
             f"banded. Every scored row needs a value in {config.actions.score_field!r}."
         )
     bands = config.actions.bands
+    if config.problem_type is ProblemType.REGRESSION and len(numeric):
+        numeric = (numeric.rank(method="min") - 1) / len(numeric)  # the share of rows scoring below
     names = pd.Series(bands[-1].name, index=scores.index, dtype="object", name=BAND_COLUMN)
     for band in reversed(bands):  # ascending min_score, so the highest matching band wins
         names[numeric >= band.min_score] = band.name

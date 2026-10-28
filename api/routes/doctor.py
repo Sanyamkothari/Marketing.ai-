@@ -115,9 +115,10 @@ register(
 
 def offers(root_path: Path) -> tuple[Offer, ...]:
     """The trainable use cases the files are checked against: Home's, in Home's order, then every other
-    shipped one that learns from a yes/no column (not the uplift-only ones). None is left out: the diagnosis ranks
-    them best fit first with the reason, and one that repeats a Home goal (its config's `duplicates`) is kept and says
-    which goal it also fits (`Offer.also_fits`)."""
+    shipped one that learns from a yes/no column. A campaign test (uplift) is listed here too: `engine.doctor.diagnose`
+    drops it unless a file has its treatment column. None is left out: the diagnosis ranks them best fit first with the
+    reason, and one that repeats a Home goal (its config's `duplicates`) is kept and says which goal it also fits
+    (`Offer.also_fits`)."""
     industries = list_industries(root_path)
     chosen = DEFAULT_INDUSTRY if DEFAULT_INDUSTRY in industries else (industries[0] if industries else None)
     refs = (
@@ -137,7 +138,7 @@ def offers(root_path: Path) -> tuple[Offer, ...]:
             config = use_case_config(use_case_id, root_path)
         except ConfigError:
             continue
-        if config.trainable_in_phase_1 and config.target.column and config.uplift.treatment_column is None:
+        if config.trainable_in_phase_1 and config.target.column:
             seen.add(use_case_id)
             if stage:
                 home_names[config.id] = config.name

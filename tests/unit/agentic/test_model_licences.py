@@ -300,6 +300,7 @@ RESOLVED_BEFORE_M143 = {
     "ai-onboarding-assistant": "bbbd16c2a10eedcf53e4c0d64f52dca16c43eae65df5abde60abcf1186011e1c",
     "bank-term-deposit": "bbbd16c2a10eedcf53e4c0d64f52dca16c43eae65df5abde60abcf1186011e1c",
     "card-default-propensity": "bbbd16c2a10eedcf53e4c0d64f52dca16c43eae65df5abde60abcf1186011e1c",
+    "customer-spend": "2c3261edbd903da4c9159b8ecb1db5f1feefcec4cd69ee1388d77caf46d09fa6",
     "fault-prediction": "cc907b072bf9260702c7a91e9ab5000dea3ea570d9e2165b55203471daf4cc2e",
     "hillstrom-email": "bbbd16c2a10eedcf53e4c0d64f52dca16c43eae65df5abde60abcf1186011e1c",
     "insurance-cross-sell": "bbbd16c2a10eedcf53e4c0d64f52dca16c43eae65df5abde60abcf1186011e1c",

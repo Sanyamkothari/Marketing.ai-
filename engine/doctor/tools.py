@@ -1006,6 +1006,10 @@ def register_all(registry: DataToolRegistry) -> None:
     from engine.doctor.tools_features import register_feature_tools
 
     register_feature_tools(registry)
+    # The spend in the days after the snapshot (#88): an amount as the outcome, for the rules.
+    from engine.doctor.amount_outcome import register_amount_tools
+
+    register_amount_tools(registry)
     # The agent looks at its own work (#85): the first rows before and after the plan, the AI only.
     from engine.doctor.tools_preview import register_preview_tools
 

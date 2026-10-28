@@ -16,8 +16,10 @@ from engine.config import StrictBase
 from engine.doctor.first_look import FirstLook
 from engine.doctor.outcomes import OutcomeOffer
 from engine.doctor.sufficiency import NextSteps
+from engine.doctor.uplift_scope import TreatmentBalance
 
 __all__ = [
+    "AmountOutcomeOffer",
     "ColumnDrift",
     "ColumnRename",
     "Diagnosis",
@@ -32,7 +34,9 @@ __all__ = [
 ]
 
 ReadinessStatus = Literal["ready", "check", "missing", "too_small"]
-ReadinessReason = Literal["NO_OUTCOME", "GUESSED_COLUMN", "TWO_COLUMNS", "NOT_ENOUGH", "STOPPED"]
+ReadinessReason = Literal[
+    "NO_OUTCOME", "GUESSED_COLUMN", "TWO_COLUMNS", "NOT_ENOUGH", "STOPPED", "NOT_RANDOM"
+]
 
 
 class FileDiagnosis(StrictBase):
@@ -66,6 +70,20 @@ class FileDiagnosis(StrictBase):
     )
 
 
+class AmountOutcomeOffer(StrictBase):
+    """An amount goal's outcome an order file can define: the arguments of `propose_amount_outcome`, for the
+    person to agree to. Names columns and numbers only; nothing is built until the person approves the plan.
+    """
+
+    upload_id: str = Field(description="The file of orders.")
+    entity_key: str = Field(description="Its customer ID column.")
+    time_column: str = Field(description="Its order date column.")
+    amount_column: str = Field(description="Its amount column.")
+    window_days: int = Field(description="Days after the snapshot the spend is added up over.")
+    outcome_name: str = Field(description="The outcome column the goal learns from.")
+    sentence: str = Field(description="One plain sentence saying what would be built.")
+
+
 class UseCaseReadiness(StrictBase):
     """Whether the files can power one use case, and the best file to start it from."""
 
@@ -93,6 +111,15 @@ class UseCaseReadiness(StrictBase):
         description="The outcome an event file can define, as a sentence to agree; null when none.",
     )
 
+    # An added, defaulted field: for a `missing` amount goal (spend) whose order file can define the outcome.
+    amount_outcome: AmountOutcomeOffer | None = Field(
+        default=None,
+        description=(
+            "For a missing amount goal: the spend in the days after the snapshot that an order file can define "
+            "(`propose_amount_outcome`), to agree to; null otherwise."
+        ),
+    )
+
     # Plan L M158 (DEC-1580): an added, defaulted field - what to do when the data is not enough.
     next_steps: NextSteps | None = Field(
         default=None,
@@ -108,7 +135,8 @@ class UseCaseReadiness(StrictBase):
         description=(
             "Why it is not plainly ready: `NO_OUTCOME` (no file names the outcome), `GUESSED_COLUMN` (one "
             "column might be it: a question), `TWO_COLUMNS` (several might be it: a question), "
-            "`NOT_ENOUGH` (too little history), `STOPPED` (Guided setup cannot use the file). Null otherwise."
+            "`NOT_ENOUGH` (too little history), `STOPPED` (Guided setup cannot use the file), `NOT_RANDOM` (a "
+            "campaign test with no control group or groups that already differed). Null otherwise."
         ),
     )
     customers: int | None = Field(default=None, description="Rows (customers) in the file to start from.")
@@ -128,6 +156,15 @@ class UseCaseReadiness(StrictBase):
             "person sees that the same files also fit that goal. Null for Home's own goals."
         ),
         exclude_if=lambda value: value is None,
+    )
+
+    # An added, defaulted field: for a campaign test (an uplift goal), the groups and how they compare.
+    balance: TreatmentBalance | None = Field(
+        default=None,
+        description=(
+            "For an uplift goal: the treatment groups, the control group and whether the groups look the same "
+            "before the campaign (`engine.doctor.uplift_scope`). Null for every other goal."
+        ),
     )
 
     # DEC-1596: an added, defaulted field - what the file already says about the outcome, with no AI.

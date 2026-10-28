@@ -141,9 +141,10 @@ FORBIDDEN_PREFIXES: Final[tuple[str, ...]] = (
 Caller = Literal["rules", "ai", "person"]
 CALLERS: Final[frozenset[str]] = frozenset({"rules", "ai", "person"})
 _MIN_PROPOSE_ROLE: Final[frozenset[Role]] = frozenset({Role.ANALYST, Role.APPROVER, Role.ADMIN})
-_LAST_ROW: Final[int] = 87
+_LAST_ROW: Final[int] = 88
 """The catalogue's last row (`engine.doctor.catalogue`): #82 and #83 are M240's tools, given rows in M236;
-#84 is `propose_sql_step`, #85 `preview_working_copy`, #86 `propose_features`."""
+#84 is `propose_sql_step`, #85 `preview_working_copy`, #86 `propose_features`, #87 `propose_combine_rows`,
+#88 `propose_amount_outcome`."""
 _LETTERS: Final[dict[int, int]] = str.maketrans("0123456789abcdef", "abcdefghijklmnop")
 
 

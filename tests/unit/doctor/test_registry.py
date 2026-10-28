@@ -33,6 +33,7 @@ from engine.agent.session import start_session
 from engine.agent.tools import TOOLS, AgentContext, ToolKind, call_tool
 from engine.doctor import registry as registry_module
 from engine.doctor import tools as tools_module
+from engine.doctor.amount_outcome import M_AMOUNT_TOOLS
 from engine.doctor.catalogue import CATALOGUE, row
 from engine.doctor.diagnose import LoadedFile, Offer, diagnose_file, readiness
 from engine.doctor.registry import (
@@ -133,6 +134,7 @@ def test_the_registry_holds_the_22_existing_tools_and_the_first_wrappers() -> No
         *M244_TOOLS,  # Plan O M244 (DEC-1814): the time-settings tools
         *M_SQL_TOOLS,  # the sandboxed SQL step
         *M_FEATURE_TOOLS,  # behaviour features
+        *M_AMOUNT_TOOLS,  # the spend in the days after the snapshot
         *M_PREVIEW_TOOLS,  # the agent looks at its own work
         *M_RESHAPE_TOOLS,  # Guided setup's combine question
     }
@@ -162,6 +164,7 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
             *M244_TOOLS,
             *M_SQL_TOOLS,
             *M_FEATURE_TOOLS,
+            *M_AMOUNT_TOOLS,
             *M_PREVIEW_TOOLS,
             *M_RESHAPE_TOOLS,  # Guided setup's combine question
         }
@@ -174,17 +177,17 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
 def test_the_catalogue_is_the_designs_eighty_tools() -> None:
     """The design's 80 tools in 81 rows, and since Plan O M236 (DEC-1806) M240's two READ tools as #82, #83."""
     counted = [entry for entry in CATALOGUE if entry.counted_with is None]
-    assert len(CATALOGUE) == 86
-    assert [e.number for e in CATALOGUE] == [n for n in range(1, 88) if n != 30]  # #30 was dropped
-    assert len(counted) == 85
-    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 28, "new": 35}
+    assert len(CATALOGUE) == 87
+    assert [e.number for e in CATALOGUE] == [n for n in range(1, 89) if n != 30]  # #30 was dropped
+    assert len(counted) == 86
+    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 28, "new": 36}
     kinds = Counter(e.kind for e in counted)
-    assert kinds["propose"] == 27 and kinds["ask"] == 4
+    assert kinds["propose"] == 28 and kinds["ask"] == 4
     assert {e.name for e in CATALOGUE if e.exposure == "aggregate"} == {
         "what_can_this_power",
         "check_readiness",
     }
-    assert len({e.name for e in CATALOGUE}) == 86
+    assert len({e.name for e in CATALOGUE}) == 87
     assert [(e.number, e.name, e.kind) for e in CATALOGUE[80:]] == [
         (82, "read_workbook_sheets", "read"),
         (83, "find_excel_serial_dates", "read"),
@@ -192,6 +195,7 @@ def test_the_catalogue_is_the_designs_eighty_tools() -> None:
         (85, "preview_working_copy", "read"),
         (86, "propose_features", "propose"),
         (87, "propose_combine_rows", "propose"),
+        (88, "propose_amount_outcome", "propose"),
     ]
     assert not EXECUTOR_NAMES & {e.name for e in CATALOGUE}, "an executor is never in the catalogue"
 
@@ -358,7 +362,7 @@ def test_a_viewer_calling_a_propose_tool_is_refused_on_that_call(
     agent: AgentContext, name: str, tmp_path: Path
 ) -> None:
     tool = data_registry().get(name)
-    caller = "person" if "person" in tool.callers else "ai"
+    caller = next(c for c in ("person", "ai", "rules") if c in tool.callers)
     # What M236's PROPOSE tools also need to exist here (DEC-1806): storage, saved connections, an AI service,
     # and for `second_opinion` a case (DEC-1409 (g)).
     from engine.connections.store import ConnectionStore
@@ -477,7 +481,7 @@ def test_every_tool_gets_the_budget_of_its_exposure() -> None:
         elif tool.name == "propose_features":
             # its answer carries the compiled query (up to 12,000 characters) and up to 40 feature lines
             assert tool.budget == MAX_OUTPUT_CHARS > ROW_LEVEL_BUDGET, tool.name
-        elif tool.name == "propose_sql_step":
+        elif tool.name in {"propose_sql_step", "propose_amount_outcome"}:
             assert tool.budget == 12_000 > ROW_LEVEL_BUDGET, tool.name
         elif tool.exposure is Exposure.SESSION_ONLY:
             assert tool.budget == ROW_LEVEL_BUDGET == 5_500, tool.name

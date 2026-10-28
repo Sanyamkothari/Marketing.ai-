@@ -210,4 +210,6 @@ def test_no_trainable_goal_is_left_out_and_one_that_repeats_a_home_goal_says_whi
         found["telco-churn"].also_fits == found["rca"].config.name
     ), "and says it also fits Home's churn goal"
     assert found["rca"].also_fits is None, "a Home goal is not marked"
-    assert "hillstrom-email" not in found, "only goals the engine trains today are offered"
+    assert (
+        "hillstrom-email" in found
+    ), "a campaign test is offered too; the diagnosis drops it with no treatment column"

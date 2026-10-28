@@ -1089,6 +1089,7 @@ FILES_KINDS: Final[frozenset[str]] = frozenset(
         "data.normalise_key",
         "data.propose_sql_step",
         "data.propose_features",
+        "data.propose_amount_outcome",
     }
 )
 """Kinds over several files (M237): each file has its own ID column, which `normalise_key` writes by design, so
@@ -1360,6 +1361,7 @@ OUTPUT_READERS: Final[Mapping[str, _Reader]] = {
     "data.stack_files": _read_stack,
     "data.propose_sql_step": _read_sql,
     "data.propose_features": _read_sql,
+    "data.propose_amount_outcome": _read_sql,
     "data.build_dataset": _read_build,
     "data.normalise_key": _read_normalise_key,
     "data.convert_currency": _read_convert,

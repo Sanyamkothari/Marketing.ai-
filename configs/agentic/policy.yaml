@@ -223,6 +223,11 @@ data:
       proposes: plan
       rules: [data.never_ticked, data.approve_class]
       approve: above_drop_share
+    # The spend in the days after the snapshot (an amount as the outcome): one query, never ticked.
+    data.propose_amount_outcome:
+      proposes: plan
+      rules: [data.never_ticked, data.approve_class]
+      approve: above_drop_share
     # M238: which customers are learnt from is the person's choice (design §6.6).
     data.split_file:
       proposes: plan

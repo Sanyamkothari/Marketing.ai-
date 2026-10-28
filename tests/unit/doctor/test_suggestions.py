@@ -63,9 +63,8 @@ def test_every_trainable_use_case_is_offered_and_a_repeat_of_a_home_goal_says_wh
     assert {"bank-term-deposit", "card-default-propensity", "insurance-cross-sell", "retail-win-back"} <= set(
         found
     )
-    assert (
-        "telco-churn" in found and "hillstrom-email" not in found
-    ), "none is skipped; uplift-only goals are not trainable"
+    assert {"hillstrom-email", "customer-spend"} <= set(found)  # a campaign test and an amount goal (W6)
+    assert "telco-churn" in found, "none is skipped"
     home = {offer.config.name for offer in found.values() if offer.also_fits is None}
     repeats = [offer for offer in found.values() if offer.also_fits is not None]
     assert repeats and all(offer.also_fits in home for offer in repeats)

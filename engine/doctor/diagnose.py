@@ -31,10 +31,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
-from engine.config import RunMode
+from engine.config import ProblemType, RunMode
 from engine.doctor.contracts import FileDiagnosis, ReadinessReason, ReadinessStatus, UseCaseReadiness
 from engine.doctor.first_look import FirstLook, advised_leaks, outcome_look
+from engine.doctor.out_of_scope import out_of_scope
 from engine.doctor.sufficiency import enough_data, with_alternatives
+from engine.doctor.uplift_scope import treatment_column_of, uplift_scope
 from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -235,7 +237,8 @@ def readiness(
     a question after a plain check, then the most 'yes' examples."""
     verdicts = [
         v.model_copy(update={"also_fits": offer.also_fits}) if offer.also_fits else v
-        for v, offer in ((_one_use_case(files, offer, root), offer) for offer in offers)
+        for offer in offers
+        if (v := _offered(files, offer, root)) is not None
     ]
     order = {offer.config.id: index for index, offer in enumerate(offers)}
     ranked = tuple(
@@ -245,6 +248,79 @@ def readiness(
         )
     )
     return with_alternatives(ranked)  # Plan L M158 (DEC-1582): the use cases the same files do power
+
+
+def _offered(files: Sequence[LoadedFile], offer: Offer, root: Path) -> UseCaseReadiness | None:
+    """`offer`'s verdict, or None when the files do not show the goal at all.
+
+    A campaign test (an uplift goal) is offered only for a file whose treatment column reads like an experiment
+    (`treatment_column_of`): without one there is no test to read, and the goal is not listed as missing. A
+    column that only shares a name with the lever (a customer `segment`) is not one. With one, the groups are checked
+    (`engine.doctor.uplift_scope`): no control group or groups that already differed is out of scope, with the
+    one out-of-scope sentence; a good test carries its balance on the verdict.
+    """
+    config = offer.config
+    if config.uplift.treatment_column is None:
+        verdict = _one_use_case(files, offer, root)
+        return (
+            _amount_gate(files, verdict, config) if config.problem_type is ProblemType.REGRESSION else verdict
+        )
+    holder, column = next(
+        ((f, c) for f in files if (c := treatment_column_of(f.frame, config)) is not None), (None, None)
+    )
+    if holder is None or column is None:
+        return None
+    scope = uplift_scope(holder.frame, column, config)
+    if scope.status in {"no_control", "not_random"}:
+        return UseCaseReadiness(
+            use_case_id=config.id,
+            name=config.name,
+            stage=offer.stage,
+            status="missing",
+            upload_id=holder.upload_id,
+            summary=scope.message,
+            needs=(scope.message,),
+            reason_code="NOT_RANDOM",
+            why=scope.message,
+            first_fix=out_of_scope("UPLIFT_NOT_RANDOM"),
+            balance=scope.balance,
+        )
+    if scope.status == "arm_too_small":
+        return UseCaseReadiness(
+            use_case_id=config.id,
+            name=config.name,
+            stage=offer.stage,
+            status="too_small",
+            upload_id=holder.upload_id,
+            summary=scope.message,
+            reason_code="NOT_ENOUGH",
+            why=scope.message,
+            first_fix=scope.message,
+            balance=scope.balance,
+        )
+    verdict = _one_use_case(files, offer, root)
+    return verdict.model_copy(
+        update={"balance": scope.balance, "why": f"{verdict.why} {scope.message}".strip()}
+    )
+
+
+def _amount_gate(
+    files: Sequence[LoadedFile], verdict: UseCaseReadiness, config: UseCaseConfig
+) -> UseCaseReadiness:
+    """A goal that predicts an amount needs customers who spent, not only customers (`amount_minimums`)."""
+    from engine.doctor.amount_outcome import amount_minimums
+
+    holder = next((f for f in files if f.upload_id == verdict.upload_id), None)
+    column = verdict.outcome_column
+    if holder is None or column is None or column not in holder.frame.columns:
+        return verdict
+    found = amount_minimums(holder.frame[column], config)
+    update: dict[str, object] = {"yes_count": found.non_zero, "why": f"{verdict.why} {found.message}".strip()}
+    if not found.enough and verdict.status in {"ready", "check"}:
+        update.update(
+            status="too_small", reason_code="NOT_ENOUGH", summary=found.message, first_fix=found.message
+        )
+    return verdict.model_copy(update=update)
 
 
 _RANK: Final[dict[str, int]] = {"ready": 0, "check": 1, "too_small": 3, "missing": 4}
@@ -259,17 +335,23 @@ def _one_use_case(files: Sequence[LoadedFile], offer: Offer, root: Path) -> UseC
     config = offer.config
     found = [(loaded, c) for loaded in files for c in outcome_columns(loaded.frame, config)]
     if not found:
+        spend = None
+        if config.problem_type is ProblemType.REGRESSION:
+            from engine.doctor.amount_outcome import offer_amount_outcome
+
+            spend = offer_amount_outcome(files, config)
         return UseCaseReadiness(
             use_case_id=config.id,
             name=config.name,
             stage=offer.stage,
             status="missing",
-            upload_id=None,
+            upload_id=None if spend is None else spend.upload_id,
             summary=f"None of your files has the outcome {config.name} learns from.",
             needs=_needs(config),
             reason_code="NO_OUTCOME",
             why=f"None of your files has the outcome {config.name} learns from.",
-            first_fix=_needs(config)[0],
+            first_fix=_needs(config)[0] if spend is None else spend.sentence,
+            amount_outcome=spend,
         )
     best = min(_LEVEL_ORDER[c.level] for _, c in found)
     found = [(loaded, c) for loaded, c in found if _LEVEL_ORDER[c.level] == best]

@@ -149,6 +149,8 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     _R(86, "propose_features", "propose", "rules + ai", "new"),
     # Q. Guided setup's reshape question, as a Data Doctor tool (merging Guided setup into the Data Doctor)
     _R(87, "propose_combine_rows", "propose", "rules + ai", "new"),
+    # R. An amount as the outcome (a regression goal): the spend in the days after the snapshot
+    _R(88, "propose_amount_outcome", "propose", "rules", "new"),
 )
 """The design §5.5, row by row."""
 

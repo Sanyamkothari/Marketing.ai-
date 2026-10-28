@@ -244,6 +244,16 @@ SPECS: dict[str, Calls | None] = {
     # Guided setup's reshape question as a Data Doctor tool (#87): the dates and carried columns named, on every column.
     "propose_combine_rows": lambda columns: [{}, {"time_column": "signup_date"}]
     + [{"time_column": column, "carry": [column]} for column in columns],
+    "propose_amount_outcome": lambda _columns: [
+        {
+            "upload_id": EVENTS,
+            "entity_key": "customer_id",
+            "time_column": "bill_date",
+            "amount_column": "amount",
+            "window_days": 30,
+            "as_of": "2025-09-01",
+        },
+    ],
     "propose_sql_step": lambda _columns: [
         {
             "description": "Every customer row",
