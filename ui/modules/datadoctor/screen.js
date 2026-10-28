@@ -29,7 +29,7 @@ import { canAccess } from "../router.js";
 import { createConnectionPicker } from "../connections/picker.js";
 import { getModelOffer, postCampaignRun } from "../campaigns/wizard_api.js";
 import { DEFAULT_SPEED, SPEEDS, applySpeedMinutes, minutesText, modelChoice, runHref, startSentenceHtml } from "../campaigns/run_rules.js";
-import { TABLE_FILE_TYPES } from "../intake/notes.js";
+import { TABLE_FILE_TYPES, bindIntakeNotes, intakeNotesHtml } from "../intake/notes.js";
 import { injectAskStyles } from "../ask/styles.js";
 import { plain } from "../ask/sent.js";
 import { userText } from "../../labels.js";
@@ -213,7 +213,10 @@ function mainHtml(entry) {
 function intakeHtml(entry, options) {
   const s = entry.state;
   if (s.picker) return `<section class="card dds-card" data-dds-picker>${s.picker.html()}</section>`;
-  return uploadHtml({ accept: TABLE_FILE_TYPES, busy: s.uploadNote, pick: true, ...options });
+  // How the last file was read (a title row skipped, a sheet chosen), with "Read it as it is" and "Read the sheet X"
+  // to read the same file again: a workbook read the wrong way has its way back here, beside the file control.
+  const notes = s.lastRead ? intakeNotesHtml(s.lastRead.answer && s.lastRead.answer.intake, { undo: true, busy: Boolean(s.busy) }) : "";
+  return `${notes}${uploadHtml({ accept: TABLE_FILE_TYPES, busy: s.uploadNote, pick: true, ...options })}`;
 }
 
 /** "Expert view": the way from the Doctor to Manual setup for this goal (its own record is not kept there). */
@@ -453,6 +456,9 @@ function draw(entry) {
   entry.aside.hidden = !entry.state.screen || isChat(entry);
   followChat(entry);
   if (entry.state.picker) entry.state.picker.bind(entry.main);
+  const again = { onAsIs: () => readAgain(entry, { intake: false }), onSheet: (sheet) => readAgain(entry, { sheet }) };
+  bindIntakeNotes(entry.main, again);
+  bindIntakeNotes(entry.aside, again);
 }
 
 /**
@@ -645,8 +651,31 @@ function upload(entry, files) {
         throw new ApiError(error.status, error.code, `${file.name} ${about} ${error.message}${done} Choose ${file.name} again to go on.`, error.body);
       }
     }
+    if (list.length === 1) {
+      const key = `${list[0].name}|${list[0].size}|${list[0].lastModified}`;
+      entry.state.lastRead = { file: list[0], answer: sent.get(key) };
+    }
     return [...sent.values()];
   }, list[0].name, list.length - 1);
+}
+
+/**
+ * Read the last file again, as it is (`intake: false`) or from another sheet: the same `POST /uploads` with those
+ * options. A check of that one file starts again on the new read; a check of several files takes it in beside them.
+ */
+function readAgain(entry, options) {
+  const last = entry.state.lastRead;
+  if (!last || !last.file || entry.state.busy) return;
+  const c = entry.state.screen && entry.state.screen.case;
+  const only = c && (c.files || []).length === 1 && last.answer && c.files[0].upload_id === last.answer.upload_id;
+  if (only) entry.state = { ...fresh(), loading: false, ai: entry.state.ai };
+  entry.review = false;
+  return bringIn(entry, last.file.name, async () => {
+    const goal = await uploadGoal(entry.host);
+    const answer = await postUpload(last.file, goal, entry.host.mode || "train", options);
+    entry.state.lastRead = { file: last.file, answer };
+    return [answer];
+  });
 }
 
 /** "Pick from a connection": the picker's import answers what `POST /uploads` does, so it carries on as a file does. */

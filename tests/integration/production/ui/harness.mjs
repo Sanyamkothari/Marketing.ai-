@@ -46,6 +46,7 @@ export function installPage(server, { hash = "#/" } = {}) {
       query: Object.fromEntries(target.searchParams),
       auth: headers.get("Authorization"),
       body: typeof init.body === "string" ? JSON.parse(init.body) : null,
+      form: init.body && typeof init.body === "object" && typeof init.body.get === "function" ? init.body : null,
     };
     calls.push(request);
     const answer = (await server(request)) || { status: 404, body: { detail: { code: "NOT_FOUND", message: "No route." } } };

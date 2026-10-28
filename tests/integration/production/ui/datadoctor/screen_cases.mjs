@@ -633,6 +633,44 @@ test("a goal that overlaps a Home goal says so, and a missing goal offers what t
   assert.equal(row("other").querySelector("[data-dds-goal-ask]"), null);
 });
 
+test("after an upload the screen says how the file was read, and reads it again as it is or from another sheet", async () => {
+  world = makeWorld({ at: "question" });
+  world.cases = { cases: [] };
+  world.uploadAnswer = (request) => ({
+    upload_id: request.form && request.form.get("sheet") ? "u_sheet2" : request.form && request.form.get("intake") === "false" ? "u_asis" : "u_dds_upload",
+    profile: null,
+    intake: {
+      notes: ["The first row was a title, so the header was read from row 2."],
+      applied: true,
+      turned_off: false,
+      sheets: [
+        { name: "Data", used: true, looks_like_data: true, hidden: false },
+        { name: "Customers 2", used: false, looks_like_data: true, hidden: false },
+      ],
+    },
+  });
+  _resetDataDoctorForTests();
+  forgetAiServiceStatus();
+  app.innerHTML = `<main><h1>Data</h1><div class="dds-layout"><div id="m"></div><aside id="a"></aside></div></main>`;
+  mountDataDoctor({ main: $("#m"), aside: $("#a") }, { place: "data" });
+  await until(() => $("#dds-file"), 3000, "the file control");
+  const input = $("#dds-file");
+  Object.defineProperty(input, "files", { value: [new File(["a,b\n1,2\n"], "book.xlsx")] });
+  input.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await until(() => $("[data-intake-notes]"), 4000, "the notes on how the file was read");
+  assert.match($("[data-intake-notes]").textContent, /title/);
+  const uploads = () => world.posted.filter((p) => p.path === "/uploads");
+  const before = uploads().length;
+  $("[data-intake-asis]").click();
+  await until(() => uploads().length === before + 1, 4000, "the file sent again, as it is");
+  assert.equal(uploads().at(-1).form.get("intake"), "false");
+  await until(() => $("[data-intake-sheet]"), 4000, "the notes again");
+  $('[data-intake-sheet="Customers 2"]').click();
+  await until(() => uploads().length === before + 2, 4000, "the file sent again, the other sheet");
+  assert.equal(uploads().at(-1).form.get("sheet"), "Customers 2");
+  world.uploadAnswer = null;
+});
+
 test("visible text: no word the glossary keeps from a marketer, in any shape", async () => {
   for (const at of [...ALL, "empty"]) {
     await show(at, at === "empty" ? { cases: { cases: [] } } : {});

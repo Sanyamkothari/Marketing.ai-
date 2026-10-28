@@ -71,8 +71,8 @@ export function serverFor(world) {
     }
     if (method === "POST" && p === "/uploads") {
       world.uploads += 1;
-      world.posted.push({ path: p, body: null });
-      return ok({ upload_id: "u_dds_upload", profile: null }, 201);
+      world.posted.push({ path: p, body: null, form: request.form || null });
+      return ok(world.uploadAnswer ? world.uploadAnswer(request) : { upload_id: "u_dds_upload", profile: null }, 201);
     }
     if (method === "POST" && (p === "/cases" || p.startsWith(`/cases/${CASE}`))) {
       world.posted.push({ path: p, body: request.body });
