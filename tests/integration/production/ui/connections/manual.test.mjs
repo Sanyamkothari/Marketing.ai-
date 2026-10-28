@@ -1,6 +1,6 @@
 /* Manual setup's "Pick from a connection" (UI audit §8.4 item 10; DEC-1109 follow-up) in jsdom, against
    REAL bodies (PB_FIXTURES, written by tests/integration/connections/test_connections_ui.py). The real
-   Setup form (ui/usecase.js) is drawn the way app.js draws it, with the agent and connections modules
+   Setup form (ui/usecase.js) is drawn the way app.js draws it, with the Data Doctor and connections modules
    registered as index.html's PLAN-G block does; the fake fetch answers what the API answered. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -37,7 +37,7 @@ const { w, calls } = installPage(server, { hash: "#/uc/x" });
 await import("../../../../../ui/modules/router.js");
 const { createController, useCaseHtml } = await import("../../../../../ui/usecase.js");
 const { fmtInt } = await import("../../../../../ui/dom.js");
-await import("../../../../../ui/modules/agent/index.js");
+await import("../../../../../ui/modules/datadoctor/index.js");
 await import("../../../../../ui/modules/connections/index.js");
 
 const app = $("#app");

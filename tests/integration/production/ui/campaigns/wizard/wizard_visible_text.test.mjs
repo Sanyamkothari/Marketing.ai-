@@ -6,8 +6,8 @@
    "never shown" word at all. The states no recorded answer can reach (learning in progress, waiting for an approval,
    a refusal) are drawn by the wizard's own builders and checked the same way.
 
-   One part of step 2 is not the wizard's: Guided setup (Plan G/L), embedded unchanged as Plan M asks. Its words are
-   checked where it is the page (the `setup-guided-*` pages of visible_text.test.mjs, with their baselines, which M172
+   One part of step 2 is not the wizard's: the Data Doctor, embedded unchanged as Plan M asks. Its words are
+   checked where it is the page (the `setup-doctor-*` pages of visible_text.test.mjs, with their baselines, which M172
    empties), so here its container is left out and everything around it is checked. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -78,7 +78,7 @@ async function visit(hash) {
   await untilStable();
 }
 
-/** The page's visible text, without Guided setup's own container (checked on its own page). */
+/** The page's visible text, without the Data Doctor's own container (checked on its own page). */
 function wizardText() {
   const copy = document.body.cloneNode(true);
   copy.querySelectorAll("[data-cw-guided]").forEach((el) => el.remove());
@@ -99,7 +99,7 @@ for (const step of STEPS) {
     draft = Boolean(step.draft);
     await visit(step.hash);
     assert.ok($(step.selector), `${step.id} did not draw: ${$("#app").textContent.slice(0, 300)}`);
-    if (step.guided) assert.ok($("[data-cw-guided] #ag-file"), "Guided setup itself is mounted, unchanged");
+    if (step.guided) assert.ok($("[data-cw-guided] [data-dds]"), "the Data Doctor itself is mounted, unchanged");
     const unrecorded = [...missing].filter((k) => !k.includes("/__") && !EXPECTED_UNRECORDED.has(k) && !isRunLookup(k));
     assert.deepEqual(unrecorded, [], `${step.id} asked for answers that are not recorded`);
     const text = wizardText();

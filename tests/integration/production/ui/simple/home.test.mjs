@@ -1,6 +1,6 @@
 /* Plan H M81/M82: the whole page on an empty installation, sign-in off, demo mode off. The bar is the
    four places; Home is the generic journey with no industry chooser, no client chooser and nothing
-   from the demo; a use case's Setup opens on Guided setup. */
+   from the demo; a use case's Setup opens on the Data Doctor. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { $, $$, settle, until } from "../harness.mjs";
@@ -14,7 +14,7 @@ const pageText = () => w.document.body.textContent;
 
 test("the page loads the Plan H module with every other one", () => {
   assert.ok(pageScripts().includes("modules/simple/index.js"));
-  assert.ok(pageScripts().includes("modules/agent/index.js"));
+  assert.ok(pageScripts().includes("modules/datadoctor/index.js"));
 });
 
 test("the top bar is exactly Home, Connections, Results and Settings", async () => {
@@ -80,13 +80,13 @@ test("demo mode off: no sample-data chip, no sample tags, no demo client, no sig
   assert.match($("main").textContent, /No models yet/, "an empty start says what to do first");
 });
 
-test("a use case's Setup opens on Guided setup, with Manual setup one click away", async () => {
+test("a use case's Setup opens on the Data Doctor, with Manual setup one click away", async () => {
   const id = fixture("ids").use_case;
   w.location.hash = `#/uc/${id}`;
   await until(() => $(".setup-tabs"), 3000, "the Setup tabs");
-  assert.equal($('[data-setup-tab="guided"]').getAttribute("aria-pressed"), "true");
+  assert.equal($('[data-setup-tab="datadoctor"]').getAttribute("aria-pressed"), "true");
   assert.equal($('[data-setup-tab="manual"]').getAttribute("aria-pressed"), "false");
-  assert.ok($("#ag-file"), "the Guided upload");
+  assert.ok($("[data-dds-place=\"setup\"]"), "the Data Doctor screen");
   assert.equal($("#f-file"), null);
   $('[data-setup-tab="manual"]').click();
   await until(() => $("#f-file"), 2000, "Manual setup's upload");

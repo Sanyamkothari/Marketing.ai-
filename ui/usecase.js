@@ -172,9 +172,9 @@ export function useCaseState(uc) {
       // Plan G: the Setup view's tab ("manual", or a registered setup mode's name) and the upload a
       // setup mode filled the form with, so that tab can draw the Run button once it has. Plan H M82
       // (DEC-1114): `null` until the person picks one, which opens the first setup mode offered -
-      // Guided setup - and Manual setup where none is.
+      // the Data Doctor - and Manual setup where none is.
       setupTab: null,
-      guided: null,
+      setupUpload: null,
       view: "setup",
       runId: null,
       detail: null,
@@ -858,7 +858,7 @@ function setupForm(uc, s) {
 
 // --- setup modes (Plan G) -------------------------------------------------------------------------
 // A phase module can offer a second way through Setup (`registerSetupMode`, modules/router.js) -
-// today, Guided setup. Then the Setup view gets a tab strip: the module's tab, and "Manual setup",
+// today, the Data Doctor. Then the Setup view gets a tab strip: the module's tab, and "Manual setup",
 // which is the form above, unchanged. On the module's tab this screen draws the card, the mode switch
 // and two empty elements the module mounts into; once the module has filled the form's state
 // (`host.approved`), the card also draws this form's own validation list and Run button.
@@ -866,7 +866,7 @@ function setupForm(uc, s) {
 const MANUAL = "manual";
 
 /** The tab on show: the one the user picked while it is still offered; before any pick, the first
- * setup mode offered (Guided setup, Plan H); else Manual setup. */
+ * setup mode offered (the Data Doctor, Plan H); else Manual setup. */
 function activeTab(s, modes) {
   const wanted = s.setupTab === null && modes.length ? modes[0].name : s.setupTab;
   return modes.some((m) => m.name === wanted) ? wanted : MANUAL;
@@ -883,7 +883,7 @@ function setupTabsHtml(modes, active) {
 }
 
 /** Whether a setup mode filled the form with the upload it still holds. */
-const guidedFilled = (s) => Boolean(s.guided && s.upload && s.source === FILE && s.upload.upload_id === s.guided.uploadId);
+const setupFilled = (s) => Boolean(s.setupUpload && s.upload && s.source === FILE && s.upload.upload_id === s.setupUpload.uploadId);
 
 function modeForm(uc, s) {
   const copy = modeCopy(uc, s);
@@ -894,7 +894,7 @@ function modeForm(uc, s) {
   }
   const why = blocker(uc, s);
   const model = train ? "" : `<div class="f-setup">${scoreModelStep(uc, s, 1)}</div>`;
-  const run = guidedFilled(s)
+  const run = setupFilled(s)
     ? `<form id="f-setup" novalidate class="f-setup">
         ${validationHtml(uc, s)}
         ${s.submitError ? errorBox(s.submitError) : ""}
@@ -1824,8 +1824,8 @@ export function createController(uc, rerender) {
     get modelVersionId() {
       return s.mode === "score" && s.modelVersionId ? s.modelVersionId : null;
     },
-    holds: (uploadId) => guidedFilled(s) && s.upload.upload_id === uploadId,
-    approved: (fill) => adoptGuided(fill),
+    holds: (uploadId) => setupFilled(s) && s.upload.upload_id === uploadId,
+    approved: (fill) => adoptSetup(fill),
     manual() {
       s.setupTab = MANUAL;
       rerender();
@@ -1839,7 +1839,7 @@ export function createController(uc, rerender) {
    * `extraOverrides`. The paths are the API's; none is spelled here. Earlier edits are dropped: what
    * was approved is the whole plan.
    */
-  function adoptGuided({ mode, upload: prepared, primaryKey, target, overrides }) {
+  function adoptSetup({ mode, upload: prepared, primaryKey, target, overrides }) {
     if (mode && mode !== s.mode) return;
     const schema = uc.advanced_settings || { stages: [] };
     const byPath = indexSchema(schema);
@@ -1866,7 +1866,7 @@ export function createController(uc, rerender) {
       else if (byPath.has(path)) writePath(s.values, path, value);
       else s.extraOverrides[path] = value;
     }
-    s.guided = { uploadId: prepared.upload_id };
+    s.setupUpload = { uploadId: prepared.upload_id };
     rerender();
   }
 

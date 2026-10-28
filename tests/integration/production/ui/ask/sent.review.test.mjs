@@ -1,9 +1,9 @@
-/* Review of "What the AI looked at" (ui/modules/agent/sent.js): hostile or odd `sent` items. Each test is a
+/* Review of "What the AI looked at" (ui/modules/ask/sent.js): hostile or odd `sent` items. Each test is a
    failing repro. They call the module's own functions on plain objects (no fixtures are needed), and
-   run in the same `node --test` glob as sent.test.mjs. */
+   run in the same `node --test` glob as ask.test.mjs. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sentHtml, statusHtml, toolPhrase, SENT_FOOTER, STATUS_MASKED } from "../../../../../ui/modules/agent/sent.js";
+import { sentHtml, statusHtml, toolPhrase, SENT_FOOTER, STATUS_MASKED } from "../../../../../ui/modules/ask/sent.js";
 
 const text = (html) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 

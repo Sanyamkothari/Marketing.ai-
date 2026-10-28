@@ -15,7 +15,8 @@ The node suites in `production/ui/datadoctor/` (sharing the jsdom install of `pr
 `screen.test.mjs` checks each question, approval and doubt shape, Approve's exact sentence, Revoke, the chat with
 no AI service (the way to Settings › AI service, not Connections), the accessibility checks of Plan M M181 and the
 visible-text check; `places.test.mjs` opens the same case in the three places - the Data page, the wizard's
-Customers step and a goal's setup - and shows that with the switch off today's screens are drawn unchanged.
+Customers step and a goal's setup (which loads with no AI service connected) - and shows that with the switch off today's
+Data page card is drawn unchanged.
 """
 
 from __future__ import annotations

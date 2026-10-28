@@ -6,8 +6,9 @@
    list's own average likelihood, the plan the real API froze from the wizard's body. The model versions are the
    validated demo's recorded answer (tests/fixtures/ui_demo/api.json) with the goal and status a case needs.
 
-   Guided setup (Plan G/L) is not loaded here: a stand-in registers through the same seam (`registerSetupMode`)
-   and hands the wizard exactly what Guided setup's Approve hands its host, so each case can approve at will. */
+   The Data Doctor (`modules/datadoctor`) is not loaded here: a stand-in registers through the same seam
+   (`registerSetupMode`) and hands the wizard exactly what the Data Doctor's Approve hands its host, so each case can
+   approve at will. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -165,16 +166,16 @@ const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 await import("../../../../../../ui/app.js");
 await import("../../../../../../ui/modules/decide/index.js");
 
-// The stand-in for Guided setup: draws a file control, keeps the host the wizard hands it.
+// The stand-in for the Data Doctor: draws a file control, keeps the host the wizard hands it.
 const guided = { host: null, mounts: 0 };
 router.registerSetupMode({
-  name: "guided",
-  label: "Guided setup (recommended)",
+  name: "datadoctor",
+  label: "Data Doctor (recommended)",
   applies: () => true,
   mount: ({ main }, host) => {
     guided.host = host;
     guided.mounts += 1;
-    main.innerHTML = `<div data-standin><input type="file" id="ag-file"></div>`;
+    main.innerHTML = `<div data-standin><input type="file" id="dds-file"></div>`;
   },
 });
 
@@ -305,7 +306,7 @@ test("Customers, first campaign: Approve starts the whole campaign on the server
   world.models = fx("models_empty");
   guided.host = null;
   await open(`#/campaigns/new/customers/${UC}`);
-  await until(() => guided.host, 3000, "Guided setup mounted");
+  await until(() => guided.host, 3000, "the Data Doctor mounted");
   assert.equal($("[data-cw-customers]").getAttribute("data-cw-customers"), "first");
   assert.match(text(), /first campaign for this goal/);
   assert.equal(guided.host.mode, "train");
@@ -324,14 +325,14 @@ test("Customers, first campaign: Approve starts the whole campaign on the server
     target: "reactivated_90d",
   });
   assert.equal(lastPost("/runs"), undefined, "the browser starts no run of its own");
-  assert.equal(guided.host.holds("u_prepared"), true, "Guided setup knows its approval was taken");
+  assert.equal(guided.host.holds("u_prepared"), true, "the Data Doctor knows its approval was taken");
 });
 
 test("Customers, later campaign: the current model is used - nothing learns again", async () => {
   world.models = { versions: [version("m_wb_1", "champion", "r_train")] };
   guided.host = null;
   await open(`#/campaigns/new/customers/${UC}`);
-  await until(() => guided.host, 3000, "Guided setup mounted");
+  await until(() => guided.host, 3000, "the Data Doctor mounted");
   assert.equal($("[data-cw-customers]").getAttribute("data-cw-customers"), "again");
   assert.equal(guided.host.mode, "score");
   assert.equal(guided.host.modelVersionId, "m_wb_1");
@@ -352,7 +353,7 @@ test("Customers: a start the server refuses is shown, and the step stays", async
   world.models = fx("models_empty");
   guided.host = null;
   await open(`#/campaigns/new/customers/${UC}`);
-  await until(() => guided.host, 3000, "Guided setup mounted");
+  await until(() => guided.host, 3000, "the Data Doctor mounted");
   world.campaignRunAnswer = {
     status: 409,
     body: { detail: { code: "CAMPAIGN_RUN_ACTIVE", message: "A campaign is already being prepared from this data (cr_0)." } },
@@ -360,7 +361,7 @@ test("Customers: a start the server refuses is shown, and the step stays", async
   guided.host.approved(fill("train"));
   await until(() => text().includes("already being prepared from this data"), 3000, "the refusal");
   assert.equal(w.location.hash, `#/campaigns/new/customers/${UC}`);
-  assert.equal(guided.host.holds("u_prepared"), false, "Guided setup offers the start again");
+  assert.equal(guided.host.holds("u_prepared"), false, "the Data Doctor offers the start again");
 });
 
 test("an address from when the browser chained the steps opens the Customers step afresh", async () => {

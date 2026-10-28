@@ -554,7 +554,7 @@ test("with an AI service connected the chat takes a message; What the AI looked 
   $("#dds-chat-form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
   await until(() => posts("chat").length === 1, 2000, "the message");
   assert.equal(posts("chat")[0].body.message, "Why is account_no not the ID?");
-  const { sentHtml } = await import("../../../../../ui/modules/agent/sent.js");
+  const { sentHtml } = await import("../../../../../ui/modules/ask/sent.js");
   const html = view.chatHtml(
     { case: { chat: [{ role: "agent", text: "Here.", at: "2026-10-12T09:00:00Z", sent: [{ tool: "value_counts", args: { column: "x" }, preview: "a", chars: 1 }] }] } },
     { ai: true },

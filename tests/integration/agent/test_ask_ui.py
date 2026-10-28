@@ -1,7 +1,6 @@
-"""The "Ask your data" panel (`ui/modules/agent/ask.js`, Plan I DEC-1255) in jsdom, against REAL API responses.
+"""The "Ask your data" panel (`ui/modules/ask/ask.js`, Plan I DEC-1255) in jsdom, against REAL API responses.
 
-The node test (`production/ui/agent/ask/ask.test.mjs`, sharing that directory's jsdom install; a sub-directory
-so Guided setup's runner, which globs `agent/*.test.mjs` with its own fixtures, does not pick it up) draws the
+The node test (`production/ui/ask/ask.test.mjs`, sharing that directory's jsdom install, with `sent.review.test.mjs` beside it) draws the
 panel on a run's Data page and replays what the app below answered:
 
 * **ask_empty** - `GET /uploads/{id}/ask` before the first question;
@@ -32,7 +31,7 @@ from tests.integration.agent.test_ask_api import ask_frame, upload
 pytestmark = pytest.mark.integration
 
 NODE_DIR: Final[Path] = Path(__file__).resolve().parents[1] / "production" / "ui"
-TESTS_DIR: Final[Path] = NODE_DIR / "agent" / "ask"
+TESTS_DIR: Final[Path] = NODE_DIR / "ask"
 USE_CASE: Final[str] = "targeted-advertisement"
 
 

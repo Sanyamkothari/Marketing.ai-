@@ -3,8 +3,8 @@
 // The person drops whatever files they have, before choosing anything. Each file is uploaded the
 // ordinary way (`POST /uploads`, so intake reads it and every limit, retention rule and erasure is an
 // upload's), then `POST /doctor/diagnosis` says what each file is and what the files can power. A use
-// case that is ready, or ready after a check, has a "Start" button: `POST /doctor/handoff` makes the
-// file an upload of that use case and its Guided setup opens on it (`handoff.js`). Home links here
+// case that is ready, or ready after a check, has a "Start" button: it opens a Data Doctor case on the file with
+// that use case as its goal and continues on the Data Doctor screen (`../datadoctor/screen.js`). Home links here
 // through its "For you" line (`registerForYou`), so no shared screen is edited.
 //
 // Two more answers come with the diagnosis. How the files fit (M155): how each log's IDs meet the
@@ -25,7 +25,8 @@ import { registerForYou } from "../../overview.js";
 import { TABLE_FILE_TYPES, intakeNotesHtml } from "../intake/notes.js";
 import { registerModule } from "../router.js";
 import { dataDoctorOn, dataDoctorOnNow } from "../datadoctor/switch.js";
-import { handOff } from "./handoff.js";
+import { chooseGoal, createCase, resumeVisit } from "../datadoctor/api.js";
+import { rememberCase, wizardHref } from "../datadoctor/screen.js";
 
 const CSS = `
 .dd .dd-drop{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
@@ -96,7 +97,6 @@ async function call(path, body) {
 }
 
 export const postDiagnosis = (uploadIds) => call("/doctor/diagnosis", { upload_ids: uploadIds });
-export const postHandoff = (uploadId, useCase) => call("/doctor/handoff", { upload_id: uploadId, use_case: useCase });
 export const postOutcome = (body) => call("/doctor/outcome", body);
 
 /** The page's state: survives a repaint, not a reload. */
@@ -222,7 +222,7 @@ function fileHtml(file, uploaded) {
     ["Dates", file.date_columns.length ? file.date_columns.join(", ") : "None found"],
   ];
   if (file.personal_columns) rows.push(["Personal data", `${file.personal_columns} column(s), hidden from every AI`]);
-  if (file.fixable_columns) rows.push(["Fixable", `${file.fixable_columns} column(s) Guided setup can tidy`]);
+  if (file.fixable_columns) rows.push(["Fixable", `${file.fixable_columns} column(s) the Data Doctor can tidy`]);
   return `<section class="card dd-file" data-dd-file="${esc(file.upload_id)}"><h4>${esc(file.file_name)}</h4>${
     file.kind_reason ? `<div class="fhint">${esc(file.kind_reason)}</div>` : ""
   }<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>${firstLookHtml(
@@ -441,11 +441,12 @@ async function start(useCaseId, uploadId) {
   state.startError = null;
   paint();
   try {
-    const upload = await postHandoff(uploadId, useCaseId);
     const file = state.uploads.find((u) => u.upload_id === uploadId);
-    handOff(useCaseId, "train", upload, file ? file.name : upload.profile.file_name);
+    const made = await createCase([uploadId], file ? file.name : "");
+    await chooseGoal(await resumeVisit(made.case_id), useCaseId);
+    rememberCase(useCaseId, made.case_id);
     state.starting = "";
-    window.location.hash = `#/uc/${encodeURIComponent(useCaseId)}`;
+    window.location.hash = wizardHref(useCaseId);
   } catch (error) {
     state.starting = "";
     state.startError = error;

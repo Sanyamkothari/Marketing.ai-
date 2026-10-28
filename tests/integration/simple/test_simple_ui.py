@@ -11,7 +11,7 @@ module in its script order - and check what a person now sees:
   when models wait for approval; a finished run's results link Model health, the Schedule and its
   report;
 * Settings groups the links, hides Admin while sign-in is off, and says sign-in is off;
-* a use case's Setup opens on Guided setup;
+* a use case's Setup opens on the Data Doctor;
 * the screens left under Settings and Results (the Reports hub `#/pilot`, the data request kit
   `#/pilot/kit`) speak of one company: no Client or Industry column, and "Open the latest report"
   only once a report exists.
@@ -53,7 +53,7 @@ TESTS_DIR: Final[Path] = NODE_DIR / "simple"
 """Plan H's jsdom tests."""
 
 USE_CASE: Final[str] = "telco-churn"
-"""A predictive use case of the generic journey, whose Setup offers Guided setup."""
+"""A predictive use case of the generic journey, whose Setup offers the Data Doctor."""
 
 
 def _ok(response: Any, status: int = 200) -> Any:

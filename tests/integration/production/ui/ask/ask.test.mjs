@@ -1,11 +1,11 @@
-/* "Ask your data" (ui/modules/agent/ask.js, Plan I DEC-1255) on a run's Data page, in jsdom, against REAL
-   bodies (PB_FIXTURES, written by tests/integration/agent/test_ask_ui.py). The agent module registers the
+/* "Ask your data" (ui/modules/ask/ask.js, Plan I DEC-1255) on a run's Data page, in jsdom, against REAL
+   bodies (PB_FIXTURES, written by tests/integration/agent/test_ask_ui.py). The ask module registers the
    panel exactly as index.html's PLAN-G block loads it; the Data page is ui/pages.js's own, given the panels
    the way app.js gives them. Two bodies are derived here from the recorded ones, never invented: a reply
    whose text claims other numbers (the chart must keep the tool's), and labels carrying markup (escaped). */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { $, $$, fixture, installPage, until } from "../../harness.mjs";
+import { $, $$, fixture, installPage, until } from "../harness.mjs";
 
 const ids = fixture("ids");
 const uc = fixture("use_case");
@@ -52,11 +52,11 @@ const server = ({ method, path, body }) => {
 };
 
 const { w } = installPage(server, { hash: "#/uc/x/data/r1" });
-const router = await import("../../../../../../ui/modules/router.js");
-await import("../../../../../../ui/modules/agent/index.js");
-const ask = await import("../../../../../../ui/modules/agent/ask.js");
-const { renderPage } = await import("../../../../../../ui/pages.js");
-const { fmtPct, fmtInt } = await import("../../../../../../ui/dom.js");
+const router = await import("../../../../../ui/modules/router.js");
+await import("../../../../../ui/modules/ask/index.js");
+const ask = await import("../../../../../ui/modules/ask/ask.js");
+const { renderPage } = await import("../../../../../ui/pages.js");
+const { fmtPct, fmtInt } = await import("../../../../../ui/dom.js");
 
 const app = $("#app");
 const run = (uploadId) => ({ run_id: "r1", mode: "train", state: "done", upload_id: uploadId, use_case_id: uc.id });

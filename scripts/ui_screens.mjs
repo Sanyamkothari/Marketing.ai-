@@ -68,7 +68,7 @@ const click = async (page, selector) => {
   await page.locator(selector).first().click({ timeout: 8000 });
   await settle(page);
 };
-/** Plan H M82 (DEC-1114): Setup opens on Guided setup; a screen of Manual setup's form clicks its tab
+/** Plan H M82 (DEC-1114): Setup opens on the Data Doctor; a screen of Manual setup's form clicks its tab
  * first (a screen marked `manual: true`). No tab (a Viewer, a generative use case): nothing to do. */
 const manualTab = async (page) => {
   const tab = page.locator('[data-setup-tab="manual"]').first();
@@ -286,35 +286,35 @@ export const SCREENS = [
     },
   },
   {
-    // Plan G M75: the Guided setup tab. `full` uploads the prepared telco file, so the helper has
-    // little to fix; the states that matter are the checklist, the summary and the chat beside it.
-    id: "guided-setup", group: "setup-onboarding", title: "Use case Setup, Guided setup tab (helper's suggestions, summary, chat)",
-    roles: "Analyst", files: [...P1, "ui/modules/agent/guided.js", "ui/modules/agent/styles.js"],
+    // The Data Doctor in a goal's Setup tab. `full` uploads the prepared telco file; the states that matter are the
+    // chat, the approval card and the data beside it.
+    id: "data-doctor-setup", group: "setup-onboarding", title: "Use case Setup, Data Doctor tab (chat, approval, data)",
+    roles: "Analyst", files: [...P1, "ui/modules/datadoctor/index.js", "ui/modules/datadoctor/screen.js"],
     route: (m) => `#/uc/${m.use_case_id}`,
     states: {
       full: {
-        base: "demo", note: "telco_history.csv uploaded on the Guided tab",
+        base: "demo", note: "telco_history.csv uploaded on the Data Doctor tab",
         act: async (page) => {
-          await click(page, '[data-setup-tab="guided"]');
-          await page.locator("#ag-file").setInputFiles(path.join(FIX, "telco_history.csv"));
-          await page.locator("[data-ag-group], [data-ag-stop]").first().waitFor({ timeout: 20000 }).catch(() => {});
+          await click(page, '[data-setup-tab="datadoctor"]');
+          await page.locator("#dds-file").setInputFiles(path.join(FIX, "telco_history.csv"));
+          await page.locator(".dds-root .dds-card, .dds-root [data-dds-approve-start]").first().waitFor({ timeout: 20000 }).catch(() => {});
           await settle(page, 400);
         },
       },
-      empty: { base: "empty", note: "before a file is uploaded", act: async (page) => click(page, '[data-setup-tab="guided"]') },
+      empty: { base: "empty", note: "before a file is uploaded", act: async (page) => click(page, '[data-setup-tab="datadoctor"]') },
       loading: {
-        base: "demo", note: "the helper's first look held back", delay: /^\/uploads\/[^/]+\/agent-session$/,
+        base: "demo", note: "the first read held back", delay: /^\/cases(\/[^/]+\/screen)?$/,
         act: async (page) => {
-          await click(page, '[data-setup-tab="guided"]');
-          await page.locator("#ag-file").setInputFiles(path.join(FIX, "telco_history.csv"));
+          await click(page, '[data-setup-tab="datadoctor"]');
+          await page.locator("#dds-file").setInputFiles(path.join(FIX, "telco_history.csv"));
         },
       },
       error: {
-        base: "demo", note: "starting the session fails (500 injected)", fail: /^\/uploads\/[^/]+\/agent-session$/,
+        base: "demo", note: "opening the case fails (500 injected)", fail: /^\/cases$/,
         act: async (page) => {
-          await click(page, '[data-setup-tab="guided"]');
-          await page.locator("#ag-file").setInputFiles(path.join(FIX, "telco_history.csv"));
-          await page.locator(".ag .apierr").first().waitFor({ timeout: 10000 }).catch(() => {});
+          await click(page, '[data-setup-tab="datadoctor"]');
+          await page.locator("#dds-file").setInputFiles(path.join(FIX, "telco_history.csv"));
+          await page.locator(".dds-root .apierr").first().waitFor({ timeout: 10000 }).catch(() => {});
           await settle(page, 400);
         },
       },
@@ -838,7 +838,7 @@ async function shoot(browser, screen, stateName, spec, m, variant) {
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
     if (stateName === "loading") {
-      // A loading state reached by clicking (Guided setup's upload): act, then shoot while held back.
+      // A loading state reached by clicking (the Data Doctor's upload): act, then shoot while held back.
       if (spec.act || screen.manual) await settle(page);
       if (screen.manual) await manualTab(page);
       if (spec.act) await spec.act(page, m);

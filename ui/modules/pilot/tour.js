@@ -80,7 +80,7 @@ export function tourSteps(demo) {
     },
     {
       title: "Set up a model",
-      text: "Guided setup checks your file and recommends the settings; you approve, then click Build the model.",
+      text: "The Data Doctor checks your file and recommends the settings; you approve, then click Build the model.",
       hash: m ? `#/uc/${uc}` : null,
       targets: ["#f-run", ".setup-grid", ".pick"],
     },

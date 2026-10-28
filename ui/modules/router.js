@@ -187,7 +187,7 @@ import "./production/boot.js";
 // ---- END PLAN-E ----
 // ---- PLAN-G (agents) — append only below this line ----
 // A *setup mode* (Plan G M75): a second way through the use-case page's Setup view, offered as a tab
-// beside "Manual setup" - today, "Guided setup". `ui/usecase.js` asks for the modes that apply to a
+// beside "Manual setup" - today, the Data Doctor. `ui/usecase.js` asks for the modes that apply to a
 // use case, draws the tab strip when there is at least one, and on that tab hands the mode two empty
 // elements to mount into (`main`, left; `aside`, right, above Previous runs) and a `host` - the only
 // door back into the Setup form's state:
@@ -196,7 +196,7 @@ import "./production/boot.js";
 //
 // `approved` fills the Setup form exactly as Manual setup would have been filled (the upload, the
 // two columns, every override - the paths come from the API, never from the module) and Run is then
-// the form's own. The agent module (`modules/agent/index.js`) is loaded by its own `<script>` in
+// the form's own. The Data Doctor module (`modules/datadoctor/index.js`) is loaded by its own `<script>` in
 // index.html's PLAN-G block, as the uplift and pilot modules are, because it imports this file.
 
 const setupModeList = [];

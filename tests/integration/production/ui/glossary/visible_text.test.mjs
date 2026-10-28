@@ -59,7 +59,7 @@ const click = (selector) => async () => {
 export const PAGES = [
   { id: "home", hash: "#/", expect: /Customer Lifecycle/ },
   { id: "results", hash: "#/results", expect: /Needs your attention/ },
-  { id: "setup-guided-win-back", hash: `#/uc/${WIN}`, expect: /Guided setup/ },
+  { id: "setup-doctor-win-back", hash: `#/uc/${WIN}`, expect: /Data Doctor/ },
   { id: "setup-manual-win-back", hash: `#/uc/${WIN}`, steps: [click('[data-setup-tab="manual"]')], expect: /Upload CSV, Excel or Parquet/ },
   {
     id: "setup-manual-win-back-score",
@@ -68,7 +68,7 @@ export const PAGES = [
     expect: /Win back lapsed customers/,
     selector: '.seg button[data-mode="score"]',
   },
-  { id: "setup-guided-hillstrom", hash: `#/uc/${UC}`, expect: /Guided setup/ },
+  { id: "setup-doctor-hillstrom", hash: `#/uc/${UC}`, expect: /Data Doctor/ },
   { id: "setup-manual-hillstrom", hash: `#/uc/${UC}`, steps: [click('[data-setup-tab="manual"]')], expect: /Upload CSV, Excel or Parquet/ },
   // Plan M M180: the run page's Data, Model and Output blocks are links to technical pages, marked `data-technical`,
   // so "View details" is no longer visible text in either mode; the blocks are asserted by selector instead.

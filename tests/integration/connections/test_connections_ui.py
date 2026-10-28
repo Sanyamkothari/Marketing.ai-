@@ -1,12 +1,12 @@
-"""The Connections page and Guided setup's "Pick from a connection" (Plan H M80) in jsdom, on REAL bodies.
+"""The Connections page and Manual setup's "Pick from a connection" (Plan H M80) in jsdom, on REAL bodies.
 
 The node tests (`production/ui/connections/*.test.mjs`, sharing that directory's jsdom install as the
-agent, usecase and ops tests do) replay what the app below answered, in the order the screens ask:
+usecase and ops tests do) replay what the app below answered, in the order the screens ask:
 
 * the catalogue, an S3 connection that tested fine (moto), and a PostgreSQL connection whose name
   carries markup and whose test really failed at its first step (nothing listens on port 1);
-* for the picker: the connections list, the S3 listing, the preview of a file, its import - an ordinary
-  upload - and the Guided-setup session the helper then starts on that upload.
+* for the picker: the connections list, the S3 listing, the preview of a file and its import - an ordinary
+  upload.
 """
 
 from __future__ import annotations
@@ -101,9 +101,6 @@ def write_fixtures(root: Path, config_root: Path, monkeypatch: pytest.MonkeyPatc
             ),
             201,
         )
-        bodies["imported_start"] = _ok(
-            client.post(f"/uploads/{upload['upload_id']}/agent-session", json={"use_case": USE_CASE}), 201
-        )
     bodies["ids"] = {
         "s3": s3_id,
         "pg": pg["connection_id"],
@@ -132,7 +129,6 @@ def test_the_fixtures_are_the_world_the_screens_are_tested_in(
         "history.csv": True,
         "notes.pdf": False,
     }
-    assert _read(out, "imported_start")["session"]["status"] in {"needs_review", "ready"}
     assert "testing" not in json.dumps(_read(out, "list")), "no secret in any body the screen sees"
 
 
