@@ -490,6 +490,12 @@ class _Chat(_Review):
             self._ask(action, args)
         elif name in {"join_files", "stack_files"}:
             self._combine(name, args)
+        elif name in {"propose_amount_outcome", "propose_test_column"}:
+            from engine.doctor.agent_amount import run_amount_outcome, run_test_column
+
+            index = self._index(action, args)
+            run = run_amount_outcome if name == "propose_amount_outcome" else run_test_column
+            run(self, index, dict(self.gates[index].unalias_args(args)))
         else:
             super()._act(action)
         if replaces is not None:
@@ -828,7 +834,16 @@ class _Chat(_Review):
 
 _STEP_KEYS: Final[frozenset[str]] = frozenset({"kind", "column"})
 _MAKES_CHANGES: Final[frozenset[str]] = frozenset(
-    {"propose_step", "propose_sql", "propose_features", "propose_combine_rows", "join_files", "stack_files"}
+    {
+        "propose_step",
+        "propose_sql",
+        "propose_features",
+        "propose_combine_rows",
+        "propose_amount_outcome",
+        "propose_test_column",
+        "join_files",
+        "stack_files",
+    }
 )
 
 

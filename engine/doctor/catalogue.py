@@ -153,6 +153,9 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     _R(88, "propose_amount_outcome", "propose", "rules", "new"),
     # S. Is the dated history long enough for the goal
     _R(89, "check_history", "read", "rules", "new"),
+    # T. Facts the AI reads before it proposes a meaning (the name lists became hints)
+    _R(90, "describe_order_file", "read", "rules + ai", "new"),
+    _R(91, "find_test_columns", "read", "rules + ai", "new"),
 )
 """The design §5.5, row by row."""
 

@@ -84,6 +84,7 @@ from engine.doctor.registry import (
     evidence_id_of,
 )
 from engine.doctor.row_contracts import StepProposal
+from engine.doctor.tools_facts import M_FACT_TOOLS
 from engine.doctor.tools_features import parse_query_output
 from engine.doctor.tools_history import M_HISTORY_TOOLS
 from engine.doctor.tools_preview import M_PREVIEW_TOOLS
@@ -438,7 +439,7 @@ class _Review:
             return False
         if tool.name == GOAL_BRIEF_TOOL:
             return _active_goal(self.case) is not None
-        return bool(tool.session_tool or tool.name in (*M_PREVIEW_TOOLS, *M_HISTORY_TOOLS))
+        return bool(tool.session_tool or tool.name in (*M_PREVIEW_TOOLS, *M_HISTORY_TOOLS, *M_FACT_TOOLS))
 
     def _complete(self, prompt: Prompt, variables: dict[str, Any]) -> str:
         """One call to the model on `prompt` rendered with `variables`, after the last egress check. Raises
@@ -570,7 +571,7 @@ class _Review:
         evidence_id = f"r{len(turn.looks) + 1}"
         result: ToolResult
         if (
-            name in (*M_PREVIEW_TOOLS, *M_HISTORY_TOOLS) or name == GOAL_BRIEF_TOOL
+            name in (*M_PREVIEW_TOOLS, *M_HISTORY_TOOLS, *M_FACT_TOOLS) or name == GOAL_BRIEF_TOOL
         ):  # a registry READ tool of its own
             made = self.registry.call(name, args, self._context(index, raw=raw))
             result = ToolResult(
@@ -1000,7 +1001,7 @@ def _data_result(result: ToolResult, ctx: AgentContext, now: Any) -> DataToolRes
         kind=(
             DataToolKind.READ
             if result.tool in TOOLS
-            or result.tool in (*M_PREVIEW_TOOLS, *M_HISTORY_TOOLS)
+            or result.tool in (*M_PREVIEW_TOOLS, *M_HISTORY_TOOLS, *M_FACT_TOOLS)
             or result.tool == GOAL_BRIEF_TOOL
             else DataToolKind.PROPOSE
         ),

@@ -87,6 +87,9 @@ class Offer:
     stage: str
     also_fits: str | None = None
     """The name of the Home goal this one overlaps (same lifecycle stage); None for Home's own goals."""
+    test: tuple[str, str] | None = None
+    """An uplift goal's campaign test as the person confirmed it: (the column, its control group). None: found by
+    the column's name (`treatment_column_of`), or not found."""
 
 
 ID_MAX_BLANK_SHARE: Final[float] = 0.5
@@ -265,12 +268,37 @@ def _offered(files: Sequence[LoadedFile], offer: Offer, root: Path) -> UseCaseRe
         return (
             _amount_gate(files, verdict, config) if config.problem_type is ProblemType.REGRESSION else verdict
         )
-    holder, column = next(
-        ((f, c) for f in files if (c := treatment_column_of(f.frame, config)) is not None), (None, None)
-    )
+    confirmed = offer.test
+    if confirmed is not None:
+        holder, column = next(
+            ((f, confirmed[0]) for f in files if confirmed[0] in f.frame.columns), (None, None)
+        )
+    else:
+        holder, column = next(
+            ((f, c) for f in files if (c := treatment_column_of(f.frame, config)) is not None), (None, None)
+        )
     if holder is None or column is None:
-        return None
-    scope = uplift_scope(holder.frame, column, config)
+        # No column is named like a test: the goal is listed as needing it, never hidden. The AI reads the
+        # candidates (`find_test_columns`) and proposes the column and the control group; the person confirms.
+        need = (
+            "A column saying which customers got the campaign and which were held out (the control group). "
+            "If a file has one under another name, Data Doctor can propose it for you to confirm."
+        )
+        return UseCaseReadiness(
+            use_case_id=config.id,
+            name=config.name,
+            stage=offer.stage,
+            status="missing",
+            upload_id=None,
+            summary="Needs the test column: which customers got the campaign, and which were held out.",
+            needs=(need,),
+            reason_code="NO_TEST_COLUMN",
+            why="No column has been confirmed as the campaign test's groups.",
+            first_fix=need,
+        )
+    scope = uplift_scope(
+        holder.frame, column, config, control=confirmed[1] if confirmed is not None else None
+    )
     if scope.status in {"no_control", "not_random"}:
         return UseCaseReadiness(
             use_case_id=config.id,
@@ -315,7 +343,8 @@ def _amount_gate(
     if holder is None or column is None or column not in holder.frame.columns:
         return verdict
     found = amount_minimums(holder.frame[column], config)
-    update: dict[str, object] = {"yes_count": found.non_zero, "why": f"{verdict.why} {found.message}".strip()}
+    # The yes/no reading of the outcome ("0 of them are a yes") means nothing for an amount: the floor says it all.
+    update: dict[str, object] = {"yes_count": found.non_zero, "why": found.message}
     if not found.enough and verdict.status in {"ready", "check"}:
         update.update(
             status="too_small", reason_code="NOT_ENOUGH", summary=found.message, first_fix=found.message
@@ -409,12 +438,21 @@ def _asked(found: list[tuple[LoadedFile, OutcomeColumn]], offer: Offer) -> UseCa
     loaded = found[0][0]
     rows = loaded.profile.row_count
     meaning = config.target.definition.strip().rstrip(".").lower() or f"the {config.name} outcome"
+    amount = config.problem_type is ProblemType.REGRESSION
     if len(columns) == 1:
-        text = f"{loaded.file_name} has a column {columns[0]}. Is it whether {meaning}?"
+        text = (
+            f"{loaded.file_name} has a column {columns[0]}. Is it the amount: {meaning}?"
+            if amount
+            else f"{loaded.file_name} has a column {columns[0]}. Is it whether {meaning}?"
+        )
         code: ReadinessReason = "GUESSED_COLUMN"
     else:
         shown = ", ".join(columns[:5])
-        text = f"{loaded.file_name} has several columns that might be it ({shown}). Which one says whether {meaning}?"
+        text = (
+            f"{loaded.file_name} has several columns that might be it ({shown}). Which one holds the amount: {meaning}?"
+            if amount
+            else f"{loaded.file_name} has several columns that might be it ({shown}). Which one says whether {meaning}?"
+        )
         code = "TWO_COLUMNS"
     counts = [
         n
@@ -441,11 +479,19 @@ def _asked(found: list[tuple[LoadedFile, OutcomeColumn]], offer: Offer) -> UseCa
 def _needs(config: UseCaseConfig) -> tuple[str, ...]:
     entity = config.entity or "customer"
     definition = config.target.definition.strip().rstrip(".")
-    what = (
-        f"a column saying, for each {entity}, whether: {definition.lower()}"
-        if definition
-        else (f"a column named {config.target.column} with the outcome for each {entity}")
-    )
+    amount = config.problem_type is ProblemType.REGRESSION
+    if amount:
+        what = (
+            f"a column with the amount, for each {entity}: {definition.lower()}"
+            if definition
+            else f"a column named {config.target.column} with the amount for each {entity}"
+        )
+    else:
+        what = (
+            f"a column saying, for each {entity}, whether: {definition.lower()}"
+            if definition
+            else (f"a column named {config.target.column} with the outcome for each {entity}")
+        )
     needs = [what[:1].upper() + what[1:] + "."]
     if config.target.label_source:
         needs.append(f"It usually comes from: {config.target.label_source}.")

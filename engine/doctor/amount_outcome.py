@@ -6,7 +6,18 @@ order history exactly as the yes/no outcomes are: **point in time**.
 
 * The customers are the ones known at the snapshot (`$as_of`): those with an order dated on or before it.
 * The outcome is their total amount over the `window_days` days **after** it (`> $as_of` and `<= $as_of + N`),
-  0 for a customer who ordered nothing in the window. Refunds (negative amounts) are netted in.
+  0 for a customer who ordered nothing in the window. The amount of a row is `amount_column`, or
+  `amount_column * quantity_column` for a line with a unit price and a quantity. `returns` says what a negative
+  row is: `net` (a refund, netted in) or `leave_out` (left out of the sum). Neither is a default: it is a meaning
+  (guide R11: a negative may be a refund, ask first).
+
+**The AI proposes the definition; code does not choose it.** `describe_order_file` (`engine.doctor.tools_facts`,
+#90) returns the facts of an order file (types, shares read as numbers and dates, negatives, whether a letter prefix
+comes with the negative rows), with the old header name lists kept only as hints. The AI reads them and calls
+`propose_amount_outcome` (callers: the rules and the AI) with the columns, the window and what returns mean, and a
+reason; the person approves the sentence, which says all of it. `offer_amount_outcome` only says that an order file
+can define the outcome (and how many negative rows it holds); it names no amount column and no window as decided.
+The point-in-time SQL below, `OUTCOME_WINDOW_PAST_DATA` and `amount_minimums` are unchanged.
 * It is the ordinary `sql_query` recipe step, proposed through :func:`engine.doctor.tools_sql._propose` with
   `reads_future` and `outcome_window_days`, the same way `propose_features` proposes the features: the trial and
   every run go through `materialize_plan` with the same as-of / `training_as_of` date, the future-rows check
@@ -20,7 +31,6 @@ order history exactly as the yes/no outcomes are: **point in time**.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from datetime import date
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -76,8 +86,21 @@ class ProposeAmountOutcomeArgs(BaseModel):
     upload_id: str = Field(min_length=1, description="The file of orders (one row per order or line).")
     entity_key: str = Field(min_length=1, max_length=128, description="The customer ID column of that file.")
     time_column: str = Field(min_length=1, max_length=128, description="The date of each row.")
-    amount_column: str = Field(min_length=1, max_length=128, description="What the row is worth.")
+    amount_column: str = Field(
+        min_length=1,
+        max_length=128,
+        description="What the row is worth, or its unit price with `quantity_column`.",
+    )
+    quantity_column: str | None = Field(
+        default=None, max_length=128, description="Units on the row: the amount is amount_column times this."
+    )
     window_days: int = Field(ge=1, le=3650, description="Days after the snapshot the spend is added up over.")
+    returns: Literal["net", "leave_out"] = Field(
+        description="A negative row: `net` (a refund, netted in) or `leave_out` (left out of the sum)."
+    )
+    reason: str | None = Field(
+        default=None, max_length=300, description="Why this definition, in a sentence."
+    )
     output_name: str = Field(default="outcome_spend", min_length=1, max_length=64)
     outcome_name: str | None = Field(
         default=None, max_length=64, description="The outcome column; default `spend_next_<N>d`."
@@ -99,10 +122,14 @@ def compile_amount_outcome(given: ProposeAmountOutcomeArgs, table: str) -> str:
     key, when, amount = _col(given.entity_key), _col(given.time_column), _col(given.amount_column)
     outcome = _col(outcome_column_name(given))
     days = given.window_days
+    worth = f"TRY_CAST({amount} AS DOUBLE)"
+    if given.quantity_column:
+        worth = f"{worth} * TRY_CAST({_col(given.quantity_column)} AS DOUBLE)"
+    kept = f" AND ({worth}) >= 0" if given.returns == "leave_out" else ""
     return (
         f"WITH ev AS (SELECT {key} AS {_ENTITY}, TRY_CAST({when} AS DATE) AS {_EVENT_TIME}, "
-        f"TRY_CAST({amount} AS DOUBLE) AS {_AMOUNT} FROM {table} "
-        f"WHERE NULLIF(TRIM(CAST({key} AS VARCHAR)), '') IS NOT NULL AND TRY_CAST({when} AS DATE) IS NOT NULL), "
+        f"{worth} AS {_AMOUNT} FROM {table} "
+        f"WHERE NULLIF(TRIM(CAST({key} AS VARCHAR)), '') IS NOT NULL AND TRY_CAST({when} AS DATE) IS NOT NULL{kept}), "
         f"known AS (SELECT DISTINCT {_ENTITY} FROM ev WHERE {_EVENT_TIME} <= CAST($as_of AS DATE)) "
         f"SELECT k.{_ENTITY} AS {key}, COALESCE(SUM(e.{_AMOUNT}), 0.0) AS {outcome} "
         f'FROM "known" k LEFT JOIN "ev" e ON e.{_ENTITY} = k.{_ENTITY} '
@@ -123,10 +150,7 @@ def propose_amount_outcome(given: ProposeAmountOutcomeArgs, ctx: DataToolContext
         )
     table = table_names(ctx.files)[given.upload_id]
     sql_args = ProposeSqlStepArgs(
-        description=(
-            f"Spend in the {given.window_days} days after the snapshot, per {given.entity_key} "
-            f"(customers with an order on or before it; {given.amount_column} added up, 0 when none)."
-        )[:300],
+        description=amount_sentence(given)[:300],
         sql=compile_amount_outcome(given, table_alias(table)),
         output_name=given.output_name,
         upload_ids=(given.upload_id,),
@@ -138,6 +162,20 @@ def propose_amount_outcome(given: ProposeAmountOutcomeArgs, ctx: DataToolContext
         outcome_window_days=given.window_days,
     )
     return _propose(sql_args, ctx)
+
+
+def amount_sentence(given: ProposeAmountOutcomeArgs) -> str:
+    """What the person approves, in plain words: the amount, the window, what a negative row is, who counts."""
+    worth = (
+        f"{given.amount_column} times {given.quantity_column}"
+        if given.quantity_column
+        else given.amount_column
+    )
+    returns = "refunds netted in" if given.returns == "net" else "negative rows left out"
+    return (
+        f"Spend in the {given.window_days} days after the snapshot, per {given.entity_key}: {worth} added up "
+        f"({returns}), 0 when none; customers with an order on or before the snapshot."
+    )
 
 
 class AmountMinimums(StrictBase):
@@ -184,91 +222,57 @@ def amount_minimums(outcome: pd.Series[Any], config: UseCaseConfig) -> AmountMin
     )
 
 
-_AMOUNT_NAME: Final[re.Pattern[str]] = re.compile(
-    r"amount|spend|revenue|sales|total|price|paid|payment|value", re.IGNORECASE
-)
-_NOT_AMOUNT_NAME: Final[re.Pattern[str]] = re.compile(
-    r"count|qty|quantity|id$|number|rate|pct|percent", re.IGNORECASE
-)
-_DATE_NAME: Final[re.Pattern[str]] = re.compile(r"date|time|ordered|purchase|placed|day", re.IGNORECASE)
-_ID_NAME: Final[re.Pattern[str]] = re.compile(
-    r"(^|[^a-z])(id|key|code)$|^(customer|client|user|account)$", re.IGNORECASE
-)
-_READABLE: Final[float] = 0.8
-"""A column counts as numbers or dates when this share of its filled cells reads as one."""
-
-
-def _readable_share(parsed: pd.Series[Any], raw: pd.Series[Any]) -> float:
-    filled = int(raw.notna().sum())
-    return float(parsed.notna().sum()) / filled if filled else 0.0
-
-
-def _order_columns(file: LoadedFile, entity: str) -> tuple[str, str, str] | None:
-    """`(customer ID, date, amount)` columns of a file with a row per order, or None when it is not one."""
-    frame = file.frame
-    if frame.empty:
-        return None
-    amounts = [
-        c
-        for c in frame.columns
-        if _AMOUNT_NAME.search(str(c))
-        and not _NOT_AMOUNT_NAME.search(str(c))
-        and _readable_share(pd.to_numeric(frame[c], errors="coerce"), frame[c]) >= _READABLE
-    ]
-    dates = [
-        c
-        for c in frame.columns
-        if _DATE_NAME.search(str(c))
-        and c not in amounts
-        and _readable_share(pd.to_datetime(frame[c], errors="coerce", format="mixed"), frame[c]) >= _READABLE
-    ]
-    keys = [
-        c
-        for c in frame.columns
-        if c not in amounts
-        and c not in dates
-        and (_ID_NAME.search(str(c)) or entity in str(c).lower())
-        and frame[c].notna().mean() >= 0.5
-        and frame[c].nunique()
-        < frame[c].notna().sum()  # customers repeat: one row per order, not per customer
-    ]
-    if not (amounts and dates and keys):
-        return None
-    keys.sort(key=lambda c: (entity not in str(c).lower(), list(frame.columns).index(c)))
-    return str(keys[0]), str(dates[0]), str(amounts[0])
-
-
 def offer_amount_outcome(files: Sequence[LoadedFile], config: UseCaseConfig) -> AmountOutcomeOffer | None:
-    """For an amount goal that no file carries the outcome of: the order file that can define it, or None.
+    """For an amount goal that no file carries the outcome of: a file of orders that can define it, or None.
 
-    A file qualifies with a customer ID that repeats, a date column and an amount column. The outcome is named as
-    the goal's own target column, so Guided setup finds it. Nothing is proposed here; the person is shown the
-    sentence and `propose_amount_outcome` builds the pending step once they agree.
+    A file qualifies by its facts (`engine.doctor.tools_facts.order_file_facts`): a column whose values repeat (a
+    customer per order), a column read as dates and a column read as numbers. Nothing is chosen here: the sentence
+    says the outcome can be built and what the AI and the person settle (which amount, how many days, what a negative
+    row is); the column hints ride along as hints. The AI proposes the definition with `propose_amount_outcome`.
     """
+    from engine.doctor.tools_facts import order_file_facts
+
     entity = config.entity or "customer"
     for file in files:
-        found = _order_columns(file, entity)
-        if found is None:
+        if file.frame.empty:
             continue
-        key, when, amount = found
-        outcome = config.target.column or f"spend_next_{DEFAULT_WINDOW_DAYS}d"
+        facts = order_file_facts(file.upload_id, file.frame)
+        keys = sorted(
+            (c for c in facts.columns if c.rows_per_value > 1 and c.dates_share < 0.8),
+            key=lambda c: (c.hint != "id", c.numbers_share >= 0.8),
+        )
+        dates = [c for c in facts.columns if c.dates_share >= 0.8]
+        key = keys[0] if keys else None
+        numbers = [
+            c for c in facts.columns if c.numbers_share >= 0.8 and key is not None and c.column != key.column
+        ]
+        if key is None or not (dates and numbers):
+            continue
+        hinted = sorted(numbers, key=lambda c: c.hint != "amount")
+        negatives = (
+            f" It has {facts.negative_rows:,} rows with a negative number: say whether they are refunds."
+            if facts.negative_rows
+            else ""
+        )
         return AmountOutcomeOffer(
             upload_id=file.upload_id,
-            entity_key=key,
-            time_column=when,
-            amount_column=amount,
+            entity_key=key.column,
+            time_column=next((c.column for c in dates if c.hint == "date"), dates[0].column),
+            amount_column=hinted[0].column,
             window_days=DEFAULT_WINDOW_DAYS,
-            outcome_name=outcome,
+            outcome_name=config.target.column or f"spend_next_{DEFAULT_WINDOW_DAYS}d",
+            amount_candidates=tuple(c.column for c in hinted[:8]),
             sentence=(
-                f"{file.file_name} has an order per row. I can add up {amount} in the {DEFAULT_WINDOW_DAYS} days "
-                f"after the snapshot date for each {entity} ({key}), 0 for one who bought nothing, as {outcome}."
+                f"{file.file_name} has an order per row, so the spend of each {entity} after the snapshot date can "
+                "be built from it. Ask Data Doctor to propose it: which amount (or quantity times price), over how "
+                f"many days, and who counts; you approve the sentence.{negatives}"
             ),
         )
     return None
 
 
 def register_amount_tools(registry: DataToolRegistry) -> tuple[str, ...]:
-    """Register `propose_amount_outcome` (catalogue #88), for the rules; its names."""
+    """Register `propose_amount_outcome` (catalogue #88), for the rules and the AI; its names."""
     registry.register(
         DataTool(
             number=88,
@@ -276,9 +280,10 @@ def register_amount_tools(registry: DataToolRegistry) -> tuple[str, ...]:
             kind=DataToolKind.PROPOSE,
             description=(
                 "Propose the spend in the N days after the snapshot date, per customer, from a file of orders: "
-                "an amount, not a yes or no, 0 for a customer who bought nothing. Only the outcome column reads "
-                "past the date. Shown as a plain description with the rows made; nothing is changed until the "
-                "person approves the plan."
+                "an amount, not a yes or no, 0 for a customer who bought nothing. You choose the amount (or "
+                "quantity times price), the window and whether a negative row is a refund, from "
+                "`describe_order_file`, with a reason. Only the outcome column reads past the date; nothing is "
+                "changed until the person approves the plan."
             ),
             input_model=ProposeAmountOutcomeArgs,
             output_model=SqlStepProposal,
@@ -289,7 +294,7 @@ def register_amount_tools(registry: DataToolRegistry) -> tuple[str, ...]:
             ),
             exposure=Exposure.SESSION_ONLY,
             run=propose_amount_outcome,
-            callers=frozenset({"rules"}),
+            callers=frozenset({"rules", "ai"}),
             needs=("files",),
             max_output_bytes=MAX_OUTPUT_CHARS,
             policy_kind="data.propose_amount_outcome",

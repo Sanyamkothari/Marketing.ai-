@@ -508,9 +508,16 @@ export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
       // A goal to check is chosen first; its question is asked then, so only a goal with a real gap shows a first fix.
       const best = index === 0 && ["ready", "check"].includes(u.status);
       const fix = u.status !== "ready" && u.status !== "check" && u.first_fix ? `<span class="dds-why" data-dds-goal-fix>To do first: ${esc(plain(u.first_fix))}</span>` : "";
+      // A Home goal this one overlaps (roadmap section 0): said, so the person sees why both are listed.
+      const also = u.also_fits ? `<span class="dds-why" data-dds-goal-also>Also fits: ${esc(plain(u.also_fits))}</span>` : "";
+      // What the AI can propose for a missing goal; the person approves what it proposes (nothing is added here).
+      const ask = goalAsk(u);
+      const askButton = ask
+        ? ` ${button({ label: ask.label, kind: "tertiary", size: "sm", attrs: `data-dds-prompt="${esc(ask.prompt)}" data-dds-goal-ask="${esc(u.use_case_id)}"`, disabled: busy })}`
+        : "";
       return `<li class="dds-goal" data-dds-goal-row="${esc(u.use_case_id)}"><span class="dds-item-body"><span class="dds-item-t">${esc(name)}${
         best ? ` <span class="chip neutral" data-dds-goal-best>Best fit</span>` : ""
-      }</span>${notes.map((n) => `<span class="dds-why" data-dds-goal-why>${n}</span>`).join("")}${fix}</span>${button({
+      }</span>${notes.map((n) => `<span class="dds-why" data-dds-goal-why>${n}</span>`).join("")}${fix}${also}</span>${askButton}${button({
         label: "Choose this goal",
         kind: best ? "primary" : "secondary",
         attrs: `data-dds-goal="${esc(u.use_case_id)}" aria-label="Choose the goal: ${esc(name)}"`,
@@ -519,6 +526,19 @@ export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
     })
     .join("");
   return `<section class="dds-group" data-dds-goals aria-labelledby="dds-g-goals"><h${level} id="dds-g-goals" class="dds-group-t">What this data can be used for</h${level}><p class="dds-why">Best fit first. Choose a goal and Data Doctor checks whether your data is ready for it. Nothing you answered is asked again.</p><ul class="dds-items">${rows}</ul></section>`;
+}
+
+/** The chat prompt a missing goal offers: the spend outcome an order file can define, or the test column of a campaign. */
+export function goalAsk(u) {
+  if (!u || u.status !== "missing") return null;
+  const name = goalName(u.use_case_id, u.name);
+  if (u.amount_outcome) {
+    return { label: "Add this outcome", prompt: `Propose the outcome for ${name} from the order file, and say why.` };
+  }
+  if (u.reason_code === "NO_TEST_COLUMN") {
+    return { label: "Find the test column", prompt: `Which column says who got the campaign for ${name}, and which group is the control group?` };
+  }
+  return null;
 }
 
 // --- adding a file --------------------------------------------------------------------------------------------

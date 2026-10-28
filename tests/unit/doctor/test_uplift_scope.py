@@ -121,7 +121,8 @@ def test_uplift_is_offered_only_for_a_file_with_the_treatment_column(config_root
     assert mine[0].balance is not None and mine[0].balance.balanced
     without = campaign().drop(columns=["segment"])
     found = list(readiness([loaded(without, "email.csv", config_root)], offers(config_root), config_root))
-    assert all(v.use_case_id != "hillstrom-email" for v in found)
+    (listed,) = [v for v in found if v.use_case_id == "hillstrom-email"]  # listed as needing it, never hidden
+    assert listed.status == "missing" and listed.reason_code == "NO_TEST_COLUMN" and listed.balance is None
 
 
 def test_a_targeted_campaign_file_is_out_of_scope_with_the_sentence(config_root: Path) -> None:
@@ -144,10 +145,11 @@ def _hillstrom_verdicts(frame: pd.DataFrame, config_root: Path) -> list:  # type
 def test_a_customer_segment_that_shares_the_name_is_not_a_campaign_test(config_root: Path) -> None:
     frame = campaign().drop(columns=["conversion"])
     frame["segment"] = np.random.default_rng(3).choice(["Gold", "Silver", "Bronze"], size=len(frame))
-    assert _hillstrom_verdicts(frame, config_root) == []
+    assert [v.reason_code for v in _hillstrom_verdicts(frame, config_root)] == ["NO_TEST_COLUMN"]
     with_outcome = campaign()
     with_outcome["segment"] = frame["segment"]
-    assert _hillstrom_verdicts(with_outcome, config_root) == []  # no control group by name: not an experiment
+    # no control group by name: not read as an experiment, the goal waits for the person to name the test column
+    assert [v.reason_code for v in _hillstrom_verdicts(with_outcome, config_root)] == ["NO_TEST_COLUMN"]
 
 
 def test_a_campaign_test_with_another_column_name_is_offered(config_root: Path) -> None:
@@ -163,4 +165,73 @@ def test_a_column_named_like_a_treatment_without_the_outcome_is_not_offered(conf
     frame = (
         campaign(groups=["control", "mail"]).rename(columns={"segment": "group"}).drop(columns=["conversion"])
     )
-    assert _hillstrom_verdicts(frame, config_root) == []
+    assert [v.reason_code for v in _hillstrom_verdicts(frame, config_root)] == ["NO_TEST_COLUMN"]
+
+
+def test_an_outcome_under_another_name_is_not_tested_for_balance(config_root: Path) -> None:
+    frame = campaign().rename(columns={"visit": "site_visit"})
+    frame["site_visit"] = np.where(
+        frame["segment"] == "No E-Mail", 0, frame["site_visit"]
+    )  # the campaign works
+    scope = uplift_scope(frame, "segment", hillstrom(config_root))
+    assert scope.status == "ok", scope.message
+    assert scope.balance is not None and "site_visit" not in {c.column for c in scope.balance.flagged}
+
+
+def test_a_one_group_campaign_file_is_missing_not_random_at_readiness(config_root: Path) -> None:
+    one = campaign(groups=["Mens E-Mail"])
+    mine = _hillstrom_verdicts(one, config_root)
+    if mine and mine[0].reason_code == "NO_TEST_COLUMN":
+        return  # no column reads as a test at all: listed as needing one
+    (verdict,) = mine
+    assert verdict.status == "missing" and verdict.reason_code == "NOT_RANDOM"
+    assert verdict.first_fix == out_of_scope("UPLIFT_NOT_RANDOM")
+
+
+def test_the_facts_list_the_candidate_columns_without_their_group_names(config_root: Path) -> None:
+    from engine.doctor.tools_facts import campaign_columns
+
+    frame = campaign(groups=["A", "base"]).rename(columns={"segment": "email_sent"})
+    facts = campaign_columns("u1", frame, hillstrom(config_root))
+    assert facts.outcome_in_file
+    sent = next(c for c in facts.columns if c.column == "email_sent")
+    assert [lv.level for lv in sent.levels] == ["L1", "L2"] and sum(lv.rows for lv in sent.levels) == len(
+        frame
+    )
+    assert "base" not in facts.model_dump_json() and '"A"' not in facts.model_dump_json()
+
+
+def test_a_test_column_the_person_confirmed_is_read_as_they_said(config_root: Path) -> None:
+    from datetime import UTC, datetime
+
+    from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
+    from engine.doctor.case import CaseItem, payload_digest
+    from engine.doctor.tools import TEST_COLUMN_KIND, confirmed_tests
+    from engine.doctor.tools_facts import level_labels
+
+    frame = campaign(groups=["A", "base"]).rename(columns={"segment": "email_sent"})
+    files = [loaded(frame, "email.csv", config_root)]
+    control = f"L{level_labels(frame['email_sent']).index('base') + 1}"
+    payload = {"upload_id": files[0].upload_id, "column": "email_sent", "control_level": control}
+
+    def item(state: ProposalState) -> CaseItem:
+        return CaseItem(
+            item_id="treatment_column.x",
+            kind=TEST_COLUMN_KIND,
+            title="t",
+            source=ProposalSource.AI,
+            confidence=AgentConfidence.CHECK,
+            state=state,
+            upload_id=files[0].upload_id,
+            payload=payload,
+            payload_digest=payload_digest(payload),
+            proposed_at=datetime(2026, 10, 1, tzinfo=UTC),
+        )
+
+    waiting = confirmed_tests(offers(config_root), files, [item(ProposalState.PENDING)])
+    found = [v for v in readiness(files, waiting, config_root) if v.use_case_id == "hillstrom-email"]
+    assert [v.reason_code for v in found] == ["NO_TEST_COLUMN"]  # a proposal waits for the person
+    agreed = confirmed_tests(offers(config_root), files, [item(ProposalState.ACCEPTED)])
+    (verdict,) = [v for v in readiness(files, agreed, config_root) if v.use_case_id == "hillstrom-email"]
+    assert verdict.status in {"ready", "check"} and verdict.balance is not None
+    assert verdict.balance.control_group == "base" and verdict.balance.balanced

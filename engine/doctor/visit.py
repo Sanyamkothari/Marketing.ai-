@@ -2188,7 +2188,8 @@ def _generic_rules(run: _Run, case: Case, step: _Step) -> None:
     """No goal: what the data can power, and what is missing for the other goals (the design §3.1)."""
     if not run.deps.offers:
         return
-    ctx = run.context(case, files=run.current(case).files)
+    # the case's items: a campaign test the person confirmed (`treatment_column`) is read as they said
+    ctx = run.context(case, files=run.current(case).files, case_items=active_section(case)[0])
     power = run.call("what_can_this_power", {}, ctx)
     verdicts = list(power.output["use_cases"])
     missing = tuple(

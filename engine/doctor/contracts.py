@@ -35,7 +35,7 @@ __all__ = [
 
 ReadinessStatus = Literal["ready", "check", "missing", "too_small"]
 ReadinessReason = Literal[
-    "NO_OUTCOME", "GUESSED_COLUMN", "TWO_COLUMNS", "NOT_ENOUGH", "STOPPED", "NOT_RANDOM"
+    "NO_OUTCOME", "GUESSED_COLUMN", "TWO_COLUMNS", "NOT_ENOUGH", "STOPPED", "NOT_RANDOM", "NO_TEST_COLUMN"
 ]
 
 
@@ -71,17 +71,21 @@ class FileDiagnosis(StrictBase):
 
 
 class AmountOutcomeOffer(StrictBase):
-    """An amount goal's outcome an order file can define: the arguments of `propose_amount_outcome`, for the
-    person to agree to. Names columns and numbers only; nothing is built until the person approves the plan.
+    """An amount goal's outcome an order file can define. Hints for the AI's `propose_amount_outcome`, never a
+    choice: the AI proposes the definition with a reason and the person approves it. Names and numbers only.
     """
 
     upload_id: str = Field(description="The file of orders.")
-    entity_key: str = Field(description="Its customer ID column.")
-    time_column: str = Field(description="Its order date column.")
-    amount_column: str = Field(description="Its amount column.")
-    window_days: int = Field(description="Days after the snapshot the spend is added up over.")
+    entity_key: str = Field(description="A hint: the column whose values repeat (the customer per order).")
+    time_column: str = Field(description="A hint: a column read as dates.")
+    amount_column: str = Field(description="A hint: a column read as numbers; the AI and the person choose.")
+    window_days: int = Field(description="A first window to discuss; the person approves the one used.")
     outcome_name: str = Field(description="The outcome column the goal learns from.")
-    sentence: str = Field(description="One plain sentence saying what would be built.")
+    sentence: str = Field(description="One plain sentence: what can be built and what is still to settle.")
+    amount_candidates: tuple[str, ...] = Field(
+        default=(),
+        description="The columns read as numbers, name-hinted amounts first (hints, not a choice).",
+    )
 
 
 class UseCaseReadiness(StrictBase):

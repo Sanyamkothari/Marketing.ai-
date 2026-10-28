@@ -48,6 +48,7 @@ def args(**more: Any) -> ProposeAmountOutcomeArgs:
             "time_column": "OrderDate",
             "amount_column": "Amount",
             "window_days": 30,
+            "returns": "net",
             **more,
         }
     )
@@ -116,7 +117,7 @@ def test_a_name_that_is_not_a_column_name_is_refused() -> None:
 
 
 def test_the_floor_is_a_thousand_customers_and_two_hundred_who_spent(config_root: Path) -> None:
-    config = load_use_case("retail-win-back", config_root)
+    config = load_use_case("customer-spend", config_root)
     rng = np.random.default_rng(3)
     enough = pd.Series(np.where(rng.random(1500) < 0.3, rng.gamma(2.0, 50.0, 1500), 0.0))
     assert amount_minimums(enough, config).enough
@@ -164,14 +165,12 @@ def _history(customers: int = 40) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["customer_id", "ordered_on", "order_total"])
 
 
-def test_the_registry_offers_the_tool_to_the_rules_only() -> None:
+def test_the_registry_offers_the_tool_to_the_rules_and_the_ai() -> None:
     from engine.doctor.registry import data_registry
 
-    assert (
-        data_registry().find("propose_amount_outcome", context(orders())) is None
-    )  # the AI is not offered it
+    assert data_registry().find("propose_amount_outcome", context(orders())) is not None  # the AI proposes it
     tool = data_registry().find("propose_amount_outcome", context(orders(), caller="rules"))
-    assert tool is not None and tool.number == 88 and tool.callers == frozenset({"rules"})
+    assert tool is not None and tool.number == 88 and tool.callers == frozenset({"rules", "ai"})
     out = data_registry().call(
         "propose_amount_outcome", args(as_of=AS_OF).model_dump(mode="json"), context(orders(), caller="rules")
     )
@@ -188,24 +187,24 @@ def test_an_order_file_makes_a_missing_spend_goal_offer_its_outcome(config_root:
     offer = verdict.amount_outcome
     assert verdict.status == "missing" and verdict.reason_code == "NO_OUTCOME"
     assert offer is not None and verdict.first_fix == offer.sentence
-    assert (offer.entity_key, offer.time_column, offer.amount_column) == (
-        "customer_id",
-        "ordered_on",
-        "order_total",
-    )
-    assert offer.outcome_name == "spend_next_90d" and offer.window_days == 90
-    # the offer is exactly the tool's arguments: agreeing to it proposes the pending step
+    # the offer decides nothing: its sentence asks for the definition, and the columns are hints
+    assert "Ask Data Doctor to propose it" in offer.sentence and "order_total" not in offer.sentence
+    assert (offer.entity_key, offer.time_column) == ("customer_id", "ordered_on")
+    assert offer.amount_candidates[0] == "order_total"
+    # the AI's proposal, with its own choices, is what builds the pending step
     proposal = propose_amount_outcome(
         ProposeAmountOutcomeArgs(
             upload_id=offer.upload_id,
             entity_key=offer.entity_key,
             time_column=offer.time_column,
-            amount_column=offer.amount_column,
-            window_days=offer.window_days,
+            amount_column="order_total",
+            window_days=60,
+            returns="net",
             outcome_name=offer.outcome_name,
             as_of=date(2025, 3, 31),
+            reason="order_total is what each order was worth",
         ),
-        DataToolContext(files=(loaded,), caller="rules", principal=PRINCIPAL),
+        DataToolContext(files=(loaded,), caller="ai", principal=PRINCIPAL),
     )
     assert offer.outcome_name in proposal.all_columns
 
@@ -217,3 +216,78 @@ def test_a_file_without_orders_offers_nothing(config_root: Path) -> None:
     flat = pd.DataFrame({"customer_id": [f"C{i}" for i in range(50)], "age": range(50)})
     loaded = LoadedFile(upload_id="up-2", file_name="people.csv", frame=flat, profile=cast(Any, None))
     assert offer_amount_outcome([loaded], config) is None
+
+
+def retail_lines() -> pd.DataFrame:
+    """UCI Online Retail's shape: a line per item, a unit price and a quantity, cancellations as C-invoices."""
+    rows = [
+        ("536365", "A1", 6, "2025-07-01", 2.55, "C1"),
+        ("536365", "A2", 8, "2025-07-01", 3.39, "C1"),
+        ("C536379", "A1", -1, "2025-07-03", 2.55, "C1"),
+        ("536366", "A3", 2, "2025-06-20", 1.85, "C2"),
+        ("536367", "A3", 10, "2025-07-10", 1.85, "C2"),
+    ]
+    return pd.DataFrame(
+        rows, columns=["InvoiceNo", "StockCode", "Quantity", "InvoiceDate", "UnitPrice", "CustomerID"]
+    )
+
+
+def test_the_facts_of_an_order_file_name_no_cell_and_show_cancellations() -> None:
+    from engine.doctor.tools_facts import order_file_facts
+
+    facts = order_file_facts("up-1", retail_lines())
+    by = {c.column: c for c in facts.columns}
+    assert facts.negative_rows == 1 and by["Quantity"].negatives == 1
+    assert by["UnitPrice"].hint == "amount" and by["Quantity"].hint == "quantity"
+    assert by["InvoiceNo"].prefix_on_negatives == 1.0 and by["InvoiceNo"].prefix_elsewhere == 0.0
+    text = facts.model_dump_json()
+    assert "536379" not in text and "A1" not in text.replace('"A1"', "")
+
+
+def test_quantity_times_price_and_returns_left_out_are_the_ais_choice() -> None:
+    lines = retail_lines()
+    lines = lines.rename(columns={"CustomerID": "Customer"})
+    common = {"entity_key": "Customer", "time_column": "InvoiceDate", "amount_column": "UnitPrice"}
+    net = spend(lines, **common, quantity_column="Quantity")
+    assert round(net.loc["C2"], 2) == 18.5  # 10 x 1.85, not a sum of unit prices
+    # C1 is known at the snapshot only through an earlier order
+    lines = pd.concat(
+        [lines, pd.DataFrame([("536300", "A9", 1, "2025-06-01", 1.0, "C1")], columns=lines.columns)]
+    )
+    kept = spend(lines, **common, quantity_column="Quantity", returns="leave_out")
+    assert round(kept.loc["C1"], 2) == round(6 * 2.55 + 8 * 3.39, 2)
+    netted = spend(lines, **common, quantity_column="Quantity", returns="net")
+    assert round(netted.loc["C1"], 2) == round(6 * 2.55 + 8 * 3.39 - 2.55, 2)
+
+
+def test_the_approved_sentence_says_every_choice() -> None:
+    from engine.doctor.amount_outcome import amount_sentence
+
+    said = amount_sentence(args(quantity_column="Qty", returns="leave_out", window_days=60))
+    assert "60 days" in said and "Amount times Qty" in said and "negative rows left out" in said
+
+
+def test_an_amount_goal_speaks_of_amounts_not_yes(config_root: Path) -> None:
+    from api.routes.doctor import offers
+    from engine.doctor.diagnose import Offer, readiness
+    from tests.unit.doctor.test_diagnose import loaded as loaded_file
+
+    found = readiness(
+        [loaded_file(spenders(1500, 0.3), "spend.csv", config_root)], offers(config_root), config_root
+    )
+    good = next(v for v in found if v.use_case_id == "customer-spend")
+    assert "are a yes" not in good.why and "with spend" in good.why
+    config = load_use_case("customer-spend", config_root)
+    flat = pd.DataFrame({"customer_id": [f"C{i}" for i in range(50)], "age": range(50)})
+    plain = LoadedFile(upload_id="up-3", file_name="people.csv", frame=flat, profile=cast(Any, None))
+    (missing,) = readiness([plain], [Offer(config=config, stage="Growth")], config_root)
+    assert missing.needs[0].startswith("A column with the amount")
+    two = spenders(1500, 0.3).assign(spend_last_90d=lambda f: f["spend_next_90d"])
+    asked = [
+        v
+        for v in readiness(
+            [loaded_file(two, "spend.csv", config_root)], [Offer(config=config, stage="Growth")], config_root
+        )
+        if v.reason_code in {"GUESSED_COLUMN", "TWO_COLUMNS"}
+    ]
+    assert all("whether" not in v.why and "amount" in v.why for v in asked)

@@ -153,17 +153,34 @@ def _text(value: object) -> str:
 def _description_columns(frame: pd.DataFrame, config: UseCaseConfig, treatment: str) -> list[str]:
     """The columns known before the campaign: all but the treatment, the outcome, the configured exclusions
     (outcomes of the same weeks, the treatment date), and anything that is an ID or free text."""
+    from engine.agent.tools import _name_matches
+    from engine.doctor.diagnose import outcome_columns
+
+    # what the campaign weeks measured, under any of its names: the target and its synonyms, and the configured
+    # exclusions (`visit`, `spend`), as whole words of a column name (`site_visit`)
+    after = tuple(
+        word
+        for word in (
+            config.target.column,
+            *config.agent.column_hints.target_synonyms,
+            *config.prepare.exclude_columns,
+        )
+        if word and word != treatment
+    )
     skip = {
         treatment,
         *(config.uplift.reserved_columns()),
         *(config.prepare.exclude_columns),
         *(c for c in (config.target.column, config.split.time_column) if c),
+        # an outcome read under another name (`site_visit`, `purchased`) is measured after the campaign: never
+        # a column known before it, so it is not tested for balance
+        *(c.column for c in outcome_columns(frame, config)),
     }
     rows = max(len(frame), 1)
     chosen: list[str] = []
     for name in frame.columns:
         column = str(name)
-        if column in skip:
+        if column in skip or _name_matches(column, after):
             continue
         series = frame[name]
         if series.notna().sum() == 0:
@@ -188,7 +205,7 @@ def _is_number(series: pd.Series) -> bool:
 
 def _smd(treated: pd.Series, control: pd.Series) -> tuple[float, float] | None:
     """`(standardized mean difference, two-sided p)` of two numeric groups; None when either has under 2 values."""
-    from scipy import stats  # type: ignore[import-untyped]  # a scikit-learn dependency, no stubs
+    from scipy import stats  # type: ignore[import-untyped]  # declared in pyproject.toml; it ships no stubs
 
     a = treated.dropna().to_numpy(dtype=float)
     b = control.dropna().to_numpy(dtype=float)
@@ -328,10 +345,16 @@ def treatment_column_of(frame: pd.DataFrame, config: UseCaseConfig) -> str | Non
     return None
 
 
-def uplift_scope(frame: pd.DataFrame, treatment_column: str, config: UseCaseConfig) -> UpliftScope:
-    """Whether the campaign test in `frame` is in scope for an uplift goal, with the numbers behind the answer."""
+def uplift_scope(
+    frame: pd.DataFrame, treatment_column: str, config: UseCaseConfig, *, control: str | None = None
+) -> UpliftScope:
+    """Whether the campaign test in `frame` is in scope for an uplift goal, with the numbers behind the answer.
+
+    `control` is the control group the person confirmed (`Offer.test`); without it the control group is the one the
+    configuration or a control-like name points to."""
     levels = list(dict.fromkeys(frame[treatment_column].dropna().map(_text).tolist()))
-    control = control_level(levels, _configured_levels(levels, config))
+    if control is None:
+        control = control_level(levels, _configured_levels(levels, config))
     balance = check_treatment_balance(frame, treatment_column, config, control=control)
     rule = out_of_scope("UPLIFT_NOT_RANDOM")
     if balance.control_group is None:

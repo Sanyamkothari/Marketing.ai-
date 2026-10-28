@@ -608,6 +608,31 @@ test("every control is a 40px target: buttons are the theme's, rows and links ha
   assert.ok(!/#[0-9a-fA-F]{3,6}\b/.test(CSS), "colours are the theme's tokens");
 });
 
+test("a goal that overlaps a Home goal says so, and a missing goal offers what the AI can propose", () => {
+  const host = document.createElement("div");
+  host.innerHTML = view.goalsHtml({
+    case: {
+      diagnosis: {
+        use_cases: [
+          { use_case_id: "telco-churn", name: "Churn", status: "ready", why: "a.csv has 4,000 customers.", also_fits: "Keep customers" },
+          { use_case_id: "customer-spend", name: "Spend", status: "missing", why: "No outcome.", amount_outcome: { upload_id: "u1", sentence: "s" } },
+          { use_case_id: "hillstrom-email", name: "E-mail", status: "missing", reason_code: "NO_TEST_COLUMN", why: "No test column." },
+          { use_case_id: "other", name: "Other", status: "missing", why: "Nothing." },
+        ],
+      },
+    },
+    view: { mode: "generic" },
+  });
+  const row = (id) => host.querySelector(`[data-dds-goal-row="${id}"]`);
+  assert.match(row("telco-churn").querySelector("[data-dds-goal-also]").textContent, /Also fits: Keep customers/);
+  assert.equal(row("customer-spend").querySelector("[data-dds-goal-also]"), null);
+  const spend = row("customer-spend").querySelector("[data-dds-goal-ask]");
+  assert.ok(spend && spend.dataset.ddsPrompt.startsWith("Propose the outcome for"), "the spend goal asks the AI");
+  const test_ = row("hillstrom-email").querySelector("[data-dds-goal-ask]");
+  assert.ok(test_ && /control group/.test(test_.dataset.ddsPrompt));
+  assert.equal(row("other").querySelector("[data-dds-goal-ask]"), null);
+});
+
 test("visible text: no word the glossary keeps from a marketer, in any shape", async () => {
   for (const at of [...ALL, "empty"]) {
     await show(at, at === "empty" ? { cases: { cases: [] } } : {});

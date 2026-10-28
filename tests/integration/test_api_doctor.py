@@ -96,6 +96,11 @@ def test_three_mixed_files_reach_guided_setup_without_manual_setup(
         item for item in diagnosis["use_cases"] if item["status"] == "missing" and item["upload_id"] is None
     ]
     assert missing and all(item["needs"] for item in missing)
+    # the diagnosis answer itself says which goals repeat a Home goal (`also_fits`), and the Home goals do not
+    assert verdicts["telco-churn"].get("also_fits"), "Telco Churn says it also fits Home's churn goal"
+    assert verdicts["rca"].get("also_fits") is None
+    # a campaign test goal is listed as needing its test column, never dropped
+    assert verdicts["hillstrom-email"]["reason_code"] == "NO_TEST_COLUMN"
 
     handed = client.post("/doctor/handoff", json={"upload_id": ad["upload_id"], "use_case": USE_CASE})
     assert handed.status_code == 201, handed.text
@@ -212,4 +217,4 @@ def test_no_trainable_goal_is_left_out_and_one_that_repeats_a_home_goal_says_whi
     assert found["rca"].also_fits is None, "a Home goal is not marked"
     assert (
         "hillstrom-email" in found
-    ), "a campaign test is offered too; the diagnosis drops it with no treatment column"
+    ), "a campaign test is offered too; with no test column the diagnosis lists it as needing one"

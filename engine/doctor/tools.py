@@ -25,7 +25,7 @@ by Plan G (`max_output_bytes=None`), so the registry never refuses what Plan G a
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Final, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel
@@ -674,6 +674,7 @@ def _what_can_this_power(_parsed: NoArgs, ctx: DataToolContext) -> PowerVerdicts
 
     files = list(ctx.files) or [_loaded(ctx, None)]
     offers = ctx.offers or (Offer(config=_config(ctx), stage=""),)
+    offers = confirmed_tests(offers, files, ctx.case_items or ())
     verdicts = list(readiness(files, offers, _root(ctx)))
 
     def fits() -> bool:
@@ -687,6 +688,41 @@ def _what_can_this_power(_parsed: NoArgs, ctx: DataToolContext) -> PowerVerdicts
             break
         verdicts[index] = verdicts[index].model_copy(update={"first_look": None})
     return PowerVerdicts(use_cases=tuple(verdicts))
+
+
+TEST_COLUMN_KIND: Final[str] = "treatment_column"
+"""A case item: the column that holds a campaign test's groups and its control group, proposed by the AI
+(`propose_test_column`) and confirmed by the person. Payload: `upload_id`, `column`, `control_level` (`L1`..)."""
+
+
+def confirmed_tests(offers: Sequence[Any], files: Sequence[Any], items: Sequence[Any]) -> tuple[Any, ...]:
+    """The offers with the campaign test the person confirmed: an accepted `treatment_column` item names the column
+    and its control group, so an uplift goal reads that column and that control group (`Offer.test`) instead of
+    finding them by their names. The balance check then runs on what they confirmed."""
+    from engine.agent.contracts import ProposalState
+    from engine.doctor.tools_facts import level_labels
+
+    confirmed = next(
+        (i for i in reversed(items) if i.kind == TEST_COLUMN_KIND and i.state is ProposalState.ACCEPTED), None
+    )
+    if confirmed is None:
+        return tuple(offers)
+    payload = confirmed.payload
+    holder = next((f for f in files if f.upload_id == payload.get("upload_id")), None)
+    column = str(payload.get("column") or "")
+    if holder is None or column not in holder.frame.columns:
+        return tuple(offers)
+    labels = level_labels(holder.frame[column])
+    wanted = str(payload.get("control_level") or "")
+    index = int(wanted[1:]) - 1 if wanted[:1] == "L" and wanted[1:].isdigit() else -1
+    if not 0 <= index < len(labels):
+        return tuple(offers)
+    from dataclasses import replace
+
+    return tuple(
+        replace(offer, test=(column, labels[index])) if offer.config.uplift.treatment_column else offer
+        for offer in offers
+    )
 
 
 def _enough_data(parsed: OutcomeArgs, ctx: DataToolContext) -> NextSteps:
@@ -1014,6 +1050,10 @@ def register_all(registry: DataToolRegistry) -> None:
     from engine.doctor.tools_history import register_history_tools
 
     register_history_tools(registry)
+    # Facts before a meaning (#90, #91): the order file and the campaign test's columns, for the rules and the AI.
+    from engine.doctor.tools_facts import register_fact_tools
+
+    register_fact_tools(registry)
     # The agent looks at its own work (#85): the first rows before and after the plan, the AI only.
     from engine.doctor.tools_preview import register_preview_tools
 

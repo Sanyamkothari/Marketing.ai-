@@ -143,6 +143,36 @@ class ProposeUnpivotArgs(_Args):
     year: int | None = Field(default=None, description="undated months; evidence in reason")
 
 
+class ProposeAmountOutcomeChatArgs(_Args):
+    """`propose_amount_outcome` (`engine.doctor.amount_outcome`): the spend after the snapshot, as you define it from
+    `describe_order_file`; the person approves the sentence, which says every choice."""
+
+    entity_key: str = Field()
+    time_column: str = Field()
+    amount_column: str = Field(description="or the unit price, with quantity_column")
+    quantity_column: str | None = Field(default=None)
+    window_days: int = Field()
+    returns: Literal["net", "leave_out"] = Field(description="a negative row: refund netted in, or left out")
+    as_of_rule: Literal["latest_date_in_file", "last_complete_month_end"] | None = Field(
+        default=None, description="only when the case has no as-of date and the person agreed"
+    )
+    reason: str = Field()
+    replaces: str | None = Field(
+        default=None,
+        description="the id of your change this swaps out",
+        json_schema_extra={"surface": "chat"},
+    )
+
+
+class ProposeTestColumnArgs(_Args):
+    """`propose_test_column` (`engine.doctor.agent_amount`): the column of a campaign test and its control group, from
+    `find_test_columns`; the person confirms both before the balance is checked."""
+
+    column: str = Field()
+    control: str = Field(description="the control group's level id, such as L2")
+    reason: str = Field()
+
+
 class ReadGuideArgs(_Args):
     """`read_guide` (`engine.doctor.guides`): read-only; the guide's rules, plus one section when named."""
 
@@ -282,6 +312,20 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
         ProposeLessonArgs,
         "once the case is ready: a general rule for later cases; the owner approves it.",
         frozenset({"chat"}),
+    ),
+    ActionSpec(
+        "propose_amount_outcome",
+        ProposeAmountOutcomeChatArgs,
+        "an amount outcome (spend in N days after the snapshot) from a file of orders; say why.",
+        frozenset({"chat"}),
+        needs_file=True,
+    ),
+    ActionSpec(
+        "propose_test_column",
+        ProposeTestColumnArgs,
+        "which column holds a campaign test and which group is the control; the person confirms.",
+        frozenset({"chat"}),
+        needs_file=True,
     ),
     ActionSpec("join_files", CombineArgs, "join the files on their key; code counts.", frozenset({"chat"})),
     ActionSpec(
