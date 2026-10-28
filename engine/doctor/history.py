@@ -8,7 +8,7 @@ Two plain rules, both measured by our code on the dates of the file and never gu
   window after it. The look-back is as long as the outcome window (at least `MIN_LOOKBACK_DAYS`), so what is learnt
   from is as long as what is predicted. `HISTORY_TOO_SHORT`.
 * **One season only.** When the history is under a year and a few months hold most of the rows (more than half in
-  three months, and well above an even spread over the months covered), the model learns one season. `HISTORY_ONE_SEASON`.
+  three months; a file of three months or less is one season by definition), the model learns one season. `HISTORY_ONE_SEASON`.
 
 This extends the date and maturity checks that exist (`OUTCOME_WINDOW_PAST_DATA` for one query step,
 `X_LABEL_MATURITY` for the newest rows); it does not repeat them. Both are warnings (flags): the person reads them
@@ -33,6 +33,7 @@ __all__ = [
     "HistoryFinding",
     "HistoryReading",
     "history_plan_findings",
+    "plan_findings_of",
     "read_history",
 ]
 
@@ -43,10 +44,6 @@ FULL_YEAR_DAYS: Final[int] = 365
 SEASON_MONTHS: Final[int] = 3
 SEASON_SHARE: Final[float] = 0.5
 """More than this share of the rows in `SEASON_MONTHS` months is a concentration ..."""
-SEASON_OVER_EVEN: Final[float] = 1.6
-"""... when it is also this many times the share an even spread over the months covered would give (so growth or a
-short file whose every month is the same size is not read as a season)."""
-MIN_MONTHS_FOR_SEASON: Final[int] = SEASON_MONTHS + 2
 _READABLE: Final[float] = 0.5
 """Dates are read only when at least this share of the cells parse (a column that is mostly text is not a date)."""
 _DAYS_PER_MONTH: Final[float] = 30.4
@@ -89,14 +86,11 @@ def _season(dates: pd.Series, start: date, end: date) -> HistoryFinding | None:
     """A few months holding most of the rows, in a history under a year."""
     periods = dates.dt.to_period("M")
     covered = (end.year - start.year) * 12 + end.month - start.month + 1
-    if covered < MIN_MONTHS_FOR_SEASON:
-        return None
     counts = periods.value_counts()
     total = int(counts.sum())
     top = int(counts.nlargest(SEASON_MONTHS).sum())
     share = top / total if total else 0.0
-    even = SEASON_MONTHS / covered
-    if share <= SEASON_SHARE or share < SEASON_OVER_EVEN * even:
+    if share <= SEASON_SHARE:
         return None
     return HistoryFinding(
         code="HISTORY_ONE_SEASON",
@@ -189,7 +183,13 @@ def history_plan_findings(
     column: str | None = None,
 ) -> tuple[PlanFinding, ...]:
     """The reading as the plan's warnings (flags: shown before approval, nothing to say yes to)."""
-    reading = read_history(values, outcome_window_days=outcome_window_days, training_as_of=training_as_of)
+    return plan_findings_of(
+        read_history(values, outcome_window_days=outcome_window_days, training_as_of=training_as_of), column
+    )
+
+
+def plan_findings_of(reading: HistoryReading | None, column: str | None = None) -> tuple[PlanFinding, ...]:
+    """A reading's findings as the plan's warnings."""
     if reading is None:
         return ()
     return tuple(

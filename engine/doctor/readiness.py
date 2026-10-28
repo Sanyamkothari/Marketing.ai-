@@ -65,6 +65,7 @@ from engine.config import (
     UseCaseConfig,
 )
 from engine.contracts import FeatureSchema, Severity, ValidationReport
+from engine.doctor.history import HistoryFinding
 from engine.doctor.readiness_contracts import (
     PROBE_CODES,
     Acknowledgement,
@@ -194,6 +195,8 @@ class ReadinessInputs:
     """What `POST /runs` refuses before it validates (`RECIPE_ROLES_MISMATCH`, a `RECIPE_*` replay
     failure), as failing blocking requirements of gate `recipe_replay`. Any one of them fails the dry
     run, and the run's checks are not computed, as `POST /runs` answers 409 without them."""
+    history: tuple[HistoryFinding, ...] = ()
+    """What the dates say is wrong with the history for the goal (`engine.doctor.history`): warnings, never a stop."""
 
 
 # ---------------------------------------------------------------------------
@@ -249,8 +252,9 @@ def check_readiness(inputs: ReadinessInputs) -> DataReadinessReport:
         row_count=inputs.row_count,
         scan=inputs.scan,
     )
+    requirements = requirements + _history_requirements(inputs.history, f"{kind}:{inputs.mode.value}")
     approvals = _approvals_required(inputs, dry_report, uplift_report)
-    warnings = _warning_count(dry_report, uplift_report)
+    warnings = _warning_count(dry_report, uplift_report) + len(inputs.history)
     verdict, reason = decide_verdict(
         dry_run_passed=dry_passed,
         probes=probed.probes,
@@ -294,6 +298,23 @@ def check_readiness(inputs: ReadinessInputs) -> DataReadinessReport:
     }
     draft = DataReadinessReport(**fields)
     return draft.model_copy(update={"report_hash": report_hash(draft)})
+
+
+def _history_requirements(found: Sequence[HistoryFinding], applies_to: str) -> tuple[Requirement, ...]:
+    """The history warnings as requirements that warn (the report and the ready card show them; none blocks)."""
+    return tuple(
+        Requirement(
+            id=f.code,
+            applies_to=applies_to,
+            engine_code=None,
+            source_ref="engine/doctor/history.py",
+            gate="prepare",
+            status="warn",
+            blocking=False,
+            message=f.text,
+        )
+        for f in found
+    )
 
 
 def report_hash(report: DataReadinessReport) -> str:

@@ -25,7 +25,7 @@ def codes(series: pd.Series, **kwargs: object) -> list[str]:
 
 def test_five_months_and_a_ninety_day_window_warns_in_plain_words() -> None:
     reading = read_history(days("2024-01-01", "2024-05-31"), outcome_window_days=90)
-    assert reading is not None and [f.code for f in reading.findings] == ["HISTORY_TOO_SHORT"]
+    assert reading is not None and "HISTORY_TOO_SHORT" in [f.code for f in reading.findings]
     text = reading.findings[0].text
     assert text.startswith(
         "The dates cover about 5 months, but a 90-day outcome needs 90 days of history before"
@@ -47,7 +47,8 @@ def test_a_fixed_training_date_needs_room_on_both_sides() -> None:
 
 
 def test_without_a_window_only_the_season_rule_runs() -> None:
-    assert codes(days("2024-01-01", "2024-03-31"), outcome_window_days=None) == []
+    assert codes(days("2024-01-01", "2024-03-31"), outcome_window_days=None) == ["HISTORY_ONE_SEASON"]
+    assert codes(days("2023-01-01", "2024-03-31"), outcome_window_days=None) == []
 
 
 def seasonal(busy: int = 400, quiet: int = 50) -> pd.Series:
@@ -68,6 +69,19 @@ def test_eight_months_mostly_in_three_warn_that_one_season_is_learnt() -> None:
     assert "one season only" in reading.findings[0].text
 
 
+def test_the_season_rule_is_more_than_half_in_three_months_under_a_year() -> None:
+    def months(sizes: list[int]) -> pd.Series:
+        return pd.Series(
+            [pd.Timestamp(2024, m, 1 + n % 28) for m, size in enumerate(sizes, start=1) for n in range(size)]
+        )
+
+    assert "HISTORY_ONE_SEASON" in codes(months([102] * 3 + [50] * 5), outcome_window_days=30)  # 55%
+    assert "HISTORY_ONE_SEASON" not in codes(months([80] * 3 + [50] * 5), outcome_window_days=30)  # 49%
+    assert "HISTORY_ONE_SEASON" not in codes(months([50] * 8), outcome_window_days=30)  # 37.5%
+    # a file of four months is one season by definition
+    assert "HISTORY_ONE_SEASON" in codes(days("2023-10-01", "2024-01-31"), outcome_window_days=30)
+
+
 def test_an_even_spread_or_a_full_year_is_not_a_season() -> None:
     assert codes(seasonal(busy=50), outcome_window_days=30) == []
     year = pd.Series(
@@ -86,7 +100,7 @@ def test_the_plan_gets_flags_nobody_has_to_say_yes_to() -> None:
     found = history_plan_findings(
         days("2024-01-01", "2024-05-31"), outcome_window_days=90, training_as_of=None
     )
-    assert [(f.code, f.level, f.hard) for f in found] == [("HISTORY_TOO_SHORT", "flag", False)]
+    assert ("HISTORY_TOO_SHORT", "flag", False) in [(f.code, f.level, f.hard) for f in found]
 
 
 def ctx(frame: pd.DataFrame, **extra: object) -> DataToolContext:

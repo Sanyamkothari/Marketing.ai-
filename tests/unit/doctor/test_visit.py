@@ -686,3 +686,49 @@ def test_two_id_named_columns_still_compete_and_none_leaves_all() -> None:
     assert [k["column"] for k in visit._id_named(two)] == ["customer_id", "account_no"]
     plain = [{"column": "spend"}, {"column": "score"}]
     assert visit._id_named(plain) == plain
+
+
+# ---------------------------------------------------------------------------
+# The history warnings are in the plan the person reads BEFORE approving
+# ---------------------------------------------------------------------------
+def _five_months(storage: LocalStorage) -> tuple[World, Case]:
+    import pandas as pd
+
+    config = load_use_case(GOAL_A)
+    frame = vs.customers(seed=1)
+    frame["snapshot_date"] = pd.date_range("2026-01-01", "2026-05-31", periods=len(frame)).strftime(
+        "%Y-%m-%d"
+    )
+    w = World(
+        files={FIRST: vs.loaded(FIRST, "customers.csv", frame, config)},
+        offers=(Offer(config=config, stage="Acquire"),),
+    )
+    case = _goal(storage, w, _generic(storage, w), GOAL_A)
+    return w, _answer(storage, w, case, "OUTCOME_COLUMN", "converted")
+
+
+def test_a_short_history_is_a_flag_in_the_plan_at_approve_and_in_the_ledger(storage: LocalStorage) -> None:
+    from engine.doctor.ledger import screen_ledger
+
+    _, case = _five_months(storage)
+    assert case.state is VisitState.APPROVE and case.visit is not None and case.visit.plan_check is not None
+    flags = [f for f in case.visit.plan_check.findings if f.code.startswith("HISTORY_")]
+    assert [(f.code, f.level, f.hard) for f in flags] == [("HISTORY_ONE_SEASON", "flag", False)]
+    ledger = screen_ledger(case)
+    assert ledger is not None and "HISTORY_ONE_SEASON" in json.dumps(ledger, default=str)
+
+
+def test_a_window_longer_than_the_history_allows_is_a_too_short_flag(storage: LocalStorage) -> None:
+    w, case = _five_months(storage)
+    window = case.items[0].model_copy(
+        update={
+            "item_id": "window-90",
+            "kind": "setting",
+            "goal_id": GOAL_A,
+            "state": ProposalState.ACCEPTED,
+            "payload": {"path": "targeting.outcome_window_days", "value": 90},
+        }
+    )
+    changed = case.model_copy(update={"items": (*case.items, window)})
+    found = visit._history_findings(changed, GOAL_A, w.load(changed))
+    assert {f.code for f in found} == {"HISTORY_TOO_SHORT", "HISTORY_ONE_SEASON"}
