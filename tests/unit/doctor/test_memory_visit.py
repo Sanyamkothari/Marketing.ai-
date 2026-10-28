@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -126,3 +127,55 @@ def test_a_memory_that_cannot_be_written_never_stops_the_hand_off(
     assert case.visit is not None and case.visit.hand_off is not None
     columns = [str(c) for c in w.files[vs.FIRST].frame.columns]
     assert recall(storage, vs.GOAL_A, shape_of(columns)) is None
+
+
+def _remember_with(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, sheet: str | None, mode: str
+) -> tuple[LocalStorage, list[str], Any]:
+    """The approval's memory written from a stored prescription that read `sheet` of a workbook, for a goal of `mode`."""
+    from types import SimpleNamespace
+
+    from engine.doctor import visit as visit_module
+    from engine.doctor.memory import remember_approved_case
+    from engine.doctor.prescription import load_prescription
+
+    storage, case, w = _approved(tmp_path)
+    loaded = w.files[vs.FIRST]
+    stored = load_prescription(
+        storage, case.client_id, case.case_id, case.prescriptions[-1].prescription_hash
+    )
+    fake = SimpleNamespace(
+        build=None,
+        recipes=stored.recipes,
+        files=(SimpleNamespace(intake=SimpleNamespace(sheet=sheet, turned_off=False)),),
+    )
+    monkeypatch.setattr("engine.doctor.prescription.load_prescription", lambda *_a, **_k: fake)
+    monkeypatch.setattr(visit_module, "stored_brief", lambda *_a, **_k: SimpleNamespace(mode=mode))
+    made = remember_approved_case(storage, case=case, loaded=loaded)
+    return storage, [str(c) for c in loaded.frame.columns], made
+
+
+def test_a_workbook_sheet_is_part_of_the_memory_and_the_upload_offer_finds_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from engine.doctor.memory import offer_for
+
+    storage, columns, made = _remember_with(tmp_path, monkeypatch, sheet="Customers", mode="train")
+    assert made is not None and made.sheet == "Customers"
+    offer = offer_for(
+        storage,
+        use_case_id=vs.GOAL_A,
+        upload_id="u_next",
+        columns=columns,
+        intake=SimpleNamespace(sheet="Customers", sheets=[]),  # type: ignore[arg-type]
+        mode="train",
+    )
+    assert offer is not None and offer.kind == "same_shape"
+    assert "with Data Doctor" in offer.sentence
+
+
+def test_a_scoring_goal_never_writes_the_memory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _storage, _columns, made = _remember_with(tmp_path, monkeypatch, sheet=None, mode="score")
+    assert made is None
