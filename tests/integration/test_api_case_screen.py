@@ -19,6 +19,7 @@ from api.main import create_app
 from api.routes import case_screen
 from engine.access.roles import Role
 from tests.fixtures.make_data import GenerationSpec, generate
+from tests.integration.doctor_wait import settled
 from tests.integration.production.access_support import bearer, local_app, make_user
 
 GOAL = "targeted-advertisement"
@@ -65,6 +66,7 @@ def test_the_screen_follows_a_visit_from_a_file_to_a_goal(client: TestClient) ->
     assert len(shown["before"]) == 10 == len(shown["after"]) and shown["note"] is None
     assert set(shown["columns"][0]) == {"name", "changed", "personal"}
     assert all(len(row) == len(shown["columns"]) for row in shown["before"] + shown["after"])
+    case = settled(client, case["case_id"])  # Approve waits for the check of the whole file
     approved = client.post(
         f"/cases/{case['case_id']}/approval",
         json={"version": case["version"], "sentence": view["approval_sentence"]},

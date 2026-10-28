@@ -93,12 +93,14 @@ from engine.doctor.case import (
     payload_digest,
 )
 from engine.doctor.decisions import decisions, sets_of_effect
+from engine.doctor.full_count import FullCountRunner
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL, GoalBrief, load_goal_brief, register_goal_brief_tool
 from engine.doctor.ledger import blocking
 from engine.doctor.ledger import find as find_finding
 from engine.doctor.materialize import Full, materialize, stop_finding
 from engine.doctor.memo import plan_part
 from engine.doctor.plan_check import (
+    check_plan,
     plan_check_of,
     plan_digest,
     readiness_acknowledged,
@@ -395,6 +397,9 @@ class VisitDeps:
     load_full: Callable[[Case], Sequence[LoadedFile]] | None = None
     """The case's files with every row (up to the profile row cap), for the whole-file count before APPROVE and at
     VERIFY. None: the rows `load_files` gives (the whole file when it fits)."""
+    full_count: FullCountRunner | None = None
+    """Runs the whole-file count of the plan as a background job and keeps it by the plan; Approve waits for it.
+    None: the count runs inline, in the request that needs it."""
     registry: DataToolRegistry | None = None
     """None: :func:`visit_registry`."""
     offers: Sequence[Offer] = ()
@@ -1487,17 +1492,60 @@ def _preview(run: _Run, case: Case) -> _Step:
     )
 
 
-def _counted(run: _Run, case: Case, items: Sequence[CaseItem]) -> PlanCheck:
+def plan_basis(case: Case, items: Sequence[CaseItem]) -> str:
+    """What a whole-file count is kept by: the plan's digest with the decisions (the as-of dates) it is counted under."""
+    return _digest(plan_digest(case.files, items), decisions(case).digest)
+
+
+def _counted(run: _Run, case: Case, items: Sequence[CaseItem], *, retry: bool = False) -> PlanCheck:
     """The plan counted on every row of its files (:class:`Full`), so the whole file's stops are known BEFORE the
     person approves, not after. Kept by the plan's digest and the as-of date it was counted under: the same plan
-    is not counted again (the stops VERIFY adds to it stay)."""
+    is not counted again (the stops VERIFY adds to it stay).
+
+    With a background runner (`VisitDeps.full_count`) the count runs as a job (:mod:`engine.doctor.full_count`) and
+    this returns at once: the finished count when there is one, else the count of a sample (`basis` None) while
+    the job runs, and the visit asks again when it next rests. `retry` starts a failed count again (Approve).
+    """
     visit = case.visit or CaseVisit()
     digest = plan_digest(case.files, items)
-    basis = _digest(digest, decisions(case).digest)
+    basis = plan_basis(case, items)
     kept = visit.plan_check
     if kept is not None and kept.digest == digest and kept.basis == basis:
         return kept
-    return plan_check_of(materialize(case, items, run.full_files(case), Full()), basis=basis)
+    runner = run.deps.full_count
+    if runner is None:
+        return plan_check_of(materialize(case, items, run.full_files(case), Full()), basis=basis)
+    found = runner.ensure(
+        case, items, basis, load_full=run.deps.load_full or run.deps.load_files, retry=retry
+    )
+    if found.state == "done" and found.check is not None:
+        return found.check
+    if kept is not None and kept.digest == digest and kept.basis is None:
+        return kept  # the sample's count stands in while the job runs
+    decided = decisions(case)
+    return check_plan(
+        run.files(case),
+        case.files,
+        items,
+        as_of=decided.as_of_date,
+        training_as_of=decided.training_as_of_date,
+    )
+
+
+def _full_check_open(run: _Run, case: Case, items: Sequence[CaseItem]) -> tuple[str, str]:
+    """`(code, message)` of the refusal while the whole-file check has no result."""
+    runner = run.deps.full_count
+    basis = plan_basis(case, items)
+    found = runner.current(case, basis) if runner is not None else None
+    if found is not None and found.state == "failed":
+        return (
+            "FULL_CHECK_FAILED",
+            "The check of the whole file could not finish, so nothing was approved. Try Approve again.",
+        )
+    return (
+        "FULL_CHECK_RUNNING",
+        "The whole file is still being checked. Approve waits for its result: it is shown on the screen.",
+    )
 
 
 def _count_preview(case: Case, files: tuple[LoadedFile, ...]) -> PreviewSummary:
@@ -1526,10 +1574,10 @@ def _approve_wait(run: _Run, case: Case) -> _Step | None:
         # A case kept when only a sample was counted: the whole file is counted now and the count is KEPT, so the
         # screen shows the stops approval would stop at, and a yes is asked for those. The old yeses were given to
         # the sample's stops (keys that no longer exist), so the person is asked again.
-        return _Step(
-            to=VisitState.APPROVE,
-            visit={"plan_check": _counted(run, case, items), "acknowledged": ()},
-        )
+        counted = _counted(run, case, items)
+        if counted.basis is None:
+            return None  # the job is still counting the whole file: nothing to write, the screen says so
+        return _Step(to=VisitState.APPROVE, visit={"plan_check": counted, "acknowledged": ()})
     check = visit.plan_check
     if (
         check is not None
@@ -3508,7 +3556,9 @@ def _approval(
     if check is None or check.basis is None or check.digest != plan_digest(case.files, items):
         # never another plan's counts, nor a count of a sample only (a case kept before the whole file was counted)
         said = said if check is not None and check.digest == plan_digest(case.files, items) else ()
-        check = _counted(run, case, items)
+        check = _counted(run, case, items, retry=True)
+        if check.basis is None:  # the whole file is still being counted, or the count failed
+            raise CaseError(*_full_check_open(run, case, items))
     # the refusal that stopped the visit is shown, not a gate: approving is itself the retry, and its write clears it
     stops = [f for f in blocking(case, check, said) if f.source != "visit"]
     if stops:

@@ -28,6 +28,7 @@ from engine.llm import FakeLLMClient, FakeLLMMode
 from engine.llm_http import PROBLEMS, LLMHttpError
 from tests.fixtures.doctor_eval.chat_model import ChatScript
 from tests.fixtures.make_data import GenerationSpec, generate
+from tests.integration.doctor_wait import settled
 from tests.integration.production.access_support import bearer, local_app, make_user
 
 GOAL = "targeted-advertisement"
@@ -97,12 +98,14 @@ def test_a_visit_goes_from_generic_to_a_goal_to_a_readiness_verdict(
     )
     assert chosen.status_code == 200, chosen.text
     case = _answer_open(client, chosen.json())
+    case = settled(client, case_id)  # the whole-file check is in the case, so a retry has nothing to take in
     assert [g["brief_hash"] for g in case["goals"]] == [load_goal_brief(GOAL).brief_hash]
     outcome = [i for i in case["items"] if i["kind"] == "outcome_column"]
     assert outcome and outcome[0]["goal_id"] == GOAL and outcome[0]["state"] == "accepted"
     again = client.post(f"/cases/{case_id}/goal", json={"version": 1, "goal_id": GOAL, "op_id": "g1"})
-    assert again.status_code == 200 and again.json()["version"] == case["version"], "a retry changes nothing"
+    assert again.status_code == 200 and again.json() == case, "a retry changes nothing"
 
+    case = settled(client, case_id)
     approved = client.post(f"/cases/{case_id}/approval", json={"version": case["version"]})
     assert approved.status_code == 200, approved.text
     case = approved.json()
@@ -528,6 +531,7 @@ def test_an_invoice_log_with_an_ai_query_reaches_a_computed_readiness_verdict_on
             )
             assert confirmed.status_code == 200, confirmed.text
             case = confirmed.json()
+        case = settled(client, case_id)
         sentence = client.get(f"/cases/{case_id}/screen").json()["view"]["approval_sentence"]
         approved = client.post(
             f"/cases/{case_id}/approval", json={"version": case["version"], "sentence": sentence}
@@ -548,6 +552,7 @@ def test_one_approval_call_takes_the_screens_yeses_and_digest_and_refuses_a_stal
         f"/cases/{case_id}/goal", json={"version": case["version"], "goal_id": GOAL, "op_id": "g1"}
     )
     case = _answer_open(client, chosen.json())
+    case = settled(client, case_id)
     shown = client.get(f"/cases/{case_id}/screen").json()["view"]["approval"]
     assert shown is not None and shown["digest"]
     stale = client.post(

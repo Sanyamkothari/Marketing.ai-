@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
+from tests.integration.doctor_wait import settled
 
 GOAL = "targeted-advertisement"
 CUSTOMERS = 250
@@ -65,6 +66,7 @@ def test_an_approved_join_becomes_the_cases_one_stored_table(client: TestClient,
     )
     assert ticked.status_code == 200, ticked.text
     case = ticked.json()
+    case = settled(client, case["case_id"])
     approved = client.post(f"/cases/{case['case_id']}/approval", json={"version": case["version"]})
     assert approved.status_code == 200, approved.text
     case = approved.json()
@@ -148,6 +150,7 @@ def test_a_join_then_approve_ends_ready_with_the_decisions_carried_and_nothing_d
     for _ in range(
         6
     ):  # approve until the case rests: the join is built after the first, the table is approved next
+        settled(client, cid)  # the whole-file check is in the case before its stops are read
         screen = client.get(f"/cases/{cid}/screen").json()
         case = screen["case"]
         if case["state"] != "approve":

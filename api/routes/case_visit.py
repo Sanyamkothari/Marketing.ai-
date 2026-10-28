@@ -44,7 +44,7 @@ from pydantic import Field
 
 from api.access import PrincipalDep, set_audit_context
 from api.access_policy import RoutePolicy, register
-from api.deps import ConfigRootDep, StorageDep, get_settings
+from api.deps import ConfigRootDep, StorageDep, get_jobs, get_settings
 from api.routes.uploads import http_error, load_upload, load_upload_profile
 from api.schemas import ErrorResponse
 from engine.access.roles import Principal, Role
@@ -53,9 +53,11 @@ from engine.doctor import visit as doctor_visit
 from engine.doctor.approval_model import GivenYes
 from engine.doctor.case import CLIENT_ID_PATTERN, DEFAULT_CLIENT_ID, Case, CaseError
 from engine.doctor.diagnose import LoadedFile
+from engine.doctor.full_count import FullCountRunner
 from engine.doctor.goal_brief import GOAL_ID_PATTERN, BriefMode, GoalBrief, load_goal_brief
 from engine.doctor.protocol import LedgerPort
 from engine.doctor.visit import ConversePort, DetectorPort, VisitDeps
+from engine.jobs import ThreadJobRunner
 from engine.storage import Storage
 
 __all__ = ["POLICIES", "ledger_for", "router"]
@@ -533,6 +535,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
 
     offers = doctor_offers(root)
     cap = min((profile_row_cap(offer.config) for offer in offers), default=DIAGNOSIS_ROWS)
+    jobs = get_jobs(request)
 
     def load_files(case: Case) -> tuple[LoadedFile, ...]:
         return _load_files(storage, case.upload_ids(), cap)
@@ -544,6 +547,8 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
         storage=storage,
         load_files=load_files,
         load_full=load_full,
+        # The whole-file count runs as a job here (a remote job runner cannot take the closure, so it stays inline).
+        full_count=FullCountRunner(storage, jobs) if isinstance(jobs, ThreadJobRunner) else None,
         # Plan O M243 (DEC-1813): PRESCRIBE writes `prescriptions/<hash>.json` and binds the case's files to it.
         prescribe=CasePrescriber(storage, load_files=load_files, config_root=root),
         verify=_prepared_verify(storage, root),

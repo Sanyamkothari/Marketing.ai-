@@ -202,7 +202,7 @@ function mainHtml(entry) {
   )}${earlier ? `<section class="card dds-card" data-dds-checklist>${earlier}</section>` : ""}${goalsHtml(screen, {
     busy,
     level: sub,
-  })}${approveHtml(screen, { busy: s.busy, level: sub, gate: model.gate })}${
+  })}${fullCheckHtml(screen)}${approveHtml(screen, { busy: s.busy, level: sub, gate: model.gate })}${
     !(c.files || []).length ? intakeHtml(entry, { first: true }) : more
   }${timelineHtml(screen, { level: sub })}${technicalHtml(screen)}${expertHtml(entry)}${
     host.place === "data" ? `<div class="dds-actions">${button({ label: "Start a new check", kind: "tertiary", attrs: "data-dds-new" })}</div>` : ""
@@ -472,6 +472,30 @@ function followChat(entry) {
 
 // --- behaviour -------------------------------------------------------------------------------------------------
 
+/** The check of the whole file runs in the background (`view.full_check`); Approve waits for it. */
+function fullCheckHtml(screen) {
+  const check = screen && screen.view && screen.view.full_check;
+  if (!check || check.state === "done") return "";
+  const progress = check.state === "running" && check.steps_total ? ` (step ${Math.min(check.steps_done + 1, check.steps_total)} of ${check.steps_total})` : "";
+  return `<p class="dds-why" role="status" data-dds-full-check="${esc(check.state)}">${esc(check.message)}${esc(progress)}</p>`;
+}
+
+/** While the whole file is checked, ask the visit to take the result in every few seconds, then draw it. */
+function watchFullCheck(entry) {
+  clearTimeout(entry.fullCheckTimer);
+  const check = entry.state.screen && entry.state.screen.view && entry.state.screen.view.full_check;
+  if (!check || !["pending", "running"].includes(check.state)) return;
+  entry.fullCheckTimer = setTimeout(async () => {
+    try {
+      await resumeVisit(entry.state.caseId);
+      await refresh(entry);
+      draw(entry);
+    } catch {
+      /* the next tick asks again */
+    }
+  }, 2500);
+}
+
 async function refresh(entry) {
   const s = entry.state;
   if (!s.caseId) {
@@ -483,6 +507,7 @@ async function refresh(entry) {
   if (s.ai === null) await readAi(entry); // not known yet: ask again (the answer is shared for a few seconds)
   await readStartInfo(entry);
   await readOffer(entry);
+  watchFullCheck(entry);
 }
 
 /** Next month: can last month's model score this file? Not in a goal's setup; only once the file is ready to start. */

@@ -580,6 +580,10 @@ def date_order_conflict(cells: pd.Series[Any]) -> bool:
     return day_first and month_first
 
 
+_FAST_PARSE_MIN: Final[int] = 1_000
+"""Fewer distinct spellings than this are read one at a time: the time is not worth a format guess."""
+
+
 def _one_datetime(text: str, dayfirst: bool) -> pd.Timestamp | None:
     if not _is_dateable(text):
         return None  # "now" / "today" / "09:30": pandas reads them as the current time or date
@@ -592,6 +596,45 @@ def _one_datetime(text: str, dayfirst: bool) -> pd.Timestamp | None:
     if stamp is None or pd.isna(stamp):
         return None
     return stamp.tz_localize(None)
+
+
+def _shared_format(values: pd.Series[Any], dayfirst: bool) -> str | None:
+    """One strptime format for the spellings of `values`, taken from the first one, or None when there is no safe one.
+
+    Safe means the format reads the day and the month in the order `dayfirst` says, so a value it parses is
+    read exactly as `format="mixed"` reads it on its own (a first value that only fits the other order, such as
+    13/1/2010 with day last, gives no format)."""
+    from pandas._libs.tslibs.parsing import guess_datetime_format
+
+    first = next((v for v in values if isinstance(v, str)), None)
+    if first is None:
+        return None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # (it warns when the guess is day first and `dayfirst` is not set)
+        found = guess_datetime_format(first, dayfirst=dayfirst)
+    if found is None or "%d" not in found or "%m" not in found:
+        return found
+    if found.startswith(
+        "%Y"
+    ):  # year first: the day/month order of an ISO-like spelling is not `dayfirst`'s to say
+        return found if not dayfirst and found.index("%m") < found.index("%d") else None
+    return found if (found.index("%d") < found.index("%m")) == dayfirst else None
+
+
+def _parse_distinct(values: pd.Series[Any], dayfirst: bool) -> pd.Series[Any]:
+    """`format="mixed"` over distinct spellings, quickly: those that fit the first one's format are read by it in
+    one pass (dateutil reads each spelling one at a time, seconds for a column of a few hundred thousand), the
+    rest one at a time as before. The answer for each spelling is the same either way."""
+    fmt = _shared_format(values, dayfirst) if len(values) > _FAST_PARSE_MIN else None
+    if fmt is None:
+        return pd.to_datetime(values, format="mixed", dayfirst=dayfirst, errors="coerce", utc=True)
+    fast = pd.to_datetime(values, format=fmt, errors="coerce", utc=True)
+    left = fast.isna() & values.notna()
+    if left.any():
+        slow = pd.to_datetime(values[left], format="mixed", dayfirst=dayfirst, errors="coerce", utc=True)
+        fast = fast.copy()
+        fast[left] = slow
+    return fast
 
 
 def _to_datetimes(cells: pd.Series[Any], *, dayfirst: bool) -> pd.Series[Any]:
@@ -613,9 +656,7 @@ def _to_datetimes(cells: pd.Series[Any], *, dayfirst: bool) -> pd.Series[Any]:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         try:
-            parsed = pd.to_datetime(
-                distinct.where(dated), format="mixed", dayfirst=dayfirst, errors="coerce", utc=True
-            )
+            parsed = _parse_distinct(distinct.where(dated), dayfirst)
         except (ValueError, TypeError, OverflowError):
             parsed = None
     if parsed is None or not pd.api.types.is_datetime64_any_dtype(parsed):

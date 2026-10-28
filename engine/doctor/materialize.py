@@ -39,7 +39,7 @@ from engine.agent.dataset_recipe import consistent_types
 from engine.agent.recipe import STEP_PHASE, RecipeError
 from engine.agent.sql_step import SqlStepError, sql_params
 from engine.agentic.canonical import canonical_bytes, sha256_hex
-from engine.doctor.guards import Finding, GuardedRun, Ledger, Receipt, run_guarded
+from engine.doctor.guards import Finding, GuardedRun, Ledger, Receipt, ReceiptMemo, run_guarded
 from engine.doctor.visit_contracts import PlanFinding
 
 if TYPE_CHECKING:
@@ -258,6 +258,7 @@ def materialize(
     candidate: tuple[str, RecipeStep] | None = None,
     twice: bool = True,
     watch: Watch | None = None,
+    memo: ReceiptMemo | None = None,
 ) -> Prepared:
     """The case's plan run over `files` at `scope`, with the case's as-of date. `items` are the plan's (the active
     section). `candidate` is `(upload id, step)`: a step to try as if it were accepted (a query trial)."""
@@ -274,6 +275,7 @@ def materialize(
         candidate=candidate,
         twice=twice,
         watch=watch,
+        memo=memo,
     )
 
 
@@ -288,11 +290,14 @@ def materialize_plan(
     candidate: tuple[str, RecipeStep] | None = None,
     twice: bool = True,
     watch: Watch | None = None,
+    memo: ReceiptMemo | None = None,
 ) -> Prepared:
     """:func:`materialize` for a caller that has the case's files and as-of date rather than the case itself.
 
     `as_of` is a run's own date; with none, a query step keeps the date (or the rule) it carries. `watch` sees
-    each step's input and output once (the preview samples what each step did from it).
+    each step's input and output once (the preview samples what each step did from it). `memo` keeps the steps'
+    receipts by what each step read (:class:`engine.doctor.guards.ReceiptMemo`): a step the plan did not change takes
+    its kept receipt.
     """
     from engine.doctor.plan_check import plan_digest, recipe_steps_of
 
@@ -360,6 +365,7 @@ def materialize_plan(
             twice,
             None,  # every query step carries its date (`bound_as_of`)
             seen_by if watch is not None else None,
+            memo,
         )
 
         try:
@@ -442,6 +448,7 @@ def _guarded(
     twice: bool,
     as_of: date | None,
     watch: Callable[[RecipeStep, pd.DataFrame, pd.DataFrame], None] | None,
+    memo: ReceiptMemo | None,
     primary_key: str | None,
     outcome: str | None,
 ) -> GuardedRun:
@@ -463,6 +470,7 @@ def _guarded(
         leak_check="full",
         outcome_open=outcome is None,  # one column of a query that reads the future is the outcome-to-be
         watch=watch,
+        memo=memo,
     )
 
 
