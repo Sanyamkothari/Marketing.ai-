@@ -13,7 +13,7 @@ at most that much of one text.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -24,6 +24,8 @@ from engine.config import config_root
 __all__ = [
     "ALREADY_READ",
     "INDEX",
+    "LEARNED",
+    "LESSONS",
     "MAX_LINES",
     "MAX_LINE_CHARS",
     "RULES",
@@ -35,6 +37,8 @@ __all__ = [
 
 INDEX: Final[str] = "index"
 RULES: Final[str] = "Rules"
+LESSONS: Final[str] = "lessons"
+LEARNED: Final[str] = "Learned"
 MAX_LINE_CHARS: Final[int] = MAX_TEXT_CHARS
 MAX_LINES: Final[int] = MAX_PROMPT_LIST - 1
 ALREADY_READ: Final[str] = "already read above"
@@ -81,9 +85,17 @@ def _lines(text: str) -> list[str]:
 
 
 def read_guide(
-    name: object, section: object = None, root: Path | None = None, *, rules: bool = True
+    name: object,
+    section: object = None,
+    root: Path | None = None,
+    *,
+    rules: bool = True,
+    lessons: Sequence[str] = (),
 ) -> tuple[str, str | None, list[str]]:
     """`(name, section, lines)`: the guide's rules and the section asked for, or all of it when `section` is None.
+
+    The `lessons` guide also holds `## Learned`: `lessons`, the owner-approved lessons the caller read from the store
+    (`engine.doctor.lessons.approved_lessons`), one line each; with none, the section is left out.
 
     `rules=False` leaves the `## Rules` block out of a section read (the caller already sent it this turn). A
     section may be named by its title or by a unique start of it ("buckets").
@@ -98,6 +110,8 @@ def read_guide(
             f"There is no guide called {str(name or '')[:40]!r}. Guides: {', '.join(names) or 'none'}.",
         )
     text = (_folder(root) / f"{key}.md").read_text(encoding="utf-8").strip()
+    if key == LESSONS and lessons:
+        text += "\n\n## " + LEARNED + "\n" + "\n".join(f"- {item}" for item in lessons)
     if section is None or not str(section).strip():
         return key, None, _fit(_lines(text))
     sections = _sections(text)

@@ -26,8 +26,9 @@ from typing import Final
 
 import yaml
 from fastapi import APIRouter, Request, Response
+from pydantic import Field
 
-from api.access import set_audit_context
+from api.access import PrincipalDep, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, StorageDep
 from api.routes.agent_recipes import load_recipe
@@ -47,6 +48,7 @@ from engine.config import (
     DEFAULT_INDUSTRY,
     ConfigError,
     RunMode,
+    StrictBase,
     UseCaseConfig,
     UseCaseStatus,
     get_roles,
@@ -58,6 +60,7 @@ from engine.doctor.contracts import Diagnosis, DiagnosisRequest, HandoffRequest
 from engine.doctor.diagnose import ADVISE_ROWS, LoadedFile, Offer, diagnose_file, readiness
 from engine.doctor.first_look import attach_recency
 from engine.doctor.joins import how_files_fit
+from engine.doctor.lessons import MAX_APPROVED, Lesson, LessonError, LessonStore
 from engine.doctor.outcomes import (
     OutcomeAgreement,
     OutcomeFile,
@@ -458,3 +461,71 @@ def renamed_copy(
     )
     response.headers["Location"] = f"/uploads/{copied.upload_id}/profile"
     return copied
+
+
+# ---------------------------------------------------------------------------
+# Lessons memory (roadmap 2.4): the AI proposes, the owner decides.
+# ---------------------------------------------------------------------------
+class LessonDecision(StrictBase):
+    """The owner's answer to one proposed lesson."""
+
+    lesson: Lesson
+
+
+class LessonList(StrictBase):
+    lessons: tuple[Lesson, ...]
+    max_approved: int = Field(description="At most this many lessons are approved at once.")
+
+
+register(
+    {
+        ("GET", "/doctor/lessons"): RoutePolicy(
+            role=Role.VIEWER,
+            action="doctor.lessons",
+            purpose="see the lessons Data Doctor proposed or learned",
+        ),
+        ("POST", "/doctor/lessons/{lesson_id}/approve"): RoutePolicy(
+            role=Role.ADMIN,
+            action="doctor.lesson_approve",
+            purpose="approve a lesson for Data Doctor's guides",
+        ),
+        ("POST", "/doctor/lessons/{lesson_id}/reject"): RoutePolicy(
+            role=Role.ADMIN, action="doctor.lesson_reject", purpose="reject a lesson Data Doctor proposed"
+        ),
+    }
+)
+
+
+@router.get(
+    "/doctor/lessons", response_model=LessonList, summary="The lessons, proposed, approved and rejected"
+)
+def list_lessons(storage: StorageDep) -> LessonList:
+    return LessonList(lessons=LessonStore(storage).all(), max_approved=MAX_APPROVED)
+
+
+def _decide(lesson_id: str, approve: bool, storage: Storage, principal: PrincipalDep) -> LessonDecision:
+    try:
+        return LessonDecision(lesson=LessonStore(storage).decide(lesson_id, approve, principal.user_id))
+    except LessonError as exc:
+        status = {"LESSON_NOT_FOUND": 404, "LESSON_DECIDED": 409, "LESSON_CAP": 409}.get(exc.code, 422)
+        raise http_error(status, exc.code, exc.message, "lesson_id") from exc
+
+
+@router.post(
+    "/doctor/lessons/{lesson_id}/approve",
+    response_model=LessonDecision,
+    responses={**_ERRORS, 404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    summary="Approve a proposed lesson: read_guide('lessons') shows it from now on",
+)
+def approve_lesson(lesson_id: str, storage: StorageDep, principal: PrincipalDep) -> LessonDecision:
+    return _decide(lesson_id, True, storage, principal)
+
+
+@router.post(
+    "/doctor/lessons/{lesson_id}/reject",
+    response_model=LessonDecision,
+    responses={**_ERRORS, 404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    summary="Reject a proposed lesson",
+)
+def reject_lesson(lesson_id: str, storage: StorageDep, principal: PrincipalDep) -> LessonDecision:
+    return _decide(lesson_id, False, storage, principal)

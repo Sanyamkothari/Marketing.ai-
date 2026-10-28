@@ -42,6 +42,7 @@ from engine.agent.untrusted import clean_text, for_prompt
 from engine.doctor.actions import prompt_variables
 from engine.doctor.agent_apply import person_owns
 from engine.doctor.agent_review import _NoAnswerError, _Review
+from engine.doctor.case import VisitState
 from engine.doctor.protocol import DONT_KNOW, Ask, AskOption, question_id_of
 from engine.doctor.questions import catalogue_lines
 from engine.doctor.visit_contracts import OptionEffect
@@ -139,6 +140,7 @@ class _Chat(_Review):
 
     def __init__(self, *args: Any, chat_steps: int, storage: Storage | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self.storage = storage
         self.max_steps = chat_steps
         self.chosen = _Chosen()
         # What the model calls a change (`c1`) or a question (`k1`) -> the id in the case. The real ids are content
@@ -478,6 +480,8 @@ class _Chat(_Review):
             self._withdraw(args)
         elif name == "suggest_answer":
             self._suggest(args)
+        elif name == "propose_lesson":
+            self._lesson(args)
         elif name == "ask":
             self._ask(action, args)
         elif name in {"join_files", "stack_files"}:
@@ -559,6 +563,22 @@ class _Chat(_Review):
                 "The person ticked that change or gave it their own yes; only they can take it back.",
             )
         return item
+
+    def _lesson(self, args: dict[str, Any]) -> None:
+        """`propose_lesson`: a general rule for later cases, kept as proposed once the case is ready. Only the owner
+        approves it (`POST /doctor/lessons/{id}/approve`); a lesson with a number, a quote or a name is refused.
+        """
+        from engine.doctor.lessons import LessonError, LessonStore
+
+        if self.storage is None or self.case.state not in LESSON_STATES:
+            self.turn.feedback.append({"lesson": "not yet: propose lessons once the case is ready"})
+            return
+        try:
+            lesson = LessonStore(self.storage).propose(args.get("text"), self.case.case_id)
+        except LessonError as exc:
+            self.turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
+            return
+        self.turn.feedback.append({"lesson": "proposed: waits for the owner", "status": lesson.status})
 
     def _withdraw(self, args: dict[str, Any]) -> None:
         item = self._own(str(args.get("item_id", "")))
@@ -770,6 +790,17 @@ class _Chat(_Review):
         return items, evidence
 
 
+LESSON_STATES: Final = frozenset(
+    {
+        VisitState.PREVIEW,
+        VisitState.APPROVE,
+        VisitState.PRESCRIBE,
+        VisitState.VERIFY,
+        VisitState.HAND_OFF,
+        VisitState.FOLLOW_UP,
+    }
+)
+"""Where the case is ready (or beyond): the AI may propose lessons from here."""
 _STEP_KEYS: Final[frozenset[str]] = frozenset({"kind", "column"})
 _MAKES_CHANGES: Final[frozenset[str]] = frozenset(
     {"propose_step", "propose_sql", "propose_features", "join_files", "stack_files"}

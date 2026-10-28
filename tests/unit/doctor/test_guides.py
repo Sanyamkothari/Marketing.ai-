@@ -88,6 +88,7 @@ def test_every_tool_a_guide_names_in_backticks_exists(name: str) -> None:
         "stack_files",
         "read_guide",
         "propose_features",
+        "propose_lesson",
     }
     known |= set(NAMED)  # the named aggregations the features guide lists
     # Action arguments are named in the prompts the model already reads (`evidence_ids`, `rows_out_equals`, ...).
@@ -112,3 +113,9 @@ def _step_kinds() -> list:  # type: ignore[type-arg]
     from engine.agent.contracts import RecipeStepKind
 
     return list(RecipeStepKind)
+
+
+def test_the_lessons_guide_is_a_normal_guide_with_no_lesson_in_it() -> None:
+    assert "lessons" in TOPICS and "## Learned" not in _text(
+        "lessons"
+    ), "approved lessons come from the store"

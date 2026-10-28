@@ -101,6 +101,7 @@ if TYPE_CHECKING:
     from engine.doctor.goal_brief import GoalBrief
     from engine.doctor.protocol import Ask
     from engine.doctor.visit import Detected, DetectorPort
+    from engine.storage import Storage
 
 __all__ = ["PROMPT", "agent_review", "lazy_review"]
 
@@ -183,6 +184,7 @@ def agent_review(
     principal: Principal,
     config_root: Path | None = None,
     registry: Any = None,
+    storage: Storage | None = None,
 ) -> DetectorPort:
     """The review as a detector. `context_for` gives one file's `AgentContext` (as CONVERSE's port does)."""
 
@@ -202,6 +204,7 @@ def agent_review(
             principal,
             config_root,
             registry or visit_registry(),
+            storage=storage,
         )
         found = used.run()
         return dataclasses.replace(
@@ -228,6 +231,7 @@ class _Review:
         principal: Principal,
         config_root: Path | None,
         registry: Any,
+        storage: Storage | None = None,
     ) -> None:
         from engine.doctor.ai_guard import file_overviews
         from engine.doctor.current_tables import current_for, labels_for
@@ -236,6 +240,7 @@ class _Review:
         self._context_for = context_for
         self._raw: dict[int, tuple[AgentContext, Any]] = {}
         self.principal, self.config_root = principal, config_root
+        self.storage = storage
         # The AI looks at the current tables: F1..Fn are the files as the plan's accepted fixes leave them, T1..Tn the
         # tables its queries build. The uploads (`self.files`) stay what the tools that read a file by id are given.
         current = current_for(case, files, context_for)
@@ -677,10 +682,12 @@ class _Review:
         sections, goes to the model as feedback.
         """
         from engine.doctor.guides import ALREADY_READ, RULES, read_guide
+        from engine.doctor.lessons import approved_lessons
 
         name, section = args.get("name"), args.get("section")
+        lessons = approved_lessons(self.storage)
         try:
-            key, title, lines = read_guide(name, section, self.config_root)
+            key, title, lines = read_guide(name, section, self.config_root, lessons=lessons)
         except AgentToolError as exc:
             self.turn.feedback.append(
                 self.gates[0].prepare({"tool": "read_guide", "error": exc.code, "message": exc.message})
@@ -693,7 +700,7 @@ class _Review:
             shown["text"] = ALREADY_READ
         else:
             if title is not None and RULES in carried:
-                lines = read_guide(key, title, self.config_root, rules=False)[2]
+                lines = read_guide(key, title, self.config_root, rules=False, lessons=lessons)[2]
             carried.add(wanted)
             carried.add(RULES)
             shown["text"] = lines
