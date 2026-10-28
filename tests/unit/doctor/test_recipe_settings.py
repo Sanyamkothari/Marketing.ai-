@@ -83,3 +83,28 @@ def test_the_prescription_check_is_the_same_function() -> None:
 def test_aliased_imports_are_resolved_by_the_architecture_scan() -> None:
     tree = ast.parse("from engine.agent.recipe import run_recipe as go\nagain = go\nagain(1)\n")
     assert "run_recipe" in called_names(tree)
+
+
+def _yes_no(words: tuple[str, str]) -> pd.DataFrame:
+    return pd.DataFrame({"flag": [words[i % 2] for i in range(40)]})
+
+
+def test_yes_no_families_are_compared_as_a_set_not_an_order() -> None:
+    """A detected (not confirmed) yes/no setting stays approved for a file that shows only some of its families."""
+    from engine.doctor.locale import detect_locale
+    from engine.doctor.materialize import check_approved_settings
+
+    english, hinglish = _yes_no(("yes", "no")), _yes_no(("haan", "nahi"))
+    both = {"a": english, "b": hinglish}
+    profile = detect_locale(both, base=india_defaults(), client_id="c").profile
+    assert check_approved_settings(both, profile=profile) == ("locale",)
+    assert check_approved_settings({"file": hinglish}, profile=profile) == ("locale",)  # a scoring file
+    assert check_approved_settings({"file": english}, profile=profile) == ("locale",)
+    assert check_approved_settings({"a": english}, profile=profile) == ("locale",)
+
+
+def test_readiness_keeps_every_code_the_scoring_route_keeps() -> None:
+    from api.routes.agent_recipes import _SUGGESTIONS
+    from engine.doctor.readiness import _RECIPE_REFUSAL_CODES
+
+    assert frozenset(_SUGGESTIONS) == _RECIPE_REFUSAL_CODES

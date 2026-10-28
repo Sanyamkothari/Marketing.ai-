@@ -820,9 +820,19 @@ def _jsonable_overrides(overrides: Mapping[str, Any]) -> dict[str, JsonValue]:
 RECIPE_ROLES_MISMATCH: Final[str] = "RECIPE_ROLES_MISMATCH"
 """`api.routes.agent_recipes.RECIPE_ROLES_MISMATCH`, spelled here because `engine/` never imports `api/`."""
 _RECIPE_REFUSAL_CODES: Final[frozenset[str]] = frozenset(
-    {"RECIPE_COLUMN_MISSING", "RECIPE_VALUES_UNCONVERTED", "RECIPE_STEP_INVALID"}
+    {
+        "RECIPE_COLUMN_MISSING",
+        "RECIPE_VALUES_UNCONVERTED",
+        "RECIPE_STEP_INVALID",
+        "RECIPE_GUARD_STOP",
+        "RECIPE_NEW_VALUE",
+        "LOCALE_CHANGED",
+        "CURRENCY_FOREIGN",
+        "CURRENCY_MIXED",
+    }
 )
-"""The codes `recipe_failure_report` answers a replay failure with; any other becomes RECIPE_STEP_INVALID."""
+"""The codes `recipe_failure_report` keeps (the keys of `api.routes.agent_recipes._SUGGESTIONS`, which a test
+holds equal); any other becomes RECIPE_STEP_INVALID."""
 
 
 def roles_refusal(

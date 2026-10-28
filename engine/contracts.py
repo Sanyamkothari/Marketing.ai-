@@ -1726,6 +1726,11 @@ AGENT_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
         # A replay of an approved recipe that the guards stop (customers lost or doubled, an empty result): the rows
         # are not prepared. `engine.agent.dataset_recipe.run_replay`.
         "RECIPE_GUARD_STOP",
+        # A scoring file written another way than the settings the recipe was approved with, or holding a new yes/no
+        # spelling: `api.routes.agent_recipes.recipe_failure_report` keeps these codes as they are.
+        "LOCALE_CHANGED",
+        "CURRENCY_FOREIGN",
+        "RECIPE_NEW_VALUE",
     }
 )
 """Plan G's three codes (DEC-1006, DEC-1013): a scoring file the model's saved preparation recipe cannot

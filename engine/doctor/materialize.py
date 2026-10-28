@@ -543,9 +543,15 @@ def check_approved_settings(
         fields = tuple(f for f in SETTINGS if f != "money_units")
         detection = detect_locale(dict(frames), base=profile, client_id=profile.client_id)
         now, before = detection.profile.values(), profile.values()
+
+        def _same(field: str) -> bool:
+            # yes/no families are a set: the order a detection lists them in depends on which families a file shows
+            if field == "boolean_words":
+                return set(now[field]) == set(before[field])
+            return bool(now.get(field) == before.get(field))
+
         changed = sorted(
-            {f for f in fields if now.get(f) != before.get(f)}
-            | {c.field for c in detection.conflicts if c.field in fields}
+            {f for f in fields if not _same(f)} | {c.field for c in detection.conflicts if c.field in fields}
         )
         if changed:
             words = ", ".join(f.replace("_", " ") for f in changed)

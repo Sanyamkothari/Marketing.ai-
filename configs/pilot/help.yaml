@@ -282,6 +282,18 @@ codes:
     title: The saved steps would harm this file
     meaning: Run on this file, the preparation steps saved with the model lose or double customers, or leave nothing, so the rows were not prepared and nothing was scored.
     fix: Open the Data Doctor check for this data to look at the counts, or change the plan.
+  RECIPE_NEW_VALUE:
+    title: A yes / no column has a new spelling
+    meaning: The preparation saved with the model reads a yes / no column by a fixed list of spellings, and this file writes it another way. The saved steps are not changed until you say what each new spelling means.
+    fix: Open Guided setup or the Data Doctor check and say whether each new spelling means yes or no.
+  LOCALE_CHANGED:
+    title: This file is written another way than the approved ones
+    meaning: Numbers, dates or yes / no words in this file are written differently from the files the model's preparation was approved on, so the same text could mean something else.
+    fix: Check how this file writes them against the approved files, or open the Data Doctor check and say which is right.
+  CURRENCY_FOREIGN:
+    title: A money column is in another currency
+    meaning: This file writes a money column in a currency other than the one the model's preparation was approved with. Amounts in different currencies are never added together, so nothing was scored.
+    fix: Say which currency the column is in and at what rate to convert it, or send amounts in the approved currency.
   RECIPE_STEP_INVALID:
     title: A saved preparation step no longer applies
     meaning: One of the steps saved with the model cannot run on this file, or the file it was prepared from is gone. A model keeps the preparation rules it was approved with; only a model approved before those rules were saved with it is also stopped when this use case no longer allows one of its steps.

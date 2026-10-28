@@ -22,6 +22,7 @@ from api.main import create_app
 from api.routes import runs
 from engine.config import RunMode, resolve_config
 from engine.contracts import ValidationReport
+from engine.doctor.currency import MoneyBasis, MoneyColumn
 from engine.doctor.readiness import check_readiness, inputs_for_upload
 from engine.storage import LocalStorage, upload_key
 from tests.unit.doctor.readiness_fixtures import customers
@@ -194,7 +195,12 @@ def test_a_scoring_report_checks_the_copy_the_models_recipe_prepares(
     from tests.integration.agent.test_recipe_runs import KEY, _messy, _recipe, _seed_model
 
     data_dir = tmp_path / "data"
-    version = _seed_model(data_dir, _recipe(_messy(), target=None))
+    money = MoneyBasis(
+        workspace_currency="INR",
+        columns=(MoneyColumn(column="ad_ctr_90d", written_in=("INR",), reported_in="INR"),),
+    )
+    recipe = _recipe(_messy(), target=None).model_copy(update={"money_basis": money.model_dump(mode="json")})
+    version = _seed_model(data_dir, recipe)
     storage = LocalStorage(data_dir)
     cfg = resolve_config(USE_CASE, {}, root=config_root).config
 
@@ -209,9 +215,13 @@ def test_a_scoring_report_checks_the_copy_the_models_recipe_prepares(
 
     fits = scoring(_messy("scoring", rows=600))
     broken = scoring(_messy("scoring", rows=600).rename(columns={"ad_ctr_90d": "ctr_90d"}))
+    dollars = _messy("scoring", rows=600)
+    dollars["ad_ctr_90d"] = "$12.0"
+    foreign = scoring(dollars)
     for upload_id, key, expected in (
         (fits, KEY, None),
         (broken, KEY, "RECIPE_COLUMN_MISSING"),
+        (foreign, KEY, "CURRENCY_FOREIGN"),
         (fits, "snapshot_date", "RECIPE_ROLES_MISMATCH"),
     ):
         dry = client.post(f"/uploads/{upload_id}/checks", json={"use_case": USE_CASE, "primary_key": key})
