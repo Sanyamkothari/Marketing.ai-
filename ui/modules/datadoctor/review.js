@@ -44,7 +44,7 @@ export function waitingFor(review, ctx) {
     if (d.answered && d.needs_yes && !ctx.yes.has(keyOf(d))) out.push(`Say yes or change: ${d.title}`);
   }
   for (const p of review.problems) {
-    if (p.hard || p.acknowledged) continue;
+    if (p.hard || !p.acknowledgeable || p.acknowledged) continue; // the server's own reasons above already say a rule is not met
     if (ctx.nos.has(p.key)) out.push(`You said no, so change the plan or the file: ${p.text}`);
     else if (!ctx.stops.has(p.key)) out.push(`Answer yes or no: ${p.text}`);
   }

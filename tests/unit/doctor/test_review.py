@@ -142,6 +142,32 @@ def test_a_hard_stop_is_distinct_and_has_a_fix_and_no_yes(
     assert not review.approve.enabled and "1 rule is not met." in review.approve.waiting
 
 
+def test_a_stop_nobody_can_acknowledge_holds_approve_and_offers_retry(
+    storage: LocalStorage, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    screen = scenario("approve", storage, world)
+    from engine.doctor import ledger as ledger_mod
+
+    stopped = ledger_mod.Finding(
+        key="c" * 16,
+        code="VISIT_STOPPED",
+        subject="visit",
+        level="stop",
+        source="visit",
+        text="The last check could not finish.",
+        resolutions=(
+            ledger_mod.Resolution(kind="retry", label="Try again"),
+            ledger_mod.Resolution(kind="fix", label="Add a different file or change the plan"),
+        ),
+    )
+    monkeypatch.setattr("engine.doctor.review.findings_of", lambda case: (stopped,))
+    review = build_review(screen.case, screen.view)
+    (problem,) = review.problems
+    assert not problem.hard and not problem.acknowledgeable
+    assert "Try again" in problem.fix
+    assert not review.approve.enabled and "1 rule is not met." in review.approve.waiting
+
+
 def test_a_pending_swap_shows_old_beside_new_and_holds_approve(storage: LocalStorage, world: World) -> None:
     screen = scenario("approve", storage, world)
     old = next(i for i in screen.case.items if i.state is ProposalState.ACCEPTED)

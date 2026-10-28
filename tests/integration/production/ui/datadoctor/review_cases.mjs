@@ -49,6 +49,9 @@ test("everything answered: the plan, the decisions and ONE Approve that records 
   approve().click();
   await until(() => posts("approval").length === 1, 4000, "the approval");
   assert.equal(posts("approval")[0].body.sentence, r.approve.sentence);
+  await settle(3);
+  assert.equal(world.posted.filter((p) => p.path.startsWith("/campaign-runs")).length, 0, "Approve on the review starts no run");
+  assert.ok(!$("[data-rv]"), "the review closes after the approval");
 });
 
 test("an assumption needs a yes (or a change) before Approve is on; a typed answer shows the right input", async () => {
@@ -132,7 +135,7 @@ test("a swap shows the old step beside the new and asks which to use", async () 
 });
 
 test("waitingFor reads the server's reasons first, then the person's", () => {
-  const r = base({ decisions: [{ title: "T", question_id: "q", answered: true, needs_yes: true }], problems: [{ key: "k", text: "X", hard: false, acknowledged: false }], approve: { stage: "approve", waiting: ["Choose what the campaign is for."], enabled: false } });
+  const r = base({ decisions: [{ title: "T", question_id: "q", answered: true, needs_yes: true }], problems: [{ key: "k", text: "X", hard: false, acknowledgeable: true, acknowledged: false }], approve: { stage: "approve", waiting: ["Choose what the campaign is for."], enabled: false } });
   const ctx = { yes: new Set(), nos: new Set(), stops: new Set() };
   assert.deepEqual(review.waitingFor(r, ctx), ["Choose what the campaign is for.", "Say yes or change: T", "Answer yes or no: X"]);
   r.approve.waiting = [];
@@ -140,4 +143,6 @@ test("waitingFor reads the server's reasons first, then the person's", () => {
   ctx.stops.add("k");
   assert.equal(review.reviewAllowed(r, ctx), true);
   assert.equal(review.reviewAllowed({ ...r, approve: { ...r.approve, stage: "start" } }, ctx), false);
+  const stopped = { key: "v", text: "V", hard: false, acknowledgeable: false, acknowledged: false };
+  assert.deepEqual(review.waitingFor({ ...r, problems: [stopped], approve: { stage: "approve", waiting: ["1 rule is not met."], enabled: false } }, ctx), ["1 rule is not met."], "a stop nobody can say yes to is never asked yes or no");
 });

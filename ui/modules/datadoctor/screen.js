@@ -55,7 +55,7 @@ import {
 } from "./api.js";
 import { injectDataDoctorStyles } from "./styles.js";
 import { sectionOf } from "./plan.js";
-import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml, progressText, sentenceWithMore } from "./chat.js";
+import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml, progressText, reviewButtonHtml, sentenceWithMore } from "./chat.js";
 import { reviewAllowed, reviewHtml, reviewOf } from "./review.js";
 import { checksHtml, funnelHtml, newLineHtml, planHtml, planModel, queueHtml, todoHtml } from "./plan_view.js";
 import {
@@ -178,8 +178,10 @@ function mainHtml(entry) {
   const proceed = continueHtml(entry);
   const more = c.files && c.files.length && !c.read_only ? `<div class="dds-more" data-dds-more>${intakeHtml(entry, { first: false })}</div>` : "";
   const back = chatShown(screen)
-    ? `<div class="dds-actions">${button({ label: "Back to the chat", kind: "secondary", attrs: "data-dds-back-to-chat" })}</div>`
-    : "";
+    ? `<div class="dds-actions">${button({ label: "Back to the chat", kind: "secondary", attrs: "data-dds-back-to-chat" })}${reviewButtonHtml(screen)}</div>`
+    : reviewOf(screen)
+      ? `<div class="dds-actions">${reviewButtonHtml(screen)}</div>`
+      : "";
   return `<div class="dds" data-dds data-dds-place="${esc(host.place)}" data-dds-case="${esc(c.case_id)}">${back}<section class="card" data-dds-header>${headerHtml(
     screen,
     { level },
@@ -350,12 +352,19 @@ function reviewMainHtml(entry) {
   });
 }
 
-/** Approve from the approval screen: its ticks are the chat card's (stops, own yeses), so one click chain serves both. */
-function approveFromReview(entry) {
+/**
+ * Approve from the approval screen: its ticks are the chat card's (stops, own yeses), so one click chain serves both.
+ * It approves only: the screen shows no speed and no start sentence, so the run is started from the chat's start card.
+ */
+async function approveFromReview(entry) {
   const s = entry.state;
   const review = reviewOf(s.screen);
   if (s.busy || !review || !reviewAllowed(review, s)) return;
-  approveAndStart(entry);
+  const approved = await approveAndStart(entry, { start: false });
+  if (approved) {
+    entry.review = false;
+    draw(entry);
+  }
 }
 
 /** The chat is drawn unless "See details" opened the full plan view. */
@@ -752,7 +761,7 @@ async function approve(entry) {
  * goes on and approves the sentence as it reads now; any other difference approves nothing, and the card shows the new
  * sentence to read.
  */
-async function approveAndStart(entry) {
+async function approveAndStart(entry, { start = true } = {}) {
   const s = entry.state;
   const card = cardOf(s.screen, "ready");
   if (s.busy || !card || card.stage !== "approve" || !approveAllowed(card, s)) return;
@@ -805,6 +814,7 @@ async function approveAndStart(entry) {
     },
     { announce: "Approved" },
   );
+  if (!start) return go && !s.error; // the approval screen only approves: the start card in the chat starts it
   const view = s.screen && s.screen.view;
   if (!go || s.error || !view || !["ready", "ready_with_warnings"].includes(view.verdict.key) || !view.start) return;
   if (modelChoice(s.offer, s.mode)) {

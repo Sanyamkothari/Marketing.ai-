@@ -282,6 +282,9 @@ def _problems(case: Case, titles: dict[str, str]) -> tuple[ReviewProblem, ...]:
         fix_text = ""
         if fix is not None:
             fix_text = fix.label + (f": {steps}" if steps else "")
+        retry = next((r for r in f.resolutions if r.kind == "retry"), None)
+        if retry is not None:
+            fix_text = f"{fix_text}. {retry.label}" if fix_text else retry.label
         out.append(
             ReviewProblem(
                 key=f.key,
@@ -376,9 +379,9 @@ def build_review(case: Case, view: CaseScreenView) -> ApprovalReview:
     pending = [s for s in swaps if s.state == "pending"]
     if pending:
         waiting.append(f"Choose between the old and the new step ({len(pending)}).")
-    hard = [p for p in problems if p.hard]
-    if hard:
-        waiting.append(f"{len(hard)} {'rule is' if len(hard) == 1 else 'rules are'} not met.")
+    unmet = [p for p in problems if not p.acknowledgeable]
+    if unmet:
+        waiting.append(f"{len(unmet)} {'rule is' if len(unmet) == 1 else 'rules are'} not met.")
     if any(a.required and not a.can_agree for a in agreements):
         waiting.append("A change needs someone else's own yes.")
     if view.verdict.key == "not_ready":

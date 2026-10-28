@@ -461,11 +461,7 @@ export function readyHtml(r, ctx) {
       attrs: `data-dds-approve-start aria-describedby="dds-approve-sentence"`,
       disabled: ctx.busy || !ok,
       busy: ctx.busy === "approve",
-    })}<span class="dds-why">The only approval. Your files are not changed.</span>${button({
-      label: "Review everything first",
-      kind: "tertiary",
-      attrs: "data-dds-open-review",
-    })}</div></section>`,
+    })}<span class="dds-why">The only approval. Your files are not changed.</span></div></section>`,
   );
 }
 
@@ -592,6 +588,11 @@ export function conversationHtml(screen, ctx) {
  * campaign wizard (`titled: false`) the wizard's own card already names the customers and the goal, so the chat adds
  * the verdict and the next step only, not a second heading.
  */
+export const reviewButtonHtml = (screen) =>
+  screen.view && screen.view.review
+    ? button({ label: "Review everything", kind: "tertiary", size: "sm", attrs: "data-dds-open-review" })
+    : "";
+
 export function headHtml(screen, { level = 2, titled = true } = {}) {
   const { view } = screen;
   const v = VERDICTS[view.verdict.key] || VERDICTS.working;
@@ -602,5 +603,5 @@ export function headHtml(screen, { level = 2, titled = true } = {}) {
   const line = view.carried && view.carried.line ? `<p class="dds-why" data-dds-new-line role="status">${esc(view.carried.line)}</p>` : "";
   return `<div class="ddc-head" data-dds-verdict="${esc(view.verdict.key)}">${titled ? `<h${level} class="dds-title">${esc(title)}</h${level}>` : ""}${statusChip("health", v.status, { word: v.word })}<p class="dds-next" data-dds-next>${esc(
     next,
-  )}</p>${line}</div>`;
+  )}</p>${line}${reviewButtonHtml(screen)}</div>`;
 }
