@@ -184,6 +184,7 @@ const DID = Object.freeze({
   stack_files: "Stacked the files",
   ask: "Asked you a question",
   suggest_answer: "Suggested an answer",
+  propose_goal: "Suggested a goal",
   express_doubt: "Said what it is not sure about",
   request_data: "Asked for more data",
   withdraw: "Took back a change",
@@ -362,8 +363,17 @@ function messageHtml(m, names, { busy, openSent, index, clicked = "" }) {
           : `${s.question ? `<p class="dds-card-t">${userTextIn(s.question, names)}</p>` : ""}${s.why ? `<p class="dds-why"><span class="dds-label">Why we ask:</span> ${userTextIn(s.why, names)}</p>` : ""}<p class="dds-why" data-dds-suggested>${esc(plain(s.label))}${s.effect ? ` ${esc("·")} ${userTextIn(s.effect, names)}` : ""}${s.rows_changed != null ? ` ${esc("·")} ${esc(s.rows_changed === 0 ? "Changes no rows" : `Changes ${plural(s.rows_changed, "row", "rows")}`)}` : ""}</p>${button({ label: "Use this answer", kind: "primary", size: "sm", attrs: `data-dds-answer="${esc(s.option_id)}" data-dds-q="${esc(s.question_id)}" data-dds-use-answer aria-label="${esc(`Use this answer: ${plain(s.label)}${s.question ? ` (${plain(s.question)})` : ""}`)}"`, disabled: busy, busy: clicked === `answer:${s.question_id}|${s.option_id}` })}${others}`
       }</div>`
     : "";
+  // A goal the agent proposes: the button is the goal cards' own (`data-dds-goal`), so the click that chooses is the person's.
+  const g = m.goal;
+  const goal = g
+    ? `<div class="ddc-suggestion" data-dds-goal-proposal="${esc(g.goal_id)}"><p class="dds-why">${esc(plain(g.reason))}</p>${
+        g.chosen
+          ? `<p class="dds-state">${icon("check", { size: 14 })}<span>${esc("A goal is chosen.")}</span></p>`
+          : button({ label: "Choose this goal", kind: "primary", size: "sm", attrs: `data-dds-goal="${esc(g.goal_id)}" aria-label="Choose the goal: ${esc(g.name)}"`, disabled: busy })
+      }</div>`
+    : "";
   return agentRow(
-    `<div class="ddc-bubble" data-dds-msg="agent">${esc(plain(m.text))}${sentHtml(m.sent, { id: index, open: openSent.has(String(index)) })}</div>${back}${trace}${suggestion}`,
+    `<div class="ddc-bubble" data-dds-msg="agent">${esc(plain(m.text))}${sentHtml(m.sent, { id: index, open: openSent.has(String(index)) })}</div>${back}${trace}${suggestion}${goal}`,
   );
 }
 

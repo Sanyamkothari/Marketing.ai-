@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from engine.config import ProblemType, RunMode
+from engine.doctor.buildable import BuildableOutcome, buildable_outcome
 from engine.doctor.contracts import FileDiagnosis, ReadinessReason, ReadinessStatus, UseCaseReadiness
 from engine.doctor.first_look import FirstLook, advised_leaks, outcome_look
 from engine.doctor.out_of_scope import out_of_scope
@@ -57,7 +58,7 @@ ADVISE_ROWS: Final[int] = 200_000
 KIND_MIN_CONFIDENCE: Final[float] = 0.1
 """Above onboarding's fallback (0.05, "no signal at all"), below its weakest real signal (0.1, half a date)."""
 
-_STATUS_ORDER: Final[dict[str, int]] = {"ready": 0, "check": 1, "too_small": 2, "missing": 3}
+_STATUS_ORDER: Final[dict[str, int]] = {"ready": 0, "check": 1, "buildable": 2, "too_small": 3, "missing": 4}
 
 _TOO_SMALL_WORDS: Final[re.Pattern[str]] = re.compile(
     r"too few|not enough|at least \d|fewer than", re.IGNORECASE
@@ -352,7 +353,7 @@ def _amount_gate(
     return verdict.model_copy(update=update)
 
 
-_RANK: Final[dict[str, int]] = {"ready": 0, "check": 1, "too_small": 3, "missing": 4}
+_RANK: Final[dict[str, int]] = {"ready": 0, "check": 1, "buildable": 2, "too_small": 3, "missing": 4}
 
 
 def _rank_of(verdict: UseCaseReadiness) -> int:
@@ -364,6 +365,9 @@ def _one_use_case(files: Sequence[LoadedFile], offer: Offer, root: Path) -> UseC
     config = offer.config
     found = [(loaded, c) for loaded in files for c in outcome_columns(loaded.frame, config)]
     if not found:
+        built = buildable_outcome(files, config, root)
+        if built is not None:
+            return _buildable(built, offer)
         spend = None
         if config.problem_type is ProblemType.REGRESSION:
             from engine.doctor.amount_outcome import offer_amount_outcome
@@ -396,6 +400,49 @@ def _one_use_case(files: Sequence[LoadedFile], offer: Offer, root: Path) -> UseC
     chosen = next(loaded for loaded, _ in named if loaded.upload_id == verdict.upload_id)
     return verdict.model_copy(
         update={"stage": offer.stage, "first_look": first, **_facts(verdict, chosen, config)}
+    )
+
+
+def _buildable(built: BuildableOutcome, offer: Offer) -> UseCaseReadiness:
+    """No file has the outcome, but an event table can define it: the goal is `buildable` (drawn as a goal card,
+    never `missing`) when the table it would train on reaches the floors; otherwise `too_small`, with the counts of
+    that table. Nothing is built here: the AI proposes the build and the person approves it."""
+    config = offer.config
+    noun = _plural(config.entity or "customer")
+    floors = (config.validation.min_rows, config.validation.min_positive)
+    common: dict[str, object] = {
+        "use_case_id": config.id,
+        "name": config.name,
+        "stage": offer.stage,
+        "upload_id": built.upload_id,
+        "customers": built.active_before,
+        "yes_count": built.yes,
+        "buildable": built,
+    }
+    if built.enough:
+        return UseCaseReadiness(
+            status="buildable",
+            summary=built.sentence,
+            reason_code="BUILDABLE",
+            why=built.sentence,
+            first_fix="Ask Data Doctor to build it; you approve every step.",
+            **common,  # type: ignore[arg-type]
+        )
+    if built.snapshot is None:
+        short = built.sentence
+    else:
+        short = (
+            f"Built from {built.file_name}, the table would have {built.active_before:,} {noun} and "
+            f"{built.yes:,} yes; the model needs at least {floors[0]:,} {noun} and {floors[1]:,} yes."
+        )
+    return UseCaseReadiness(
+        status="too_small",
+        summary=short,
+        needs=_needs(config),
+        reason_code="NOT_ENOUGH",
+        why=short,
+        first_fix=short,
+        **common,  # type: ignore[arg-type]
     )
 
 

@@ -133,3 +133,48 @@ def test_a_control_group_that_is_not_one_is_refused(storage: LocalStorage, world
     talk = Talk(storage, world, client)
     case = talk.say("which column is the test")
     assert not [i for i in ai_items(case) if i.kind == "treatment_column"]
+
+
+def _fitting(case: object) -> list[str]:
+    from engine.doctor.visit import fitting_goals
+
+    return [str(u["use_case_id"]) for u in fitting_goals(case)]  # type: ignore[arg-type]
+
+
+def test_a_goal_is_proposed_with_a_reason_and_only_the_persons_click_chooses_it(
+    storage: LocalStorage, world: World
+) -> None:
+    talk = Talk(storage, world, ChatScript({"goal": []}))
+    goal_id, *_ = _fitting(talk.case) or ["none"]
+    assert goal_id != "none", "the world's files fit at least one goal"
+    client = ChatScript(
+        {
+            "goal": [
+                {
+                    "action": "propose_goal",
+                    "args": {"goal_id": goal_id, "reason": "the files already have its outcome"},
+                },
+                reply("This goal fits your files. Choose it if you agree."),
+            ]
+        }
+    )
+    case = Talk(storage, world, client).say("which goal should I choose?")
+    entry = case.chat[-1]
+    assert entry.goal is not None and entry.goal.goal_id == goal_id
+    assert entry.goal.reason == "the files already have its outcome"
+    assert not case.goals, "the AI never chooses the goal"
+
+
+def test_a_goal_the_files_do_not_fit_is_refused(storage: LocalStorage, world: World) -> None:
+    client = ChatScript(
+        {
+            "goal": [
+                {"action": "propose_goal", "args": {"goal_id": "no-such-goal", "reason": "it sounds good"}},
+                reply("That did not work."),
+            ]
+        }
+    )
+    talk = Talk(storage, world, client)
+    case = talk.say("which goal should I choose?")
+    assert case.chat[-1].goal is None
+    assert "AGENT_GOAL_UNKNOWN" in str(client.seen[-1].results)

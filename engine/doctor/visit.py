@@ -84,6 +84,7 @@ from engine.doctor.case import (
     CaseQuestion,
     CaseReadinessRef,
     CaseStore,
+    ChatGoal,
     ChatSuggestion,
     EventDraft,
     TimelineKind,
@@ -266,6 +267,8 @@ class ConverseResult:
     """`(question_id, option_id)`: the answer it suggests to an open question; never recorded by the AI."""
     suggestions: tuple[tuple[str, str], ...] = ()
     """Every answer it suggests, one per open question (`suggestion` alone is the older single form)."""
+    goal: tuple[str, str] | None = None
+    """`(goal_id, reason)`: the goal it proposes while no goal is chosen; never chosen by the AI."""
     tools: tuple[str, ...] = ()
     """What it did to answer, in order (the looks and the actions)."""
     model_calls: int = 0
@@ -1450,6 +1453,7 @@ def _converse(run: _Run, case: Case) -> _Step:
         tools=result.tools,
         suggestion=suggestion,
         suggestions=tuple(shown),
+        goal=_proposed_goal(case, result.goal),
         blocked_by=result.blocked_by,
         error_codes=result.error_codes,
     )
@@ -1505,6 +1509,25 @@ def _taken_back(case: Case, ids: Sequence[str], made: set[str]) -> list[str]:
         ):
             found.append(item_id)
     return found
+
+
+def fitting_goals(case: Case) -> list[dict[str, Any]]:
+    """The goals that fit the files, as the generic visit counted them: ready, to check, or buildable from the events."""
+    raw = (case.diagnosis or {}).get("use_cases")
+    fitting = {"ready", "check", "buildable"}
+    return (
+        [u for u in raw if isinstance(u, dict) and u.get("status") in fitting]
+        if isinstance(raw, list)
+        else []
+    )
+
+
+def _proposed_goal(case: Case, given: tuple[str, str] | None) -> ChatGoal | None:
+    """The goal a reply proposes, kept only while it still fits the files and no goal is chosen."""
+    if given is None or active_goal(case) is not None:
+        return None
+    fits = {str(u.get("use_case_id")) for u in fitting_goals(case)}
+    return ChatGoal(goal_id=given[0], reason=given[1]) if given[0] in fits else None
 
 
 def _suggested(case: Case, step: _Step, given: tuple[str, str] | None) -> ChatSuggestion | None:
@@ -2304,8 +2327,10 @@ def _generic_rules(run: _Run, case: Case, step: _Step) -> None:
     """No goal: what the data can power, and what is missing for the other goals (the design §3.1)."""
     if not run.deps.offers:
         return
-    # the case's items: a campaign test the person confirmed (`treatment_column`) is read as they said
-    ctx = run.context(case, files=run.current(case).files, case_items=active_section(case)[0])
+    # the case's items: a campaign test the person confirmed (`treatment_column`) is read as they said. The tables are
+    # the files as the plan leaves them and the tables its queries build (as the goal's own rules read them), so a
+    # built table that holds the outcome is what the fit and the floors (rows, 'yes' examples) are counted on.
+    ctx = run.context(case, files=run.current(case).tables, case_items=active_section(case)[0])
     power = run.call("what_can_this_power", {}, ctx)
     verdicts = list(power.output["use_cases"])
     missing = tuple(
@@ -2436,7 +2461,7 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                         goal_id=goal,
                     )
                 )
-            else:
+            elif not _offer_build(run, case, brief, step, files, now):
                 step.doubts.append(
                     CaseDoubt(
                         doubt_id=f"d.outcome_missing.{goal}"[:128],
@@ -2470,6 +2495,72 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
         look = built.loaded if built is not None and built.origin.upload_id == table else None
         _time_rule(run, case, brief, table, step, now, look=look, current=current)
         _consent_rule(case, brief, table, step, files, now, look=look)
+
+
+def _offer_build(
+    run: _Run, case: Case, brief: GoalBrief, step: _Step, files: Sequence[LoadedFile], now: datetime
+) -> bool:
+    """No file has the goal's outcome, but an event table can define it (`engine.doctor.buildable`): propose the build
+    - one row per customer at a snapshot, behaviour measured on or before it and the outcome read from the window
+    after it, through the ordinary point-in-time `sql_query` step - instead of asking for a column. The step waits for
+    the person's yes (never ticked); its own date is the training snapshot, and the case's as-of date (the scoring
+    date) is checked against it as for any query. True when a proposal was made; False leaves the request to ask for
+    the column (the goal does not allow building, the table is too small, or the trial refused the query)."""
+    from engine.agent.sql_step import table_alias
+    from engine.config import load_use_case
+    from engine.doctor.buildable import buildable_outcome, compile_build
+    from engine.doctor.materialize import table_names
+    from engine.doctor.registry import DataToolError
+    from engine.doctor.tools_sql import SqlStepProposal
+
+    try:
+        config = load_use_case(brief.goal_id, run.deps.config_root)
+    except Exception:  # a goal whose configuration cannot be read is asked for the column, as before
+        return False
+    built = buildable_outcome(files, config, run.deps.config_root)
+    if built is None or not built.enough or built.snapshot is None:
+        return False
+    loaded = next((f for f in files if f.upload_id == built.upload_id), None)
+    if loaded is None:
+        return False
+    ctx = run.context(case, files=files, case_items=active_section(case)[0])
+    table = table_names(ctx.files)[loaded.upload_id]
+    try:
+        sql, description = compile_build(built, config, table_alias(table))
+        result = run.call(
+            "propose_sql_step",
+            {
+                "description": description,
+                "sql": sql,
+                "output_name": f"training_{_norm(brief.goal_id)}"[:_OUTPUT_NAME_CHARS],
+                "upload_ids": [loaded.upload_id],
+                "as_of": built.snapshot.isoformat(),
+                "reads_future": True,
+                "outcome_window_days": built.window_days,
+            },
+            ctx,
+        )
+    except DataToolError as exc:
+        _LOG.info("doctor.build_offer_refused goal=%s code=%s", brief.goal_id, exc.code)
+        return False
+    step.evidence.append(result)
+    made = SqlStepProposal.model_validate(result.output)
+    payload = made.payload()
+    payload["needs_yes"] = True
+    payload["buildable"] = built.model_dump(mode="json")
+    step.items.append(
+        _item(
+            "recipe_step",
+            payload,
+            title=made.title,
+            upload_id=loaded.upload_id,
+            confidence=AgentConfidence.CHECK,
+            evidence=(result.evidence_id,),
+            now=now,
+            goal_id=brief.goal_id,
+        )
+    )
+    return True
 
 
 _STEM: Final[int] = 5
