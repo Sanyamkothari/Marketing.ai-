@@ -67,7 +67,7 @@ class ProposeSqlArgs(_Args):
     sql: str = Field(description="one SELECT over `t_<file name>`; `$as_of` is the date")
     output_name: str = Field()
     files: list[str] = Field(
-        default_factory=list, description="the tables it reads: F1.., or a table a query built (T1..)"
+        default_factory=list, description="the tables it reads: F1.., or a query's table (T1..)"
     )
     expect: Expectations | None = Field(default=None)
     as_of: str | None = Field(default=None, description="YYYY-MM-DD the person said")
@@ -254,8 +254,8 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
     ActionSpec(
         "propose_unpivot",
         ProposeUnpivotArgs,
-        "a wide sheet (spend_jan..spend_dec) turned into one row per customer per period: the person is asked, and "
-        "says the year when the names have none.",
+        "wide period columns (spend_jan..spend_dec) as one row per period; the person is asked, and gives a "
+        "missing year.",
         frozenset({"review"}),
         needs_file=True,
     ),
