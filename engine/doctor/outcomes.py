@@ -85,7 +85,7 @@ MAX_JOIN_COLUMNS: Final[int] = 40
 # configs/outcomes.yaml
 # ---------------------------------------------------------------------------
 class OutcomeAudience(BaseModel):
-    """A narrower audience a goal is for, as its configuration describes it (`retail-win-back`: shoppers who have
+    """A narrower audience a goal is for, as its configuration describes it (a win-back goal: shoppers who have
     stopped buying). A build counts both readings - every customer active on or before the snapshot, and only these
     - and the person picks one; the code never applies it on its own."""
 

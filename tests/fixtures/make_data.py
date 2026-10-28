@@ -57,6 +57,7 @@ import pandas as pd
 from engine.config import (
     ColumnRole,
     ColumnType,
+    ProblemType,
     TemplateColumn,
     UseCaseConfig,
     load_all_use_cases,
@@ -260,7 +261,11 @@ def variant_applies(variant: str, config: UseCaseConfig) -> bool:
     Churn file has no date column, and `unparseable_time` is about a date column. Such a variant
     is *skipped* - `generate` returns the clean frame rather than raising - and a caller driving a
     matrix off `VARIANTS` asks this first so it parametrises over the pairs that mean something.
+
+    `non_binary_target` means nothing for an amount goal (regression): its target has many values by design.
     """
+    if variant == "non_binary_target" and config.problem_type is not ProblemType.BINARY_CLASSIFICATION:
+        return False
     return all(config.template.by_role(role) for role in VARIANT_SPECS[variant].requires_roles)
 
 

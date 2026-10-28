@@ -1717,6 +1717,39 @@ def _binary_target(work: pd.DataFrame, target: str, label: str) -> pd.Series:
     return pd.Series(flags, index=work.index, dtype="int64")
 
 
+def leakage_outcome(
+    frame: pd.DataFrame, params: CheckParams, facts: FrameFacts, work: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.Series] | None:
+    """The rows the leakage branches read and the yes/no they score each column against.
+
+    A yes/no goal: its positive label (`resolve_positive_label`). An amount goal (regression): whether the
+    amount is above zero - the customers who spent, the same reading its 200-positives floor counts - over the
+    rows whose amount is a number. Leakage is checked for both; `None` when the target gives no such reading.
+    """
+    import pandas as pd
+
+    target = params.target
+    if not target or target not in work.columns:
+        return None
+    if params.problem_type is ProblemType.REGRESSION:
+        amounts = pd.to_numeric(work[target], errors="coerce")
+        known = amounts.notna()
+        if not bool(known.any()):
+            return None
+        rows = work[known]
+        return (rows, (amounts[known] > 0).astype("int64"))
+    label, _positives, _negatives = resolve_positive_label(frame, params, facts)
+    if label is None:
+        return None
+    return (work, _binary_target(work, target, label))
+
+
+LEAKAGE_PROBLEMS: Final[frozenset[ProblemType]] = frozenset(
+    {ProblemType.BINARY_CLASSIFICATION, ProblemType.REGRESSION}
+)
+"""The problems whose uploads the leakage check reads: a yes/no outcome, and an amount (read as spent or not)."""
+
+
 def _leakage_feature(
     work: pd.DataFrame,
     name: str,
@@ -1821,13 +1854,14 @@ def baseline_auc(
     target = params.target
     if not target:
         return (None, ())
-    work = leakage_sample(frame, params)
+    if params.problem_type not in LEAKAGE_PROBLEMS:
+        return (None, ())
+    outcome = leakage_outcome(frame, params, facts, leakage_sample(frame, params))
+    if outcome is None:
+        return (None, ())
+    work, y = outcome
     if len(work) < LEAKAGE_MIN_ROWS:
         return (None, ())
-    label, _positives, _negatives = resolve_positive_label(frame, params, facts)
-    if label is None:
-        return (None, ())
-    y = _binary_target(work, target, label)
     if int(y.sum()) < BASELINE_MIN_CLASS_ROWS or int(len(y) - y.sum()) < BASELINE_MIN_CLASS_ROWS:
         return (None, ())
 
@@ -1903,14 +1937,20 @@ def check_leakage_suspected(frame: pd.DataFrame, params: CheckParams) -> CheckRe
     facts = facts_for(frame, params)
     if not params.leakage_check:
         return CheckResult(code=code, skipped=True, skip_reason="leakage_check is off")
-    if params.problem_type is not ProblemType.BINARY_CLASSIFICATION:
-        return CheckResult(code=code, skipped=True, skip_reason="not a binary problem")
+    if params.problem_type not in LEAKAGE_PROBLEMS:
+        return CheckResult(code=code, skipped=True, skip_reason="not a yes/no or amount problem")
     target = params.target
     if not target or target not in facts.columns:
         return CheckResult(code=code, skipped=True, skip_reason="no target column")
-    label, _positives, _negatives = resolve_positive_label(frame, params, facts)
-    if label is None:
-        return CheckResult(code=code, skipped=True, skip_reason="target is not two-valued")
+    outcome = leakage_outcome(frame, params, facts, leakage_sample(frame, params))
+    if outcome is None:
+        reason = (
+            "target is not an amount"
+            if params.problem_type is ProblemType.REGRESSION
+            else "target is not two-valued"
+        )
+        return CheckResult(code=code, skipped=True, skip_reason=reason)
+    work, y = outcome
 
     candidates = candidate_columns(frame, params, facts)
     positions = {name: index for index, name in enumerate(facts.columns)}
@@ -1924,10 +1964,8 @@ def check_leakage_suspected(frame: pd.DataFrame, params: CheckParams) -> CheckRe
         elif positions[name] > target_position and after_pattern.search(name):
             named[name] = ("after_target", params.leakage_after_target_pattern)
 
-    work = leakage_sample(frame, params)
     scored: dict[str, float] = {}
     if len(work) >= LEAKAGE_MIN_ROWS:
-        y = _binary_target(work, target, label)
         for name in candidates:
             feature = _leakage_feature(
                 work, name, facts.types.get(name, ColumnType.STRING), y, LEAKAGE_MAX_CATEGORIES
@@ -1940,11 +1978,10 @@ def check_leakage_suspected(frame: pd.DataFrame, params: CheckParams) -> CheckRe
 
     blanks: dict[str, BlankLeak] = {}
     if len(work) >= LEAKAGE_MIN_ROWS:
-        y_blank = _binary_target(work, target, label)
         for name in candidates:
             if name in scored:
                 continue
-            found = blank_leak(work[name], y_blank)
+            found = blank_leak(work[name], y)
             if found is not None and found.auc >= BLANK_LEAK_WARN_AUC:
                 blanks[name] = found
 
