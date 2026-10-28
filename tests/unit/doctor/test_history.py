@@ -123,3 +123,19 @@ def test_the_tool_reports_the_warning_and_refuses_a_column_that_is_not_dates() -
     assert out["needed_days"] == 180 and out["months"] == 5
     with pytest.raises(DataToolError):
         data_registry().call("check_history", {"column": "who"}, ctx(frame))
+
+
+def test_numbers_do_not_read_as_dates() -> None:
+    assert read_history(pd.Series([120, 450, 999, 30]), outcome_window_days=90) is None
+    assert read_history(pd.Series([True, False, True]), outcome_window_days=90) is None
+
+
+def test_the_plans_own_look_back_is_used_not_lengthened() -> None:
+    series = days("2024-01-01", "2024-05-31")  # 151 days
+    short = read_history(series, outcome_window_days=90, lookback_days=30)
+    assert short is not None and short.needed_days == 120
+    assert "HISTORY_TOO_SHORT" not in [f.code for f in short.findings]
+    floored = read_history(series, outcome_window_days=90, lookback_days=7)
+    assert floored is not None and floored.needed_days == 120  # the floor of 30 days stays
+    default = read_history(series, outcome_window_days=90)
+    assert default is not None and default.needed_days == 180

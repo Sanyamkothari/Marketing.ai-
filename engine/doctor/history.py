@@ -5,8 +5,9 @@ Two plain rules, both measured by our code on the dates of the file and never gu
 * **Room for both windows.** A model learns from behaviour in a look-back window before the training snapshot and from
   the outcome in a full outcome window after it. The history must hold both: `lookback + outcome window` days, or,
   when the training snapshot is fixed (`decisions.training_as_of_date`), that many days before it and the outcome
-  window after it. The look-back is as long as the outcome window (at least `MIN_LOOKBACK_DAYS`), so what is learnt
-  from is as long as what is predicted. `HISTORY_TOO_SHORT`.
+  window after it. The look-back is the plan's own (`lookback_days`, at least `MIN_LOOKBACK_DAYS`) when it names
+  one, else as long as the outcome window, so what is learnt from is as long as what is predicted.
+  `HISTORY_TOO_SHORT`.
 * **One season only.** When the history is under a year and a few months hold most of the rows (more than half in
   three months; a file of three months or less is one season by definition), the model learns one season. `HISTORY_ONE_SEASON`.
 
@@ -76,7 +77,10 @@ def _months(days: float) -> str:
 
 
 def _dates(series: pd.Series) -> pd.Series:
+    """The cells that read as dates. Numbers and yes/no never do (they would parse as 1970 epoch dates)."""
     column = series
+    if pd.api.types.is_bool_dtype(column) or pd.api.types.is_numeric_dtype(column):
+        return column.iloc[0:0]
     if not pd.api.types.is_datetime64_any_dtype(column):
         column = pd.to_datetime(column, errors="coerce", format="mixed")
     return column.dropna()
@@ -127,7 +131,8 @@ def read_history(
     needed: int | None = None
     if outcome_window_days is not None and outcome_window_days > 0:
         window = outcome_window_days
-        back = max(lookback_days or 0, window, MIN_LOOKBACK_DAYS)
+        # The plan's own look-back when it names one (never under the floor), else as long as the outcome window.
+        back = max(lookback_days, MIN_LOOKBACK_DAYS) if lookback_days else max(window, MIN_LOOKBACK_DAYS)
         needed = back + window
         before = None if training_as_of is None else (training_as_of - start).days
         after = None if training_as_of is None else (end - training_as_of).days

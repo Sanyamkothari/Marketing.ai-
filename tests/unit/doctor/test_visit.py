@@ -732,3 +732,44 @@ def test_a_window_longer_than_the_history_allows_is_a_too_short_flag(storage: Lo
     changed = case.model_copy(update={"items": (*case.items, window)})
     found = visit._history_findings(changed, GOAL_A, w.load(changed))
     assert {f.code for f in found} == {"HISTORY_TOO_SHORT", "HISTORY_ONE_SEASON"}
+
+
+def test_the_history_check_reads_the_snapshot_a_future_reading_query_sets(storage: LocalStorage) -> None:
+    w, case = _five_months(storage)
+    window = case.items[0].model_copy(
+        update={
+            "item_id": "window-90",
+            "kind": "setting",
+            "goal_id": GOAL_A,
+            "state": ProposalState.ACCEPTED,
+            "payload": {"path": "targeting.outcome_window_days", "value": 90},
+        }
+    )
+    step = {
+        "order": 1,
+        "kind": "sql_query",
+        "column": "totals",
+        "params": {
+            "sql": "SELECT customer_id FROM this",
+            "inputs": ["this"],
+            "output_name": "totals",
+            "description": "The outcome.",
+            "reads_future": True,
+            "as_of": "2026-01-15",
+        },
+    }
+    query = case.items[0].model_copy(
+        update={
+            "item_id": "query-1",
+            "kind": "step",
+            "goal_id": GOAL_A,
+            "upload_id": FIRST,
+            "state": ProposalState.ACCEPTED,
+            "payload": {"step": step},
+        }
+    )
+    changed = case.model_copy(update={"items": (*case.items, window, query)})
+    reading, _ = visit._history_reading(changed, GOAL_A, w.load(changed))
+    assert reading is not None
+    short = next(f for f in reading.findings if f.code == "HISTORY_TOO_SHORT")
+    assert short.text.startswith("The training date leaves 14 days of history before it")

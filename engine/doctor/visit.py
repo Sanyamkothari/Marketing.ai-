@@ -105,6 +105,7 @@ from engine.doctor.plan_check import (
     plan_check_of,
     plan_digest,
     readiness_acknowledged,
+    recipe_steps_of,
     stop_is_open,
     with_full_findings,
 )
@@ -2674,12 +2675,18 @@ def _history_reading(
     dated = decided.as_of_column(goal_id)
     if dated is None:
         return None, None
+    from engine.doctor.materialize import snapshot_of
+
     for loaded in files:
         if (dated.upload_id in (None, loaded.upload_id)) and dated.column in loaded.frame.columns:
+            # The date the training table is really cut at: the decided snapshot, else a future-reading query's own.
+            steps = [
+                step for step, _ in recipe_steps_of(case.items, loaded.upload_id, only_file=len(files) == 1)
+            ]
             reading = read_history(
                 loaded.frame[dated.column],
                 outcome_window_days=decided.window_days(goal_id),
-                training_as_of=decided.training_as_of_date,
+                training_as_of=snapshot_of(steps, decided.training_as_of_date),
             )
             return reading, dated.column
     return None, None
