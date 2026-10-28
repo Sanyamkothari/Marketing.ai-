@@ -16,7 +16,6 @@ import random
 import socket
 from collections.abc import Sequence
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -244,45 +243,33 @@ def test_an_ai_session_catches_an_ai_step_that_accept_recommended_ticks(
     assert {h.where for h in run.harms} >= {"messy/propose_step", "messy/propose_setting"}
 
 
-class _FakeClient:
-    """The two calls `_Recording` makes around "accept the recommended": the session before, then the decision."""
-
-    def __init__(self, before: Any, after: Any) -> None:
-        self.sessions = [before, after]
-
-    def get(self, url: str, **_kwargs: Any) -> Any:
-        return SimpleNamespace(status_code=200, json=lambda: {"session": self.sessions[0]})
-
-    def post(self, url: str, **_kwargs: Any) -> Any:
-        return SimpleNamespace(status_code=200, json=lambda: {"session": self.sessions[1]})
+def _step_item(kind: str, column: str, source: str = "rules") -> dict[str, Any]:
+    return {
+        "item_id": f"recipe_step.{kind}.{column}",
+        "kind": "recipe_step",
+        "source": source,
+        "payload": {"step": {"kind": kind, "column": column, "order": 1, "params": {}}},
+    }
 
 
-def test_the_journey_checks_every_accept_recommended_it_passes_on() -> None:
-    from engine.agent.contracts import DecidedBy, ProposalSource, ProposalState
-
-    before = bench.ai_session("messy", _live(ReferenceModel())).session  # with the AI's pending suggestions
-    pending = [p.proposal_id for p in before.proposals if p.source is ProposalSource.AI]
-    assert pending
-    ticked = tuple(
-        (
-            p.model_copy(update={"state": ProposalState.ACCEPTED, "decided_by": DecidedBy.USER})
-            if p.proposal_id in pending
-            else p
-        )
-        for p in before.proposals
-    )
-    after = before.model_copy(update={"proposals": ticked})
-    recording = bench._Recording(
-        _FakeClient(before.model_dump(mode="json"), after.model_dump(mode="json")), "in_xx"
-    )
-    recording.post("/uploads/u/agent-session/decisions", json={"accept_recommended": True})
-    assert recording.accepts == 1
-    assert [h.metric for h in recording.harms] == ["pre_ticked_ai_step"] * len(pending)
-    clean = bench._Recording(
-        _FakeClient(before.model_dump(mode="json"), before.model_dump(mode="json")), "in_xx"
-    )
-    clean.post("/uploads/u/agent-session/decisions", json={"accept_recommended": True})
-    assert clean.harms == []
+def test_the_journey_checks_every_suggestion_the_driver_ticks() -> None:
+    """The driver ticks the Doctor's sure suggestions; one that is the AI's, or changes the outcome, the ID or what a
+    row is, is a harm (the visit's version of "accept the recommended" never ticking what it may not)."""
+    ticked = [
+        _step_item("normalise_text", "city"),
+        _step_item("normalise_text", "bought"),
+        _step_item("normalise_text", "cust_id"),
+        _step_item("keep_latest_per_id", "cust_id"),
+        _step_item("normalise_text", "city", source="ai"),
+    ]
+    found = bench.ticked_item_harms(ticked, primary_key="cust_id", target="bought", where="in_xx")
+    assert [(h.metric, h.detail) for h in found] == [
+        ("meaning_changed_without_approval", "a normalise_text step on the outcome"),
+        ("meaning_changed_without_approval", "a normalise_text step on the ID"),
+        ("meaning_changed_without_approval", "a keep_latest_per_id step (what a row is)"),
+        ("pre_ticked_ai_step", "recipe_step ticked"),
+    ]
+    assert bench.ticked_item_harms(ticked[:1], primary_key="cust_id", target="bought", where="in_xx") == []
 
 
 # ---------------------------------------------------------------------------
@@ -343,8 +330,11 @@ def _in_01_shaped(rows: int = 1_200) -> tuple[bytes, dict[str, str], dict[str, s
     return out.getvalue().encode("utf-8"), labels, days
 
 
-def _run_in_01_shaped() -> Any:
+def _run_in_01_shaped(outcome_header: str = "Kharida (30 din)") -> Any:
     data, labels, days = _in_01_shaped()
+    if outcome_header != IN_01_SHAPE[-1]:
+        first, _, rest = data.decode("utf-8").partition("\n")
+        data = (first.removesuffix(IN_01_SHAPE[-1]) + outcome_header + "\n" + rest).encode("utf-8")
     job = bench.Job(
         "in_01_shape",
         "heldout",
@@ -352,77 +342,72 @@ def _run_in_01_shaped() -> Any:
         lambda: ("in_01_shape.csv", data, "text/csv"),
         lambda: bench.Truth(
             key="Grahak ID",
-            outcome="Kharida (30 din)",
-            header=IN_01_SHAPE,
+            outcome=outcome_header,
+            header=(*IN_01_SHAPE[:-1], outcome_header),
             labels=labels,
             dates={"Judne ki tareekh": days},
         ),
     )
     configs = REPO / "configs"
-    with bench.unified_app(configs) as (client, data_dir):
+    from scripts.plan_l_benchmark import unified_app
+
+    with unified_app(configs) as (client, data_dir):
         return bench.run_job(client, data_dir, job, available=set(), config_root=configs, train=False)
 
 
-def test_an_in_01_shaped_file_reaches_approve_with_its_true_columns() -> None:
-    """With DEC-1821, a session with no ID or outcome settled asks for them; the harness answers each role question
-    with the file's true column, as a person who knows the file would, and the file reaches Approve."""
-    result = _run_in_01_shaped()
-    assert result.approved and result.roles_settled, result
-    assert result.invariant_problem is None
+def test_an_in_01_shaped_file_settles_its_true_columns_and_never_ends_silently() -> None:
+    """The Doctor finds the outcome by name: the file's true ID and outcome are settled with no guess and no harm.
+    Whether it then reaches the hand-off or stops (a stop the person must say yes to, e.g. a changed column
+    type), the harness reports which, in words; it never ends with nothing said."""
+    result = _run_in_01_shaped("Purchased")
+    assert result.uploaded and result.roles_settled, result
     assert not any("not offered" in note or "settled" in note for note in result.not_measured), result
     assert result.harms == (), "the right ID and outcome: no row, label or column harm"
+    assert result.approved or result.why_not, "a stop is always reported"
+
+
+def test_an_outcome_the_doctor_cannot_find_is_a_stop_not_a_hand_off() -> None:
+    """A Hinglish outcome header the Doctor does not recognise is a doubt and a data request, not a guess: the
+    file is not handed on, and the harness says why (and that the visit rested at Approve with no outcome)."""
+    result = _run_in_01_shaped()
+    assert not result.approved and result.why_not, result
+    assert not result.roles_settled and result.harms == ()
+    assert result.invariant_problem == "ready (said by Guided setup) but no ID or outcome settled"
 
 
 def test_the_invariant_catches_ready_with_no_roles_settled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """B1, kept meaningful after the fix: with the product's behaviour before DEC-1821 (no role question, ready
-    with roles unsettled), the in_01 shape is called ready and fails at Approve; the harness must say so."""
-    from engine.agent import session as session_module
+    """B1, kept meaningful: a visit that says it is ready to Approve with no case to show an ID and an outcome
+    settled, and no Approve, is called out by the harness."""
+    from scripts import plan_l_benchmark
 
-    monkeypatch.setattr(session_module, "unsettled_roles", lambda _session: ())
-    monkeypatch.setattr(session_module, "_ask_for_unsettled_roles", lambda session, _ctx: session)
+    def says_ready(_client: Any, _upload: str, _goal: str, outcome: Any, **_kwargs: Any) -> None:
+        outcome.session_status = "ready"
+
+    monkeypatch.setattr(plan_l_benchmark, "_drive", says_ready)
     result = _run_in_01_shaped()
     assert not result.approved and result.session_status == "ready"
     assert result.invariant_problem == "ready (said by Guided setup) but no ID or outcome settled"
 
 
-class _RoleClient:
-    """A session with one open ID question, and the answer the driver sends."""
-
-    def __init__(self, columns: Sequence[str]) -> None:
-        options = [
-            {"option_id": f"use-{n}", "label": c, "proposal": {"value": c}} for n, c in enumerate(columns, 1)
-        ]
-        self.session = {"questions": [{"question_id": "a2-role-id", "options": options}]}
-        self.sent: list[Any] = []
-
-    def get(self, url: str, **_kwargs: Any) -> Any:
-        return SimpleNamespace(status_code=200, json=lambda: {"session": self.session})
-
-    def post(self, url: str, **kwargs: Any) -> Any:
-        self.sent.append(kwargs.get("json"))
-        return SimpleNamespace(status_code=200, json=lambda: {"session": self.session})
+def _question(code: str, columns: Sequence[str]) -> dict[str, Any]:
+    options = [{"option_id": f"c{n}", "label": c} for n, c in enumerate(columns)]
+    return {"question_id": f"q.{code.lower()}.base.x", "code": code, "options": options}
 
 
 def test_a_role_question_is_answered_with_the_true_column_or_says_it_was_not_offered() -> None:
     truth = bench.Truth(key="Grahak ID", outcome="Kharida (30 din)", header=(), labels={})
-    answer = {"question_id": "a2-role-id", "option_id": "use-1"}
-    offered = _RoleClient(["Mobile No", "grahak_id"])
-    recording = bench._Recording(offered, "in_xx", truth)
-    recording.post("/uploads/u/agent-session/answers", json=dict(answer))
-    assert offered.sent == [{**answer, "option_id": "use-2"}] and recording.not_measured == []
-    missing = _RoleClient(["Mobile No", "Naam"])
-    recording = bench._Recording(missing, "in_xx", truth)
-    recording.post("/uploads/u/agent-session/answers", json=dict(answer))
-    assert missing.sent == [answer], "no true column offered: the first option, as the driver chose"
-    assert recording.not_measured == [
+    answers = bench._Answers(truth)
+    assert answers(_question("KEY_AMBIGUOUS", ["Mobile No", "grahak_id"])) == "c1"
+    assert answers(_question("OUTCOME_COLUMN", ["Naam", "kharida_30_din (file.csv)"])) == "c1"
+    assert answers.not_measured == []
+    assert (
+        answers(_question("KEY_AMBIGUOUS", ["Mobile No", "Naam"])) is None
+    ), "the driver takes its own choice"
+    assert answers.not_measured == [
         "the true ID column 'Grahak ID' was not offered in the ID question; answered 'Mobile No'"
     ]
-    other = _RoleClient(["Mobile No"])
-    plain = bench._Recording(other, "in_xx", truth)
-    plain.post("/uploads/u/agent-session/answers", json={"question_id": "a2-combine", "option_id": "use-1"})
-    assert other.sent == [
-        {"question_id": "a2-combine", "option_id": "use-1"}
-    ], "only role questions are answered"
+    assert answers(_question("THIN_LAST_PERIOD", ["Mobile No"])) is None, "only role questions are answered"
+    assert len(answers.not_measured) == 1
 
 
 # ---------------------------------------------------------------------------

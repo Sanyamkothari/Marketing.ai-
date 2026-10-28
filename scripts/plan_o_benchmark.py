@@ -10,8 +10,8 @@ What it runs, each part selectable with `--parts` (all by default):
   digests, harm (a pre-ticked AI step, a meaning changed), the change-share guard, personal data in any prompt, the
   injection canary, and model calls and cost per case. The model is **recorded** (a cassette: no network, no key)
   unless a real one is configured; `--record` records a new cassette from the reference model or a real one.
-* **plan_l**, **extended**, **heldout** - the benchmark files through upload, Data Doctor, the hand-off, Guided setup
-  and Approve with no person (Plan L M160's driver, `scripts.plan_l_benchmark`), then the readiness report on the
+* **plan_l**, **extended**, **heldout** - the benchmark files through upload, Data Doctor's diagnosis and the case
+  visit to Approve with no person (Plan L M160's driver, `scripts.plan_l_benchmark`), then the readiness report on the
   prepared copy (the invariant on every file), and harm: rows and columns lost with nothing saying so, and outcome
   values changed. Plan L's 30 files, the extended cases, and 20 held-out Indian files written by a generator that
   imports nothing from the lexicons (reported separately; never used for tuning).
@@ -42,12 +42,10 @@ import argparse
 import dataclasses
 import json
 import re
-import shutil
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -795,27 +793,6 @@ def heldout_jobs(folder: Path | None = None) -> list[Job]:
     ]
 
 
-@contextmanager
-def unified_app(config_root: Path) -> Iterator[tuple[Any, Path]]:
-    """The API with `data_doctor.unified` on, over a copy of `config_root`, and its data folder."""
-    from fastapi.testclient import TestClient
-
-    from api.main import create_app
-
-    with tempfile.TemporaryDirectory() as work:
-        root = Path(work) / "configs"
-        shutil.copytree(config_root, root)
-        engine_yaml = root / "engine.yaml"
-        text = engine_yaml.read_text(encoding="utf-8")
-        switched = re.sub(r"(\n  data_doctor:[^\n]*\n    unified:) false", r"\1 true", text, count=1)
-        if switched == text:
-            raise RuntimeError("could not switch data_doctor.unified on in the copied engine.yaml")
-        engine_yaml.write_text(switched, encoding="utf-8")
-        data_dir = Path(work) / "data"
-        with TestClient(create_app(config_root=root, data_dir=data_dir)) as client:
-            yield client, data_dir
-
-
 def same_column(written: Any, true: str) -> bool:
     """Whether a column name (or its label) is the file's true column: compared case-blind, with spaces,
     underscores and punctuation ignored (`Grahak ID` is `grahak_id`)."""
@@ -826,91 +803,80 @@ def same_column(written: Any, true: str) -> bool:
     return bool(plain(true)) and plain(written) == plain(true)
 
 
-class _Recording:
-    """The test client between Plan L's driver and the API.
+class _Answers:
+    """A person who knows the file, between the visit's driver and its questions.
 
-    It keeps Approve's answer; it checks every "accept the recommended" it passes on (the session before and after,
-    so a step it ticks that it never may is counted: `ticked_harms`); and it answers a role question (DEC-1821's
-    `a<round>-role-id` / `-role-outcome`) as a person who knows the file would, with the file's true ID or outcome
-    column. The driver picks the first option of a question with no recommended one; for a role question that
-    would be a guess, so the answer is replaced. When the true column is not among the options, the first option is
-    sent and the file says so (`not_measured`): a wrong column is never chosen silently.
+    The driver takes the recommended option, else the first. For the two questions that say what a column *is*
+    (`KEY_AMBIGUOUS`, `OUTCOME_COLUMN`) that would be a guess, so the file's true ID or outcome column is chosen
+    when the question offers it. When it does not, the first option is sent and the file says so (`not_measured`):
+    a wrong column is never chosen silently.
     """
 
-    def __init__(self, client: Any, where: str, truth: Truth | None = None) -> None:
-        self.client = client
-        self.where = where
+    _ROLES: Final[dict[str, str]] = {"KEY_AMBIGUOUS": "ID", "OUTCOME_COLUMN": "outcome"}
+
+    def __init__(self, truth: Truth | None) -> None:
         self.truth = truth
-        self.applied: dict[str, Any] | None = None
-        self.harms: list[Any] = []
-        self.accepts = 0
         self.not_measured: list[str] = []
 
-    def post(self, url: str, **kwargs: Any) -> Any:
-        body = kwargs.get("json")
-        if (
-            url.endswith("/answers")
-            and isinstance(body, dict)
-            and "-role-" in str(body.get("question_id", ""))
-        ):
-            kwargs["json"] = self._role_answer(url.removesuffix("/answers"), body)
-        accepting = url.endswith("/decisions") and isinstance(body, dict) and body.get("accept_recommended")
-        before = self._session(url.removesuffix("/decisions")) if accepting else None
-        response = self.client.post(url, **kwargs)
-        if url.endswith("/apply") and response.status_code == 200:
-            self.applied = response.json()
-        if accepting and before is not None and response.status_code == 200:
-            self._ticked(before, response.json()["session"])
-        return response
-
-    def get(self, url: str, **kwargs: Any) -> Any:
-        return self.client.get(url, **kwargs)
-
-    def _role_answer(self, base: str, body: dict[str, Any]) -> dict[str, Any]:
-        question_id = str(body["question_id"])
-        role = "ID" if "-role-id" in question_id else "outcome"
-        session = self._session(base) or {}
-        question = next(
-            (q for q in session.get("questions", []) if q.get("question_id") == question_id), None
-        )
-        options = list(question.get("options", [])) if question else []
-        sent = next((o for o in options if o.get("option_id") == body.get("option_id")), None)
-        sent_label = str(sent.get("label")) if sent else str(body.get("option_id"))
+    def __call__(self, question: dict[str, Any]) -> str | None:
+        role = self._ROLES.get(str(question.get("code")))
+        if role is None:
+            return None
+        options = list(question.get("options", []))
+        sent = options[0] if options else None
+        sent_label = str(sent.get("label")) if sent else "none"
         if self.truth is None:
             self.not_measured.append(
                 f"the {role} question was answered '{sent_label}' (no truth to answer from)"
             )
-            return body
+            return None
         true = self.truth.key if role == "ID" else self.truth.outcome
         for option in options:
-            value = (option.get("proposal") or {}).get("value")
-            if same_column(value, true) or same_column(option.get("label"), true):
-                return {**body, "option_id": option["option_id"]}
+            label = str(option.get("label"))
+            if same_column(label, true) or same_column(re.sub(r" \(.*\)$", "", label), true):
+                return str(option["option_id"])
         self.not_measured.append(
             f"the true {role} column '{true}' was not offered in the {role} question; answered '{sent_label}'"
         )
-        return body
+        return None
 
-    def _session(self, base: str) -> Any | None:
-        response = self.client.get(base)
-        return response.json()["session"] if response.status_code == 200 else None
 
-    def _ticked(self, before: Any, after: Any) -> None:
-        from engine.agent.contracts import AgentSession
-        from engine.agent.session import roles_of
-        from engine.doctor.evals import ticked_harms
+def ticked_item_harms(
+    items: Sequence[dict[str, Any]], *, primary_key: str | None, target: str | None, where: str
+) -> list[Any]:
+    """What the driver's ticks changed that a tick never may: a suggestion of the AI's ticked for the person, or a
+    step on the outcome or the ID, or one that changes what a row is. Answering a question is the person's own
+    decision and is not read here. (The Data Doctor pre-ticks only what the values prove; this is the check that
+    the driver, which ticks the rest of the sure ones, adds nothing meaning-bearing.)"""
+    from engine.agent.contracts import ROW_RESHAPE_STEP_KINDS, RecipeStep, RecipeStepKind
+    from engine.doctor.evals import HarmEvent
 
-        was = AgentSession.model_validate(before)
-        now = AgentSession.model_validate(after)
-        key, target = roles_of(now)
-        self.accepts += 1
-        self.harms += ticked_harms(
-            was.proposals,
-            now.proposals,
-            primary_key=key,
-            target=target,
-            where=f"{self.where}/accept_recommended",
-        )
+    events: list[Any] = []
+    for item in items:
+        if item.get("source") == "ai":
+            events.append(
+                HarmEvent(metric="pre_ticked_ai_step", where=where, detail=f"{item['kind']} ticked")
+            )
+            continue
+        raw = (item.get("payload") or {}).get("step")
+        if not isinstance(raw, dict):
+            continue
+        try:
+            step = RecipeStep.model_validate(raw)
+        except ValueError:  # a step this reader does not know is not read as harm
+            continue
+        why = None
+        if target is not None and step.column == target and step.kind is not RecipeStepKind.RENAME_COLUMN:
+            why = f"a {step.kind.value} step on the outcome"
+        elif (
+            primary_key is not None and step.column == primary_key and step.kind not in ROW_RESHAPE_STEP_KINDS
+        ):
+            why = f"a {step.kind.value} step on the ID"
+        elif step.kind in ROW_RESHAPE_STEP_KINDS:
+            why = f"a {step.kind.value} step (what a row is)"
+        if why is not None:
+            events.append(HarmEvent(metric="meaning_changed_without_approval", where=where, detail=why))
+    return events
 
 
 def _prepared(storage: Any, upload_id: str) -> Any:
@@ -1063,11 +1029,9 @@ def run_job(
     client: Any, data_dir: Path, job: Job, *, available: set[str], config_root: Path, train: bool
 ) -> Any:
     """One benchmark file through the journey, the readiness report, the end-to-end invariant and the harm checks."""
-    from engine.config import RunMode, resolve_config
     from engine.doctor.evals import BenchFile, invariant_problem, journey_invariant
-    from engine.doctor.readiness import check_readiness, inputs_for_upload
     from engine.storage import LocalStorage
-    from scripts.plan_l_benchmark import Outcome, _drive
+    from scripts.plan_l_benchmark import Outcome, _drive, roles_of_case
 
     waiting = tuple(n for n in job.needs if n not in available)
     if waiting:
@@ -1093,14 +1057,13 @@ def run_job(
     if diagnosis.status_code == 200:
         found = next((u for u in diagnosis.json()["use_cases"] if u["use_case_id"] == job.use_case), None)
         doctor = found["status"] if found else None
-    if doctor in ("ready", "check"):
-        handed = client.post("/doctor/handoff", json={"upload_id": upload_id, "use_case": job.use_case})
-        if handed.status_code in (200, 201):
-            upload_id = handed.json()["upload_id"]
     truth = job.truth()
-    recording = _Recording(client, job.name, truth)
+    answers = _Answers(truth)
+    ticked: list[dict[str, Any]] = []
     outcome = Outcome(name=job.name, use_case=job.use_case)
-    _drive(recording, upload_id, job.use_case, outcome)
+    applied = _drive(
+        client, upload_id, job.use_case, outcome, data_dir=data_dir, choose=answers, ticked=ticked
+    )
     bench = bench.model_copy(
         update={
             "uploaded": True,
@@ -1110,9 +1073,12 @@ def run_job(
             "approved": outcome.applied,
         }
     )
-    harms: list[Any] = list(recording.harms)
-    unmeasured: list[str] = list(recording.not_measured)
-    applied = recording.applied
+    final = _case_of(client, outcome)
+    key, target = roles_of_case(final, job.use_case) if final else (None, None)
+    harms: list[Any] = ticked_item_harms(
+        ticked, primary_key=key, target=target, where=f"{job.name}/accept_recommended"
+    )
+    unmeasured: list[str] = list(answers.not_measured)
     storage = LocalStorage(data_dir)
     report_problem: str | None = None
     verdict: str | None = None
@@ -1125,28 +1091,19 @@ def run_job(
             or f"setup ended {outcome.session_status}"
         )
         verdict, report_problem, roles_settled = _unapproved_readiness(
-            client, storage, upload_id, job.use_case, config_root
+            storage, upload_id, job.use_case, config_root, key, target
         )
     else:
         roles_settled = bool(applied.get("primary_key")) and bool(applied.get("target"))
-        cfg = resolve_config(job.use_case, applied["overrides"], root=config_root).config
-        try:
-            report = check_readiness(
-                inputs_for_upload(
-                    storage,
-                    applied["upload_id"],
-                    config=cfg,
-                    mode=RunMode.TRAIN,
-                    primary_key=applied["primary_key"],
-                    target=applied["target"],
-                    resolved_overrides=applied["overrides"],
-                )
-            )
-            verdict, report_problem = report.verdict, invariant_problem(report)
-        except ValueError as exc:  # the report's own invariant refused to exist: that is the finding
-            verdict, report_problem = "invalid", f"the readiness report broke its invariant: {str(exc)[:120]}"
-        receipt = applied.get("receipt") or {}
-        steps = receipt.get("steps") or []
+        report = applied[
+            "report"
+        ]  # the Doctor's own, written on the prepared copy when it handed the file on
+        verdict, report_problem = report.verdict, invariant_problem(report)
+        steps = [
+            i["payload"]["step"]
+            for i in applied["case"]["items"]
+            if i["state"] == "accepted" and isinstance((i.get("payload") or {}).get("step"), dict)
+        ]
         if truth is None:
             unmeasured.append("rows, labels, columns and dates: no truth for this file")
         else:
@@ -1158,7 +1115,11 @@ def run_job(
                 target=applied.get("target"),
                 questions=outcome.questions,
                 documented_rows=(
-                    int(receipt.get("rows_in", 0)) - int(receipt.get("rows_out", 0))
+                    max(
+                        0,
+                        (report.source.original_rows_parsed or report.source.rows_parsed)
+                        - report.source.rows_parsed,
+                    )
                     if any(s.get("kind") in _ROW_STEPS for s in steps)
                     else 0
                 ),
@@ -1196,21 +1157,23 @@ def run_job(
     )
 
 
+def _case_of(client: Any, outcome: Any) -> dict[str, Any] | None:
+    """The case the driver opened, as it ended (None: none was opened)."""
+    if not outcome.case_id:
+        return None
+    response = client.get(f"/cases/{outcome.case_id}")
+    return dict(response.json()) if response.status_code == 200 else None
+
+
 def _unapproved_readiness(
-    client: Any, storage: Any, upload_id: str, use_case: str, config_root: Path
+    storage: Any, upload_id: str, use_case: str, config_root: Path, key: str | None, target: str | None
 ) -> tuple[str | None, str | None, bool]:
     """`(verdict, report problem, roles settled)` of a file that did not reach Approve: the readiness report on
-    the upload as it stands, with the roles its session reached. No report without an ID and an outcome."""
-    from engine.agent.contracts import AgentSession
-    from engine.agent.session import roles_of
+    the upload as it stands, with the roles its case reached. No report without an ID and an outcome."""
     from engine.config import RunMode, resolve_config
     from engine.doctor.evals import invariant_problem
     from engine.doctor.readiness import check_readiness, inputs_for_upload
 
-    response = client.get(f"/uploads/{upload_id}/agent-session")
-    if response.status_code != 200:
-        return None, None, False
-    key, target = roles_of(AgentSession.model_validate(response.json()["session"]))
     if not key or not target:
         return None, None, False
     cfg = resolve_config(use_case, {}, root=config_root).config
@@ -1251,6 +1214,8 @@ def _train(client: Any, use_case: str, applied: dict[str, Any], timeout_s: float
 
 
 def run_files(jobs: Sequence[Job], *, config_root: Path, available: set[str], train: bool) -> list[Any]:
+    from scripts.plan_l_benchmark import unified_app
+
     with unified_app(config_root) as (client, data_dir):
         return [
             run_job(client, data_dir, job, available=available, config_root=config_root, train=train)

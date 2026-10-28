@@ -1,13 +1,13 @@
 """Plan O M234 acceptance: on the 30 Plan L benchmark files, every `ready` file's split and training finish
 (DEC-1804 (e)).
 
-Each benchmark file goes the way Plan L M160 takes it - upload, Data Doctor, the hand-off, Guided setup to
-Approve with no person - and the readiness report is computed on the prepared copy Approve wrote. One
+Each benchmark file goes the way Plan L M160 takes it - upload, then the Data Doctor visit to Approve with
+no person - and the readiness report is computed on the prepared copy Approve wrote. One
 test takes the plainest and the messiest file and runs the engine's own prepare, split and train-only fit
 on every `ready` copy; the other takes all thirty and trains each `ready` copy to the end through
 `POST /runs`, with plan §10's quick settings, and a last test holds the number of ready files to the
-Plan L run's, so the claim cannot pass by finding no file ready. All three are slow (they drive Guided
-setup to Approve on real benchmark files).
+Plan L run's, so the claim cannot pass by finding no file ready. All three are slow (they drive the Data Doctor
+visit to Approve on real benchmark files).
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from api.main import create_app
 from engine import keys
 from engine.config import ProblemType, RunMode, resolve_config
 from engine.doctor.readiness import check_readiness, inputs_for_upload
@@ -29,7 +28,7 @@ from engine.doctor.readiness_contracts import DataReadinessReport
 from engine.doctor.readiness_probes import label_key
 from engine.stages import prepare
 from engine.storage import LocalStorage, upload_key
-from scripts.plan_l_benchmark import Messy, Outcome, _drive, cases, file_bytes
+from scripts.plan_l_benchmark import Messy, Outcome, _drive, cases, file_bytes, unified_app
 
 QUICK: dict[str, Any] = {
     "model_search.time_limit_minutes": 1,
@@ -49,27 +48,9 @@ class Prepared:
     report: DataReadinessReport | None
 
 
-class _Recording:
-    """The test client, keeping Approve's answer: the upload, the roles and the overrides Run uses."""
-
-    def __init__(self, client: TestClient) -> None:
-        self.client = client
-        self.applied: dict[str, Any] | None = None
-
-    def post(self, url: str, **kwargs: Any) -> Any:
-        response = self.client.post(url, **kwargs)
-        if url.endswith("/apply") and response.status_code == 200:
-            self.applied = response.json()
-        return response
-
-    def get(self, url: str, **kwargs: Any) -> Any:
-        return self.client.get(url, **kwargs)
-
-
 @pytest.fixture(scope="module")
-def app(config_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[TestClient, Path]]:
-    data_dir = tmp_path_factory.mktemp("readiness-bench")
-    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as client:
+def app(config_root: Path) -> Iterator[tuple[TestClient, Path]]:
+    with unified_app(config_root) as (client, data_dir):
         yield client, data_dir
 
 
@@ -81,21 +62,10 @@ def _prepare(client: TestClient, data_dir: Path, case: Messy, config_root: Path)
     )
     assert response.status_code == 201, response.text
     upload_id = response.json()["upload_id"]
-    diagnosis = client.post("/doctor/diagnosis", json={"upload_ids": [upload_id]})
-    verdict = (
-        next((u for u in diagnosis.json()["use_cases"] if u["use_case_id"] == case.use_case), None)
-        if diagnosis.status_code == 200
-        else None
-    )
-    if verdict is not None and verdict["status"] in ("ready", "check"):
-        handed = client.post("/doctor/handoff", json={"upload_id": upload_id, "use_case": case.use_case})
-        if handed.status_code in (200, 201):
-            upload_id = handed.json()["upload_id"]
-    recording = _Recording(client)
-    _drive(recording, upload_id, case.use_case, Outcome(name=case.name, use_case=case.use_case))
-    if recording.applied is None:
+    outcome = Outcome(name=case.name, use_case=case.use_case)
+    applied = _drive(client, upload_id, case.use_case, outcome, data_dir=data_dir)
+    if applied is None:
         return Prepared(case, None, None, None, {}, None)
-    applied = recording.applied
     overrides = {**applied["overrides"], **QUICK}
     cfg = resolve_config(case.use_case, overrides, root=config_root).config
     report = check_readiness(
