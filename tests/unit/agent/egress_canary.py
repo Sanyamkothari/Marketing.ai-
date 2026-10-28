@@ -164,9 +164,8 @@ def canary_context(
 ) -> AgentContext:
     """A context whose agent config has the given data-access mode and hidden columns, and room for a long chat.
 
-    It runs under a copy of the shipped configuration with Plan K's `agentic.enabled` on (`header_help_root`), so the
-    canary also reaches what M142 adds only then: the `header_candidates` key and the `draft_outcome_labels` tool
-    (DEC-1409 (f)). With the switch off those are absent and the rest is what the canary always covered."""
+    It runs on the shipped configuration (`header_help_root`), where M142's help is always on, so the canary also
+    reaches the `header_candidates` key and the `draft_outcome_labels` tool (DEC-1409 (f))."""
     ctx = context_for(
         canary_frame(rows) if frame is None else frame, target="converted_30d", config_root=header_help_root()
     )

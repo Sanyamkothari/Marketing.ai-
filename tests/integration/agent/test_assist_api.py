@@ -26,7 +26,6 @@ from engine.settings import Settings
 from engine.storage import LocalStorage
 from tests.fixtures.agent_bench.make_hinglish import CASES, hinglish_frame
 from tests.unit.agent.assist_client import AssistClient
-from tests.unit.agent.helpers import with_header_help
 
 pytestmark = pytest.mark.integration
 
@@ -48,12 +47,6 @@ def _restore_root_logging() -> Iterator[None]:
         for handler, filters, formatter in state:
             handler.filters = filters
             handler.setFormatter(formatter)
-
-
-@pytest.fixture
-def config_root(config_root: Path, tmp_path: Path) -> Path:
-    """The shipped configuration with Plan K's `agentic.enabled` on: M142's help runs only then (DEC-1409 (f))."""
-    return with_header_help(config_root, tmp_path / "configs")
 
 
 @pytest.fixture
@@ -234,3 +227,11 @@ def test_the_route_keeps_the_chat_routes_access_rule() -> None:
     assert assist.role is chat.role is Role.ANALYST
     assert json.loads(assist.model_dump_json())["object_param"] == "upload_id"
     assert assist.action == "agent.assist"
+
+
+def test_every_test_here_runs_on_the_shipped_configuration(config_root: Path) -> None:
+    """No switch: the second opinion above answers 200 with a connected AI on the configuration as shipped, where
+    `agentic.enabled` is false, and 409 `AI_NOT_CONNECTED` without one."""
+    from engine.agentic.config import agentic_enabled
+
+    assert not agentic_enabled(config_root), "the shipped configuration is what this test runs on"

@@ -890,7 +890,7 @@ def message_agent_session(
             meter=meter,
             guardrails=guardrails,
             config_root=root,
-            principal=current_principal(request),  # Plan O M232: role per tool call, behind the switch
+            principal=current_principal(request),  # Plan O M232: role per tool call
         )
         asked = ChatMessage(role=ChatRole.USER, text=text, created_at=utc_now())
         session = session.model_copy(
@@ -1572,7 +1572,7 @@ def ask_message(
             meter=meter,
             guardrails=guardrails,
             config_root=root,
-            principal=current_principal(request),  # Plan O M232: role per tool call, behind the switch
+            principal=current_principal(request),  # Plan O M232: role per tool call
         )
         asked = ChatMessage(role=ChatRole.USER, text=text, created_at=utc_now())
         session = session.model_copy(

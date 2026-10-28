@@ -17,7 +17,7 @@ references:
   nothing changes the rows, the built rows are checked against the contract all the same.
 * **Training from a file** (:func:`upload_for_training`): the upload bound to a prescription - or, for an unbound
   upload, the prescription the use case's champion was trained under - is checked as sent (intake, locale,
-  currency: `engine.doctor.prescription_replay.check_files`, the file read only once the switch and the binding are
+  currency: `engine.doctor.prescription_replay.check_files`, the file read only once the binding is
   confirmed), prepared by its file slot's recipe, checked against the slot's contract, then given the outcome, the
   post-build recipe and the final contract; the API writes the result as the run's prepared copy.
 * **Every prepared run** (:func:`attach_to_run`): the run keeps the reference (`runs/<id>/prescription_ref.json`) and,
@@ -29,8 +29,8 @@ references:
   (`PRESCRIPTION_DRIFT`, `CURRENCY_FOREIGN`, `CURRENCY_MIXED`), which the route answers with a 409 and the question;
   warnings are returned. Nothing is re-learnt.
 
-With the switch off, or with nothing bound, every function here returns None (or nothing) before reading anything,
-so every run is exactly as before: byte-identical, which the tests pin.
+With nothing bound, every function here returns None (or nothing) before reading anything, so a run with no
+prescription is exactly as before: byte-identical, which the tests pin.
 """
 
 from __future__ import annotations
@@ -278,7 +278,7 @@ def recipe_money_basis(recipe: DataRecipe | None, config: UseCaseConfig) -> Mone
 def attach_recipe_basis(
     storage: Storage, run_id: str, recipe: DataRecipe | None, config: UseCaseConfig
 ) -> MoneyBasis | None:
-    """With the switch on, a run prepared by a recipe under no stored prescription keeps that recipe's money basis
+    """A run prepared by a recipe under no stored prescription keeps that recipe's money basis
     (`money_basis.json`); nothing otherwise. Returns what was saved."""
     if recipe is None:
         return None
@@ -381,7 +381,7 @@ def dataset_for_training(
     manifest: DatasetManifest | None = None,
     capped: pd.DataFrame | None = None,
 ) -> DatasetTraining | None:
-    """The dataset prepared by its prescription for training, or None (switch off, or nothing bound) before anything
+    """The dataset prepared by its prescription for training, or None (nothing bound) before anything
     is read. `manifest` names the spec a fresh build came from (read from the dataset when not given); `capped` is the
     built rows up to the profiling cap, when the caller has read them already.
 
@@ -468,11 +468,11 @@ def upload_for_training(
     *,
     fallback: Callable[[], PrescriptionRef | None] | None = None,
 ) -> UploadTraining | None:
-    """The slot preparing `upload_id` for training (None: switch off, nothing bound, or no slot for it).
+    """The slot preparing `upload_id` for training (None: nothing bound, or no slot for it).
 
     The upload's own reference, else `fallback()` (the prescription the use case's champion was trained under, for
     next month's file sent straight to a run). `frame()` reads the upload as sent (capped) and `intake()` its intake
-    report, for the intake, locale and currency checks - each called only once the switch and the binding are
+    report, for the intake, locale and currency checks - each called only once the binding is
     confirmed. A stop raises.
     """
     ref = bound(storage, upload_id=upload_id)
@@ -539,7 +539,7 @@ def check_for_scoring(
     """A scoring file against the prescription the model was trained under: the raw-file checks on `raw()` (the file
     as sent, read only now, for a one-file prescription), then the contract on `prepared` (the rows the model reads;
     the outcome is not read). Raises `PrescriptionError` on a stop; returns the warnings. None - before anything is
-    read - with the switch off or for a model trained with no prescription."""
+    read - for a model trained with no prescription."""
     ref = run_ref(storage, training_run_id)
     if ref is None:
         return None

@@ -1,4 +1,4 @@
-"""The `data_doctor:` block of a use case (Plan O): the switch that turns the one Data Doctor agent on.
+"""The `data_doctor:` block of a use case (Plan O): the settings of the one Data Doctor agent, which is always on.
 
 Plan O (`docs/plans/MARKETING_AI_PLAN_O_DATA_DOCTOR.md`) builds one agent, Data Doctor, whose tools are every data
 capability the product has. There is no on/off switch: it is always on. Defaults live in `configs/engine.yaml` under
@@ -11,7 +11,7 @@ raises `ValueError`, which the config loader reports as `CONFIG_INVALID` with th
 
 The block is **not overridable per run**: none of its paths is in `overridable_paths()`, so a run override that
 names one is refused with `OVERRIDE_UNKNOWN_PATH`. It is outside `Recipe.recipe_hash`, and `UseCaseConfig` leaves
-it out of a dump while it holds only defaults, so a run's `run_config.json` is unchanged while the switch is off
+it out of a dump while it holds only defaults, so a run's `run_config.json` is unchanged while nothing is set
 (DEC-1800 (c)).
 """
 
@@ -261,7 +261,7 @@ class DataDoctorLimits(BaseModel):
 
 
 class DataDoctorConfig(BaseModel):
-    """`data_doctor:` in a use case: Plan O's one Data Doctor agent: the switch (M230) and the workspace currency (M242)."""
+    """`data_doctor:` in a use case: Plan O's one Data Doctor agent (always on): its settings and the workspace currency (M242)."""
 
     model_config = _SETTINGS
 

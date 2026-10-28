@@ -744,8 +744,9 @@ def _second_opinion(_parsed: _Args, ctx: DataToolContext) -> SecondOpinion:
     question it adds is pending; it decides, ticks and applies nothing.
 
     It works from the case: the rules read the case's file once (`rules_session` on the file's context with the ID
-    and outcome the case decided, a working record that is never stored) and the AI's questions are returned for the
-    visit to put to the person, so no Guided-setup session is read or written. The transcript the AI call leaves is
+    and outcome the case decided, a working record that is never stored) and the AI's questions are returned to the
+    caller, so no Guided-setup session is read or written. Its callers are the rules and the screen only, never the
+    AI's own tool list; nothing in the visit calls it yet, so it spends no AI call until a person asks for it. The transcript the AI call leaves is
     not kept. The AI's usage stays on `ctx.meter`: the caller that supplied the meter records `meter.usage()`.
     """
     from engine.agent.assist import assist_session

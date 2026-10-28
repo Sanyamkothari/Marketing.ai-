@@ -15,15 +15,15 @@ not call it: the session did not record whether a preview was shown or which sen
   When an accepted step is APPROVE-class (`remove_rows`; `keep_latest_per_id` leaving out more than 2% of the
   preview's rows), the sentence names it and the approval needs it read back: M233's `data.approve_class` decides
   (`APPROVAL_SENTENCE_CHANGED`, `TOOL_ROLE_REQUIRED`).
-* **Separation of duties** (O17). With the switch on, the decide, answer and edit routes record who ticked,
+* **Separation of duties** (O17). The decide, answer and edit routes record who ticked,
   answered or added each suggestion (:func:`record_proposers`, beside the session); with
   `governance.approval_required` on, an APPROVE-class step is approved by someone else (`POLICY_ROLE_SEPARATION`).
-  A step a person ticked before anyone was recorded (the switch turned on mid-session) cannot be checked, so it
+  A step a person ticked before anyone was recorded (a session older than this record) cannot be checked, so it
   is refused the same way until it is ticked again.
 * **O10's warning.** An AI step that changes more than 30% of its column carries `AI_STEP_CHANGES_MANY`
   (`engine.agent.loop`); :func:`approval_of` lists those accepted, so the screen shows them at Approve.
 
-With the switch off none of this is read, and Approve is exactly as before.
+A session with nothing of this to record reads none of it, and Approve is exactly as before.
 """
 
 from __future__ import annotations

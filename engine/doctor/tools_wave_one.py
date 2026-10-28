@@ -11,8 +11,8 @@ each of them an adapter that turns the spec into a :class:`~engine.doctor.regist
   rule that only #36 and #69 are aggregate) makes it `session-only`, which is the stricter reading.
 * **Role.** The spec's role, raised to an Analyst for a `session-only` tool: M232's rule that a result holding a
   cell, a row or a masked example needs an Analyst (DEC-1802 (c)). `check_readiness` is aggregate and a Viewer's.
-* **Callers.** The rules and the person (the screen), never the AI: the chat's tool list is unchanged with the
-  switch on, and the AI reaches these tools through the visit (M235), once M233's policy has their rule sets.
+* **Callers.** The rules and the person (the screen), never the AI directly: the AI reaches these tools through
+  the visit (M235), once M233's policy has their rule sets.
 * **Policy kind** for each PROPOSE tool: `data.<tool name>`, M237's own names. M233 adds the rule sets (default
   deny without them).
 * **Context.** Each module reads a small protocol; it is built here from the `DataToolContext`: the file being set

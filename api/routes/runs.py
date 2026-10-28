@@ -628,7 +628,7 @@ def start_run(
     elif dataset_prepared is not None:
         attach_dataset_recipe(storage, record.run_id, dataset_prepared[0], dataset_prepared[1].receipt)
         carried = dataset_prepared[0]
-    # Plan O M243: the prescription's reference, money basis and warnings; or, switch on and no prescription, the
+    # Plan O M243: the prescription's reference, money basis and warnings; or, with no prescription, the
     # money basis of the recipe that prepared the run (an upload's read only then).
     attach_prescription(
         storage,

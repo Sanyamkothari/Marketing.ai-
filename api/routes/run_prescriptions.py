@@ -109,7 +109,7 @@ def prescribed_training(
     manifest: DatasetManifest | None = None,
     registry: ModelRegistry | None = None,
 ) -> Prescribed | None:
-    """The rows a training run reads under its prescription, or None (switch off, nothing bound) before anything is
+    """The rows a training run reads under its prescription, or None (nothing bound) before anything is
     read."""
     from engine.doctor.prescription import PrescriptionError
     from engine.doctor.prescription_runs import dataset_for_training
@@ -171,7 +171,7 @@ def _upload_training(
     read: list[Any] = []
 
     def raw() -> Any:
-        """The upload as sent (capped), read once, and only after the switch and the binding are confirmed."""
+        """The upload as sent (capped), read once, and only after the binding is confirmed."""
         if not read:
             read.append(
                 ingest.read_upload(
@@ -257,7 +257,7 @@ def prescribed_scoring(
     sent: UploadRecord | None,
 ) -> Prescribed | None:
     """A scoring file checked against the prescription its model was trained under, or None (before anything is
-    read while the switch is off)."""
+    read, for a model trained with no prescription)."""
     from engine.doctor.prescription import PrescriptionError
     from engine.doctor.prescription_runs import check_for_scoring
 
@@ -298,7 +298,7 @@ def attach(
     upload_id: str | None = None,
 ) -> None:
     """The run keeps its prescription's reference, its money basis and the warnings. Under no stored prescription,
-    while the switch is on, a run prepared by a recipe (`recipe`, or the one the run's upload `upload_id` was
+    a run prepared by a recipe (`recipe`, or the one the run's upload `upload_id` was
     prepared with, read only then) keeps that recipe's money basis; nothing otherwise. A dataset's post-build recipe
     is attached by the route itself, with every other dataset recipe (`attach_dataset_recipe`).
     """

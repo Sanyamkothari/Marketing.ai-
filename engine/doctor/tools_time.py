@@ -3,7 +3,7 @@
 | # | Tool | Kind | What it does |
 |---|---|---|---|
 | 79 | `estimate_training_time` | READ | minutes a training run is expected to take under a budget, per stage, from rows x columns x model families x this deployment's past runs (the stored stage durations M189's progress bar reads) |
-| 80 | `propose_training_budget` | PROPOSE | Quick, Balanced (recommended, at the point of diminishing returns) and Thorough, each "about N minutes" and what it buys; replaces `_time_rules` behind the switch |
+| 80 | `propose_training_budget` | PROPOSE | Quick, Balanced (recommended, at the point of diminishing returns) and Thorough, each "about N minutes" and what it buys; replaces `_time_rules` |
 | 81 | `propose_time_settings` | PROPOSE | the date each row describes, feasible time-split cut points, whether the newest slice is mature, the outcome window and lapse (settled through `define_outcome`), the snapshot cadence |
 
 Both PROPOSE tools return a pending proposal the policy reads (M233's `data.propose_training_budget` and

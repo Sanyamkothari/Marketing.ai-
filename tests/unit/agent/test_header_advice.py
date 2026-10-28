@@ -1,8 +1,7 @@
 """Guided setup reads Hinglish and abbreviated headers (Plan K M142, DEC-1409), through the advisor and the session.
 
-M142's setup help is part of Plan K and runs only with `agentic.enabled` on, so every context here is built under a
-copy of the shipped configuration with that switch on (`header_help_context`); `test_header_switch.py` pins the
-switch itself.
+M142's setup help is always on (there is no switch), so every context here is built on the shipped configuration
+(`header_help_context`).
 
 Every test goes in through `advise`, `start_session`, `answer` or `accept_recommended` on a file built the way
 an upload's is. The acceptance rules: a column read from its header is only ever a "please check" suggestion,
