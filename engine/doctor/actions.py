@@ -117,12 +117,16 @@ class ProposeFeaturesArgs(_Args):
 
 
 class ProposeCombineRowsArgs(_Args):
-    """`propose_combine_rows` (`engine.doctor.tools_reshape`): the file is the action's `file`. Code builds the plan
-    (counts, totals, averages, latest value) from these names alone; the model never writes its parameters."""
+    """`propose_combine_rows` (`engine.doctor.tools_reshape`): the file is the action's `file`. Code drafts the
+    per-column plan (its answer's `plan`); the model changes rows of it with a reason, and the tool checks them.
+    """
 
     time_column: str | None = Field(default=None)
     snapshot_column: str | None = Field(default=None)
     carry: list[str] = Field(default_factory=list, description="one value per ID")
+    columns: list[dict[str, Any]] = Field(
+        default_factory=list, description="edits: column, functions, reason"
+    )
     replaces: str | None = Field(
         default=None,
         description="the id of your change this swaps out",
@@ -253,7 +257,7 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
     ActionSpec(
         "propose_combine_rows",
         ProposeCombineRowsArgs,
-        "one row per ID; code builds it.",
+        "one row per ID; edit its plan.",
         _BOTH,
         needs_file=True,
     ),

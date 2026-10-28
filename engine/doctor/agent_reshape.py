@@ -1,8 +1,8 @@
 """The AI's `propose_combine_rows` action (review and chat): the registry's tool, its answer kept as a pending step.
 
-The model names only the dates and the columns that hold one value per ID (`time_column`, `snapshot_column`,
-`carry`); the tool (`engine.doctor.tools_reshape`) plans, tries and freezes the combine itself, so the model never
-writes its parameters. The answer becomes a pending, never-ticked case item at the end of the turn; the guards of a
+The model names the dates and the columns that hold one value per ID (`time_column`, `snapshot_column`, `carry`),
+and may change rows of the drafted per-column plan with a reason (`columns`, `outcome_function`); the tool
+(`engine.doctor.tools_reshape`) drafts, checks, tries and freezes the combine, and the person approves the table. The answer becomes a pending, never-ticked case item at the end of the turn; the guards of a
 reshape step still run at Approve (`engine.doctor.reshape_guard`). What the model is shown back is counts and column
 names only: no cell value goes back (the egress gate prepares it).
 """
@@ -31,6 +31,9 @@ _SHOWN: Final[tuple[str, ...]] = (
     "most_rows",
     "failed",
     "features",
+    "plan",
+    "outcome_function",
+    "left_out",
 )
 
 

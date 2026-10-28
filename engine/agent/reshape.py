@@ -42,6 +42,8 @@ when the outcome started to be measured; the proposal says so.
 
 **The outcome.** The outcome is read, not aggregated: it is the value on the entity's latest row by
 snapshot date, ties broken by the time column and then by position in the file, empty values skipped.
+With `outcome_function: max` it is the largest value among those rows instead (an outcome such as "ever
+bought" or "any complaint", which is a yes when any row of the snapshot says yes).
 `latest` is the value on the latest row by the time column; between rows of the same date it takes
 the later snapshot, then the later row in the file, so a same-date tie goes to the row the outcome
 would read. (The two are different rules: across dates, `latest` follows the time column and the
@@ -166,8 +168,11 @@ _ONE_KIND: Final[frozenset[str]] = frozenset(
 _SNAPSHOT_NAME: Final[re.Pattern[str]] = re.compile(r"snapshot|(?:^|_)as_?of(?:_|$)", re.IGNORECASE)
 """`snapshot_date`, `SnapshotDate`, `as_of`, `asof_date` - but not `has_offer`."""
 _PARAMS: Final[frozenset[str]] = frozenset(
-    {"time_column", "snapshot_column", "dayfirst", "outcome", "features"}
+    {"time_column", "snapshot_column", "dayfirst", "outcome", "outcome_function", "features"}
 )
+OUTCOME_FUNCTIONS: Final[frozenset[str]] = frozenset({"latest", "max"})
+"""How the outcome is read from an entity's rows at its snapshot: the latest row's value (the default), or the largest
+(`max`: "ever bought", "any complaint" - a yes on any of those rows)."""
 
 
 class CombineError(Exception):
@@ -202,6 +207,7 @@ class CombineSpec:
     dayfirst: bool | Mapping[str, bool | None] | None  # per date column; null: nothing proved it
     outcome: str | None
     features: tuple[CombineFeature, ...]
+    outcome_function: str = "latest"
 
     def order(self, column: str) -> bool | None:
         """The frozen day/month order of `column` (True: day first); None when it was not decided."""
@@ -250,6 +256,11 @@ class CombineSpec:
         outcome = params.get("outcome")
         if outcome is not None and not isinstance(outcome, str):
             raise refuse("the outcome must be a column name or null.")
+        outcome_function = params.get("outcome_function", "latest")
+        if outcome_function not in OUTCOME_FUNCTIONS:
+            raise refuse(
+                "the outcome is read from the latest row or as the largest value ('latest' or 'max')."
+            )
         dayfirst = params.get("dayfirst", False)
         if isinstance(dayfirst, Mapping):
             if not all(
@@ -289,6 +300,7 @@ class CombineSpec:
             dayfirst=dayfirst,
             outcome=outcome,
             features=tuple(features),
+            outcome_function=str(outcome_function),
         )
         names = spec.output_columns(with_outcome=True)
         if len(set(names)) != len(names):
@@ -746,6 +758,8 @@ def _outcome(frame: pd.DataFrame, spec: CombineSpec, line: _Timeline) -> pd.Seri
     rows = rows[rows["k"].notna() & rows["s"].notna()]
     latest = rows.groupby("k", sort=False)["s"].transform("max")
     rows = rows[(rows["s"] == latest) & rows["y"].notna()]
+    if spec.outcome_function == "max":
+        return rows.groupby("k", sort=False)["y"].max()
     rows = rows.sort_values(["t", "pos"], kind="stable", na_position="first")
     return rows.groupby("k", sort=False)["y"].last()
 
