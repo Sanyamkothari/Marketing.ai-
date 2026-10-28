@@ -1,7 +1,7 @@
 """Plan L M160: the messy-file benchmark (`scripts/plan_l_benchmark.py`).
 
 The fast tests drive two files, the plainest and the messiest of one use case, through upload, Data Doctor,
-the hand-off and Guided setup to Approve with no person; the slow one runs all thirty and holds plan §11's
+and the Data Doctor visit to Approve with no person; the slow one runs all thirty and holds plan §11's
 targets: no file fails at upload, at least 80% reach an approved run without Manual setup, and at most three
 questions are asked per file on average.
 """
