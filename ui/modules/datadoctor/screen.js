@@ -54,7 +54,8 @@ import {
 } from "./api.js";
 import { injectDataDoctorStyles } from "./styles.js";
 import { sectionOf } from "./plan.js";
-import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml, progressText, sentenceWithMore } from "./chat.js";
+import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml, progressText, reviewButtonHtml, sentenceWithMore } from "./chat.js";
+import { reviewAllowed, reviewHtml, reviewOf } from "./review.js";
 import { checksHtml, funnelHtml, newLineHtml, planHtml, planModel, queueHtml, todoHtml } from "./plan_view.js";
 import {
   approveHtml,
@@ -111,6 +112,8 @@ function fresh() {
     knowing: new Map(), // "I don't know" panels open: "q:<question>" / "i:<item>" -> who would know (or null)
     stops: new Set(), // the chat's approval card: stops the person ticked "go on anyway" for (by key)
     confirms: new Set(), // ... and the changes they ticked "I agree" for (by item id)
+    yes: new Set(), // the approval screen: assumptions the person said "yes, that is right" to (question or item id)
+    nos: new Set(), // ... and the problems they said "no" to (by key): Approve waits until the plan or file is changed
     tab: null, // the data panel's file (upload id) and side ("after" | "before")
     side: "after",
   };
@@ -150,6 +153,7 @@ function mainHtml(entry) {
     })}<div class="card-body">${intakeHtml(entry, { first: true, quiet: true })}</div></section>${err}</div>`;
   }
   const screen = s.screen;
+  if (entry.review && reviewOf(screen)) return reviewMainHtml(entry);
   if (isChat(entry)) return chatMainHtml(entry);
   const c = screen.case;
   const view = screen.view;
@@ -173,8 +177,10 @@ function mainHtml(entry) {
   const proceed = continueHtml(entry);
   const more = c.files && c.files.length && !c.read_only ? `<div class="dds-more" data-dds-more>${intakeHtml(entry, { first: false })}</div>` : "";
   const back = chatShown(screen)
-    ? `<div class="dds-actions">${button({ label: "Back to the chat", kind: "secondary", attrs: "data-dds-back-to-chat" })}</div>`
-    : "";
+    ? `<div class="dds-actions">${button({ label: "Back to the chat", kind: "secondary", attrs: "data-dds-back-to-chat" })}${reviewButtonHtml(screen)}</div>`
+    : reviewOf(screen)
+      ? `<div class="dds-actions">${reviewButtonHtml(screen)}</div>`
+      : "";
   return `<div class="dds" data-dds data-dds-place="${esc(host.place)}" data-dds-case="${esc(c.case_id)}">${back}<section class="card" data-dds-header>${headerHtml(
     screen,
     { level },
@@ -326,6 +332,39 @@ function continueHtml(entry) {
 
 /** Whether the server sent a conversation to draw (an older answer has none: today's plan view is drawn then). */
 const chatShown = (screen) => Boolean(screen && screen.case && (screen.case.files || []).length && !screen.case.read_only && screen.view.conversation && screen.view.conversation.length);
+
+/** The one approval screen (`review.js`): opened from the approval card, left with "Back to the chat". */
+function reviewMainHtml(entry) {
+  const { state: s, host } = entry;
+  const err = s.error ? errorBox(s.error) : "";
+  const notice = s.notice ? `<p class="dds-why" role="status" data-dds-notice>${esc(s.notice)}</p>` : "";
+  const alert = `${notice}${err}`;
+  return reviewHtml(s.screen, {
+    yes: s.yes,
+    nos: s.nos,
+    stops: s.stops,
+    confirms: s.confirms,
+    changing: s.changing,
+    busy: s.busy,
+    level: levelOf(host),
+    alertHtml: alert,
+  });
+}
+
+/**
+ * Approve from the approval screen: its ticks are the chat card's (stops, own yeses), so one click chain serves both.
+ * It approves only: the screen shows no speed and no start sentence, so the run is started from the chat's start card.
+ */
+async function approveFromReview(entry) {
+  const s = entry.state;
+  const review = reviewOf(s.screen);
+  if (s.busy || !review || !reviewAllowed(review, s)) return;
+  const approved = await approveAndStart(entry, { start: false });
+  if (approved) {
+    entry.review = false;
+    draw(entry);
+  }
+}
 
 /** The chat is drawn unless "See details" opened the full plan view. */
 const isChat = (entry) => !entry.detail && chatShown(entry.state.screen);
@@ -721,7 +760,7 @@ async function approve(entry) {
  * goes on and approves the sentence as it reads now; any other difference approves nothing, and the card shows the new
  * sentence to read.
  */
-async function approveAndStart(entry) {
+async function approveAndStart(entry, { start = true } = {}) {
   const s = entry.state;
   const card = cardOf(s.screen, "ready");
   if (s.busy || !card || card.stage !== "approve" || !approveAllowed(card, s)) return;
@@ -774,6 +813,7 @@ async function approveAndStart(entry) {
     },
     { announce: "Approved" },
   );
+  if (!start) return go && !s.error; // the approval screen only approves: the start card in the chat starts it
   const view = s.screen && s.screen.view;
   if (!go || s.error || !view || !["ready", "ready_with_warnings"].includes(view.verdict.key) || !view.start) return;
   if (modelChoice(s.offer, s.mode)) {
@@ -794,6 +834,52 @@ async function pickGoal(entry, goalId) {
   }
 }
 
+/** The clicks of the approval screen: each one is an action the screen already had, or a tick kept here. */
+function reviewClick(entry, target) {
+  const s = entry.state;
+  const d = target.dataset;
+  const redraw = () => draw(entry);
+  if (target.hasAttribute("data-rv-back")) {
+    entry.review = false;
+    redraw();
+  } else if (d.rvYes) {
+    s.yes.add(d.rvYes);
+    redraw();
+  } else if (d.rvChange) {
+    if (s.changing.has(d.rvChange)) s.changing.delete(d.rvChange);
+    else s.changing.add(d.rvChange);
+    redraw();
+  } else if (d.rvAnswer && d.rvQ) {
+    const field = target.closest("li")?.querySelector("input[data-rv-value]");
+    const typed = field ? field.value : "";
+    if (field && !typed) {
+      field.focus();
+      return;
+    }
+    act(
+      entry,
+      "answer",
+      async () => {
+        await answerQuestion(theCase(entry), d.rvQ, d.rvAnswer, typed);
+        s.changing.delete(d.rvQ);
+        s.yes.add(d.rvQ);
+      },
+      { announce: "Answer saved", pending: `answer:${d.rvQ}|${d.rvAnswer}` },
+    );
+  } else if (d.rvUndo) act(entry, "tick", () => decideItem(theCase(entry), d.rvUndo, false), { announce: "Change undone" });
+  else if (d.rvSwapUse) act(entry, "tick", () => decideItem(theCase(entry), d.rvSwapUse, true), { announce: "New step used" });
+  else if (d.rvSwapKeep) act(entry, "tick", () => decideItem(theCase(entry), d.rvSwapKeep, false), { announce: "Old step kept" });
+  else if (d.rvStopYes) {
+    s.stops.add(d.rvStopYes);
+    s.nos.delete(d.rvStopYes);
+    redraw();
+  } else if (d.rvStopNo) {
+    s.nos.add(d.rvStopNo);
+    s.stops.delete(d.rvStopNo);
+    redraw();
+  } else if (target.hasAttribute("data-rv-approve")) approveFromReview(entry);
+}
+
 function bind(entry) {
   const root = entry.main;
   root.addEventListener("click", (event) => {
@@ -807,6 +893,10 @@ function bind(entry) {
     else if (target.hasAttribute("data-dds-panel-toggle")) togglePanel(entry);
     else if (d.ddsPrompt) talk(entry, d.ddsPrompt);
     else if (target.hasAttribute("data-dds-approve-start")) approveAndStart(entry);
+    else if (target.hasAttribute("data-dds-open-review")) {
+      entry.review = true;
+      draw(entry);
+    } else if (target.closest("[data-rv]")) reviewClick(entry, target);
     else if (target.hasAttribute("data-dds-see-details")) {
       entry.detail = true;
       draw(entry);
@@ -924,6 +1014,9 @@ function bind(entry) {
       if (go) go.disabled = Boolean(entry.state.busy) || !approveAllowed(ready, entry.state);
       const note = root.querySelector("[data-dds-approve-note]");
       if (note && ready) note.innerHTML = leavesOutHtml(ready, { names: namesOf(entry.state.screen.case), confirms: entry.state.confirms, starts: approveStarts(entry) });
+    } else if (input.matches && input.matches("input[data-rv-confirm]")) {
+      if (input.checked) entry.state.confirms.add(input.dataset.rvConfirm);
+      else entry.state.confirms.delete(input.dataset.rvConfirm);
     } else if (input.matches && input.matches("input[data-dds-read]")) {
       // "I have read this sentence": kept for the next drawing, and turns its "I agree" on or off in place, so
       // the focus stays on the box.

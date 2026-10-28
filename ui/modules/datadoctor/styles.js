@@ -29,6 +29,13 @@ export const CSS = `
 .dds-state{display:flex;gap:6px;align-items:flex-start}
 .dds-state>.ds-ico{margin-top:3px;flex:none}
 .dds-label{font-weight:600;color:var(--ink)}
+.dds-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--s3)}
+ol.dds-list{list-style:decimal;padding-left:var(--s5);gap:var(--s2)}
+.dds-card.is-hard{border:2px solid var(--critical);background:var(--critical-t)}
+.dds-swap{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s3)}
+.dds-swap-side{display:flex;flex-direction:column;gap:var(--s1);padding:var(--s3);border:1px solid var(--line);border-radius:var(--r-lg);min-width:0}
+[data-rv-swap-new]{border-color:var(--brand-blue)}
+@media (max-width:600px){.dds-swap{grid-template-columns:minmax(0,1fr)}}
 .dds-opts{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:var(--s2) var(--s3)}
 .dds-opt{display:flex;flex-direction:column;gap:2px;min-width:0}
 .dds-opt .btn{min-height:40px}

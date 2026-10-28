@@ -62,6 +62,7 @@ from engine.doctor.protocol import (
     role_for,
 )
 from engine.doctor.readiness_contracts import DataReadinessReport
+from engine.doctor.review import ApprovalReview, build_review
 from engine.doctor.standing import StandingAnswerStore, answer_id_for
 from engine.doctor.visit import (
     active_goal,
@@ -245,6 +246,11 @@ class CaseScreenView(StrictBase):
     missing_for: tuple[str, ...] = Field(
         default=(), description="Goals the files are missing something for (no goal chosen yet)."
     )
+    review: ApprovalReview | None = Field(
+        default=None,
+        description="The one approval screen (`engine.doctor.review`): the plan in plain words, each decision or "
+        "assumption with its answers, the problems (hard stops apart), the swaps and Approve with what it waits for.",
+    )
     conversation: tuple[ConversationCard, ...] = Field(
         default=(),
         description="The case as one conversation, in reading order (`engine.doctor.conversation`): the first look, "
@@ -382,7 +388,7 @@ def screen_view(
         config_root=config_root,
         principal=principal,
     )
-    return view.model_copy(update={"conversation": conversation})
+    return view.model_copy(update={"conversation": conversation, "review": build_review(case, view)})
 
 
 # ---------------------------------------------------------------------------
