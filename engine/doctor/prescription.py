@@ -31,7 +31,7 @@ same decisions on next month's files hash the same.
 
 **An existing `DataRecipe` reads as a prescription with one part** (:func:`one_part`): one file slot holding the recipe
 and nothing else, so a model trained today keeps scoring exactly as it does (the replay of a one-part prescription is
-`run_saved_recipe`, byte for byte).
+`run_saved_recipe`, byte for byte, which runs `materialize.replay_recipe`).
 
 **PRESCRIBE.** :class:`CasePrescriber` is M235's `VisitDeps.prescribe` port: it builds the prescription from the case's
 approved items (:func:`prescription_from_case`), writes it, binds the case's uploads and built dataset to it

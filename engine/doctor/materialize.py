@@ -27,16 +27,16 @@ from __future__ import annotations
 
 import contextlib
 import functools
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.config import AgentConfig
-from engine.agent.contracts import RecipeStep, RecipeStepKind
+from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind
 from engine.agent.dataset_recipe import consistent_types
-from engine.agent.recipe import STEP_PHASE, RecipeError
+from engine.agent.recipe import STEP_PHASE, RecipeError, RecipeRun, run_recipe
 from engine.agent.sql_step import SqlStepError, sql_params
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.doctor.guards import Finding, GuardedRun, Ledger, Receipt, ReceiptMemo, run_guarded
@@ -45,6 +45,8 @@ from engine.doctor.visit_contracts import PlanFinding
 if TYPE_CHECKING:
     import pandas as pd
 
+    from engine.agent.config import AgentLevel
+    from engine.agent.reshape import LeakCheck
     from engine.doctor.case import Case, CaseFile, CaseItem
     from engine.doctor.diagnose import LoadedFile
 
@@ -62,6 +64,7 @@ __all__ = [
     "materialize",
     "materialize_plan",
     "open_findings",
+    "replay_recipe",
     "roles_of",
     "scoped",
     "stop_finding",
@@ -469,6 +472,54 @@ def materialize_plan(
         failed=tuple(failed),
         failures=tuple(failures),
     )
+
+
+def replay_recipe(
+    frame: Any,
+    recipe: DataRecipe,
+    *,
+    levels: Sequence[AgentLevel],
+    max_failure_pct: float,
+    upload_id: str,
+    derived_upload_id: str | None = None,
+    leak_check: LeakCheck | None = None,
+    tables: Mapping[str, Any] | None = None,
+) -> RecipeRun:
+    """An approved recipe's steps on new rows (next month's file, a scoring file, a firing's dataset). Raises
+    `RecipeError`. This is the one place a stored recipe is applied to a file; every replay path calls it.
+
+    A recipe approved under the guards (Data Doctor: `recipe.acknowledged_stops` is not None) replays under them:
+    every step is counted by :func:`engine.doctor.guards.run_guarded`, and a *stop* raises `RECIPE_GUARD_STOP` instead
+    of preparing the rows, unless a person said yes to that kind of stop at approval. Next month's file and the
+    scoring file never go on silently when the same steps now lose or double customers. A recipe approved without
+    the guards (Guided setup, or one saved before them) replays as it was approved: its intended losses were never
+    counted, so they cannot be told from new ones.
+    """
+    args: dict[str, Any] = {
+        "upload_id": upload_id,
+        "primary_key": recipe.primary_key,
+        "target": recipe.target,
+        "levels": levels,
+        "max_failure_pct": max_failure_pct,
+        "snapshot_column": recipe.snapshot_column,
+        "derived_upload_id": derived_upload_id,
+        "leak_check": leak_check,
+        "tables": tables,
+    }
+    if recipe.acknowledged_stops is None:
+        return run_recipe(consistent_types(frame), recipe.steps, **args)
+    run = run_guarded(
+        consistent_types(frame), recipe.steps, twice=False, **args
+    )  # repeatability: checked at approval
+    stops = [f for f in run.findings if f.level == "stop" and f.code not in recipe.acknowledged_stops]
+    if stops:
+        raise RecipeError(
+            "RECIPE_GUARD_STOP",
+            " ".join(f.message for f in stops[:3])
+            + " The rows were not prepared. Open the Data Doctor check to look at it, or change the plan.",
+            order=stops[0].order,
+        )
+    return run.run
 
 
 def _guarded(

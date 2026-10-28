@@ -26,13 +26,13 @@ again for a yes of their own, an item whose payload moved with the dates needs i
 case goes through the visit (UNDERSTAND/ASK/TREAT/PREVIEW/APPROVE with its approvals and `taken_in` carried), never
 straight to an approved state.
 
-**The other next-month paths are different concerns, and stay.** `prescription_replay.replay_prescription` replays a
-*stored prescription's* recipes for scoring and scheduled firings, where there is no case and nobody to ask in a
-visit; `fingerprint` is the in-visit detector for a case that has no approved plan to replay (a first look at a
-file against last time's facts); `carry.last_month` starts a *new* case of a client from the steps another case's
-person approved (it carries marks, never files or items); `add_files` only adds a file to the case it belongs to.
-None of them replays a case's approved plan on a new file and compares the result, which is all this module does.
-Folding the scoring replay into `materialize_plan` is a separate change (see the roadmap).
+**One replay path.** A stored recipe (training, scoring, a scheduled firing, `prescription_replay`) is applied to a
+file by `materialize.replay_recipe`, the same module this one calls; `prescription_replay` keeps only what is a
+prescription's own (the intake, locale, currency and spelling checks, the build, the outcome, the contract) and
+calls it for the steps. `fingerprint` is the in-visit detector for a case that has no approved plan to replay (a
+first look at a file against last time's facts); `carry.last_month` starts a *new* case of a client from the steps
+another case's person approved (it carries marks, never files or items); `add_files` only adds a file to the case
+it belongs to. None of them applies steps. See "Replay paths" in `docs/plans/DATA_DOCTOR_ROOT_CAUSES.md`.
 """
 
 from __future__ import annotations

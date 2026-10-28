@@ -91,6 +91,28 @@ section generated from the registry schemas; a contract test.
 Hard rules are kept and each is enforced in exactly one place: the approval gate, readiness on `materialize(Full)`, the
 leak check inside `materialize`, consent as a decision with its own approval class, egress unchanged.
 
+## Replay paths (roadmap 2.1: one place applies an approved recipe to a file)
+
+A stored recipe's steps are applied to rows in one function, `engine/doctor/materialize.py::replay_recipe` (beside
+`materialize_plan`, which applies a case's plan). Every other path is a caller. `tests/unit/doctor/test_single_replay.py`
+fails when a module outside `engine/doctor` applies steps itself, or when `dataset_recipe` or `prescription_replay`
+gains a runner call.
+
+| Path | Before | After |
+|---|---|---|
+| Scoring a model's stored recipe (`POST /runs`, `replay_for_scoring`, readiness) | `run_saved_recipe` -> `run_replay` in `engine/agent/dataset_recipe.py` ran `run_recipe` / `run_guarded` itself | `run_replay` delegates to `materialize.replay_recipe` (same levels, limit, guards, acknowledged stops, leak check) |
+| Scheduled firing (`engine/scheduling/firing.py`, `prepare_dataset`) | same `run_saved_recipe` | same, now a thin caller |
+| Training from a file or built dataset with a prescription (`prescription_runs`, `api/routes/run_prescriptions.py`) | `prescription_replay.run_part_recipe` -> `run_saved_recipe` / `run_replay` | unchanged call chain; reaches `replay_recipe`. The prescription's own checks (intake, locale, currency, new yes/no spellings, step drift, outcome, contract) stay in `prescription_replay` and wrap the call; they are not steps |
+| `prescription_replay.replay_prescription` | orchestrates the parts, applied steps through `run_part_recipe` | same, no runner call of its own |
+| Next-month recheck (`recheck.py`) | `materialize_plan` | unchanged: it applies a case's plan, `replay_recipe` applies a stored recipe, both in `materialize.py` |
+| Onboarding replay (`engine/onboarding/replay.py`) | copies last month's column mapping onto the new file; reads no row | unchanged: not a recipe-step path (the build applies the mapping's transforms) |
+| `fingerprint.py`, `carry.py` | detect a known file; carry approved marks into a new case | unchanged: they apply no steps |
+| Evals, `api/routes/agent.py`, the Guided-setup agent loop, advisor, edits | try a step while it is written | unchanged: authoring trials, listed in the test |
+
+Left for later: the `TODO Step 4` entries of `test_single_materialisation.py` (modules that try steps on rows they
+prepare themselves), and moving the prescription's drift translation (`step_drift`) into `materialize`, which needs
+the scoring routes to accept a `PrescriptionError`.
+
 ## Order of work (each step ends with the Online Retail replay reaching further, and its tests)
 
 | Step | Fix | Removes | Size |
