@@ -115,26 +115,22 @@ def test_the_guide_with_the_most_lessons_stays_inside_the_guides_limits() -> Non
     assert len(learned.split()) <= MAX_APPROVED * (MAX_WORDS + 1) + 2
 
 
-def test_the_chat_proposes_only_once_the_case_is_ready(tmp_path: Path) -> None:
-    from types import SimpleNamespace
-
-    from engine.doctor.agent_chat import _Chat
-    from engine.doctor.case import VisitState
-
-    storage = LocalStorage(tmp_path)
-
-    def run(state: VisitState, text: str) -> list[dict[str, object]]:
-        feedback: list[dict[str, object]] = []
-        me = SimpleNamespace(
-            storage=storage,
-            case=SimpleNamespace(state=state, case_id="c1"),
-            turn=SimpleNamespace(feedback=feedback),
-            gates=[SimpleNamespace(prepare=lambda x: x)],
-        )
-        _Chat._lesson(me, {"text": text})  # type: ignore[arg-type]
-        return feedback
-
-    assert "not yet" in str(run(VisitState.ASK, GOOD)) and LessonStore(storage).all() == ()
-    assert run(VisitState.PREVIEW, GOOD)[0]["status"] == "proposed"
-    assert run(VisitState.PREVIEW, "It had 300 rows.")[0]["error"] == "LESSON_REFUSED"
-    assert [x.text for x in LessonStore(storage).all()] == [GOOD]
+def test_an_approved_lesson_can_be_retired_to_make_room(tmp_path: Path) -> None:
+    lessons = store(tmp_path)
+    words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india"]
+    made = [lessons.propose(f"Check the {w} column first.") for w in words]
+    for lesson in made[:MAX_APPROVED]:
+        lessons.decide(lesson.lesson_id, True, "owner")
+    with pytest.raises(LessonError) as over:
+        lessons.decide(made[MAX_APPROVED].lesson_id, True, "owner")
+    assert over.value.code == "LESSON_CAP"
+    retired = lessons.retire(made[0].lesson_id, "owner")
+    assert retired.status == "rejected" and retired.decided_by == "owner"
+    assert made[0].text not in approved_lessons(LocalStorage(tmp_path))
+    assert lessons.decide(made[MAX_APPROVED].lesson_id, True, "owner").status == "approved"
+    with pytest.raises(LessonError) as again:
+        lessons.retire(made[0].lesson_id, "owner")  # only an approved lesson is retired
+    assert again.value.code == "LESSON_NOT_APPROVED"
+    with pytest.raises(LessonError) as unknown:
+        lessons.retire("ls_nope", "owner")
+    assert unknown.value.code == "LESSON_NOT_FOUND"

@@ -42,7 +42,6 @@ from engine.agent.untrusted import clean_text, for_prompt
 from engine.doctor.actions import prompt_variables
 from engine.doctor.agent_apply import person_owns
 from engine.doctor.agent_review import _NoAnswerError, _Review
-from engine.doctor.case import VisitState
 from engine.doctor.protocol import DONT_KNOW, Ask, AskOption, question_id_of
 from engine.doctor.questions import catalogue_lines
 from engine.doctor.visit_contracts import OptionEffect
@@ -564,13 +563,33 @@ class _Chat(_Review):
             )
         return item
 
+    def _ready(self) -> bool:
+        """The active goal's latest readiness verdict is ready (with or without warnings) for the plan as it stands.
+        The chat runs from CONVERSE, so the case's state says nothing here; the verdict and its plan digest do.
+        """
+        from engine.doctor.visit import active_goal, prescription_digest, stored_brief
+
+        goal = active_goal(self.case)
+        ref = (
+            None
+            if goal is None
+            else next((r for r in self.case.readiness if r.goal_id == goal.goal_id), None)
+        )
+        if ref is None or ref.verdict not in {"ready", "ready_with_warnings"} or self.storage is None:
+            return False
+        now = prescription_digest(self.case, stored_brief(self.storage, self.case))
+        return (
+            ref.plan_digest
+            or (self.case.prescriptions[-1].prescription_hash if self.case.prescriptions else "")
+        ) == now
+
     def _lesson(self, args: dict[str, Any]) -> None:
         """`propose_lesson`: a general rule for later cases, kept as proposed once the case is ready. Only the owner
         approves it (`POST /doctor/lessons/{id}/approve`); a lesson with a number, a quote or a name is refused.
         """
         from engine.doctor.lessons import LessonError, LessonStore
 
-        if self.storage is None or self.case.state not in LESSON_STATES:
+        if self.storage is None or not self._ready():
             self.turn.feedback.append({"lesson": "not yet: propose lessons once the case is ready"})
             return
         try:
@@ -790,17 +809,6 @@ class _Chat(_Review):
         return items, evidence
 
 
-LESSON_STATES: Final = frozenset(
-    {
-        VisitState.PREVIEW,
-        VisitState.APPROVE,
-        VisitState.PRESCRIBE,
-        VisitState.VERIFY,
-        VisitState.HAND_OFF,
-        VisitState.FOLLOW_UP,
-    }
-)
-"""Where the case is ready (or beyond): the AI may propose lessons from here."""
 _STEP_KEYS: Final[frozenset[str]] = frozenset({"kind", "column"})
 _MAKES_CHANGES: Final[frozenset[str]] = frozenset(
     {"propose_step", "propose_sql", "propose_features", "join_files", "stack_files"}

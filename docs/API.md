@@ -92,6 +92,7 @@ Contract schema version: 1.
 | GET | `/doctor/lessons` | The lessons, proposed, approved and rejected | LessonList |
 | POST | `/doctor/lessons/{lesson_id}/approve` | Approve a proposed lesson: read_guide('lessons') shows it from now on | LessonDecision |
 | POST | `/doctor/lessons/{lesson_id}/reject` | Reject a proposed lesson | LessonDecision |
+| POST | `/doctor/lessons/{lesson_id}/retire` | Retire an approved lesson: it leaves the guide and makes room for another | LessonDecision |
 | POST | `/doctor/outcome` | Agree the outcome built from an event file, as the sentence the person picked | OutcomeAgreement |
 | GET | `/healthz` | Liveness probe | HealthResponse |
 | GET | `/holdout` | The holdout: salt, epochs, use cases | HoldoutView |

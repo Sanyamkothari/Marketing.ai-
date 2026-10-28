@@ -492,6 +492,11 @@ register(
         ("POST", "/doctor/lessons/{lesson_id}/reject"): RoutePolicy(
             role=Role.ADMIN, action="doctor.lesson_reject", purpose="reject a lesson Data Doctor proposed"
         ),
+        ("POST", "/doctor/lessons/{lesson_id}/retire"): RoutePolicy(
+            role=Role.ADMIN,
+            action="doctor.lesson_retire",
+            purpose="take an approved lesson back out of Data Doctor's guides",
+        ),
     }
 )
 
@@ -503,11 +508,22 @@ def list_lessons(storage: StorageDep) -> LessonList:
     return LessonList(lessons=LessonStore(storage).all(), max_approved=MAX_APPROVED)
 
 
-def _decide(lesson_id: str, approve: bool, storage: Storage, principal: PrincipalDep) -> LessonDecision:
+def _decide(
+    lesson_id: str, approve: bool | None, storage: Storage, principal: PrincipalDep
+) -> LessonDecision:
+    """`approve` True or False decides a proposed lesson; None retires an approved one."""
     try:
-        return LessonDecision(lesson=LessonStore(storage).decide(lesson_id, approve, principal.user_id))
+        store = LessonStore(storage)
+        if approve is None:
+            return LessonDecision(lesson=store.retire(lesson_id, principal.user_id))
+        return LessonDecision(lesson=store.decide(lesson_id, approve, principal.user_id))
     except LessonError as exc:
-        status = {"LESSON_NOT_FOUND": 404, "LESSON_DECIDED": 409, "LESSON_CAP": 409}.get(exc.code, 422)
+        status = {
+            "LESSON_NOT_FOUND": 404,
+            "LESSON_DECIDED": 409,
+            "LESSON_CAP": 409,
+            "LESSON_NOT_APPROVED": 409,
+        }.get(exc.code, 422)
         raise http_error(status, exc.code, exc.message, "lesson_id") from exc
 
 
@@ -529,3 +545,13 @@ def approve_lesson(lesson_id: str, storage: StorageDep, principal: PrincipalDep)
 )
 def reject_lesson(lesson_id: str, storage: StorageDep, principal: PrincipalDep) -> LessonDecision:
     return _decide(lesson_id, False, storage, principal)
+
+
+@router.post(
+    "/doctor/lessons/{lesson_id}/retire",
+    response_model=LessonDecision,
+    responses={**_ERRORS, 404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    summary="Retire an approved lesson: it leaves the guide and makes room for another",
+)
+def retire_lesson(lesson_id: str, storage: StorageDep, principal: PrincipalDep) -> LessonDecision:
+    return _decide(lesson_id, None, storage, principal)

@@ -42,3 +42,12 @@ def test_list_approve_and_reject(client: TestClient, data_dir: Path) -> None:
     assert no.status_code == 200 and no.json()["lesson"]["status"] == "rejected"
     assert client.post(f"/doctor/lessons/{drop.lesson_id}/approve").status_code == 409
     assert client.post("/doctor/lessons/ls_missing/approve").status_code == 404
+
+
+def test_retire_an_approved_lesson(client: TestClient, data_dir: Path) -> None:
+    lesson = LessonStore(LocalStorage(data_dir)).propose("Ask which date column is the order date first.")
+    assert client.post(f"/doctor/lessons/{lesson.lesson_id}/retire").status_code == 409  # not approved yet
+    client.post(f"/doctor/lessons/{lesson.lesson_id}/approve")
+    done = client.post(f"/doctor/lessons/{lesson.lesson_id}/retire")
+    assert done.status_code == 200 and done.json()["lesson"]["status"] == "rejected"
+    assert client.post("/doctor/lessons/ls_missing/retire").status_code == 404

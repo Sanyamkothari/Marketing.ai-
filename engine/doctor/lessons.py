@@ -8,7 +8,7 @@ dataset number, no cell text and no client name. A lesson starts `proposed`; onl
 The text is checked by code, not trusted: a lesson holds no digit (a rule id such as `R4` is allowed), no quote, no
 address or link, and is at most `MAX_WORDS` words, so it cannot carry a count, a date, a value or a name out of a
 case. At most `MAX_APPROVED` lessons are approved at once, which keeps the guide under the guides' word limit; the
-owner rejects one to make room. The store is one small JSON document, `doctor_lessons/lessons.json`, holding the
+owner retires one (`POST /doctor/lessons/{id}/retire`) to make room. The store is one small JSON document, `doctor_lessons/lessons.json`, holding the
 deployment's lessons (the deployment is the client). It holds no rows and no customer id.
 """
 
@@ -139,6 +139,20 @@ class LessonStore:
         )
         self._save(tuple(decided if item.lesson_id == lesson_id else item for item in lessons))
         return decided
+
+    def retire(self, lesson_id: str, by: str) -> Lesson:
+        """The owner takes an approved lesson back: it becomes `rejected`, leaves the guide and makes room."""
+        lessons = self.all()
+        found = next((item for item in lessons if item.lesson_id == lesson_id), None)
+        if found is None:
+            raise LessonError("LESSON_NOT_FOUND", "There is no such lesson.")
+        if found.status != "approved":
+            raise LessonError(
+                "LESSON_NOT_APPROVED", f"Only an approved lesson can be retired; this one is {found.status}."
+            )
+        retired = found.model_copy(update={"status": "rejected", "decided_at": utc_now(), "decided_by": by})
+        self._save(tuple(retired if item.lesson_id == lesson_id else item for item in lessons))
+        return retired
 
 
 def approved_lessons(storage: Storage | None) -> tuple[str, ...]:
