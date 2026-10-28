@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, ToolResult
 from engine.agent.grounding import evidence_numbers, grounded_numbers
-from engine.agent.loop import MAX_MESSAGE_CHARS, UNAVAILABLE, _parse, refused_sentence
+from engine.agent.loop import MAX_MESSAGE_CHARS, UNAVAILABLE, _parse, person_reason, refused_sentence
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import clean_text, for_prompt
 from engine.doctor.actions import prompt_variables
@@ -159,8 +159,6 @@ class _Chosen:
 
 class _Chat(_Review):
     purpose = GenerativePurpose.DOCTOR_CHAT
-    person_why = ""
-    """Why the last reply the AI wrote was refused, in the person's words."""
 
     def __init__(self, *args: Any, chat_steps: int, storage: Storage | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -342,7 +340,6 @@ class _Chat(_Review):
             None  # the last thing the engine refused, for the person if no reply comes
         )
         wanted = ""  # the last action the AI tried
-        self.person_why = ""
         why: tuple[str, ...] = ()  # the codes and the sentence of an AI service that did not answer
         lead = UNAVAILABLE
         text = self._text(
@@ -384,6 +381,7 @@ class _Chat(_Review):
             except _NoAnswerError as stop:
                 blocked, why, lead = stop.reason, stop.codes, stop.reply
                 break
+            wanted = ""  # a refusal of a reply, or of an unreadable one, did not come from an action
             try:
                 action = _plain_or_action(answer)
                 if str(action["action"]) == "reply":
@@ -443,13 +441,8 @@ class _Chat(_Review):
             return TOO_BIG + "Ask about one file or one step at a time."
         if refusal is None:
             return f"{NOTHING_SAID} {ASK_AGAIN}"
-        reason = self.person_why if refusal.code.endswith("_REFUSED") and self.person_why else refusal.message
-        did = (
-            f"I tried to {_ACTIONS.get(wanted, 'act on that')}. "
-            if wanted and refusal.code != "AGENT_TEXT_REFUSED"
-            else ""
-        )
-        return self.gates[0].person_text(did + refused_sentence(reason))
+        did = f"I tried to {_ACTIONS.get(wanted, 'act on that')}. " if wanted else ""
+        return self.gates[0].person_text(did + refused_sentence(person_reason(refusal)))
 
     def _spent(self) -> bool:
         """Whether the case's spending limit is reached (a meter without a limit never is)."""
@@ -514,9 +507,10 @@ class _Chat(_Review):
                     f"The reply is {len(said)} characters; the most allowed is {self.limits.turn.chat_reply_chars}. Say the same "
                     f"in fewer words, with the result first.{also}",
                 )
-            self.person_why = self.checker.why(said, failure, person=True)
             raise AgentToolError(
-                "AGENT_TEXT_REFUSED", f"The reply was refused. {self.checker.why(said, failure)}"
+                "AGENT_TEXT_REFUSED",
+                f"The reply was refused. {self.checker.why(said, failure)}",
+                self.checker.why(said, failure, person=True),
             )
         return self.gates[0].person_text(said)
 
@@ -772,7 +766,9 @@ class _Chat(_Review):
             )
             if failure is not None:
                 raise AgentToolError(
-                    "AGENT_QUESTION_REFUSED", f"The question was refused. {self.checker.why(part, failure)}"
+                    "AGENT_QUESTION_REFUSED",
+                    f"The question was refused. {self.checker.why(part, failure)}",
+                    self.checker.why(part, failure, person=True),
                 )
         gate = self.gates[index]
         shown = [gate.person_text(o) for o in options]

@@ -782,6 +782,7 @@ class _Review:
                 raise AgentToolError(
                     "AGENT_QUESTION_REFUSED",
                     f"The question was refused. {self.checker.why(text, failure)}",
+                    self.checker.why(text, failure, person=True),
                 )
         if ask.blocking and turn.blocking >= self.limits.asks.blocking:
             raise AgentToolError(
@@ -804,6 +805,7 @@ class _Review:
                 raise AgentToolError(
                     "AGENT_TEXT_REFUSED",
                     f"The {target} was refused. {self.checker.why(text, failure)}",
+                    self.checker.why(text, failure, person=True),
                 )
         return [self.gates[index].person_text(text) if text else "" for text in texts]
 

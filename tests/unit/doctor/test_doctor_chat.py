@@ -800,9 +800,21 @@ def test_two_bad_replies_end_the_turn_with_a_plain_sentence(storage: LocalStorag
     client = ChatScript({"nonsense": [{"action": "dance"}, {"action": "sing"}, {"action": "hum"}]})
     talk = Talk(storage, world, client)
     talk.say("nonsense")
-    assert "There is no action called 'sing'" in talk.reply.text, "the refusal is named"
+    assert "sing" not in talk.reply.text, "the model's own words are never echoed to the person"
+    assert "What I tried was refused: I asked for something that does not exist here" in talk.reply.text
     assert talk.reply.text.endswith("Ask me again and I will try another way."), "never a bare refusal"
     assert talk.case.state in (VisitState.ASK, VisitState.APPROVE), "the visit goes on"
+
+
+def test_a_refused_action_never_repeats_the_model_s_text_or_number_to_the_person(
+    storage: LocalStorage, world: World
+) -> None:
+    odd = {"action": "4,372 customers dropped"}
+    client = ChatScript({"odd": [odd, odd, odd]})
+    talk = Talk(storage, world, client)
+    talk.say("odd")
+    assert "4,372" not in talk.reply.text
+    assert "I tried to act on that" in talk.reply.text and "does not exist here" in talk.reply.text
 
 
 def test_a_turn_takes_at_most_the_configured_number_of_steps(storage: LocalStorage, world: World) -> None:

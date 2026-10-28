@@ -228,23 +228,33 @@ def test_rows_a_step_the_person_agreed_to_drop_do_not_stop_the_plan_again() -> N
     frame, steps = _two_drops(30)  # 4% and 3%: 7% together, over the 5% we allow without asking
     asked = run_guarded(frame, steps, primary_key="id", target="y", **RUN)
     assert codes(asked, "stop") == ["PLAN_LOSES_TOO_MUCH"]
-    agreed = run_guarded(frame, steps, primary_key="id", target="y", approved={1}, **RUN)
+    agreed = run_guarded(frame, steps, primary_key="id", target="y", approved={1: 40}, **RUN)
     assert codes(agreed, "stop") == [], "only the 3% of the step nobody agreed to is left to ask about"
     ledger = agreed.ledger
     assert ledger is not None and ledger.lost_total == 70 and ledger.open_lost == 30
     assert [s.approved for s in ledger.steps] == [True, False]
 
 
+def test_a_yes_holds_only_up_to_the_count_agreed_and_a_bigger_drop_stops_the_plan() -> None:
+    frame, steps = _two_drops(40)
+    # step 1 was agreed at 20 customers, and now drops 40: the 20 more are asked about with the 40 of step 2
+    result = run_guarded(frame, steps, primary_key="id", target="y", approved={1: 20}, **RUN)
+    gate = next(f for f in result.findings if f.code == "PLAN_LOSES_TOO_MUCH")
+    assert gate.count == 60
+    assert result.ledger is not None and [s.approved for s in result.ledger.steps] == [False, False]
+    assert "besides the 20 you already agreed to leave out" in gate.message
+
+
 def test_the_stop_asks_only_about_the_rest_and_lists_which_steps_drop_how_many() -> None:
     frame, steps = _two_drops(80)  # 4% agreed, 8% not
-    result = run_guarded(frame, steps, primary_key="id", target="y", approved={1}, **RUN)
+    result = run_guarded(frame, steps, primary_key="id", target="y", approved={1: 40}, **RUN)
     gate = next(f for f in result.findings if f.code == "PLAN_LOSES_TOO_MUCH")
     assert gate.count == 80, "a yes covers the unapproved remainder, not the rows already agreed"
     assert gate.message.startswith("This step leaves out 80 of 1,000 customers (8.0%)")
     assert "besides the 40 you already agreed to leave out" in gate.message
     assert gate.detail is not None
     assert (
-        "40 (step 1, remove rows, already agreed)" in gate.detail
+        "40 (step 1, remove rows, 40 already agreed)" in gate.detail
         and "80 (step 2, remove rows)" in gate.detail
     )
 

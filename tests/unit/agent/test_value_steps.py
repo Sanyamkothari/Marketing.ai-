@@ -113,6 +113,18 @@ def test_remove_rows_before_a_date_keeps_what_is_not_a_date() -> None:
     assert remove_rows(series, operator="after", values=["2025-01-01"]).tolist() == [True, False, True, True]
 
 
+def test_remove_rows_after_a_date_keeps_the_whole_day() -> None:
+    """'After 2011-11-30' leaves out the 1st on, never the rows timestamped on the 30th itself."""
+    series = pd.Series(
+        ["2011-11-30 00:00:00", "2011-11-30 13:45:10", "2011-11-30 23:59:59", "2011-12-01 00:00:00"]
+    )
+    assert remove_rows(series, operator="after", values=["2011-11-30"]).tolist() == [True, True, True, False]
+    assert remove_rows(series, operator="after", values=["2011-11-30 12:00:00"]).tolist() == [
+        True, False, False, False,
+    ]  # fmt: skip
+    assert remove_rows(series, operator="before", values=["2011-11-30"]).tolist() == [True] * 4
+
+
 def test_every_step_reads_one_row_at_a_time() -> None:
     """Stateless (DEC-1004): a row's output is the same in a file of one row and in the whole file."""
     series = pd.Series(["2 GB", "Bombay", "212", None, "Mumbai, MH"])

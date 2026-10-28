@@ -126,10 +126,12 @@ MAX_PROFILE_COLUMNS: Final[int] = MAX_PROMPT_LIST
 class AgentToolError(Exception):
     """A tool call the engine refused; `code` is machine-readable, `message` is for the model and logs."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, person: str = "") -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+        self.person = person
+        """A fixed sentence for the person saying why (no text of the model's, no number); empty: the code's own."""
 
 
 class ToolKind(StrEnum):

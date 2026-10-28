@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -352,10 +352,15 @@ def materialize_plan(
     # ask about it again.
     from engine.doctor.protocol import AGENT
 
+    # Only up to the count they were shown (`CaseItem.agreed_rows`); an answer re-applied from a standing answer
+    # on a new file was shown no count of this file's.
     said_yes = {
-        item.item_id
+        item.item_id: item.agreed_rows
         for item in items
-        if item.state is ProposalState.ACCEPTED and item.decided_by not in (None, AGENT)
+        if item.state is ProposalState.ACCEPTED
+        and item.decided_by not in (None, AGENT)
+        and item.agreed_rows
+        and item.standing_answer_id is None
     }
     plans: list[tuple[LoadedFile, list[tuple[RecipeStep, str]]]] = []
     for loaded in files:
@@ -405,7 +410,7 @@ def materialize_plan(
             None,  # every query step carries its date (`bound_as_of`)
             seen_by if watch is not None else None,
             memo,
-            approved=frozenset(step.order for step, item_id in mine if item_id in said_yes),
+            approved={step.order: said_yes[item_id] for step, item_id in mine if item_id in said_yes},
         )
 
         try:
@@ -492,7 +497,7 @@ def _guarded(
     primary_key: str | None,
     outcome: str | None,
     *,
-    approved: frozenset[int] = frozenset(),
+    approved: Mapping[int, int] | None = None,
 ) -> GuardedRun:
     """One file's steps under the guards, with the tables the plan has made so far."""
     from engine.doctor.plan_check import guard_levels

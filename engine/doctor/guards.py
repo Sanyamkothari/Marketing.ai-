@@ -699,9 +699,20 @@ class LedgerStep(StrictBase):
     rows_after: int
     lost: int
     rate_after: float | None = None
-    approved: bool = Field(
-        default=False, description="The person already said yes to this step, drops included."
+    agreed: int = Field(
+        default=0,
+        description="The most this step may lose without a new yes: the count the person said yes to. A bigger "
+        "drop is open again.",
     )
+
+    @property
+    def approved(self) -> bool:
+        """The person's yes covers all of what the step loses."""
+        return self.lost <= self.agreed
+
+    @property
+    def open_lost(self) -> int:
+        return max(0, self.lost - self.agreed)
 
 
 class Ledger(StrictBase):
@@ -725,16 +736,18 @@ class Ledger(StrictBase):
     @property
     def open_lost(self) -> int:
         """What the steps the person has not yet said yes to lose: the part the plan-level stop asks about."""
-        return sum(s.lost for s in self.steps if not s.approved)
+        return sum(s.open_lost for s in self.steps)
 
     @property
     def open_pct(self) -> float:
         return self.open_lost / self.start * 100.0 if self.start else 0.0
 
 
-def build_ledger(receipts: Sequence[Receipt], approved: Collection[int] = ()) -> Ledger | None:
-    """The ledger over `receipts` in order; none for an empty plan. `approved` are the orders of the steps the
-    person already said yes to: what they lose is counted, but is not asked about again."""
+def build_ledger(receipts: Sequence[Receipt], approved: Mapping[int, int] | None = None) -> Ledger | None:
+    """The ledger over `receipts` in order; none for an empty plan. `approved` maps the orders of the steps the
+    person already said yes to onto the count they said yes to: up to that count what a step loses is counted, but is
+    not asked about again; what it loses beyond it is open."""
+    approved = approved or {}
     if not receipts:
         return None
     counted = receipts[0].keys_in is not None
@@ -759,14 +772,14 @@ def build_ledger(receipts: Sequence[Receipt], approved: Collection[int] = ()) ->
                 rows_after=r.rows_out,
                 lost=lost,
                 rate_after=r.rate_out,
-                approved=r.order in approved,
+                agreed=approved.get(r.order, 0),
             )
         )
         before = after
     steps = tuple(steps_list)
     by_outcome: dict[str, int] = {}
-    for r in receipts:
-        if r.order in approved:
+    for r, counted_step in zip(receipts, steps_list, strict=True):
+        if counted_step.approved:
             continue  # who was lost is told for the steps still to be decided
         for name, count in r.lost_by_outcome.items():
             by_outcome[name] = by_outcome.get(name, 0) + count
@@ -790,9 +803,7 @@ def build_ledger(receipts: Sequence[Receipt], approved: Collection[int] = ()) ->
         rate_end=rate_end,
         rate_move=None if rate_start is None or rate_end is None else rate_end - rate_start,
         top_loss_steps=tuple(
-            s.order
-            for s in sorted(steps, key=lambda s: -s.lost if not s.approved else 0)[:_TOP_STEPS]
-            if s.lost and not s.approved
+            s.order for s in sorted(steps, key=lambda s: -s.open_lost)[:_TOP_STEPS] if s.open_lost
         ),
         top_rate_steps=tuple(o for o, m in sorted(moves.items(), key=lambda kv: -kv[1])[:_TOP_STEPS] if m),
     )
@@ -834,9 +845,9 @@ def plan_findings(ledger: Ledger | None, *, side_table: bool = False) -> list[Fi
     if ledger.open_pct > gates.loss_stop_pct and not side_table:
         by = ", ".join(f"{k}: {v:,}" for k, v in ledger.lost_by_outcome.items())
         lossy = [st for st in ledger.steps if st.lost]
-        open_steps = [st for st in lossy if not st.approved]
+        open_steps = [st for st in lossy if st.open_lost]
         who = "This step leaves" if len(open_steps) <= 1 else "Together these steps leave"
-        agreed = [st for st in lossy if st.approved]
+        agreed = [st for st in lossy if st.agreed]
         found.append(
             Finding(
                 level="stop",
@@ -846,7 +857,7 @@ def plan_findings(ledger: Ledger | None, *, side_table: bool = False) -> list[Fi
                     f"{who} out {ledger.open_lost:,} of {ledger.start:,} {ledger.unit} "
                     f"({ledger.open_pct:.1f}%), more than the {gates.loss_stop_pct:g}% we allow without asking."
                     + (
-                        f" That is besides the {sum(st.lost for st in agreed):,} you already agreed to leave out."
+                        f" That is besides the {sum(min(st.lost, st.agreed) for st in agreed):,} you already agreed to leave out."
                         if agreed
                         else ""
                     )
@@ -857,7 +868,7 @@ def plan_findings(ledger: Ledger | None, *, side_table: bool = False) -> list[Fi
                     " Steps that leave out rows: "
                     + ", ".join(
                         f"{st.lost:,} ({_naming([st.order])}, {st.kind.replace('_', ' ')}"
-                        + (", already agreed" if st.approved else "")
+                        + (f", {st.agreed:,} already agreed" if st.agreed else "")
                         + ")"
                         for st in lossy
                     )
@@ -1111,7 +1122,7 @@ def run_guarded(
     source_name: str | None = None,
     watch: Callable[[RecipeStep, pd.DataFrame, pd.DataFrame], None] | None = None,
     memo: ReceiptMemo | None = None,
-    approved: Collection[int] = (),
+    approved: Mapping[int, int] | None = None,
     **recipe_args: Any,
 ) -> GuardedRun:
     """`run_recipe`, with a receipt for every step, the plan's ledger and the findings; run twice by default.
@@ -1127,8 +1138,9 @@ def run_guarded(
     receipt instead of counting its tables again (the counting is what costs on a big file); the step itself still
     runs, so the tables and their hashes are always this run's own. The second run only compares hashes.
 
-    `approved` are the orders of the steps the person already said yes to: what they leave out does not count
-    towards the plan's loss stop again (:func:`plan_findings`).
+    `approved` maps the orders of the steps the person already said yes to onto the count they said yes to: up to
+    that count what a step leaves out does not count towards the plan's loss stop again (:func:`plan_findings`);
+    the rest does.
     """
     book = book if book is not None else ExpectationBook()
     side_table = (source_name or "this file") if names_a_log_row(primary_key) else None

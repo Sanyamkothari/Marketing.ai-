@@ -648,7 +648,7 @@ def chat_turn(
             errors.append(exc.code)
             strikes += 1
             if strikes > 1:
-                return finish(f"{FALLBACK} {refused_sentence(exc.message)}", blocked_by=exc.code)
+                return finish(f"{FALLBACK} {refused_sentence(person_reason(exc))}", blocked_by=exc.code)
             feedback.append(gate.prepare({"error": exc.code, "message": exc.message}))
             items.append(None)
         except Exception as exc:
@@ -1146,11 +1146,36 @@ def _reply(
     return finish(text, evidence)
 
 
-def refused_sentence(message: str, limit: int = 320) -> str:
-    """What the person is told when a turn ends on a refusal: what was refused and why (the engine's own message,
-    which says what would fix it), and that they can ask again."""
-    said = " ".join(message.split())[:limit].rstrip(" .")
-    return f"What I tried was refused: {said}. Ask me again and I will try another way."
+_PERSON_REASONS: Final[dict[str, str]] = {
+    "AGENT_REPLY_MALFORMED": "my answer was not in a form the engine could read",
+    "AGENT_TOOL_UNKNOWN": "I asked for something that does not exist here",
+    "AGENT_TOOL_ARGS_INVALID": "what I asked for was not filled in properly",
+    "AGENT_TOOL_LIMIT": "I had used all the lookups I may make in one message",
+    "AGENT_ITEM_UNKNOWN": "it pointed at a change that is not there",
+    "AGENT_FILE_UNKNOWN": "it named a file that is not in this case",
+    "AGENT_BLOCKING_LIMIT": "that was more questions than one message may carry",
+    "AGENT_QUESTION_INVALID": "the question I wanted to ask you was too long",
+    "AGENT_QUESTION_REFUSED": "the question I wanted to ask you did not pass the checks",
+    "AGENT_TEXT_REFUSED": "what I wrote for you did not pass the checks on what I may tell you",
+    "AGENT_STEP_NOT_ALLOWED": "that kind of change is not allowed on this column",
+    "AGENT_SETTING_NOT_ALLOWED": "that setting is not mine to change",
+    "AGENT_STEP_UNGROUNDED": "the change was not based on anything I had looked at",
+    "AGENT_STEP_NO_EFFECT": "the change would not have altered any rows",
+}
+_PERSON_REASON_DEFAULT: Final[str] = "it did not pass the engine's checks"
+
+
+def person_reason(exc: AgentToolError) -> str:
+    """Why `exc` was refused, in words made here: a sentence set with the refusal, else one fixed for its code.
+    Never the refusal's own message (written for the AI, it quotes what the AI sent) and never the AI's text.
+    """
+    return exc.person or _PERSON_REASONS.get(exc.code, _PERSON_REASON_DEFAULT)
+
+
+def refused_sentence(reason: str) -> str:
+    """What the person is told when a turn ends on a refusal: what was refused and why (`person_reason`), and that
+    they can ask again."""
+    return f"What I tried was refused: {reason.strip(' .')}. Ask me again and I will try another way."
 
 
 def _fallback(session: AgentSession) -> str:
