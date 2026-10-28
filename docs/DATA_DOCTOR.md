@@ -695,7 +695,8 @@ replies in plain words. Its instructions are one short prompt, `configs/prompts/
   the message the change answers counts as its proposer.
 - **Held in code:** each file's own masking before anything is sent, numbers in a reply must come from a look or from
   your words, the case's AI spending limit (`data_doctor.ai_limits`: 2,000,000 tokens and 200 calls per case, at most
-  8 actions per message), and every refusal of the tools (consent, future dates, look-alike joins, invented values,
+  8 actions per message), the client's one-time consent for any AI call (`engine/ai_consent.py`, shared by every AI
+  path), and every refusal of the tools (consent, future dates, look-alike joins, invented values,
   the original files).
 
 ### For developers

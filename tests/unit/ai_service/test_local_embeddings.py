@@ -14,21 +14,25 @@ import time
 import types
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 from pydantic import SecretStr
 
 from engine import llm
+from engine.ai_consent import NoClientData
 from engine.ai_service import (
     PROVIDERS,
     AiServiceStore,
     KeywordEmbeddingClient,
+    ResolvedAi,
     ServiceInput,
     build_service_client,
-    resolve_client,
     save_service,
     uses_embedding_model,
+)
+from engine.ai_service import (
+    resolve_client as _resolve_client,
 )
 from engine.config import LlmConfig
 from engine.llm import (
@@ -45,6 +49,11 @@ from engine.settings import Settings
 from engine.storage import LocalStorage
 
 KEY = "zk-test-key-0123456789abcdef"
+
+
+def resolve_client(llm: LlmConfig, **kw: Any) -> ResolvedAi:
+    """Resolution is what these tests are about, not consent: the calls here carry no client's data."""
+    return _resolve_client(llm, consent=NoClientData("a resolution test"), **kw)
 
 
 class FakeSentenceTransformer:
@@ -202,5 +211,5 @@ def test_a_saved_service_with_the_local_model_records_it_as_the_embedding_model(
         storage=storage,
     )
     resolved = resolve_client(LlmConfig(), slot="product", storage=storage, settings=settings)
-    assert isinstance(resolved.client, LocalEmbeddingClient)
+    assert isinstance(resolved.client.inner, LocalEmbeddingClient)
     assert resolved.llm.embedding_model == LOCAL_EMBEDDING_MODEL_ID

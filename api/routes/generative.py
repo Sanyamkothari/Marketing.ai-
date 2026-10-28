@@ -81,6 +81,7 @@ from api.schemas import (
     RootCauseRequest,
 )
 from engine.access.roles import Principal, Role
+from engine.ai_consent import WORKSPACE_CLIENT, ClientData
 from engine.ai_service import ResolvedAi
 from engine.audit.events import content_hash
 from engine.config import (
@@ -670,7 +671,13 @@ def _with_deliverable_ai(
     Bedrock client runs as is read per request (`profile_in_force`): a person may switch profile on the
     connection screen between two jobs, and the next job should run as whoever they chose.
     """
-    ai = resolve_slot(use_case.generative.llm, slot="deliverable", storage=storage, settings=settings)
+    ai = resolve_slot(
+        use_case.generative.llm,
+        slot="deliverable",
+        storage=storage,
+        settings=settings,
+        consent=ClientData(WORKSPACE_CLIENT),
+    )
     generative = use_case.generative.model_copy(update={"llm": ai.llm})
     return use_case.model_copy(update={"generative": generative}), ai
 

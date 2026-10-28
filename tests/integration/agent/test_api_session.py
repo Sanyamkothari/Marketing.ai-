@@ -18,6 +18,7 @@ from engine.agent.contracts import DATA_RECIPE_FILENAME, AgentSession, SessionSt
 from engine.jobs import CancelToken
 from engine.llm import FakeLLMClient, FakeLLMMode
 from engine.storage import LocalStorage, run_key, upload_key
+from tests.ai_consent_support import consented
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.integration.agent.test_recipe_runs import _messy, _recipe, _seed_model
@@ -42,7 +43,7 @@ def client(config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch) -
         return job
 
     monkeypatch.setattr(runs, "build_job_fn", idle)
-    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as test_client:
+    with TestClient(create_app(config_root=config_root, data_dir=consented(data_dir))) as test_client:
         yield test_client
 
 

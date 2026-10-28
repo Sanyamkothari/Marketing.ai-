@@ -36,6 +36,7 @@ from engine.storage import run_key
 from engine.utils.time import utc_now
 from tests.agentic.scenarios.planner_scenarios import expected_digest
 from tests.agentic.scenarios.planner_world import HonestModel, PlannerWorld
+from tests.ai_consent_support import consented
 
 pytestmark = pytest.mark.integration
 
@@ -368,7 +369,7 @@ def test_the_planner_meters_under_the_use_cases_own_ai_and_budget(
     document["generative"]["budget"] = {"max_calls_per_run": 1, "cache": False}
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     settings = Settings(connections_key=SecretStr("F" * 40), allow_fake_ai=True)
-    app = create_app(config_root=root, data_dir=pw.world.data_dir, settings=settings)
+    app = create_app(config_root=root, data_dir=consented(pw.world.data_dir), settings=settings)
     seen: list[PlannerDeps] = []
 
     def capture(

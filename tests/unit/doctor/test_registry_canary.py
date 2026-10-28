@@ -31,6 +31,7 @@ from engine.agent.loop import chat_turn
 from engine.agent.session import start_session
 from engine.agent.tools import TOOLS, AgentContext, AgentToolError
 from engine.agent.untrusted import for_prompt
+from engine.ai_consent import AiConsentStore
 from engine.contracts import RunMode
 from engine.doctor.case import CaseFile, CaseStore
 from engine.doctor.case_files import CaseFiles
@@ -397,6 +398,9 @@ def _case(ctx: AgentContext, root: Path) -> DataToolContext:
         ),
     )
     storage = LocalStorage(root)
+    AiConsentStore(storage).give(
+        "default", actor="canary", at=utc_now()
+    )  # the AI may be asked (second_opinion)
     case_files = _stored_case(storage, ctx, files[0].file_name)
     _m236(storage, ctx, root)
     upload_record(storage, "u_month_one", f"{NAME} {EMAIL}.csv")

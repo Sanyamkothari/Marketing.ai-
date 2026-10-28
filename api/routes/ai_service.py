@@ -41,6 +41,12 @@ from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, SettingsDep, StorageDep
 from api.schemas import ErrorResponse
 from engine.access.roles import Role
+from engine.ai_consent import (
+    AI_CONSENT_REQUIRED,
+    AI_CONSENT_REQUIRED_MESSAGE,
+    AiConsentRequiredError,
+    ConsentScope,
+)
 from engine.ai_service import (
     PROVIDERS,
     SLOT_LABELS,
@@ -74,7 +80,7 @@ from engine.settings import Settings
 from engine.storage import Storage
 from engine.utils.time import utc_now
 
-__all__ = ["not_connected_http", "resolve_slot", "router"]
+__all__ = ["consent_required_http", "not_connected_http", "require_consent", "resolve_slot", "router"]
 
 router = APIRouter(tags=["ai-service"])
 
@@ -297,12 +303,54 @@ def not_connected_http(exc: AiNotConnectedError) -> HTTPException:
     )
 
 
-def resolve_slot(llm: LlmConfig, *, slot: str, storage: Storage, settings: Settings) -> ResolvedAi:
-    """The client and effective `LlmConfig` for a language call of `slot`, or `409 AI_NOT_CONNECTED`."""
+def consent_required_http() -> HTTPException:
+    """`409 AI_CONSENT_REQUIRED`: the client has not allowed the AI to read its data. Says nothing else."""
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": AI_CONSENT_REQUIRED,
+            "message": AI_CONSENT_REQUIRED_MESSAGE,
+            "path": None,
+            "fix": None,
+        },
+        headers={"Cache-Control": _NO_STORE},
+    )
+
+
+def resolve_slot(
+    llm: LlmConfig,
+    *,
+    slot: str,
+    storage: Storage,
+    settings: Settings,
+    consent: ConsentScope,
+    ask_now: bool = True,
+) -> ResolvedAi:
+    """The client and effective `LlmConfig` for a language call of `slot`, or `409 AI_NOT_CONNECTED`.
+
+    `consent` says what the calls carry (`engine.ai_consent`) and has no default. A call that carries a client's
+    data without that client's consent is refused by the client itself, whoever calls; here the route is
+    refused at once with `409 AI_CONSENT_REQUIRED`, before it stores anything. `ask_now=False` leaves the
+    refusal to the first call, for a caller that serves several clients and says so itself (the Data Doctor's
+    chat, which tells the person in its own words).
+    """
     try:
-        return resolve_client(llm, slot=slot, storage=storage, settings=settings, profile=profile_in_force())
+        ai = resolve_client(
+            llm, slot=slot, storage=storage, settings=settings, consent=consent, profile=profile_in_force()
+        )
     except AiNotConnectedError as exc:
         raise not_connected_http(exc) from None
+    if ask_now:
+        require_consent(ai)
+    return ai
+
+
+def require_consent(ai: ResolvedAi) -> None:
+    """`409 AI_CONSENT_REQUIRED` unless the client behind `ai` has consented (or the call carries no data)."""
+    try:
+        ai.client.require()
+    except AiConsentRequiredError:
+        raise consent_required_http() from None
 
 
 # ---------------------------------------------------------------------------

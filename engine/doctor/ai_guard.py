@@ -7,8 +7,8 @@ masked look at every file of the case.
   up it refuses the call, the Doctor says so plainly and carries on with its rules alone. A call already under
   way is not cut short, so a case can end a little over its limit.
 * **Consent.** The AI reads masked summaries of a client's data only after someone with the right role has said
-  so once for that client. The yes is kept at `cases/<client_id>/ai_consent.json` with who gave it and when.
-  Without it the Doctor makes no AI call at all.
+  so once for that client. The yes is kept at `cases/<client_id>/ai_consent.json` with who gave it and when
+  (`engine.ai_consent`, which also gates every other AI call). Without it the Doctor makes no AI call at all.
 * **Every file masked.** :func:`file_overviews` gives the AI an overview of each of the case's other files, each
   one through that file's own egress gate (`engine.agent.egress`), like any tool result the chat reads.
 """
@@ -16,18 +16,14 @@ masked look at every file of the case.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Callable, Sequence
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from pydantic import AwareDatetime, Field
-
-from engine.config import BudgetConfig, LlmConfig, StrictBase
-from engine.doctor.case import CASE_PREFIX, CLIENT_ID_PATTERN, Case
+from engine.ai_consent import AiConsent, AiConsentStore, consent_key
+from engine.config import BudgetConfig, LlmConfig
+from engine.doctor.case import Case
 from engine.generative.budget import Meter
 from engine.generative.errors import BUDGET_EXCEEDED, generative_error
-from engine.storage import Storage, StorageError
 
 if TYPE_CHECKING:
     from engine.agent.contracts import SentItem
@@ -52,7 +48,6 @@ AI_NO_CONSENT_REPLY: Final[str] = (
     "The Doctor's AI has not been allowed to read this client's data yet, so I am working with my rules alone. "
     "Allow it once for this client and I can use it."
 )
-CONSENT_FILENAME: Final[str] = "ai_consent.json"
 MAX_OVERVIEW_CHARS: Final[int] = 20_000
 """The most the other files' overviews take of a chat prompt; files past it are left out, so a case with many wide
 files still leaves room for the chat (the prompt's own limit is `engine.agent.loop.MAX_PROMPT_CHARS`)."""
@@ -63,41 +58,6 @@ _OVERVIEW_COLUMN_KEYS: Final[tuple[str, ...]] = (
     "looks_like_id",
     "personal_data",
 )
-
-
-def consent_key(client_id: str) -> str:
-    return f"{CASE_PREFIX}{client_id}/{CONSENT_FILENAME}"
-
-
-class AiConsent(StrictBase):
-    """`cases/<client_id>/ai_consent.json`: the client let the Doctor's AI read masked summaries of its data."""
-
-    client_id: str
-    given_by: str = Field(description="Who said yes (user id).")
-    given_at: AwareDatetime
-
-
-class AiConsentStore:
-    def __init__(self, storage: Storage) -> None:
-        self._storage = storage
-
-    def get(self, client_id: str) -> AiConsent | None:
-        key = consent_key(client_id)
-        try:
-            return self._storage.read_model(key, AiConsent) if self._storage.exists(key) else None
-        except (StorageError, ValueError):
-            return None
-
-    def give(self, client_id: str, *, actor: str, at: datetime) -> AiConsent:
-        """Record the yes. Asked again, the first one stands (who and when are not rewritten)."""
-        if re.fullmatch(CLIENT_ID_PATTERN, client_id) is None:
-            raise ValueError("client_id is not a client id")
-        found = self.get(client_id)
-        if found is not None:
-            return found
-        consent = AiConsent(client_id=client_id, given_by=actor, given_at=at)
-        self._storage.write_model(consent_key(client_id), consent)
-        return consent
 
 
 class AiGuard(Meter):

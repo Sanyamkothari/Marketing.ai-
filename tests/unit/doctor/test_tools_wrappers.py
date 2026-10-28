@@ -592,6 +592,19 @@ def test_second_opinion_works_from_the_case_and_ticks_nothing() -> None:
     assert out["questions"], "the AI's questions come back for the visit to put to the person"
 
 
+def test_second_opinion_is_refused_without_the_clients_consent_and_works_with_it(tmp_path: Path) -> None:
+    from engine.ai_consent import AI_CONSENT_REQUIRED, AiConsentStore
+
+    ctx, client, _agent = _assist_case(header_help_root())
+    ctx = dataclasses.replace(ctx, storage=LocalStorage(tmp_path / "store"))
+    with pytest.raises(DataToolError) as refused:
+        _call("second_opinion", {}, ctx)
+    assert (refused.value.code, refused.value.status) == (AI_CONSENT_REQUIRED, 409)
+    assert client.prompts == [], "nothing was sent"
+    AiConsentStore(ctx.storage).give("default", actor="u1", at=NOW)
+    assert _call("second_opinion", {}, ctx)["source"] == "ai"
+
+
 def test_second_opinion_starts_from_the_roles_the_case_decided() -> None:
     from engine.agent.proposals import roles_of, rules_session
 

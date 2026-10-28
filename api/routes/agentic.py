@@ -321,17 +321,28 @@ class PlanView(StrictBase):
 
 
 def _meter(storage: Storage, settings: Settings, llm: Any, budget: Any, job_id: str) -> Any:
-    """The Product AI through a Meter with `llm` and `budget`, or None when no AI service answers."""
+    """The Product AI through a Meter with `llm` and `budget`, or None when no AI service answers or the client has
+    not allowed the AI to read its data."""
+    from engine.ai_consent import WORKSPACE_CLIENT, AiConsentRequiredError, ClientData
     from engine.ai_service import AiNotConnectedError, resolve_client
     from engine.aws_connection import profile_in_force
     from engine.generative.budget import Meter
 
     try:
         resolved = resolve_client(
-            llm, slot="product", storage=storage, settings=settings, profile=profile_in_force()
+            llm,
+            slot="product",
+            storage=storage,
+            settings=settings,
+            consent=ClientData(WORKSPACE_CLIENT),
+            profile=profile_in_force(),
         )
     except AiNotConnectedError:
         return None
+    try:
+        resolved.client.require()  # the planner's prompts carry the client's data
+    except AiConsentRequiredError:
+        return None  # without the client's yes the planner works from its rules, as with no AI service
     return Meter(resolved.client, job_id=job_id, llm=resolved.llm, budget=budget)
 
 

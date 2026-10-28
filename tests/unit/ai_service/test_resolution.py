@@ -5,19 +5,24 @@ from __future__ import annotations
 import json
 import socket
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
 
+from engine.ai_consent import NoClientData
 from engine.ai_service import (
     AiNotConnectedError,
     AiServiceStore,
     KeywordEmbeddingClient,
+    ResolvedAi,
     ServiceInput,
     effective_service,
-    resolve_client,
     save_service,
     store_key,
+)
+from engine.ai_service import (
+    resolve_client as _resolve_client,
 )
 from engine.config import LlmBackend, LlmConfig
 from engine.llm import KEYWORD_HASH_MODEL_ID, BedrockLLMClient, FakeLLMClient
@@ -36,6 +41,11 @@ YAML_BEDROCK = LlmConfig(
     judge_model_id="yaml-judge",
     embedding_model_id="yaml-emb",
 )
+
+
+def resolve_client(llm: LlmConfig, **kw: Any) -> ResolvedAi:
+    """Resolution is what these tests are about, not consent: the calls here carry no client's data."""
+    return _resolve_client(llm, consent=NoClientData("a resolution test"), **kw)
 
 
 def _settings(**kw: object) -> Settings:
@@ -68,14 +78,16 @@ def test_the_fake_answers_only_when_a_test_allows_it(storage: LocalStorage) -> N
     resolved = resolve_client(
         YAML_FAKE, slot="product", storage=storage, settings=_settings(allow_fake_ai=True)
     )
-    assert isinstance(resolved.client, FakeLLMClient)
+    assert isinstance(resolved.client.inner, FakeLLMClient)
     assert (resolved.source, resolved.provider, resolved.third_party) == ("fake", "fake", False)
     assert resolved.llm == YAML_FAKE
 
 
 def test_the_use_case_files_bedrock_still_works_as_before(storage: LocalStorage) -> None:
     resolved = resolve_client(YAML_BEDROCK, slot="deliverable", storage=storage, settings=_settings())
-    assert isinstance(resolved.client, BedrockLLMClient) and resolved.client.model_id == "yaml-gen"
+    assert (
+        isinstance(resolved.client.inner, BedrockLLMClient) and resolved.client.inner.model_id == "yaml-gen"
+    )
     assert (resolved.source, resolved.provider, resolved.third_party) == ("config", "bedrock", False)
     assert resolved.llm is YAML_BEDROCK or resolved.llm == YAML_BEDROCK
 
@@ -83,7 +95,7 @@ def test_the_use_case_files_bedrock_still_works_as_before(storage: LocalStorage)
 def test_a_saved_service_beats_the_use_case_file(storage: LocalStorage) -> None:
     _save(storage, provider="openai", api_key=KEY, model="saved-m")
     resolved = resolve_client(YAML_BEDROCK, slot="product", storage=storage, settings=_settings())
-    assert isinstance(resolved.client, KeywordEmbeddingClient)
+    assert isinstance(resolved.client.inner, KeywordEmbeddingClient)
     assert (resolved.source, resolved.provider, resolved.third_party) == ("saved", "openai", True)
 
 
@@ -102,16 +114,19 @@ def test_the_saved_models_become_the_llm_config_every_call_is_metered_with(stora
 def test_an_embedding_model_makes_a_real_client_and_none_makes_a_keyword_hash(storage: LocalStorage) -> None:
     _save(storage, provider="openai", api_key=KEY, model="m", embedding_model="emb-1")
     with_model = resolve_client(YAML_FAKE, slot="product", storage=storage, settings=_settings())
-    assert isinstance(with_model.client, OpenAICompatibleClient) and with_model.llm.embedding_model == "emb-1"
+    assert (
+        isinstance(with_model.client.inner, OpenAICompatibleClient)
+        and with_model.llm.embedding_model == "emb-1"
+    )
     _save(storage, provider="openai", api_key=KEY, model="m")
     without = resolve_client(YAML_FAKE, slot="product", storage=storage, settings=_settings())
-    assert isinstance(without.client, KeywordEmbeddingClient)
+    assert isinstance(without.client.inner, KeywordEmbeddingClient)
 
 
 def test_keyword_embeddings_are_deterministic_and_match_by_shared_words(storage: LocalStorage) -> None:
     _save(storage, provider="anthropic", api_key=KEY, model="m")
     client = resolve_client(YAML_FAKE, slot="product", storage=storage, settings=_settings()).client
-    assert isinstance(client, KeywordEmbeddingClient)
+    assert isinstance(client.inner, KeywordEmbeddingClient)
     a, b, c = client.embed(
         ["refund policy for damaged parcels", "damaged parcels refund", "office opening hours"]
     )
@@ -127,7 +142,7 @@ def test_anthropic_never_asks_the_service_for_embeddings(storage: LocalStorage) 
     _save(storage, provider="anthropic", api_key=KEY, model="m", embedding_model="ignored")
     resolved = resolve_client(YAML_FAKE, slot="product", storage=storage, settings=_settings())
     assert resolved.llm.embedding_model == KEYWORD_HASH_MODEL_ID
-    assert isinstance(resolved.client, KeywordEmbeddingClient)
+    assert isinstance(resolved.client.inner, KeywordEmbeddingClient)
 
 
 def test_a_saved_bedrock_uses_its_region_and_models(storage: LocalStorage) -> None:
@@ -135,7 +150,7 @@ def test_a_saved_bedrock_uses_its_region_and_models(storage: LocalStorage) -> No
     resolved = resolve_client(
         YAML_FAKE, slot="product", storage=storage, settings=_settings(), profile="prof"
     )
-    assert isinstance(resolved.client, BedrockLLMClient) and resolved.client.model_id == "b-gen"
+    assert isinstance(resolved.client.inner, BedrockLLMClient) and resolved.client.inner.model_id == "b-gen"
     assert resolved.llm.backend is LlmBackend.BEDROCK and resolved.llm.region == "eu-west-1"
     assert (resolved.llm.generation_model, resolved.llm.embedding_model, resolved.third_party) == (
         "b-gen",
@@ -152,7 +167,7 @@ def test_the_deliverable_does_not_follow_the_product(storage: LocalStorage) -> N
     _save(storage, "deliverable", provider="anthropic", api_key=KEY, model="cust-m")
     own = resolve_client(YAML_FAKE, slot="deliverable", storage=storage, settings=_settings())
     assert (own.source, own.provider, own.llm.generation_model) == ("saved", "anthropic", "cust-m")
-    assert isinstance(own.client, KeywordEmbeddingClient)
+    assert isinstance(own.client.inner, KeywordEmbeddingClient)
     assert (
         resolve_client(YAML_FAKE, slot="product", storage=storage, settings=_settings()).provider == "openai"
     )
@@ -213,7 +228,7 @@ def test_a_resolved_client_really_talks_to_its_service(storage: LocalStorage) ->
             storage=storage,
         )
         resolved = resolve_client(YAML_FAKE, slot="deliverable", storage=storage, settings=settings)
-        assert isinstance(resolved.client, KeywordEmbeddingClient)
+        assert isinstance(resolved.client.inner, KeywordEmbeddingClient)
         assert resolved.client.complete("hi").text == "hello"
     assert anthropic.requests[0].headers["x-api-key"] == KEY
     stored = (storage.root / store_key("deliverable")).read_text()  # type: ignore[attr-defined]

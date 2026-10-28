@@ -27,6 +27,7 @@ from engine import ai_service
 from engine.access.roles import Role
 from engine.settings import Settings
 from engine.storage import LocalStorage
+from tests.ai_consent_support import consented
 from tests.unit.agent.egress_canary import ToolingClient
 
 pytestmark = pytest.mark.integration
@@ -63,7 +64,7 @@ def data_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def client(config_root: Path, data_dir: Path) -> Iterator[TestClient]:
-    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as test_client:
+    with TestClient(create_app(config_root=config_root, data_dir=consented(data_dir))) as test_client:
         yield test_client
 
 

@@ -25,6 +25,7 @@ from pydantic import SecretStr
 
 from api.main import create_app
 from engine.settings import Settings
+from tests.ai_consent_support import consented
 from tests.fixtures.node import skip_without_jsdom
 from tests.integration.agent.test_ask_api import ask_frame, upload
 
@@ -44,7 +45,7 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
     out = root / "fixtures"
     out.mkdir(parents=True)
     bodies: dict[str, Any] = {}
-    with TestClient(create_app(config_root=config_root, data_dir=root / "data")) as client:
+    with TestClient(create_app(config_root=config_root, data_dir=consented(root / "data"))) as client:
         bodies["use_case"] = _ok(client.get(f"/use-cases/{USE_CASE}"))
         upload_id = upload(client)
         bodies["ask_empty"] = _ok(client.get(f"/uploads/{upload_id}/ask"))
