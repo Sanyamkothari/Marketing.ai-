@@ -65,6 +65,7 @@ from d_common import (  # noqa: E402
 )
 
 from api.v2.engines.doctor import profile_frame, read_csv_bytes  # noqa: E402
+from autonomy.contracts import Channel, EventType  # noqa: E402
 from autonomy.data.folder import StateFolder  # noqa: E402
 from autonomy.data.loaders import online_retail_log_events  # noqa: E402
 from autonomy.data.mapping import EventMapping, MappingError, map_frame, problem_counts  # noqa: E402
@@ -79,7 +80,7 @@ BASE_MAPPING = EventMapping(
     timestamp="InvoiceDate",
     timestamp_format="%m/%d/%Y %H:%M",
     timezone="Europe/London",
-    event_type="purchase",
+    event_type=EventType.PURCHASE,
     quantity_column="Quantity",
     unit_price_column="UnitPrice",
     item_column="StockCode",
@@ -333,7 +334,7 @@ def f1() -> dict[str, Any]:
         "profile_no_delimiter": route_profile(data),
         "profile_delimiter_semicolon": route_profile(data, {"delimiter": ";"}),
         "map_events_no_delimiter": route_map(
-            data[:200000], EventMapping(customer_id="age", timestamp="month", event_type="visit")
+            data[:200000], EventMapping(customer_id="age", timestamp="month", event_type=EventType.VISIT)
         )[1],
     }
 
@@ -373,7 +374,7 @@ def f3() -> dict[str, Any]:
         customer_id="person",
         timestamp="time",
         event_type_column="event",
-        event_type_values={"transaction": "purchase", "offer received": "send"},
+        event_type_values={"transaction": EventType.PURCHASE, "offer received": EventType.SEND},
         value_column="value",
     )
     try:
@@ -537,7 +538,7 @@ def i3() -> dict[str, Any]:
         customer_id="CustomerID",
         timestamp="ts",
         timezone="Europe/London",
-        event_type="consent_granted",
+        event_type=EventType.CONSENT_GRANTED,
         channel_column="channel",
         id_leading_zeros="strip",
     )
@@ -749,7 +750,7 @@ def n5() -> dict[str, Any]:
         customer_id="CustomerID",
         timestamp="ts",
         timezone="UTC",
-        event_type="purchase",
+        event_type=EventType.PURCHASE,
         value_column="value",
         attrs={"currency": "currency"},
     )
@@ -817,7 +818,7 @@ def n7() -> dict[str, Any]:
 
 def _date_variant(
     series_fn: Callable[[pd.Series], pd.Series],
-    mapping: EventMapping = BASE_MAPPING,  # type: ignore[type-arg]
+    mapping: EventMapping = BASE_MAPPING,
     rows: Callable[[pd.DataFrame], pd.Index] | None = None,
     fields: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -948,8 +949,8 @@ def t7() -> dict[str, Any]:
         customer_id="CONTROLN",
         timestamp="ADATE_3",
         timestamp_format="%y%m",
-        event_type="send",
-        channel="webhook",
+        event_type=EventType.SEND,
+        channel=Channel.WEBHOOK,
     )
     e1, p1 = map_frame(frame_pd, m, "kdd")
     with zipfile.ZipFile(DATASETS / "kdd98_full" / "cup98LRN.zip") as z:
@@ -1161,7 +1162,7 @@ def w2() -> dict[str, Any]:
         customer_id="agent",
         timestamp="arrival_date_year",
         timestamp_format="%Y",
-        event_type="purchase",
+        event_type=EventType.PURCHASE,
         value_column="adr",
     )
     events, problems = map_frame(f, m, "hotel")

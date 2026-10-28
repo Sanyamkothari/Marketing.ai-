@@ -71,7 +71,7 @@ from autonomy.data.rebuild import rebuild_states  # noqa: E402
 from autonomy.fakes import InMemoryEventStore, InMemoryStateStore  # noqa: E402
 from autonomy.learning.observations import ipw_weights, logged_sends, weighted_rate  # noqa: E402
 from autonomy.proof.ope import evaluate  # noqa: E402
-from autonomy.runtime.agent import build_agent_policy  # noqa: E402
+from autonomy.runtime.agent import ClickResponseModel, build_agent_policy  # noqa: E402
 
 CLIP = 20.0  # the warm start's clip (DEFAULT_LOGGED_IPW_CLIP)
 
@@ -79,7 +79,7 @@ CLIP = 20.0  # the warm start's clip (DEFAULT_LOGGED_IPW_CLIP)
 # --------------------------------------------------------------------------- small models
 
 
-def in_train(ids: pd.Series, seed: str = "d-ipw") -> np.ndarray:  # type: ignore[type-arg]
+def in_train(ids: pd.Series, seed: str = "d-ipw") -> np.ndarray:
     """Half the customers, by a salted hash of the id: the same customer is always on one side."""
     return np.array([int(hashlib.sha256(f"{seed}:{i}".encode()).hexdigest()[:8], 16) % 2 == 0 for i in ids])
 
@@ -108,7 +108,7 @@ def fit_logistic(
 def predict_logistic(model: tuple[np.ndarray, np.ndarray, np.ndarray], x: np.ndarray) -> np.ndarray:
     w, mu, sd = model
     z = np.column_stack([np.ones(len(x)), (x - mu) / sd])
-    return 1 / (1 + np.exp(-np.clip(z @ w, -30, 30)))
+    return np.asarray(1 / (1 + np.exp(-np.clip(z @ w, -30, 30))))
 
 
 def auc(score: np.ndarray, y: np.ndarray) -> float | None:
@@ -177,6 +177,7 @@ def product_warm_start(history: list[Event], now: datetime, channel: Channel) ->
     policy.nightly([], by_cust, now)
     policy.prepare_day(states, DecisionContext(now=now, briefs=(brief,), content=tuple(content)))
     model = policy.bundle.response
+    assert isinstance(model, ClickResponseModel), "the agent's response model learns click rates"
     sends = logged_sends(by_cust, {})
     keys = sorted({s.action_key() for s in sends})
     seg_of = {s.customer_id: policy.segment(s, now) for s in states}
@@ -419,20 +420,21 @@ def run_kdd98(clock: Clock, max_rows: int | None) -> dict[str, Any]:
 
     def history(clicks: bool, probs: bool) -> list[Event]:
         evs: list[Event] = []
-        for r in tr.itertuples(index=False):
-            did = f"{r.cid}:{r.promo}"
-            ts = pd.Timestamp(r.sent_at).to_pydatetime().replace(tzinfo=UTC) + timedelta(hours=14)
-            evs.append(_send(r.cid, ts, did, "mail_" + r.promo[2:], r.p_hat if probs else None, "kdd98"))
-            if r.gave:
+        rows = zip(tr.cid, tr.promo, tr.sent_at, tr.p_hat, tr.gave, tr.gift_at, tr.amount, strict=True)
+        for cid, promo, sent_at, p_hat, gave, gift_at, amount in rows:
+            did = f"{cid}:{promo}"
+            ts = pd.Timestamp(sent_at).to_pydatetime().replace(tzinfo=UTC) + timedelta(hours=14)
+            evs.append(_send(cid, ts, did, "mail_" + promo[2:], p_hat if probs else None, "kdd98"))
+            if gave:
                 g_ts = (
-                    pd.Timestamp(r.gift_at).to_pydatetime().replace(tzinfo=UTC) + timedelta(days=14)
-                    if pd.notna(r.gift_at)
+                    pd.Timestamp(gift_at).to_pydatetime().replace(tzinfo=UTC) + timedelta(days=14)
+                    if pd.notna(gift_at)
                     else ts + timedelta(days=21)
                 )
                 g_ts = max(g_ts, ts + timedelta(hours=1))
-                evs.append(_buy(r.cid, g_ts, did, float(r.amount), "kdd98"))
+                evs.append(_buy(cid, g_ts, did, float(amount), "kdd98"))
                 if clicks:
-                    evs.append(_click(r.cid, g_ts, did, "kdd98"))
+                    evs.append(_click(cid, g_ts, did, "kdd98"))
         return [e for e in evs if e.ts < now]
 
     variants = {}
@@ -525,11 +527,16 @@ def run_bank(clock: Clock, max_rows: int | None) -> dict[str, Any]:
     }
     ct = pd.crosstab([raw.year, raw.month], raw.contact)
     one_sided = ct[(ct.min(axis=1) < 20)]
+    examples: dict[str, Any] = {}
+    for key, row in one_sided.head(6).iterrows():
+        assert isinstance(key, tuple), "the crosstab is indexed by (year, month)"
+        year, month = key
+        examples[f"{year}-{month}"] = row.to_dict()
     out["positivity_by_month"] = {
         "months": len(ct),
         "months_with_under_20_of_one_type": len(one_sided),
         "clients_in_those_months": int(one_sided.sum().sum()),
-        "examples": {f"{y_}-{m}": r.to_dict() for (y_, m), r in one_sided.head(6).iterrows()},
+        "examples": examples,
     }
     with clock.step("propensity"):
         pm = fit_logistic(x[tr], a[tr])
@@ -576,12 +583,14 @@ def run_bank(clock: Clock, max_rows: int | None) -> dict[str, Any]:
 
     def history(probs: bool) -> list[Event]:
         evs: list[Event] = []
-        for r, p in zip(trf.itertuples(index=False), p_logged[tr], strict=True):
-            ts = r.call_at.to_pydatetime().replace(tzinfo=UTC)
-            did = f"{r.cid}:call"
-            evs.append(_send(r.cid, ts, did, r.contact, p if probs else None, "bank"))
-            if r.y == "yes":
-                evs.append(_click(r.cid, ts + timedelta(hours=1), did, "bank"))
+        for cid, call_at, contact, y_, p in zip(
+            trf.cid, trf.call_at, trf.contact, trf.y, p_logged[tr], strict=True
+        ):
+            ts = call_at.to_pydatetime().replace(tzinfo=UTC)
+            did = f"{cid}:call"
+            evs.append(_send(cid, ts, did, contact, p if probs else None, "bank"))
+            if y_ == "yes":
+                evs.append(_click(cid, ts + timedelta(hours=1), did, "bank"))
         return evs
 
     variants = {}

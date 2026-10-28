@@ -126,8 +126,8 @@ def full_stream(clock: Clock, rows: int | None) -> tuple[dict[str, Any], list[Ev
         now = max(e.ts for e in events) + timedelta(days=1)
         states = InMemoryStateStore()
         rebuild_states(store, states, StateFolder(), now)
-        rows = list(states.scan())
-        s.extra["states"] = len(rows)
+        state_rows = list(states.scan())
+        s.extra["states"] = len(state_rows)
     by_type = Counter(e.type.value for e in events)
     # Per customer, which event types they have
     kinds: dict[str, set[str]] = {}
@@ -136,10 +136,10 @@ def full_stream(clock: Clock, rows: int | None) -> tuple[dict[str, Any], list[Ev
     only_views = sum(1 for k in kinds.values() if k == {"view"})
     with_cart = sum(1 for k in kinds.values() if "cart" in k)
     cart_no_buy = sum(1 for k in kinds.values() if "cart" in k and "purchase" not in k)
-    buyers = [r for r in rows if r.purchases > 0]
+    buyers = [r for r in state_rows if r.purchases > 0]
     default = CustomerState(customer_id="x", as_of=now)
     set_fields = {
-        f: sum(1 for r in rows if getattr(r, f) != getattr(default, f))
+        f: sum(1 for r in state_rows if getattr(r, f) != getattr(default, f))
         for f in (
             "last_seen_at",
             "first_seen_at",
@@ -159,8 +159,8 @@ def full_stream(clock: Clock, rows: int | None) -> tuple[dict[str, Any], list[Ev
         "rows_by_type": {str(k): int(v) for k, v in rows_by_type.items()},
         "events_by_type": dict(by_type),
         "problems": problem_counts(problems),
-        "states": len(rows),
-        "segments": dict(Counter(r.segment for r in rows).most_common()),
+        "states": len(state_rows),
+        "segments": dict(Counter(r.segment for r in state_rows).most_common()),
         "customers_only_views": only_views,
         "customers_with_cart": with_cart,
         "customers_cart_never_bought": cart_no_buy,

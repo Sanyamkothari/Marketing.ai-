@@ -49,6 +49,7 @@ from autonomy.contracts import (
     Decision,
     DecisionKind,
     Envelope,
+    Event,
     EventType,
     Group,
     Objective,
@@ -152,7 +153,7 @@ def main() -> None:
         loaded = hillstrom_events(frame, campaign_at=T0, include_outcomes=True)
     payload["loader"] = {"events": len(loaded.events), "problems": len(loaded.problems)}
     print(f"    {len(loaded.events)} events, {len(loaded.problems)} problems")
-    by_c: dict[str, list] = {}
+    by_c: dict[str, list[Event]] = {}
     for e in loaded.events:
         by_c.setdefault(e.customer_id, []).append(e)
 
@@ -166,7 +167,7 @@ def main() -> None:
     }
     print(f"    loader SENDs as the warm start reads them: {payload['loader_send_check']}")
 
-    def is_outcome(e) -> bool:  # noqa: ANN001
+    def is_outcome(e: Event) -> bool:
         return bool(e.attrs.get("outcome"))
 
     pre = [e for e in loaded.events if e.type is not EventType.SEND and not is_outcome(e)]
@@ -180,7 +181,7 @@ def main() -> None:
 
     # --- the train log as the agent's learning API takes it ------------------------------------
     train_set = set(train.customer_ids)
-    history: dict[str, list] = {}
+    history: dict[str, list[Event]] = {}
     decisions: dict[str, Decision] = {}
     rewards: list[Reward] = []
     for i, cid in enumerate(train.customer_ids):
@@ -249,7 +250,8 @@ def main() -> None:
 
     variants = [v for v in args.variants.split(",") if v]
     seeds = list(range(1, args.seeds + 1))
-    payload["economics"] = {}
+    economics: dict[str, object] = {}
+    payload["economics"] = economics
     for cost in COSTS:
         econ = C.Economics(MARGIN, cost, "USD", f"profit = {MARGIN} x spend - {cost} per e-mail")
         key = f"cost_{cost:g}"
@@ -342,7 +344,7 @@ def main() -> None:
         rows = C.evaluate_policies(test, profit_te, "profit", emailed, reference=C.fixed(test.n, k, ref_c))
         C.print_table("TEST content choice (always e-mail; the policy only picks men's vs women's)", rows)
         block["content_choice_profit"] = rows
-        payload["economics"][key] = block
+        economics[key] = block
 
     payload["timings"] = timings.rows
     C.save("a_hillstrom" + (f"_limit{args.limit}" if args.limit else ""), payload)

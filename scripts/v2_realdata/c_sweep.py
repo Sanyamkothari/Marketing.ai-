@@ -269,7 +269,7 @@ def outcome_events(
             continue
         a = d.action
         send_at = max(a.send_at, now)
-        base = {
+        base: dict[str, Any] = {
             "customer_id": d.customer_id,
             "source": "c-scale-synthetic",
             "channel": a.channel,

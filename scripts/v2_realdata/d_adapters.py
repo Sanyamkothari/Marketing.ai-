@@ -80,7 +80,7 @@ class DAdapted:
     goal_kind: GoalKind
     objective: Objective
     goal_text: str
-    outcome: pd.Series  # type: ignore[type-arg]  # customer_id -> the dataset's own outcome (0/1)
+    outcome: pd.Series  # customer_id -> the dataset's own outcome (0/1)
     outcome_name: str
     invented: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -157,14 +157,14 @@ def long_events(
     return map_frame(f.reset_index(drop=True), mapping, source)
 
 
-def _iso(ts: pd.Series) -> pd.Series:  # type: ignore[type-arg]
+def _iso(ts: pd.Series) -> pd.Series:
     return pd.to_datetime(ts).dt.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 # --------------------------------------------------------------------------- bank marketing
 
 
-def bank_dates(frame: pd.DataFrame) -> pd.Series:  # type: ignore[type-arg]
+def bank_dates(frame: pd.DataFrame) -> pd.Series:
     """Reconstructed call dates. The file has `month` and `day_of_week` but no year or day; the UCI
     page says rows are in time order from May 2008 to November 2010. So the year goes up by one
     whenever the month goes backwards in row order, and within a month the week goes up whenever
@@ -413,7 +413,7 @@ def adapt_health(clock: Clock | None = None, max_rows: int | None = None) -> DAd
 # --------------------------------------------------------------------------- hotel bookings
 
 
-def hotel_arrival(raw: pd.DataFrame) -> pd.Series:  # type: ignore[type-arg]
+def hotel_arrival(raw: pd.DataFrame) -> pd.Series:
     month = raw.arrival_date_month.str[:3].str.lower().map(MONTHS)
     return pd.to_datetime(
         pd.DataFrame({"year": raw.arrival_date_year, "month": month, "day": raw.arrival_date_day_of_month})
@@ -572,7 +572,7 @@ def read_kdd98(max_rows: int | None = None) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(data), low_memory=False, nrows=max_rows)
 
 
-def yymm(values: pd.Series) -> pd.Series:  # type: ignore[type-arg]
+def yymm(values: pd.Series) -> pd.Series:
     """YYMM numbers (9706, or 9606.0 from a column with blanks) as the 1st of that month."""
     v = pd.to_numeric(values, errors="coerce")
     year = 1900 + (v // 100)

@@ -19,7 +19,7 @@ for _p in (str(HERE), str(HERE.parents[1])):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from b_common import (  # noqa: E402,F401  (re-exported for the d_* runners)
+from b_common import (  # noqa: E402  (re-exported for the d_* runners, see __all__)
     DATASETS,
     REPO,
     Clock,
@@ -28,6 +28,20 @@ from b_common import (  # noqa: E402,F401  (re-exported for the d_* runners)
     jsonable,
     peak_rss_mb,
 )
+
+__all__ = [
+    "DATASETS",
+    "REPO",
+    "RESULTS",
+    "Clock",
+    "command_line",
+    "doctor_client",
+    "env_info",
+    "jsonable",
+    "peak_rss_mb",
+    "post_file",
+    "write_result",
+]
 
 RESULTS = DATASETS / "_results" / "d"
 

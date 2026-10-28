@@ -220,7 +220,7 @@ def frame_from_preferences(preferences: Mapping[str, str], dtypes: Sequence[tupl
             row[col] = raw
     frame = pd.DataFrame([row])
     for col, dtype in cast.items():
-        frame[col] = frame[col].astype(dtype)
+        frame[col] = frame[col].astype(pd.api.types.pandas_dtype(dtype))
     return frame
 
 

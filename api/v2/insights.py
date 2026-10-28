@@ -705,8 +705,8 @@ def today(services: Services, goal_id: str | None = None, day: dt.date | None = 
             if e.decision_id is None:
                 continue
             if e.decision_id not in decision_ids:
-                d = services.decisions.get(e.decision_id)
-                if d is None or resolve(d) != goal_id:
+                logged = services.decisions.get(e.decision_id)
+                if logged is None or resolve(logged) != goal_id:
                     continue
         if e.type is EventType.SEND:
             sent += 1
@@ -1112,13 +1112,13 @@ def review_content(item: ContentItem, threshold: int = 3) -> ContentReview:
     checks: list[EditorCheck] = []
     for name in ("no_invented_numbers", "unsubscribe", "channel_rules"):
         if name in failed:
-            checks.append(EditorCheck(check=name, passed=False, note="; ".join(failed[name])))  # type: ignore[arg-type]
+            checks.append(EditorCheck(check=name, passed=False, note="; ".join(failed[name])))
         elif name == "unsubscribe" and item.channel is not Channel.EMAIL:
             checks.append(
                 EditorCheck(check="unsubscribe", passed=True, note="No unsubscribe line needed here")
             )
         else:
-            checks.append(EditorCheck(check=name, passed=True, note=_CHECK_NOTES[name]))  # type: ignore[arg-type]
+            checks.append(EditorCheck(check=name, passed=True, note=_CHECK_NOTES[name]))
     no_verdict = any("no valid verdict" in n for n in judged)
     for name in ("brand_voice", "honesty"):
         if name in failed:

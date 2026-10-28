@@ -193,6 +193,10 @@ files = [
 ]                                       # source dirs, plus the synthetic generators and the service fakes: test
                                         # infrastructure every later milestone builds on. Other tests are not
                                         # type-checked; no per-module `strict` anywhere (it is not a per-module option).
+mypy_path = ["scripts/v2_realdata"]     # the real-data runners are standalone scripts that put their own folder on
+explicit_package_bases = true           # sys.path and import siblings top-level (`from b_common import ...`); with
+                                        # this folder as a package base mypy names them `b_common` etc. exactly as
+                                        # they run (every other file still maps from the repo root, as before)
 warn_unreachable = true
 warn_unused_configs = true
 show_error_codes = true

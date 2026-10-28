@@ -36,6 +36,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -97,7 +98,8 @@ PROFILE_MAPPING = EventMapping(
 def build_receipts(timings: C.Timings) -> pd.DataFrame:
     if RECEIPTS.exists():
         with timings.step("load cached receipts"):
-            return pd.read_pickle(RECEIPTS)
+            cached: pd.DataFrame = pd.read_pickle(RECEIPTS)
+            return cached
     cols = [
         "client_id",
         "transaction_id",
@@ -205,7 +207,9 @@ def arm_of(d: Decision) -> int:
     return 0 if d.kind is DecisionKind.NOTHING else 1
 
 
-def scale_test(rec: pd.DataFrame, clients: pd.DataFrame, timings: C.Timings, sizes: list[int]) -> list[dict]:
+def scale_test(
+    rec: pd.DataFrame, clients: pd.DataFrame, timings: C.Timings, sizes: list[int]
+) -> list[dict[str, Any]]:
     """Product path (map_frame + store + rebuild_states) on growing client samples."""
     rows = []
     ids = clients["client_id"].to_numpy()
@@ -400,7 +404,9 @@ def main() -> None:
     gc.collect()
 
     def profit(r: C.Rct) -> np.ndarray:
-        return MARGIN * r.outcomes["mean_receipt"] * r.outcomes["target"] - SMS_COST * (r.arm != 0)
+        return np.asarray(
+            MARGIN * r.outcomes["mean_receipt"] * r.outcomes["target"] - SMS_COST * (r.arm != 0)
+        )
 
     payload["agent"] = {v: C.agent_summary(r) for v, r in runs.items()}
     cands = [

@@ -36,6 +36,7 @@ from autonomy.contracts import DecisionKind, EventType, Group  # noqa: E402
 from autonomy.data.folder import StateFolder  # noqa: E402
 from autonomy.decide.bidders import contact_harm_of  # noqa: E402
 from autonomy.proof.split import group_assigner  # noqa: E402
+from autonomy.runtime.agent import AgentPolicy  # noqa: E402
 from autonomy.runtime.service import AutonomyRuntime, RuntimeConfig, TickReport  # noqa: E402
 from autonomy.runtime.settings import workspace_policy_factory  # noqa: E402
 
@@ -43,6 +44,7 @@ from autonomy.runtime.settings import workspace_policy_factory  # noqa: E402
 def harm_view(rt: AutonomyRuntime) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for gid, (_, pol) in sorted(rt._policies.items()):
+        assert isinstance(pol, AgentPolicy), "the workspace policy factory builds an AgentPolicy"
         h = contact_harm_of(pol.bundle.response, create=False)
         if h is None:
             out[gid] = None

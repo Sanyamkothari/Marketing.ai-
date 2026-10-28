@@ -46,8 +46,8 @@ for _p in (str(HERE), str(HERE.parents[1])):
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-from b_adapters import DATASETS, FAMILY_B, adapt  # noqa: E402
-from b_common import Clock, command_line, env_info, peak_rss_mb, write_result  # noqa: E402
+from b_adapters import FAMILY_B, adapt  # noqa: E402
+from b_common import DATASETS, Clock, command_line, env_info, peak_rss_mb, write_result  # noqa: E402
 
 from autonomy.catalog.cycle import CycleModel, backtest_last_interval, calibrate_at_cutoff  # noqa: E402
 from autonomy.catalog.evaluate import _last_bought, evaluate  # noqa: E402
