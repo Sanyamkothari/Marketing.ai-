@@ -565,3 +565,52 @@ def test_a_group_by_on_an_already_unique_key_cannot_hide_a_rewrite_from_the_meas
     )
     changed, out_of = measure_step(frame, hide, primary_key="CustomerID", target=None)
     assert changed > 0 and out_of > 0
+
+
+# ---------------------------------------------------------------------------
+# Kept receipts: a changed plan counts only the steps whose input changed
+# ---------------------------------------------------------------------------
+class _Memo:
+    def __init__(self) -> None:
+        self.kept: dict[str, Any] = {}
+
+    def get(self, key: str) -> Any:
+        return self.kept.get(key)
+
+    def put(self, key: str, receipt: Any) -> None:
+        self.kept[key] = receipt
+
+
+def test_a_changed_plan_counts_only_the_steps_whose_input_changed(monkeypatch: pytest.MonkeyPatch) -> None:
+    counted: list[int] = []
+    real = guards.make_receipt
+
+    def counting(order: int, *args: Any, **kwargs: Any) -> Any:
+        counted.append(order)
+        return real(order, *args, **kwargs)
+
+    monkeypatch.setattr(guards, "make_receipt", counting)
+    frame = pd.DataFrame(
+        {"id": range(200), "batch": [i % 4 for i in range(200)], "y": [i % 2 for i in range(200)]}
+    )
+    memo = _Memo()
+
+    def plan(*batches: int) -> list[RecipeStep]:
+        return [
+            RecipeStep(
+                order=n,
+                kind=RecipeStepKind.REMOVE_ROWS,
+                column="batch",
+                params={"operator": "equals", "values": [b]},
+            )
+            for n, b in enumerate(batches, start=1)
+        ]
+
+    first = run_guarded(frame, plan(1, 2), primary_key="id", target="y", memo=memo, **RUN)
+    assert counted == [1, 2]  # (the second, repeat run only compares hashes)
+    again = run_guarded(frame, plan(1, 2), primary_key="id", target="y", memo=memo, **RUN)
+    assert counted == [1, 2] and again.receipts == first.receipts, "the same plan is not counted again"
+    changed = run_guarded(frame, plan(1, 3), primary_key="id", target="y", memo=memo, **RUN)
+    assert counted == [1, 2, 2], "only the step that changed was counted"
+    assert changed.receipts[0] == first.receipts[0] and changed.receipts[1] != first.receipts[1]
+    assert run_guarded(frame, plan(1, 3), primary_key="id", target="y", **RUN).receipts == changed.receipts

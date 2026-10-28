@@ -31,7 +31,7 @@ import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, Protocol
 
 import pandas as pd
 from pandas.api import types as pdt
@@ -60,6 +60,7 @@ __all__ = [
     "Ledger",
     "NotMeasurableError",
     "Receipt",
+    "ReceiptMemo",
     "Triage",
     "acknowledge",
     "build_ledger",
@@ -1031,6 +1032,31 @@ def _sql_of(step: RecipeStep) -> str | None:
     return text if isinstance(text, str) else None
 
 
+class ReceiptMemo(Protocol):
+    """Receipts kept by what a step read and did, so a plan that changed one step does not count the others again.
+
+    The key (:func:`_receipt_key`) is the digest of the table the step read, the step itself, and everything else the
+    receipt is counted by; a receipt holds counts, codes and column names only, never a cell value."""
+
+    def get(self, key: str) -> Receipt | None: ...
+
+    def put(self, key: str, receipt: Receipt) -> None: ...
+
+
+def _receipt_key(
+    step: RecipeStep,
+    read: str,
+    other_inputs: Mapping[str, pd.DataFrame],
+    *,
+    counted_by: Sequence[object],
+) -> str:
+    """The memo key of a step's receipt: the digest of what it read (`read`, plus the other tables a query reads),
+    the step with its order, and `counted_by` (the ID, outcome, positive value, side-table flag, SQL and date).
+    """
+    others = {name: frame_hash(table) for name, table in sorted(other_inputs.items())}
+    return sha256_hex(canonical_bytes([read, step.model_dump(mode="json"), others, counted_by]))[:32]
+
+
 def run_guarded(
     frame: pd.DataFrame,
     steps: Sequence[RecipeStep],
@@ -1044,6 +1070,7 @@ def run_guarded(
     twice: bool = True,
     source_name: str | None = None,
     watch: Callable[[RecipeStep, pd.DataFrame, pd.DataFrame], None] | None = None,
+    memo: ReceiptMemo | None = None,
     **recipe_args: Any,
 ) -> GuardedRun:
     """`run_recipe`, with a receipt for every step, the plan's ledger and the findings; run twice by default.
@@ -1054,6 +1081,10 @@ def run_guarded(
     `expectations` (by step order) are locked in `book` before the plan runs. `watch(step, before, after)` sees each
     step's input and output once, on the first run (the preview takes its sample rows from it). Raises what
     `run_recipe` raises.
+
+    With a `memo`, a step whose input table, payload and roles are the ones of a receipt already kept takes that
+    receipt instead of counting its tables again (the counting is what costs on a big file); the step itself still
+    runs, so the tables and their hashes are always this run's own. The second run only compares hashes.
     """
     book = book if book is not None else ExpectationBook()
     side_table = (source_name or "this file") if names_a_log_row(primary_key) else None
@@ -1066,20 +1097,40 @@ def run_guarded(
         hashes: list[str] = []
 
         def observe(step: RecipeStep, before: pd.DataFrame, after: pd.DataFrame) -> None:
-            receipts.append(
-                make_receipt(
-                    step.order,
-                    step.kind.value,
-                    _inputs_of(step, before, tables),
-                    after,
-                    key=None if side_table else primary_key,
-                    target=target,
-                    positive=positive,
-                    infer=side_table is None,
-                    sql=_sql_of(step),
-                    as_of=_as_of_of(step, before, tables, recipe_args.get("as_of")),
-                )
-            )
+            if watching:  # the second run is only compared by its hashes
+                inputs = _inputs_of(step, before, tables)
+                as_of = _as_of_of(step, before, tables, recipe_args.get("as_of"))
+                found: Receipt | None = None
+                address = ""
+                if memo is not None:
+                    counted_by = [
+                        None if side_table else primary_key,
+                        target,
+                        None if positive is None else str(positive),
+                        side_table is None,
+                        _sql_of(step),
+                        as_of.isoformat() if as_of else None,
+                    ]
+                    read = hashes[-1] if hashes else frame_hash(before)
+                    others = {n: f for n, f in inputs.items() if f is not before}
+                    address = _receipt_key(step, read, others, counted_by=counted_by)
+                    found = memo.get(address)
+                if found is None:
+                    found = make_receipt(
+                        step.order,
+                        step.kind.value,
+                        inputs,
+                        after,
+                        key=None if side_table else primary_key,
+                        target=target,
+                        positive=positive,
+                        infer=side_table is None,
+                        sql=_sql_of(step),
+                        as_of=as_of,
+                    )
+                    if memo is not None:
+                        memo.put(address, found)
+                receipts.append(found)
             hashes.append(frame_hash(after))
             if watching and watch is not None:
                 watch(step, before, after)

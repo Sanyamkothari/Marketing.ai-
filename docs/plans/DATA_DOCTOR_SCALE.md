@@ -15,8 +15,16 @@ Date: 2026-10-27. Roadmap 2.3 (`DATA_DOCTOR_ROADMAP.md`).
   (`FULL_CHECK_FAILED` on the screen) Approve starts the count again.
 * A remote job runner (SageMaker) cannot take the closure, so there the count stays inline as before.
 
-Not done: re-running only the rules a change touches / caching rule results by table digest (second row of 2.3). Only
-the whole-file count is cached (by plan).
+* The receipts are cached by step too (`ReceiptMemo` in `engine/doctor/guards.py`, kept by `StoredReceipts` in
+  `full_count.py` as `full_count/receipts/<key>.json`). The key is the digest of the table the step read, the step with
+  its order, and what the receipt is counted by (ID, outcome, positive value, SQL, date), plus the digests of the other
+  tables a query reads. A changed plan counts only the steps from the changed one on; the steps before it take their
+  kept receipts. The repeat run of the guards only compares hashes now, so it no longer builds receipts. Receipts hold
+  counts, codes and column names only.
+
+Not done: the steps themselves still run on the whole file for every changed plan (only their counting is skipped).
+Skipping the run needs the tables kept between ticks, which on a big file is a memory and storage cost this does not
+take on. Findings are not cached: they are worked out from the receipts, which is cheap.
 
 ## Measurement
 

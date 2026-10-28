@@ -25,6 +25,7 @@ from engine.config import StrictBase
 from engine.contracts import RunState
 from engine.doctor.case import Case, CaseItem, case_dir
 from engine.doctor.diagnose import LoadedFile
+from engine.doctor.guards import Receipt
 from engine.doctor.materialize import Full, materialize
 from engine.doctor.plan_check import plan_check_of, recipe_steps_of
 from engine.doctor.visit_contracts import PlanCheck
@@ -37,6 +38,7 @@ __all__ = ["FullCount", "FullCountRunner", "full_count_key", "full_count_of"]
 
 _LOGGER = get_logger(__name__)
 FULL_COUNT_DIRNAME: Final[str] = "full_count"
+RECEIPTS_DIRNAME: Final[str] = "receipts"
 FullCountState = Literal["pending", "running", "done", "failed"]
 
 
@@ -66,6 +68,30 @@ def full_count_of(storage: Storage, case: Case, basis: str) -> FullCount | None:
         return storage.read_model(key, FullCount) if storage.exists(key) else None
     except (StorageError, ValueError):
         return None
+
+
+class StoredReceipts:
+    """The receipts of the steps counted on the whole file, kept next to the case by what each step read
+    (:class:`engine.doctor.guards.ReceiptMemo`): a plan that changed one step counts only that step and the ones
+    after it again. Counts, codes and column names only. A record that cannot be read is simply counted again.
+    """
+
+    def __init__(self, storage: Storage, case: Case) -> None:
+        self._storage = storage
+        self._prefix = f"{case_dir(case.client_id, case.case_id)}{FULL_COUNT_DIRNAME}/{RECEIPTS_DIRNAME}/"
+
+    def get(self, key: str) -> Receipt | None:
+        name = f"{self._prefix}{key}.json"
+        try:
+            return self._storage.read_model(name, Receipt) if self._storage.exists(name) else None
+        except (StorageError, ValueError):
+            return None
+
+    def put(self, key: str, receipt: Receipt) -> None:
+        try:
+            self._storage.write_model(f"{self._prefix}{key}.json", receipt)
+        except StorageError:
+            _LOGGER.warning("a step receipt could not be kept; it is counted again next time")
 
 
 class FullCountRunner:
@@ -128,6 +154,8 @@ class FullCountRunner:
         prefix = full_count_key(case.client_id, case.case_id, "")
         for key in self._storage.list_keys(prefix):
             other = key.removeprefix(prefix).removesuffix(".json")
+            if "/" in other:  # the kept step receipts, not a count
+                continue
             found = full_count_of(self._storage, case, other) if other != basis else None
             if found is not None and found.state in {"pending", "running"}:
                 self._jobs.cancel(found.job_id)
@@ -161,7 +189,14 @@ class FullCountRunner:
                 self._write(case, state)
 
             try:
-                prepared = materialize(case, items, load_full(case), Full(), watch=counted)
+                prepared = materialize(
+                    case,
+                    items,
+                    load_full(case),
+                    Full(),
+                    watch=counted,
+                    memo=StoredReceipts(self._storage, case),
+                )
                 check = plan_check_of(prepared, basis=count.basis)
             except Exception as exc:  # the record says it failed; the traceback goes to the log
                 _LOGGER.exception("whole-file count %s failed", count.job_id)
