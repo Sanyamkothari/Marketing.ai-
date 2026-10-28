@@ -17,6 +17,7 @@ from __future__ import annotations
 import threading
 import uuid
 from collections.abc import Callable, Sequence
+from datetime import timedelta
 from typing import Final, Literal
 
 from pydantic import AwareDatetime, Field
@@ -94,6 +95,21 @@ class StoredReceipts:
             _LOGGER.warning("a step receipt could not be kept; it is counted again next time")
 
 
+PENDING_GRACE: Final[timedelta] = timedelta(seconds=10)
+"""A `pending` record this young is alive even when the job runner does not know its job yet (the record is written
+just before the job is submitted), so a read in that gap does not mark it failed."""
+
+_LOCKS_GUARD: Final[threading.Lock] = threading.Lock()
+_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _case_lock(client_id: str, case_id: str) -> threading.Lock:
+    """One lock per case for the whole process: the routes build a runner per request, so the lock cannot be the
+    runner's own (the UI poll and Approve, or two tabs, would both start a count of the same plan)."""
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(f"{client_id}/{case_id}", threading.Lock())
+
+
 Extra = Callable[[Case, Sequence[LoadedFile]], tuple[PlanFinding, ...]]
 """Flags read on the whole files beside the plan's count, added to its findings."""
 
@@ -104,14 +120,14 @@ class FullCountRunner:
     def __init__(self, storage: Storage, jobs: JobRunner) -> None:
         self._storage = storage
         self._jobs = jobs
-        self._lock = threading.Lock()
 
     def current(self, case: Case, basis: str) -> FullCount | None:
         """The stored count for `basis`; a count recorded as running by a process that is gone reads as failed."""
         found = full_count_of(self._storage, case, basis)
         if found is None:
             return None
-        if found.state in {"pending", "running"} and not self._alive(found.job_id):
+        young = found.state == "pending" and utc_now() - found.started_at < PENDING_GRACE
+        if found.state in {"pending", "running"} and not young and not self._alive(found.job_id):
             found = found.model_copy(
                 update={
                     "state": "failed",
@@ -136,7 +152,7 @@ class FullCountRunner:
         `retry` (Approve is the retry), so a screen that is read again and again does not loop on a failure.
         `extra` adds flags read on the same whole files to the count (the history check of `engine.doctor.history`).
         """
-        with self._lock:
+        with _case_lock(case.client_id, case.case_id):
             found = self.current(case, basis)
             if found is not None and (found.state != "failed" or not retry):
                 return found
@@ -157,7 +173,7 @@ class FullCountRunner:
 
     def _cancel_others(self, case: Case, basis: str) -> None:
         """The plan changed: a count still under way for another plan is of no use, so it is stopped."""
-        prefix = full_count_key(case.client_id, case.case_id, "")
+        prefix = f"{case_dir(case.client_id, case.case_id)}{FULL_COUNT_DIRNAME}/"
         for key in self._storage.list_keys(prefix):
             other = key.removeprefix(prefix).removesuffix(".json")
             if "/" in other:  # the kept step receipts, not a count

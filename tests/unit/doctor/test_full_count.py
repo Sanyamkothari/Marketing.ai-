@@ -123,3 +123,115 @@ def test_a_failed_check_is_said_and_approve_tries_it_again(tmp_path: Path) -> No
         assert case.visit.plan_check.basis is not None
     finally:
         jobs.shutdown()
+
+
+class _Jobs:
+    """A job runner that records submits and cancels and runs nothing (thread-safe enough for the test)."""
+
+    def __init__(self) -> None:
+        self.submitted: list[str] = []
+        self.cancelled: list[str] = []
+
+    def submit(self, job_id: str, fn: Any) -> None:
+        self.submitted.append(job_id)
+
+    def cancel(self, job_id: str) -> None:
+        self.cancelled.append(job_id)
+
+    def status(self, job_id: str) -> Any:
+        from types import SimpleNamespace
+
+        from engine.contracts import RunState
+
+        if job_id in self.submitted:
+            return SimpleNamespace(state=RunState.RUNNING)
+        raise KeyError(job_id)
+
+
+def test_two_requests_start_one_count(tmp_path: Path) -> None:
+    storage, _deps, case, jobs, gate = _walk(tmp_path)
+    gate.release.set()
+    jobs.shutdown()
+    items, _ = active_section(case)
+    fake = _Jobs()
+    barrier = threading.Barrier(2)
+
+    def ensure() -> None:
+        barrier.wait()
+        # a new runner per request, as the route builds it
+        FullCountRunner(storage, fake).ensure(case, items, "basis-two", load_full=gate)  # type: ignore[arg-type]
+
+    threads = [threading.Thread(target=ensure) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(fake.submitted) == 1
+
+
+def test_a_pending_record_just_written_is_alive_but_a_running_unknown_job_is_failed(tmp_path: Path) -> None:
+    from engine.doctor.full_count import FullCount
+    from engine.utils.time import utc_now
+
+    storage, _deps, case, jobs, gate = _walk(tmp_path)
+    gate.release.set()
+    jobs.shutdown()
+    runner = FullCountRunner(storage, _Jobs())  # type: ignore[arg-type]
+    young = FullCount(basis="b-young", job_id="unknown-1", state="pending", started_at=utc_now())
+    runner._write(case, young)
+    assert runner.current(case, "b-young").state == "pending"  # type: ignore[union-attr]
+    lost = FullCount(basis="b-lost", job_id="unknown-2", state="running", started_at=utc_now())
+    runner._write(case, lost)
+    gone = runner.current(case, "b-lost")
+    assert gone is not None and gone.state == "failed"
+    assert full_count_of(storage, case, "b-lost").state == "failed"  # type: ignore[union-attr]
+
+
+def test_a_changed_plan_cancels_the_old_count(tmp_path: Path) -> None:
+    storage, _deps, case, jobs, gate = _walk(tmp_path)
+    gate.release.set()
+    jobs.shutdown()
+    items, _ = active_section(case)
+    fake = _Jobs()
+    runner = FullCountRunner(storage, fake)  # type: ignore[arg-type]
+    old = runner.ensure(case, items, "plan-old", load_full=gate)
+    new = runner.ensure(case, items, "plan-new", load_full=gate)
+    assert fake.cancelled == [old.job_id] and new.job_id in fake.submitted
+    assert full_count_of(storage, case, "plan-new").basis == "plan-new"  # type: ignore[union-attr]
+
+
+def test_steps_done_grows_to_steps_total(tmp_path: Path) -> None:
+    storage, _deps, case, jobs, gate = _walk(tmp_path)
+    gate.release.set()
+    items, _ = active_section(case)
+    template = next(i for i in items if i.kind == "key")
+    items = (
+        *items,
+        *(
+            template.model_copy(
+                update={
+                    "item_id": f"recipe_step.{column}",
+                    "kind": "recipe_step",
+                    "payload": {"step": {"order": 1, "kind": kind, "column": column, "params": {}}},
+                }
+            )
+            for kind, column in (("normalise_text", "account_no"), ("drop_column", "visits_90d"))
+        ),
+    )
+    seen: list[tuple[str, int, int]] = []
+
+    class _Watched(FullCountRunner):
+        def _write(self, case: Case, count: Any) -> None:
+            seen.append((count.state, count.steps_done, count.steps_total))
+            super()._write(case, count)
+
+    try:
+        record = _Watched(storage, jobs).ensure(case, items, "plan-steps", load_full=gate)
+        jobs.wait(record.job_id, 10)
+    finally:
+        jobs.shutdown()
+    total = record.steps_total
+    assert total == 2
+    done = [n for state, n, _ in seen if state == "running"]
+    assert done == sorted(done) and seen[-1] == ("done", total, total)
+    assert max(done) == total
