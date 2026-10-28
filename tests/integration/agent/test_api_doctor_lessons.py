@@ -51,3 +51,20 @@ def test_retire_an_approved_lesson(client: TestClient, data_dir: Path) -> None:
     done = client.post(f"/doctor/lessons/{lesson.lesson_id}/retire")
     assert done.status_code == 200 and done.json()["lesson"]["status"] == "rejected"
     assert client.post("/doctor/lessons/ls_missing/retire").status_code == 404
+
+
+def test_an_owner_decision_names_the_lesson_in_the_audit(tmp_path: Path) -> None:
+    from engine.access.roles import Role
+    from engine.audit.events import AuditQuery
+    from tests.integration.production.access_support import audit_log_at, bearer, local_app, make_user
+
+    app = local_app(tmp_path)
+    headers = bearer(app, make_user(app, "owner", [Role.ADMIN]))
+    lesson = LessonStore(LocalStorage(tmp_path)).propose("Ask which date column is the order date first.")
+    with TestClient(app) as test_client:
+        assert (
+            test_client.post(f"/doctor/lessons/{lesson.lesson_id}/approve", headers=headers).status_code
+            == 200
+        )
+    events = audit_log_at(tmp_path).query(AuditQuery(action="doctor.lesson_approve"))
+    assert [(e.object_id, e.object_type) for e in events] == [(lesson.lesson_id, "doctor_lesson")]

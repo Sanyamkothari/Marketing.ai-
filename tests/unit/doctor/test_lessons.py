@@ -134,3 +134,70 @@ def test_an_approved_lesson_can_be_retired_to_make_room(tmp_path: Path) -> None:
     with pytest.raises(LessonError) as unknown:
         lessons.retire("ls_nope", "owner")
     assert unknown.value.code == "LESSON_NOT_FOUND"
+
+
+def test_a_bad_read_refuses_the_write_and_leaves_the_file(tmp_path: Path) -> None:
+    from engine.doctor.lessons import LESSONS_KEY
+
+    lessons = store(tmp_path)
+    kept = lessons.propose(GOOD)
+    lessons.decide(kept.lesson_id, True, "owner")
+    path = LocalStorage(tmp_path).local_path(LESSONS_KEY)
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(ValueError):
+        lessons.propose("Always ask what a negative amount means before netting it.")
+    assert path.read_text(encoding="utf-8") == "{not json"
+    assert lessons.all() == ()  # readers fall back; writers never do
+
+
+def test_two_threads_keep_both_writes(tmp_path: Path) -> None:
+    import threading
+
+    lessons = store(tmp_path)
+    first = lessons.propose(GOOD)
+    second = lessons.propose("Always ask what a negative amount means before netting it.")
+    barrier = threading.Barrier(2)
+
+    def approve(lesson_id: str) -> None:
+        barrier.wait()
+        lessons.decide(lesson_id, True, "owner")
+
+    threads = [threading.Thread(target=approve, args=(item.lesson_id,)) for item in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(item.status for item in lessons.all()) == ["approved", "approved"]
+
+
+def test_a_lesson_naming_the_case_is_refused() -> None:
+    words = ["CustomerID", "invoices_2011.csv", "invoices_2011", "Acme Retail"]
+    for text in (
+        "Treat Acme Retail rows as test data.",
+        "Read customerid as the key column.",
+        "Treat invoices_2011 as the order file.",
+    ):
+        with pytest.raises(LessonError):
+            check_lesson(text, words)
+    assert check_lesson(GOOD, words) == GOOD
+
+
+def test_a_lesson_is_capped_and_names_only_known_ids() -> None:
+    from engine.doctor.lessons import MAX_LINE_CHARS
+
+    assert check_lesson("Ask about refunds first, as R11 says.")
+    with pytest.raises(LessonError):
+        check_lesson("Ask about refunds first, as Q45 says.")
+    with pytest.raises(LessonError):
+        check_lesson(" ".join(["Supercalifragilisticexpialidocious"] * 6))
+    assert len(" ".join(["Supercalifragilisticexpialidocious"] * 6)) > MAX_LINE_CHARS
+
+
+def test_approved_lessons_reach_the_prompt_variables(tmp_path: Path) -> None:
+    from engine.doctor.actions import prompt_variables
+
+    lessons = store(tmp_path)
+    lessons.decide(lessons.propose(GOOD).lesson_id, True, "owner")
+    plain = prompt_variables("review")["guide_index"]
+    taught = prompt_variables("review", lessons=approved_lessons(LocalStorage(tmp_path)))["guide_index"]
+    assert GOOD not in plain and taught.startswith(plain) and GOOD in taught

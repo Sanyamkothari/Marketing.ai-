@@ -72,6 +72,7 @@ from engine.doctor.actions import prompt_variables
 from engine.doctor.decisions import decisions
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL
 from engine.doctor.guards import ExpectationBook, Expectations, Finding
+from engine.doctor.lessons import approved_lessons
 from engine.doctor.limits import limits
 from engine.doctor.protocol import DataRequest, ProtocolError, doubt_ask, express_doubt
 from engine.doctor.questions import QuestionError, build_ask, catalogue_lines
@@ -466,11 +467,14 @@ class _Review:
         prompt = load_prompt(PROMPT, self.config_root)
         tools = self._tools()
         goal = self.brief.goal_name if self.brief is not None else "see what these tables can be used for"
+        lessons = approved_lessons(self.storage)
         for step in range(self.max_steps + 1):
             variables = {
                 "goal": goal,
                 "tools": tools,
-                **prompt_variables("review", self.ctxs[0].config, config_root=self.config_root),
+                **prompt_variables(
+                    "review", self.ctxs[0].config, config_root=self.config_root, lessons=lessons
+                ),
                 "questions": catalogue_lines(),
                 "state": json.dumps(self.state, ensure_ascii=False),
                 "turn_results": (

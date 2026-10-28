@@ -42,6 +42,7 @@ from engine.agent.untrusted import clean_text, for_prompt
 from engine.doctor.actions import prompt_variables
 from engine.doctor.agent_apply import person_owns
 from engine.doctor.agent_review import _NoAnswerError, _Review
+from engine.doctor.lessons import approved_lessons
 from engine.doctor.protocol import DONT_KNOW, Ask, AskOption, question_id_of
 from engine.doctor.questions import catalogue_lines
 from engine.doctor.visit_contracts import OptionEffect
@@ -328,11 +329,15 @@ class _Chat(_Review):
         shown = json.dumps(self.state, ensure_ascii=False) + "\n" + history
         self.turn.sent.append(sent_item(self.gates[0], STATE_TOOL, {}, shown))
 
+        lessons = approved_lessons(self.storage)
+
         def variables_for(results: list[dict[str, Any]]) -> dict[str, Any]:
             return {
                 "goal": goal,
                 "tools": tools,
-                **prompt_variables("chat", self.ctxs[0].config, config_root=self.config_root),
+                **prompt_variables(
+                    "chat", self.ctxs[0].config, config_root=self.config_root, lessons=lessons
+                ),
                 "questions": catalogue_lines(chat=True),
                 "state": json.dumps(self.state, ensure_ascii=False),
                 "conversation": history,
@@ -593,11 +598,23 @@ class _Chat(_Review):
             self.turn.feedback.append({"lesson": "not yet: propose lessons once the case is ready"})
             return
         try:
-            lesson = LessonStore(self.storage).propose(args.get("text"), self.case.case_id)
+            lesson = LessonStore(self.storage).propose(
+                args.get("text"), self.case.case_id, self._case_words()
+            )
         except LessonError as exc:
             self.turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
             return
         self.turn.feedback.append({"lesson": "proposed: waits for the owner", "status": lesson.status})
+
+    def _case_words(self) -> list[str]:
+        """The case's column names, file names and profile top values, for the lesson check only (never sent)."""
+        words: list[str] = [f.file_name for f in self.case.files if f.file_name]
+        words += [f.file_name.rsplit(".", 1)[0] for f in self.case.files if f.file_name]
+        for ctx in self.ctxs:
+            for column in ctx.profile.columns:
+                words.append(column.name)
+                words += [top.value for top in column.top_categories]
+        return words
 
     def _withdraw(self, args: dict[str, Any]) -> None:
         item = self._own(str(args.get("item_id", "")))

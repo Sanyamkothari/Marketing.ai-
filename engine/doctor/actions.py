@@ -14,7 +14,7 @@ unchanged, so an action stays as strict or as lenient as it was.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal, get_args, get_origin
 
@@ -424,14 +424,22 @@ def prompt_variables(
     *,
     callable_: Callable[[ActionSpec], bool] | None = None,
     config_root: Any = None,
+    lessons: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """The generated variables of a Doctor prompt: `actions`, `step_kinds`, `doctor_limits` and `guide_index`."""
+    """The generated variables of a Doctor prompt: `actions`, `step_kinds`, `doctor_limits` and `guide_index`.
+
+    `lessons` (the owner-approved lessons, `engine.doctor.lessons.approved_lessons`) follow the guide index, so an
+    approved lesson reaches every prompt whether or not the AI reads the `lessons` guide.
+    """
     from engine.doctor.guides import index_text
+    from engine.doctor.lessons import lessons_text
     from engine.doctor.limits import prompt_limits
 
+    index = index_text(config_root)
+    learned = lessons_text(lessons)
     return {
         "actions": action_lines(surface, callable_=callable_),
         "step_kinds": step_kind_lines(surface),
         "doctor_limits": prompt_limits(config),
-        "guide_index": index_text(config_root),
+        "guide_index": f"{index}\n\n{learned}" if learned else index,
     }

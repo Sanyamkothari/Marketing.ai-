@@ -509,9 +509,10 @@ def list_lessons(storage: StorageDep) -> LessonList:
 
 
 def _decide(
-    lesson_id: str, approve: bool | None, storage: Storage, principal: PrincipalDep
+    request: Request, lesson_id: str, approve: bool | None, storage: Storage, principal: PrincipalDep
 ) -> LessonDecision:
-    """`approve` True or False decides a proposed lesson; None retires an approved one."""
+    """`approve` True or False decides a proposed lesson; None retires an approved one. The audit event names it."""
+    set_audit_context(request, object_id=lesson_id, object_type="doctor_lesson")
     try:
         store = LessonStore(storage)
         if approve is None:
@@ -533,8 +534,10 @@ def _decide(
     responses={**_ERRORS, 404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
     summary="Approve a proposed lesson: read_guide('lessons') shows it from now on",
 )
-def approve_lesson(lesson_id: str, storage: StorageDep, principal: PrincipalDep) -> LessonDecision:
-    return _decide(lesson_id, True, storage, principal)
+def approve_lesson(
+    request: Request, lesson_id: str, storage: StorageDep, principal: PrincipalDep
+) -> LessonDecision:
+    return _decide(request, lesson_id, True, storage, principal)
 
 
 @router.post(
@@ -543,8 +546,10 @@ def approve_lesson(lesson_id: str, storage: StorageDep, principal: PrincipalDep)
     responses={**_ERRORS, 404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
     summary="Reject a proposed lesson",
 )
-def reject_lesson(lesson_id: str, storage: StorageDep, principal: PrincipalDep) -> LessonDecision:
-    return _decide(lesson_id, False, storage, principal)
+def reject_lesson(
+    request: Request, lesson_id: str, storage: StorageDep, principal: PrincipalDep
+) -> LessonDecision:
+    return _decide(request, lesson_id, False, storage, principal)
 
 
 @router.post(
@@ -553,5 +558,7 @@ def reject_lesson(lesson_id: str, storage: StorageDep, principal: PrincipalDep) 
     responses={**_ERRORS, 404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
     summary="Retire an approved lesson: it leaves the guide and makes room for another",
 )
-def retire_lesson(lesson_id: str, storage: StorageDep, principal: PrincipalDep) -> LessonDecision:
-    return _decide(lesson_id, None, storage, principal)
+def retire_lesson(
+    request: Request, lesson_id: str, storage: StorageDep, principal: PrincipalDep
+) -> LessonDecision:
+    return _decide(request, lesson_id, None, storage, principal)
