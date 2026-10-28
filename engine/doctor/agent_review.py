@@ -82,6 +82,7 @@ from engine.doctor.registry import (
     Exposure,
     evidence_id_of,
 )
+from engine.doctor.row_contracts import StepProposal
 from engine.doctor.tools_features import parse_query_output
 from engine.doctor.tools_preview import M_PREVIEW_TOOLS
 from engine.doctor.tools_sql import SqlStepProposal
@@ -162,6 +163,8 @@ class _Turn:
     steps: list[tuple[int, ToolResult, Proposal]] = field(default_factory=list)
     queries: dict[str, _Sql] = field(default_factory=dict)
     """By output name: the latest try of each query."""
+    combines: dict[int, tuple[int, DataToolResult]] = field(default_factory=dict)
+    """By file index: the latest `propose_combine_rows` answer (file index, result)."""
     closed: set[str] = field(default_factory=set)
     asks: list[Ask] = field(default_factory=list)
     doubts: list[CaseDoubt] = field(default_factory=list)
@@ -516,6 +519,8 @@ class _Review:
             self._sql(args)
         elif name == "propose_features":
             self._features(action, args)
+        elif name == "propose_combine_rows":
+            self._combine_rows(action, args)
         elif name == "read_guide":
             self._guide(args)
         elif name == "ask_question":
@@ -704,6 +709,13 @@ class _Review:
 
         index = self._index(action, args)
         run_features(self, index, dict(self.gates[index].unalias_args(args)))
+
+    def _combine_rows(self, action: dict[str, Any], args: dict[str, Any]) -> None:
+        from engine.doctor.agent_reshape import run_combine_rows
+
+        index = self._index(action, args)
+        self._file_only(index)  # rows of a file, never of a table a query built
+        run_combine_rows(self, index, dict(self.gates[index].unalias_args(args)))
 
     def _ask(self, action: dict[str, Any], args: dict[str, Any]) -> None:
         turn = self.turn
@@ -924,6 +936,26 @@ class _Review:
                 )
             )
             out.append(query.result)
+        for index, combined in turn.combines.values():
+            step = StepProposal.model_validate(combined.output["step"])
+            items.append(
+                _item(
+                    "recipe_step",
+                    {
+                        "upload_id": self.ctxs[index].upload_id,
+                        "path": None,
+                        "value": None,
+                        "step": step.as_step(1).model_dump(mode="json"),
+                    },
+                    title=step.title,
+                    upload_id=self.ctxs[index].upload_id,
+                    confidence=AgentConfidence.CHECK,
+                    evidence=(combined.evidence_id,),
+                    now=now,
+                    source=ProposalSource.AI,
+                )
+            )
+            out.append(combined)
         return items, out
 
 

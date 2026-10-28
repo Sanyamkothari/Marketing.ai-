@@ -95,10 +95,20 @@ def test_one_row_per_id_has_nothing_to_combine() -> None:
     assert "nothing to combine" in caught.value.message
 
 
-def test_the_registry_offers_it_to_the_rules_and_the_person_never_ticked() -> None:
+def test_the_registry_offers_it_to_the_rules_the_ai_and_the_person_never_ticked() -> None:
     tool = data_registry().get("propose_combine_rows")
     assert tool.number == 87 and tool.step_kinds == (RecipeStepKind.COMBINE_ROWS,)
-    assert tool.callers == frozenset({"rules", "person"})
+    assert tool.callers == frozenset({"rules", "ai", "person"})
     from engine.doctor.policy import load_data_policy
 
     assert RecipeStepKind.COMBINE_ROWS in load_data_policy(None).never_ticked_steps
+
+
+def test_the_ai_action_is_offered_and_its_arguments_are_only_names() -> None:
+    from engine.doctor.actions import ACTIONS, ProposeCombineRowsArgs
+    from engine.doctor.agent_chat import _MAKES_CHANGES
+
+    spec = next(a for a in ACTIONS if a.name == "propose_combine_rows")
+    assert spec.surfaces == frozenset({"review", "chat"}) and spec.needs_file
+    assert set(ProposeCombineRowsArgs.model_fields) == {"time_column", "snapshot_column", "carry", "replaces"}
+    assert "propose_combine_rows" in _MAKES_CHANGES

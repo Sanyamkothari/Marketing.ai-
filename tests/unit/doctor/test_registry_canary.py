@@ -242,6 +242,9 @@ SPECS: dict[str, Calls | None] = {
             "amount_column": "amount",
         },
     ],
+    # Guided setup's reshape question as a Data Doctor tool (#87): the dates and carried columns named, on every column.
+    "propose_combine_rows": lambda columns: [{}, {"time_column": "signup_date"}]
+    + [{"time_column": column, "carry": [column]} for column in columns],
     "propose_sql_step": lambda _columns: [
         {
             "description": "Every customer row",
@@ -494,6 +497,12 @@ def _restore_patches() -> Any:
         setattr(module, name, original)
 
 
+def _repeating(ctx: AgentContext) -> AgentContext:
+    """The canary's event file as the file in hand: each ID is on several rows, dated, with planted text."""
+    events = _events(ctx)
+    return replace(ctx, frame=events, profile=_profile(ctx, events, EVENTS, "bills.csv"), target=None)
+
+
 def _gate(case: DataToolContext, mode: str) -> Egress:
     agent = case.agent
     assert agent is not None
@@ -529,6 +538,8 @@ def test_every_registered_tool_passes_the_canary(mode: str, tmp_path: Path) -> N
             try:
                 # A tool only the rules and the AI may call (the SQL step) runs as the rules do.
                 caller = case if case.caller in tool.callers else replace(case, caller="rules")
+                if tool.name == "propose_combine_rows":  # an ID repeats only in the event file
+                    caller = replace(caller, agent=_repeating(ctx), primary_key="customer_id")
                 result: dict[str, Any] = data_registry().call(tool.name, given, caller).output
                 answered[tool.name] = answered.get(tool.name, 0) + 1
             except AgentToolError as exc:  # a refusal is fed back to the model; it must be clean too

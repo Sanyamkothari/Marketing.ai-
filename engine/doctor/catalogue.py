@@ -148,7 +148,7 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     # P. Behaviour features from the point-in-time library (Step 7)
     _R(86, "propose_features", "propose", "rules + ai", "new"),
     # Q. Guided setup's reshape question, as a Data Doctor tool (merging Guided setup into the Data Doctor)
-    _R(87, "propose_combine_rows", "propose", "rules", "new"),
+    _R(87, "propose_combine_rows", "propose", "rules + ai", "new"),
 )
 """The design §5.5, row by row."""
 

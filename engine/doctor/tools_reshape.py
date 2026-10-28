@@ -218,7 +218,7 @@ def propose_combine_rows(given: ProposeCombineRowsInput, ctx: DataToolContext) -
 
 
 def register_reshape_tools(registry: DataToolRegistry) -> tuple[str, ...]:
-    """Register `propose_combine_rows` (catalogue #87), for the rules and the screen; its names."""
+    """Register `propose_combine_rows` (catalogue #87), for the rules, the AI and the screen; its names."""
     registry.register(
         DataTool(
             number=87,
@@ -238,7 +238,7 @@ def register_reshape_tools(registry: DataToolRegistry) -> tuple[str, ...]:
             ),
             exposure=Exposure.SESSION_ONLY,
             run=propose_combine_rows,
-            callers=frozenset({"rules", "person"}),
+            callers=frozenset({"rules", "ai", "person"}),
             needs=("agent",),
             policy_kind="data.propose_combine_rows",
             step_kinds=(RecipeStepKind.COMBINE_ROWS,),
