@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import calendar
 import threading
+import weakref
 from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -137,7 +138,6 @@ def _columns(frame: pd.DataFrame) -> tuple[str, str, str | None, str | None, str
 class _Events:
     """A frame read as events: its columns, and the customer and the day of every row that has both."""
 
-    frame: pd.DataFrame
     key: str
     when: str
     amount: str | None
@@ -147,18 +147,23 @@ class _Events:
     days: pd.Series[pd.Timestamp]
 
 
-_CACHE: OrderedDict[int, _Events | None] = OrderedDict()
+_CACHE: OrderedDict[int, tuple[weakref.ref[pd.DataFrame], _Events | None]] = OrderedDict()
 _CACHE_SIZE: Final[int] = 4
 _LOCK = threading.Lock()
 
 
 def _events(frame: pd.DataFrame) -> _Events | None:
     """`frame` as events, or None. Read once per frame: every goal asks, and reading the dates is the slow part.
-    The cache holds the frame itself, so an id is never reused while it is kept."""
+    An entry keeps a weak reference to its frame (a negative one too) and is used only while that reference still
+    reaches this very frame: an id that a freed frame left behind and a new frame took is never mistaken for it, and
+    the cache never keeps a frame alive."""
     with _LOCK:
-        if id(frame) in _CACHE:
-            _CACHE.move_to_end(id(frame))
-            return _CACHE[id(frame)]
+        entry = _CACHE.get(id(frame))
+        if entry is not None:
+            if entry[0]() is frame:
+                _CACHE.move_to_end(id(frame))
+                return entry[1]
+            del _CACHE[id(frame)]
     found = _columns(frame)
     events: _Events | None = None
     if found is not None:
@@ -169,9 +174,11 @@ def _events(frame: pd.DataFrame) -> _Events | None:
         days = pd.to_datetime(frame[when], errors="coerce", format=how)
         keep = (ids.notna() & days.notna()).to_numpy()
         if keep.any():
-            events = _Events(frame, key, when, amount, quantity, order, ids[keep], days[keep].dt.normalize())
+            events = _Events(key, when, amount, quantity, order, ids[keep], days[keep].dt.normalize())
     with _LOCK:
-        _CACHE[id(frame)] = events
+        for stale in [k for k, (ref, _e) in _CACHE.items() if ref() is None]:
+            del _CACHE[stale]
+        _CACHE[id(frame)] = (weakref.ref(frame), events)
         while len(_CACHE) > _CACHE_SIZE:
             _CACHE.popitem(last=False)
     return events

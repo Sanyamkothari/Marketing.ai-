@@ -518,6 +518,17 @@ def _fit(case: Case, goal_id: str, goal_name: str | None, verdict_key: str, verd
     if found is not None:
         ok = found.get("status") in _FITTING
         sentence = str(found.get("why") or found.get("summary") or verdict_next)
+        if found.get("status") == "buildable" and any(
+            i.kind == "recipe_step"
+            and i.goal_id == goal_id
+            and i.state is ProposalState.REJECTED
+            and "buildable" in i.payload
+            for i in case.items
+        ):  # the build was declined: it fits only once the column comes some other way
+            ok = False
+            sentence = (
+                "You declined building the outcome from the order history, so it needs a column saying it."
+            )
     else:
         ok = verdict_key != "not_ready"
         sentence = verdict_next

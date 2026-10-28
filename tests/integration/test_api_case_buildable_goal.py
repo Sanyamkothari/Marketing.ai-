@@ -177,3 +177,30 @@ def test_a_raw_order_log_fits_the_goal_as_buildable_then_builds(client: TestClie
         if c["id"] in {"ROWS_TOO_FEW", "TARGET_TOO_FEW_POSITIVES"}
     }
     assert floors == {"ROWS_TOO_FEW": "pass", "TARGET_TOO_FEW_POSITIVES": "pass"}, floors
+
+
+def test_a_declined_build_asks_for_the_column_instead(client: TestClient) -> None:
+    buffer = io.StringIO()
+    order_log().to_csv(buffer, index=False)
+    uploaded = client.post(
+        "/uploads",
+        files={"file": ("orders.csv", buffer.getvalue().encode(), "text/csv")},
+        data={"use_case": GOAL, "mode": "train"},
+    )
+    case_id = client.post("/cases", json={"upload_ids": [uploaded.json()["upload_id"]]}).json()["case_id"]
+    case = client.post(f"/cases/{case_id}/visit", json={}).json()
+    client.post(f"/cases/{case_id}/goal", json={"version": case["version"], "goal_id": GOAL, "op_id": "g1"})
+    case = settled(client, case_id)
+    (proposal,) = [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
+    declined = client.post(
+        f"/cases/{case_id}/decisions",
+        json={"version": case["version"], "item_id": proposal["item_id"], "accept": False},
+    )
+    assert declined.status_code == 200, declined.text
+    case = settled(client, case_id)
+    assert [i["state"] for i in case["items"] if i["kind"] == "recipe_step"] == ["rejected"]
+    assert any(q["code"] == "DATA_REQUESTED" and q["answer"] is None for q in case["questions"]), "the column"
+    assert any(d["doubt_id"].startswith("d.outcome_missing") for d in case.get("doubts", []))
+    view = client.get(f"/cases/{case_id}/screen").json()["view"]
+    (fit,) = [c for c in view["conversation"] if c.get("type") == "fit"]
+    assert fit["ok"] is False

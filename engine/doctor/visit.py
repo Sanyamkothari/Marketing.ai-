@@ -2505,7 +2505,8 @@ def _offer_build(
     after it, through the ordinary point-in-time `sql_query` step - instead of asking for a column. The step waits for
     the person's yes (never ticked); its own date is the training snapshot, and the case's as-of date (the scoring
     date) is checked against it as for any query. True when a proposal was made; False leaves the request to ask for
-    the column (the goal does not allow building, the table is too small, or the trial refused the query)."""
+    the column (the goal does not allow building, the table is too small, the trial refused the query, or the person
+    already declined this goal's build: it is not proposed again, and the column is asked for instead)."""
     from engine.agent.sql_step import table_alias
     from engine.config import load_use_case
     from engine.doctor.buildable import buildable_outcome, compile_build
@@ -2516,6 +2517,15 @@ def _offer_build(
     try:
         config = load_use_case(brief.goal_id, run.deps.config_root)
     except Exception:  # a goal whose configuration cannot be read is asked for the column, as before
+        return False
+    declined = any(
+        i.kind == "recipe_step"
+        and i.goal_id == brief.goal_id
+        and i.state is ProposalState.REJECTED
+        and "buildable" in i.payload
+        for i in active_section(case)[0]
+    )
+    if declined:
         return False
     built = buildable_outcome(files, config, run.deps.config_root)
     if built is None or not built.enough or built.snapshot is None:

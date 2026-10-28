@@ -99,3 +99,11 @@ def test_a_date_column_the_plan_already_parsed_is_still_the_date(config_root: Pa
     found = buildable_outcome([loaded(parsed, config_root)], config, config_root)
     assert found is not None and found.time_column == "order_date" and found.enough
     assert found.amount_column == "unit_price", "the date is not offered as an amount"
+
+
+def test_a_freed_frames_verdict_is_never_handed_to_a_new_frame(config_root: Path) -> None:
+    from engine.doctor.buildable import _events
+
+    for _ in range(50):  # a freed frame's id is reused soon: the new event table must still read as events
+        assert _events(pd.DataFrame({"x": [1, 2, 3]})) is None
+        assert _events(pd.DataFrame(log(300).to_dict("list"))) is not None
