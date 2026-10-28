@@ -185,7 +185,6 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "brand_logo_url",
     "brand_logo_alt",
     "brand_color",
-    "data_doctor_unified",
 )
 """Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 

@@ -1329,6 +1329,9 @@ class UseCaseConfig(_Base):
     name: Annotated[str, Field(min_length=1)]
     description: str = ""
     lifecycle_stage: Annotated[str, Field(min_length=1)]
+    # The id of the use case this one repeats (the same outcome, offered twice): Data Doctor still offers it and says
+    # the same files also fit that goal. Empty for a goal that stands on its own.
+    duplicates: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$")] | None = None
     ai_type: AiType = AiType.PREDICTIVE
     problem_type: ProblemType = ProblemType.BINARY_CLASSIFICATION
     entity: Annotated[str, Field(min_length=1)] = "customer"
@@ -1972,7 +1975,18 @@ def leaf_paths(document: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 IMMUTABLE_PATHS: Final[frozenset[str]] = frozenset(
-    {"id", "name", "description", "lifecycle_stage", "ai_type", "entity", "template", "ui", "output"}
+    {
+        "id",
+        "name",
+        "description",
+        "lifecycle_stage",
+        "duplicates",
+        "ai_type",
+        "entity",
+        "template",
+        "ui",
+        "output",
+    }
 )
 EXTRA_OVERRIDABLE_PATHS: Final[frozenset[str]] = frozenset(
     {

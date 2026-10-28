@@ -42,15 +42,6 @@ const CSS = `
 .dt .dt-ai{margin:0 0 var(--s4);font-size:var(--fs-small);color:var(--ink2)}
 .dt .dt-ai a{color:var(--brand-blue);font-weight:500}
 
-/* Check my data: a calm card, one action */
-.dt .dt-check{max-width:720px;padding:var(--s5) var(--s5) var(--s5)}
-.dt .dt-check-h{display:flex;align-items:flex-start;gap:var(--s4);margin-bottom:var(--s4)}
-.dt .dt-check h2{margin:0 0 var(--s1);font-size:var(--fs-section);line-height:var(--lh-section);font-weight:600;color:var(--ink)}
-.dt .dt-check p{margin:0;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--ink2)}
-.dt .dt-points{list-style:none;margin:0 0 var(--s4);padding:0;display:flex;flex-direction:column;gap:var(--s3)}
-.dt .dt-points li{display:flex;align-items:flex-start;gap:var(--s3);font-size:var(--fs-body);line-height:var(--lh-body);color:var(--ink2)}
-.dt .dt-points svg{margin-top:2px;color:var(--brand-blue)}
-.dt .dt-after{margin-bottom:var(--s4)!important;color:var(--muted)!important}
 /* a phone (or any coarse pointer): every action is a 40px target, with room between Edit and Delete */
 @media (max-width:700px),(pointer:coarse){
 .dt .dt-actions .btn.sm,.dt .dt-kind .btn.sm,.dt .dt-more .btn.sm,.dt .cn-confirm .btn.sm{min-height:40px;height:40px;padding:0 var(--s3)}
@@ -60,8 +51,6 @@ const CSS = `
 .dt .dt-row{grid-template-columns:40px minmax(0,1fr);align-items:start;padding:var(--s4)}
 .dt .dt-row>.dt-cell,.dt .dt-row>.dt-actions{grid-column:2}
 .dt .dt-actions{justify-content:flex-start;margin-left:calc(var(--s1) * -1)}
-.dt .dt-check{padding:var(--s4)}
-.dt .dt-check-h{flex-direction:column;gap:var(--s3)}
 }
 `;
 

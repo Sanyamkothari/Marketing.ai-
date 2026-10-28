@@ -124,7 +124,7 @@ class UseCaseReadiness(StrictBase):
     also_fits: str | None = Field(
         default=None,
         description=(
-            "The Home goal this one overlaps (same lifecycle stage), by name: this goal is still offered, and the "
+            "The Home goal this one repeats (its config's `duplicates`), by name: this goal is still offered, and the "
             "person sees that the same files also fit that goal. Null for Home's own goals."
         ),
         exclude_if=lambda value: value is None,

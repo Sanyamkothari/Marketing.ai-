@@ -1,5 +1,5 @@
 // The one Data Doctor screen (Plan O M247, DEC-1817; the design §13): one component, opened on a case, in three
-// places, behind `data_doctor.unified`:
+// places:
 //
 //   the Data page          `#/data/check`: the newest case (or a new one), with no goal; "Choose this goal" sets the
 //                          goal on the same case and continues in the "New campaign" wizard, where nothing answered
@@ -11,8 +11,7 @@
 //   a goal's setup         the Setup tab of `#/uc/<goal>`, in the same two places Guided setup mounts into.
 //
 // The wizard and a goal's setup reach it through Guided setup's own mount (`../agent/guided.js` `mountGuided` hands
-// over when the switch is on), so the screen sits exactly where Guided setup sat and no route or page changes.
-// With the switch off nothing here is drawn and Guided setup is unchanged.
+// over), so the screen sits where Guided setup sat and no route or page changes.
 //
 // The way in is a chat (`chat.js`): the server's `view.conversation` as cards, a composer, the data beside it and ONE
 // "Approve and start" card (`approveAndStart`). "See details (for experts)" opens the full plan view below it, as it

@@ -267,7 +267,9 @@ def test_a_brand_colour_reaches_every_new_brand_coloured_thing_of_these_pages(
         _recolour(data)
         assert _style(data, ".dt-ico", "color") == GREEN_RGB, "the type icons"
         assert _is_greenish(_style(data, ".dt-ico", "backgroundColor")), "and their tint"
-        assert _style(data, "#dt-add", "backgroundColor") == GREEN_RGB, "+ Add a source"
+        assert (
+            _style(data, "[data-dt-connect] .btn.primary", "backgroundColor") == GREEN_RGB
+        ), "Connect your data"
     finally:
         data.context.close()
     settings = _open(browser, base, "#/settings", 1440)
@@ -325,7 +327,7 @@ def test_on_a_phone_every_row_action_is_a_40px_target(browser: Any, base: str) -
         models.context.close()
     data = _open(browser, base, "#/data", 390, 844)
     try:
-        data.click("#dt-add")
+        data.click("[data-dt-open-chooser]")
         data.wait_for_timeout(300)
         assert _small_targets(data, "#dt-chooser .btn") == []
     finally:

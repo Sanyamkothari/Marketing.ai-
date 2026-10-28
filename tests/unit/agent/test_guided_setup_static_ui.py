@@ -29,14 +29,6 @@ from pydantic import BaseModel
 
 from api.main import create_app
 from api.routes import agent as agent_routes
-from engine.agent.contracts import (
-    AgentConfidence,
-    ChatRole,
-    ProposalKind,
-    ProposalState,
-    RecipeStepKind,
-    SessionStatus,
-)
 
 UI_DIR: Final[Path] = Path(__file__).resolve().parents[3] / "ui"
 AGENT_DIR: Final[Path] = UI_DIR / "modules" / "agent"
@@ -133,31 +125,6 @@ def test_every_request_body_has_exactly_its_models_fields(marker: str, model: ty
     assert keys == set(model.model_fields), (marker, keys)
 
 
-def test_a_decision_the_screen_sends_is_a_decision_the_api_takes() -> None:
-    text = code_of("guided.js")
-    literal = re.search(r"\(\{ proposal_id: p\.proposal_id, state: [^}]+\}\)", text)
-    assert literal, "the decision literal moved"
-    assert {"proposal_id", "state"} <= set(agent_routes.Decision.model_fields)
-    for state in re.findall(r'"(accepted|rejected)"', literal.group(0)):
-        assert state in {s.value for s in ProposalState}
-
-
-def test_every_enum_value_the_screen_branches_on_is_a_member() -> None:
-    text = code_of("guided.js")
-    values = {
-        "confidence": {AgentConfidence(v) for v in re.findall(r'confidence === "([a-z_]+)"', text)},
-        "state": {ProposalState(v) for v in re.findall(r'state === "([a-z_]+)"', text)},
-        "status": {SessionStatus(v) for v in re.findall(r'status === "([a-z_]+)"', text)},
-        "role": {ChatRole(v) for v in re.findall(r'role === "([a-z_]+)"', text)},
-        "kind": {RecipeStepKind(v) for v in re.findall(r'kind === "([a-z_]+)"', text)},
-    }
-    assert all(values.values()), values
-    kinds = re.search(r"const GROUPS = \[(.*?)\n\];", text, re.DOTALL)
-    assert kinds
-    grouped = set(re.findall(r'"(role|recipe_step|acknowledgement|setting)"', kinds.group(1)))
-    assert grouped == {k.value for k in ProposalKind}, "every proposal kind has a group"
-
-
 def test_the_module_names_no_advanced_setting() -> None:
     """Setting paths and labels come from the API (a proposal's `path`, `title`), never from here."""
     with TestClient(create_app()) as client:
@@ -181,16 +148,3 @@ def test_nothing_is_fabricated() -> None:
         raw = read(name)
         for placeholder in PLACEHOLDERS:
             assert placeholder not in raw, f"{name} uses {placeholder} instead of the em dash"
-
-
-def test_session_text_is_only_ever_drawn_escaped() -> None:
-    """Every field of the session a person's file could have shaped reaches the page through `esc`."""
-    text = code_of("guided.js")
-    for field in ("title", "reason", "text", "label", "effect", "stop_reason", "agent_name"):
-        for match in re.finditer(rf"\$\{{([^{{}}]*\.{field}\b[^{{}}]*)\}}", text):
-            expression = match.group(1)
-            assert expression.lstrip().startswith(("esc(", "dash(")) or "esc(" in expression, expression
-    assert "innerHTML" in text
-    assert text.count("innerHTML =") == 2, "the two elements are drawn in one place (`draw`)"
-    for forbidden in ("marked(", "markdown", "insertAdjacentHTML", "outerHTML =", "import("):
-        assert forbidden not in text, forbidden

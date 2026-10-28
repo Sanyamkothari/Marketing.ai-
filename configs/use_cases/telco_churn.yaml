@@ -2,6 +2,7 @@ id: telco-churn
 name: Telco Customer Churn
 description: Scores every subscriber on how likely they are to leave, so retention offers reach the accounts most at risk.
 lifecycle_stage: Churn
+duplicates: rca                          # the same churn outcome Home already offers
 entity: subscriber                       # the engine's copy says "one row per subscriber"; config, not code
 
 # Plan section 10's public-dataset smoke test: the Kaggle Telco Customer Churn file

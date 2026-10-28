@@ -1,14 +1,13 @@
 /* The Data page's look (Plan M M188, DEC-1618) in jsdom, against REAL bodies (PB_FIXTURES, written by
    tests/integration/data_page/test_data_ui.py): what the markup must say for the CSS to draw it and for a screen reader
-   to read it. The words and the actions are sources.test.mjs's, actions.test.mjs's and check.test.mjs's business.
+   to read it. The words and the actions are sources.test.mjs's and actions.test.mjs's business.
 
-   - the header is components.js's, with "+ Add a source" the one primary action on the right (Sources), and no header
-     action on Check my data, whose card holds its one;
+   - the header is components.js's, with no action of its own: "Connect your data" is the one primary action;
    - underline tabs with the tab roles; the current one is also aria-current="page", as a link to a page is;
    - every source row has a type icon (a file or a connection) that screen readers skip - the words say the type - and
      a health chip: an icon hidden from screen readers and a word, in the tone of the status mapping;
    - rows, files and connections alike, keep rows/columns/size as quiet meta and the date as its own cell;
-   - the empty state has an icon, a sentence and one action. */
+   - the empty state has an icon and a sentence. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { $, $$, fixture, installPage } from "../harness.mjs";
@@ -37,17 +36,14 @@ async function show(hash) {
 }
 const row = (id) => $(`[data-dt-id="${id}"]`);
 
-test("the header is the look's: the title, one sentence, and + Add a source as the one primary action", async () => {
+test("the header is the look's: the title and one sentence; the connect card holds the one primary action", async () => {
   await show("#/data");
   const header = $("main > .page-header");
   assert.ok(header, "components.js pageHeader");
   assert.equal(header.querySelectorAll("h1").length, 1);
-  const primary = header.querySelectorAll(".ph-actions .btn.primary");
-  assert.equal(primary.length, 1);
-  assert.equal(text(primary[0]), "+ Add a source");
-  assert.equal(primary[0].getAttribute("aria-controls"), "dt-chooser");
+  assert.equal(header.querySelectorAll(".btn").length, 0, "no header action");
   assert.equal($$("main .btn.primary").length, 1, "the only one on the page");
-  assert.equal(header.querySelectorAll(".ph-actions .btn.secondary").length, 1, "Check my data is a secondary button beside it");
+  assert.equal(text($("[data-dt-connect] .btn.primary")), "Connect your data");
   assert.equal($(".crumbs"), null, "Data is a top-level place: no breadcrumb");
 });
 
@@ -56,7 +52,7 @@ test("the tabs are underline tabs with the tab roles; the current one is also ar
   assert.ok(list && list.classList.contains("ds-tabs"));
   assert.equal(list.getAttribute("aria-label"), "Data sections");
   const tabs = [...list.querySelectorAll('[role="tab"]')];
-  assert.deepEqual(tabs.map(text), ["Sources", "Check my data"]);
+  assert.deepEqual(tabs.map(text), ["Sources", "Data Doctor"]);
   assert.deepEqual(tabs.map((t) => t.getAttribute("aria-selected")), ["true", "false"]);
   assert.deepEqual(tabs.map((t) => t.getAttribute("tabindex")), ["0", "-1"]);
   assert.equal(tabs[0].getAttribute("aria-current"), "page");
@@ -124,7 +120,7 @@ test("Add a source: one card with a tile per kind, each with its icon and one sm
   assert.equal(chooser.querySelectorAll(".card").length, 0, "no card inside the card");
 });
 
-test("an installation with no sources: an empty state with an icon, one sentence and one action, in one card", async () => {
+test("an installation with no sources: an empty state with an icon and one sentence, in one card", async () => {
   const saved = { c: world.connections, u: world.uploads };
   world.connections = [];
   world.uploads = [];
@@ -132,31 +128,8 @@ test("an installation with no sources: an empty state with an icon, one sentence
   const empty = $(".empty-state");
   assert.ok(empty.closest(".card"), "it sits in a card, not on the bare canvas");
   assert.ok(empty.querySelector(".es-icon svg"), "an icon");
-  assert.equal(empty.querySelectorAll("a.btn, button.btn").length, 1, "one action");
-  // M188 review 13: the action is the header's way forward: it opens the same "Add a source" chooser.
-  const action = empty.querySelector("button.btn");
-  assert.equal(action.textContent.trim(), "Add a source");
-  assert.equal(action.getAttribute("aria-controls"), "dt-chooser");
-  assert.equal($("#dt-chooser").hidden, true);
-  action.click();
-  assert.equal($("#dt-chooser").hidden, false, "it opens the chooser");
-  assert.equal($("#dt-add").getAttribute("aria-expanded"), "true", "and the header's button says so");
-  assert.ok($("#dt-chooser").contains(w.document.activeElement), "focus moves into the chooser");
-  assert.equal($$("main .btn.primary").length, 1, "the page's one primary action is still the header's");
+  assert.equal(empty.querySelectorAll("a.btn, button.btn").length, 0, "the way forward is the connect card above");
+  assert.equal($$("main .btn.primary").length, 1, "the page's one primary action is the connect card's");
   world.connections = saved.c;
   world.uploads = saved.u;
-});
-
-test("Check my data: a calm card holds the one primary action; the header has none", async () => {
-  await show("#/data/check");
-  assert.equal($$("main > .page-header .btn").length, 0, "no header action");
-  const card = $(".dt-check");
-  assert.ok(card && card.classList.contains("card"));
-  assert.equal(card.querySelectorAll(".btn.primary").length, 1);
-  assert.equal(text(card.querySelector(".btn.primary")), "Open Data Doctor");
-  assert.equal($$("main .btn.primary").length, 1, "and the only one on the page");
-  assert.equal($$(".dt-points li svg[aria-hidden='true']").length, 3, "three points, each with a check that screen readers skip");
-  assert.equal($$(".dt-points li").length, 3);
-  const tabs = [...$$('main [role="tab"]')];
-  assert.equal(tabs.find((t) => t.getAttribute("aria-selected") === "true").dataset.dtTab, "check");
 });

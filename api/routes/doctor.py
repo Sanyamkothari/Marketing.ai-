@@ -116,7 +116,7 @@ register(
 def offers(root_path: Path) -> tuple[Offer, ...]:
     """The trainable use cases the files are checked against: Home's, in Home's order, then every other
     shipped one that learns from a yes/no column (not the uplift-only ones). None is left out: the diagnosis ranks
-    them best fit first with the reason, and one that overlaps a Home goal (same lifecycle stage) is kept and says
+    them best fit first with the reason, and one that repeats a Home goal (its config's `duplicates`) is kept and says
     which goal it also fits (`Offer.also_fits`)."""
     industries = list_industries(root_path)
     chosen = DEFAULT_INDUSTRY if DEFAULT_INDUSTRY in industries else (industries[0] if industries else None)
@@ -129,7 +129,7 @@ def offers(root_path: Path) -> tuple[Offer, ...]:
     candidates += [("", use_case_id) for use_case_id in list_use_case_ids(root_path)]
     found: list[Offer] = []
     seen: set[str] = set()
-    home_goal: dict[str, str] = {}  # lifecycle stage -> the first Home goal listed under it
+    home_names: dict[str, str] = {}  # use case id -> name, for the Home goals
     for stage, use_case_id in candidates:
         if use_case_id in seen:
             continue
@@ -140,12 +140,14 @@ def offers(root_path: Path) -> tuple[Offer, ...]:
         if config.trainable_in_phase_1 and config.target.column and config.uplift.treatment_column is None:
             seen.add(use_case_id)
             if stage:
-                home_goal.setdefault(config.lifecycle_stage, config.name)
+                home_names[config.id] = config.name
             found.append(
                 Offer(
                     config=config,
                     stage=stage or config.lifecycle_stage,
-                    also_fits=None if stage else home_goal.get(config.lifecycle_stage),
+                    also_fits=(
+                        None if stage or config.duplicates is None else home_names.get(config.duplicates)
+                    ),
                 )
             )
     return tuple(found)

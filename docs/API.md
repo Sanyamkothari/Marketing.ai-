@@ -383,6 +383,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `name` | string | yes |  |
 | `description` | string | no |  |
 | `lifecycle_stage` | string | yes |  |
+| `duplicates` | string \| null | no |  |
 | `ai_type` | AiType ("predictive" \| "generative" \| "hybrid") | no |  |
 | `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering" \| "uplift") | no |  |
 | `entity` | string | no |  |

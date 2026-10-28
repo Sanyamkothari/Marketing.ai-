@@ -3,17 +3,15 @@
 //   #/data          Sources: the saved connections and the uploaded files in one list, each with its health and when
 //                   it was last refreshed or uploaded. A connection keeps Test, Edit and Delete, and "+ Add a source"
 //                   opens the kinds of source to set up.
-//   #/data/check    Check my data: what Data Doctor does, with the way in to it. With `data_doctor.unified` on, the
-//                   Data Doctor screen itself (`#/data/check/pick` opens it on "Pick from a connection").
+//   #/data/check    Data Doctor: the one Data Doctor screen itself (`#/data/check/pick` opens it on "Pick from a
+//                   connection").
 //
 // Nothing here is new engine behaviour. The list, the test and the delete are the Connections module's own calls
 // (`../connections/api.js`) and its own badge and test report (`statusBadge`, `stepsHtml`); the set-up and edit forms
-// stay at `#/connections/new/<kind>` and `#/connections/<id>`; Data Doctor stays at `#/doctor`. The one addition is the
-// list of uploaded files, `GET /uploads`.
+// stay at `#/connections/new/<kind>` and `#/connections/<id>`; `#/doctor` redirects to the Data Doctor tab. The one
+// addition is the list of uploaded files, `GET /uploads`.
 //
-// Data Doctor is reached by a link, not drawn inside the tab: its module draws a whole page of its own (its own H1 and
-// `<main>`) and exports no render function to reuse, so embedding it here would give this page two H1s. The link is at
-// the top of the Sources tab, so it is one click from Data.
+// The Data Doctor tab draws the Data Doctor component itself (it draws no H1 of its own).
 //
 // This page does not import `ui/layout.js`: it draws the same in the classic and the campaigns layout.
 
@@ -30,17 +28,15 @@ import { injectDataStyles } from "./styles.js";
 // Plan M M192 (DEC-1622): the note under the sources opens Settings › AI service itself, not Settings (which used to
 // send the AI service back to Connections, which the campaigns layout redirects here: a loop).
 import { AI_SETTINGS_HREF, aiServiceStatus } from "../../availability.js";
-// Plan O M247 (DEC-1817): with `data_doctor.unified` on, "Check my data" is the one Data Doctor screen itself, drawn
-// in the tab (a component that draws no H1 of its own), and the header's link goes to the tab. Off: unchanged.
-import { dataDoctorOn, dataDoctorOnNow } from "../datadoctor/switch.js";
+// Plan O M247 (DEC-1817): the Data Doctor tab is the one Data Doctor screen itself, drawn in the tab (a component that
+// draws no H1 of its own).
 import { mountDataDoctor } from "../datadoctor/screen.js";
 import { TABLE_FILE_TYPES } from "../intake/notes.js";
 
 export const DATA_HOME = "#/data";
-export const DOCTOR_HREF = "#/doctor";
 export const TABS = Object.freeze([
   { id: "sources", label: "Sources", href: DATA_HOME },
-  { id: "check", label: "Check my data", href: `${DATA_HOME}/check` },
+  { id: "check", label: "Data Doctor", href: `${DATA_HOME}/check` },
 ]);
 /** How many uploaded files the list shows before "Show all". */
 export const FILES_SHOWN = 25;
@@ -65,7 +61,7 @@ const state = {
   showOlderChecks: false,
 };
 
-let view = { app: null, tab: "sources", hash: "", doctor: false };
+let view = { app: null, tab: "sources", hash: "" };
 
 /** The files chosen on "Connect your data": kept while the page goes to the Data Doctor tab, which reads them. */
 let handedFiles = null;
@@ -122,33 +118,20 @@ function fileOrigin(u) {
   }
 }
 
-/** The header: "+ Add a source" is the Sources tab's one primary action; the Check tab keeps its one action in its card. */
-function header(tab) {
-  const subtitle = "Where your customer data comes from, and whether it is ready to use.";
-  // With the one Data Doctor on, the page's one action is "Connect your data" below; the other kinds of source are a
-  // quiet link there, so the header carries no second button.
-  if (tab !== "sources" || dataDoctorOnNow()) return pageHeader({ title: "Data", subtitle });
-  return pageHeader({
-    title: "Data",
-    subtitle,
-    primary: { label: "+ Add a source", id: "dt-add", attrs: `aria-expanded="${state.chooserOpen}" aria-controls="dt-chooser"` },
-    secondary: [
-      dataDoctorOnNow()
-        ? { label: "Data Doctor", href: `${DATA_HOME}/check`, attrs: "data-dt-doctor" }
-        : { label: "Check my data", href: DOCTOR_HREF, attrs: "data-dt-doctor" },
-    ],
-  });
+/** The header: the page's one action is "Connect your data" below, so the header carries no button. */
+function header() {
+  return pageHeader({ title: "Data", subtitle: "Where your customer data comes from, and whether it is ready to use." });
 }
 
 /** The underline tabs: a link to each route; the current one is also `aria-current="page"`, as a link to a page is. */
 function tabsHtml(tab) {
-  // With the one Data Doctor on, the second tab is called what it is (the `check` id and address stay).
+  // The second tab keeps the `check` id and address.
   return tabs({
     label: "Data sections",
     current: tab,
     items: TABS.map((t) => ({
       id: t.id,
-      label: t.id === "check" && (view.doctor || dataDoctorOnNow()) ? "Data Doctor" : t.label,
+      label: t.label,
       href: t.href,
       attrs: `data-dt-tab="${t.id}"${t.id === tab ? ' aria-current="page"' : ""}`,
     })),
@@ -283,22 +266,17 @@ function chooserHtml() {
       return `<article class="dt-kind" data-dt-kind="${esc(k.kind)}"><div class="dt-kind-h">${typeIcon("connection")}<h3>${esc(k.label)}</h3></div>${action}</article>`;
     })
     .join("");
-  // With the one Data Doctor on, a file or a pick from a connection is brought in on its tab; off, the old page.
-  const doctor = dataDoctorOnNow();
-  const file = doctor ? "" : `<article class="dt-kind" data-dt-kind="file"><div class="dt-kind-h">${typeIcon("file")}<h3>A file from your computer</h3></div><p class="dt-note">CSV, Excel or Parquet. Data Doctor reads it first and says what it can be used for.</p><div class="btn-row">${button(
-    { label: "Choose a file", href: doctor ? `${DATA_HOME}/check` : DOCTOR_HREF, kind: "secondary", size: "sm", attrs: 'data-dt-new="file"' },
-  )}</div></article>`;
-  const pick =
-    doctor && state.connections.some((c) => c.available)
-      ? `<article class="dt-kind" data-dt-kind="pick"><div class="dt-kind-h">${typeIcon("connection")}<h3>Pick from a connection</h3></div><p class="dt-note">Choose a file or table in a source you have set up. Data Doctor reads it first.</p><div class="btn-row">${button(
-          { label: "Pick from a connection", href: `${DATA_HOME}/check/pick`, kind: "secondary", size: "sm", attrs: 'data-dt-new="pick"' },
-        )}</div></article>`
-      : "";
-  return `<section class="dt-chooser" id="dt-chooser" aria-labelledby="dt-chooser-h"${state.chooserOpen ? "" : " hidden"}><h2 id="dt-chooser-h">${doctor ? "Other sources" : "Add a source"}</h2><p>Marketing AI only reads from a source. It never changes anything there.</p><div class="dt-kinds">${cards}${file}${pick}</div></section>`;
+  // A file or a pick from a connection is brought in on the Data Doctor tab.
+  const pick = state.connections.some((c) => c.available)
+    ? `<article class="dt-kind" data-dt-kind="pick"><div class="dt-kind-h">${typeIcon("connection")}<h3>Pick from a connection</h3></div><p class="dt-note">Choose a file or table in a source you have set up. Data Doctor reads it first.</p><div class="btn-row">${button(
+        { label: "Pick from a connection", href: `${DATA_HOME}/check/pick`, kind: "secondary", size: "sm", attrs: 'data-dt-new="pick"' },
+      )}</div></article>`
+    : "";
+  return `<section class="dt-chooser" id="dt-chooser" aria-labelledby="dt-chooser-h"${state.chooserOpen ? "" : " hidden"}><h2 id="dt-chooser-h">Other sources</h2><p>Marketing AI only reads from a source. It never changes anything there.</p><div class="dt-kinds">${cards}${pick}</div></section>`;
 }
 
 /**
- * With the one Data Doctor on: the page starts with one action. Files are chosen here (several at once) and go straight
+ * The page starts with one action. Files are chosen here (several at once) and go straight
  * into the Data Doctor; the other kinds of source are a quiet link that opens the chooser below.
  */
 function connectHtml() {
@@ -362,16 +340,12 @@ function sourcesHtml() {
       : `<div class="card">${emptyState({
           icon: "data",
           title: "No data sources yet",
-          text: dataDoctorOnNow() ? "Connect your data above to get started." : "Add a source or choose a file to get started.",
-          // The one way forward is the header's: this opens the same "Add a source" chooser (M188 review).
-          action: dataDoctorOnNow()
-            ? null
-            : { label: "Add a source", kind: "secondary", attrs: 'data-dt-open-chooser aria-controls="dt-chooser"' },
+          text: "Connect your data above to get started.",
         })}</div>`;
   const problem = state.uploadsError
     ? errorBox(state.uploadsError, { title: "The uploaded files could not be listed." })
     : "";
-  return `${aiStatusHtml()}${dataDoctorOnNow() ? connectHtml() : ""}${chooserHtml()}<section class="dt-sec" aria-labelledby="dt-sources-h"><h2 id="dt-sources-h">Your sources</h2><p>Saved connections and uploaded files, with their health and when they last brought in data.</p>${list}${problem}</section>
+  return `${aiStatusHtml()}${connectHtml()}${chooserHtml()}<section class="dt-sec" aria-labelledby="dt-sources-h"><h2 id="dt-sources-h">Your sources</h2><p>Saved connections and uploaded files, with their health and when they last brought in data.</p>${list}${problem}</section>
     <p class="dt-foot">Connect an AI service in <a href="${AI_SETTINGS_HREF}" data-dt-settings>Settings › AI service</a>.</p>`;
 }
 
@@ -385,20 +359,12 @@ function aiStatusHtml() {
   }</p>`;
 }
 
-// --- the Check my data tab -------------------------------------------------------------------------
+// --- the Data Doctor tab ---------------------------------------------------------------------------
 
 /** Plan O M247: the tab holds the Data Doctor screen: the case on the left, the chat on the right. */
 const DOCTOR_SLOTS = `<section class="dt-doctor" data-dt-doctor-screen aria-label="Data Doctor"><div class="dds-layout"><div class="dds-main" data-dds-main></div><aside class="dds-aside" data-dds-aside></aside></div></section>`;
 
-function checkHtml() {
-  if (view.doctor) return DOCTOR_SLOTS;
-  const point = (text) => `<li>${icon("checkCircle", { size: 18 })}<span>${esc(text)}</span></li>`;
-  return `<section class="dt-check card" aria-labelledby="dt-check-h"><div class="dt-check-h"><span class="dt-ico lg">${icon("checkCircle", { size: 24 })}</span><div><h2 id="dt-check-h">Check my data</h2>
-    <p>Data Doctor looks at your files before you use them. It never changes them.</p></div></div>
-    <ul class="dt-points">${point("It says what each file is and what it can be used for.")}${point("It says what is missing, so you know what to ask your data team for.")}${point("It shows how several files fit together.")}</ul>
-    <p class="dt-after">Choose your files there, or open it from here at any time.</p>
-    <div class="dt-go">${button({ label: "Open Data Doctor", href: DOCTOR_HREF })}</div></section>`;
-}
+const checkHtml = () => DOCTOR_SLOTS;
 
 // --- drawing and behaviour -------------------------------------------------------------------------
 
@@ -407,19 +373,19 @@ function draw() {
   if (!app || !stillHere()) return;
   injectDataStyles();
   injectConnectionStyles();
-  app.innerHTML = `<main class="screen dt" data-dt-tab-shown="${tab}">${header(tab)}${tabsHtml(tab)}${
+  app.innerHTML = `<main class="screen dt" data-dt-tab-shown="${tab}">${header()}${tabsHtml(tab)}${
     tab === "check" ? checkHtml() : sourcesHtml()
   }</main>`;
   bind(app);
-  if (tab === "check" && view.doctor) {
+  if (tab === "check") {
     const main = app.querySelector("[data-dds-main]");
     const aside = app.querySelector("[data-dds-aside]");
     if (main) mountDataDoctor({ main, aside }, { place: "data", pick: view.pick, caseId: view.caseId, files: view.files });
-    view.pick = false;
-    view.files = null; // the files are read once, not on every redraw // `#/data/check/pick` opens the picker once, not on every redraw
+    view.pick = false; // `#/data/check/pick` opens the picker once, not on every redraw
+    view.files = null; // the files are read once, not on every redraw
   }
   revealSelectedTab(app);
-  document.title = `${tab === "check" ? "Check my data" : "Data"} · Marketing AI`;
+  document.title = `${tab === "check" ? "Data Doctor" : "Data"} · Marketing AI`;
 }
 
 async function testFromList(id) {
@@ -456,14 +422,13 @@ async function remove(id) {
 }
 
 function bind(app) {
-  const add = app.querySelector("#dt-add");
   const opener = app.querySelector("[data-dt-open-chooser]");
   if (opener) {
     opener.addEventListener("click", () => {
       state.chooserOpen = true;
       const chooser = app.querySelector("#dt-chooser");
       if (chooser) chooser.hidden = false;
-      (add || opener).setAttribute("aria-expanded", "true");
+      opener.setAttribute("aria-expanded", "true");
       const first = chooser && chooser.querySelector("a, button");
       if (first) first.focus();
     });
@@ -474,14 +439,6 @@ function bind(app) {
       if (!files.files || !files.files.length) return;
       handedFiles = [...files.files];
       window.location.hash = `${DATA_HOME}/check`; // the Data Doctor tab reads them
-    });
-  }
-  if (add) {
-    add.addEventListener("click", () => {
-      state.chooserOpen = !state.chooserOpen;
-      const chooser = app.querySelector("#dt-chooser");
-      if (chooser) chooser.hidden = !state.chooserOpen;
-      add.setAttribute("aria-expanded", String(state.chooserOpen));
     });
   }
   app.querySelectorAll("[data-dt-test]").forEach((b) => b.addEventListener("click", () => testFromList(b.dataset.dtTest)));
@@ -524,14 +481,10 @@ export async function renderData(app, parts) {
   const tab = tabOf(parts);
   // `#/data/check/case/<id>` opens the Data Doctor on that case ("What the Doctor did" from a finished campaign).
   const caseId = parts[2] === "case" && parts[3] ? safeDecode(parts[3]) : null;
-  view = { app, tab, hash: window.location.hash, doctor: false, pick: parts[2] === "pick", caseId };
+  view = { app, tab, hash: window.location.hash, pick: parts[2] === "pick", caseId };
   injectDataStyles();
   if (tab === "check") {
-    // Plan O M247: only this tab waits for `/auth/me` (the call the app already made at start-up).
-    const doctor = await dataDoctorOn();
-    if (view.app !== app || view.tab !== tab) return;
-    view.doctor = doctor;
-    view.files = doctor ? handedFiles : null;
+    view.files = handedFiles;
     handedFiles = null;
     draw();
     return;
@@ -546,10 +499,9 @@ export async function renderData(app, parts) {
     Promise.all([getKinds(), getConnections()]),
     getUploads(),
     aiServiceStatus(),
-    // Data Doctor off: the route is not there, and nothing is sent for it.
-    dataDoctorOn().then((on) => (on ? getCases() : { cases: [] })),
+    getCases(),
   ]);
-  // Without the list of checks (Data Doctor off or not answering) every file is listed on its own, as before.
+  // Without the list of checks (Data Doctor not answering) every file is listed on its own, as before.
   state.checks = checks.status === "fulfilled" ? checks.value.cases || [] : [];
   const product = ai.status === "fulfilled" && ai.value && ai.value.slots && ai.value.slots.product;
   state.ai = product ? Boolean(product.connected) : null;

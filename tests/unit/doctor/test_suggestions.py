@@ -69,6 +69,11 @@ def test_every_trainable_use_case_is_offered_and_a_repeat_of_a_home_goal_says_wh
     home = {offer.config.name for offer in found.values() if offer.also_fits is None}
     repeats = [offer for offer in found.values() if offer.also_fits is not None]
     assert repeats and all(offer.also_fits in home for offer in repeats)
+    assert [offer.config.id for offer in repeats] == [
+        "telco-churn"
+    ], "only a real repeat is marked, not a same stage"
+    for use_case_id in ("card-default-propensity", "bank-term-deposit", "insurance-cross-sell"):
+        assert found[use_case_id].also_fits is None
 
 
 def test_a_returned_goods_column_is_a_question_not_ready(config_root: Path) -> None:
