@@ -15,6 +15,7 @@ TREAT with its reason; forgetting an upload forgets it in the visit.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
@@ -61,9 +63,24 @@ from tests.unit.doctor.visit_support import (
 ALL_STATES = {state.value for state in VisitState}
 
 
+def _content(frame: pd.DataFrame) -> str:
+    """What a frame holds (names, types and every value), as a digest: two files under one upload id differ here."""
+    digest = hashlib.sha256(
+        json.dumps([list(map(str, frame.columns)), list(map(str, frame.dtypes))]).encode()
+    )
+    digest.update(pd.util.hash_pandas_object(frame, index=True).to_numpy().tobytes())
+    return digest.hexdigest()
+
+
 class _Cached(DataToolRegistry):
     """The visit's registry, remembering each answer: the tools are deterministic, so a test that runs the
-    same visit many times need not compute the same diagnosis again. Every call still goes through `call`."""
+    same visit many times need not compute the same diagnosis again. Every call still goes through `call`.
+
+    The key names what the tool reads, by CONTENT: the memory is shared by every module that imports it, in one
+    process, and other modules put other files under the same upload ids (`test_agent_review`'s `_dirty` world is
+    `up-customers-oct` with a `city` column). Keyed by upload id alone, an answer computed for that other file was
+    handed to this module's visit whenever both ran in one worker, and the in-process run no longer matched a
+    fresh process that computed it (`test_a_real_process_killed_mid_visit_resumes`)."""
 
     def __init__(self, inner: DataToolRegistry, memory: dict[str, DataToolResult]) -> None:
         super().__init__()
@@ -76,9 +93,9 @@ class _Cached(DataToolRegistry):
             [
                 name,
                 dict(given),
-                [f.upload_id for f in ctx.files],
-                None if agent is None else [agent.upload_id, agent.use_case_id],
-                [offer.config.id for offer in ctx.offers],
+                [[f.upload_id, f.file_name, _content(f.frame)] for f in ctx.files],
+                None if agent is None else [agent.upload_id, agent.use_case_id, _content(agent.frame)],
+                [[offer.config.model_dump_json(), offer.stage] for offer in ctx.offers],
             ],
             sort_keys=True,
             default=str,
@@ -357,6 +374,33 @@ def test_a_real_process_killed_mid_visit_resumes(tmp_path: Path, world: World) -
         (case,) = CaseStore(storage).list(CLIENT)
         assert summary(case) == summary(clean)
         assert timeline_summary(storage, case) == timeline_summary(LocalStorage(tmp_path / "clean"), clean)
+
+
+def test_the_shared_tool_memory_never_hands_one_files_answer_to_another_file_under_the_same_id(
+    tmp_path: Path, world: World
+) -> None:
+    """The memory `_Cached` keeps is shared by every module that imports it. Another module's file under the same
+    upload id (here: the October customers with a `city` column, as `test_agent_review` builds) answered first, and
+    the visit of this module's file must still read its own file: the same case as with no memory at all."""
+    frame = vs.customers(seed=1)
+    frame["city"] = ["Pune", "pune ", "Mumbai"] * (len(frame) // 3)
+    other = World(
+        files={FIRST: vs.loaded(FIRST, "customers_oct.csv", frame, world.offers[0].config)},
+        offers=world.offers,
+    )
+    memory: dict[str, DataToolResult] = {}
+
+    def first_rest(name: str, w: World, registry: DataToolRegistry | None) -> Case:
+        storage = LocalStorage(tmp_path / name)
+        w.ticks = 0
+        extra = {} if registry is None else {"registry": registry}
+        case = open_case(storage, w)
+        return visit.resume(CLIENT, case.case_id, deps_for(storage, w, **extra), actor=ANALYST)
+
+    first_rest("other", other, _Cached(visit.visit_registry(), memory))
+    remembered = first_rest("cached", world, _Cached(visit.visit_registry(), memory))
+    fresh = first_rest("fresh", world, None)
+    assert summary(remembered) == summary(fresh)
 
 
 # ---------------------------------------------------------------------------
