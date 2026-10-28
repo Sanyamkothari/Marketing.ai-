@@ -9,8 +9,14 @@ const diagnosis = fixture("diagnosis");
 const agreement = fixture("agreement");
 const uploads = fixture("uploads");
 const sent = [];
+const visited = [];
 
 const server = (request) => {
+  if (request.path === "/cases" || request.path.startsWith("/cases/")) {
+    visited.push(`${request.method} ${request.path}`);
+    const made = { case_id: "case_1", version: "v1" };
+    return { status: request.method === "POST" && request.path === "/cases" ? 201 : 200, body: made };
+  }
   if (request.method === "POST" && request.path === "/doctor/outcome") {
     sent.push(request.body);
     return { status: 201, body: agreement };
@@ -125,4 +131,17 @@ test("first-look groups and sentences are text, never markup", async () => {
   assert.equal($$("[data-dd-look] img").length, 0);
   assert.equal($$("[data-dd-look] b").length, 0);
   assert.equal(window.__pwned2, undefined);
+});
+
+test("Start opens a case with the file, visits it, chooses the goal, then lands in the wizard", async () => {
+  const startable = structuredClone(diagnosis);
+  const item = startable.use_cases[0];
+  Object.assign(item, { status: "ready", upload_id: uploads[0].upload_id });
+  showDiagnosis(startable, uploads);
+  await settle();
+  visited.length = 0;
+  $(`[data-dd-start="${item.use_case_id}"]`).click();
+  await until(() => window.location.hash.startsWith("#/campaigns/new/customers/"), 2000, "the wizard hash");
+  assert.deepEqual(visited, ["POST /cases", "POST /cases/case_1/visit", "POST /cases/case_1/goal"]);
+  assert.equal(window.location.hash, `#/campaigns/new/customers/${encodeURIComponent(item.use_case_id)}`);
 });

@@ -127,14 +127,17 @@ def test_a_viewer_reads_the_screen(unified: None, tmp_path: Path) -> None:
         assert client.get("/data-doctor/cases", headers=bearer(app, viewer)).status_code == 200
 
 
-def test_with_the_switch_off_nothing_changes(config_root: Path, tmp_path: Path) -> None:
+def test_with_the_switch_off_the_routes_are_there_and_auth_me_answers_as_before(
+    config_root: Path, tmp_path: Path
+) -> None:
+    """The screen is the setup page, so its routes are always mounted; only `/auth/me`'s flag follows the switch."""
     app = create_app(config_root=config_root, data_dir=tmp_path / "data")
     paths = app.openapi()["paths"]
-    assert "/cases/{case_id}/screen" not in paths and "/data-doctor/cases" not in paths
+    assert "/cases/{case_id}/screen" in paths and "/data-doctor/cases" in paths
     with TestClient(app) as client:
         me = client.get("/auth/me").json()
         assert "data_doctor" not in me, "with the switch off /auth/me answers exactly as before"
-        assert client.get("/data-doctor/cases").status_code == 404
+        assert client.get("/data-doctor/cases").status_code == 200
 
 
 def test_the_screen_names_the_goal_and_says_who_may_agree(unified: None, tmp_path: Path) -> None:

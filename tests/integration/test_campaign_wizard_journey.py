@@ -93,7 +93,6 @@ def server(workdir: Path, config_root: Path) -> Iterator[str]:
         **os.environ,
         "MARKETING_AI_CONFIG_DIR": str(config_root),
         "MARKETING_AI_DATA_DIR": str(data_dir),
-        "MARKETING_AI_DATA_DOCTOR_UNIFIED": "true",  # the Data Doctor is the setup screen; its /cases routes must be there
         "PYTHONPATH": str(REPO_ROOT),
         "PYTHONUNBUFFERED": "1",
     }

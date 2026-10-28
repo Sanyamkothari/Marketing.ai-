@@ -41,10 +41,28 @@ Contract schema version: 1.
 | POST | `/campaigns/{campaign_id}/plan` | Register a campaign's test plan before its outcomes are read | TestPlan |
 | GET | `/campaigns/{campaign_id}/plan-preview` | The computed points behind the 'Plan the test' slider, on the campaign's own population | CampaignPlanPreview |
 | POST | `/campaigns/{campaign_id}/plan/amendments` | Amend a campaign's test plan: a new version with a reason, the old one kept | TestPlan |
+| POST | `/cases` | Open a Data Doctor case, optionally with files | Case |
+| GET | `/cases/{case_id}` | A Data Doctor case | Case |
+| POST | `/cases/{case_id}/acknowledgements` | Say yes to one stop of the plan | Case |
+| GET | `/cases/{case_id}/ai` | The Doctor's AI on a case | AiStatus |
+| POST | `/cases/{case_id}/ai-consent` | Let the Doctor's AI read masked summaries of this client's data | AiStatus |
+| POST | `/cases/{case_id}/answers` | Answer a question | Case |
+| POST | `/cases/{case_id}/approval` | Approve the changes | Case |
+| POST | `/cases/{case_id}/chat` | Write to Data Doctor | Case |
+| POST | `/cases/{case_id}/confirmations` | Give the own yes to one change that needs it | Case |
+| POST | `/cases/{case_id}/decisions` | Tick or untick a suggestion | Case |
+| POST | `/cases/{case_id}/files` | Add a file to a Data Doctor case, against the version you read | Case |
+| POST | `/cases/{case_id}/goal` | Choose a goal | Case |
+| GET | `/cases/{case_id}/screen` | A Data Doctor case as its screen shows it | CaseScreen |
+| POST | `/cases/{case_id}/standing-answers/{answer_id}/revoke` | Revoke a remembered answer | Case |
+| GET | `/cases/{case_id}/timeline` | What happened in a Data Doctor case, oldest first | CaseTimeline |
+| POST | `/cases/{case_id}/visit` | Continue a visit | Case |
 | GET | `/clients` | Every client, newest first | ClientListResponse |
 | POST | `/clients` | Register a client whose data will be onboarded | ClientCreateResponse |
 | POST | `/clients/default` | The client every installation starts with, created the first time it is asked for | ClientRecord |
 | GET | `/clients/{client_id}` | One client | ClientRecord |
+| GET | `/clients/{client_id}/facts` | What Data Doctor was told about a client's business | tuple |
+| PUT | `/clients/{client_id}/facts` | Tell Data Doctor facts about a client's business, or take them back | tuple |
 | GET | `/clients/{client_id}/mappings` | A client's saved mappings, newest first | MappingListResponse |
 | POST | `/clients/{client_id}/mappings/suggest` | Suggest a mapping of one source against one use case's standard schema; nothing is saved | MappingSpec |
 | PUT | `/clients/{client_id}/mappings/{mapping_id}` | Save a user's mapping decisions and return the checks they imply | MappingSaveResponse |
@@ -57,6 +75,8 @@ Contract schema version: 1.
 | POST | `/clients/{client_id}/sources/from-connection` | Read a client's table from a saved connection, profile it and keep it bound for monthly builds | SourceCreateResponse |
 | DELETE | `/clients/{client_id}/sources/{source_id}` | Remove one source | - |
 | PATCH | `/clients/{client_id}/sources/{source_id}` | Confirm (or change) one source's role | SourceSpec |
+| GET | `/clients/{client_id}/standing-answers` | The answers Data Doctor remembers for a client | tuple |
+| POST | `/clients/{client_id}/standing-answers/{answer_id}/revoke` | Revoke a remembered answer: it is asked again next time | StandingAnswer |
 | DELETE | `/connection/aws` | Forget the chosen profile and go back to the default credential chain (local only) | AwsConnectionState |
 | GET | `/connection/aws` | The AWS identity Bedrock is called as, and whether this caller may change it | AwsConnectionState |
 | PUT | `/connection/aws` | Choose the AWS identity: the default chain, or an AWS CLI profile by name (local only) | AwsConnectionState |
@@ -75,6 +95,8 @@ Contract schema version: 1.
 | GET | `/cost/fx-rate` | The saved exchange rate | FxRateView |
 | PUT | `/cost/fx-rate` | Save the exchange rate rupee figures are worked out with (Admin) | FxRateView |
 | GET | `/cost/spend` | What finished runs cost each month, at list price | SpendView |
+| GET | `/data-doctor/candidate-rules` | AI-proposed patterns approved often enough to become a rule | tuple |
+| GET | `/data-doctor/cases` | A client's Data Doctor cases, newest change first | CaseList |
 | GET | `/datasets` | Dataset manifests, newest first | DatasetListResponse |
 | POST | `/datasets` | Validate a recipe and, when it passes, start building a dataset from it | DatasetCreatedResponse |
 | GET | `/datasets/{dataset_id}` | One dataset: its manifest, once built, and the status the Build screen polls | DatasetGetResponse |
@@ -90,6 +112,7 @@ Contract schema version: 1.
 | POST | `/doctor/diagnosis` | What each uploaded file is, and which use cases the files can power | Diagnosis |
 | POST | `/doctor/handoff` | The file as an upload of the chosen use case, read the same way, for its Guided setup | UploadResponse |
 | POST | `/doctor/outcome` | Agree the outcome built from an event file, as the sentence the person picked | OutcomeAgreement |
+| GET | `/goal-briefs/{goal_id}` | What a goal needs | GoalBrief |
 | GET | `/healthz` | Liveness probe | HealthResponse |
 | GET | `/holdout` | The holdout: salt, epochs, use cases | HoldoutView |
 | PUT | `/holdout` | Start a new holdout epoch (Admin): a lower share, or a new salt | HoldoutView |
@@ -190,6 +213,8 @@ Contract schema version: 1.
 | POST | `/uploads/{upload_id}/agent-session` | Start (or restart) Guided setup for an upload: the helper's suggestions and questions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/answers` | Answer one of the helper's questions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/apply` | Approve: prepare the data with the accepted steps and return what Run needs | ApplyResponse |
+| GET | `/uploads/{upload_id}/agent-session/approval` | What Approve will record: the exact sentence and what needs its own yes | ApprovalView |
+| POST | `/uploads/{upload_id}/agent-session/approve` | Approve with the sentence read: the accepted steps prepare the data | - |
 | POST | `/uploads/{upload_id}/agent-session/assist` | Ask the AI service for a second opinion on the columns (optional) | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/decisions` | Accept or reject the helper's suggestions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/edits` | Add an edit made by hand: a step like every other, ticked, undone by unticking | AgentSessionResponse |

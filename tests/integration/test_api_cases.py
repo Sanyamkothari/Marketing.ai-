@@ -267,11 +267,9 @@ def test_a_viewer_reads_a_case_but_cannot_change_it(unified: None, tmp_path: Pat
         assert [e["actor"] for e in events] == [analyst], "the timeline records the user id"
 
 
-def test_with_the_switch_off_there_is_no_cases_path(config_root: Path, tmp_path: Path) -> None:
+def test_with_the_switch_off_the_cases_path_is_still_there(config_root: Path, tmp_path: Path) -> None:
+    """The Data Doctor is the setup screen, so its routes do not wait for `data_doctor.unified`."""
     app = create_app(config_root=config_root, data_dir=tmp_path / "data")
-    paths = app.openapi()["paths"]
-    assert not [path for path in paths if path.startswith("/cases")]
+    assert "/cases" in app.openapi()["paths"]
     with TestClient(app) as client:
-        response = client.post("/cases", json={})
-        assert response.status_code == 404 and "CASE" not in response.text
-    assert not (tmp_path / "data" / "cases").exists()
+        assert client.post("/cases", json={}).status_code == 201

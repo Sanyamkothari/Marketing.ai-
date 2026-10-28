@@ -378,12 +378,11 @@ def test_a_viewer_reads_a_brief_but_cannot_move_a_visit(unified: None, tmp_path:
         assert {e["actor"] for e in events} == {analyst}, "the timeline records the user id"
 
 
-def test_with_the_switch_off_there_is_no_visit_path(config_root: Path, tmp_path: Path) -> None:
+def test_with_the_switch_off_the_visit_path_is_still_there(config_root: Path, tmp_path: Path) -> None:
+    """The Data Doctor is the setup screen, so its routes do not wait for `data_doctor.unified`."""
     app = create_app(config_root=config_root, data_dir=tmp_path / "data")
     paths = app.openapi()["paths"]
-    assert not [path for path in paths if path.startswith(("/cases", "/goal-briefs"))]
-    with TestClient(app) as client:
-        assert client.get(f"/goal-briefs/{GOAL}").status_code == 404
+    assert "/cases/{case_id}/visit" in paths and "/goal-briefs/{goal_id}" in paths
 
 
 def test_an_answer_value_is_refused_where_the_option_takes_none(client: TestClient, data_dir: Path) -> None:
