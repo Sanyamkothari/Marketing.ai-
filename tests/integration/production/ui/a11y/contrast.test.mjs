@@ -5,7 +5,7 @@
    1. THE PALETTE: the pairs a marketer reads most - body text, secondary text, links, the primary button, the
       badges, the dark stage pills - are asserted by name, so a change to a token that breaks one of them fails
       with that pair's name. Each pair is also confirmed to be used by a rule in the style sheets.
-   2. EVERY RULE: every rule in index.html and in every .js file under ui/ that sets a text colour is checked on the ground it sets
+   2. EVERY RULE: every rule in index.html and in every .js file under ui/ (not ui/v2/, the Autonomy app with its own palette) that sets a text colour is checked on the ground it sets
       (or, with none set, on --surface and --soft). The rules that fail today are listed in contrast_known.json, each
       with a reason, where it is, and the fix; the test fails on a failing pair that is not listed, and on a listed
       pair that now passes (so the list can only shrink).

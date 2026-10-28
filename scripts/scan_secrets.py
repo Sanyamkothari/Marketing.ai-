@@ -91,6 +91,18 @@ REVIEWED_FAKES: Final[dict[str, str]] = {
     "30c952fab122c3f9": "`pw`: a two-letter DSN password in tests/unit/test_settings.py",
     "545c4652e05586b5": "`hunter2-do-not-log`: the value the redaction tests assert never reaches a log",
     "4f21cdb9cad54751": "`a-wrong-password`: the failed-login case of the Phase 4b auth route tests",
+    # Reviewed 2026-10-28: the v2 (Autonomy) connector, rehearsal and roles tests' made-up keys and tokens.
+    "2e8deba50aad7a51": "`rehearsal-mandate-secret`: scripts/v2_zero_touch_rehearsal.py's local mandate secret",
+    "63bfad1e310be0a9": "`shpat_good_token`: the Connect screen test's accepted Shopify token",
+    "e17293b2db2008d1": "`pk_live_secret_0123456789abcdef`: the Klaviyo fake's API key in tests/v2/connectors",
+    "f5c620cb10664cb1": "`shp_secret_1`: the Shopify fake's app client secret in tests/v2/connectors",
+    "717c5ebe8c105683": "`shpat_live_1`: a Shopify token the v2 connector API tests send to the fake",
+    "8001b1f7c4873763": "`shpat_wrong_1`: the token the Shopify fake refuses in the v2 connector API tests",
+    "dcf1231550766e40": "`key_12345678`: the demo connector's key in the v2 connector API tests",
+    "6ec8d7598181644e": "`sk_live_secret_1`: a key the v2 connector API test sends with a malformed config",
+    "3641cb75529661c9": "`k_supersecret`: the value the v2 HTTP base test asserts is redacted from a log",
+    "bc91a5d127db96de": "`their_own_custom_app`: the Shopify webhook test's custom-app key",
+    "b1de026e7c7748a2": "`ZZ-PROPOSER-REASONING-ZZ`: the marker the v2 roles test asserts never leaks",
 }
 """SHA-256 prefix (16 hex) of a value reviewed as fake -> why. Reviewed 2026-09-23 (M52)."""
 

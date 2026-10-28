@@ -548,6 +548,38 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/uploads/{upload_id}/agent-session/assist",
         # Plan M M175: the Overview page's four parts in one call, Viewer, from existing sources only (DEC-1605)
         "/overview",
+        # Plan O (Data Doctor): the case and its visit (M231, M235), next month's recheck, the protocol's routes
+        # outside a case (M246) and what the screen reads (M247) - always mounted since the `data_doctor.unified`
+        # switch was removed - and the lessons the Doctor proposes for review
+        "/cases",
+        "/cases/{case_id}",
+        "/cases/{case_id}/files",
+        "/cases/{case_id}/timeline",
+        "/cases/{case_id}/ai",
+        "/cases/{case_id}/ai-consent",
+        "/cases/{case_id}/visit",
+        "/cases/{case_id}/goal",
+        "/cases/{case_id}/answers",
+        "/cases/{case_id}/decisions",
+        "/cases/{case_id}/acknowledgements",
+        "/cases/{case_id}/confirmations",
+        "/cases/{case_id}/approval",
+        "/cases/{case_id}/chat",
+        "/cases/{case_id}/standing-answers/{answer_id}/revoke",
+        "/goal-briefs/{goal_id}",
+        "/cases/{case_id}/recheck",
+        "/uploads/{upload_id}/agent-session/approval",
+        "/uploads/{upload_id}/agent-session/approve",
+        "/clients/{client_id}/standing-answers",
+        "/clients/{client_id}/standing-answers/{answer_id}/revoke",
+        "/clients/{client_id}/facts",
+        "/data-doctor/candidate-rules",
+        "/cases/{case_id}/screen",
+        "/data-doctor/cases",
+        "/doctor/lessons",
+        "/doctor/lessons/{lesson_id}/approve",
+        "/doctor/lessons/{lesson_id}/reject",
+        "/doctor/lessons/{lesson_id}/retire",
     }
 
 

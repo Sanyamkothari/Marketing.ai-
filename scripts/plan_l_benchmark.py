@@ -295,6 +295,35 @@ def not_ready_because(case: dict[str, Any], goal: str) -> str | None:
     return reason if not missing or stops or open_requests else f"no {' or '.join(missing)} settled: {reason}"
 
 
+FULL_CHECK_SECONDS: Final[float] = 300.0
+"""How long the driver waits for the background check of the whole file before it tries Approve anyway."""
+
+
+def _whole_file_checked(
+    client: Any,
+    path: str,
+    case: dict[str, Any],
+    call: Callable[[str, dict[str, Any], str], dict[str, Any] | None],
+) -> dict[str, Any] | None:
+    """The case once the background check of the whole file has a result, as the screen's poll waits for it.
+
+    Approve is refused (`FULL_CHECK_RUNNING`) until the count of the whole file is in the case. Each tick asks the
+    visit to continue (which takes a finished count into the case) and reads the screen; past the deadline the case
+    is handed back as it is, and Approve says why it was refused."""
+    deadline = time.monotonic() + FULL_CHECK_SECONDS
+    while True:
+        shown = client.get(f"{path}/screen").json()["view"].get("full_check")
+        done = shown is None or shown["state"] in {"done", "failed"}
+        if not done and time.monotonic() >= deadline:
+            return case
+        if not done:
+            time.sleep(0.05)
+        latest = call(f"{path}/visit", {}, "visit")
+        if latest is None or done:
+            return latest
+        case = latest
+
+
 def _drive(
     client: Any,
     upload_id: str,
@@ -368,6 +397,9 @@ def _drive(
     outcome.session_status = "ready" if why_not is None else "stopped"
     if why_not is not None:
         outcome.stop_reason = why_not
+        return None
+    case = _whole_file_checked(client, path, case, call)
+    if case is None:
         return None
     approved = call(f"{path}/approval", {"version": case["version"]}, "approve")
     if approved is None:

@@ -164,8 +164,11 @@ test("in the campaigns layout an old address goes to its new home, once that pag
     assert.equal(w.location.hash, to, `${from} -> ${to}`);
     assert.equal(w.history.length, before + 1, `${from}: the redirect replaced the entry (Back skips the old address)`);
   }
+  // `#/doctor` is Data Doctor's old address: it forwards to the one Data Doctor screen (Plan O M247, DEC-1817)
+  await visit(state, "#/doctor");
+  assert.equal(w.location.hash, "#/data/check", "#/doctor forwards to the Data Doctor screen");
   // kept addresses stay where they are
-  for (const hash of ["#/doctor", "#/connections/new/postgres", "#/approvals", "#/pilot/kit", "#/uc/hillstrom-email", "#/monitoring/alerts", "#/settings"]) {
+  for (const hash of ["#/connections/new/postgres", "#/approvals", "#/pilot/kit", "#/uc/hillstrom-email", "#/monitoring/alerts", "#/settings"]) {
     await visit(state, hash);
     assert.equal(w.location.hash, hash, `${hash} is kept`);
   }

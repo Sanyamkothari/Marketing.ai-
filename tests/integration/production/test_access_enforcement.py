@@ -60,9 +60,10 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> tuple[TestClient, dict[st
 
 def _code(response: object) -> str | None:
     try:
-        detail = response.json().get("detail")  # type: ignore[attr-defined]
+        body = response.json()  # type: ignore[attr-defined]
     except ValueError:
         return None
+    detail = body.get("detail") if isinstance(body, dict) else None  # a list answer has no error code
     return detail.get("code") if isinstance(detail, dict) else None
 
 

@@ -63,6 +63,9 @@ def test_the_default_answer_says_classic(tmp_path: Path) -> None:
     with TestClient(app) as client:
         body = client.get("/auth/me").json()
     assert body["ui_layout"] == "classic"
-    # M180 (DEC-1610) added `preferences` (null with sign-in off, but sent); M182 added `brand`: both additive.
-    assert set(body) == {"principal", "auth_mode", "permissions", "ui_layout", "preferences", "brand"}
+    # M180 (DEC-1610) added `preferences` (null with sign-in off, but sent); M182 added `brand`; M247 added
+    # `data_doctor` (always true since the `data_doctor.unified` switch was removed): all additive.
+    keys = {"principal", "auth_mode", "permissions", "ui_layout", "preferences", "brand", "data_doctor"}
+    assert set(body) == keys
+    assert body["data_doctor"] is True
     assert body["preferences"] is None

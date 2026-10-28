@@ -13,8 +13,10 @@ import logging
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api.access import AnonymousEventLimiter
 from engine.access.roles import Role
 from engine.audit.events import AuditQuery
 from tests.integration.production.access_support import (
@@ -48,6 +50,7 @@ def _latest(tmp_path: Path):  # type: ignore[no-untyped-def]
 def signed_in(tmp_path_factory: pytest.TempPathFactory) -> tuple[TestClient, Path, str]:
     tmp_path = tmp_path_factory.mktemp("audit-local")
     app = local_app(tmp_path)
+    _no_anonymous_cap(app)
     viewer = make_user(app, "viewer-only", [Role.VIEWER])
     client = TestClient(app, raise_server_exceptions=False)
     client.app_state = app  # type: ignore[attr-defined]
@@ -57,7 +60,16 @@ def signed_in(tmp_path_factory: pytest.TempPathFactory) -> tuple[TestClient, Pat
 @pytest.fixture(scope="module")
 def auth_off(tmp_path_factory: pytest.TempPathFactory) -> tuple[TestClient, Path]:
     tmp_path = tmp_path_factory.mktemp("audit-off")
-    return TestClient(local_app(tmp_path, auth_mode="off"), raise_server_exceptions=False), tmp_path
+    app = local_app(tmp_path, auth_mode="off")
+    _no_anonymous_cap(app)
+    return TestClient(app, raise_server_exceptions=False), tmp_path
+
+
+def _no_anonymous_cap(app: FastAPI) -> None:
+    """One shared app drives every mutating route anonymously, well over DEC-724's
+    `ANONYMOUS_EVENTS_PER_MINUTE` from the test client's one address within a minute: lift the cap here
+    so each request's one event is counted (the cap itself: test_access_review.py)."""
+    app.state.anonymous_event_limiter = AnonymousEventLimiter(per_minute=1_000_000)
 
 
 @pytest.mark.parametrize("route", MUTATING, ids=lambda route: route.id)

@@ -101,16 +101,19 @@ def _key_clause(table: Table, keys: Sequence[str], row: Mapping[str, Any]) -> Co
 def insert_ignore(conn: Connection, table: Table, rows: Sequence[Row]) -> int:
     """Insert rows, silently skipping any whose primary key exists; return how many were new.
 
-    One multi-row statement per chunk rather than `executemany`, because a single statement's
-    rowcount is reliable on every driver while an executemany's is not.
+    One multi-row statement per chunk rather than `executemany`. On Postgres the rows actually
+    inserted are counted from `RETURNING` (a conflict returns nothing): SQLAlchemy 2 with psycopg 3
+    reports a core INSERT's `rowcount` as -1, so it cannot be read there.
     """
     if not rows:
         return 0
     dialect = conn.dialect.name
     new = 0
+    returned = list(table.primary_key.columns) or list(table.columns)[:1]
     for chunk in _chunks(rows, _chunk_size(conn, table)):
         if dialect == "postgresql":
-            new += conn.execute(pg_insert(table).values(list(chunk)).on_conflict_do_nothing()).rowcount
+            statement = pg_insert(table).values(list(chunk)).on_conflict_do_nothing().returning(*returned)
+            new += len(conn.execute(statement).fetchall())
         elif dialect == "sqlite":
             new += conn.execute(insert(table).values(list(chunk)).prefix_with("OR IGNORE")).rowcount
         else:

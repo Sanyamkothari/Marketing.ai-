@@ -83,7 +83,18 @@ export function colourOf(value, tok) {
   return null;
 }
 
-const DECLARATION = /^\s*(?:[a-z0-9-]+\s*:\s*[^;{}]+;?\s*)+$/i;
+const DECLARATION = /^\s*[a-z0-9-]+\s*:\s*[^;{}]+$/i;
+
+/**
+ * Whether a block's body is only `name: value` declarations, `;`-separated (the last `;` optional). Checked one
+ * declaration at a time: as one pattern, `(?:name: value;?\s*)+$`, a long body that is not CSS (a JavaScript object
+ * literal) backtracks for minutes before it fails.
+ */
+function declarationsOnly(body) {
+  const parts = body.split(";");
+  if (parts.length > 1 && parts[parts.length - 1].trim() === "") parts.pop();
+  return parts.every((part) => DECLARATION.test(part));
+}
 
 /** Every `selector{declarations}` block in a CSS or JavaScript string; JavaScript that is not CSS is skipped. */
 export function rulesIn(text) {
@@ -94,7 +105,7 @@ export function rulesIn(text) {
     const body = m[2];
     if (!selector || /\$\{|`|;|=>|function|\bif\b|\bfor\b|\breturn\b/.test(selector) || /\$\{/.test(body)) continue;
     if (!/^[.#\[*:>&a-z@]/i.test(selector) || selector.startsWith("@")) continue;
-    if (!DECLARATION.test(body)) continue;
+    if (!declarationsOnly(body)) continue;
     const props = {};
     for (const d of body.matchAll(/([a-z0-9-]+)\s*:\s*([^;]+);?/gi)) props[d[1].toLowerCase()] = d[2].trim();
     rules.push({ selector, props });
@@ -187,12 +198,17 @@ export function pairsOf(rules, tok, surfaces = ["--surface", "--soft"]) {
   return out;
 }
 
-/** Every style source of the UI: index.html, and every .js file of ui/ that holds a CSS-looking block. */
+/** Every style source of the UI: index.html, and every .js file of ui/ that holds a CSS-looking block. `ui/v2/` is
+ * left out: it is the Autonomy app, a page of its own (ui/v2/index.html) with its own palette in ui/v2/styles.css,
+ * so its `var(--faint)` is not this page's and would be read against the wrong tokens. */
+const OTHER_APPS = new Set([path.join(UI_DIR.pathname, "v2")]);
+
 export function styleSources() {
   const found = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
+      if (entry.isDirectory() && OTHER_APPS.has(full)) continue;
       if (entry.isDirectory()) walk(full);
       else if (/\.(js|html|css)$/.test(entry.name)) {
         const file = path.relative(new URL("../../../../../", import.meta.url).pathname, full);

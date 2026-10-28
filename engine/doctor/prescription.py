@@ -61,7 +61,7 @@ from engine.config import StrictBase
 from engine.contracts import Artefact
 from engine.doctor.build_driver import BuildRecord
 from engine.doctor.currency import MoneyBasis
-from engine.doctor.decisions import DecisionKind, Decisions, decisions_from
+from engine.doctor.decisions import Decided, DecisionKind, Decisions, decisions_from
 from engine.doctor.locale import LocaleProfile
 from engine.doctor.outcome_definition import (
     OutcomeApproval,
@@ -590,6 +590,23 @@ def _unique_steps(steps: Sequence[RecipeStep]) -> list[RecipeStep]:
     return out
 
 
+def _carried_columns(case: Case, records: Sequence[Decided]) -> dict[str, str]:
+    """`{upload the case holds now: column}` for one kind of decision. A decision made on a file goes on the table an
+    approved join or stack made from it, but one made on that table itself wins: the table's own ID column, not the
+    ID of whichever source file happened to be decided first (the items' order is the order they were proposed in,
+    which the background checks can change)."""
+    from engine.doctor.combine_run import current_upload
+
+    own: dict[str, str] = {}
+    carried: dict[str, str] = {}
+    for record in records:
+        if not record.upload_id:
+            continue
+        now = current_upload(case, record.upload_id)
+        (own if now == record.upload_id else carried).setdefault(now, record.column)
+    return {**carried, **own}
+
+
 def _recipe(
     steps: Sequence[RecipeStep],
     *,
@@ -959,7 +976,6 @@ def prescription_from_case(
     its recipe, so a model trained on it carries one recipe and scores exactly as a Guided-setup model does.
     """
     from engine import __version__
-    from engine.doctor.combine_run import current_upload
     from engine.doctor.plan_check import acknowledged_codes
     from engine.doctor.visit import active_section
 
@@ -974,18 +990,9 @@ def prescription_from_case(
     # A decision made on a file goes on the table an approved join or stack made from it (the outcome, the date).
     decided = decisions_from(approved, section_questions)
     _log_ignored(decided, "plan")
-    keys: dict[str, str] = {}
-    for key_decision in decided.of("key"):
-        if key_decision.upload_id:
-            keys.setdefault(current_upload(case, key_decision.upload_id), key_decision.column)
-    targets: dict[str, str] = {}
-    for outcome_decision in decided.of("outcome"):
-        if outcome_decision.upload_id:
-            targets.setdefault(current_upload(case, outcome_decision.upload_id), outcome_decision.column)
-    as_of: dict[str, str] = {}
-    for time_decision in decided.of("as_of_column"):
-        if time_decision.upload_id:
-            as_of.setdefault(current_upload(case, time_decision.upload_id), time_decision.column)
+    keys = _carried_columns(case, decided.of("key"))
+    targets = _carried_columns(case, decided.of("outcome"))
+    as_of = _carried_columns(case, decided.of("as_of_column"))
     steps_by_upload: dict[str | None, list[RecipeStep]] = {}
     from engine.doctor.materialize import snapshot_of
 
