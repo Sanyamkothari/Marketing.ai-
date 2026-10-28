@@ -16,9 +16,23 @@ runs a step of its own, and there is no second replay path. What this module add
   and the scoring date is never later than the day after the data ends. A step that froze one of the old dates
   (a query's `as_of`) is moved with them.
 
-Hard rules stay hard: at least 1,000 rows and 200 positives, the guards' leakage and consent stops, and a step that
-cannot run are stops nobody may say yes to. The person approves every change and every meaning: the replay changes
-nothing about the approved plan, and a changed subject waits for an answer.
+Hard rules stay hard: at least 1,000 rows and 200 positives (counted on the prepared training table, not on the raw
+files), the guards' leakage and consent stops, a change in what a protected column (ID, outcome, consent, date) holds,
+and a step that cannot run are stops nobody may say yes to: each is written into the follow-up case as a `data_check`
+item whose finding is marked `hard`, so the findings ledger shows it as a rule and approval waits for it. Other stops
+are acknowledgeable as anywhere, and a stop the person already said yes to in the approved run (same key, count not
+grown) is not raised again. The person approves every change and every meaning: the outcome and consent items open
+again for a yes of their own, an item whose payload moved with the dates needs its approval again, and the follow-up
+case goes through the visit (UNDERSTAND/ASK/TREAT/PREVIEW/APPROVE with its approvals and `taken_in` carried), never
+straight to an approved state.
+
+**The other next-month paths are different concerns, and stay.** `prescription_replay.replay_prescription` replays a
+*stored prescription's* recipes for scoring and scheduled firings, where there is no case and nobody to ask in a
+visit; `fingerprint` is the in-visit detector for a case that has no approved plan to replay (a first look at a
+file against last time's facts); `carry.last_month` starts a *new* case of a client from the steps another case's
+person approved (it carries marks, never files or items); `add_files` only adds a file to the case it belongs to.
+None of them replays a case's approved plan on a new file and compares the result, which is all this module does.
+Folding the scoring replay into `materialize_plan` is a separate change (see the roadmap).
 """
 
 from __future__ import annotations
@@ -36,7 +50,7 @@ from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import StrictBase
 from engine.doctor.case import (
     Case,
-    CaseDoubt,
+    CaseApproval,
     CaseFile,
     CaseItem,
     CaseOption,
@@ -47,6 +61,7 @@ from engine.doctor.case import (
     payload_digest,
 )
 from engine.doctor.decisions import decisions, sets_of_effect
+from engine.doctor.guards import holds
 from engine.doctor.materialize import (
     ALIAS_KIND,
     Full,
@@ -55,7 +70,7 @@ from engine.doctor.materialize import (
     materialize_plan,
     roles_of,
 )
-from engine.doctor.plan_check import recipe_steps_of
+from engine.doctor.plan_check import recipe_steps_of, stop_is_open
 from engine.doctor.prescription_contract import (
     OUTCOME_RATE_FLOOR,
     OUTCOME_RATE_MOVE,
@@ -64,8 +79,9 @@ from engine.doctor.prescription_contract import (
     type_group,
 )
 from engine.doctor.prescription_contract import check_contract as check_prepared
+from engine.doctor.protocol import approve_class_of
 from engine.doctor.renames import match_renames, recipe_columns
-from engine.doctor.subjects import doubt_subject, question_subject
+from engine.doctor.subjects import question_subject
 from engine.doctor.visit import active_goal, active_section, is_approved
 from engine.doctor.visit_contracts import CaseVisit, OptionEffect
 
@@ -148,7 +164,14 @@ class RecheckReport(StrictBase):
     rows_before: int
     rows_after: int
     dates: DateMove = Field(default_factory=DateMove)
-    kept_items: int = Field(description="Approved items that keep their approval.")
+    kept_items: int = Field(
+        description="Approved items that keep their approval, exactly as they were approved."
+    )
+    asked_again: int = Field(
+        default=0,
+        description="Approved items that wait for the person's yes again: what the outcome and consent say, and an "
+        "item whose payload moved (with the dates).",
+    )
     findings: tuple[RecheckFinding, ...] = ()
 
     @property
@@ -171,8 +194,12 @@ class Rechecked:
 
     report: RecheckReport
     items: tuple[CaseItem, ...]
+    """The case's items for the follow-up: moved, with the meaning ones open again, and the stops as `data_check`s."""
     questions: tuple[CaseQuestion, ...]
-    doubts: tuple[CaseDoubt, ...]
+    approvals: tuple[CaseApproval, ...]
+    """The approvals that still stand: not those of an item that waits for a yes again."""
+    reopened: tuple[str, ...]
+    """Ids of the items that wait for the person's yes again."""
     offers: dict[str, tuple[OptionEffect, ...]]
 
 
@@ -198,11 +225,11 @@ def _data_end(frame: pd.DataFrame, columns: Sequence[str]) -> date | None:
 
 
 def _date_columns(prepared: pd.DataFrame, as_of_column: str | None) -> list[str]:
-    named = [as_of_column] if as_of_column else []
-    return [
-        *named,
-        *(str(c) for c in prepared.columns if type_group(prepared[c]) == "date" and c != as_of_column),
-    ]
+    """The columns the data's end is read from: the approved as-of column when one is named (the other dates of a
+    file, an expiry or a contract end, may lie in the future), else every date column."""
+    if as_of_column:
+        return [as_of_column]
+    return [str(c) for c in prepared.columns if type_group(prepared[c]) == "date"]
 
 
 def _window_days(items: Sequence[CaseItem], window: int | None) -> int | None:
@@ -265,13 +292,17 @@ def moved_dates(
     )
 
 
-def _move_value(value: Any, mapping: Mapping[str, str]) -> Any:
+DATE_KEYS: Final[frozenset[str]] = frozenset({"as_of", "training_as_of"})
+"""The payload keys that hold the case's dates: only these move, never a string that happens to equal one."""
+
+
+def _move_value(value: Any, uploads: Mapping[str, str], dates: Mapping[str, str], *, key: str = "") -> Any:
     if isinstance(value, str):
-        return mapping.get(value, value)
+        return (dates if key in DATE_KEYS else uploads).get(value, value)
     if isinstance(value, dict):
-        return {k: _move_value(v, mapping) for k, v in value.items()}
+        return {k: _move_value(v, uploads, dates, key=str(k)) for k, v in value.items()}
     if isinstance(value, list):
-        return [_move_value(v, mapping) for v in value]
+        return [_move_value(v, uploads, dates, key=key) for v in value]
     return value
 
 
@@ -296,7 +327,7 @@ class _Found:
 
     findings: list[RecheckFinding]
     questions: list[CaseQuestion]
-    doubts: list[CaseDoubt]
+    checks: list[CaseItem]
     offers: dict[str, tuple[OptionEffect, ...]]
     now: datetime
 
@@ -308,9 +339,11 @@ class _Found:
         upload_id: str | None,
         column: str | None = None,
         yes: tuple[str, OptionEffect] | None = None,
+        key: str | None = None,
     ) -> None:
-        """One question about a subject: `yes` is the answer that changes something (its effect, with its label)."""
-        question_id = f"q.recheck_{code.lower()}.base.{_short([upload_id, column])}"
+        """One question about a subject: `yes` is the answer that changes something (its effect, with its label).
+        `key` tells apart two questions of one code about one column (a finding of a step)."""
+        question_id = f"q.recheck_{code.lower()}.base.{_short([upload_id, column, key])}"
         agree = yes[0] if yes else "Yes, that is expected; go on"
         effect = yes[1] if yes else OptionEffect(option_id="yes")
         options = (
@@ -354,23 +387,55 @@ class _Found:
         )
 
     def stop(
-        self, code: str, text: str, *, upload_id: str | None, column: str | None = None, hard: bool = False
+        self,
+        code: str,
+        text: str,
+        *,
+        upload_id: str | None,
+        column: str | None = None,
+        hard: bool = False,
+        key: str | None = None,
     ) -> None:
-        doubt = CaseDoubt(
-            doubt_id=f"d.recheck_{code.lower()}.{_short([upload_id, column])}"[:128],
-            because=text,
-            would_do="Stop here: the new file is not used until this is settled.",
-            if_not="Nothing is trained or scored with this file.",
-            upload_id=upload_id,
+        """A stop: a `data_check` item whose finding the ledger reads (`kept`: the count of every row does not
+        measure it again). `hard` is a rule no yes lifts; any other stop waits for a person's yes, as anywhere.
+        """
+        payload: dict[str, Any] = {
+            "code": code,
+            "level": "stop",
+            "upload_id": upload_id,
+            "column": column,
+            "findings": [
+                {
+                    "level": "stop",
+                    "code": code,
+                    "message": text,
+                    "kept": True,
+                    **({"hard": True} if hard else {}),
+                }
+            ],
+        }
+        item_id = f"data_check.recheck_{code.lower()}.{_short([upload_id, column, key])}"[:128]
+        self.checks.append(
+            CaseItem(
+                item_id=item_id,
+                kind="data_check",
+                title=text,
+                source=ProposalSource.RULES,
+                confidence=AgentConfidence.CHECK,
+                state=ProposalState.ACCEPTED,
+                upload_id=upload_id,
+                payload=payload,
+                payload_digest=payload_digest(payload),
+                proposed_at=self.now,
+            )
         )
-        self.doubts.append(doubt)
         where = upload_id or "case"
         self.findings.append(
             RecheckFinding(
                 code=code,
                 level="stop",
                 text=text,
-                subject=f"{doubt_subject(doubt)}:{where}" + (f":{column}" if column else ""),
+                subject=f"data_check@{code}:{where}" + (f":{column}" if column else ""),
                 upload_id=upload_id,
                 column=column,
                 hard=hard,
@@ -490,8 +555,12 @@ def _content(
     upload_id: str,
     key: str | None,
     target: str | None,
+    protected: frozenset[str],
 ) -> None:
-    """What the prepared columns look like now against the approved run's (the contract learnt from it)."""
+    """What the prepared columns look like now against the approved run's (the contract learnt from it).
+
+    A drift the prescription contract stops on stays a stop here; on a protected column (ID, outcome, consent,
+    date) it is a rule no yes lifts, since the approved steps would run on a changed meaning."""
     contract: DataContract = learn_contract(old, primary_key=key, target=target)
     # the outcome rate is judged below, as a stop; the contract's own check for it is a warning
     contract = DataContract(
@@ -506,7 +575,12 @@ def _content(
             code = "NEW_CATEGORY"
         else:
             code = "NULL_RATE_JUMP" if " is empty in " in drift.summary else "VALUE_SHIFT"
-        found.ask(code, drift.summary, upload_id=upload_id, column=drift.column)
+        if drift.stops:
+            found.stop(
+                code, drift.summary, upload_id=upload_id, column=drift.column, hard=drift.column in protected
+            )
+        else:
+            found.ask(code, drift.summary, upload_id=upload_id, column=drift.column)
     for column in contract.columns:
         if not column.closed or column.column not in new.columns:
             continue
@@ -521,37 +595,66 @@ def _content(
                 upload_id=upload_id,
                 column=column.column,
             )
-    if target is not None and target in old.columns and target in new.columns:
-        before, after = _yes_rate(old[target]), _yes_rate(new[target])
-        if before is not None and after is not None:
-            if abs(after - before) > max(OUTCOME_RATE_FLOOR, OUTCOME_RATE_MOVE * before):
-                found.stop(
-                    "OUTCOME_RATE_SHIFT",
-                    f"The share of yes in '{target}' is {after:.1%}; it was {before:.1%} when the plan was "
-                    "approved. A shift this big needs a person to look before anything is trained.",
-                    upload_id=upload_id,
-                    column=target,
-                )
-            positives = int(pd.to_numeric(new[target], errors="coerce").fillna(0).sum())
-            if positives < MIN_POSITIVES:
-                found.stop(
-                    "TOO_FEW_POSITIVES",
-                    f"'{target}' has {positives:,} yes outcomes; at least {MIN_POSITIVES:,} are needed.",
-                    upload_id=upload_id,
-                    column=target,
-                    hard=True,
-                )
+    if target is None or target not in new.columns:
+        return
+    after = _yes_rate(new[target])
+    if after is None:
+        found.stop(
+            "OUTCOME_NOT_YES_NO",
+            f"'{target}' cannot be read as yes or no in this file, so the yes outcomes cannot be counted.",
+            upload_id=upload_id,
+            column=target,
+            hard=True,
+        )
+        return
+    before = _yes_rate(old[target]) if target in old.columns else None
+    if before is not None and abs(after - before) > max(OUTCOME_RATE_FLOOR, OUTCOME_RATE_MOVE * before):
+        found.stop(
+            "OUTCOME_RATE_SHIFT",
+            f"The share of yes in '{target}' is {after:.1%}; it was {before:.1%} when the plan was "
+            "approved. A shift this big needs a person to look before anything is trained.",
+            upload_id=upload_id,
+            column=target,
+        )
+    positives = int(pd.to_numeric(new[target], errors="coerce").fillna(0).sum())
+    if positives < MIN_POSITIVES:
+        found.stop(
+            "TOO_FEW_POSITIVES",
+            f"'{target}' has {positives:,} yes outcomes; at least {MIN_POSITIVES:,} are needed.",
+            upload_id=upload_id,
+            column=target,
+            hard=True,
+        )
 
 
 # ---------------------------------------------------------------------------
 # The recheck
 # ---------------------------------------------------------------------------
+MEANING_KINDS: Final[frozenset[str]] = frozenset(
+    {
+        "consent_column",
+        "map_consent",
+        "suppression",
+        "outcome_column",
+        "define_outcome",
+        "outcome_definition",
+        "map_outcome_values",
+    }
+)
+"""What the outcome and consent mean is never carried (`engine.doctor.carry`): next month's person says it again."""
+
+
 def _remap_items(
     items: Sequence[CaseItem], uploads: Mapping[str, str], dates: Mapping[str, str]
-) -> tuple[CaseItem, ...]:
+) -> tuple[tuple[CaseItem, ...], frozenset[str]]:
+    """The items on the new uploads, with the case's dates moved, and the ids of those the dates changed."""
     out: list[CaseItem] = []
+    moved: set[str] = set()
     for item in items:
-        payload = _move_value(item.payload, {**dates, **uploads})
+        by_id = _move_value(item.payload, uploads, {})
+        payload = _move_value(item.payload, uploads, dates)
+        if payload != by_id:
+            moved.add(item.item_id)
         out.append(
             item.model_copy(
                 update={
@@ -563,7 +666,27 @@ def _remap_items(
                 }
             )
         )
-    return tuple(out)
+    return tuple(out), frozenset(moved)
+
+
+def _ask_again(
+    items: Sequence[CaseItem], moved: frozenset[str]
+) -> tuple[tuple[CaseItem, ...], frozenset[str]]:
+    """Open the items that need the person's yes again: the meaning ones (outcome, consent), and an APPROVE-class
+    item whose payload changed (its approval was for the payload it had). Returns the items and those ids."""
+    out: list[CaseItem] = []
+    again: set[str] = set()
+    for item in items:
+        if item.state is ProposalState.ACCEPTED:
+            if item.kind in MEANING_KINDS:
+                item = item.model_copy(
+                    update={"state": ProposalState.PENDING, "decided_by": None, "decided_at": None}
+                )
+                again.add(item.item_id)
+            elif item.item_id in moved or approve_class_of(item.kind, item.payload) is not None:
+                again.add(item.item_id)
+        out.append(item)
+    return tuple(out), frozenset(again)
 
 
 def _remap_questions(questions: Sequence[CaseQuestion], dates: Mapping[str, str]) -> tuple[CaseQuestion, ...]:
@@ -574,10 +697,17 @@ def _remap_questions(questions: Sequence[CaseQuestion], dates: Mapping[str, str]
             value = q.answer_value
             if value is None and option is not None:
                 value = next((d for d in dates if d in option.label), None)
-            if value in dates:
+            if value is not None and value in dates:
                 q = q.model_copy(update={"answer_value": dates[value]})
         out.append(q)
     return tuple(out)
+
+
+def _training_rows(tables: Mapping[str, pd.DataFrame], targets: Mapping[str, str | None]) -> int:
+    """The rows of the prepared training table: the one that holds the outcome, else the largest (a file is
+    counted after its steps left rows out, kept the latest or joined, never as the raw file was)."""
+    with_target = [len(t) for n, t in tables.items() if targets.get(n) in t.columns]
+    return max(with_target or [len(t) for t in tables.values()], default=0)
 
 
 def recheck(
@@ -604,6 +734,7 @@ def recheck(
             "RECHECK_FILES_MISMATCH", "Give one new file for each file of the case, and no others."
         )
     items, _ = active_section(case)
+    active_ids = {i.item_id for i in items}
     decided = decisions(case)
     baseline = materialize(case, items, list(old_files), Full())
     if baseline.failed:
@@ -612,13 +743,20 @@ def recheck(
             "The approved plan cannot be run on the approved files any more, so there is nothing to compare with.",
         )
     found = _Found([], [], [], {}, now)
+    first_new = next(iter(uploads.values()))
     reads: set[str] = set()
+    protected: dict[str, frozenset[str]] = {}
     for upload_id in uploads:
         reads |= recipe_columns(s for s, _ in recipe_steps_of(items, upload_id, only_file=len(uploads) == 1))[
             0
         ]
-        roles = (decided.column(kind, upload_id) for kind in ("key", "outcome", "as_of_column", "consent"))
-        reads |= {c for c in roles if c is not None}
+        roles = {
+            c
+            for kind in ("key", "outcome", "as_of_column", "consent")
+            if (c := decided.column(kind, upload_id)) is not None
+        }
+        reads |= roles
+        protected[upload_id] = frozenset(roles)
     trying: list[CaseItem] = []
     standing: list[LoadedFile] = []
     for old_id, new_id in uploads.items():
@@ -627,17 +765,24 @@ def recheck(
         # the new file stands in for the old one under the old name, so the plan's table names still match
         standing.append(replace(new, file_name=old.file_name))
 
-    # the data's end, then the dates that move with it (from the files as read, before any step)
+    # the data's end, then the dates that move with it (from the files as read, before any step). The end is read
+    # from the approved as-of column when one is named (a renamed one through its alias) and never later than today.
     window = _window_days(items, decided.window_days(getattr(active_goal(case), "goal_id", None)))
-    ends_before, ends_after = [], []
+    ends_before: list[date | None] = []
+    ends_after: list[date | None] = []
     for old_id, new_id in uploads.items():
         name = baseline.by_upload[old_id]
         named = decided.as_of_columns.get(old_id)
         columns = _date_columns(baseline.tables[name], str(named.value) if named is not None else None)
+        now_called = {
+            str(a.payload["as"]): str(a.payload["column"]) for a in trying if a.payload["upload_id"] == new_id
+        }
         ends_before.append(_data_end(old_by[old_id].frame, columns))
-        ends_after.append(_data_end(new_by[new_id].frame, columns))
+        ends_after.append(_data_end(new_by[new_id].frame, [now_called.get(c, c) for c in columns]))
     end_before = max((d for d in ends_before if d), default=None)
     end_after = max((d for d in ends_after if d), default=None)
+    if end_after is not None:
+        end_after = min(end_after, now.date())
     dates = moved_dates(
         end_before=end_before,
         end_after=end_after,
@@ -645,57 +790,88 @@ def recheck(
         training=decided.training_as_of_date,
         window=window,
     )
-    if end_before is not None and end_after is not None and end_after <= end_before:
+    if end_before is not None and end_after is None:
+        found.ask(
+            "DATE_END_NOT_FOUND",
+            "The newest date of this file could not be found, so the case's dates stay as they were. "
+            "Is that right, or is there a newer date column?",
+            upload_id=first_new,
+        )
+    elif end_before is not None and end_after is not None and end_after <= end_before:
         found.ask(
             "DATE_RANGE_NOT_FORWARD",
             f"The newest date in this file ({end_after.isoformat()}) is not later than in the approved file "
             f"({end_before.isoformat()}). Is this the newer file?",
-            upload_id=next(iter(uploads.values())),
+            upload_id=first_new,
         )
     mapping = _date_mapping(dates)
 
     new_case_files = [f.model_copy(update={"upload_id": uploads[f.upload_id]}) for f in case.files]
-    moved_items = _remap_items(items, uploads, mapping)
+    remapped, moved = _remap_items(case.items, uploads, mapping)
     run: Prepared = materialize_plan(
         new_case_files,
-        [*moved_items, *trying],
+        [*(i for i in remapped if i.item_id in active_ids), *trying],
         standing,
         Full(),
         as_of=dates.as_of_after,
         training_as_of=dates.training_as_of_after,
     )
+    # only what is new or grown is raised: a stop the person said yes to in the approved run (same key, count not
+    # bigger) stays said, a flag the approved run had too is not asked again, a new flag is a question
+    before = {f.key: f for f in baseline.findings}
+    said = case.visit.acknowledged if case.visit is not None else ()
     for finding in run.findings:
+        was = before.get(finding.key)
         if finding.level == "stop":
-            found.stop(
-                finding.code,
-                finding.text,
-                upload_id=None,
-                column=finding.column,
-                hard=finding.hard,
-            )
-    rows_before = sum(f.file_rows or len(f.frame) for f in old_files)
-    rows_after = sum(f.file_rows or len(f.frame) for f in new_files)
-    if not run.failed:
+            if finding.hard or stop_is_open(finding, said):
+                found.stop(
+                    finding.code,
+                    finding.text,
+                    upload_id=None,
+                    column=finding.column,
+                    hard=finding.hard,
+                    key=finding.key,
+                )
+        elif finding.level == "flag" and (was is None or not holds(was.count, finding.count)):
+            found.ask(finding.code, finding.text, upload_id=first_new, column=finding.column, key=finding.key)
+    rows_before = rows_after = 0
+    if run.failed:
+        rows_before = sum(f.file_rows or len(f.frame) for f in old_files)
+        rows_after = sum(f.file_rows or len(f.frame) for f in new_files)
+    else:
+        targets: dict[str, str | None] = {}
         for old_id, new_id in uploads.items():
             name = baseline.by_upload[old_id]
-            columns = {str(c) for c in baseline.tables[name].columns}
-            key, target = roles_of(items, old_id, columns)
-            _content(found, baseline.tables[name], run.tables[name], upload_id=new_id, key=key, target=target)
-    if rows_after < MIN_ROWS:
-        found.stop(
-            "TOO_FEW_ROWS",
-            f"This file has {rows_after:,} rows; at least {MIN_ROWS:,} are needed.",
-            upload_id=None,
-            hard=True,
-        )
+            key, target = roles_of(items, old_id, {str(c) for c in baseline.tables[name].columns})
+            targets[name] = target
+            _content(
+                found,
+                baseline.tables[name],
+                run.tables[name],
+                upload_id=new_id,
+                key=key,
+                target=target,
+                protected=protected[old_id],
+            )
+        names = [baseline.by_upload[u] for u in uploads]
+        rows_before = _training_rows({n: baseline.tables[n] for n in names}, targets)
+        rows_after = _training_rows({n: run.tables[n] for n in names}, targets)
+        if rows_after < MIN_ROWS:
+            found.stop(
+                "TOO_FEW_ROWS",
+                f"The prepared training table has {rows_after:,} rows; at least {MIN_ROWS:,} are needed.",
+                upload_id=None,
+                hard=True,
+            )
     low, high = ROW_COUNT_BAND
     if rows_before and not low <= rows_after / rows_before <= high:
         found.ask(
             "ROW_COUNT_CHANGED",
             f"This file has {rows_after:,} rows; the approved file had {rows_before:,}. Is that expected?",
-            upload_id=next(iter(uploads.values())),
+            upload_id=first_new,
         )
-    kept = sum(1 for i in items if i.state is ProposalState.ACCEPTED)  # nothing here changes an approved item
+    follow_items, again = _ask_again(remapped, moved)
+    kept = sum(1 for i in items if i.state is ProposalState.ACCEPTED and i.item_id not in again)
     report = RecheckReport(
         source_case_id=case.case_id,
         uploads=dict(uploads),
@@ -703,15 +879,16 @@ def recheck(
         rows_after=rows_after,
         dates=dates,
         kept_items=kept,
+        asked_again=sum(1 for i in items if i.state is ProposalState.ACCEPTED and i.item_id in again),
         findings=tuple(found.findings),
     )
-    all_items = _remap_items(case.items, uploads, mapping)
-    all_questions = _remap_questions(case.questions, mapping)
+    reopened = frozenset(i.item_id for i in follow_items if i.item_id in again and i.kind in MEANING_KINDS)
     return Rechecked(
         report=report,
-        items=all_items,
-        questions=(*all_questions, *found.questions),
-        doubts=(*case.doubts, *found.doubts),
+        items=(*follow_items, *({c.item_id: c for c in found.checks}.values())),
+        questions=(*_remap_questions(case.questions, mapping), *found.questions),
+        approvals=tuple(a for a in case.approvals if not (a.approve_class and reopened & set(a.item_ids))),
+        reopened=tuple(sorted(reopened)),
         offers=found.offers,
     )
 
@@ -738,10 +915,16 @@ def open_recheck_case(
     *,
     actor: str,
 ) -> Case:
-    """A new case linked to `case`: the approved items, approvals and answers carry over unchanged (their approval
-    stands); what the recheck found waits as questions and stops. `new_case_files` are the new uploads, in the
-    order of `case.files`. A case with nothing open stays where the old one stood; any question or stop sends it to ASK.
+    """A new case linked to `case`, ready for the visit to go on from its approval (never in an approved state).
+
+    The new uploads are marked taken in, so the visit does not read them from INTAKE again and run the whole round
+    (the carried approvals, `approved_before` and the person's answers stand); the diagnosis follows the new uploads.
+    Everything the recheck found waits as a question (ASK, then TREAT once answered) or a stop in the ledger; with
+    nothing to ask the visit goes on at TREAT, counts the plan at PREVIEW and, when nothing is new, carries the
+    approval on to PRESCRIBE, VERIFY and the hand-off in the name of who approved. `new_case_files` are the new
+    uploads, in the order of `case.files`.
     """
+    from engine.doctor.carry import marks
     from engine.doctor.case import VisitState
 
     report = rechecked.report
@@ -753,31 +936,36 @@ def open_recheck_case(
     created = store.create(
         client_id=case.client_id, created_by=actor, title=f"{case.title} (next month)".strip(), files=files
     )
-    visit = (case.visit or CaseVisit()).model_copy(
+    source = case.visit or CaseVisit()
+    reopened = {m for i in case.items if i.item_id in rechecked.reopened for m in marks(i)}
+    visit = source.model_copy(
         update={
-            "offers": {**(case.visit.offers if case.visit else {}), **rechecked.offers},
+            "offers": {**source.offers, **rechecked.offers},
             "done": {},
             "ops": (),
+            "taken_in": tuple(f.upload_id for f in files),
+            "waiting_for": None,
             "hand_off": None,
             "stopped": None,
             "plan_check": None,
-            "acknowledged": (),
+            "approved_before": tuple(m for m in source.approved_before if m not in reopened),
         }
     )
-    open_now = bool(report.questions or report.stops)
+    diagnosis = (
+        _move_value(case.diagnosis, uploads, {}) if isinstance(case.diagnosis, dict) else case.diagnosis
+    )
 
     def change(fresh: Case) -> Any:
         updated = fresh.model_copy(
             update={
                 "items": rechecked.items,
                 "questions": rechecked.questions,
-                "doubts": rechecked.doubts,
-                "approvals": case.approvals,
+                "approvals": rechecked.approvals,
                 "goals": case.goals,
-                "diagnosis": case.diagnosis,
+                "diagnosis": diagnosis,
                 "locale_profile": case.locale_profile,
                 "visit": visit,
-                "state": VisitState.ASK if open_now else case.state,
+                "state": VisitState.ASK if report.questions else VisitState.TREAT,
                 "recheck_of": CaseRecheck(
                     source_case_id=case.case_id, source_version=case.version, uploads=dict(uploads)
                 ),
@@ -791,6 +979,7 @@ def open_recheck_case(
                     "questions": len(report.questions),
                     "stops": len(report.stops),
                     "kept_items": report.kept_items,
+                    "asked_again": report.asked_again,
                 },
             ),
         )

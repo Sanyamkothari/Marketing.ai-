@@ -4,7 +4,7 @@ Mounted beside the visit's routes (`api/main.py`).
 
 | Method and path | Role | Does |
 |---|---|---|
-| `POST /cases/{case_id}/recheck` | Analyst | Takes the new upload(s) for a ready case, replays the approved plan on them through the one materialisation (`engine.doctor.materialize`), and opens a NEW case linked to the old one (`recheck_of`). Approved items keep their approval; each thing that differs from the approved run is a question or a stop in the new case. Answers the drift report. |
+| `POST /cases/{case_id}/recheck` | Analyst | Takes the new upload(s) for a ready case, replays the approved plan on them through the one materialisation (`engine.doctor.materialize`), and opens a NEW case linked to the old one (`recheck_of`). Approved items keep their approval, except what the outcome and consent mean and any item the moved dates changed (those wait for a yes again); each thing that differs from the approved run is a question or a stop in the new case (a hard rule is a stop no yes lifts), and the visit goes on from there without reading the files from the start. Answers the drift report. |
 | `GET /cases/{case_id}/recheck` | Viewer | The drift report a recheck made, for the case it opened. |
 
 Refusals: `404 CASE_NOT_FOUND`, `404 UPLOAD_NOT_FOUND`, `409 RECHECK_NOT_READY` (the case was not approved and taken to

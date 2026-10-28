@@ -132,7 +132,8 @@ def test_a_same_shape_file_passes_with_zero_questions() -> None:
     report = result.report
     assert report.passed, [f.text for f in report.findings]
     assert report.questions == () and report.stops == ()
-    assert report.kept_items == 5  # every approved item keeps its approval
+    # the outcome says what it means again, and the dates item moved with the data: both wait for a yes
+    assert report.kept_items == 3 and report.asked_again == 2
     assert [q for q in result.questions if q.answer is None] == []
 
 
@@ -168,8 +169,10 @@ def test_a_big_outcome_rate_shift_is_a_stop() -> None:
 def test_an_empty_share_that_jumps_and_a_new_category_are_asked() -> None:
     new = month(OLD_START + timedelta(days=30), seed=2, spend_empty=0.4)
     new.loc[:300, "region"] = "central"
-    codes = {f.code for f in run(new).report.questions}
-    assert "NULL_RATE_JUMP" in codes and "NEW_CATEGORY" in codes
+    report = run(new).report
+    assert "NULL_RATE_JUMP" in {f.code for f in report.questions}
+    # a new value in a closed column stops the replay (the prescription contract's rule); it is not a yes-able question
+    assert "NEW_CATEGORY" in {f.code for f in report.stops}
 
 
 def test_too_few_rows_is_a_hard_stop() -> None:
@@ -198,10 +201,12 @@ def test_a_new_column_is_said_not_asked() -> None:
 def test_the_dates_move_with_the_data() -> None:
     dates = run(month(OLD_START + timedelta(days=30), seed=2)).report.dates
     assert dates.moved
-    shift = (dates.data_end_after - dates.data_end_before).days  # type: ignore[operator]
+    shift = (dates.data_end_after - dates.data_end_before).days
     assert shift > 0
-    assert dates.as_of_after == min(date(2024, 6, 1) + timedelta(days=shift), dates.data_end_after + timedelta(days=1))  # type: ignore[operator]
-    assert dates.training_as_of_after <= dates.data_end_after  # type: ignore[operator]
+    assert dates.as_of_after == min(
+        date(2024, 6, 1) + timedelta(days=shift), dates.data_end_after + timedelta(days=1)
+    )
+    assert dates.training_as_of_after <= dates.data_end_after
 
 
 def test_a_file_that_is_not_newer_moves_nothing_and_asks() -> None:
@@ -257,7 +262,7 @@ def test_a_query_that_froze_the_old_snapshot_moves_with_it() -> None:
     )
     result = run(month(OLD_START + timedelta(days=30), seed=2), case)
     moved = next(i for i in result.items if i.item_id == "item_q")
-    assert moved.payload["step"]["params"]["as_of"] == result.report.dates.training_as_of_after.isoformat()  # type: ignore[index,union-attr]
+    assert moved.payload["step"]["params"]["as_of"] == result.report.dates.training_as_of_after.isoformat()
     # and the decisions the follow-up case reads are the moved ones
     follow = decisions(case.model_copy(update={"items": result.items, "questions": result.questions}))
     assert follow.training_as_of_date == result.report.dates.training_as_of_after
@@ -322,9 +327,134 @@ def test_the_follow_up_case_keeps_approvals_and_links_back(tmp_path: Path) -> No
     assert made.upload_ids() == ("up-new",)
     assert made.state is VisitState.ASK  # one open question
     assert [i.item_id for i in made.items] == [i.item_id for i in case.items]
-    assert all(i.state is ProposalState.ACCEPTED and i.decided_by == "asha" for i in made.items)
+    # the outcome's meaning is asked again; the rest keeps its approval
+    assert {i.item_id for i in made.items if i.state is ProposalState.PENDING} == {"item_out"}
+    assert all(i.decided_by == "asha" for i in made.items if i.state is ProposalState.ACCEPTED)
     assert all(i.upload_id == "up-new" for i in made.items)
     assert made.approvals == case.approvals
+    assert made.visit is not None and made.visit.taken_in == ("up-new",)
     assert len([q for q in made.questions if q.answer is None]) == 1
     assert store.get("default", case.case_id).upload_ids() == ("up-old",)  # the old case is untouched
     assert read_report(LocalStorage(tmp_path), "default", made.case_id) is None  # the API stores the report
+
+
+# -- hard rules, protected columns, dates ---------------------------------------------------------------------
+def test_the_floor_counts_the_prepared_training_table_not_the_raw_file() -> None:
+    drop = RecipeStep(
+        order=1,
+        kind=RecipeStepKind.REMOVE_ROWS,
+        column="region",
+        params={"operator": "equals", "values": ["north", "south", "east"]},
+        reason="only the west",
+    )
+    case = ready_case()
+    case = case.model_copy(
+        update={
+            "items": (*case.items, item("item_drop", "recipe_step", {"step": drop.model_dump(mode="json")}))
+        }
+    )
+    report = run(month(OLD_START + timedelta(days=30), seed=2), case).report  # 3,000 raw rows, about 750 left
+    floor = [f for f in report.stops if f.code == "TOO_FEW_ROWS"]
+    assert floor and floor[0].hard and report.rows_after < 1_000
+
+
+def test_the_hard_stops_are_hard_in_the_ledger_not_acknowledgeable_doubts() -> None:
+    from engine.doctor.ledger import findings_of
+
+    case = ready_case()
+    result = run(month(OLD_START + timedelta(days=30), seed=2).head(400), case)
+    follow = case.model_copy(update={"items": result.items, "questions": result.questions, "doubts": ()})
+    hard = {f.code: f for f in findings_of(follow)}
+    assert hard["TOO_FEW_ROWS"].level == "hard"
+    assert all(r.kind != "acknowledge" for r in hard["TOO_FEW_ROWS"].resolutions)  # no yes lifts it
+    assert hard["TOO_FEW_POSITIVES"].level == "hard"
+
+
+def test_an_outcome_that_is_no_longer_yes_no_is_a_hard_stop() -> None:
+    new = month(OLD_START + timedelta(days=30), seed=2)
+    new["churned"] = new["churned"].map({0: "no", 1: "yes"})
+    stops = {f.code: f for f in run(new).report.stops}
+    assert stops["OUTCOME_NOT_YES_NO"].hard
+
+
+def test_a_new_value_in_a_closed_column_is_a_stop_and_a_non_yes_no_outcome_is_hard() -> None:
+    new = month(OLD_START + timedelta(days=30), seed=2)
+    new.loc[:50, "region"] = "central"
+    assert not {(f.code, f.column): f for f in run(new).report.stops}[("NEW_CATEGORY", "region")].hard
+    new.loc[:50, "churned"] = 2
+    assert {f.code: f for f in run(new).report.stops}["OUTCOME_NOT_YES_NO"].hard
+
+
+def test_the_end_of_the_data_is_the_named_date_column_never_a_future_one() -> None:
+    new = month(OLD_START + timedelta(days=30), seed=2)
+    new["contract_end"] = "2031-01-01"  # a date in the future that is not the day each row describes
+    dates = run(new).report.dates
+    expected = pd.to_datetime(new["joined"]).max().date()
+    assert dates.data_end_after == expected
+    assert dates.training_as_of_after <= expected and dates.as_of_after <= expected + timedelta(days=1)
+    # a file dated after today is read to today at most
+    later = run(month(date(2027, 1, 1), seed=2)).report.dates
+    assert later.data_end_after == NOW.date()
+
+
+def test_a_date_column_that_cannot_be_found_is_asked_not_silently_kept() -> None:
+    gone = month(OLD_START + timedelta(days=30), seed=2).drop(columns=["joined"])
+    report = run(gone).report
+    assert "DATE_END_NOT_FOUND" in {f.code for f in report.questions}
+    assert not report.dates.moved
+
+
+# -- the follow-up case goes through the visit ---------------------------------------------------------------
+def test_the_follow_up_case_goes_on_through_the_visit_without_a_new_round(tmp_path: Path) -> None:
+    from engine.doctor import visit
+    from engine.doctor.diagnose import Offer
+    from tests.unit.doctor.visit_support import World, deps_for
+
+    storage = LocalStorage(tmp_path)
+    store = CaseStore(storage)
+    source = store.create(
+        client_id="default",
+        created_by="asha",
+        title="Churn",
+        files=[CaseFile(upload_id="up-old", file_name="customers.csv", added_at=NOW, added_by="asha")],
+    )
+    case = ready_case().model_copy(
+        update={"case_id": source.case_id, "version": source.version, "created_at": source.created_at}
+    )
+    old = loaded(month(OLD_START, seed=1), "up-old")
+    new = loaded(
+        month(OLD_START + timedelta(days=30), seed=2, amount="bill_amount"), "up-new", "customers_next.csv"
+    )
+    result = recheck(case, {"up-old": "up-new"}, [old], [new], now=NOW)
+    made = open_recheck_case(
+        store,
+        case,
+        result,
+        [CaseFile(upload_id="up-new", file_name="customers_next.csv", added_at=NOW, added_by="asha")],
+        actor="asha",
+    )
+    assert made.state is VisitState.ASK
+    world = World(
+        files={"up-new": new}, offers=(Offer(config=load_use_case("rca", CONFIGS), stage="Retain"),)
+    )
+    deps = deps_for(storage, world)
+    question = next(q for q in made.questions if q.answer is None)
+    after = visit.answer(
+        "default",
+        made.case_id,
+        question.question_id,
+        "yes",
+        deps,
+        expected_version=made.version,
+        actor="asha",
+    )
+    # the rename was the only thing asked: no INTAKE round, no second question about the files
+    assert after.visit is not None and after.visit.taken_in == ("up-new",)
+    assert [
+        q.question_id for q in after.questions if q.answer is None and q.code.startswith("RECHECK_")
+    ] == []
+    assert after.state is not VisitState.INTAKE
+    parse = next(i for i in after.items if i.item_id == "item_parse")
+    assert parse.state is ProposalState.ACCEPTED and parse.decided_by == "asha"
+    assert any(i.kind == "column_alias" and i.state is ProposalState.ACCEPTED for i in after.items)
+    assert after.approvals[: len(case.approvals)] == case.approvals
