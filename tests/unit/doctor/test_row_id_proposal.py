@@ -136,7 +136,7 @@ def test_an_id_with_another_name_is_asked_about_not_replaced_by_a_row_number(tmp
     assert not _proposed(case), "no row number is added for it"
     q = vs.question(case, "KEY_NOT_UNIQUE")
     labels = [o.label for o in q.options]
-    assert labels[0].startswith("Kundennummer") and "None of these: add a row number" in labels
+    assert labels[0].startswith("Kundennummer") and "None of these: add a row number" not in labels
     assert q.recommended is None, "which column is the ID is the person's to say"
     case = visit.answer(
         CLIENT, case.case_id, q.question_id, vs.option(q, "Kundennummer"), deps,

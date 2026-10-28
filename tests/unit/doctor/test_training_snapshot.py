@@ -100,7 +100,8 @@ def test_the_trial_passes_the_window_check_for_the_august_step_and_names_the_dat
     }
     out = dict(data_registry().call("propose_sql_step", given, ctx).output)
     assert "OUTCOME_WINDOW_PAST_DATA" not in {f["code"] for f in out["findings"]}
-    assert "2011-08-31, not 2011-11-30" in out["sentence"]
+    assert "reads the data as of 2011-08-31, the date the training table is cut at" in out["sentence"]
+    assert "90 days after it give the outcome" in out["sentence"] and "2011-11-30" in out["sentence"]
     given.pop("as_of")
     out = dict(data_registry().call("propose_sql_step", given, ctx).output)
     assert "OUTCOME_WINDOW_PAST_DATA" in {f["code"] for f in out["findings"]}  # the case date does not fit
@@ -224,3 +225,37 @@ def test_the_outcome_is_not_all_zero_in_the_trial_the_prescription_and_the_repla
         recipe, log(), config=None, upload_id="up-1", leak_check=None, tables={"log": log()}
     )
     assert int(ran.frame["again"].sum()) > 0
+
+
+def test_the_two_dates_of_a_training_build_are_not_a_stop_but_an_unexplained_difference_is() -> None:
+    from engine.doctor.materialize import Full, date_differences
+
+    build = query(as_of=TRAINING.isoformat())  # a snapshot whose 90 days are over by the case date
+    assert date_differences([(build, "i1")], SCORING, None, Full()) == []
+    assert (
+        date_differences([(build, "i1")], SCORING, SCORING, Full()) == []
+    )  # the case date, also as the fallback
+    late = query(as_of=date(2011, 10, 31).isoformat())  # its window runs past the case date: no reason for it
+    assert [f.code for f in date_differences([(late, "i1")], SCORING, None, Full())] == ["STEP_DATE_DIFFERS"]
+    plain = RecipeStep(
+        order=1,
+        kind=RecipeStepKind.SQL_QUERY,
+        column="t",
+        params={"sql": "SELECT 1", "inputs": ["log"], "output_name": "t", "as_of": "2011-08-31"},
+        reason="r",
+    )  # reads no future: nothing explains the other date
+    assert [f.code for f in date_differences([(plain, "i2")], SCORING, None, Full())] == ["STEP_DATE_DIFFERS"]
+    # a training date that was decided is the date: a step cut elsewhere still stops
+    assert [f.code for f in date_differences([(build, "i1")], SCORING, date(2011, 7, 31), Full())] == [
+        "STEP_DATE_DIFFERS"
+    ]
+
+
+def test_a_decided_training_date_is_matched_by_every_step_whatever_its_window() -> None:
+    from engine.doctor.materialize import Full, date_differences
+
+    earlier = query(as_of=date(2011, 5, 31).isoformat())  # 90 days from it are over by the case date
+    decided = date(2011, 8, 31)
+    assert [f.code for f in date_differences([(earlier, "i1")], SCORING, decided, Full())] == [
+        "STEP_DATE_DIFFERS"
+    ]

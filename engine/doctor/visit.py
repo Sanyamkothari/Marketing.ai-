@@ -57,7 +57,7 @@ import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
@@ -103,6 +103,7 @@ from engine.doctor.materialize import Full, materialize, stop_finding
 from engine.doctor.memo import plan_part
 from engine.doctor.plan_check import (
     check_plan,
+    item_sentence_now,
     plan_check_of,
     plan_digest,
     readiness_acknowledged,
@@ -122,7 +123,6 @@ from engine.doctor.protocol import (
     approve_class_of,
     confirmation_refusal,
     decision_body,
-    item_sentence,
     question_budget,
     question_id_of,
     request_data,
@@ -151,7 +151,7 @@ from engine.utils.time import utc_now
 if TYPE_CHECKING:
     from engine.access.roles import Principal
     from engine.config import UseCaseConfig
-    from engine.doctor.buildable import BuildableOutcome
+    from engine.doctor.buildable import BuildableOutcome, BuildAudience
     from engine.doctor.current_tables import CurrentTables
     from engine.doctor.diagnose import LoadedFile, Offer
     from engine.storage import Storage
@@ -1127,6 +1127,7 @@ def _treat(run: _Run, case: Case) -> _Step:
             _generic_rules(run, case, step)
         else:
             _goal_rules(run, case, brief, step)
+        _recommend_customer_column(case, step)
         by_rules = _mark(step)
         review = _digest(
             [(f.upload_id, f.fingerprint) for f in case.files],
@@ -2079,9 +2080,15 @@ def _question(
     column: str | None = None,
     goal_id: str | None = None,
     blocking: bool = True,
+    recommended: str | None = None,
+    why: str = "",
 ) -> tuple[CaseQuestion, tuple[OptionEffect, ...]]:
     """A question whose id is its code, its goal (none for the base) and its subject - never the mode it is asked
-    in - so a question answered once is found, not asked again, whenever the rules need the same answer."""
+    in - so a question answered once is found, not asked again, whenever the rules need the same answer.
+
+    The rules recommend no column on a guess of their own (which column is which is the person's to say). A
+    `recommended` option is only ever one that a step the person already approved, or the build the goal
+    offers, uses as a fact; `why` says so in plain words. The person still answers."""
     question_id = f"q.{code.lower()}.{goal_id or 'base'}.{_short(dict(subject))}"[:128]
     options = tuple(
         CaseOption(
@@ -2100,7 +2107,8 @@ def _question(
         text=text,
         options=options,
         blocking=blocking,
-        recommended=None,  # meaning-bearing: the rules never recommend which column is which
+        recommended=recommended if recommended in {effect.option_id for _l, effect in choices} else None,
+        why=why,
         goal_id=goal_id,
     )
     return question, tuple(effect for _label, effect in choices)
@@ -2131,7 +2139,7 @@ def _base_rules(run: _Run, case: Case, step: _Step) -> None:
     ctx = run.context(case, files=current.files)
     for loaded in current.files:
         upload_id = loaded.upload_id
-        if decisions(case).key(upload_id) is not None:
+        if decisions(case).key(upload_id) is not None or _approved_build_key(case, upload_id) is not None:
             continue
         result = run.call("find_file_role", {"upload_id": upload_id}, ctx)
         step.evidence.append(result)
@@ -2184,13 +2192,19 @@ def _base_rules(run: _Run, case: Case, step: _Step) -> None:
         elif len(loaded.frame) > 0:
             # No column is unique and complete. The near-candidates are facts (how often a value repeats, how many
             # blanks); a name like `customer_id` only ranks them. With any, the person says which one names the
-            # customers, or takes a row number; with none (and not an events file), the row number is proposed.
-            near = _near_keys(result.output, loaded)
-            made = _row_id_item(run, step, loaded, ctx, now, evidence=result.evidence_id)
+            # customers; for a file of events (many rows per customer) that is the question, with the blank share of
+            # each column shown and the column the goal's build counts customers by recommended, and a row number
+            # is never offered (it would name a row, not a customer). A file that is not events can take a row
+            # number; with no near-candidate (and not events) the row number is proposed.
+            events = _event_file(result.output, _event_roles(run))
+            near = _near_keys(loaded)
+            made = (
+                _row_id_item(run, step, loaded, ctx, now, evidence=result.evidence_id) if not events else None
+            )
             if near:
                 choices = [
                     (
-                        f"{key['column']} (a value repeats about {float(key.get('rows_per_key') or 1):.1f} times)",
+                        _near_key_label(key, events=events),
                         OptionEffect(
                             option_id=f"c{index}",
                             kind="key",
@@ -2215,15 +2229,79 @@ def _base_rules(run: _Run, case: Case, step: _Step) -> None:
                         "KEY_NOT_UNIQUE",
                         {"upload_id": upload_id},
                         text=(
-                            f"No column of {name} holds a different value on every row with no blanks. Which column "
-                            "names the customers in it?"
+                            f"{name} has many rows for each customer, so no column is different on every row. "
+                            "Which column names the customer on each row?"
+                            if events
+                            else f"No column of {name} holds a different value on every row with no blanks. "
+                            "Which column names the customers in it?"
                         ),
                         choices=choices,
                         upload_id=upload_id,
                     )
                 )
-            elif made is not None and not _event_file(result.output):
+            elif made is not None:
                 step.items.append(made)
+
+
+def _near_key_label(key: dict[str, Any], *, events: bool) -> str:
+    """One offered customer column with its facts: how often a value repeats and the share of blank rows (rows
+    with a blank there cannot be tied to a person)."""
+    blank = float(key.get("null_rate") or 0.0)
+    label = f"{key['column']} (a value repeats about {float(key.get('rows_per_key') or 1):.1f} times"
+    if blank >= 0.005:
+        label += f"; {blank:.0%} blank" + (", those rows cannot be tied to a person" if events else "")
+    return label + ")"
+
+
+def _approved_build_key(case: Case, upload_id: str) -> str | None:
+    """The customer column of an approved build that reads this file: the build counts customers by it, so the
+    question which column names the customer is answered by the step the person approved."""
+    for item in active_section(case)[0]:
+        built = item.payload.get("buildable")
+        if (
+            item.kind == "recipe_step"
+            and item.state is ProposalState.ACCEPTED
+            and isinstance(built, dict)
+            and built.get("upload_id") == upload_id
+            and isinstance(built.get("entity_key"), str)
+        ):
+            return str(built["entity_key"])
+    return None
+
+
+def _offered_build_key(diagnosis: Mapping[str, Any] | None, upload_id: str) -> str | None:
+    """The one customer column the goals that can be built from this file count customers by (the diagnosis'
+    `buildable` facts), or None when there is none or they disagree."""
+    found = {
+        str(built["entity_key"])
+        for use_case in (diagnosis or {}).get("use_cases", [])
+        if isinstance(use_case, dict)
+        and isinstance(built := use_case.get("buildable"), dict)
+        and built.get("upload_id") == upload_id
+        and isinstance(built.get("entity_key"), str)
+    }
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def _recommend_customer_column(case: Case, step: _Step) -> None:
+    """The customer question of a file of events recommends the column the goals' build counts customers by (a fact
+    of the build, said with its reason); the person still answers. It runs after the goals were judged, which is
+    when those facts are known."""
+    diagnosis = step.updates.get("diagnosis", case.diagnosis)
+    for index, (question, effects) in enumerate(step.questions):
+        if (
+            question.code != "KEY_NOT_UNIQUE"
+            or question.upload_id is None
+            or question.recommended is not None
+        ):
+            continue
+        offered = _offered_build_key(diagnosis, question.upload_id)
+        pick = next(
+            (e.option_id for e in effects if offered is not None and e.payload.get("column") == offered), None
+        )
+        if offered is not None and pick is not None:
+            why = f"The build for your goal counts each customer by “{offered}”."
+            step.questions[index] = (question.model_copy(update={"recommended": pick, "why": why}), effects)
 
 
 ROW_ID_WARNING: Final[str] = (
@@ -2234,47 +2312,79 @@ ROW_ID_WARNING: Final[str] = (
 """What the person is told with the proposed row number (never silently invented: it waits for their yes)."""
 
 
-_EVENT_ROLES: Final[frozenset[str]] = frozenset(
-    {"bills", "payments", "complaints", "usage", "campaign_events", "orders"}
-)
-"""The roles of a file with many rows per customer (events, transactions): such a file has an ID, repeated."""
 _NEAR_ROWS_PER_KEY: Final[float] = 50.0
 """A text column whose values repeat at most this often may name customers who appear on several rows."""
 
 
-def _near_keys(roles: dict[str, Any], loaded: LoadedFile) -> list[dict[str, Any]]:
+def _near_keys(loaded: LoadedFile) -> list[dict[str, Any]]:
     """The columns that could name the customers though none is unique and complete: a text column whose values
-    repeat a few times (an events file) or that has some blanks, and any column named like an ID. Ranked: named like
-    an ID first (a hint, not a decision), then the fewest repeats."""
+    repeat a few times (an events file) or that has some blanks, and any column named like an ID, over every column
+    of the file (not the five the role tool lists first, which rank the fewest blanks first and so leave out a
+    customer column with blanks). A column of dates never names a customer. Ranked: named like an ID first (a hint,
+    not a decision), then the fewest repeats."""
     import pandas as pd
 
+    from engine.onboarding.sources import key_candidates
+
     found: list[dict[str, Any]] = []
-    for key in roles.get("keys", []):
-        if not isinstance(key, dict) or key.get("column") not in loaded.frame.columns:
-            continue
+    for candidate in key_candidates(loaded.profile):
+        key = candidate.model_dump(mode="json")
         column = str(key["column"])
+        if column not in loaded.frame.columns:
+            continue
         named = bool(_ID_NAMED.search(column.strip()))
         series = loaded.frame[column]
         text = not (pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series))
         repeats = float(key.get("rows_per_key") or 99.0)
         blanks = float(key.get("null_rate") or 0.0)
-        if named or (text and repeats <= _NEAR_ROWS_PER_KEY and blanks < 0.5 and series.nunique() > 1):
+        if named or (
+            text
+            and repeats <= _NEAR_ROWS_PER_KEY
+            and blanks < 0.5
+            and series.nunique() > 1
+            and not _dates(series)
+        ):
             found.append(key)
     found.sort(
-        key=lambda k: (
-            not _ID_NAMED.search(str(k["column"]).strip()),
-            float(k.get("rows_per_key") or 99.0),
-        )
+        key=lambda k: (not _ID_NAMED.search(str(k["column"]).strip()), float(k.get("rows_per_key") or 99.0))
     )
     return found
 
 
-def _event_file(roles: dict[str, Any]) -> bool:
-    """The file reads as events or transactions: a row number would not be its ID."""
-    return any(
-        isinstance(r, dict) and r.get("role") in _EVENT_ROLES and float(r.get("confidence") or 0.0) >= 0.5
-        for r in roles.get("roles", [])
-    )
+_DATE_SAMPLE: Final[int] = 500
+
+
+def _dates(series: Any) -> bool:
+    """A text column that reads as dates on nearly every value (digits joined by a date or time separator)."""
+    import pandas as pd
+
+    from engine.onboarding.sources import MIN_TIME_PARSE_RATE
+
+    seen = series.dropna().astype(str).head(_DATE_SAMPLE)
+    if seen.empty or seen.str.contains(r"\d[-/:.]\d", regex=True).mean() < MIN_TIME_PARSE_RATE:
+        return False
+    return bool(pd.to_datetime(seen, errors="coerce", format="mixed").notna().mean() >= MIN_TIME_PARSE_RATE)
+
+
+def _event_roles(run: _Run) -> frozenset[str]:
+    """The roles the catalogue calls events (many rows per customer): bills, payments, orders, any other log."""
+    from engine.config import get_roles
+
+    return frozenset(get_roles(run.deps.config_root).event_roles)
+
+
+def _event_file(roles: dict[str, Any], event_roles: frozenset[str]) -> bool:
+    """The file reads as events or transactions: an event role of the catalogue outscores every other role, so a
+    row number would not be its ID. A tie is no evidence (a file with no date and nothing that names a role ties
+    its event roles at the same low score), so it does not count as events."""
+    ranked = [r for r in roles.get("roles", []) if isinstance(r, dict)]
+    if not ranked or ranked[0].get("role") not in event_roles:
+        return False
+    top = ranked[0].get("confidence")
+    second = ranked[1].get("confidence") if len(ranked) > 1 else None
+    if not isinstance(top, (int, float)):
+        return False
+    return not isinstance(second, (int, float)) or top > second
 
 
 _OUTPUT_NAME_CHARS: Final[int] = 64
@@ -2433,6 +2543,7 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                     [str(c) for c in loaded.frame.columns], brief.outcome.synonyms, parts=True
                 )
             ]
+            built_likely: list[tuple[LoadedFile, str]] = []
             if not likely:
                 built_likely = _built_outcomes(current, brief, case)
                 likely = built_likely + [
@@ -2455,6 +2566,16 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                 ]
                 choices.append(("None of these", OptionEffect(option_id="none")))
                 what = brief.outcome.definition.rstrip(".") or f"the outcome of {brief.goal_name}"
+                # A column a step the person approved builds is a fact, not a guess: it is the one recommended.
+                approved = next(
+                    (
+                        f"c{index}"
+                        for index, (lf, column) in enumerate(likely[:5])
+                        if (lf.upload_id, column) in {(b.upload_id, c) for b, c in built_likely}
+                        and _built_by_approved(case, current, column)
+                    ),
+                    None,
+                )
                 step.questions.append(
                     _question(
                         "OUTCOME_COLUMN",
@@ -2465,6 +2586,8 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                             likely[0][0].upload_id if len({lf.upload_id for lf, _c in likely}) == 1 else None
                         ),
                         goal_id=goal,
+                        recommended=approved,
+                        why="It is built by the step you approved." if approved is not None else "",
                     )
                 )
             elif not _offer_build(run, case, brief, step, files, now):
@@ -2579,6 +2702,9 @@ def _offer_build(
     payload["buildable"] = built.model_dump(mode="json")
     if audience is not None:
         payload["audience"] = audience.model_dump(mode="json")
+    _say_build_counts(
+        payload, built, config.entity or "customer", audience, decisions(case).training_as_of_date
+    )
     step.items.append(
         _item(
             "recipe_step",
@@ -2592,6 +2718,70 @@ def _offer_build(
         )
     )
     return True
+
+
+def _audience_left_out(payload: Mapping[str, Any]) -> int:
+    """Customers in the file that the build's audience leaves out (no activity on or before the snapshot): the count
+    the person's yes agrees to, from the counts of the audience question (0 for a step that is not a build).
+    """
+    built = payload.get("buildable")
+    if not isinstance(built, dict):
+        return 0
+    chosen = payload.get("audience")
+    kept = chosen.get("customers") if isinstance(chosen, dict) else built.get("active_before")
+    ids = built.get("ids")
+    if (
+        isinstance(kept, bool)
+        or isinstance(ids, bool)
+        or not isinstance(kept, int)
+        or not isinstance(ids, int)
+    ):
+        return 0
+    return max(0, ids - kept)
+
+
+def _say_build_counts(
+    payload: dict[str, Any],
+    built: BuildableOutcome,
+    entity: str,
+    audience: BuildAudience | None,
+    decided: date | None,
+) -> None:
+    """The build's sentence says what the sample could only estimate (the table has one row per customer in the
+    audience, counted on every row of the file) and, in plain words, who the audience leaves out."""
+    from engine.doctor.plan_check import replace_estimate
+
+    sentence = str(payload.get("sentence") or "")
+    rows = audience.customers if audience is not None else built.active_before
+    estimate = payload.get("sentence_estimate")
+    if built.exact and isinstance(estimate, dict):
+        # The customers clause is a sample's too; the sentence below says who the audience leaves out.
+        sentence = replace_estimate(sentence, estimate, rows)
+        payload.pop("sentence_estimate")
+    left = _audience_left_out(payload)
+    if left and built.snapshot is not None:
+        plural = entity if entity.endswith("s") else f"{entity}s"
+        sentence += (
+            f" The {left:,} of the file's {built.ids:,} {plural} with no activity on or before "
+            f"{built.snapshot:%d %b %Y} are left out: "
+            + (
+                "that is the audience you chose."
+                if audience is not None
+                else "the table is about those active by then."
+            )
+        )
+    if (
+        decided is not None
+        and built.snapshot is not None
+        and built.snapshot != decided
+        and built.snapshot + timedelta(days=built.window_days) <= decided
+    ):
+        # The two dates of a training table: said here, so the difference is not a stop to say yes to.
+        sentence += (
+            f" It is cut at {built.snapshot:%d %b %Y}: the {built.window_days} days after it give the outcome, "
+            f"and {decided:%d %b %Y} is the date your case is read at."
+        )
+    payload["sentence"] = sentence
 
 
 def _audience_question(
@@ -2729,6 +2919,13 @@ def _built_outcomes(
             ranked.append((tier, len(ranked), table.origin, column))
     ranked.sort(key=lambda r: (r[0], r[1]))
     return [(origin, column) for _t, _i, origin, column in ranked]
+
+
+def _built_by_approved(case: Case, current: CurrentTables, column: str) -> bool:
+    """The table that holds `column` is made by a query step the person approved (not one only proposed)."""
+    table = current.built_with(column)
+    maker = next((i for i in case.items if table is not None and i.item_id == table.made_by), None)
+    return maker is not None and maker.state is ProposalState.ACCEPTED
 
 
 def _prepared_outcomes(
@@ -3449,14 +3646,17 @@ def _agreed_update(case: Case, item: CaseItem, accept: bool) -> dict[str, int]:
         return {}
     check = case.visit.plan_check if case.visit is not None else None
     rows = check.ledger.get("steps") if check is not None else None
+    # A build's audience leaves out the customers with no activity before its snapshot: the yes agrees to up to the
+    # count the audience question showed, however many the sample counted when it was said.
+    left_out = _audience_left_out(item.payload)
     for row in rows if isinstance(rows, list) else []:
         if isinstance(row, dict) and row.get("item_id") == item.item_id:
             lost = row.get("customers_lost")
             if not isinstance(lost, int):
                 rows_in, rows_out = row.get("rows_in"), row.get("rows_out")
                 lost = rows_in - rows_out if isinstance(rows_in, int) and isinstance(rows_out, int) else 0
-            return {"agreed_rows": max(0, lost)}
-    return {}
+            return {"agreed_rows": max(0, lost, left_out)}
+    return {"agreed_rows": left_out} if left_out else {}
 
 
 def _person_step(
@@ -4150,11 +4350,15 @@ def item_proposers(case: Case, item: CaseItem) -> tuple[str, ...]:
     return _proposers(case, item)
 
 
+def _plan_check_of(case: Case) -> PlanCheck | None:
+    return case.visit.plan_check if case.visit is not None else None
+
+
 def confirmed(case: Case, item: CaseItem) -> bool:
     """Whether an APPROVE-class item has its own yes for what it says now (its payload and its sentence)."""
     from engine.doctor.protocol import approval_digest
 
-    wanted = approval_digest([item.payload_digest], item_sentence(item.title, item.payload))
+    wanted = approval_digest([item.payload_digest], item_sentence_now(item, _plan_check_of(case)))
     return any(
         approval.approve_class and item.item_id in approval.item_ids and approval.payload_digest == wanted
         for approval in case.approvals
@@ -4203,7 +4407,7 @@ def confirm(
         rule = approve_class_of(item.kind, item.payload, deps.protocol)
         if rule is None:
             raise _unknown("This change does not need its own yes; it is approved with the others.")
-        text = item_sentence(item.title, item.payload)
+        text = item_sentence_now(item, _plan_check_of(case))
         proposed_by = _proposers(case, item)
         required = _approval_required(deps, case)
         refused = confirmation_refusal(

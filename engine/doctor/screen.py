@@ -53,13 +53,12 @@ from engine.doctor.conversation import ConversationCard, build_conversation
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.full_count import full_count_of
 from engine.doctor.ledger import screen_ledger
-from engine.doctor.plan_check import open_stops, plan_digest
+from engine.doctor.plan_check import item_sentence_now, open_stops, plan_digest
 from engine.doctor.preview import PreviewView, cached_preview, preview_rows
 from engine.doctor.protocol import (
     DEFAULT_SETTINGS,
     approve_class_of,
     confirmation_refusal,
-    item_sentence,
     role_for,
 )
 from engine.doctor.readiness_contracts import DataReadinessReport
@@ -545,7 +544,7 @@ def _approve_class(
         if rule is None:
             continue
         role = role_for(rule, approval_required=separate)
-        sentence = item_sentence(item.title, item.payload)
+        sentence = item_sentence_now(item, case.visit.plan_check if case.visit is not None else None)
         why_not: Literal["role", "separation"] | None = None
         if principal is not None:
             # The very rule `visit.confirm` applies, with the sentence as shown: what it would refuse, said first.
