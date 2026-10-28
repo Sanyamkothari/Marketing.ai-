@@ -229,7 +229,7 @@ def remove_rows(series: pd.Series[Any], *, operator: str, values: Sequence[Any])
 
     `equals` / `in` compare trimmed text (so 7 and "7" match), `starts_with` leaves out the rows whose trimmed
     text begins with one of the values (ids starting 999), `is_empty` needs no value, `before` / `after` compare
-    dates (a value that is not a date is kept).
+    dates (a value that is not a date is kept); `after` a date written without a time keeps that whole day.
     """
     if operator == "starts_with":
         prefixes = tuple(p for p in (_text(v) for v in values) if p)
@@ -248,8 +248,14 @@ def remove_rows(series: pd.Series[Any], *, operator: str, values: Sequence[Any])
         hit = series.isna() | series.map(lambda v: isinstance(v, str) and not v.strip())
     else:
         when = pd.to_datetime(series, errors="coerce", utc=True)
-        limit = pd.Timestamp(str(values[0]))
+        written = str(values[0])
+        limit = pd.Timestamp(written)
         limit = limit.tz_localize("UTC") if limit.tzinfo is None else limit.tz_convert("UTC")
-        hit = (when < limit) if operator == "before" else (when > limit)
+        if operator == "before":
+            hit = when < limit
+        else:
+            # a date written without a time is a whole day: "after 2011-11-30" keeps every row of the 30th
+            whole_day = re.search(r"\d:\d", written) is None
+            hit = (when >= limit + pd.Timedelta(days=1)) if whole_day else (when > limit)
         hit = hit.fillna(False)
     return ~hit.astype(bool)

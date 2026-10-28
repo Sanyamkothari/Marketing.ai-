@@ -334,6 +334,13 @@ class CaseItem(StrictBase):
         exclude_if=lambda value: value is None,
         description="Plan O M246: the client's standing answer that added it, pre-ticked and revocable.",
     )
+    agreed_rows: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+        description="The count of rows the person was shown this change leave out when they said yes. The plan's "
+        "loss stop does not ask again up to that count; a bigger drop is asked about. Null: nothing is exempt.",
+    )
     parked_for: str | None = Field(
         default=None,
         exclude_if=lambda value: value is None,

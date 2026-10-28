@@ -476,11 +476,24 @@ def rows_aggregated(sql: str, tables: Mapping[str, pd.DataFrame], *, as_of: date
         con.close()
 
 
-def _fixed_date_refusal(shown: str) -> SqlStepError:
+def _fixed_date_refusal(shown: str, day: date | None = None, as_of: date | None = None) -> SqlStepError:
+    """The refusal of a date typed into the query, naming the literal and what to write in its place: `$as_of` for
+    the as-of day itself, `$as_of + INTERVAL 'n' DAY` for a day a fixed distance from it (an outcome window's end).
+    """
+    if day is not None and as_of is not None:
+        gap = (day - as_of).days
+        instead = (
+            "$as_of"
+            if gap == 0
+            else f"$as_of + INTERVAL '{gap}' DAY" if gap > 0 else f"$as_of - INTERVAL '{-gap}' DAY"
+        )
+        fix = f"Replace the typed date '{shown}' with {instead}"
+    else:
+        fix = f"Replace the typed date ({shown}) with $as_of (or $as_of plus or minus an INTERVAL)"
     return SqlStepError(
         "SQL_FIXED_DATE",
-        f"The query has a date typed into it ({shown}). Use $as_of instead, so next month's files are not "
-        "cut at this month's date.",
+        f"{fix}, so next month's files are not cut at this month's date. Every other date in the query must "
+        "come from $as_of too.",
     )
 
 
@@ -501,7 +514,7 @@ def _check_dates(node: dict[str, Any], as_of: date | None) -> None:
         text = value.get("value")
         typed = kind == "VARCHAR" and isinstance(text, str) and _DATE_TEXT.match(text)
         if typed and (as_of is None or _literal_date(str(text)) != as_of):
-            raise _fixed_date_refusal(str(text).strip()[:19])
+            raise _fixed_date_refusal(str(text).strip()[:19], _literal_date(str(text)), as_of)
     elif node.get("class") == "FUNCTION" and str(node.get("function_name", "")).lower() in _MAKE_DATE:
         if node.get("children") and _fixed(node):
             raise _fixed_date_refusal(f"{node.get('function_name')} of fixed values")

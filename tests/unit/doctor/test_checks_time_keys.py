@@ -77,6 +77,17 @@ def test_a_date_typed_into_the_query_is_refused(sql: str) -> None:
     assert caught.value.code == "SQL_FIXED_DATE"
 
 
+def test_the_refusal_of_a_typed_date_names_the_literal_and_what_replaces_it() -> None:
+    sql = "SELECT * FROM t_orders WHERE order_date <= $as_of AND order_date < DATE '2026-05-01'"
+    with pytest.raises(SqlStepError) as caught:
+        check_sql(sql, ["t_orders"], as_of=AS_OF)
+    assert caught.value.code == "SQL_FIXED_DATE"
+    assert "'2026-05-01'" in caught.value.message and "$as_of + INTERVAL '90' DAY" in caught.value.message
+    with pytest.raises(SqlStepError) as before:
+        check_sql("SELECT * FROM t_orders WHERE order_date > '2026-01-01'", ["t_orders"], as_of=AS_OF)
+    assert "$as_of - INTERVAL '30' DAY" in before.value.message
+
+
 def test_the_as_of_date_itself_and_text_that_only_looks_like_one_are_allowed() -> None:
     check_sql("SELECT * FROM t_orders WHERE order_date <= DATE '2026-01-31'", ["t_orders"], as_of=AS_OF)
     check_sql("SELECT * FROM t_orders WHERE order_date <= $as_of", ["t_orders"], as_of=AS_OF)

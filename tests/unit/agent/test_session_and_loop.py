@@ -139,7 +139,12 @@ def test_one_malformed_reply_is_corrected_and_two_end_the_turn(started: tuple[An
         guardrails=_guardrails(),
         principal=ANALYST,
     )
-    assert (bad.reply.text, bad.blocked_by) == (FALLBACK, "AGENT_REPLY_MALFORMED")
+    assert bad.blocked_by == "AGENT_REPLY_MALFORMED"
+    assert (
+        bad.reply.text.startswith(FALLBACK)
+        and "refused" in bad.reply.text
+        and "Ask me again" in bad.reply.text
+    )
 
 
 def test_every_step_of_the_chat_is_asked_with_the_data_agents_allowance(started: tuple[Any, Any]) -> None:

@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.config import AgentConfig
-from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
+from engine.agent.contracts import DataRecipe, ProposalState, RecipeStep, RecipeStepKind, recipe_hash
 from engine.agent.dataset_recipe import consistent_types
 from engine.agent.recipe import STEP_PHASE, RecipeError, RecipeRun, run_recipe
 from engine.agent.sql_step import SqlStepError, sql_params
@@ -197,8 +197,6 @@ def aliased(files: Sequence[LoadedFile], items: Sequence[CaseItem]) -> list[Load
     read by the plan's name, so the plan runs on next month's file exactly as it was approved (in memory only).
     """
     from dataclasses import replace
-
-    from engine.agent.contracts import ProposalState
 
     out: list[LoadedFile] = []
     for loaded in files:
@@ -367,6 +365,20 @@ def materialize_plan(
     failed: list[str] = []
     failures: list[StepFailure] = []
 
+    # The steps a person ticked (or answered for): what they leave out was agreed, so the plan's loss stop does not
+    # ask about it again.
+    from engine.doctor.protocol import AGENT
+
+    # Only up to the count they were shown (`CaseItem.agreed_rows`); an answer re-applied from a standing answer
+    # on a new file was shown no count of this file's.
+    said_yes = {
+        item.item_id: item.agreed_rows
+        for item in items
+        if item.state is ProposalState.ACCEPTED
+        and item.decided_by not in (None, AGENT)
+        and item.agreed_rows
+        and item.standing_answer_id is None
+    }
     plans: list[tuple[LoadedFile, list[tuple[RecipeStep, str]]]] = []
     for loaded in files:
         mine = recipe_steps_of(items, loaded.upload_id, only_file=len(files) == 1)
@@ -415,6 +427,7 @@ def materialize_plan(
             None,  # every query step carries its date (`bound_as_of`)
             seen_by if watch is not None else None,
             memo,
+            approved={step.order: said_yes[item_id] for step, item_id in mine if item_id in said_yes},
         )
 
         try:
@@ -801,6 +814,8 @@ def _guarded(
     memo: ReceiptMemo | None,
     primary_key: str | None,
     outcome: str | None,
+    *,
+    approved: Mapping[int, int] | None = None,
 ) -> GuardedRun:
     """One file's steps under the guards, with the tables the plan has made so far."""
     from engine.doctor.plan_check import guard_levels
@@ -821,6 +836,7 @@ def _guarded(
         outcome_open=outcome is None,  # one column of a query that reads the future is the outcome-to-be
         watch=watch,
         memo=memo,
+        approved=approved,
     )
 
 

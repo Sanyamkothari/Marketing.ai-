@@ -3289,6 +3289,23 @@ def _seen(case: Case, op_id: str | None) -> bool:
     return op_id is not None and case.visit is not None and op_id in case.visit.ops
 
 
+def _agreed_update(case: Case, item: CaseItem, accept: bool) -> dict[str, int]:
+    """The count a person's yes to `item` holds up to: what the plan counted it leaving out when they said it.
+    Nothing when it was not counted (then no part of its drop is exempt from the plan's loss stop)."""
+    if not accept or item.agreed_rows is not None or item.standing_answer_id is not None:
+        return {}
+    check = case.visit.plan_check if case.visit is not None else None
+    rows = check.ledger.get("steps") if check is not None else None
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and row.get("item_id") == item.item_id:
+            lost = row.get("customers_lost")
+            if not isinstance(lost, int):
+                rows_in, rows_out = row.get("rows_in"), row.get("rows_out")
+                lost = rows_in - rows_out if isinstance(rows_in, int) and isinstance(rows_out, int) else 0
+            return {"agreed_rows": max(0, lost)}
+    return {}
+
+
 def _person_step(
     run: _Run,
     client_id: str,
@@ -3500,6 +3517,7 @@ def answer(
                     decided_by=actor,
                     decided_at=now,
                     goal_id=question.goal_id,
+                    agreed_rows=chosen.rows_changed,  # the count the option showed: the yes holds up to it
                 )
             )
         answered = question.model_copy(
@@ -3614,7 +3632,13 @@ def decide(
             raise _unknown("A step can be parked only unticked, for one of the people who would know.")
         state = ProposalState.ACCEPTED if accept else ProposalState.REJECTED
         decided = item.model_copy(
-            update={"state": state, "decided_by": actor, "decided_at": now, "parked_for": park_for}
+            update={
+                "state": state,
+                "decided_by": actor,
+                "decided_at": now,
+                "parked_for": park_for,
+                **_agreed_update(case, item, accept),
+            }
         )
         out, swap_events = (
             leave_out_for(case.items, decided, actor=actor, now=now) if accept else ({}, [])
@@ -4070,7 +4094,12 @@ def confirm(
             item
             if item.state is ProposalState.ACCEPTED and item.decided_by != AGENT
             else item.model_copy(  # a change the agent applied becomes the person's own with their yes
-                update={"state": ProposalState.ACCEPTED, "decided_by": principal.user_id, "decided_at": now}
+                update={
+                    "state": ProposalState.ACCEPTED,
+                    "decided_by": principal.user_id,
+                    "decided_at": now,
+                    **_agreed_update(case, item, True),
+                }
             )
         )
         out, swap_events = leave_out_for(case.items, ticked, actor=principal.user_id, now=now)

@@ -754,6 +754,32 @@ def test_a_reply_with_a_number_nobody_looked_up_is_refused_and_the_next_one_is_u
     assert any(r.get("error") == "AGENT_TEXT_REFUSED" for r in client.seen[1].results)
 
 
+def test_a_refused_number_is_named_to_the_ai_and_a_turn_that_still_fails_tells_the_person_why(
+    storage: LocalStorage, world: World
+) -> None:
+    client = ChatScript({"how many": [reply("There are 7,777 test accounts.")] * 6})
+    talk = Talk(storage, world, client)
+    talk.say("how many test accounts are there")
+    told = [r.get("message", "") for seen in client.seen for r in seen.results if r.get("error")]
+    assert told and all("'7,777'" in m and "no tool result" in m for m in told), "the AI learns which number"
+    assert "a number that I have not looked up" in talk.reply.text and "7,777" not in talk.reply.text
+    assert "Ask me again" in talk.reply.text
+    assert talk.reply.text != "I could not answer that from what I have checked."
+
+
+def test_a_turn_that_ends_on_a_refused_action_names_the_action_and_the_refusal(
+    storage: LocalStorage, world: World
+) -> None:
+    bad = {"action": "withdraw", "args": {"item_id": "c99"}}
+    client = ChatScript({"prepare": [bad] * 6})
+    talk = Talk(storage, world, client)
+    talk.say("prepare the file for that then")
+    text = talk.reply.text
+    assert text.startswith("I tried to take a change back.") and "refused" in text
+    assert text.endswith("Ask me again and I will try another way.")
+    assert talk.reply.blocked_by is not None
+
+
 def test_an_answer_in_plain_sentences_is_a_reply_and_is_checked_like_one(
     storage: LocalStorage, world: World
 ) -> None:
@@ -774,10 +800,21 @@ def test_two_bad_replies_end_the_turn_with_a_plain_sentence(storage: LocalStorag
     client = ChatScript({"nonsense": [{"action": "dance"}, {"action": "sing"}, {"action": "hum"}]})
     talk = Talk(storage, world, client)
     talk.say("nonsense")
-    assert (
-        talk.reply.text == "I could not answer that from what I have checked."
-    ), "the last word was no reply too"
+    assert "sing" not in talk.reply.text, "the model's own words are never echoed to the person"
+    assert "What I tried was refused: I asked for something that does not exist here" in talk.reply.text
+    assert talk.reply.text.endswith("Ask me again and I will try another way."), "never a bare refusal"
     assert talk.case.state in (VisitState.ASK, VisitState.APPROVE), "the visit goes on"
+
+
+def test_a_refused_action_never_repeats_the_model_s_text_or_number_to_the_person(
+    storage: LocalStorage, world: World
+) -> None:
+    odd = {"action": "4,372 customers dropped"}
+    client = ChatScript({"odd": [odd, odd, odd]})
+    talk = Talk(storage, world, client)
+    talk.say("odd")
+    assert "4,372" not in talk.reply.text
+    assert "I tried to act on that" in talk.reply.text and "does not exist here" in talk.reply.text
 
 
 def test_a_turn_takes_at_most_the_configured_number_of_steps(storage: LocalStorage, world: World) -> None:
@@ -1219,3 +1256,17 @@ def test_guided_setup_keeps_its_shorter_reply_ceiling() -> None:
     assert guard.check(
         text, CheckContext(target="doctor reply", max_chars=limits().turn.chat_reply_chars)
     ).passed
+
+
+def test_an_invalid_expect_tells_the_ai_which_fields_and_why_without_a_link_or_a_value() -> None:
+    from pydantic import ValidationError
+
+    from engine.doctor.agent_review import _expect_problems
+    from engine.doctor.guards import Expectations
+
+    with pytest.raises(ValidationError) as caught:
+        Expectations.model_validate({"rows_out_min": "lots-of-rows-7", "rows_out": 5, "keys_unique": []})
+    said = _expect_problems(caught.value)
+    assert "`rows_out_min`" in said and "`rows_out`" in said and "`keys_unique`" in said
+    assert "Allowed fields:" in said and "max_keys_repeated" in said
+    assert "http" not in said and "lots-of-rows-7" not in said
