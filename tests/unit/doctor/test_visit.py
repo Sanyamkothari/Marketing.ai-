@@ -773,3 +773,44 @@ def test_the_history_check_reads_the_snapshot_a_future_reading_query_sets(storag
     assert reading is not None
     short = next(f for f in reading.findings if f.code == "HISTORY_TOO_SHORT")
     assert short.text.startswith("The training date leaves 14 days of history before it")
+
+
+def test_a_yes_no_text_outcome_reaches_approve_with_no_step_that_cannot_run(storage: LocalStorage) -> None:
+    """The visit used to offer (and pre-tick) a yes/no recoding of the outcome column, which the plan check then
+    refused (`PLAN_STEP_CANNOT_RUN`). Once the column is the outcome, the Doctor takes such a step back itself.
+    """
+    import numpy as np
+
+    from engine.doctor.case import CaseStore
+
+    config = load_use_case(GOAL_A)
+    frame = vs.customers(seed=3)
+    frame["converted"] = np.random.default_rng(4).choice(["yes", "no"], size=len(frame))
+    w = World(
+        files={FIRST: vs.loaded(FIRST, "customers.csv", frame, config)},
+        offers=(Offer(config=config, stage="Acquire"),),
+    )
+    case = _generic(storage, w)
+    template = next(i for i in case.items if i.kind == "key")
+    step = {"order": 1, "kind": "map_boolean", "column": "converted", "params": {}}
+    recode = template.model_copy(
+        update={
+            "item_id": "recipe_step.base.converted",
+            "kind": "recipe_step",
+            "title": "Turn the yes / no values in 'converted' into 1 and 0",
+            "payload": {"upload_id": FIRST, "step": step},
+            "state": ProposalState.ACCEPTED,  # pre-ticked, as the rules did
+            "decided_by": None,
+        }
+    )
+    case = CaseStore(storage).update(
+        CLIENT, case.case_id, expected_version=case.version, actor=ANALYST,
+        change=lambda c: (c.model_copy(update={"items": (*c.items, recode)}), ()),
+    )  # fmt: skip
+    case = _goal(storage, w, case, GOAL_A)
+    if any(q.code == "OUTCOME_COLUMN" and q.answer is None for q in case.questions):
+        case = _answer(storage, w, case, "OUTCOME_COLUMN", "converted")
+    taken = next(i for i in case.items if i.item_id == "recipe_step.base.converted")
+    assert taken.state is ProposalState.REJECTED and "outcome column" in (taken.withdrawn_because or "")
+    assert case.state is VisitState.APPROVE and case.visit is not None and case.visit.plan_check is not None
+    assert "PLAN_STEP_CANNOT_RUN" not in {f.code for f in case.visit.plan_check.findings}

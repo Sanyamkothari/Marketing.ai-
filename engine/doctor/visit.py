@@ -63,7 +63,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 from pydantic import JsonValue
 
-from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
+from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, RecipeStepKind
 from engine.agent.tools import AgentToolError
 from engine.config import ConfigError
 from engine.doctor.agent_apply import AGENT_APPLIED_STEPS, agent_applies, person_owns, roles_of, twin_of
@@ -1148,6 +1148,7 @@ def _treat(run: _Run, case: Case) -> _Step:
             (by_rules, by_detectors),
             reviewed=bool(reviewed) and visit.done.get("agent_base") != base,
         )
+        _withdraw_role_steps(case, step, run.deps.clock())
         blocking = [
             q for q in settled.questions if q.blocking and q.answer is None and _in_section(q.goal_id, case)
         ]
@@ -1157,6 +1158,61 @@ def _treat(run: _Run, case: Case) -> _Step:
     if open_blocking(case):
         step.to = VisitState.ASK
     return step
+
+
+_ROLE_STEP_KINDS: Final[frozenset[str]] = frozenset(
+    kind.value
+    for kind in (
+        RecipeStepKind.DERIVE,
+        RecipeStepKind.SQL_QUERY,
+        RecipeStepKind.KEEP_LATEST_PER_ID,
+        RecipeStepKind.COMBINE_ROWS,
+        RecipeStepKind.UNPIVOT,
+    )
+)
+"""Steps that name the ID column without changing it (the recipe's own check lets them through): a derived column,
+a query, and the steps that reshape the rows per ID."""
+
+
+def _withdraw_role_steps(case: Case, step: _Step, now: datetime) -> None:
+    """A recipe step on the column settled as the file's ID or outcome can never run (the recipe never changes them:
+    `PLAN_STEP_CANNOT_RUN`), so the Doctor takes it back itself, with the reason, whoever ticked it: a yes/no outcome
+    is read through the goal's positive value, never recoded by a step. Rows left out by their ID (test accounts)
+    and a derived column that only reads them are not changes to them, so they stay."""
+    items: list[CaseItem] = list(step.updates.get("items", case.items))
+    decided = decisions(case.model_copy(update={"items": tuple(items)}))
+    one = case.files[0].upload_id if len(case.files) == 1 else None
+    changed = False
+    for index, item in enumerate(items):
+        raw = item.payload.get("step")
+        if item.state not in (ProposalState.PENDING, ProposalState.ACCEPTED) or not isinstance(raw, dict):
+            continue
+        upload_id = item.upload_id or _str(item.payload.get("upload_id")) or one
+        column, kind = raw.get("column"), raw.get("kind")
+        if upload_id is None or not isinstance(column, str):
+            continue
+        key, outcome = decided.key(upload_id), decided.outcome_of_upload(upload_id)
+        if kind in _ROLE_STEP_KINDS or column not in {key, outcome} - {None}:
+            continue
+        if kind == RecipeStepKind.REMOVE_ROWS.value and column == key != outcome:
+            continue
+        role = "ID" if column == key else "outcome"
+        items[index] = item.model_copy(
+            update={
+                "state": ProposalState.REJECTED,
+                "decided_by": AGENT,
+                "decided_at": now,
+                "parked_for": None,
+                "withdrawn_because": (
+                    f"'{column}' is the {role} column, which no step changes"
+                    + ("; its yes and no are read as they are" if role == "outcome" else "")
+                    + "."
+                ),
+            }
+        )
+        changed = True
+    if changed:
+        step.updates["items"] = items
 
 
 def _mark(step: _Step) -> tuple[int, int, int]:
@@ -2096,9 +2152,48 @@ def _base_rules(run: _Run, case: Case, step: _Step) -> None:
                     upload_id=upload_id,
                 )
             )
-        elif len(loaded.frame) > 0 and not _has_id_like(result.output, loaded):
+        elif len(loaded.frame) > 0:
+            # No column is unique and complete. The near-candidates are facts (how often a value repeats, how many
+            # blanks); a name like `customer_id` only ranks them. With any, the person says which one names the
+            # customers, or takes a row number; with none (and not an events file), the row number is proposed.
+            near = _near_keys(result.output, loaded)
             made = _row_id_item(run, step, loaded, ctx, now, evidence=result.evidence_id)
-            if made is not None:
+            if near:
+                choices = [
+                    (
+                        f"{key['column']} (a value repeats about {float(key.get('rows_per_key') or 1):.1f} times)",
+                        OptionEffect(
+                            option_id=f"c{index}",
+                            kind="key",
+                            title=f"“{key['column']}” names the customers of {name}.",
+                            payload={"upload_id": upload_id, "column": str(key["column"])},
+                        ),
+                    )
+                    for index, key in enumerate(near[:5])
+                ]
+                if made is not None:
+                    choices.append(
+                        (
+                            "None of these: add a row number",
+                            OptionEffect(
+                                option_id="rownum", kind="key", title=made.title, payload=made.payload
+                            ),
+                        )
+                    )
+                choices.append((_DONT_KNOW, OptionEffect(option_id="none")))
+                step.questions.append(
+                    _question(
+                        "KEY_NOT_UNIQUE",
+                        {"upload_id": upload_id},
+                        text=(
+                            f"No column of {name} holds a different value on every row with no blanks. Which column "
+                            "names the customers in it?"
+                        ),
+                        choices=choices,
+                        upload_id=upload_id,
+                    )
+                )
+            elif made is not None and not _event_file(result.output):
                 step.items.append(made)
 
 
@@ -2114,18 +2209,39 @@ _EVENT_ROLES: Final[frozenset[str]] = frozenset(
     {"bills", "payments", "complaints", "usage", "campaign_events", "orders"}
 )
 """The roles of a file with many rows per customer (events, transactions): such a file has an ID, repeated."""
+_NEAR_ROWS_PER_KEY: Final[float] = 50.0
+"""A text column whose values repeat at most this often may name customers who appear on several rows."""
 
 
-def _has_id_like(roles: dict[str, Any], loaded: LoadedFile) -> bool:
-    """True when the file has a column that could name its customers or accounts, even one that repeats or has
-    blanks, or reads as an events or transactions file: a row number would not be its ID, so none is offered.
-    """
-    if any(_ID_NAMED.search(str(c).strip()) for c in loaded.frame.columns):
-        return True
-    if any(
-        isinstance(k, dict) and float(k.get("rows_per_key") or 99.0) <= _UNIQUE for k in roles.get("keys", [])
-    ):
-        return True  # a different value on every row, though too many blanks to be decided as the ID
+def _near_keys(roles: dict[str, Any], loaded: LoadedFile) -> list[dict[str, Any]]:
+    """The columns that could name the customers though none is unique and complete: a text column whose values
+    repeat a few times (an events file) or that has some blanks, and any column named like an ID. Ranked: named like
+    an ID first (a hint, not a decision), then the fewest repeats."""
+    import pandas as pd
+
+    found: list[dict[str, Any]] = []
+    for key in roles.get("keys", []):
+        if not isinstance(key, dict) or key.get("column") not in loaded.frame.columns:
+            continue
+        column = str(key["column"])
+        named = bool(_ID_NAMED.search(column.strip()))
+        series = loaded.frame[column]
+        text = not (pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series))
+        repeats = float(key.get("rows_per_key") or 99.0)
+        blanks = float(key.get("null_rate") or 0.0)
+        if named or (text and repeats <= _NEAR_ROWS_PER_KEY and blanks < 0.5 and series.nunique() > 1):
+            found.append(key)
+    found.sort(
+        key=lambda k: (
+            not _ID_NAMED.search(str(k["column"]).strip()),
+            float(k.get("rows_per_key") or 99.0),
+        )
+    )
+    return found
+
+
+def _event_file(roles: dict[str, Any]) -> bool:
+    """The file reads as events or transactions: a row number would not be its ID."""
     return any(
         isinstance(r, dict) and r.get("role") in _EVENT_ROLES and float(r.get("confidence") or 0.0) >= 0.5
         for r in roles.get("roles", [])

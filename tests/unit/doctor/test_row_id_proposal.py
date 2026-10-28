@@ -120,3 +120,41 @@ def test_saying_yes_records_the_row_number_as_the_id_and_builds_it_beside_anothe
     built = prepared.tables[prepared.by_upload[SECOND]]
     assert "row_id" in built.columns and len(built) == 1_200
     assert next(f.key for f in prepared.files if f.upload_id == SECOND) == "row_id"
+
+
+def test_an_id_with_another_name_is_asked_about_not_replaced_by_a_row_number(tmp_path: Path) -> None:
+    rng = np.random.default_rng(5)
+    frame = pd.DataFrame(
+        {
+            "Kundennummer": [f"K{i}" for i in rng.integers(0, 300, 1_200)],
+            "order_date": pd.date_range("2024-01-01", periods=1_200, freq="h").strftime("%Y-%m-%d"),
+            "amount": rng.integers(5, 500, 1_200),
+        }
+    )
+    w = _world({FIRST: ("bestellungen.csv", frame)})
+    case, deps = _open(tmp_path, w)
+    assert not _proposed(case), "no row number is added for it"
+    q = vs.question(case, "KEY_NOT_UNIQUE")
+    labels = [o.label for o in q.options]
+    assert labels[0].startswith("Kundennummer") and "None of these: add a row number" in labels
+    assert q.recommended is None, "which column is the ID is the person's to say"
+    case = visit.answer(
+        CLIENT, case.case_id, q.question_id, vs.option(q, "Kundennummer"), deps,
+        expected_version=case.version, actor=ANALYST,
+    )  # fmt: skip
+    assert decisions(case).key(FIRST) == "Kundennummer"
+
+
+def test_the_row_number_is_one_answer_the_person_may_give(tmp_path: Path) -> None:
+    rng = np.random.default_rng(6)
+    frame = _calls().assign(
+        caller=[f"P{i}" for i in rng.integers(0, 40, 1_200)]
+    )  # a text column that repeats
+    w = _world({FIRST: ("bank_calls.csv", frame)})
+    case, deps = _open(tmp_path, w)
+    q = vs.question(case, "KEY_NOT_UNIQUE")
+    case = visit.answer(
+        CLIENT, case.case_id, q.question_id, vs.option(q, "None of these: add a row number"), deps,
+        expected_version=case.version, actor=ANALYST,
+    )  # fmt: skip
+    assert decisions(case).key(FIRST) == "row_id"
