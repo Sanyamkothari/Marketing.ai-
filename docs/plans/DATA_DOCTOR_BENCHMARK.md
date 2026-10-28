@@ -12,7 +12,7 @@ It records `reached_ready`, state, the reason when not ready, wall time, peak me
 process), AI calls and tokens (from the case counters).
 
 ```
-.venv/bin/python scripts/bench_doctor.py --out-dir bench-out                 # all six, fake grounded AI
+.venv/bin/python scripts/bench_doctor.py                                      # all six, fake grounded AI (out: <data dir>/out)
 .venv/bin/python scripts/bench_doctor.py --only online-retail --local online-retail=/path/to/log.csv
 .venv/bin/python scripts/bench_doctor.py --live                                # the configured model
 ```

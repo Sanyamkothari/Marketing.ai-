@@ -10,8 +10,8 @@ import pytest
 from scripts import bench_doctor
 
 
-def _customers(path: Path, rows: int = 1_200) -> Path:
-    """A tidy one-row-per-customer file with a churn column: 1,200 rows, about a quarter positive."""
+def _customers(path: Path, rows: int = 1_000) -> Path:
+    """A tidy one-row-per-customer file with a churn column at the 1,000-row floor, about a quarter positive."""
     rng = random.Random(7)
     lines = ["customer_id,tenure,monthly_charges,contract,churned"]
     for i in range(rows):
@@ -28,12 +28,14 @@ def test_a_visit_over_a_synthetic_file_gives_a_complete_record(
 ) -> None:
     # run_visit sets these for good; monkeypatch puts the environment back afterwards
     monkeypatch.setenv("MARKETING_AI_ALLOW_FAKE_AI", "true")
-    monkeypatch.setenv("MARKETING_AI_DATA_DOCTOR_UNIFIED", "true")
     record = bench_doctor.run_visit(
         _customers(tmp_path / "customers.csv"), "telco-churn", data_dir=tmp_path / "data"
     )
     assert isinstance(record["reached_ready"], bool)
     assert record["state"] is not None
+    assert record["rows"] == 1_000, "the rows come from the upload's profile"
+    assert record["goal"], "the scripted person picked a goal"
+    assert record["state"] not in {"intake", "understand"}, "the visit moved past its start"
     assert record["wall_s"] > 0
     assert record["peak_mem_mb"] > 0
     assert record["ai_calls"] >= 0 and record["ai_tokens"] >= 0

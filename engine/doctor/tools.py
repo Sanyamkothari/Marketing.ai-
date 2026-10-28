@@ -687,6 +687,18 @@ def _what_can_this_power(_parsed: NoArgs, ctx: DataToolContext) -> PowerVerdicts
         if fits():
             break
         verdicts[index] = verdicts[index].model_copy(update={"first_look": None})
+    # Many goals the files cannot power each repeat "start this other goal instead" (the ones the files do power,
+    # already listed above them): the last of them lose that list first, so twelve missing goals never stop a visit.
+    for index in range(len(verdicts) - 1, -1, -1):
+        if fits():
+            break
+        if verdicts[index].status in {"missing", "too_small"} and verdicts[index].next_steps is not None:
+            steps = verdicts[index].next_steps
+            assert steps is not None
+            others = tuple(o for o in steps.options if o.kind != "other_use_case")
+            verdicts[index] = verdicts[index].model_copy(
+                update={"next_steps": steps.model_copy(update={"options": others})}
+            )
     return PowerVerdicts(use_cases=tuple(verdicts))
 
 

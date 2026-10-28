@@ -78,7 +78,6 @@ def fetch(name: str, data_dir: Path, local: Path | None = None) -> Path:
 def _setup_environment(live: bool) -> None:
     if not live:
         os.environ["MARKETING_AI_ALLOW_FAKE_AI"] = "true"
-    os.environ["MARKETING_AI_DATA_DOCTOR_UNIFIED"] = "true"  # as make run / docker compose do
 
 
 def _first_option(question: dict[str, Any]) -> str | None:
@@ -126,6 +125,7 @@ def run_visit(
             if r.status_code != 201:
                 record["steps"].append(f"upload: HTTP {r.status_code} {r.text[:200]}")
                 return _finish(record, None, None, started, f"upload refused: HTTP {r.status_code}")
+            record["rows"] = (r.json().get("profile") or {}).get("row_count")
             case = client.post("/cases", json={"upload_ids": [r.json()["upload_id"]]}).json()
             cid = case["case_id"]
             client.post(f"/cases/{cid}/ai-consent", json={})
@@ -309,7 +309,10 @@ def main(argv: list[str] | None = None) -> int:
         "--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="where the datasets are fetched to"
     )
     parser.add_argument(
-        "--out-dir", type=Path, default=Path("bench-out"), help="where bench_doctor.json/.md go"
+        "--out-dir",
+        type=Path,
+        default=DEFAULT_DATA_DIR / "out",
+        help="where bench_doctor.json/.md go (outside the repository by default)",
     )
     parser.add_argument(
         "--only", action="append", choices=sorted(DATASETS), help="run just these (repeatable)"

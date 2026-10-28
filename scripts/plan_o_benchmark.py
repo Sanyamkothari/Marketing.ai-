@@ -919,13 +919,19 @@ class _Answers:
         if role is None:
             return None
         options = list(question.get("options", []))
-        sent = options[0] if options else None
+        # what the driver would send otherwise: the recommended option, else the first; named and returned here, so
+        # the note names the option that is really sent
+        recommended = question.get("recommended")
+        sent = next(
+            (o for o in options if o.get("option_id") == recommended), options[0] if options else None
+        )
         sent_label = str(sent.get("label")) if sent else "none"
+        sent_id = str(sent["option_id"]) if sent else None
         if self.truth is None:
             self.not_measured.append(
                 f"the {role} question was answered '{sent_label}' (no truth to answer from)"
             )
-            return None
+            return sent_id
         true = self.truth.key if role == "ID" else self.truth.outcome
         for option in options:
             label = str(option.get("label"))
@@ -934,7 +940,7 @@ class _Answers:
         self.not_measured.append(
             f"the true {role} column '{true}' was not offered in the {role} question; answered '{sent_label}'"
         )
-        return None
+        return sent_id
 
 
 def undecided_accepted(case: dict[str, Any], ticked: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
