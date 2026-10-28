@@ -124,6 +124,10 @@ def _rounded_digits(series: pd.Series[Any]) -> int:
     return int(rounded.sum()) if rounded.mean() >= 0.5 else 0
 
 
+_MOSTLY_UNIQUE: Final[float] = 0.5
+"""A key with at least this share of different values is expected to be unique; one below it repeats by design."""
+
+
 def key_quality(
     series: pd.Series[Any], column: str, *, expect_unique: bool = False, exact: Any = None
 ) -> list[Check]:
@@ -167,7 +171,9 @@ def key_quality(
             {"filled": filled, "distinct": distinct, "unique_share": round(unique_share, 4), "top": top},
         )
     )
-    if expect_unique and distinct < filled:
+    # A column whose values mostly repeat names the customer on each row of a log (many rows per customer): that is
+    # what it is for, not duplicates of an ID that should be unique.
+    if expect_unique and distinct < filled and unique_share >= _MOSTLY_UNIQUE:
         found.append(
             Check(
                 "KEY_NOT_UNIQUE",

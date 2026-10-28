@@ -132,6 +132,7 @@ def diagnose_file(loaded: LoadedFile, config: UseCaseConfig, roles: RoleCatalogu
         client_id="data-doctor",
         file_name=loaded.file_name,
         row_count=profile.row_count,
+        fingerprint=profile.fingerprint,  # the frame's content was hashed when it was profiled: not again
         roles=roles,
     )
     best = source.role_candidates[0] if source.role_candidates else None

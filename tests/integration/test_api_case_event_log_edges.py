@@ -136,3 +136,22 @@ def test_an_order_log_with_blank_ids_asks_which_column_names_the_customer_and_go
     assert done.status_code == 200, done.text
     (readiness,) = done.json()["readiness"]
     assert readiness["goal_id"] == GOAL and readiness["verdict"] == "ready"
+
+
+def test_a_customer_column_chosen_for_a_log_is_not_expected_to_be_unique(client: TestClient) -> None:
+    buffer = io.StringIO()
+    blank_log().to_csv(buffer, index=False)
+    uploaded = client.post(
+        "/uploads",
+        files={"file": ("orders.csv", buffer.getvalue().encode(), "text/csv")},
+        data={"use_case": GOAL, "mode": "train"},
+    )
+    case = client.post("/cases", json={"upload_ids": [uploaded.json()["upload_id"]]}).json()
+    case_id = case["case_id"]
+    case = client.post(f"/cases/{case_id}/visit", json={}).json()
+    key = open_question(case, "KEY_NOT_UNIQUE")
+    assert key is not None and key["recommended"] is not None
+    case = answer(client, case_id, case, "KEY_NOT_UNIQUE", key["recommended"])
+    assert open_question(case, "KEY_NOT_UNIQUE") is None
+    said = [i["title"] for i in case["items"] if i["kind"] == "data_check"]
+    assert not [t for t in said if "should name each customer once" in t], said

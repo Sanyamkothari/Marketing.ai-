@@ -232,6 +232,9 @@ def test_the_two_dates_of_a_training_build_are_not_a_stop_but_an_unexplained_dif
 
     build = query(as_of=TRAINING.isoformat())  # a snapshot whose 90 days are over by the case date
     assert date_differences([(build, "i1")], SCORING, None, Full()) == []
+    assert (
+        date_differences([(build, "i1")], SCORING, SCORING, Full()) == []
+    )  # the case date, also as the fallback
     late = query(as_of=date(2011, 10, 31).isoformat())  # its window runs past the case date: no reason for it
     assert [f.code for f in date_differences([(late, "i1")], SCORING, None, Full())] == ["STEP_DATE_DIFFERS"]
     plain = RecipeStep(

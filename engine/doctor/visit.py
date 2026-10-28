@@ -57,7 +57,7 @@ import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
@@ -2695,7 +2695,9 @@ def _offer_build(
     payload["buildable"] = built.model_dump(mode="json")
     if audience is not None:
         payload["audience"] = audience.model_dump(mode="json")
-    _say_build_counts(payload, built, config.entity or "customer", audience)
+    _say_build_counts(
+        payload, built, config.entity or "customer", audience, decisions(case).training_as_of_date
+    )
     step.items.append(
         _item(
             "recipe_step",
@@ -2732,7 +2734,11 @@ def _audience_left_out(payload: Mapping[str, Any]) -> int:
 
 
 def _say_build_counts(
-    payload: dict[str, Any], built: BuildableOutcome, entity: str, audience: BuildAudience | None
+    payload: dict[str, Any],
+    built: BuildableOutcome,
+    entity: str,
+    audience: BuildAudience | None,
+    decided: date | None,
 ) -> None:
     """The build's sentence says what the sample could only estimate (the table has one row per customer in the
     audience, counted on every row of the file) and, in plain words, who the audience leaves out."""
@@ -2756,6 +2762,17 @@ def _say_build_counts(
                 if audience is not None
                 else "the table is about those active by then."
             )
+        )
+    if (
+        decided is not None
+        and built.snapshot is not None
+        and built.snapshot != decided
+        and built.snapshot + timedelta(days=built.window_days) <= decided
+    ):
+        # The two dates of a training table: said here, so the difference is not a stop to say yes to.
+        sentence += (
+            f" It is cut at {built.snapshot:%d %b %Y}: the {built.window_days} days after it give the outcome, "
+            f"and {decided:%d %b %Y} is the date your case is read at."
         )
     payload["sentence"] = sentence
 

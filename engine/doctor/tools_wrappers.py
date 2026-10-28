@@ -165,6 +165,7 @@ def _source_profile(ctx: DataToolContext, loaded: LoadedFile) -> Any:
         client_id="data-doctor",
         file_name=loaded.file_name,
         row_count=loaded.profile.row_count,
+        fingerprint=loaded.profile.fingerprint,  # the frame's content was hashed when it was profiled: not again
         roles=_roles(ctx),
     )
 

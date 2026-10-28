@@ -106,3 +106,54 @@ def test_the_customers_an_audience_leaves_out_are_agreed_up_to_the_count_it_show
     assert _agreed_update(case, build_item(ids=4_372, kept=3_360, audience=True), False) == {}
     plain = item("item_x", {"sentence": "s"}, ProposalState.ACCEPTED, upload_id="up-1")
     assert _agreed_update(case, plain, True) == {}
+
+
+def test_a_key_that_repeats_by_design_is_not_expected_to_be_unique() -> None:
+    from engine.doctor.checks_time_keys import key_quality
+
+    log_ids = pd.Series([f"C{n % 50}" for n in range(1_000)])  # the customer on each row of a log
+    assert "KEY_NOT_UNIQUE" not in {c.code for c in key_quality(log_ids, "customer", expect_unique=True)}
+    list_ids = pd.Series([f"C{n}" for n in range(1_000)] + ["C1", "C2", "C3"])  # a list with a few repeats
+    assert "KEY_NOT_UNIQUE" in {c.code for c in key_quality(list_ids, "customer", expect_unique=True)}
+
+
+def test_a_build_says_its_two_dates_and_who_its_audience_leaves_out() -> None:
+    from datetime import date
+
+    from engine.doctor.buildable import BuildableOutcome
+    from engine.doctor.visit import _say_build_counts
+
+    built = BuildableOutcome(
+        upload_id="u",
+        file_name="f.csv",
+        entity_key="CustomerID",
+        time_column="InvoiceDate",
+        label_type="event_presence",
+        window_days=90,
+        snapshot=date(2011, 8, 31),
+        data_start=date(2010, 12, 1),
+        data_end=date(2011, 12, 9),
+        ids=4_372,
+        active_before=3_360,
+        yes=1_893,
+        rows_read=541_909,
+        file_rows=541_909,
+        enough=True,
+        sentence="s",
+    )
+    payload: dict[str, Any] = {
+        "sentence": "Build. It would have about 3,102 rows and 8 columns (an estimate).",
+        "sentence_estimate": {"rows": "about 3,102 rows", "note": "(an estimate)"},
+        "buildable": built.model_dump(mode="json"),
+    }
+    _say_build_counts(payload, built, "shopper", None, date(2011, 11, 30))
+    said = payload["sentence"]
+    assert "would have 3,360 rows" in said and "estimate" not in said and "sentence_estimate" not in payload
+    assert (
+        "The 1,012 of the file's 4,372 shoppers with no activity on or before 31 Aug 2011 are left out"
+        in said
+    )
+    assert "the 90 days after it give the outcome, and 30 Nov 2011 is the date your case is read at" in said
+    other: dict[str, Any] = {"sentence": "Build.", "buildable": built.model_dump(mode="json")}
+    _say_build_counts(other, built, "shopper", None, date(2011, 10, 15))  # the window runs past the case date
+    assert "is the date your case is read at" not in other["sentence"]

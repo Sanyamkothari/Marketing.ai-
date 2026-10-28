@@ -913,7 +913,6 @@ def date_differences(
     decided = training_as_of or as_of
     if decided is None:
         return []
-    decided_training_unset = training_as_of is None
     out: list[PlanFinding] = []
     for step, item_id in bound:
         have = step.params.get("as_of")
@@ -922,9 +921,9 @@ def date_differences(
             and have
             and have != decided.isoformat()
             and item_id
-            # The two dates of a training table (its snapshot, and the case's later date) differ on purpose when
-            # no training date was decided and the outcome window is over by the case's date.
-            and not (decided_training_unset and training_window_fits(step, decided))
+            # The two dates of a training table (its snapshot, and the later date decided for the case) differ on
+            # purpose when the step's outcome window is over by the decided date.
+            and not training_window_fits(step, decided)
         ):
             out.append(
                 _stop(
