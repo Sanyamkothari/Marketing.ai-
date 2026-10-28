@@ -56,7 +56,7 @@ import functools
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
@@ -95,6 +95,7 @@ from engine.doctor.case import (
 from engine.doctor.decisions import decisions, sets_of_effect
 from engine.doctor.full_count import FullCountRunner
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL, GoalBrief, load_goal_brief, register_goal_brief_tool
+from engine.doctor.history import HistoryReading, plan_findings_of, read_history
 from engine.doctor.ledger import blocking
 from engine.doctor.ledger import find as find_finding
 from engine.doctor.materialize import Full, materialize, stop_finding
@@ -1517,22 +1518,44 @@ def _counted(run: _Run, case: Case, items: Sequence[CaseItem], *, retry: bool = 
         return kept
     runner = run.deps.full_count
     if runner is None:
-        return plan_check_of(materialize(case, items, run.full_files(case), Full()), basis=basis)
+        files = run.full_files(case)
+        check = plan_check_of(materialize(case, items, files, Full()), basis=basis)
+        return _with_history(case, check, files)
     found = runner.ensure(
-        case, items, basis, load_full=run.deps.load_full or run.deps.load_files, retry=retry
+        case,
+        items,
+        basis,
+        load_full=run.deps.load_full or run.deps.load_files,
+        retry=retry,
+        extra=_plan_history_findings,
     )
     if found.state == "done" and found.check is not None:
         return found.check
     if kept is not None and kept.digest == digest and kept.basis is None:
         return kept  # the sample's count stands in while the job runs
     decided = decisions(case)
-    return check_plan(
-        run.files(case),
+    files = run.files(case)
+    sample = check_plan(
+        files,
         case.files,
         items,
         as_of=decided.as_of_date,
         training_as_of=decided.training_as_of_date,
     )
+    return _with_history(case, sample, files)
+
+
+def _plan_history_findings(case: Case, files: Sequence[LoadedFile]) -> tuple[PlanFinding, ...]:
+    """The history flags of the case's active goal, read on `files` (none without a goal)."""
+    goal = active_goal(case)
+    return () if goal is None else _history_findings(case, goal.goal_id, files)
+
+
+def _with_history(case: Case, check: PlanCheck, files: Sequence[LoadedFile]) -> PlanCheck:
+    """`check` with the history flags: part of the plan the person reads before approving (the window and the
+    training date are in `decisions(case).digest`, so the basis changes when either does)."""
+    warnings = _plan_history_findings(case, files)
+    return check.model_copy(update={"findings": (*check.findings, *warnings)}) if warnings else check
 
 
 def _full_check_open(run: _Run, case: Case, items: Sequence[CaseItem]) -> tuple[str, str]:
@@ -2641,6 +2664,33 @@ def _is_hard_readiness(code: str, acknowledgeable: bool) -> bool:
     return not acknowledgeable or code in _HARD_READINESS or code.startswith("CONSENT_")
 
 
+def _history_reading(
+    case: Case, goal_id: str, files: Sequence[LoadedFile]
+) -> tuple[HistoryReading | None, str | None]:
+    """What the dates say about the history for the goal (:mod:`engine.doctor.history`), and the column read: the
+    file holding the goal's event date, with the goal's outcome window and the training snapshot. None without a
+    decided event date column."""
+    decided = decisions(case)
+    dated = decided.as_of_column(goal_id)
+    if dated is None:
+        return None, None
+    for loaded in files:
+        if (dated.upload_id in (None, loaded.upload_id)) and dated.column in loaded.frame.columns:
+            reading = read_history(
+                loaded.frame[dated.column],
+                outcome_window_days=decided.window_days(goal_id),
+                training_as_of=decided.training_as_of_date,
+            )
+            return reading, dated.column
+    return None, None
+
+
+def _history_findings(case: Case, goal_id: str, files: Sequence[LoadedFile]) -> tuple[PlanFinding, ...]:
+    """Warnings when the dated history is short for the goal, as flags of the plan (shown before approval)."""
+    reading, column = _history_reading(case, goal_id, files)
+    return plan_findings_of(reading, column)
+
+
 def _readiness_findings(report: Any) -> tuple[PlanFinding, ...]:
     """Each requirement of the readiness report that fails, as a whole-file stop for the ledger.
 
@@ -2814,7 +2864,12 @@ def readiness_verify(
             target=column,
             goal=brief.goal_id,
         )
-        report = check_readiness(inputs)
+        history, _ = _history_reading(
+            case, brief.goal_id, full_files(case) if full_files is not None else files
+        )
+        report = check_readiness(
+            replace(inputs, history=() if history is None else history.findings)
+        )  # the history flags are in the report too
         store_readiness(storage, report, client_id=case.client_id, case_id=case.case_id)
         ref = CaseReadinessRef(
             goal_id=brief.goal_id,

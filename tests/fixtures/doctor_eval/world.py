@@ -484,6 +484,7 @@ CALLS: Final[dict[str, Calls | None]] = {
     ),
     "map_outcome_values": _each("column"),
     "check_target_type": _each("column"),
+    "check_history": _fixed({"column": "bill_date", "outcome_window_days": 30}),
     # Plan O M244 (DEC-1814): the time-settings tools, with every column named as the date each row describes
     # (a column that is not a date is refused, and the refusal must be clean too) and as the outcome.
     "estimate_training_time": _fixed({}, {"minutes": 5}, {"minutes": 240}),

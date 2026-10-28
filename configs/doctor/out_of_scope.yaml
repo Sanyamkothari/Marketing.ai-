@@ -48,10 +48,6 @@ sentences:
     situation: A very large table, or a pull without filters
     say: "This table is too large to copy whole. Please ask IT for a view with the last 18 months."
     request: FEED_DELAY
-  SHORT_SEASON:
-    situation: Less than 13 months of history
-    say: "Your data covers one festive season only. Scores may be too high in a normal month."
-    request: MORE_HISTORY
   TOO_FEW_POSITIVES:
     situation: Too few examples of the outcome (fewer than about 50)
     say: "There are only {count} examples of customers who {outcome}. We need about {needed}. A looser definition gives {looser_count}; or wait until {date}."

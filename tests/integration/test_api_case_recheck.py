@@ -19,8 +19,7 @@ T0 = datetime(2026, 10, 12, 9, 0, tzinfo=UTC)
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch, config_root: Path, tmp_path: Path) -> Iterator[TestClient]:
-    monkeypatch.setattr(doctor_case, "data_doctor_unified", lambda root=None: True)
+def client(config_root: Path, tmp_path: Path) -> Iterator[TestClient]:
     with TestClient(create_app(config_root=config_root, data_dir=tmp_path / "data")) as test_client:
         yield test_client
 

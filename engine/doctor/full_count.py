@@ -28,7 +28,7 @@ from engine.doctor.diagnose import LoadedFile
 from engine.doctor.guards import Receipt
 from engine.doctor.materialize import Full, materialize
 from engine.doctor.plan_check import plan_check_of, recipe_steps_of
-from engine.doctor.visit_contracts import PlanCheck
+from engine.doctor.visit_contracts import PlanCheck, PlanFinding
 from engine.jobs import CancelToken, JobRunner
 from engine.storage import Storage, StorageError
 from engine.utils.logging import get_logger
@@ -94,6 +94,10 @@ class StoredReceipts:
             _LOGGER.warning("a step receipt could not be kept; it is counted again next time")
 
 
+Extra = Callable[[Case, Sequence[LoadedFile]], tuple[PlanFinding, ...]]
+"""Flags read on the whole files beside the plan's count, added to its findings."""
+
+
 class FullCountRunner:
     """Starts, follows and reads the whole-file counts of a store's cases on a :class:`JobRunner`."""
 
@@ -126,9 +130,11 @@ class FullCountRunner:
         *,
         load_full: Callable[[Case], Sequence[LoadedFile]],
         retry: bool = False,
+        extra: Extra | None = None,
     ) -> FullCount:
         """The count for `basis`, started when none is under way or done. A failed one starts again only with
         `retry` (Approve is the retry), so a screen that is read again and again does not loop on a failure.
+        `extra` adds flags read on the same whole files to the count (the history check of `engine.doctor.history`).
         """
         with self._lock:
             found = self.current(case, basis)
@@ -146,7 +152,7 @@ class FullCountRunner:
             )
             self._cancel_others(case, basis)
             self._write(case, fresh)
-            self._jobs.submit(fresh.job_id, self._job(case, tuple(items), fresh, load_full))
+            self._jobs.submit(fresh.job_id, self._job(case, tuple(items), fresh, load_full, extra))
             return fresh
 
     def _cancel_others(self, case: Case, basis: str) -> None:
@@ -175,6 +181,7 @@ class FullCountRunner:
         items: tuple[CaseItem, ...],
         count: FullCount,
         load_full: Callable[[Case], Sequence[LoadedFile]],
+        extra: Extra | None = None,
     ) -> Callable[[CancelToken], None]:
         def run(token: CancelToken) -> None:
             state = count.model_copy(update={"state": "running"})
@@ -189,15 +196,19 @@ class FullCountRunner:
                 self._write(case, state)
 
             try:
+                files = load_full(case)
                 prepared = materialize(
                     case,
                     items,
-                    load_full(case),
+                    files,
                     Full(),
                     watch=counted,
                     memo=StoredReceipts(self._storage, case),
                 )
                 check = plan_check_of(prepared, basis=count.basis)
+                added = extra(case, files) if extra is not None else ()
+                if added:
+                    check = check.model_copy(update={"findings": (*check.findings, *added)})
             except Exception as exc:  # the record says it failed; the traceback goes to the log
                 _LOGGER.exception("whole-file count %s failed", count.job_id)
                 self._write(

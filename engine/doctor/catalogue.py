@@ -151,6 +151,8 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     _R(87, "propose_combine_rows", "propose", "rules + ai", "new"),
     # R. An amount as the outcome (a regression goal): the spend in the days after the snapshot
     _R(88, "propose_amount_outcome", "propose", "rules", "new"),
+    # S. Is the dated history long enough for the goal
+    _R(89, "check_history", "read", "rules", "new"),
 )
 """The design §5.5, row by row."""
 

@@ -52,6 +52,7 @@ from engine.doctor.registry import (
 )
 from engine.doctor.tools import LookOutput
 from engine.doctor.tools_features import M_FEATURE_TOOLS
+from engine.doctor.tools_history import M_HISTORY_TOOLS
 from engine.doctor.tools_outcomes import M239_TOOLS
 from engine.doctor.tools_preview import M_PREVIEW_TOOLS
 from engine.doctor.tools_reshape import M_RESHAPE_TOOLS
@@ -137,6 +138,7 @@ def test_the_registry_holds_the_22_existing_tools_and_the_first_wrappers() -> No
         *M_AMOUNT_TOOLS,  # the spend in the days after the snapshot
         *M_PREVIEW_TOOLS,  # the agent looks at its own work
         *M_RESHAPE_TOOLS,  # Guided setup's combine question
+        *M_HISTORY_TOOLS,  # is the history long enough
     }
     assert len(LOOK_TOOLS) == 18
     # The 22nd existing tool is the conversation loop: it is the caller, not a tool kind.
@@ -167,6 +169,7 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
             *M_AMOUNT_TOOLS,
             *M_PREVIEW_TOOLS,
             *M_RESHAPE_TOOLS,  # Guided setup's combine question
+            *M_HISTORY_TOOLS,
         }
         assert entry.status in {"existing", "wrapper"} or tool.name in built_new, tool.name
         if tool.number in FIRST_WRAPPERS:
@@ -177,17 +180,17 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
 def test_the_catalogue_is_the_designs_eighty_tools() -> None:
     """The design's 80 tools in 81 rows, and since Plan O M236 (DEC-1806) M240's two READ tools as #82, #83."""
     counted = [entry for entry in CATALOGUE if entry.counted_with is None]
-    assert len(CATALOGUE) == 87
-    assert [e.number for e in CATALOGUE] == [n for n in range(1, 89) if n != 30]  # #30 was dropped
-    assert len(counted) == 86
-    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 28, "new": 36}
+    assert len(CATALOGUE) == 88
+    assert [e.number for e in CATALOGUE] == [n for n in range(1, 90) if n != 30]  # #30 was dropped
+    assert len(counted) == 87
+    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 28, "new": 37}
     kinds = Counter(e.kind for e in counted)
     assert kinds["propose"] == 28 and kinds["ask"] == 4
     assert {e.name for e in CATALOGUE if e.exposure == "aggregate"} == {
         "what_can_this_power",
         "check_readiness",
     }
-    assert len({e.name for e in CATALOGUE}) == 87
+    assert len({e.name for e in CATALOGUE}) == 88
     assert [(e.number, e.name, e.kind) for e in CATALOGUE[80:]] == [
         (82, "read_workbook_sheets", "read"),
         (83, "find_excel_serial_dates", "read"),
@@ -196,6 +199,7 @@ def test_the_catalogue_is_the_designs_eighty_tools() -> None:
         (86, "propose_features", "propose"),
         (87, "propose_combine_rows", "propose"),
         (88, "propose_amount_outcome", "propose"),
+        (89, "check_history", "read"),
     ]
     assert not EXECUTOR_NAMES & {e.name for e in CATALOGUE}, "an executor is never in the catalogue"
 
@@ -421,7 +425,7 @@ def test_the_ai_never_sees_a_person_only_tool_or_a_wrapper_in_m232(agent: AgentC
         data_registry().call("edit_by_hand", {"kind": "drop_column", "column": "x"}, ctx)
     assert refused.value.code == "TOOL_UNKNOWN"
     listed = [t.name for t in data_registry().listed_for(ctx, DataToolKind.READ)]
-    assert listed == LOOK_TOOLS
+    assert listed == [*LOOK_TOOLS, *M_HISTORY_TOOLS]
 
 
 def test_ai_and_person_calls_must_say_who_is_asking(agent: AgentContext) -> None:
