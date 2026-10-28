@@ -20,6 +20,26 @@ process), AI calls and tokens (from the case counters).
 The default AI is the fake grounded one. It does not read the data, so these numbers measure the rules, the visit and the
 plumbing, not the quality or the cost of a real model (the AI call and token columns are the fake's bookkeeping).
 
+## Result of the run on 2026-10-28 (fake AI, the committed harness, one dataset at a time)
+
+Printed by `scripts/bench_doctor.py --only <dataset>` (four runs, pasted as printed; the Rows column comes from the
+upload's profile). Online Retail and Health Insurance were not run again: each needs more than the nine minutes and the
+memory a run here may take, so their row stays "no result" below.
+
+| Dataset | Rows (file) | Ready | State | Why not | Wall s | Peak MB | AI calls | AI tokens |
+|---|---|---|---|---|---|---|---|---|
+| telco-customer-churn | 7,043 | yes | follow_up | - | 65.73 | 407.5 | 8 | 63948 |
+| uci-bank-marketing | 41,188 | no | follow_up | no goal offered | 73.53 | 597.6 | 0 | 0 |
+| uci-credit-default | 30,000 | no | approve | hard stop: PRESCRIPTION_DRIFT | 42.55 | 505.7 | 10 | 80305 |
+| hillstrom-email | 64,000 | no | follow_up | no goal offered | 40.07 | 550.9 | 6 | 46894 |
+
+What changed since the first run: telco churn reaches ready (the step on the outcome column is taken back once the
+column is the outcome, so `PLAN_STEP_CANNOT_RUN` is gone). Bank marketing and Hillstrom have no ID column: the readiness
+check reads the raw file, finds no column naming each client and lists no goal as ready, so the scripted person has no
+goal to pick; the visit offers a row number for the person's yes. On bank marketing the `month` column is also read as
+currency codes (`CURRENCY_MIXED`), a false finding still to fix. Credit default ends on a `PRESCRIPTION_DRIFT` hard
+stop at approval.
+
 ## Result of the run on 2026-10-27 (fake AI, raw files as downloaded)
 
 | Dataset | Rows (file) | Ready | State | Why not | Wall s | Peak MB | AI calls | AI tokens |

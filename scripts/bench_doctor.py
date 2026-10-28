@@ -171,6 +171,17 @@ def run_visit(
             confirmed: set[str] = set()
             for _round in range(MAX_ROUNDS):
                 acted = False
+                if record["goal"] is None:
+                    # a file the rules could not read for any goal at first (no ID yet) is read again once the
+                    # person has answered: the first goal it offers then is taken
+                    goal, offered = _pick_goal(case, use_case)
+                    if goal is not None:
+                        record.update(
+                            goal=goal,
+                            goals_offered=offered,
+                            expected_goal_offered=any(g["goal_id"] == use_case for g in offered),
+                        )
+                        acted |= post("goal", {"goal_id": goal, "op_id": "bench-goal-late"})
                 for q in [q for q in case["questions"] if q.get("answer") is None]:
                     option = _first_option(q)
                     if option is not None and post(
@@ -290,12 +301,16 @@ def run_all(
 
 
 def markdown_table(results: list[dict[str, Any]]) -> str:
-    head = "| Dataset | Ready | State | Why not | Wall s | Peak MB | AI calls | AI tokens |\n|---|---|---|---|---|---|---|---|\n"
+    head = (
+        "| Dataset | Rows (file) | Ready | State | Why not | Wall s | Peak MB | AI calls | AI tokens |\n"
+        "|---|---|---|---|---|---|---|---|---|\n"
+    )
     rows = []
     for r in results:
         why = (r.get("reason") or "").replace("|", "/").replace("\n", " ")
+        count = f"{r['rows']:,}" if isinstance(r.get("rows"), int) else "-"
         rows.append(
-            f"| {r['dataset']} | {'yes' if r.get('reached_ready') else 'no'} | {r.get('state') or '-'} | {why or '-'} "
+            f"| {r['dataset']} | {count} | {'yes' if r.get('reached_ready') else 'no'} | {r.get('state') or '-'} | {why or '-'} "
             f"| {r.get('wall_s', '-')} | {r.get('peak_mem_mb', '-')} | {r.get('ai_calls', '-')} | {r.get('ai_tokens', '-')} |"
         )
     return head + "\n".join(rows) + "\n"
