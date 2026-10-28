@@ -533,8 +533,8 @@ def test_a_role_question_is_answered_with_the_true_column_or_says_it_was_not_off
     assert answers(_question("OUTCOME_COLUMN", ["Naam", "kharida_30_din (file.csv)"])) == "c1"
     assert answers.not_measured == []
     assert (
-        answers(_question("KEY_AMBIGUOUS", ["Mobile No", "Naam"])) is None
-    ), "the driver takes its own choice"
+        answers(_question("KEY_AMBIGUOUS", ["Mobile No", "Naam"])) == "c0"
+    ), "the option the driver sends is returned, so the note names what was really sent"
     assert answers.not_measured == [
         "the true ID column 'Grahak ID' was not offered in the ID question; answered 'Mobile No'"
     ]
