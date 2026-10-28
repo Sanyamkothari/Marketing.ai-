@@ -7,7 +7,8 @@ here instead of at the person's run.
 
 The modules listed below still run a recipe for a reason of their own (each says which). Each entry names its reason; a "TODO Step 4" entry is the plan's remaining second world, taken off when that step
 lands. The list may only shrink:
-a module that stops calling is a stale entry and fails too, so it is taken off.
+a module that stops calling is a stale entry and fails too, so it is taken off. Calls are read with import aliases
+resolved, in every module under `engine/doctor` (subpackages too) and `api/routes`.
 """
 
 from __future__ import annotations
@@ -15,15 +16,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit.doctor._ast_calls import module_calls
+
 ROOT = Path(__file__).resolve().parents[3]
 RUNNERS = frozenset({"run_recipe", "run_guarded", "run_sql"})
 THE_ONE = "engine/doctor/materialize.py"
 STILL_OWN_RUN = {
     "engine/doctor/guards.py": "defines run_guarded over run_recipe",
-    "engine/doctor/prescription.py": "TODO Step 4: learns a contract from the approved recipe (replay world)",
+    "engine/doctor/prescription.py": "`_learn` runs the recipe being approved, at approval, for the guards' receipts and"
+    " the contract it learns (not a replay: it keeps the findings, twice, and never stops on them); see 'Replay paths'",
     "engine/doctor/build_driver.py": "tries a build, not the plan's steps",
-    "engine/doctor/split.py": "TODO Step 4: splits rows with the recipe's own run, not on the materialised tables",
-    "engine/doctor/time_settings.py": "TODO Step 4: a time-settings trial over rows it prepares itself",
     "engine/doctor/change_share.py": "TODO Step 4: measures a step on rows that are not the materialised tables",
     "engine/doctor/evals.py": "the eval harness replays a recipe (a test tool, not a customer path)",
     "api/routes/agent.py": "the Guided-setup agent's own recipe route",
@@ -35,14 +37,9 @@ STILL_OWN_RUN = {
 def callers() -> set[str]:
     found: set[str] = set()
     for folder in ("engine/doctor", "api/routes"):
-        for path in sorted((ROOT / folder).glob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    func = node.func
-                    name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
-                    if name in RUNNERS:
-                        found.add(path.relative_to(ROOT).as_posix())
+        for path in sorted((ROOT / folder).rglob("*.py")):
+            if RUNNERS & module_calls(path):
+                found.add(path.relative_to(ROOT).as_posix())
     return found
 
 

@@ -2060,9 +2060,9 @@ def apply_time_settings(
     frame: pd.DataFrame, changes: TimeChanges, *, upload_id: str, config: UseCaseConfig
 ) -> pd.DataFrame:
     """`frame` with the time settings' recipe steps replayed on it, the way a prepared copy is made
-    (`engine.agent.recipe.run_recipe`): the rows whose outcome is not final are left out."""
+    (`engine.doctor.materialize.replay_steps`): the rows whose outcome is not final are left out."""
     from engine.agent.contracts import RecipeStep
-    from engine.agent.recipe import run_recipe
+    from engine.doctor.materialize import replay_steps
 
     found = changes.steps.get(upload_id, ())
     if not found:
@@ -2071,12 +2071,10 @@ def apply_time_settings(
         RecipeStep.model_validate(step).model_copy(update={"order": index + 1})
         for index, step in enumerate(found)
     ]
-    return run_recipe(
+    return replay_steps(
         frame,
         steps,
         upload_id=upload_id,
-        primary_key=None,
-        target=None,
         levels=config.agent.levels,
         max_failure_pct=config.agent.max_conversion_failure_pct,
     ).frame

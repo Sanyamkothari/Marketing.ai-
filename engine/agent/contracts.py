@@ -314,6 +314,22 @@ class DataRecipe(Artefact):
             "setup, or saved before them), which replays unguarded, as it was approved."
         ),
     )
+    locale_profile: dict[str, JsonValue] | None = Field(
+        default=None,
+        description=(
+            "Data Doctor: the locale profile (number marks, date order, yes/no words) the person approved, as "
+            "`engine.doctor.locale.LocaleProfile` reads it. Every replay compares the file with it. Null on a recipe "
+            "approved without one (Guided setup, or saved before they were kept), which replays as it was approved."
+        ),
+    )
+    money_basis: dict[str, JsonValue] | None = Field(
+        default=None,
+        description=(
+            "Data Doctor: the money basis (each money column's unit and frozen rates) the person approved, as "
+            "`engine.doctor.currency.MoneyBasis` reads it. Every replay compares the file's currencies with it. "
+            "Null where `locale_profile` is."
+        ),
+    )
     created_at: AwareDatetime = Field(description="When it was approved.")
 
     @model_validator(mode="after")
@@ -401,6 +417,10 @@ class RecipeReceipt(Artefact):
     columns_in: Annotated[int, Field(ge=0, description="Columns read.")]
     columns_out: Annotated[int, Field(ge=0, description="Columns written.")]
     steps: tuple[StepReceipt, ...] = Field(description="One entry per step, in order.")
+    notes: tuple[str, ...] = Field(
+        default=(),
+        description="Plain notes about this run (a check that could not be made); empty on a receipt without any.",
+    )
     created_at: AwareDatetime = Field(description="When it ran.")
 
 

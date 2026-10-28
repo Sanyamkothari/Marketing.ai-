@@ -31,7 +31,7 @@ same decisions on next month's files hash the same.
 
 **An existing `DataRecipe` reads as a prescription with one part** (:func:`one_part`): one file slot holding the recipe
 and nothing else, so a model trained today keeps scoring exactly as it does (the replay of a one-part prescription is
-`run_saved_recipe`, byte for byte).
+`run_saved_recipe`, byte for byte, which runs `materialize.replay_recipe`).
 
 **PRESCRIBE.** :class:`CasePrescriber` is M235's `VisitDeps.prescribe` port: it builds the prescription from the case's
 approved items (:func:`prescription_from_case`), writes it, binds the case's uploads and built dataset to it
@@ -631,6 +631,16 @@ def _recipe(
     )
 
 
+def _with_settings(recipe: DataRecipe, locale: LocalePart) -> DataRecipe:
+    """`recipe` with the locale profile and money basis the person approved (JSON, as the recipe stores them)."""
+    return recipe.model_copy(
+        update={
+            "locale_profile": None if locale.profile is None else locale.profile.model_dump(mode="json"),
+            "money_basis": None if locale.money_basis is None else locale.money_basis.model_dump(mode="json"),
+        }
+    )
+
+
 def slot_name(text: str) -> str:
     return (_SLOT.sub("_", text).strip("_") or "file")[:128]
 
@@ -1079,6 +1089,14 @@ def prescription_from_case(
     recipes = [p.recipe for p in parts if p.recipe is not None] + ([post_build] if post_build else [])
     basis = _money(recipes, profile, approved, config)
     locale = None if profile is None and basis is None else LocalePart(profile=profile, money_basis=basis)
+    if locale is not None:
+        # A file slot's recipe carries what the person approved about its raw file, so a model trained on it checks a
+        # scoring file or a firing against the same settings (materialize.replay_recipe). The post-build recipe reads
+        # a built table, not a raw file, and carries none.
+        parts = [
+            p if p.recipe is None else p.model_copy(update={"recipe": _with_settings(p.recipe, locale)})
+            for p in parts
+        ]
     return make_prescription(
         files=parts,
         build=build,

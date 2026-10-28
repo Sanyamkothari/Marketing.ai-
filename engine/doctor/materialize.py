@@ -27,31 +27,39 @@ from __future__ import annotations
 
 import contextlib
 import functools
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.config import AgentConfig
-from engine.agent.contracts import RecipeStep, RecipeStepKind
+from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
 from engine.agent.dataset_recipe import consistent_types
-from engine.agent.recipe import STEP_PHASE, RecipeError
+from engine.agent.recipe import STEP_PHASE, RecipeError, RecipeRun, run_recipe
 from engine.agent.sql_step import SqlStepError, sql_params
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.doctor.guards import Finding, GuardedRun, Ledger, Receipt, ReceiptMemo, run_guarded
 from engine.doctor.visit_contracts import PlanFinding
+from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
     import pandas as pd
 
+    from engine.agent.config import AgentLevel
+    from engine.agent.reshape import LeakCheck
     from engine.doctor.case import Case, CaseFile, CaseItem
     from engine.doctor.diagnose import LoadedFile
+    from engine.doctor.prescription import PrescriptionError
+    from engine.doctor.prescription_contract import DataContract
 
 __all__ = [
     "CANDIDATE",
     "SAMPLE_SEED",
+    "UNCHECKED_SETTINGS_NOTE",
+    "ApprovedSettingsError",
     "Full",
+    "NewSpellingError",
     "Prepared",
     "PreparedFile",
     "Sample",
@@ -59,11 +67,16 @@ __all__ = [
     "StepFailure",
     "Watch",
     "aliased",
+    "check_approved_settings",
+    "check_spellings",
     "materialize",
     "materialize_plan",
     "open_findings",
+    "replay_recipe",
+    "replay_steps",
     "roles_of",
     "scoped",
+    "step_drift",
     "stop_finding",
     "table_names",
 ]
@@ -72,6 +85,10 @@ SAMPLE_SEED: Final[int] = 20_260_101
 """The seed every sample of the plan is drawn with: the same rows for every caller of the same scope."""
 CANDIDATE: Final[str] = "candidate"
 """The item id of the step a caller asks about (:func:`materialize`'s `candidate`)."""
+UNCHECKED_SETTINGS_NOTE: Final[str] = (
+    "No approved number, date or currency settings are stored with this recipe, so this file's were not "
+    "compared with the ones that were approved."
+)
 HARD_CODES: Final[frozenset[str]] = frozenset({"PLAN_STEP_CANNOT_RUN"})
 """The guards' stops no yes can lift: a step that cannot run is not a loss a person may accept."""
 _HARD_CODES: Final[frozenset[str]] = HARD_CODES
@@ -468,6 +485,307 @@ def materialize_plan(
         by_upload=names,
         failed=tuple(failed),
         failures=tuple(failures),
+    )
+
+
+class NewSpellingError(RecipeError):
+    """A yes/no step meets spellings it has no meaning for (`RECIPE_NEW_VALUE`): asked, never failed quietly under
+    the conversion limit."""
+
+    def __init__(self, column: str, order: int, unknown: Sequence[str], rows: int) -> None:
+        count = len(unknown)
+        super().__init__(
+            "RECIPE_NEW_VALUE",
+            f"'{column}' holds {count} spelling{'s' if count != 1 else ''} the approved yes/no step has no meaning "
+            f"for, in {rows:,} row{'s' if rows != 1 else ''}. Does each mean yes or no?",
+            column=column,
+            order=order,
+        )
+        self.unknown = tuple(unknown)
+        self.rows = rows
+
+
+class ApprovedSettingsError(RecipeError):
+    """A file is written another way than the number, date and currency settings the person approved (the locale
+    profile, the money basis). `detector` is the prescription's drift name (`LOCALE_CHANGED`, `CURRENCY_MIXED`,
+    `CURRENCY_FOREIGN`) and is also the error's code; `question` is what the person is asked."""
+
+    def __init__(
+        self,
+        detector: str,
+        summary: str,
+        question: str,
+        *,
+        column: str | None = None,
+        slot: str | None = None,
+    ) -> None:
+        super().__init__(detector, summary, column=column)
+        self.detector = detector
+        self.question = question
+        self.slot = slot
+
+
+def check_approved_settings(
+    frames: Mapping[str, Any], *, profile: Any = None, basis: Any = None
+) -> tuple[str, ...]:
+    """The approved locale profile and money basis against the raw files (`frames`, by slot). Raises
+    :class:`ApprovedSettingsError` on the first difference; returns what was checked (`"locale"`, `"currency"`).
+
+    The one check of both: a stored recipe's replay (:func:`replay_recipe`, with what the recipe carries) and the
+    prescription's raw-file checks (`prescription_replay.check_files`, with what the prescription froze) call it, so
+    a scoring file, a firing and a training replay meet the same stops. A field the files do not decide stays as
+    approved; a money column the files do not have is not read."""
+    from engine.doctor.currency import read_currencies
+    from engine.doctor.locale import SETTINGS, detect_locale
+
+    checked: list[str] = []
+    if profile is not None:
+        fields = tuple(f for f in SETTINGS if f != "money_units")
+        detection = detect_locale(dict(frames), base=profile, client_id=profile.client_id)
+        now, before = detection.profile.values(), profile.values()
+
+        def _same(field: str) -> bool:
+            # yes/no families are a set: the order a detection lists them in depends on which families a file shows
+            if field == "boolean_words":
+                return set(now[field]) == set(before[field])
+            return bool(now.get(field) == before.get(field))
+
+        changed = sorted(
+            {f for f in fields if not _same(f)} | {c.field for c in detection.conflicts if c.field in fields}
+        )
+        if changed:
+            words = ", ".join(f.replace("_", " ") for f in changed)
+            raise ApprovedSettingsError(
+                "LOCALE_CHANGED",
+                f"These files are written another way than the approved ones: {words}.",
+                f"These files write {words} differently from the files that were approved. Which is right?",
+            )
+        checked.append("locale")
+    if basis is not None and basis.columns:
+        for slot, frame in frames.items():
+            for money in basis.columns:
+                if money.column not in {str(c) for c in frame.columns}:
+                    continue
+                (found,) = read_currencies(frame, columns=[money.column]) or (None,)
+                if found is None:
+                    continue
+                codes = set(found.codes)
+                new = sorted(codes - set(money.written_in))
+                if not new and not found.several:
+                    continue
+                mixed = len(codes) > 1 or found.several > 0
+                raise ApprovedSettingsError(
+                    "CURRENCY_MIXED" if mixed else "CURRENCY_FOREIGN",
+                    f"'{money.column}' is written in {', '.join(new) or 'several currencies at once'}; the approved "
+                    f"preparation reads it in {', '.join(money.written_in)}.",
+                    f"'{money.column}' now holds amounts in {', '.join(new) or 'more than one currency'}. Which "
+                    "rate, or which column says the currency of each row? Amounts in different currencies are "
+                    "never added.",
+                    column=money.column,
+                    slot=slot,
+                )
+        checked.append("currency")
+    return tuple(checked)
+
+
+def _recipe_settings(recipe: DataRecipe) -> tuple[Any, Any]:
+    """The locale profile and money basis stored with a recipe, as models (None for each a recipe does not carry)."""
+    from pydantic import ValidationError
+
+    from engine.doctor.currency import MoneyBasis
+    from engine.doctor.locale import LocaleProfile
+
+    try:
+        profile = (
+            None if recipe.locale_profile is None else LocaleProfile.model_validate(recipe.locale_profile)
+        )
+        basis = None if recipe.money_basis is None else MoneyBasis.model_validate(recipe.money_basis)
+    except ValidationError:  # a record this build cannot read is not an approval to check against
+        return None, None
+    return profile, basis
+
+
+def check_spellings(recipe: DataRecipe, frame: Any) -> None:
+    """A `map_boolean` step's frozen spellings: a value it has no meaning for raises :class:`NewSpellingError`."""
+    from engine.doctor.prescription_contract import value_text
+
+    for step in recipe.steps:
+        if step.kind is not RecipeStepKind.MAP_BOOLEAN or step.column not in frame.columns:
+            continue
+        known = {
+            str(v).strip().casefold()
+            for v in (*step.params.get("true_values", []), *step.params.get("false_values", []))  # type: ignore[misc]
+        }
+        texts = frame[step.column].dropna().map(value_text)
+        texts = texts[texts != ""]
+        unknown = sorted({t for t in texts if t.casefold() not in known})
+        if unknown:
+            rows = sum(1 for t in texts if t.casefold() not in known)
+            raise NewSpellingError(str(step.column), step.order, unknown, rows)
+
+
+def step_drift(
+    exc: RecipeError, contract: DataContract | None, *, part: str, slot: str | None = None
+) -> PrescriptionError:
+    """A stored recipe that cannot run, as the prescription replay says it: a new yes/no spelling is `NEW_VALUE`;
+    a step that fails on a column the contract knows is `PRESCRIPTION_DRIFT` (the column is gone, or changed);
+    otherwise the step's own code. A scoring route answers the same `RecipeError` with its one-error report
+    (`recipe_failure_report`), so a replay without a prescription raises it as it is."""
+    from engine.doctor.prescription import PrescriptionError
+    from engine.doctor.prescription_replay import drift_stop
+
+    column = exc.column
+    if isinstance(exc, ApprovedSettingsError):
+        currency = exc.detector != "LOCALE_CHANGED"
+        return drift_stop(
+            exc.detector,
+            exc.message,
+            exc.question,
+            part="currency" if currency else "locale",
+            slot=exc.slot or slot,
+            column=column,
+            **({"code": exc.detector} if currency else {}),
+        )
+    if isinstance(exc, NewSpellingError):
+        count = len(exc.unknown)
+        return drift_stop(
+            "NEW_VALUE",
+            f"'{column}' holds {count} spelling{'s' if count != 1 else ''} the approved yes/no "
+            f"step has no meaning for, in {exc.rows:,} row{'s' if exc.rows != 1 else ''}.",
+            f"'{column}' has {count} new spelling{'s' if count != 1 else ''}. Does each mean yes or no?",
+            part=part,
+            slot=slot,
+            column=column,
+            examples=exc.unknown,
+        )
+    if contract is None or column is None or contract.column(column) is None:
+        return PrescriptionError(exc.code, exc.message, part=part)
+    if exc.code == "RECIPE_COLUMN_MISSING":
+        return drift_stop(
+            "MISSING_COLUMN",
+            f"'{column}' is not in this file; step {exc.order} of the approved preparation reads it.",
+            f"This file has no column '{column}'. Is it called something else now?",
+            part=part,
+            slot=slot,
+            column=column,
+        )
+    return drift_stop(
+        "MEANING_CHANGED",
+        f"Step {exc.order} of the approved preparation cannot run on '{column}' any more ({exc.code}): {exc.message}",
+        f"'{column}' changed since the preparation was approved, and step {exc.order} cannot run on it. What does the "
+        "column hold now?",
+        part=part,
+        slot=slot,
+        column=column,
+    )
+
+
+def replay_recipe(
+    frame: Any,
+    recipe: DataRecipe,
+    *,
+    levels: Sequence[AgentLevel],
+    max_failure_pct: float,
+    upload_id: str,
+    derived_upload_id: str | None = None,
+    leak_check: LeakCheck | None = None,
+    tables: Mapping[str, Any] | None = None,
+    clock: Callable[[], datetime] = utc_now,
+) -> RecipeRun:
+    """An approved recipe's steps on new rows (next month's file, a scoring file, a firing's dataset). Raises
+    `RecipeError`. This is the one place a stored recipe is applied to a file; every stored-recipe replay calls it.
+
+    The checks that need only the recipe run on every such replay: a yes/no step's frozen spellings
+    (:func:`check_spellings`, `NewSpellingError`), the number, date and currency settings the person approved
+    (:func:`check_approved_settings`, `ApprovedSettingsError`; a recipe carries its locale profile and money basis
+    from the day it is approved, and a recipe saved before that replays without them, with a note on its receipt)
+    and the guards' stops. The prescription's intake check and its joint check of several files stay in
+    `engine.doctor.prescription_replay.check_files`, which calls the same :func:`check_approved_settings`. It differs from :func:`materialize_plan` (a plan still being decided, checked at every visit) on purpose: its
+    steps already carry the dates the person approved, so nothing is bound to a run's as-of date or compared for
+    date differences, and the leak check is the caller's (training `full`, scoring `narrow`) where a plan is
+    always checked `full`.
+
+    A recipe approved under the guards (Data Doctor: `recipe.acknowledged_stops` is not None) replays under them:
+    every step is counted by :func:`engine.doctor.guards.run_guarded`, and a *stop* raises `RECIPE_GUARD_STOP` instead
+    of preparing the rows, unless a person said yes to that kind of stop at approval. Next month's file and the
+    scoring file never go on silently when the same steps now lose or double customers. A recipe approved without
+    the guards (Guided setup, or one saved before them) replays as it was approved: its intended losses were never
+    counted, so they cannot be told from new ones.
+    """
+    check_spellings(recipe, frame)
+    profile, basis = _recipe_settings(recipe)
+    check_approved_settings({"file": frame}, profile=profile, basis=basis)
+    args: dict[str, Any] = {
+        "upload_id": upload_id,
+        "primary_key": recipe.primary_key,
+        "target": recipe.target,
+        "levels": levels,
+        "max_failure_pct": max_failure_pct,
+        "snapshot_column": recipe.snapshot_column,
+        "derived_upload_id": derived_upload_id,
+        "leak_check": leak_check,
+        "tables": tables,
+        "clock": clock,
+    }
+    if recipe.acknowledged_stops is None:
+        return run_recipe(consistent_types(frame), recipe.steps, **args)
+    unchecked = profile is None and basis is None
+    run = run_guarded(
+        consistent_types(frame), recipe.steps, twice=False, **args
+    )  # repeatability: checked at approval
+    stops = [f for f in run.findings if f.level == "stop" and f.code not in recipe.acknowledged_stops]
+    if stops:
+        raise RecipeError(
+            "RECIPE_GUARD_STOP",
+            " ".join(f.message for f in stops[:3])
+            + " The rows were not prepared. Open the Data Doctor check to look at it, or change the plan.",
+            order=stops[0].order,
+        )
+    if unchecked:
+        receipt = run.run.receipt.model_copy(
+            update={"notes": (*run.run.receipt.notes, UNCHECKED_SETTINGS_NOTE)}
+        )
+        return RecipeRun(frame=run.run.frame, receipt=receipt)
+    return run.run
+
+
+def replay_steps(
+    frame: Any,
+    steps: Sequence[RecipeStep],
+    *,
+    upload_id: str,
+    levels: Sequence[AgentLevel],
+    max_failure_pct: float,
+    primary_key: str | None = None,
+    target: str | None = None,
+    snapshot_column: str | None = None,
+    leak_check: LeakCheck | None = None,
+    clock: Callable[[], datetime] = utc_now,
+) -> RecipeRun:
+    """Approved steps that are not (yet) a saved recipe on rows (a time setting's steps, a split's recipe): the steps
+    as an unguarded, unstamped :class:`DataRecipe` through :func:`replay_recipe`, so they meet its checks and run
+    under the levels and limit the caller names."""
+    ordered = tuple(steps)
+    hash_ = recipe_hash(ordered)
+    recipe = DataRecipe(
+        recipe_id=f"rc-{hash_.removeprefix('sha256:')[:16]}",
+        use_case_id="steps",
+        source_fingerprint="steps",
+        steps=ordered,
+        recipe_hash=hash_,
+        primary_key=primary_key,
+        target=target,
+        snapshot_column=snapshot_column,
+        created_at=clock(),
+    )
+    return replay_recipe(
+        frame,
+        recipe,
+        levels=levels,
+        max_failure_pct=max_failure_pct,
+        upload_id=upload_id,
+        leak_check=leak_check,
+        clock=clock,
     )
 
 

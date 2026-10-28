@@ -38,7 +38,7 @@ from pydantic import Field, model_validator
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import RecipeReceipt, RecipeStep
-from engine.agent.recipe import RecipeRun, run_recipe
+from engine.agent.recipe import RecipeRun
 from engine.agent.reshape import CombineError, LeakCheck, _dates
 from engine.config import StrictBase
 from engine.utils.time import utc_now
@@ -294,7 +294,9 @@ def split_file(
     clock: Callable[[], datetime] = utc_now,
 ) -> SplitFileRun:
     """Run the recipe once on `frame`, then split the prepared copy by `rule`: two prepared parts, one recipe."""
-    run = run_recipe(
+    from engine.doctor.materialize import replay_steps
+
+    run = replay_steps(
         frame,
         steps,
         upload_id=upload_id,

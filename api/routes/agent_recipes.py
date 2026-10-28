@@ -99,6 +99,18 @@ _SUGGESTIONS: dict[str, str] = {
     "RECIPE_GUARD_STOP": (
         "Open the Data Doctor check for this data to see what the steps now do to the customers, or change the plan."
     ),
+    "RECIPE_NEW_VALUE": (
+        "Open Guided setup or the Data Doctor check to say whether each new spelling means yes or no; the "
+        "model's steps are not changed until you do."
+    ),
+    "LOCALE_CHANGED": (
+        "Check how numbers, dates and yes/no are written in this file against the files the model was approved "
+        "on, or open the Data Doctor check to say which is right."
+    ),
+    "CURRENCY_FOREIGN": (
+        "Say which currency this column is in and at what rate to convert it, or send amounts in the currency "
+        "the model was approved with; amounts in different currencies are never added together."
+    ),
     "CURRENCY_MIXED": (
         "Say which rows are in which currency, or convert them at a rate you give; amounts in different "
         "currencies are never added together."

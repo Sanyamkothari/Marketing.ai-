@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
 from pydantic import Field
@@ -39,7 +39,7 @@ from engine.agent.contracts import DataRecipe, RecipeReceipt, RecipeStepKind
 from engine.agent.recipe import RecipeError
 from engine.config import StrictBase
 from engine.doctor.build_driver import BuildDriveError, BuildDriveResult, replay_build
-from engine.doctor.locale import SETTINGS, detect_locale
+from engine.doctor.materialize import ApprovedSettingsError, check_approved_settings, step_drift
 from engine.doctor.outcome_definition import OutcomeError, OutcomeReceipt, apply_outcome_values
 from engine.doctor.prescription import (
     PRESCRIPTION_DRIFT,
@@ -55,7 +55,6 @@ from engine.doctor.prescription_contract import (
     DriftFinding,
     check_contract,
     drift_question,
-    value_text,
 )
 from engine.intake.contracts import IntakeReport
 
@@ -84,8 +83,6 @@ __all__ = [
 
 Mode = Literal["train", "score"]
 PartName = Literal["intake", "locale", "currency", "recipe", "build", "outcome", "post_build", "contract"]
-_LOCALE_FIELDS: Final[tuple[str, ...]] = tuple(f for f in SETTINGS if f != "money_units")
-"""The locale fields a replay compares; money columns are the currency check's."""
 
 
 @dataclass(frozen=True)
@@ -232,63 +229,26 @@ def _check_intake(part: FilePart, file: ReplayFile, trail: _Trail) -> None:
     trail.add("intake", "checked", slot=part.slot)
 
 
-def _check_locale(prescription: Prescription, by_slot: Mapping[str, pd.DataFrame], trail: _Trail) -> None:
+def _check_settings(prescription: Prescription, by_slot: Mapping[str, pd.DataFrame], trail: _Trail) -> None:
+    """The approved locale profile and money basis on the raw files: :func:`check_approved_settings`, the check every
+    stored-recipe replay makes with what its recipe carries."""
     locale = prescription.locale
-    if locale is None or locale.profile is None:
-        trail.add("locale", "skipped", detail="no locale profile in the prescription")
-        return
-    frozen = locale.profile
-    detection = detect_locale(dict(by_slot), base=frozen, client_id=frozen.client_id)
-    now = detection.profile.values()
-    before = frozen.values()
-    changed = sorted(
-        {f for f in _LOCALE_FIELDS if now.get(f) != before.get(f)}
-        | {c.field for c in detection.conflicts if c.field in _LOCALE_FIELDS}
-    )
-    if changed:
-        words = ", ".join(f.replace("_", " ") for f in changed)
-        raise drift_stop(
-            "LOCALE_CHANGED",
-            f"These files are written another way than the approved ones: {words}.",
-            f"These files write {words} differently from the files that were approved. Which is right?",
-            part="locale",
-        )
-    trail.add("locale", "checked", detail=f"profile {str(locale.profile_hash)[:19]}")
-
-
-def _check_currency(prescription: Prescription, by_slot: Mapping[str, pd.DataFrame], trail: _Trail) -> None:
-    from engine.doctor.currency import read_currencies
-
-    locale = prescription.locale
+    profile = None if locale is None else locale.profile
     basis = None if locale is None else locale.money_basis
-    if basis is None or not basis.columns:
+    if basis is not None and not basis.columns:
+        basis = None
+    try:
+        checked = check_approved_settings(by_slot, profile=profile, basis=basis)
+    except ApprovedSettingsError as exc:
+        raise step_drift(exc, None, part="recipe") from exc
+    if locale is not None and profile is not None:
+        trail.add("locale", "checked", detail=f"profile {str(locale.profile_hash)[:19]}")
+    else:
+        trail.add("locale", "skipped", detail="no locale profile in the prescription")
+    if basis is not None and "currency" in checked:
+        trail.add("currency", "checked", detail=f"basis {basis.basis_hash[:19]}")
+    else:
         trail.add("currency", "skipped", detail="no money basis in the prescription")
-        return
-    for slot, frame in by_slot.items():
-        for money in basis.columns:
-            if money.column not in {str(c) for c in frame.columns}:
-                continue
-            (found,) = read_currencies(frame, columns=[money.column]) or (None,)
-            if found is None:
-                continue
-            codes = set(found.codes)
-            new = sorted(codes - set(money.written_in))
-            if not new and not found.several:
-                continue
-            mixed = len(codes) > 1 or found.several > 0
-            code = "CURRENCY_MIXED" if mixed else "CURRENCY_FOREIGN"
-            raise drift_stop(
-                code,
-                f"'{money.column}' is written in {', '.join(new) or 'several currencies at once'}; the approved "
-                f"preparation reads it in {', '.join(money.written_in)}.",
-                f"'{money.column}' now holds amounts in {', '.join(new) or 'more than one currency'}. Which rate, "
-                "or which column says the currency of each row? Amounts in different currencies are never added.",
-                part="currency",
-                slot=slot,
-                column=money.column,
-                code=code,
-            )
-    trail.add("currency", "checked", detail=f"basis {basis.basis_hash[:19]}")
 
 
 def check_files(
@@ -301,8 +261,7 @@ def check_files(
         part = prescription.file(file.slot)
         if part is not None:
             _check_intake(part, file, own)
-    _check_locale(prescription, by_slot, own)
-    _check_currency(prescription, by_slot, own)
+    _check_settings(prescription, by_slot, own)
     return tuple(own.warnings)
 
 
@@ -319,33 +278,6 @@ def _frames_by_slot(files: Sequence[ReplayFile]) -> dict[str, pd.DataFrame]:
 # ---------------------------------------------------------------------------
 # Recipes
 # ---------------------------------------------------------------------------
-def _check_spellings(recipe: DataRecipe, frame: pd.DataFrame, *, slot: str | None) -> None:
-    """A `map_boolean` step's frozen spellings: a value it has no meaning for stops (never a quiet failure)."""
-    for step in recipe.steps:
-        if step.kind is not RecipeStepKind.MAP_BOOLEAN or step.column not in frame.columns:
-            continue
-        known = {
-            str(v).strip().casefold()
-            for v in (*step.params.get("true_values", []), *step.params.get("false_values", []))  # type: ignore[misc]
-        }
-        texts = frame[step.column].dropna().map(value_text)
-        texts = texts[texts != ""]
-        unknown = sorted({t for t in texts if t.casefold() not in known})
-        if unknown:
-            rows = sum(1 for t in texts if t.casefold() not in known)
-            raise drift_stop(
-                "NEW_VALUE",
-                f"'{step.column}' holds {len(unknown)} spelling{'s' if len(unknown) != 1 else ''} the approved yes/no "
-                f"step has no meaning for, in {rows:,} row{'s' if rows != 1 else ''}.",
-                f"'{step.column}' has {len(unknown)} new spelling{'s' if len(unknown) != 1 else ''}. Does each mean "
-                "yes or no?",
-                part="recipe",
-                slot=slot,
-                column=step.column,
-                examples=unknown,
-            )
-
-
 def run_part_recipe(
     recipe: DataRecipe,
     frame: pd.DataFrame,
@@ -364,7 +296,6 @@ def run_part_recipe(
     from engine.agent.config import AgentConfig
     from engine.agent.dataset_recipe import run_replay, run_saved_recipe
 
-    _check_spellings(recipe, frame, slot=slot)
     try:
         if config is not None:
             return run_saved_recipe(
@@ -386,34 +317,6 @@ def run_part_recipe(
         )
     except RecipeError as exc:
         raise step_drift(exc, contract, part=part, slot=slot) from exc
-
-
-def step_drift(
-    exc: RecipeError, contract: DataContract | None, *, part: str, slot: str | None = None
-) -> PrescriptionError:
-    """A step that cannot run: `PRESCRIPTION_DRIFT` when the column it reads is one the contract knows (the column
-    is gone, or changed), else the step's own code."""
-    column = exc.column
-    if contract is None or column is None or contract.column(column) is None:
-        return PrescriptionError(exc.code, exc.message, part=part)
-    if exc.code == "RECIPE_COLUMN_MISSING":
-        return drift_stop(
-            "MISSING_COLUMN",
-            f"'{column}' is not in this file; step {exc.order} of the approved preparation reads it.",
-            f"This file has no column '{column}'. Is it called something else now?",
-            part=part,
-            slot=slot,
-            column=column,
-        )
-    return drift_stop(
-        "MEANING_CHANGED",
-        f"Step {exc.order} of the approved preparation cannot run on '{column}' any more ({exc.code}): {exc.message}",
-        f"'{column}' changed since the preparation was approved, and step {exc.order} cannot run on it. What does the "
-        "column hold now?",
-        part=part,
-        slot=slot,
-        column=column,
-    )
 
 
 def _leak(mode: Mode) -> LeakCheck:
