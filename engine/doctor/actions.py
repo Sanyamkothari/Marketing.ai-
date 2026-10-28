@@ -119,10 +119,6 @@ class ProposeFeaturesArgs(_Args):
 class ProposeUnpivotArgs(_Args):
     """`propose_unpivot` (`engine.doctor.agent_unpivot`): code finds the period columns and builds the step."""
 
-    year: int | None = Field(
-        default=None,
-        description="the year the person said, only when the columns name months or quarters with none",
-    )
     reason: str | None = Field(default=None)
 
 
@@ -237,8 +233,8 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
     ActionSpec(
         "propose_unpivot",
         ProposeUnpivotArgs,
-        "a wide sheet (spend_jan..spend_dec) turned into one row per customer per period; ask the year first when "
-        "the names have none.",
+        "a wide sheet (spend_jan..spend_dec) turned into one row per customer per period: the person is asked, and "
+        "says the year when the names have none.",
         frozenset({"review"}),
         needs_file=True,
     ),

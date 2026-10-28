@@ -96,6 +96,8 @@ class QuestionSpec:
     """Who would know, when the person does not."""
     safe_default: str = ""
     """What is used meanwhile, in plain words, after "will"."""
+    from_code: bool = False
+    """Asked only by code that carries the change each answer makes (the review's unpivot): the model cannot ask it."""
 
     @property
     def recommends(self) -> bool:
@@ -529,6 +531,45 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             roles=(CAMPAIGN_MANAGER,),
             safe_default="leave the outcome as the file has it",
         ),
+        QuestionSpec(
+            qid="Q25",
+            code="Q25_UNPIVOT",
+            topic="period columns into rows",
+            text="{file} has one column per {kind} for {measures}. Turn them into rows, one per {entity} per "
+            "{kind}? The first {rows_in} rows become {rows_out}.",
+            why="As rows they can be combined back into one row per {entity}; as columns each {kind} is an "
+            "unrelated column.",
+            options=(
+                OptionSpec(
+                    "Yes, turn them into rows",
+                    effect="One row per {entity} per {kind}; the rows can then be combined into one row per "
+                    "{entity}.",
+                ),
+                OptionSpec("No, keep them as columns", effect="Each {kind} stays a separate column."),
+            ),
+            blocking=True,
+            roles=(CRM_ADMIN,),
+            safe_default="keep the columns as they are",
+            from_code=True,
+        ),
+        QuestionSpec(
+            qid="Q26",
+            code="Q26_UNPIVOT_YEAR",
+            topic="year of period columns",
+            text="The {kind} columns of {measures} in {file} name no year. Which year do they cover? As rows, "
+            "one per {entity} per {kind}, the first {rows_in} rows become {rows_out}.",
+            why="Without a year the rows cannot be put in date order. The year you pick is written into the step.",
+            options=(
+                OptionSpec("{choice}", repeat=True),
+                OptionSpec(
+                    "None of these: keep them as columns", effect="Each {kind} stays a separate column."
+                ),
+            ),
+            blocking=True,
+            roles=(CRM_ADMIN,),
+            safe_default="keep the columns as they are",
+            from_code=True,
+        ),
     )
 }
 """Q1 to Q20 of the scenario study, and Q21 to Q23 (what one row is, which statuses are real money, who can have the
@@ -614,8 +655,10 @@ def build_ask(
     value_signature: tuple[str, ...] = (),
     evidence_ids: tuple[str, ...] = (),
     proven: str | None = None,
+    by_code: bool = False,
 ) -> Ask:
-    """A protocol `Ask` from a catalogue entry.
+    """A protocol `Ask` from a catalogue entry (`by_code`: the caller carries the change of each answer, which an
+    entry marked `from_code` requires).
 
     `values` fill the placeholders. `rows_changed`, `label_rates` and `effects` are aligned with the answers as
     rendered (see :func:`render_options`), without "I don't know"; `effects` carry what an answer adds, and their
@@ -625,6 +668,8 @@ def build_ask(
     and is the safe choice.
     """
     spec = question(qid)
+    if spec.from_code and not by_code:
+        raise QuestionError(f"{qid} is asked by Data Doctor itself; choose another question")
     if recommended_choice is not None and not 0 <= recommended_choice < len(choices):
         raise QuestionError(
             f"{qid}: recommended_choice {recommended_choice} is not one of the {len(choices)} choices"
@@ -783,7 +828,7 @@ def catalogue_lines(*, chat: bool = False) -> tuple[str, ...]:
     The chat's prompt (`chat`) also lists the questions only the chat asks."""
     lines = []
     for spec in CATALOGUE.values():
-        if spec.chat_only and not chat:
+        if (spec.chat_only and not chat) or spec.from_code:
             continue
         need = ", ".join(
             sorted(required_fields(spec) | ({"choices"} if any(o.repeat for o in spec.options) else set()))

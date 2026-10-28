@@ -1088,9 +1088,11 @@ def never_ticked_steps(config: Any, config_root: Path | None) -> frozenset[Recip
 # ---------------------------------------------------------------------------
 # What the wave-1 tools return, read as proposals (the registry asks after each call)
 # ---------------------------------------------------------------------------
-HANDLER_CHECKED: Final[frozenset[str]] = frozenset({"data.setting", "data.recipe_step", "data.person_edit"})
+HANDLER_CHECKED: Final[frozenset[str]] = frozenset(
+    {"data.setting", "data.recipe_step", "data.person_edit", "data.unpivot"}
+)
 """Kinds whose handler asks the rules itself, where its own checks are (`loop._propose`, `loop._propose_step`,
-`edits.add_edit`): the registry adds no second reading of their output."""
+`edits.add_edit`, `agent_unpivot.run_unpivot`): the registry adds no second reading of their output."""
 
 FILES_KINDS: Final[frozenset[str]] = frozenset(
     {
