@@ -96,6 +96,9 @@ class ResultsFacts:
     segments: SegmentReport | None
     feature_names: dict[str, str]
     root: Path | None = None
+    example_bands: tuple[str, ...] = ()
+    """The band of each example, banded over every scored row as the export bands them (`assign_bands`: a
+    regression run by the share of rows scoring below, not by the raw amount); empty for an uplift model."""
 
     def plain(self, text: str) -> str:
         """Engine words in config text ("subscriber", "snapshot") in the client's words."""
@@ -137,37 +140,41 @@ def _latest_score_run(storage: Storage, model_id: str) -> RunRecord | None:
 
 def _example_rows(
     storage: Storage, key: str, config: UseCaseConfig, *, uplift: bool
-) -> tuple[RowExplanation, ...]:
+) -> tuple[tuple[RowExplanation, ...], tuple[str, ...]]:
     """The (at most three) example rows, validated one by one - never the whole file.
 
     A scoring run explains every row it scored, so its `row_explanations.parquet` can hold millions
     of rows. Only the score column is scanned to choose the examples (the top score of each band;
-    for an uplift model the three largest predicted gains); only the chosen rows become models.
+    for an uplift model the three largest predicted gains); only the chosen rows become models. The bands are
+    the export's own (`engine.stages.actions.assign_bands`, over every score), returned beside the rows.
     """
     import numpy as np
+    import pandas as pd
     import pyarrow.parquet as pq
 
     from engine.contracts import RowExplanation
+    from engine.stages.actions import assign_bands
 
     with storage.open_read(key) as handle:
         table = pq.read_table(handle)  # type: ignore[no-untyped-call]
     scores = np.asarray(table.column("score").to_numpy(zero_copy_only=False), dtype=float)
     if scores.size == 0:
-        return ()
+        return (), ()
     chosen: list[int] = []
+    names: list[str] = []
     if uplift:
         chosen = [int(i) for i in np.argsort(-scores, kind="stable")[:EXAMPLES]]
     else:
-        upper = np.inf
+        banded = assign_bands(pd.Series(scores), config).to_numpy()
         for band in config.actions.bands:
-            inside = np.flatnonzero((scores >= band.min_score) & (scores < upper))
+            inside = np.flatnonzero(banded == band.name)
             if inside.size:
                 chosen.append(int(inside[np.argmax(scores[inside])]))
-            upper = band.min_score
+                names.append(band.name)
             if len(chosen) == EXAMPLES:
                 break
     rows = table.take(chosen).to_pylist()
-    return tuple(RowExplanation.model_validate(row) for row in rows)
+    return tuple(RowExplanation.model_validate(row) for row in rows), tuple(names)
 
 
 def _humanise(name: str) -> str:
@@ -281,6 +288,7 @@ def collect_results(
         else None
     )
     examples: tuple[RowExplanation, ...] = ()
+    example_bands: tuple[str, ...] = ()
     examples_from = ""
     for run, label in ((score_run, "scored"), (train, "test")):
         if run is None:
@@ -288,11 +296,11 @@ def collect_results(
         key = run_key(run.run_id, "row_explanations.parquet")
         if storage.exists(key):
             try:
-                examples = _example_rows(storage, key, config, uplift=uplift_run)
+                examples, example_bands = _example_rows(storage, key, config, uplift=uplift_run)
                 examples_from = label
                 break
             except Exception:  # an unreadable file means no examples, never invented ones
-                examples = ()
+                examples, example_bands = (), ()
     segments = None
     if score_run is not None:
         segments = _read(storage, run_key(score_run.run_id, SEGMENTS_FILENAME), SegmentReport)
@@ -317,6 +325,7 @@ def collect_results(
         segments=segments,
         feature_names=_feature_names(config, manifest, client_store),
         root=root,
+        example_bands=example_bands,
     )
 
 
@@ -351,6 +360,8 @@ def _examples(facts: ResultsFacts) -> list[tuple[str, RowExplanation]]:
     if facts.uplift is not None:
         top = sorted(facts.examples, key=lambda e: e.score, reverse=True)[:EXAMPLES]
         return [("", example) for example in top]
+    if len(facts.example_bands) == len(facts.examples):  # banded over every score, as the export is
+        return list(zip(facts.example_bands, facts.examples, strict=True))[:EXAMPLES]
     bands = facts.config.actions.bands
     chosen: list[tuple[str, RowExplanation]] = []
     for band in bands:
