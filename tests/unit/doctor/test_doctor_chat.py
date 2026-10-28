@@ -363,6 +363,31 @@ def test_leaving_rows_out_stays_a_change_the_person_confirms_at_the_approval(
     assert visit.unconfirmed(talk.case) == (applied,)
 
 
+def test_the_chat_proposes_a_lesson_only_once_the_case_is_ready(storage: LocalStorage, world: World) -> None:
+    """The chat runs in CONVERSE, so readiness is the case's verdict for the plan as it stands, not its state."""
+    from engine.doctor.lessons import LessonStore
+
+    lesson = "Ask which column is the outcome before building any model."
+    propose = {"action": "propose_lesson", "args": {"text": lesson}}
+    client = ChatScript({"early": [propose, reply("Noted.")], "later": [propose, reply("Noted.")]})
+    talk = Talk(storage, world, client)
+    talk.say("early")
+    assert LessonStore(storage).all() == (), "no verdict yet: not ready"
+    assert any("not yet" in str(r) for r in client.seen[-1].results)
+
+    talk.goal()
+    outcome = vs.question(talk.case, "OUTCOME_COLUMN")
+    talk.answer(outcome.question_id, vs.option(outcome, "converted"))
+    talk.case = visit.approve(
+        cs.CLIENT, talk.case.case_id, talk.deps(), expected_version=talk.case.version, actor=ANALYST
+    )
+    assert talk.case.state is VisitState.FOLLOW_UP and talk.case.readiness
+    talk.say("later")
+    stored = LessonStore(storage).all()
+    assert [x.text for x in stored] == [lesson] and stored[0].status == "proposed"
+    assert stored[0].case_id == talk.case.case_id
+
+
 # ---------------------------------------------------------------------------
 # Asking, suggesting, doubting
 # ---------------------------------------------------------------------------

@@ -111,6 +111,10 @@ Contract schema version: 1.
 | GET | `/decide/conflicts` | Get arbitration conflicts summary for Results UI | dict |
 | POST | `/doctor/diagnosis` | What each uploaded file is, and which use cases the files can power | Diagnosis |
 | POST | `/doctor/handoff` | The file as an upload of the chosen use case, read the same way, for its Guided setup | UploadResponse |
+| GET | `/doctor/lessons` | The lessons, proposed, approved and rejected | LessonList |
+| POST | `/doctor/lessons/{lesson_id}/approve` | Approve a proposed lesson: read_guide('lessons') shows it from now on | LessonDecision |
+| POST | `/doctor/lessons/{lesson_id}/reject` | Reject a proposed lesson | LessonDecision |
+| POST | `/doctor/lessons/{lesson_id}/retire` | Retire an approved lesson: it leaves the guide and makes room for another | LessonDecision |
 | POST | `/doctor/outcome` | Agree the outcome built from an event file, as the sentence the person picked | OutcomeAgreement |
 | GET | `/goal-briefs/{goal_id}` | What a goal needs | GoalBrief |
 | GET | `/healthz` | Liveness probe | HealthResponse |

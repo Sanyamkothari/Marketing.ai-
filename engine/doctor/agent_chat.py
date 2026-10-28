@@ -139,6 +139,7 @@ class _Chat(_Review):
 
     def __init__(self, *args: Any, chat_steps: int, storage: Storage | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self.storage = storage
         self.max_steps = chat_steps
         self.chosen = _Chosen()
         # What the model calls a change (`c1`) or a question (`k1`) -> the id in the case. The real ids are content
@@ -478,6 +479,8 @@ class _Chat(_Review):
             self._withdraw(args)
         elif name == "suggest_answer":
             self._suggest(args)
+        elif name == "propose_lesson":
+            self._lesson(args)
         elif name == "ask":
             self._ask(action, args)
         elif name in {"join_files", "stack_files"}:
@@ -559,6 +562,42 @@ class _Chat(_Review):
                 "The person ticked that change or gave it their own yes; only they can take it back.",
             )
         return item
+
+    def _ready(self) -> bool:
+        """The active goal's latest readiness verdict is ready (with or without warnings) for the plan as it stands.
+        The chat runs from CONVERSE, so the case's state says nothing here; the verdict and its plan digest do.
+        """
+        from engine.doctor.visit import active_goal, prescription_digest, stored_brief
+
+        goal = active_goal(self.case)
+        ref = (
+            None
+            if goal is None
+            else next((r for r in self.case.readiness if r.goal_id == goal.goal_id), None)
+        )
+        if ref is None or ref.verdict not in {"ready", "ready_with_warnings"} or self.storage is None:
+            return False
+        now = prescription_digest(self.case, stored_brief(self.storage, self.case))
+        return (
+            ref.plan_digest
+            or (self.case.prescriptions[-1].prescription_hash if self.case.prescriptions else "")
+        ) == now
+
+    def _lesson(self, args: dict[str, Any]) -> None:
+        """`propose_lesson`: a general rule for later cases, kept as proposed once the case is ready. Only the owner
+        approves it (`POST /doctor/lessons/{id}/approve`); a lesson with a number, a quote or a name is refused.
+        """
+        from engine.doctor.lessons import LessonError, LessonStore
+
+        if self.storage is None or not self._ready():
+            self.turn.feedback.append({"lesson": "not yet: propose lessons once the case is ready"})
+            return
+        try:
+            lesson = LessonStore(self.storage).propose(args.get("text"), self.case.case_id)
+        except LessonError as exc:
+            self.turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
+            return
+        self.turn.feedback.append({"lesson": "proposed: waits for the owner", "status": lesson.status})
 
     def _withdraw(self, args: dict[str, Any]) -> None:
         item = self._own(str(args.get("item_id", "")))

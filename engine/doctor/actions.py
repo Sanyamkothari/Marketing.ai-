@@ -143,6 +143,12 @@ class ReadGuideArgs(_Args):
     section: str | None = Field(default=None)
 
 
+class ProposeLessonArgs(_Args):
+    """`propose_lesson` (`engine.doctor.lessons`): the owner decides; nothing reaches a guide before they approve."""
+
+    text: str = Field(description="one general rule, at most 18 words, no number, quote or name")
+
+
 class AskReviewArgs(_Args):
     question: str = Field(description="a question id below")
     column: str | None = Field(default=None)
@@ -264,6 +270,12 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
         ReadGuideArgs,
         "a guide: its rules plus the section (else all).",
         _BOTH,
+    ),
+    ActionSpec(
+        "propose_lesson",
+        ProposeLessonArgs,
+        "once the case is ready: a general rule for later cases; the owner approves it.",
+        frozenset({"chat"}),
     ),
     ActionSpec("join_files", CombineArgs, "join the files on their key; code counts.", frozenset({"chat"})),
     ActionSpec(

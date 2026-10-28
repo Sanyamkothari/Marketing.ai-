@@ -392,7 +392,12 @@ def _review(
         return None
     meter, guardrails, context_for = parts
     return agent_review(
-        context_for, meter=meter, guardrails=guardrails, principal=principal, config_root=root
+        context_for,
+        meter=meter,
+        guardrails=guardrails,
+        principal=principal,
+        config_root=root,
+        storage=storage,
     )
 
 
