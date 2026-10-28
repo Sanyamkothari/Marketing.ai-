@@ -53,6 +53,8 @@ Contract schema version: 1.
 | POST | `/cases/{case_id}/decisions` | Tick or untick a suggestion | Case |
 | POST | `/cases/{case_id}/files` | Add a file to a Data Doctor case, against the version you read | Case |
 | POST | `/cases/{case_id}/goal` | Choose a goal | Case |
+| GET | `/cases/{case_id}/recheck` | The drift report of the recheck that opened this case | RecheckReport |
+| POST | `/cases/{case_id}/recheck` | Replay a ready case's approved plan on next month's file | RecheckReport |
 | GET | `/cases/{case_id}/screen` | A Data Doctor case as its screen shows it | CaseScreen |
 | POST | `/cases/{case_id}/standing-answers/{answer_id}/revoke` | Revoke a remembered answer | Case |
 | GET | `/cases/{case_id}/timeline` | What happened in a Data Doctor case, oldest first | CaseTimeline |
