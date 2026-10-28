@@ -223,12 +223,19 @@ def capture(base: str, out: Path, *, train: bool, messy: Path) -> None:
         shoot(page, out, "04_connection_form")
 
         go(page, base, f"#/uc/{USE_CASE}")
-        shoot(page, out, "05_guided_setup_start")
-        page.set_input_files("#ag-file", str(messy))
-        page.wait_for_selector("[data-ag-group], [data-ag-stop]", timeout=120_000)
+        shoot(page, out, "05_data_doctor_start")
+        # The goal's Setup tab is the Data Doctor's screen (Guided setup is gone): its file input and its cards.
+        tab = page.locator('[data-setup-tab="datadoctor"]')
+        if tab.count():
+            tab.first.click()
+        page.set_input_files("#dds-file", str(messy))
+        page.wait_for_selector(
+            ".dds-root .dds-card, .dds-root [data-dds-approve-start], [data-dds-verdict], [data-dds-question]",
+            timeout=120_000,
+        )
         settle(page)
-        scroll_to(page, "[data-ag-group]")
-        shoot(page, out, "06_guided_setup_suggestions")
+        scroll_to(page, ".dds-root")
+        shoot(page, out, "06_data_doctor_first_look")
 
         if train:
             print("  training and scoring (a minute or two)...")
