@@ -6,7 +6,7 @@
 // phone), each with its state and one direct button to its key form, which already exists at
 // `#/connections/ai/<slot>` (`modules/connections/ai.js`):
 //
-//   "AI that helps your team"           the `product` slot: the chat and suggestions in Guided setup and Data Doctor;
+//   "AI that helps your team"           the `product` slot: the chat and suggestions in Data Doctor;
 //   "AI that writes for your customers" the `deliverable` slot: campaign messages and the notes on why a result
 //                                       changed.
 //
@@ -32,7 +32,7 @@ export const AI_SLOTS = Object.freeze([
   Object.freeze({
     slot: "product",
     title: "AI that helps your team",
-    text: "Powers the chat and the suggestions in Guided setup and Data Doctor.",
+    text: "Powers the chat and the suggestions in Data Doctor.",
     tech: "Product AI",
   }),
   Object.freeze({

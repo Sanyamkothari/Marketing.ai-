@@ -138,7 +138,7 @@ test("a file pulled from a connection, a renamed copy and a built dataset are ea
   assert.match(text(copy.querySelector("[data-dt-when]")), /^Made /);
   assert.match(text(row(ids.direct).querySelector(".dt-sub")), /^File$/, "the file that was sent keeps its own label");
 
-  assert.match(text(row("u_built0000001").querySelector(".dt-sub")), /^Built by Guided setup from another file$/);
+  assert.match(text(row("u_built0000001").querySelector(".dt-sub")), /^Built from another file by the steps you approved$/);
   assert.match(text(row("u_built0000001").querySelector("[data-dt-when]")), /^Built /);
   for (const r of $$("[data-dt-source='file']")) assert.ok(!/Uploaded/.test(text(r)), "no row claims a person uploaded it");
   world.uploads = world.uploads.filter((u) => u.upload_id !== "u_built0000001");

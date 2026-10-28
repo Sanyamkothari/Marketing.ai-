@@ -1,7 +1,7 @@
 // The AI service screens: `#/connections/ai/product` and `#/connections/ai/deliverable`, one form, two
 // slots (`GET /ai-service` answers `{ slots: { product, deliverable }, providers }`).
 //
-//   Product AI      helps the team prepare data in Guided setup (the chat helper). It sees column names
+//   Product AI      helps the team prepare data in Data Doctor (the chat helper). It sees column names
 //                   and masked samples of the customer's data.
 //   Deliverable AI  what the customer receives: the Onboarding Assistant's answers, root-cause summaries
 //                   and campaign copy. It uses the Product AI until it is given its own service.
@@ -50,8 +50,8 @@ export const SLOTS = Object.freeze({
   product: {
     id: "product",
     title: "Product AI",
-    blurb: "Helps your team prepare data in Guided setup. It sees column names and masked samples of the customer's data.",
-    privacy: (label) => `Your prompts (including column names and masked samples from Guided setup) are sent to ${label}.`,
+    blurb: "Helps your team prepare data in Data Doctor. It sees column names and masked samples of the customer's data.",
+    privacy: (label) => `Your prompts (including column names and masked samples from Data Doctor) are sent to ${label}.`,
   },
   deliverable: {
     id: "deliverable",

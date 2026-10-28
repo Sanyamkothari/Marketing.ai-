@@ -112,7 +112,7 @@ function fileOrigin(u) {
     case "renamed_copy":
       return { kind: "Copy with renamed columns. The file you sent is unchanged.", verb: "Made" };
     case "recipe":
-      return { kind: "Built by Guided setup from another file", verb: "Built" };
+      return { kind: "Built from another file by the steps you approved", verb: "Built" };
     default:
       return { kind: "File", verb: "Added" };
   }

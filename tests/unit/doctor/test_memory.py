@@ -140,9 +140,7 @@ def test_a_second_file_of_the_same_shape_is_offered_the_treatment(tmp_path: Path
     )
     assert offer is not None and offer.kind == "same_shape" and offer.can_apply
     assert (offer.recipe_id, offer.steps, offer.source_file_name) == ("rc-month-one", 2, "billing_sept.csv")
-    assert offer.sentence.startswith(
-        "This looks like billing_sept.csv, which you prepared with Guided setup on 1 Jun 2026"
-    )
+    assert offer.sentence.startswith("This looks like billing_sept.csv, which you prepared on 1 Jun 2026")
     assert "nothing changes until you approve" in offer.sentence
     scoring = offer_for(
         storage, use_case_id=USE_CASE, upload_id="u_score", columns=COLUMNS, intake=None, mode="score"

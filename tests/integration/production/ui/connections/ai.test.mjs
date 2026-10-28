@@ -109,7 +109,7 @@ test("each slot says what it is for", async () => {
   await show("product");
   assert.equal(
     text($("[data-ai-blurb]")),
-    "Helps your team prepare data in Guided setup. It sees column names and masked samples of the customer's data.",
+    "Helps your team prepare data in Data Doctor. It sees column names and masked samples of the customer's data.",
   );
   assert.match(text($("h1")), /^Product AI$/);
   assert.deepEqual(
@@ -205,7 +205,7 @@ test("the third-party notice names the service and what is sent, and differs by 
   await show("product");
   assert.equal(
     text($("[data-ai-third-party]")),
-    "Privacy. Your prompts (including column names and masked samples from Guided setup) are sent to OpenAI.",
+    "Privacy. Your prompts (including column names and masked samples from Data Doctor) are sent to OpenAI.",
   );
   pick("anthropic");
   assert.match(text($("[data-ai-third-party]")), /are sent to Claude \(Anthropic\)\.$/);

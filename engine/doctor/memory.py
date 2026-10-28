@@ -1,10 +1,10 @@
 """Memory (Plan L M159, DEC-1590 … DEC-1595): the next file of the same shape is offered the same treatment.
 
-When Guided setup approves (`apply`) a training file with steps, `remember` writes down the file's
-**shape** and what treated it: the recipe's id, the prepared upload that holds it and how intake read the
+When a training file's steps are approved (by Guided setup's `apply` before, by the Data Doctor's approval now:
+`remember_approved_case`), `remember` writes down the file's **shape** and what treated it: the recipe's id, the prepared upload that holds it and how intake read the
 file (the sheet, intake on or off). When a later file of the same shape arrives - an upload, an import, a
 hand-off from Data Doctor, training or scoring - `offer_for` says so ("This looks like billing_sept.csv,
-which you prepared with Guided setup on 3 Sep"), and Guided setup's **Use the same treatment**
+which you prepared with Data Doctor on 3 Sep"), and **Use the same treatment**
 (`use_same_treatment`) ticks the saved steps in the session. They are still shown, previewed and approved
 like every other step: nothing is ever applied without Approve.
 
@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 __all__ = [
     "MEMORY_PREFIX",
     "MEMORY_TOOL",
+    "TREATMENT_RECIPE_FILENAME",
     "TreatmentMemory",
     "TreatmentOffer",
     "forget",
@@ -195,13 +196,20 @@ def remember_approved_case(
 ) -> TreatmentMemory | None:
     """Data Doctor approval: write down the treatment of a one-file case for its goal, so `recall_treatment` offers
     it for the next file of the same shape. None when there is nothing to remember: no goal, several files, a
-    build, or no step (a join or stack is not a treatment of one file's shape).
+    build, no step (a join or stack is not a treatment of one file's shape), or a goal that does not train (a scoring
+    case never writes over the memory a training case left, as Guided setup wrote it only for training). A workbook
+    sheet the case read is part of the shape (`shape_of(columns, sheet)`), so the upload offers and the rename checks
+    find the memory.
 
     The recipe is the case's stored prescription's, kept beside the source upload as `treatment_recipe.json`.
     """
     from engine.doctor.prescription import load_prescription
+    from engine.doctor.visit import stored_brief
 
     goal = next((g for g in case.goals if g.active), None)
+    brief = stored_brief(storage, case) if goal is not None else None
+    if brief is not None and brief.mode != "train":
+        return None
     if (
         goal is None
         or len(case.files) != 1
@@ -223,7 +231,7 @@ def remember_approved_case(
         columns=[
             str(c) for c in loaded.frame.columns
         ],  # the columns `recall_treatment` reads the next file by
-        sheet=None,
+        sheet=intake.sheet if intake is not None else None,
         intake_enabled=not (intake is not None and intake.turned_off),
         recipe=recipes[0],
         recipe_upload_id=loaded.upload_id,
@@ -335,6 +343,11 @@ def _offer(
     return _as_offer(storage, latest, kind="same_sheet", training=False)
 
 
+def _by(memory: TreatmentMemory) -> str:
+    """Who prepared it, by the recipe the memory names: the Data Doctor's own, else the earlier guided steps."""
+    return " with Data Doctor" if memory.recipe_file == TREATMENT_RECIPE_FILENAME else ""
+
+
 def _as_offer(
     storage: Storage, memory: TreatmentMemory, *, kind: Literal["same_shape", "same_sheet"], training: bool
 ) -> TreatmentOffer:
@@ -344,17 +357,17 @@ def _as_offer(
     steps = f"{memory.steps} step{'s' if memory.steps != 1 else ''}"
     if kind == "same_sheet":
         sentence = (
-            f"Last time the sheet “{memory.sheet}” of {which} was prepared with Guided setup on {when} "
+            f"Last time the sheet “{memory.sheet}” of {which} was prepared{_by(memory)} on {when} "
             f"({steps}). This workbook has that sheet: read it to be offered the same treatment."
         )
     elif training:
         sentence = (
-            f"This looks like {which}, which you prepared with Guided setup on {when} ({steps}). "
+            f"This looks like {which}, which you prepared{_by(memory)} on {when} ({steps}). "
             "Use the same treatment? The steps are ticked for you to check, and nothing changes until you approve."
         )
     else:
         sentence = (
-            f"This looks like {which}, which you prepared with Guided setup on {when} ({steps}). A file to score "
+            f"This looks like {which}, which you prepared{_by(memory)} on {when} ({steps}). A file to score "
             "is prepared by the steps saved with the model it is scored with."
         )
     return TreatmentOffer(

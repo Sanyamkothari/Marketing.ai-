@@ -114,7 +114,7 @@ test("the AI service section has two cards, each with its own badge and a button
   assert.equal(product.querySelector("a.btn").getAttribute("href"), "#/connections/ai/product");
   assert.equal(deliverable.querySelector("a.btn").getAttribute("href"), "#/connections/ai/deliverable");
   assert.equal(text(product.querySelector("a.btn")), "Change");
-  assert.match(text(product), /Helps your team prepare data in Guided setup/);
+  assert.match(text(product), /Helps your team prepare data in Data Doctor/);
   assert.match(text(deliverable), /What your customer gets/);
 });
 

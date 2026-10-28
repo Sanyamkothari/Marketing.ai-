@@ -25,7 +25,7 @@ the baseline is now an empty object, so any of these words outside technical det
 | SHAP, feature importance | **What drives it** | `shap`, `feature importance`, `feature`, `importance` | The reasons behind a ranking, in business words. SHAP, 'feature' and 'importance' are modelling words; a column is 'a detail about the customer'. |
 | drift, PSI | **Customers have changed since the model was trained** | `drift`, `psi` | What drift means to a marketer: the customers look different from the ones the model learned on. |
 | arbitration | **One message per customer** | `arbitration` | When several campaigns want the same customer only one message goes; 'arbitration' is the engine's rule. |
-| recipe | **The fixes you approved** | `recipe` | The data fixes the person approved in Guided setup, saved so next month's file is prepared the same way. 'Recipe' is the engine's name. |
+| recipe | **The fixes you approved** | `recipe` | The data fixes the person approved, saved so next month's file is prepared the same way. 'Recipe' is the engine's name. |
 | model names (the algorithm that won) | *(hidden)* | `lightgbm`, `xgboost`, `catboost`, `ensemble`, `random forest`, `randomforest`, `logistic regression`, `logisticregression`, `gradient boosting`, `neural net`, `neural network`, `neuralnet`, `autogluon` | Which algorithm won is hidden from a marketer. An analyst sees it under technical details. |
 
 ## How a term is matched

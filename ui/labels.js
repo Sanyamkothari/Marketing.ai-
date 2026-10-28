@@ -165,7 +165,7 @@ export const GLOSSARY = [
     shown: "The fixes you approved",
     never: ["recipe"],
     reason:
-      "The data fixes the person approved in Guided setup, saved so next month's file is prepared the same way. 'Recipe' is the engine's name.",
+      "The data fixes the person approved, saved so next month's file is prepared the same way. 'Recipe' is the engine's name.",
   },
   {
     key: "modelNames",

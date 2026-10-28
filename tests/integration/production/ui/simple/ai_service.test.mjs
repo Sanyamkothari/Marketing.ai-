@@ -99,7 +99,7 @@ test("neither connected: two cards in plain words, 'Not connected', and a Connec
   assert.equal($("main .crumbs a").getAttribute("href"), "#/settings");
   assert.equal(text(card("product").querySelector("h2")), "AI that helps your team");
   assert.equal(text(card("deliverable").querySelector("h2")), "AI that writes for your customers");
-  assert.match(text(card("product")), /Guided setup and Data Doctor/);
+  assert.match(text(card("product")), /suggestions in Data Doctor/);
   assert.match(text(card("deliverable")), /campaign messages/);
   for (const name of ["product", "deliverable"]) {
     const chip = card(name).querySelector("[data-ai-svc-status]");

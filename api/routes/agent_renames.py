@@ -37,7 +37,15 @@ from engine.agent.contracts import RECIPE_RECEIPT_FILENAME, DataRecipe, RecipeRe
 from engine.agent.dataset_recipe import consistent_types
 from engine.config import UseCaseConfig
 from engine.contracts import DatasetProfile, FeatureSchema, ModelVersion, RunRecord, ValidationReport
-from engine.doctor.memory import TreatmentMemory, offer_for, recall, remembered, remembered_recipe, shape_of
+from engine.doctor.memory import (
+    TREATMENT_RECIPE_FILENAME,
+    TreatmentMemory,
+    offer_for,
+    recall,
+    remembered,
+    remembered_recipe,
+    shape_of,
+)
 from engine.doctor.renames import (
     RENAMED_COPY_FILENAME,
     ColumnRename,
@@ -307,7 +315,8 @@ def memory_changes(
         )
         name = _file_name(storage, memory.source_upload_id)
         which = name or "a file"
-        sentence = f"This looks like {which}, which you prepared with Guided setup on {_day(memory)}"
+        by = " with Data Doctor" if memory.recipe_file == TREATMENT_RECIPE_FILENAME else ""
+        sentence = f"This looks like {which}, which you prepared{by} on {_day(memory)}"
         sentence += (
             f", but your file has {_quoted(suggested)}."
             if suggested
