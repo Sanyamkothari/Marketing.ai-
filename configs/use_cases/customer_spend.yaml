@@ -1,0 +1,59 @@
+id: customer-spend
+name: Customer Spend
+description: Predicts how much each customer will spend in the next 90 days, so a budget and a service level can follow the customers worth most.
+lifecycle_stage: Growth
+entity: customer
+problem_type: regression
+
+# A regression goal: the outcome is an amount, not a yes or no. Its file is usually the order history, and the
+# outcome is worked out from it point in time (engine/doctor/amount_outcome.py): the total over the 90 days
+# after the snapshot date, 0 for a customer who bought nothing. Every feature is measured on or before that date.
+# Needs at least validation.min_rows customers and validation.min_positive of them who spent (see amount_minimums).
+
+target:
+  column: spend_next_90d
+  definition: The amount the customer spent in the 90 days after the snapshot date
+  label_source: Order history, added up after the snapshot date (Data Doctor builds it)
+
+model_search:
+  metric: mae                               # the typical miss in money; a few very large customers do not dominate it
+  metric_choices: [mae, rmse]
+
+actions:
+  score_field: predicted_spend
+  bands:
+    - {name: High,   min_score: 0.80, action: "Dedicated account care and early access"}
+    - {name: Medium, min_score: 0.50, action: "Standard loyalty offers"}
+    - {name: Low,    min_score: 0.00, action: "Low-cost reminders only"}
+  suppression:
+    opt_out_column: null
+    recently_contacted_column: null
+
+output:
+  kpi:
+    label: "Customers expected to spend a lot"
+    formula: 'count_where_band_in(["High","Medium"])'
+
+ui:
+  pages:
+    data: "Order history at the snapshot"
+    model: "Customer Spend Model"
+    output: "Expected Spend per Customer"
+
+template:
+  columns:
+    - {name: customer_id,     role: primary_key, type: string, description: "Unique customer identifier. Never used as a feature.", examples: ["C001","C002","C003","C004","C005"]}
+    - {name: snapshot_date,   role: time,        type: date,   description: "Date the features describe the customer as of. Nothing after it may be used.", examples: ["2025-06-30","2025-06-30","2025-06-30","2025-06-30","2025-06-30"]}
+    - {name: orders_365d,     role: feature,     type: integer, description: "Orders in the 365 days up to the snapshot", examples: ["1","3","6","12","24"]}
+    - {name: spend_365d,      role: feature,     type: float,   description: "Amount spent in the 365 days up to the snapshot", examples: ["40.0","310.5","980.0","2400.0","9100.0"]}
+    - {name: days_since_last_order, role: feature, type: integer, description: "Days between the last order and the snapshot", examples: ["3","20","45","120","300"]}
+    - {name: spend_next_90d,  role: target,      type: float,   description: "Target: the amount spent in the 90 days after the snapshot (0 when nothing). Leave blank when scoring.", examples: ["0.0","0.0","120.0","560.0","1800.0"]}
+
+agent:
+  goal: "Predict how much each customer will spend in the next 90 days."
+  knowledge:
+    - "The outcome is the total spent in the 90 days after the snapshot date, 0 for a customer who did not buy."
+    - "Orders after the snapshot contain the answer; every feature must be measured on or before the snapshot."
+    - "Most customers spend nothing in a window, so the model needs enough customers who did spend."
+  column_hints:
+    target_synonyms: [spend_next_90d, future_spend, next_spend, spend_90d_after]

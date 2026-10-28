@@ -56,10 +56,13 @@ def test_a_bank_marketing_file_gets_term_deposit_first(config_root: Path) -> Non
     assert all(v.status == "missing" and v.first_fix for v in found[1:])
 
 
-def test_every_trainable_use_case_is_considered_but_not_telco_churn(config_root: Path) -> None:
+def test_every_trainable_use_case_is_considered_including_campaign_tests_but_not_telco_churn(
+    config_root: Path,
+) -> None:
     ids = {offer.config.id for offer in offers(config_root)}
     assert {"bank-term-deposit", "card-default-propensity", "insurance-cross-sell", "retail-win-back"} <= ids
-    assert "telco-churn" not in ids and "hillstrom-email" not in ids
+    assert {"hillstrom-email", "customer-spend"} <= ids  # a campaign test and an amount goal (W6)
+    assert "telco-churn" not in ids
 
 
 def test_a_returned_goods_column_is_a_question_not_ready(config_root: Path) -> None:
