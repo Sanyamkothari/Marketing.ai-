@@ -593,6 +593,16 @@ def test_second_opinion_works_from_the_case_and_ticks_nothing() -> None:
     assert out["questions"], "the AI's questions come back for the visit to put to the person"
 
 
+def test_second_opinion_starts_from_the_roles_the_case_decided() -> None:
+    from engine.agent.proposals import roles_of, rules_session
+
+    _ctx, _client, agent = _assist_case(header_help_root())
+    session = rules_session(
+        agent, session_id="x", clock=lambda: NOW, primary_key="customer_id", target="churn_flg"
+    )
+    assert roles_of(session) == ("customer_id", "churn_flg")
+
+
 def test_second_opinion_is_off_with_agentic_enabled_off_as_the_assist_route() -> None:
     """DEC-1409 (g): with `agentic.enabled` off (the shipped default) the AI is never asked for a second
     opinion; the registry does not offer the tool and a direct run is `404 AGENTIC_DISABLED`."""

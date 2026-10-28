@@ -9,7 +9,7 @@ import json
 from collections.abc import Callable
 from datetime import datetime
 
-from engine.agent.advisor import ROLE_PRIMARY_KEY, ROLE_TARGET, summarise
+from engine.agent.advisor import ROLE_PRIMARY_KEY, ROLE_TARGET, Advice, advise, summarise
 from engine.agent.contracts import (
     AgentConfidence,
     AgentSession,
@@ -30,6 +30,8 @@ __all__ = [
     "identity",
     "required_roles",
     "roles_of",
+    "rules_session",
+    "session_from_advice",
     "status_of",
     "unsettled_roles",
     "with_summary",
@@ -254,3 +256,53 @@ def _ask_for_unsettled_roles(session: AgentSession, ctx: AgentContext) -> AgentS
     ):
         return session
     return session.model_copy(update={"questions": tuple(questions)})
+
+
+def session_from_advice(
+    advice: Advice,
+    ctx: AgentContext,
+    *,
+    session_id: str,
+    agent_name: str,
+    created_at: datetime,
+    now: datetime,
+) -> AgentSession:
+    return AgentSession(
+        session_id=session_id,
+        upload_id=ctx.upload_id,
+        use_case_id=ctx.use_case_id,
+        mode=ctx.mode.value,
+        agent_name=agent_name,
+        status=advice.status,
+        proposals=advice.proposals,
+        questions=advice.questions,
+        tool_results=advice.tool_results,
+        stop_reason=advice.stop_reason,
+        assumptions=advice.assumptions,
+        engine_hidden=advice.engine_hidden,
+        created_at=created_at,
+        updated_at=now,
+    )
+
+
+def rules_session(
+    ctx: AgentContext,
+    *,
+    session_id: str,
+    clock: Callable[[], datetime] = utc_now,
+    primary_key: str | None = None,
+    target: str | None = None,
+) -> AgentSession:
+    """Run the rules advisor once and open a working session on what it found. `primary_key` and `target` are
+    the roles already decided (for example by a case), which the advisor then takes as given."""
+    now = clock()
+    advice = advise(ctx, id_prefix="a1-", primary_key=primary_key, target=target)
+    session = session_from_advice(
+        advice,
+        ctx,
+        session_id=session_id,
+        agent_name=ctx.config.agent.name_for(ctx.config.name),
+        created_at=now,
+        now=now,
+    )
+    return with_summary(session, ctx, clock=clock)

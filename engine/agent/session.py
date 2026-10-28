@@ -59,6 +59,7 @@ from engine.agent.proposals import (
     identity,
     required_roles,
     roles_of,
+    rules_session,
     status_of,
     unsettled_roles,
     with_summary,
@@ -139,48 +140,11 @@ def reshape_of(session: AgentSession) -> tuple[RecipeStep | None, bool]:
     return (accepted[-1] if accepted else None), declined
 
 
-def _from_advice(
-    advice: Advice,
-    ctx: AgentContext,
-    *,
-    session_id: str,
-    agent_name: str,
-    created_at: datetime,
-    now: datetime,
-) -> AgentSession:
-    return AgentSession(
-        session_id=session_id,
-        upload_id=ctx.upload_id,
-        use_case_id=ctx.use_case_id,
-        mode=ctx.mode.value,
-        agent_name=agent_name,
-        status=advice.status,
-        proposals=advice.proposals,
-        questions=advice.questions,
-        tool_results=advice.tool_results,
-        stop_reason=advice.stop_reason,
-        assumptions=advice.assumptions,
-        engine_hidden=advice.engine_hidden,
-        created_at=created_at,
-        updated_at=now,
-    )
-
-
 def start_session(
     ctx: AgentContext, *, session_id: str, clock: Callable[[], datetime] = utc_now
 ) -> AgentSession:
     """Run the advisor once and open a session on what it found."""
-    now = clock()
-    advice = advise(ctx, id_prefix="a1-")
-    session = _from_advice(
-        advice,
-        ctx,
-        session_id=session_id,
-        agent_name=ctx.config.agent.name_for(ctx.config.name),
-        created_at=now,
-        now=now,
-    )
-    return with_summary(session, ctx, clock=clock)
+    return rules_session(ctx, session_id=session_id, clock=clock)
 
 
 def _decided(proposal: Proposal, state: ProposalState, value: Any = None) -> Proposal:

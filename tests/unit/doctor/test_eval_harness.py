@@ -376,10 +376,12 @@ def test_an_in_01_shaped_file_reaches_approve_with_its_true_columns() -> None:
 def test_the_invariant_catches_ready_with_no_roles_settled(monkeypatch: pytest.MonkeyPatch) -> None:
     """B1, kept meaningful after the fix: with the product's behaviour before DEC-1821 (no role question, ready
     with roles unsettled), the in_01 shape is called ready and fails at Approve; the harness must say so."""
+    from engine.agent import proposals
     from engine.agent import session as session_module
 
+    monkeypatch.setattr(proposals, "unsettled_roles", lambda _session: ())
+    monkeypatch.setattr(proposals, "_ask_for_unsettled_roles", lambda session, _ctx: session)
     monkeypatch.setattr(session_module, "unsettled_roles", lambda _session: ())
-    monkeypatch.setattr(session_module, "_ask_for_unsettled_roles", lambda session, _ctx: session)
     result = _run_in_01_shaped()
     assert not result.approved and result.session_status == "ready"
     assert result.invariant_problem == "ready (said by Guided setup) but no ID or outcome settled"
