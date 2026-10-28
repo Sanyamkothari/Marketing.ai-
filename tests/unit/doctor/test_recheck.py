@@ -568,3 +568,79 @@ def test_one_file_that_fails_does_not_hide_drift_in_the_other() -> None:
     ).report
     assert report.rows_after == 2 * ROWS  # the run failed (raw rows are counted), and still the drift is said
     assert "OUTCOME_RATE_SHIFT" in {f.code for f in report.stops}
+
+
+def _dropping_north() -> Case:
+    drop = RecipeStep(
+        order=1,
+        kind=RecipeStepKind.REMOVE_ROWS,
+        column="region",
+        params={"operator": "equals", "values": ["north"]},
+        reason="r",
+    )
+    case = ready_case()
+    return case.model_copy(
+        update={
+            "items": (*case.items, item("item_drop", "recipe_step", {"step": drop.model_dump(mode="json")}))
+        }
+    )
+
+
+def test_a_stop_said_yes_to_in_the_approved_run_is_not_asked_again() -> None:
+    from engine.doctor.visit_contracts import Acknowledgement, CaseVisit
+
+    case = _dropping_north()
+    asked = run(month(OLD_START + timedelta(days=30), seed=2), case).report
+    (stop,) = [f for f in asked.stops if f.code == "PLAN_LOSES_TOO_MUCH"]
+    baseline = materialize(case, case.items, [loaded(month(OLD_START, seed=1), "up-old")], Full())
+    found = next(f for f in baseline.findings if f.code == "PLAN_LOSES_TOO_MUCH")
+    said = Acknowledgement(key=found.key, count=10_000, by="asha", at=NOW, reason="known")
+    acked = case.model_copy(update={"visit": CaseVisit(acknowledged=(said,))})
+    carried = run(month(OLD_START + timedelta(days=30), seed=2), acked)
+    again = carried.report
+    assert "PLAN_LOSES_TOO_MUCH" not in {f.code for f in again.stops}, "the yes carries while the count holds"
+    # and the follow-up case holds the yes under the new run's key, so its APPROVE does not ask it again
+    assert {a.key for a in carried.acknowledged} > {found.key}
+    small = acked.model_copy(
+        update={"visit": CaseVisit(acknowledged=(said.model_copy(update={"count": 1}),))}
+    )
+    grown = run(month(OLD_START + timedelta(days=30), seed=2), small).report
+    assert "PLAN_LOSES_TOO_MUCH" in {f.code for f in grown.stops}, "a bigger loss needs a new yes"
+    assert stop.subject.startswith("data_check@PLAN_LOSES_TOO_MUCH:")
+
+
+def test_the_training_table_reads_no_row_after_the_training_date() -> None:
+    sql = (
+        "SELECT customer_id, churned, joined, amount, region FROM t_customers "
+        "WHERE CAST(joined AS DATE) <= $as_of"
+    )
+    step = RecipeStep(
+        order=1,
+        kind=RecipeStepKind.SQL_QUERY,
+        column="kept",
+        params={"sql": sql, "inputs": ["customers"], "output_name": "kept", "description": "d"},
+        reason="r",
+    )
+    case = ready_case()
+    case = case.model_copy(
+        update={
+            "items": (*case.items, item("item_kept", "recipe_step", {"step": step.model_dump(mode="json")}))
+        }
+    )
+    result = run(month(OLD_START + timedelta(days=30), seed=2), case)
+    training = result.report.dates.training_as_of_after
+    assert training is not None
+    new = loaded(month(OLD_START + timedelta(days=30), seed=2), "up-new")
+    follow = case.model_copy(update={"items": result.items})
+    files = [CaseFile(upload_id="up-new", file_name="customers.csv", added_at=NOW, added_by="asha")]
+    from engine.doctor.materialize import materialize_plan
+
+    built = materialize_plan(
+        files,
+        [i for i in follow.items if i.state is ProposalState.ACCEPTED],
+        [new],
+        Full(),
+        training_as_of=training,
+    )
+    table = built.tables["kept"] if "kept" in built.tables else built.tables["customers"]
+    assert (pd.to_datetime(table["joined"]).dt.date <= training).all()

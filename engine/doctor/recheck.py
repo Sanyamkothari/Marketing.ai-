@@ -199,6 +199,8 @@ class Rechecked:
     reopened: tuple[str, ...]
     """Ids of the items that wait for the person's yes again."""
     offers: dict[str, tuple[OptionEffect, ...]]
+    acknowledged: tuple[Any, ...] = ()
+    """The yeses of the approved run, carried to the same findings of the new run (keyed by the new uploads)."""
 
 
 # ---------------------------------------------------------------------------
@@ -909,6 +911,22 @@ def recheck(
     # bigger) stays said, a flag the approved run had too is not asked again, a new flag is a question
     before = {f.key: f for f in baseline.findings}
     said = case.visit.acknowledged if case.visit is not None else ()
+
+    # A yes was given on the approved run's findings, whose keys name the old uploads: it carries to the same
+    # finding of the new run (same code, column and scope), with the count it was given for.
+    def same(old: Any, new: Any) -> bool:
+        return (old.code, old.column, old.scope, old.level) == (new.code, new.column, new.scope, new.level)
+
+    said = (
+        *said,
+        *(
+            a.model_copy(update={"key": found.key})
+            for a in said
+            if (old := before.get(a.key)) is not None
+            for found in run.findings
+            if found.key != a.key and same(old, found)
+        ),
+    )
     for finding in run.findings:
         was = before.get(finding.key)
         if finding.level == "stop":
@@ -984,6 +1002,7 @@ def recheck(
         approvals=tuple(a for a in case.approvals if not (a.approve_class and reopened & set(a.item_ids))),
         reopened=tuple(sorted(reopened)),
         offers=found.offers,
+        acknowledged=tuple(said),
     )
 
 
@@ -1042,6 +1061,7 @@ def open_recheck_case(
             "hand_off": None,
             "stopped": None,
             "plan_check": None,
+            "acknowledged": tuple({a.key: a for a in rechecked.acknowledged}.values()),
             "approved_before": tuple(m for m in source.approved_before if m not in reopened),
         }
     )
