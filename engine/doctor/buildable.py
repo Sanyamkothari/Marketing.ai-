@@ -6,8 +6,12 @@ goal allows `reshape` (`agent.levels`: many rows per customer combined into one)
 (`configs/outcomes.yaml`: `event_presence` or `event_absence`, with its windows), an event table - an ID column
 and a date column, with an amount when there is one - is enough to build one row per customer with the outcome.
 
-This module only counts. The facts are measured on the rows by code (distinct IDs, the date span, a candidate
-snapshot, the customers active on or before it, and how many of them are a 'yes' in the window after it); the
+This module only counts. The facts are measured on every row of the file by code (distinct IDs, the date span, a
+candidate snapshot, the customers active on or before it, and how many of them are a 'yes' in the window after it):
+distinct customers do not grow with the rows, so a count made on a sample is never scaled up. When the diagnosis
+holds a sample, the ID and date columns alone are read over the whole file (`LoadedFile.column_chunks`). When the
+goal's outcome names a narrower audience (`configs/outcomes.yaml`: `audience`, such as the shoppers who have gone
+quiet for 90 days), both readings are counted and the person picks one; the code never narrows it on its own. The
 build is proposed afterwards (`engine.doctor.visit`, through `propose_features` and the point-in-time query) and the
 person approves it. The snapshot is the latest month-end whose window is over, a first date to discuss, not a
 decision. The floors (`validation.min_rows`, `validation.min_positive`) are checked on those counts, so the verdict
@@ -20,30 +24,47 @@ import calendar
 import threading
 import weakref
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import pandas as pd
 from pydantic import Field
 
 from engine.agent.config import AgentLevel
 from engine.config import StrictBase
+from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from engine.config import UseCaseConfig
     from engine.doctor.diagnose import LoadedFile
 
-__all__ = ["BuildableOutcome", "buildable_outcome", "compile_build", "snapshot_for"]
+__all__ = ["BuildAudience", "BuildableOutcome", "buildable_outcome", "compile_build", "snapshot_for"]
+
+_LOG = get_logger(__name__)
 
 _SAMPLE_ROWS: Final[int] = 50_000
-"""Rows the columns are told apart on (an ID, a date, an amount); the counts use every row read."""
+"""Rows the columns are told apart on (an ID, a date, an amount); the counts use every row of the file."""
 _YES: Final[tuple[object, ...]] = (1, True, "1", None)
 """The positive labels the built outcome (1 for a yes, 0 for a no) is: another word for yes is the person's to define."""
 _MIN_SHARE: Final[float] = 0.8
 """Share of a column's filled cells that must read as dates (or numbers) for it to be one."""
+
+
+class BuildAudience(StrictBase):
+    """One reading of who the built table is about, with its counts: every customer active on or before the snapshot,
+    or the narrower audience the goal's configuration names (customers quiet for `quiet_days` before it)."""
+
+    audience_id: Literal["active", "quiet"]
+    quiet_days: int | None = Field(
+        default=None, description="For `quiet`: days before the snapshot with no row."
+    )
+    label: str = Field(description="Who they are, in plain words.")
+    customers: int = Field(description="Customers in this reading: the rows built.")
+    yes: int = Field(description="Of them, how many are a 'yes' in the window after the snapshot.")
+    enough: bool = Field(description="These rows would reach the configured floors.")
 
 
 class BuildableOutcome(StrictBase):
@@ -72,7 +93,18 @@ class BuildableOutcome(StrictBase):
     yes: int = Field(description="Of them, how many are a 'yes' in the window after the snapshot.")
     rows_read: int
     file_rows: int
-    enough: bool = Field(description="The rows built would reach the configured floors.")
+    exact: bool = Field(
+        default=True,
+        description="The counts are made on every row of the file. False only when no reader of the whole file was "
+        "at hand: the counts are then a sample's, and the floors are not taken as reached unless a sample's count "
+        "cannot be higher than the file's.",
+    )
+    audiences: tuple[BuildAudience, ...] = Field(
+        default=(),
+        description="When the goal names a narrower audience: the counts of both readings (all active before the "
+        "snapshot, and quiet before it). The person picks one; empty when the goal names none.",
+    )
+    enough: bool = Field(description="The rows built would reach the configured floors (in some reading).")
     sentence: str = Field(description="One plain sentence: what can be built and the counts.")
 
 
@@ -147,67 +179,130 @@ class _Events:
     days: pd.Series[pd.Timestamp]
 
 
+def _ids_days(frame: pd.DataFrame, key: str, when: str) -> tuple[pd.Series[str], pd.Series[pd.Timestamp]]:
+    """The customer (text, trimmed) and the day of every row of `frame` that has both."""
+    ids = frame[key].astype("string").str.strip()
+    ids = ids.mask(ids == "")
+    how = "mixed" if frame[when].dtype == object else None
+    days = pd.to_datetime(frame[when], errors="coerce", format=how)
+    keep = (ids.notna() & days.notna()).to_numpy()
+    return ids[keep], days[keep].dt.normalize()
+
+
 _CACHE: OrderedDict[int, tuple[weakref.ref[pd.DataFrame], _Events | None]] = OrderedDict()
+_WHOLE: OrderedDict[int, tuple[weakref.ref[pd.DataFrame], pd.DataFrame | None]] = OrderedDict()
 _CACHE_SIZE: Final[int] = 4
 _LOCK = threading.Lock()
 
 
-def _events(frame: pd.DataFrame) -> _Events | None:
-    """`frame` as events, or None. Read once per frame: every goal asks, and reading the dates is the slow part.
-    An entry keeps a weak reference to its frame (a negative one too) and is used only while that reference still
-    reaches this very frame: an id that a freed frame left behind and a new frame took is never mistaken for it, and
-    the cache never keeps a frame alive."""
+def _cached(cache: OrderedDict[int, Any], frame: pd.DataFrame, make: Callable[[], Any]) -> Any:
+    """`make()` once per frame. An entry keeps a weak reference to its frame (a negative one too) and is used only
+    while that reference still reaches this very frame: an id that a freed frame left behind and a new frame took is
+    never mistaken for it, and the cache never keeps a frame alive."""
     with _LOCK:
-        entry = _CACHE.get(id(frame))
+        entry = cache.get(id(frame))
         if entry is not None:
             if entry[0]() is frame:
-                _CACHE.move_to_end(id(frame))
+                cache.move_to_end(id(frame))
                 return entry[1]
-            del _CACHE[id(frame)]
-    found = _columns(frame)
-    events: _Events | None = None
-    if found is not None:
-        key, when, amount, quantity, order = found
-        ids = frame[key].astype("string").str.strip()
-        ids = ids.mask(ids == "")
-        how = "mixed" if frame[when].dtype == object else None
-        days = pd.to_datetime(frame[when], errors="coerce", format=how)
-        keep = (ids.notna() & days.notna()).to_numpy()
-        if keep.any():
-            events = _Events(key, when, amount, quantity, order, ids[keep], days[keep].dt.normalize())
+            del cache[id(frame)]
+    found = make()
     with _LOCK:
-        for stale in [k for k, (ref, _e) in _CACHE.items() if ref() is None]:
-            del _CACHE[stale]
-        _CACHE[id(frame)] = (weakref.ref(frame), events)
-        while len(_CACHE) > _CACHE_SIZE:
-            _CACHE.popitem(last=False)
-    return events
+        for stale in [k for k, (ref, _e) in cache.items() if ref() is None]:
+            del cache[stale]
+        cache[id(frame)] = (weakref.ref(frame), found)
+        while len(cache) > _CACHE_SIZE:
+            cache.popitem(last=False)
+    return found
 
 
-def _measure(
-    events: _Events, window_days: int, label_type: str
-) -> tuple[date, date, int, date | None, int, int]:
-    """(first date, last date, distinct customers, snapshot, customers active before it, 'yes' among them)."""
-    ids, days = events.ids, events.days
+def _events(frame: pd.DataFrame) -> _Events | None:
+    """`frame` as events, or None. Read once per frame: every goal asks, and reading the dates is the slow part."""
+
+    def make() -> _Events | None:
+        found = _columns(frame)
+        if found is None:
+            return None
+        key, when, amount, quantity, order = found
+        ids, days = _ids_days(frame, key, when)
+        return _Events(key, when, amount, quantity, order, ids, days) if len(ids) else None
+
+    return cast("_Events | None", _cached(_CACHE, frame, make))
+
+
+def _every_row(loaded: LoadedFile, events: _Events) -> pd.DataFrame | None:
+    """The distinct (customer, day) pairs of every row of the file: from the frame when it is the whole file, else
+    from the ID and date columns read over the whole stored file (`LoadedFile.column_chunks`). None when the frame is
+    a sample and the whole file cannot be read: a count of distinct customers is never scaled up from a sample.
+    """
+    reader = loaded.column_chunks
+    if loaded.file_rows is None or loaded.file_rows <= len(loaded.frame):
+        reader = None
+    elif reader is None:
+        return None
+
+    def make() -> pd.DataFrame | None:
+        if reader is None:  # the frame is the whole file
+            return pd.DataFrame({"id": events.ids, "day": events.days}).drop_duplicates()
+        parts: list[pd.DataFrame] = []
+        try:
+            for chunk in reader([events.key, events.when]):
+                ids, days = _ids_days(chunk, events.key, events.when)
+                parts.append(pd.DataFrame({"id": ids, "day": days}).drop_duplicates())
+        except (
+            Exception
+        ) as exc:  # a file that cannot be read again (renamed columns, gone) is counted as unknown
+            _LOG.info("doctor.build_count_unread upload=%s error=%s", loaded.upload_id, type(exc).__name__)
+            return None
+        if not parts:
+            return None
+        return pd.concat(parts, ignore_index=True).drop_duplicates()
+
+    return cast("pd.DataFrame | None", _cached(_WHOLE, loaded.frame, make))
+
+
+@dataclass(frozen=True)
+class _Counts:
+    start: date
+    end: date
+    distinct: int
+    snapshot: date | None
+    active: int = 0
+    yes: int = 0
+    quiet: int = 0
+    quiet_yes: int = 0
+
+
+def _measure(pairs: pd.DataFrame, window_days: int, label_type: str, quiet_days: int | None) -> _Counts:
+    """The span, the distinct customers, the snapshot, the customers active on or before it and the 'yes' among
+    them; with `quiet_days`, also the customers among them with no row in the `quiet_days` days up to it."""
+    ids, days = pairs["id"], pairs["day"]
     start, end = days.min().date(), days.max().date()
     snapshot = snapshot_for(start, end, window_days)
     distinct = int(ids.nunique())
     if snapshot is None:
-        return start, end, distinct, None, 0, 0
+        return _Counts(start, end, distinct, None)
     cut = pd.Timestamp(snapshot)
     known = set(ids[days <= cut].unique())
     later = set(ids[(days > cut) & (days <= cut + pd.Timedelta(days=window_days))].unique())
-    came = len(known & later)
-    yes = came if label_type == "event_presence" else len(known) - came
-    return start, end, distinct, snapshot, len(known), yes
+
+    def yes_of(group: set[Any]) -> int:
+        came = len(group & later)
+        return came if label_type == "event_presence" else len(group) - came
+
+    quiet: set[Any] = set()
+    if quiet_days is not None:
+        recent = set(ids[(days > cut - pd.Timedelta(days=quiet_days)) & (days <= cut)].unique())
+        quiet = known - recent
+    return _Counts(start, end, distinct, snapshot, len(known), yes_of(known), len(quiet), yes_of(quiet))
 
 
 def buildable_outcome(
     files: Sequence[LoadedFile], config: UseCaseConfig, root: Path | None
 ) -> BuildableOutcome | None:
-    """The outcome of `config` that an event file among `files` can define, counted; None when the goal does not allow
-    building it, has no event outcome in `configs/outcomes.yaml`, or no file is an event table (an ID that repeats and
-    a date)."""
+    """The outcome of `config` that an event file among `files` can define, counted on every row; None when the goal
+    does not allow building it, has no event outcome in `configs/outcomes.yaml`, or no file is an event table (an ID
+    that repeats and a date)."""
     from engine.config import config_root
     from engine.doctor.outcomes import load_outcome_catalogue
 
@@ -218,6 +313,8 @@ def buildable_outcome(
         return None
     noun = config.entity or "customer"
     days = template.default_days
+    narrower = template.audience
+    floors = (config.validation.min_rows, config.validation.min_positive)
     for loaded in files:
         frame = loaded.frame
         if frame.empty:
@@ -225,21 +322,43 @@ def buildable_outcome(
         events = _events(frame)
         if events is None:
             continue
-        key, when, amount, quantity, order = (
-            events.key,
-            events.when,
-            events.amount,
-            events.quantity,
-            events.order,
-        )
-        start, end, ids, snapshot, active, yes = _measure(events, days, template.label_type)
         rows = loaded.file_rows or len(frame)
-        scale = rows / max(len(frame), 1)
-        # A sample undercounts the whole file: a shortfall counts only when it holds scaled up as well.
+        pairs = _every_row(loaded, events)
+        exact = pairs is not None
+        if pairs is None:  # a sample only: its counts are a floor of the file's at best
+            pairs = pd.DataFrame({"id": events.ids, "day": events.days}).drop_duplicates()
+        counted = _measure(pairs, days, template.label_type, narrower.quiet_days if narrower else None)
+        start, end, snapshot = counted.start, counted.end, counted.snapshot
+
+        presence = template.label_type == "event_presence"
+        # A sample's count is used only when it cannot be higher than the file's (customers seen, and a 'yes' that is
+        # a row seen in the window); a floor is a hard rule, never met by scaling a count up.
+        trusted = snapshot is not None and exact
+        floor_ok = snapshot is not None and (exact or presence)
+        audiences: tuple[BuildAudience, ...] = ()
+        if narrower is not None and snapshot is not None:
+            audiences = (
+                BuildAudience(
+                    audience_id="active",
+                    label=f"every {noun} active on or before the snapshot",
+                    customers=counted.active,
+                    yes=counted.yes,
+                    enough=floor_ok and _reaches(counted.active, counted.yes, floors),
+                ),
+                BuildAudience(
+                    audience_id="quiet",
+                    quiet_days=narrower.quiet_days,
+                    label=narrower.label.format(entities=_plural(noun), quiet_days=narrower.quiet_days),
+                    customers=counted.quiet,
+                    yes=counted.quiet_yes,
+                    # quiet is "no row seen lately": a sample can miss the recent row, so only every row says it
+                    enough=trusted and _reaches(counted.quiet, counted.quiet_yes, floors),
+                ),
+            )
         enough = (
-            snapshot is not None
-            and round(active * scale) >= config.validation.min_rows
-            and round(yes * scale) >= config.validation.min_positive
+            any(a.enough for a in audiences)
+            if audiences
+            else floor_ok and _reaches(counted.active, counted.yes, floors)
         )
         span = f"{start:%d %b %Y} to {end:%d %b %Y}"
         if snapshot is None:
@@ -252,39 +371,59 @@ def buildable_outcome(
                 f"Fits once I build one row per {noun} with the outcome: a snapshot (for example "
                 f"{snapshot:%d %b %Y}, the latest month-end whose {days} days are over), the {days}-day window "
                 f"after it, and the {noun}s active before it. {loaded.file_name} ({span}) would give "
-                f"{active:,} {noun}s, {yes:,} of them a yes."
+                f"{counted.active:,} {noun}s, {counted.yes:,} of them a yes."
             )
-            if scale > 1:
-                sentence += f" Counted on {len(frame):,} of {rows:,} rows."
+            if len(audiences) > 1:
+                quiet = audiences[1]
+                sentence += (
+                    f" Counting only the {quiet.label}: {quiet.customers:,}, {quiet.yes:,} of them a yes. "
+                    "Which of the two the goal means is yours to say."
+                )
+            if not exact:
+                sentence += f" Counted on {len(frame):,} of {rows:,} rows only."
         return BuildableOutcome(
             upload_id=loaded.upload_id,
             file_name=loaded.file_name,
-            entity_key=key,
-            time_column=when,
-            amount_column=amount,
-            quantity_column=quantity,
-            order_column=order,
+            entity_key=events.key,
+            time_column=events.when,
+            amount_column=events.amount,
+            quantity_column=events.quantity,
+            order_column=events.order,
             label_type=template.label_type,
             window_days=days,
             snapshot=snapshot,
             data_start=start,
             data_end=end,
-            ids=ids,
-            active_before=active,
-            yes=yes,
-            rows_read=len(frame),
+            ids=counted.distinct,
+            active_before=counted.active,
+            yes=counted.yes,
+            rows_read=rows if exact else len(frame),
             file_rows=rows,
+            exact=exact,
+            audiences=audiences,
             enough=enough,
             sentence=sentence,
         )
     return None
 
 
-def compile_build(built: BuildableOutcome, config: UseCaseConfig, table: str) -> tuple[str, str]:
+def _reaches(customers: int, yes: int, floors: tuple[int, int]) -> bool:
+    return customers >= floors[0] and yes >= floors[1]
+
+
+def _plural(noun: str) -> str:
+    return noun if noun.endswith("s") else f"{noun}s"
+
+
+def compile_build(
+    built: BuildableOutcome, config: UseCaseConfig, table: str, audience: BuildAudience | None = None
+) -> tuple[str, str]:
     """(the query, its description) that builds one row per customer known at `$as_of` over the table whose SQL name is
     `table`: the behaviour features measured at that date (`propose_features`'s own compiler, so none reads a row
     after it) and the outcome, read from the `window_days` days after it (the only part that reads the future). The
-    outcome is 1 for a yes and 0 for a no, named as the goal's target column."""
+    outcome is 1 for a yes and 0 for a no, named as the goal's target column. With the `quiet` audience the person
+    picked, only the customers with no row in its `quiet_days` days up to `$as_of` are kept (read on or before it).
+    """
     from engine.doctor.tools_features import FeatureArg, ProposeFeaturesArgs, _col, compile_features
 
     outcome = config.target.column
@@ -332,19 +471,35 @@ def compile_build(built: BuildableOutcome, config: UseCaseConfig, table: str) ->
     days = built.window_days
     id_key, id_when, label = _col(key), _col(when), _col(outcome)
     yes, no = (1, 0) if built.label_type == "event_presence" else (0, 1)
+    quiet = audience.quiet_days if audience is not None and audience.audience_id == "quiet" else None
+    recent, only_quiet = "", ""
+    if quiet is not None:
+        recent = (
+            f"r AS (SELECT DISTINCT CAST({id_key} AS VARCHAR) AS entity_key FROM {table} "
+            f"WHERE NULLIF(TRIM(CAST({id_key} AS VARCHAR)), '') IS NOT NULL "
+            f"AND TRY_CAST({id_when} AS DATE) > CAST($as_of AS DATE) - INTERVAL {int(quiet)} DAY "
+            f"AND TRY_CAST({id_when} AS DATE) <= CAST($as_of AS DATE)), "
+        )
+        only_quiet = f'WHERE CAST(f.{id_key} AS VARCHAR) NOT IN (SELECT entity_key FROM "r") '
     sql = (
         f"WITH f AS ({features.sql}), "
+        f"{recent}"
         f"w AS (SELECT DISTINCT CAST({id_key} AS VARCHAR) AS entity_key FROM {table} "
         f"WHERE NULLIF(TRIM(CAST({id_key} AS VARCHAR)), '') IS NOT NULL "
         f"AND TRY_CAST({id_when} AS DATE) > CAST($as_of AS DATE) "
         f"AND TRY_CAST({id_when} AS DATE) <= CAST($as_of AS DATE) + INTERVAL {days} DAY) "
         f"SELECT f.*, CASE WHEN w.entity_key IS NULL THEN {no} ELSE {yes} END AS {label} "
-        f'FROM "f" LEFT JOIN "w" ON CAST(f.{id_key} AS VARCHAR) = w.entity_key ORDER BY f.{id_key}'
+        f'FROM "f" LEFT JOIN "w" ON CAST(f.{id_key} AS VARCHAR) = w.entity_key {only_quiet}ORDER BY f.{id_key}'
     )
     noun = config.entity or "customer"
     word = "came back" if built.label_type == "event_presence" else "had no row"
+    who = (
+        f"known at the snapshot with no row in the {quiet} days up to it"
+        if quiet is not None
+        else "known at the snapshot"
+    )
     description = (
-        f"Training table: one row per {noun} known at the snapshot, with behaviour measured on or before it "
+        f"Training table: one row per {noun} {who}, with behaviour measured on or before it "
         f"({', '.join(f.name for f in features.features)}), and {outcome}: 1 when the {noun} {word} in the "
         f"{days} days after the snapshot, else 0."
     )

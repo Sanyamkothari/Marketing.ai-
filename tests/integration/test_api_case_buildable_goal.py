@@ -71,6 +71,27 @@ def _checks(node: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _audience(
+    client: TestClient, case_id: str, case: dict[str, Any], counted: dict[str, Any]
+) -> dict[str, Any]:
+    """The goal names a narrower audience (shoppers who have gone quiet): the build waits for the person to say which
+    shoppers it is about, from both readings' counts. Nothing is built before; the person picks every shopper active
+    before the snapshot here (the quiet ones are too few in this log, and the option says so)."""
+    assert not [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
+    (asked,) = [q for q in case["questions"] if q["code"] == "BUILD_AUDIENCE" and q["answer"] is None]
+    assert asked["blocking"] and asked["recommended"] is None, "the rules never pick the audience"
+    labels = {o["option_id"]: o["label"] for o in asked["options"]}
+    active, quiet = counted["audiences"]
+    assert f"{active['customers']:,}" in labels["active"] and f"{quiet['customers']:,}" in labels["quiet"]
+    assert "gone quiet" in labels["quiet"] and ("too few" in labels["quiet"]) is not quiet["enough"]
+    answered = client.post(
+        f"/cases/{case_id}/answers",
+        json={"version": case["version"], "question_id": asked["question_id"], "option_id": "active"},
+    )
+    assert answered.status_code == 200, answered.text
+    return settled(client, case_id)
+
+
 def _goal_cards(client: TestClient, case_id: str) -> list[dict[str, Any]]:
     view = client.get(f"/cases/{case_id}/screen").json()["view"]
     return [c for card in view["conversation"] if card.get("type") == "goals" for c in card["cards"]]
@@ -106,13 +127,14 @@ def test_a_raw_order_log_fits_the_goal_as_buildable_then_builds(client: TestClie
         f"/cases/{case_id}/goal", json={"version": case["version"], "goal_id": GOAL, "op_id": "g1"}
     )
     assert chosen.status_code == 200, chosen.text
-    case = settled(client, case_id)
+    case = _audience(client, case_id, settled(client, case_id), counted)
     assert not [r for r in case.get("requests", []) if r.get("kind") == "more_data"]
     proposals = [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
     assert len(proposals) == 1 and proposals[0]["state"] == "pending"
     params = proposals[0]["payload"]["step"]["params"]
     assert params["reads_future"] and params["outcome_window_days"] == 90 and params["as_of"] == "2023-11-30"
     assert "reactivated_90d" in proposals[0]["payload"]["columns"]
+    assert proposals[0]["payload"]["audience"]["audience_id"] == "active"
 
     # 3. the person approves it: the built table is what the fit counts
     approved = client.post(
@@ -189,8 +211,9 @@ def test_a_declined_build_asks_for_the_column_instead(client: TestClient) -> Non
     )
     case_id = client.post("/cases", json={"upload_ids": [uploaded.json()["upload_id"]]}).json()["case_id"]
     case = client.post(f"/cases/{case_id}/visit", json={}).json()
+    counted = next(u for u in case["diagnosis"]["use_cases"] if u["use_case_id"] == GOAL)["buildable"]
     client.post(f"/cases/{case_id}/goal", json={"version": case["version"], "goal_id": GOAL, "op_id": "g1"})
-    case = settled(client, case_id)
+    case = _audience(client, case_id, settled(client, case_id), counted)
     (proposal,) = [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
     declined = client.post(
         f"/cases/{case_id}/decisions",

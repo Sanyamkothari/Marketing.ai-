@@ -26,7 +26,7 @@ tool on the same rows, with the advisor's leak findings left out. Only the chose
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -78,6 +78,12 @@ class LoadedFile:
     """Exact counts and the whole value list of the key, consent and outcome columns, over every row of the file."""
     file_rows: int | None = None
     """The file's rows when `frame` is a random sample of them; None when `frame` is the whole file."""
+    column_chunks: Callable[[Sequence[str]], Iterator[pd.DataFrame]] | None = field(
+        default=None, compare=False, repr=False
+    )
+    """Every row of the named columns of the stored file, chunk by chunk, when `frame` is a sample of it: a count
+    that is a hard rule (the floors of a build, `engine.doctor.buildable`) is made on all rows, not scaled up. None
+    when `frame` is the whole file or no stored file is behind it (a table the plan made)."""
 
 
 @dataclass(frozen=True)

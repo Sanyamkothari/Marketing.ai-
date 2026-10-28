@@ -17,7 +17,7 @@ import hashlib
 import io
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from engine.stages.ingest import ColumnStats
     from engine.storage import Storage
 
-__all__ = ["KEY_NAME", "doctor_rows", "exact_value_columns", "sample_seed"]
+__all__ = ["KEY_NAME", "column_chunks", "doctor_rows", "exact_value_columns", "sample_seed"]
 
 _LOG = get_logger(__name__)
 
@@ -119,3 +119,56 @@ def doctor_rows(
     except Exception as exc:  # no cache is not a reason to stop the visit
         _LOG.info("doctor.sample_cache_unwritten upload=%s error=%s", upload_id, type(exc).__name__)
     return sample.frame, sample.exact, sample.row_count
+
+
+def column_chunks(
+    storage: Storage,
+    source_key: str,
+    *,
+    file_format: Literal["csv", "parquet"],
+    delimiter: str | None,
+    encoding: str,
+    chunk_rows: int = 200_000,
+) -> Callable[[Sequence[str]], Iterator[pd.DataFrame]]:
+    """A reader of every row of some columns of the stored file, chunk by chunk, as text (an ID keeps its leading
+    zeros): the counts a sample cannot make exactly (`LoadedFile.column_chunks`). Only the named columns are read, so
+    an ID and a date over a large file is cheap. A column the file does not have raises `KeyError`."""
+
+    def read(columns: Sequence[str]) -> Iterator[pd.DataFrame]:
+        import pandas as pd
+
+        from engine.stages.ingest import _open_parquet
+
+        wanted = list(dict.fromkeys(str(c) for c in columns))
+        if file_format == "parquet":
+            parquet = _open_parquet(storage, source_key)
+            missing = [c for c in wanted if c not in set(parquet.schema_arrow.names)]
+            if missing:
+                raise KeyError(missing[0])
+            for batch in parquet.iter_batches(batch_size=chunk_rows, columns=wanted):
+                yield batch.to_pandas()
+            return
+        with storage.open_read(source_key) as raw:
+            text = io.TextIOWrapper(raw, encoding=encoding, newline="")
+            header = pd.read_csv(text, sep="," if delimiter is None else delimiter, nrows=0, engine="c")
+            missing = [c for c in wanted if c not in {str(h) for h in header.columns}]
+            if missing:
+                raise KeyError(missing[0])
+        with storage.open_read(source_key) as raw:
+            text = io.TextIOWrapper(raw, encoding=encoding, newline="")
+            yield from pd.read_csv(
+                text,
+                sep="," if delimiter is None else delimiter,
+                chunksize=chunk_rows,
+                header=0,
+                usecols=wanted,
+                dtype=str,
+                keep_default_na=False,
+                na_values=[""],
+                skipinitialspace=True,
+                skip_blank_lines=True,
+                engine="c",
+                on_bad_lines="skip",  # the run's reader drops them too
+            )
+
+    return read

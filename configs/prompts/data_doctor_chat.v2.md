@@ -40,6 +40,8 @@ A quick question has {{ doctor_limits.quick_options_min }} to {{ doctor_limits.q
 
 With no goal chosen yet, when the person's words or `goals_that_fit` in the case point at one goal, call `propose_goal` with a reason and say why it fits. A goal with status buildable fits once the outcome is built from the events: say so, and that you will propose the build after they choose it. The person chooses with the button; never say a goal is chosen.
 
+When a question asks which customers a build is about (all active before the snapshot, or only those quiet before it), the goal's own words in the question say who it is for: point at that answer with `suggest_answer` and say why in a sentence, with both counts. The person answers; never say it is decided.
+
 ## Guides
 
 {{ guide_index }}

@@ -274,6 +274,7 @@ def _goal_error(exc: ConfigError) -> Exception:
 
 def _load_files(storage: Storage, upload_ids: Sequence[str], cap_of: int) -> tuple[LoadedFile, ...]:
     """The case's files as the Doctor's diagnosis reads them: rows capped, the profile, the intake notes."""
+    from api.routes.doctor import column_reader
     from engine.doctor.diagnose import ADVISE_ROWS
     from engine.doctor.sample_rows import doctor_rows
     from engine.intake.contracts import IntakeReport
@@ -308,6 +309,7 @@ def _load_files(storage: Storage, upload_ids: Sequence[str], cap_of: int) -> tup
                 notes=notes,
                 exact=exact,
                 file_rows=file_rows,
+                column_chunks=None if file_rows is None else column_reader(storage, record, profile),
             )
         )
     return tuple(loaded)
@@ -493,6 +495,7 @@ def first_rows_loader(storage: Storage) -> Callable[[Case], tuple[LoadedFile, ..
     from engine.doctor.limits import limits
 
     sample_rows = limits().trial.sample_rows
+    from api.routes.doctor import column_reader
     from engine.stages import ingest
 
     def load_files(case: Case) -> tuple[LoadedFile, ...]:
@@ -515,6 +518,9 @@ def first_rows_loader(storage: Storage) -> Callable[[Case], tuple[LoadedFile, ..
                     frame=frame,
                     profile=profile,
                     file_rows=profile.row_count if profile.row_count > len(frame) else None,
+                    column_chunks=(
+                        column_reader(storage, record, profile) if profile.row_count > len(frame) else None
+                    ),
                 )
             )
         return tuple(loaded)

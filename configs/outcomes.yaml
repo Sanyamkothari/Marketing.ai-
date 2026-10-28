@@ -82,6 +82,12 @@ templates:
     event_kinds: [orders, payments, activity, other_event]
     days: [30, 60, 90]
     default_days: 90
+    # The goal is for shoppers who have stopped buying (configs/use_cases/retail_win_back.yaml: its description, and
+    # its reference file is the lapsed audience - no order in the 90 days before the snapshot). A build counts both
+    # readings (every shopper active on or before the snapshot, and only these); the AI proposes one, the person picks.
+    audience:
+      quiet_days: 90
+      label: "{entities} who have gone quiet (nothing in the {quiet_days} days before the snapshot)"
 
   targeted-advertisement:
     question: When has a customer converted?

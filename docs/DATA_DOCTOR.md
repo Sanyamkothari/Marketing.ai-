@@ -274,6 +274,15 @@ a date; an outcome that tests a value ("a bill paid more than 7 days late") is w
 tables*. RCA, Win-back, Targeted Advertisement and Fault Prediction ship with sentences (and Telco Churn, for
 its own industry).
 
+**A goal built from an order log** (`engine/doctor/buildable.py`): the customers and the yeses that decide whether
+the built table reaches the floors (1,000 rows, 200 yes) are counted on every row of the file. When the Doctor holds
+a sample of a large file, only the ID and date columns are read again over the whole file; a count of customers is
+never scaled up from a sample, because customers do not grow with rows. When a goal's sentence names a narrower
+audience (`audience` in `configs/outcomes.yaml`: Retail Win-back is for shoppers quiet for 90 days before the
+snapshot), both readings are counted - every customer active on or before the snapshot, and only the quiet ones -
+the AI may point at the one the goal describes, with its reason, and you pick it in a question that shows both
+counts (`BUILD_AUDIENCE`). The build is proposed only after that, and still waits for your yes.
+
 ### For developers
 
 - `engine/doctor/outcomes.py` — the catalogue (`load_outcome_catalogue`), `offer_outcome` (the measured offer)

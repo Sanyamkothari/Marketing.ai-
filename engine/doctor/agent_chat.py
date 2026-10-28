@@ -291,6 +291,7 @@ class _Chat(_Review):
                         "status": str(u.get("status")),
                         "customers": u.get("customers"),
                         "yes_count": u.get("yes_count"),
+                        **_audiences_of(u),
                     }
                     for u in fitting[:6]
                 ]
@@ -1045,3 +1046,24 @@ def doctor_converse(
         )
 
     return converse
+
+
+def _audiences_of(verdict: dict[str, Any]) -> dict[str, Any]:
+    """A buildable goal that names a narrower audience: both readings' counts (`BuildableOutcome.audiences`), so the
+    AI can say which one the goal describes and why. Counts and ids only; the person picks."""
+    built = verdict.get("buildable")
+    found = built.get("audiences") if isinstance(built, dict) else None
+    if not isinstance(found, list) or not found:
+        return {}
+    return {
+        "audiences": [
+            {
+                "audience": str(a.get("audience_id")),
+                "quiet_days": a.get("quiet_days"),
+                "customers": a.get("customers"),
+                "yes_count": a.get("yes"),
+            }
+            for a in found
+            if isinstance(a, dict)
+        ]
+    }

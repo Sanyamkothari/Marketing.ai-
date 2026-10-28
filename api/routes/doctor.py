@@ -21,8 +21,9 @@ picture. No new route: both are counted on the rows the diagnosis already read.
 from __future__ import annotations
 
 import secrets
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Request, Response
 from pydantic import Field
@@ -70,13 +71,18 @@ from engine.doctor.outcomes import (
     offer_outcome,
 )
 from engine.doctor.renames import ColumnRename, RenamedCopyRequest
-from engine.doctor.sample_rows import doctor_rows
+from engine.doctor.sample_rows import column_chunks, doctor_rows
 from engine.intake.config import load_intake_config
 from engine.intake.contracts import IntakeReport
 from engine.intake.run import received_format_for
 from engine.storage import Storage, upload_key
 from engine.utils.ids import new_upload_id
 from engine.utils.time import utc_now
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from engine.contracts import DatasetProfile
 
 router: APIRouter = APIRouter(tags=["doctor"])
 
@@ -163,6 +169,20 @@ uploads must not cost twenty full reads. A file gets an even share, never fewer 
 measured on fewer rows than a file has says so (`sampled`, the outcome's note)."""
 
 
+def column_reader(
+    storage: Storage, record: UploadRecord, profile: DatasetProfile
+) -> Callable[[Sequence[str]], Iterator[pd.DataFrame]]:
+    """`LoadedFile.column_chunks` of a stored upload: every row of some of its columns, for the counts a sample
+    cannot make exactly."""
+    return column_chunks(
+        storage,
+        record.source_key,
+        file_format=record.file_format,
+        delimiter=profile.delimiter,
+        encoding=profile.encoding,
+    )
+
+
 def _load(storage: Storage, upload_id: str, cap: int) -> LoadedFile:
     record = load_upload(storage, upload_id)
     profile = load_upload_profile(storage, upload_id)
@@ -187,6 +207,7 @@ def _load(storage: Storage, upload_id: str, cap: int) -> LoadedFile:
         notes=notes,
         exact=exact,
         file_rows=file_rows,
+        column_chunks=None if file_rows is None else column_reader(storage, record, profile),
     )
 
 

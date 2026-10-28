@@ -53,6 +53,7 @@ if TYPE_CHECKING:
 __all__ = [
     "OUTCOMES_FILENAME",
     "OutcomeAgreement",
+    "OutcomeAudience",
     "OutcomeCatalogue",
     "OutcomeChoice",
     "OutcomeFile",
@@ -83,6 +84,30 @@ MAX_JOIN_COLUMNS: Final[int] = 40
 # ---------------------------------------------------------------------------
 # configs/outcomes.yaml
 # ---------------------------------------------------------------------------
+class OutcomeAudience(BaseModel):
+    """A narrower audience a goal is for, as its configuration describes it (`retail-win-back`: shoppers who have
+    stopped buying). A build counts both readings - every customer active on or before the snapshot, and only these
+    - and the person picks one; the code never applies it on its own."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    quiet_days: int = Field(
+        ge=1,
+        le=3650,
+        description="Days before the snapshot with no row: a customer quiet that long is in it.",
+    )
+    label: str = Field(
+        min_length=1,
+        description='Who they are, in plain words; blanks {entities} ("shoppers") and {quiet_days}.',
+    )
+
+    def model_post_init(self, _context: Any) -> None:
+        try:
+            self.label.format(entities="customers", quiet_days=self.quiet_days)
+        except (KeyError, IndexError, ValueError) as exc:
+            raise ValueError(f"the audience label has an unknown blank: {exc}") from exc
+
+
 class OutcomeTemplate(BaseModel):
     """One use case's outcome sentence, the `LabelSpec` kind it builds, and the person's choices."""
 
@@ -100,6 +125,11 @@ class OutcomeTemplate(BaseModel):
         min_length=1, max_length=6, description="The windows offered, in days."
     )
     default_days: int = Field(description="The window shown first; one of `days`.")
+    audience: OutcomeAudience | None = Field(
+        default=None,
+        description="The narrower audience the goal is for, when its configuration names one; a build then asks "
+        "which reading the person means.",
+    )
 
     @field_validator("days")
     @classmethod

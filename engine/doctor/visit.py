@@ -150,6 +150,8 @@ from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
     from engine.access.roles import Principal
+    from engine.config import UseCaseConfig
+    from engine.doctor.buildable import BuildableOutcome
     from engine.doctor.current_tables import CurrentTables
     from engine.doctor.diagnose import LoadedFile, Offer
     from engine.storage import Storage
@@ -1108,6 +1110,10 @@ def _treat(run: _Run, case: Case) -> _Step:
         brief.brief_hash if brief is not None else None,
         answers,
         plan_part(case),  # the plan and the decisions (`decisions(case).digest`): the rules read its tables
+        # A declined build is read by the rules (the column is asked for instead), and a "no" is in no plan digest.
+        sorted(
+            i.item_id for i in case.items if i.state is ProposalState.REJECTED and "buildable" in i.payload
+        ),
         # A decided outcome whose query the person left out is asked about again (the rules run once more).
         goal is not None
         and (decided := decisions(case).pair("outcome", goal.goal_id)) is not None
@@ -2533,10 +2539,23 @@ def _offer_build(
     loaded = next((f for f in files if f.upload_id == built.upload_id), None)
     if loaded is None:
         return False
+    audience = None
+    if built.audiences:
+        # The goal names a narrower audience (`configs/outcomes.yaml`): who the table is about is a meaning, so the
+        # person picks it from both readings' counts (the AI may point at one in the chat, with its reason).
+        asked = _audience_question(config, built)
+        held = next((q for q in case.questions if q.question_id == asked[0].question_id), None)
+        if held is None or held.answer is None:
+            if held is None:
+                step.questions.append(asked)
+            return True
+        audience = next((a for a in built.audiences if a.audience_id == held.answer and a.enough), None)
+        if audience is None:  # neither, or a reading too small to learn from: the column is asked for instead
+            return False
     ctx = run.context(case, files=files, case_items=active_section(case)[0])
     table = table_names(ctx.files)[loaded.upload_id]
     try:
-        sql, description = compile_build(built, config, table_alias(table))
+        sql, description = compile_build(built, config, table_alias(table), audience)
         result = run.call(
             "propose_sql_step",
             {
@@ -2558,6 +2577,8 @@ def _offer_build(
     payload = made.payload()
     payload["needs_yes"] = True
     payload["buildable"] = built.model_dump(mode="json")
+    if audience is not None:
+        payload["audience"] = audience.model_dump(mode="json")
     step.items.append(
         _item(
             "recipe_step",
@@ -2571,6 +2592,37 @@ def _offer_build(
         )
     )
     return True
+
+
+def _audience_question(
+    config: UseCaseConfig, built: BuildableOutcome
+) -> tuple[CaseQuestion, tuple[OptionEffect, ...]]:
+    """BUILD_AUDIENCE: which customers the built table is about, with both readings' counts (every customer active
+    on or before the snapshot, or the narrower audience the goal's configuration names). A reading too small to
+    learn from says so; "Neither" asks for the outcome column instead. Nothing is recommended by the rules."""
+    noun = config.entity or "customer"
+    plural = noun if noun.endswith("s") else f"{noun}s"
+    assert built.snapshot is not None
+    choices: list[tuple[str, OptionEffect]] = []
+    for audience in built.audiences:
+        who = (
+            f"All {audience.customers:,} {plural} active on or before {built.snapshot:%d %b %Y}"
+            if audience.audience_id == "active"
+            else f"Only the {audience.customers:,} {audience.label}"
+        )
+        short = "" if audience.enough else ": too few to learn from"
+        choices.append(
+            (f"{who} ({audience.yes:,} of them a yes){short}", OptionEffect(option_id=audience.audience_id))
+        )
+    choices.append(("Neither: I will bring the outcome column", OptionEffect(option_id="none")))
+    return _question(
+        "BUILD_AUDIENCE",
+        {"upload_id": built.upload_id, "snapshot": built.snapshot.isoformat()},
+        text=f"{config.description.rstrip('.')}. Which {plural} should the training table be built from?",
+        choices=choices,
+        upload_id=built.upload_id,
+        goal_id=config.id,
+    )
 
 
 _STEM: Final[int] = 5
