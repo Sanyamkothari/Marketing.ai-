@@ -325,11 +325,18 @@ def test_a_name_is_registered_once() -> None:
 # ---------------------------------------------------------------------------
 # Role per call
 # ---------------------------------------------------------------------------
+@dataclasses.dataclass(frozen=True)
+class _Handle:
+    case_id: str = "case-1"
+    client_id: str = "default"
+
+
 def _full_context(
     agent: AgentContext, principal: Principal, caller: str = "person", **more: Any
 ) -> DataToolContext:
     session = start_session(agent, session_id="s-1")
     return DataToolContext(
+        case=_Handle(),
         agent=agent,
         principal=principal,
         caller=caller,  # type: ignore[arg-type]
@@ -348,7 +355,7 @@ def test_a_viewer_calling_a_propose_tool_is_refused_on_that_call(
     tool = data_registry().get(name)
     caller = "person" if "person" in tool.callers else "ai"
     # What M236's PROPOSE tools also need to exist here (DEC-1806): storage, saved connections, an AI service,
-    # and for `second_opinion` Plan K's `agentic.enabled` on, as its route needs (DEC-1409 (g)).
+    # and for `second_opinion` a case (DEC-1409 (g)).
     from engine.connections.store import ConnectionStore
     from engine.settings import Settings
     from engine.storage import LocalStorage

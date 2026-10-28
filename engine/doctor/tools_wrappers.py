@@ -741,36 +741,43 @@ class SecondOpinion(Pending):
 
 def _second_opinion(_parsed: _Args, ctx: DataToolContext) -> SecondOpinion:
     """`assist_session`: the AI reranks candidates the rules listed and asks about possible leaks. Every
-    question it adds is pending; it decides, ticks and applies nothing. The session is handed to
-    `save_session`, as `edit_by_hand`'s is.
+    question it adds is pending; it decides, ticks and applies nothing.
 
-    It refuses what the route it wraps (`POST /uploads/{id}/agent-session/assist`) refuses: an approved
-    session is `409 AGENT_SESSION_APPLIED`. The saved transcript is capped with
-    `engine.agent.egress.cap_sent`, as the route caps it. The AI's usage stays on `ctx.meter`: the caller that
-    supplied the meter records `meter.usage()` (the route writes it to the upload's `llm_usage.json`)."""
+    It works from the case: the rules read the case's file once (`rules_session` on the file's context with the ID
+    and outcome the case decided, a working record that is never stored) and the AI's questions are returned for the
+    visit to put to the person, so no Guided-setup session is read or written. The transcript the AI call leaves is
+    not kept. The AI's usage stays on `ctx.meter`: the caller that supplied the meter records `meter.usage()`.
+    """
     from engine.agent.assist import assist_session
-    from engine.agent.contracts import SessionStatus
-    from engine.agent.egress import cap_sent
+    from engine.agent.proposals import rules_session
     from engine.agentic.claims import guardrails_for
+    from engine.doctor.case import CaseError, CaseStore
+    from engine.doctor.decisions import decisions
 
-    session, save = ctx.session, ctx.save_session
-    if session is None or save is None:  # unreachable through the registry: `needs` makes it unavailable
-        raise DataToolError("TOOL_UNKNOWN", "second_opinion needs a session.", status=404)
-    if session.status is SessionStatus.APPLIED:
-        raise DataToolError(
-            "AGENT_SESSION_APPLIED", "This setup was already approved. Start again to change it.", status=409
-        )
+    if ctx.case is None:  # unreachable through the registry: `needs` makes it unavailable
+        raise DataToolError("TOOL_UNKNOWN", "second_opinion needs a case.", status=404)
+    agent = ctx.require_agent()
+    key, outcome = ctx.primary_key, None
+    if ctx.storage is not None:
+        try:
+            decided = decisions(CaseStore(ctx.storage).get(ctx.case.client_id, ctx.case.case_id))
+        except CaseError:  # a case that does not read leaves the rules to their own choice
+            decided = None
+        if decided is not None:
+            key = decided.column_of_upload("key", agent.upload_id) or key
+            outcome = decided.outcome_of_upload(agent.upload_id)
+    session = rules_session(
+        agent, session_id="case-second-opinion", clock=ctx.clock, primary_key=key, target=outcome
+    )
     before = {question.question_id for question in session.questions}
     result = assist_session(
-        ctx.require_agent(),
+        agent,
         session,
         meter=ctx.meter,
         guardrails=ctx.guardrails or guardrails_for(ctx.root()),
         config_root=ctx.root(),
         clock=ctx.clock,
     )
-    if result.session is not session:
-        save(result.session.model_copy(update={"transcript": cap_sent(result.session.transcript)}))
     added = [q for q in result.session.questions if q.question_id not in before]
     return SecondOpinion(
         source="ai",
@@ -1317,7 +1324,7 @@ def _entries() -> tuple[_Entry, ...]:
             _Args,
             SecondOpinion,
             _second_opinion,
-            ("agent", "session", "save_session", "meter"),
+            ("agent", "case", "meter"),
             {"wraps": "engine/agent/assist.py:365 assist_session"},
         ),
         (

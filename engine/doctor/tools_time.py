@@ -162,7 +162,7 @@ def _decided(ctx: DataToolContext) -> tuple[str | None, str | None]:
     agent = ctx.require_agent()
     key, target = ctx.primary_key, agent.target
     if ctx.session is not None:
-        from engine.agent.session import roles_of
+        from engine.agent.proposals import roles_of
 
         session_key, session_target = roles_of(ctx.session)
         key, target = key or session_key, target or session_target

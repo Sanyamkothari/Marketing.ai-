@@ -29,7 +29,7 @@ from engine.agent.contracts import (
     RecipeStepKind,
     ToolResult,
 )
-from engine.agent.session import SessionError, roles_of, with_summary
+from engine.agent.proposals import SessionError, roles_of, with_summary
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import display_name
 from engine.utils.time import utc_now

@@ -271,7 +271,7 @@ def _edit_by_hand(parsed: EditArgs, ctx: DataToolContext) -> ProposeOutput:
     the edits route does); the tool is not available without one, so an edit is never made and dropped.
     """
     from engine.agent.edits import add_edit
-    from engine.agent.session import SessionError
+    from engine.agent.proposals import SessionError
 
     session, save = ctx.session, ctx.save_session
     if session is None or save is None:  # unreachable through the registry: `needs` makes it unavailable

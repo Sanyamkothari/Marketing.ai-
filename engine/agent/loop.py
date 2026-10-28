@@ -95,8 +95,8 @@ from engine.agent.egress import (
 )
 from engine.agent.explore import EXPLORE_NOTE
 from engine.agent.grounding import evidence_numbers, grounded_numbers, ungrounded_numbers
+from engine.agent.proposals import roles_of
 from engine.agent.recommend import setting_allowed, settings_fields
-from engine.agent.session import roles_of
 from engine.agent.tools import TOOLS, AgentContext, AgentToolError, ToolKind
 from engine.agent.untrusted import display_name, for_prompt, resolve_column
 from engine.config import ConfigError, advanced_settings_schema, resolve_config

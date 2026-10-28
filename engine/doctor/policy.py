@@ -1411,7 +1411,7 @@ def tool_policy_context(ctx: Any, kind: str) -> DataPolicyContext:
     outcome, its personal columns and the use case's levels with decision O3's reshape; for several files
     (:data:`FILES_KINDS`) no single ID is protected. A call with no file reads only the policy.
     """
-    from engine.agent.session import roles_of
+    from engine.agent.proposals import roles_of
     from engine.doctor.reshape_guard import doctor_levels
 
     policy = policy_or_deny(ctx.root())
