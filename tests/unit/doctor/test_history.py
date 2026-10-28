@@ -139,3 +139,10 @@ def test_the_plans_own_look_back_is_used_not_lengthened() -> None:
     assert floored is not None and floored.needed_days == 120  # the floor of 30 days stays
     default = read_history(series, outcome_window_days=90)
     assert default is not None and default.needed_days == 180
+
+
+def test_a_file_of_one_month_says_so_in_plain_words() -> None:
+    reading = read_history(days("2024-03-01", "2024-03-20"), outcome_window_days=None)
+    assert reading is not None
+    (season,) = reading.findings
+    assert season.text.startswith("The file covers only 1 month.") and "3 of the 1" not in season.text

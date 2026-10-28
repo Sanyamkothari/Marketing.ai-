@@ -96,11 +96,16 @@ def _season(dates: pd.Series, start: date, end: date) -> HistoryFinding | None:
     share = top / total if total else 0.0
     if share <= SEASON_SHARE:
         return None
+    where = (
+        f"The file covers only {covered} month{'' if covered == 1 else 's'}"
+        if covered <= SEASON_MONTHS
+        else f"{share:.0%} of the rows fall in {SEASON_MONTHS} of the {covered} months in the file, and the file "
+        "covers less than a year"
+    )
     return HistoryFinding(
         code="HISTORY_ONE_SEASON",
         text=(
-            f"{share:.0%} of the rows fall in {SEASON_MONTHS} of the {covered} months in the file, and the file "
-            "covers less than a year. The model would learn one season only, so its scores may look better than "
+            f"{where}. The model would learn one season only, so its results may look better than "
             "they will in a normal month. Send at least 12 months of history."
         ),
         detail=f"Rows per calendar month: the {SEASON_MONTHS} busiest of {covered} months hold {share:.1%}.",
