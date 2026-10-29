@@ -264,8 +264,8 @@ class Receipt(StrictBase):
         """What the step cost: customers lost, or rows left out when there is no ID to count by."""
         if self.keys_in is not None:
             return self.keys_lost
-        if self.key_missing:
-            return 0  # rows folded into one per customer cannot be told from rows lost: the step is flagged instead
+        if self.key_missing and self.rows_aggregated is not None:
+            return self.rows_left_out  # a rollup folds rows: only the rows its WHERE dropped are lost
         return max(0, next(iter(self.rows_in.values()), 0) - self.rows_out)
 
     @property
@@ -466,6 +466,7 @@ def make_receipt(
         # The result holds the ID under no name we can match: the customers cannot be counted, and a rollup of
         # rows to one per customer must not read as a loss of rows. Said, not guessed.
         receipt["key_missing"] = key
+        receipt["rows_aggregated"] = rows_aggregated(sql, inputs, as_of=as_of) if sql else None
         return Receipt(**receipt)
     if out_name != key:
         receipt["key_in_result"] = out_name

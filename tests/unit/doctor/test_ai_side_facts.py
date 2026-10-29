@@ -67,13 +67,14 @@ def test_the_numbers_of_an_accepted_change_are_the_ais_own_settings_but_its_quer
         "description": "Next 555 days",
         "outcome_window_days": 90,
         "as_of": "2011-09-01",
-        "expect": {"max_keys_lost_pct": 5, "keys_unique": True},
+        "expect": {"max_keys_lost_pct": 5, "keys_unique": True, "rows_out_equals": 4372},
     }
     mine = grounded_numbers(own_numbers(args))
-    assert (
-        ungrounded_numbers("The window is 90 days, cut at 2011-09-01, and at most 5% may be lost.", mine)
-        == []
-    )
+    assert ungrounded_numbers("The window is 90 days, cut at 2011-09-01.", mine) == []
+    assert ungrounded_numbers("The build makes 4,372 customers, at most 5% lost.", mine) == [
+        "4,372",
+        "5%",
+    ], "an `expect` bound is a prediction about the data, not a setting"
     assert ungrounded_numbers("It keeps 777 and 555 customers.", mine) == ["777", "555"]
 
 
@@ -208,7 +209,7 @@ def test_a_result_without_the_id_is_not_scored_as_loss_and_says_what_to_keep() -
     base = pd.DataFrame({"CustomerID": [1, 1, 2, 3, 3, 3], "Quantity": [1, 2, 3, 4, 5, 6]})
     out = pd.DataFrame({"who": ["a", "b", "c"], "orders": [2, 1, 3]})  # a count that repeats ids' values
     receipt = make_receipt(1, "sql_query", {"t": base}, out, key="CustomerID")
-    assert receipt.keys_in is None and receipt.key_missing == "CustomerID" and receipt.lost == 0
+    assert receipt.keys_in is None and receipt.key_missing == "CustomerID"
     (finding,) = [f for f in receipt_findings(receipt) if f.code == "STEP_NOT_COUNTED"]
     assert "Keep CustomerID" in finding.message
 
@@ -263,3 +264,10 @@ def test_the_review_reads_the_receipt_of_its_plan_and_is_not_asked_again_on_a_st
     calls = len(client.users)
     quiet = ar._review(ar._guard(client))(ticked, files, None)
     assert quiet.unchanged and quiet.model_calls == 0 and len(client.users) == calls
+
+
+def test_a_result_without_the_id_still_counts_the_rows_it_drops() -> None:
+    base = pd.DataFrame({"CustomerID": list(range(100)), "Quantity": list(range(100))})
+    out = pd.DataFrame({"Quantity": list(range(6))})
+    receipt = make_receipt(1, "sql_query", {"t": base}, out, key="CustomerID")
+    assert receipt.key_missing == "CustomerID" and receipt.lost == 94

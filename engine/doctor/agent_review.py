@@ -256,9 +256,10 @@ def _expect_problems(exc: ValidationError) -> str:
 
 
 def own_numbers(value: Any, key: str = "") -> list[Any]:
-    """The numbers an accepted action's arguments set (`outcome_window_days: 90`, `as_of: "2011-09-01"`, an
-    `expect` bound): settings the AI chose and the engine took, which it may repeat. Text (a query, a reason) is not
-    read for numbers, and a number a look tool was given is never one of these."""
+    """The numbers an accepted action's arguments set (`outcome_window_days: 90`, `as_of: "2011-09-01"`): settings
+    the AI chose and the engine took, which it may repeat. The `expect` bounds are predictions about the data, not
+    settings, so they are never read. Text (a query, a reason) is not read for numbers, and a number a look tool was
+    given is never one of these."""
     if isinstance(value, bool) or value is None:
         return []
     if isinstance(value, (int, float)):
@@ -266,7 +267,12 @@ def own_numbers(value: Any, key: str = "") -> list[Any]:
     if isinstance(value, str):
         return [value] if key in {"as_of", "training_as_of"} else []
     if isinstance(value, dict):
-        return [n for k, v in value.items() if k not in _ARGUMENT_TEXT for n in own_numbers(v, str(k))]
+        return [
+            n
+            for k, v in value.items()
+            if k not in _ARGUMENT_TEXT and k != "expect"
+            for n in own_numbers(v, str(k))
+        ]
     if isinstance(value, (list, tuple)):
         return [n for v in value for n in own_numbers(v, key)]
     return []
@@ -690,6 +696,9 @@ class _Review:
             state_digest=self.state_digest() if self.finished and failed is None else "",
         )
 
+    sql_failed: bool = False
+    """The latest `propose_sql` failed its own `expect` checks."""
+
     finished: bool = False
     """The model ended the review with `finish` (not a limit, a refusal or an AI service that stopped answering)."""
 
@@ -698,6 +707,8 @@ class _Review:
         arguments): it may say them. A number it gave a look tool, or one in its query's text, is not one of them.
         """
         raw = action.get("args")
+        if str(action.get("action")) == "propose_sql" and self.sql_failed:
+            return  # a query whose own checks failed is not accepted: its settings are not yet the build's
         if str(action.get("action")) in MAKES_CHANGES_WITH_ARGS and isinstance(raw, dict):
             self.checker.grounded = self.checker.grounded | grounded_numbers(own_numbers(raw))
 
@@ -840,10 +851,19 @@ class _Review:
         result = self.registry.call(
             "propose_sql_step", given, self._context(first, primary_key=key, replacing=self.replacing)
         )
+        proposal = SqlStepProposal.model_validate(result.output)
+        if proposal.receipt.key_missing:
+            kept = proposal.receipt.key_missing
+            raise AgentToolError(
+                "AGENT_KEY_DROPPED",
+                f"The query's result has no column that holds the customer ID {kept}, under that name or another, "
+                f"so the customers it keeps cannot be counted. Keep {kept} in the result (select it, or group by "
+                "it) and propose it again.",
+            )
         order = turn.orders.setdefault(name, len(turn.orders) + 1)
         changed = turn.book.declare(order, expectations)
-        proposal = SqlStepProposal.model_validate(result.output)
         outcome = turn.book.check(order, proposal.receipt)
+        self.sql_failed = bool(outcome.failures)
         prior = turn.queries[name].findings if name in turn.queries else ()
         rewrites = [f for f in prior if f.code.startswith("EXPECTATION_CHANGED")]  # a rewrite stays flagged
         findings = (*proposal.findings, *rewrites, *changed, *outcome.findings)
@@ -877,7 +897,9 @@ class _Review:
                 ),
             ),
         }
-        self.checker.grounded = self.checker.grounded | grounded_numbers([shown["result"]])
+        # what the AI expected and did not get is its prediction, not a fact: only what our code counted is grounded
+        counted = {k: v for k, v in shown["result"].items() if k != "failed_checks"}
+        self.checker.grounded = self.checker.grounded | grounded_numbers([counted])
         turn.feedback.append(shown)
 
     def _guide(self, args: dict[str, Any]) -> None:
