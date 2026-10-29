@@ -621,7 +621,7 @@ class PowerVerdicts(StrictBase):
 
 class GoalDetailsArgs(StrictBase):
     goal_id: str = Field(
-        description="The use case / goal id to get full details for, e.g. 'retail-win-back'."
+        description="The use case / goal id to get full details for, as the readiness verdicts name it."
     )
 
 

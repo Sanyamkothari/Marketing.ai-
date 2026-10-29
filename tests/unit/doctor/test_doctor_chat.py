@@ -493,7 +493,7 @@ def test_the_agent_cannot_take_back_a_change_the_rules_made_and_is_told_which_ar
     case = talk.say("take it back")
     assert talk.reply.withdrawn == () and case.items == before, "nothing is taken back"
     refused = next(r for r in client.seen[-1].results if r.get("error") == "AGENT_ITEM_UNKNOWN")
-    assert "Your own changes: none" in refused["message"]
+    assert "Your own changes: none" in _told(refused)
 
 
 def test_a_suggestion_names_the_open_questions_and_never_points_at_i_dont_know(
@@ -522,11 +522,7 @@ def test_a_suggestion_names_the_open_questions_and_never_points_at_i_dont_know(
     talk.say("sale")
     assert talk.reply.suggestion is None
     refusals = [r for r in client.seen[-1].results if r.get("error") == "AGENT_SUGGESTION_UNKNOWN"]
-    assert (
-        refusals
-        and "Open questions: ['k" in refusals[0]["message"]
-        and "Choices of" in refusals[0]["message"]
-    )
+    assert refusals and "Open questions: ['k" in _told(refusals[0]) and "Choices of" in _told(refusals[0])
 
 
 def test_a_doubt_about_meaning_and_a_request_for_data_reach_the_case(
