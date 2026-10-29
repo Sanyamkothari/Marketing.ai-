@@ -458,6 +458,50 @@ def test_a_stale_undecided_item_is_taken_back_only_when_the_emission_is_complete
     assert any(e.details.get("why") == "retracted" for e in complete.events)
 
 
+def _build(window: int) -> Create:
+    payload = {
+        "step": {
+            "order": 1,
+            "kind": "sql_query",
+            "column": "training_g",
+            "params": {"output_name": "training_g", "window_days": window},
+        },
+        "needs_yes": True,
+        "buildable": {"goal": "g"},
+    }
+    given = ItemDraft(
+        kind="recipe_step", payload=payload, title=f"Build {window}", confidence=AgentConfidence.CHECK
+    )
+    return Create(draft=given, reason="r", basis="r1")
+
+
+def test_the_default_author_suggesting_its_own_build_again_changed_supersedes_it_and_the_new_one_is_in_the_plan() -> (
+    None
+):
+    first = apply_actions(make_case(), [_build(90)], ctx(complete=True)).case
+    (old,) = first.items
+    assert old.state is ProposalState.ACCEPTED and old.decided_by is None
+    out = apply_actions(first, [_build(60)], ctx(complete=True)).case
+    gone = by_id(out, old.item_id)
+    (new,) = [i for i in out.items if i.item_id != old.item_id]
+    assert new.title == "Build 60" and new.replaces is None
+    assert (
+        new.state is ProposalState.ACCEPTED and new.decided_by is None
+    ), "the goal's build stays in the plan"
+    assert gone.state is ProposalState.REJECTED and gone.superseded_by == new.item_id
+    assert gone.withdrawn_because != NO_LONGER_EMITTED
+
+
+def test_the_default_author_suggesting_its_key_differently_supersedes_the_key_it_put_in_the_plan() -> None:
+    old = in_plan("spend", producer="author")
+    new = create("parse_number", "spend", strip=True, basis="r1")
+    out = apply_actions(make_case([old]), [new], ctx(complete=True)).case
+    gone = by_id(out, old.item_id)
+    (added,) = [i for i in out.items if i.item_id != old.item_id]
+    assert added.replaces is None, "no swap to approve: the author's own item is superseded directly"
+    assert gone.state is ProposalState.REJECTED and gone.superseded_by == added.item_id
+
+
 def test_the_default_author_keeps_what_it_says_again_and_never_takes_back_the_ais() -> None:
     keep = create("parse_number", "spend")
     kept = apply_actions(make_case(), [keep], ctx(complete=True)).case

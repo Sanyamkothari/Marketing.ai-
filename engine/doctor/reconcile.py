@@ -210,11 +210,22 @@ def left_out_event(kind: str, item: CaseItem, **details: str | int | bool) -> Ev
     )
 
 
-def _holds_its_place(case: Case, item: CaseItem) -> bool:
+def _holds_its_place(case: Case, item: CaseItem, emission: Emission | None = None) -> bool:
     """A change a newer one may only swap for, never replace: the person's, or ticked by anyone but the AI itself
-    (the rules' proven key, a standing answer)."""
+    (the rules' proven key, a standing answer). Not the author's own, in the plan and nobody's decision: its
+    complete set of suggestions supersedes that directly (the goal's build, a key it now suggests differently).
+    """
     if person_owns(case, item):
         return True
+    if (
+        emission is not None
+        and emission.complete
+        and emission.producer not in AI_PRODUCERS
+        and item.decided_by is None
+        and item.source is not ProposalSource.AI
+        and _made_by(item.producer, emission.producer)
+    ):
+        return False
     return item.state is ProposalState.ACCEPTED and not (
         item.source is ProposalSource.AI and item.decided_by == AGENT
     )
@@ -259,7 +270,7 @@ def _fold_items(case: Case, emission: Emission, work: Reconciled, now: datetime)
             and i.state is not ProposalState.REJECTED
             and item_subject(i) == item.subject
         ]
-        holding = [i for i in rivals if _holds_its_place(case, i)]
+        holding = [i for i in rivals if _holds_its_place(case, i, emission)]
         if holding:  # a swap to approve: it waits, whatever the producer thought of it
             item = item.model_copy(
                 update={
