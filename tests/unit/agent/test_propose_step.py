@@ -113,7 +113,7 @@ def test_a_fix_that_only_matters_below_the_first_rows_is_judged_on_the_whole_col
     frame = messy_frame()
     frame["city"] = ["Mumbai" if index < 1500 else "Bombay" for index in range(len(frame))]
     ctx = context_for(frame)
-    late = (ctx, start_session(ctx, session_id="s2"))
+    late = (ctx, rules_session(ctx, session_id="s2"))
     result = turn(late, LOOK, step("map_values", mapping={"Bombay": "Mumbai"}), reply())
     assert result.blocked_by is None
     (proposal,) = result.proposals
@@ -130,7 +130,7 @@ def test_a_fix_that_changes_most_of_the_column_below_the_first_rows_is_refused_b
     frame = messy_frame()
     frame["city"] = ["Mumbai" if index < 1000 else "Bombay" for index in range(len(frame))]
     ctx = context_for(frame)
-    late = (ctx, start_session(ctx, session_id="s3"))
+    late = (ctx, rules_session(ctx, session_id="s3"))
     attempt = step("map_values", mapping={"Bombay": "Mumbai"})
     result = turn(late, LOOK, attempt, attempt)  # 2000 of 3000 rows (67%), none of them in the first 1000
     assert result.proposals == () and result.blocked_by == "AI_STEP_CHANGES_TOO_MANY"

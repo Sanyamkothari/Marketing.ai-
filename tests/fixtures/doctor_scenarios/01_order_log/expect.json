@@ -69,7 +69,7 @@
         {
           "has": [
             "is the outcome",
-            "reactivated_90d"
+            "reactivated"
           ]
         }
       ],
@@ -81,7 +81,7 @@
       ],
       "verdict": "ready",
       "primary_key": "CustomerID",
-      "outcome": "reactivated_90d",
+      "outcome": "reactivated",
       "files": {
         "order_log.csv": 12008
       },
