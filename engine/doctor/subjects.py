@@ -3,7 +3,8 @@
 Two proposals with one subject are two answers to one matter, and only one of them can stand: `outcome@goal` (which
 column says the outcome), `sql@name` (the query that makes the table of that name), `key@file` (which column names
 each row of the file), `fix@column:kind` (how a column is read), `question@CODE:column` (a question about a
-matter), `data_check@code` (a doubt about a matter). The reconcile store (`engine.doctor.reconcile`) adds, supersedes
+matter), `data_check@code` (a doubt about a matter), `setting@goal:name` (the value of one of a goal's settings) and
+`withdraw@item` (taking one item out of the plan). The reconcile store (`engine.doctor.reconcile`) adds, supersedes
 or takes back proposals by subject.
 
 The subject is derived from `kind` and `payload`, never typed in by a producer, so a case stored before this module
@@ -21,11 +22,18 @@ from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.doctor.case import CaseDoubt, CaseItem, CaseQuestion
 
 __all__ = [
+    "SETTING_KIND",
+    "WITHDRAW_KIND",
     "doubt_subject",
     "item_subject",
     "options_digest",
     "question_subject",
 ]
+
+WITHDRAW_KIND: Final[str] = "withdraw"
+"""The item kind that asks the person to take another item out of the plan (`payload.item_id`, with its consequence)."""
+SETTING_KIND: Final[str] = "goal_setting"
+"""The item kind that sets one of a goal's settings (`payload.goal_id`, `setting`, `value`)."""
 
 _GOAL_KINDS: Final[Mapping[str, str]] = {
     "outcome_column": "outcome",
@@ -65,6 +73,10 @@ def item_subject(item: CaseItem) -> str:
     goal = item.goal_id or "base"
     if item.kind in _GOAL_KINDS:
         return f"{_GOAL_KINDS[item.kind]}@{goal}"
+    if item.kind == SETTING_KIND:
+        return f"setting@{_text(payload.get('goal_id')) or goal}:{_text(payload.get('setting')) or '-'}"
+    if item.kind == WITHDRAW_KIND:
+        return f"withdraw@{_text(payload.get('item_id')) or item.item_id}"
     if item.kind == "key":
         return f"key@{item.upload_id or _text(payload.get('upload_id')) or 'case'}"
     if item.kind == "data_check" and _text(payload.get("code")):

@@ -1,8 +1,14 @@
-"""Which changes the Data Doctor's AI may put into the plan for the person, and which wait for their tick.
+"""Which changes the author may put into the plan for the person, and which wait for their tick.
 
-The chat's AI never ticks anything itself. What it proposes is pending, `check`, never ticked; the **visit** then
-applies the ones that are safe - the agent's own tick, `decided_by` the agent, one Undo, on the timeline - and the
-chat asks the same question before it writes its reply, so what it says it did is what the visit does.
+:func:`waits_because` is the one rule of placement, for the AI and for the default author alike: a change it answers
+None for goes into the plan ("in the plan, undecided": nobody has decided it, and the approval does), any other waits
+as a proposal. What the values prove (`sure`) and the goal's own build go in as well. The author never ticks anything
+itself, and `decided_by` is not written for it.
+
+Until the visit is rebuilt around the one author (`engine.doctor.author`), the chat's AI still goes through
+:func:`agent_applies`: what it proposes is pending, `check`; the **visit** then applies the ones that are safe - the
+agent's own tick, `decided_by` the agent, one Undo, on the timeline - and the chat asks the same question before it
+writes its reply, so what it says it did is what the visit does.
 
 A change is applied for the person only when all of these hold:
 
@@ -33,11 +39,12 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Final
 
-from engine.agent.contracts import ProposalSource, ProposalState
+from engine.agent.contracts import AgentConfidence, ProposalState
 from engine.doctor.decisions import role_columns
 from engine.doctor.limits import limits
 from engine.doctor.plan_check import check_plan
 from engine.doctor.protocol import AGENT, approve_class_of
+from engine.doctor.subjects import SETTING_KIND, WITHDRAW_KIND
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -159,12 +166,11 @@ def person_owns(case: Case, item: CaseItem) -> bool:
 
 
 def required_by_goal(item: CaseItem) -> bool:
-    """Whether the item is the goal's build as the rules put it in the plan: ticked because the goal needs it, with no
-    person's decision on it yet. Their own yes at Approve is what makes it theirs (`visit.confirm`)."""
+    """Whether the item is the goal's build as the author put it in the plan: ticked because the goal needs it, with
+    no person's decision on it yet. Their own yes at Approve is what makes it theirs (`visit.confirm`)."""
     return (
         item.state is ProposalState.ACCEPTED
         and item.decided_by is None
-        and item.source is not ProposalSource.AI
         and bool(item.payload.get("needs_yes"))
         and isinstance(item.payload.get("buildable"), dict)
     )
@@ -179,8 +185,14 @@ what the step does: the same query re-proposed after a tick has another `tried_a
 def meaning_key(item: CaseItem) -> str:
     """What a change does, without the words around it: a typed or SQL step with its reason, order and proposal left
     out. The id of a change hashes the model's wording, so the same filter re-proposed with another reason has
-    another id; this is what a person's earlier "no" is compared by."""
-    step = item.payload.get("step")
+    another id; this is what a person's earlier "no" is compared by. Taking an item out of the plan is the item it
+    takes out, and a goal's setting is its value."""
+    payload = item.payload
+    if item.kind == WITHDRAW_KIND:
+        return f"{item.kind}|{payload.get('item_id')}"
+    if item.kind == SETTING_KIND:
+        return f"{item.kind}|{payload.get('goal_id')}|{payload.get('setting')}|{payload.get('value')}"
+    step = payload.get("step")
     if not isinstance(step, dict):
         return item.item_id
     body = {k: v for k, v in step.items() if k not in _WORDING}
@@ -207,16 +219,20 @@ def twin_of(items: Sequence[CaseItem], item: CaseItem) -> CaseItem | None:
 
 
 def waits_because(item: CaseItem, roles: Roles = NO_ROLES) -> str | None:
-    """Why this change cannot be applied for the person whatever the guards say (None: it may be)."""
+    """Why this change cannot go into the plan before the person's tick, whoever proposes it, whatever the guards say
+    (None: it may). The author never decides this; the plan's placement is this answer."""
     from engine.doctor.combine_run import JOIN_KIND, STACK_KIND
 
     payload = item.payload
-    if item.source is not ProposalSource.AI or item.state is not ProposalState.PENDING:
-        return "it is not a new change of the AI's"
+    if item.state is not ProposalState.PENDING:
+        return "it is not a new change"
     if payload.get("warnings"):
         return "it changes many of the values in its column"
     if payload.get("needs_yes"):
-        return "it needs your own yes"
+        # The goal's own build is in the plan and has its yes at Approve; any other change that needs one waits.
+        return None if isinstance(payload.get("buildable"), dict) else "it needs your own yes"
+    if item.confidence is AgentConfidence.SURE:
+        return None  # the values prove it: in the plan, shown, and the person may untick it
     if item.kind == "recipe_step":
         raw = payload.get("step")
         allowed = AGENT_APPLIED_STEPS.get(str(raw.get("kind"))) if isinstance(raw, dict) else None
