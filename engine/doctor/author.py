@@ -1,239 +1,193 @@
-"""The single authoring path and deterministic default author for the Data Doctor.
+"""The one author of the Data Doctor's plan.
 
-One author:
-* With an AI: the AI agent loop writes the plan.
-* Without an AI: the deterministic default author turns fact tools' suggestions into the same plan,
-  through the same authoring models and validation.
-* In both cases, zero items are pre-accepted (decided_by=""). The plan starts with items pending
-  person approval (ProposalState.PENDING), or recommended unconfirmed.
+Two authors write the plan, and they write it the same way:
+
+* with an AI, the AI turn builds :data:`AuthorAction`s from its tool calls;
+* without one, the default author builds the same actions from what the fact tools suggest.
+
+:func:`apply_actions` is the only code that writes the case's items and questions. It takes a case and returns a case:
+no storage, no tool call, no model. It runs on top of the reconcile store (`engine.doctor.reconcile`) with the single
+producer :data:`PRODUCER`.
+
+Who decides what:
+
+* The author only *proposes*. Whether a proposal is in the plan at once or waits for the person's tick is decided by
+  code (:func:`engine.doctor.agent_apply.waits_because`), never by the author.
+* Nothing the person decided is ever changed here. Replacing or withdrawing it is a new proposal that waits for their
+  yes (a swap); their yes then leaves the old one out (`engine.doctor.swaps`).
+* `decided_by` is never set here. A change in the plan that nobody decided is "in the plan, undecided"; the approval
+  stamps it.
+
+Nothing here reads a cell.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Annotated, Literal, Protocol
 
-from pydantic import Field
+from pydantic import Field, JsonValue
 
-from engine.agent.contracts import (
-    AgentConfidence,
-    ProposalSource,
-    ProposalState,
-)
-from engine.config import StrictBase, load_use_case
-from engine.doctor.case import (
-    Case,
-    CaseDoubt,
-    CaseItem,
-    CaseOption,
-    CaseQuestion,
-    EventDraft,
-    payload_digest,
-)
-from engine.doctor.decisions import decisions, sets_of_effect
-from engine.doctor.tools_facts import (
-    FactQuestion,
-    FactSuggestion,
-    extract_consent_facts,
-    extract_goal_build_facts,
-    extract_key_facts,
-    extract_time_facts,
-)
-from engine.doctor.visit_contracts import OptionEffect
+from engine.agent.contracts import AgentConfidence
+from engine.config import StrictBase
+from engine.doctor.agent_apply import Roles
+from engine.doctor.case import Case, CaseDoubt, EventDraft
+from engine.doctor.protocol import Ask, DataRequest, ProtocolSettings
+from engine.doctor.standing import StandingAnswerStore
 
-if TYPE_CHECKING:
-    from engine.doctor.diagnose import LoadedFile
-    from engine.doctor.goal_brief import GoalBrief
+__all__ = [
+    "PRODUCER",
+    "Applied",
+    "ApplyContext",
+    "AskPerson",
+    "AuthorAction",
+    "Create",
+    "Doubt",
+    "ItemDraft",
+    "Refusal",
+    "Request",
+    "SetSetting",
+    "SettingsView",
+    "Withdraw",
+    "apply_actions",
+    "check_action",
+]
+
+PRODUCER = "author"
+"""The producer every item, question and doubt of the author carries (`CaseItem.producer`)."""
 
 
-class AuthorResult(StrictBase):
-    items: tuple[CaseItem, ...] = ()
-    questions: tuple[tuple[CaseQuestion, tuple[OptionEffect, ...]], ...] = ()
-    doubts: tuple[CaseDoubt, ...] = ()
-    requests: tuple[Any, ...] = ()
-    events: tuple[EventDraft, ...] = ()
-    reasked: set[str] = Field(default_factory=set)
-    model_calls: int = 0
-    tokens: int = 0
-    summary: str = ""
-    reply: str = ""
-    blocked_by: str | None = None
-    error_codes: tuple[str, ...] = ()
-    state_digest: str = ""
-    unchanged: bool = False
+class Refusal(StrictBase):
+    """Why an action was not applied, in words a person (or the AI, to fix its next try) can act on."""
+
+    code: str = Field(description="What kind of refusal, machine-readable.")
+    what_failed: str = Field(description="What was refused, in one plain sentence.")
+    value: str | None = Field(default=None, description="The name or count it is about; never a cell value.")
+    how_to_fix: str = Field(min_length=1, description="What to change; never empty.")
 
 
-def create_author_item(
-    suggestion: FactSuggestion,
-    *,
-    source: ProposalSource,
-    now: datetime,
-    replaces: str | None = None,
-) -> CaseItem:
-    """Create a CaseItem through the single authoring path.
+class ItemDraft(StrictBase):
+    """What a fact tool or an AI tool call produced for one plan item, its receipt included."""
 
-    Crucially: the item is ALWAYS ProposalState.PENDING with decided_by=None.
-    Neither author pre-accepts items with decided_by="". The person approves every change.
-    """
-    payload = dict(suggestion.payload)
-    confidence = AgentConfidence.SURE if suggestion.confidence == "sure" else AgentConfidence.CHECK
-    if suggestion.needs_yes:
-        payload["needs_yes"] = True
-    if suggestion.ticked:
-        payload["recommended_ticked"] = True
-    if replaces:
-        payload["replaces"] = replaces
+    kind: str = Field(description="What it would change (`recipe_step`, `key`, `goal_setting`, ...).")
+    payload: dict[str, JsonValue] = Field(description="What it would do, as data.")
+    title: str = Field(description="What, in one plain sentence.")
+    upload_id: str | None = Field(default=None, description="The file it is about; null for the whole case.")
+    goal_id: str | None = Field(
+        default=None, description="The goal section it belongs to; null for the base."
+    )
+    confidence: AgentConfidence = Field(description="`sure` only when the values prove it.")
+    evidence_ids: tuple[str, ...] = Field(default=(), description="Evidence it rests on.")
 
-    item_id = f"{suggestion.kind}.{suggestion.goal_id or 'base'}.{payload_digest(payload)[:16]}"
-    return CaseItem(
-        item_id=item_id[:128],
-        kind=suggestion.kind,
-        title=suggestion.title,
-        source=source,
-        confidence=confidence,
-        state=ProposalState.PENDING,  # Never pre-accepted!
-        upload_id=suggestion.upload_id,
-        evidence_ids=(),
-        payload=payload,
-        payload_digest=payload_digest(payload),
-        proposed_at=now,
-        goal_id=suggestion.goal_id,
-        decided_by=None,
-        decided_at=None,
+
+class Create(StrictBase):
+    """Put a change into the plan (or, when it must wait, in front of the person)."""
+
+    op: Literal["create"] = "create"
+    draft: ItemDraft
+    reason: str = Field(description="Why, in the author's words.")
+    replaces: str | None = Field(
+        default=None,
+        description="The item this takes the place of; a change the person decided waits for a yes.",
+    )
+    basis: str = Field(
+        description='What it rests on: "s:<suggestion id>", an evidence reference ("r<n>") or "msg:<n>".'
     )
 
 
-def create_author_question(
-    q: FactQuestion,
-) -> tuple[CaseQuestion, tuple[OptionEffect, ...]]:
-    """Create a CaseQuestion through the single authoring path."""
-    effects: list[OptionEffect] = []
-    options: list[CaseOption] = []
-    for label, payload_dict in q.choices:
-        opt_id = str(payload_dict.get("option_id") or f"opt_{len(options)}")
-        kind = payload_dict.get("kind")
-        payload = payload_dict.get("payload")
-        title = payload_dict.get("title", "")
-        effect = OptionEffect(
-            option_id=opt_id,
-            kind=str(kind) if kind is not None else None,
-            title=title,
-            payload=payload if isinstance(payload, dict) else {},
-        )
-        effects.append(effect)
-        options.append(
-            CaseOption(
-                option_id=opt_id,
-                label=label,
-                effect_digest=payload_digest(effect.payload) if effect.kind is not None else None,
-                sets=sets_of_effect(effect.kind),
-                safe=opt_id == q.safe,
-            )
-        )
+class Withdraw(StrictBase):
+    """Take a change out of the plan; one the person decided, or that is already in the plan, waits for a yes."""
 
-    question_id = f"q.{q.code.lower()}.{q.goal_id or 'base'}.{payload_digest(dict(q.choices))[:16]}"[:128]
-    question = CaseQuestion(
-        question_id=question_id,
-        code=q.code,
-        upload_id=q.upload_id,
-        column=q.column,
-        text=q.text,
-        options=tuple(options),
-        blocking=q.blocking,
-        recommended=q.recommended,
-        why=q.why,
-        goal_id=q.goal_id,
-    )
-    return question, tuple(effects)
+    op: Literal["withdraw"] = "withdraw"
+    item_id: str
+    reason: str
+    consequence: str = Field(description="What changes in the training table without it.")
 
 
-def run_default_author(
-    case: Case,
-    files: tuple[LoadedFile, ...],
-    brief: GoalBrief | None,
-    clock: Callable[[], datetime],
-    config_root: Path | None = None,
-    event_roles: frozenset[str] = frozenset(),
-) -> AuthorResult:
-    """The deterministic default author when no AI is present.
+class AskPerson(StrictBase):
+    """An ambiguity, settled by the protocol: proven, assumed or asked within the file's question budget."""
 
-    Derives the same plan from fact tools through the same actions and models:
-    * Key facts -> key proposals (pending) or key questions
-    * Goal build facts -> build SQL step (pending, needs_yes) or audience question
-    * Time facts -> as_of_column proposal (pending)
-    * Consent facts -> consent_column proposal (pending)
-    """
-    now = clock()
-    items: list[CaseItem] = []
-    questions: list[tuple[CaseQuestion, tuple[OptionEffect, ...]]] = []
-    doubts: list[CaseDoubt] = []
+    op: Literal["ask"] = "ask"
+    ask: Ask
 
-    dec = decisions(case)
-    source = ProposalSource.RULES
 
-    # 1. Base facts per file: key columns
-    for loaded in files:
-        upload_id = loaded.upload_id
-        if dec.key(upload_id) is not None:
-            continue
-        facts = extract_key_facts(loaded, event_roles)
-        for s in facts.suggestions:
-            items.append(create_author_item(s, source=source, now=now))
-        for q in facts.questions:
-            # Check if this question was already asked/answered
-            existing = next(
-                (
-                    existing_q
-                    for existing_q in case.questions
-                    if existing_q.code == q.code and existing_q.upload_id == q.upload_id
-                ),
-                None,
-            )
-            if existing is None:
-                questions.append(create_author_question(q))
+class SetSetting(StrictBase):
+    """A goal's setting (window, audience) to a value its config allows."""
 
-    # 2. Goal facts (if goal chosen)
-    if brief is not None:
-        goal_id = brief.goal_id
-        config = load_use_case(goal_id, config_root)
+    op: Literal["setting"] = "setting"
+    goal_id: str
+    setting: str
+    value: str
+    reason: str
 
-        # Buildable outcome
-        build_facts = extract_goal_build_facts(files, config, config_root)
-        if build_facts.enough and build_facts.suggested_build is not None:
-            # Check if buildable step already exists in plan
-            existing_build = next(
-                (
-                    i
-                    for i in case.items
-                    if i.goal_id == goal_id and i.kind == "recipe_step" and "buildable" in i.payload
-                ),
-                None,
-            )
-            if existing_build is None:
-                items.append(create_author_item(build_facts.suggested_build, source=source, now=now))
 
-        # Time column
-        if dec.pair("as_of_column", goal_id) is None:
-            primary_file = files[0] if files else None
-            if primary_file is not None:
-                time_facts = extract_time_facts(primary_file, goal_id=goal_id)
-                for s in time_facts.suggestions:
-                    items.append(create_author_item(s, source=source, now=now))
-                for q in time_facts.questions:
-                    questions.append(create_author_question(q))
+class Doubt(StrictBase):
+    """The author is unsure and says so in three parts."""
 
-        # Consent column
-        if dec.pair("consent", goal_id) is None:
-            primary_file = files[0] if files else None
-            if primary_file is not None:
-                consent_facts = extract_consent_facts(primary_file, goal_id=goal_id)
-                for s in consent_facts.suggestions:
-                    items.append(create_author_item(s, source=source, now=now))
+    op: Literal["doubt"] = "doubt"
+    doubt: CaseDoubt
 
-    return AuthorResult(
-        items=tuple(items),
-        questions=tuple(questions),
-        doubts=tuple(doubts),
-    )
+
+class Request(StrictBase):
+    """No choice makes the data usable: what to collect, from whom, and why."""
+
+    op: Literal["request"] = "request"
+    request: DataRequest
+
+
+AuthorAction = Annotated[
+    Create | Withdraw | AskPerson | SetSetting | Doubt | Request, Field(discriminator="op")
+]
+
+
+class SettingsView(Protocol):
+    """What the author needs to know of the chosen goal's settings (`engine.doctor.goal_settings.GoalSettings`)."""
+
+    def allowed(self, setting: str) -> Sequence[str | int]:
+        """The values the goal's config allows for `setting`; none for an unknown setting."""
+        ...
+
+
+@dataclass(frozen=True)
+class ApplyContext:
+    """What the author's actions are applied under."""
+
+    now: datetime
+    author: Literal["ai", "default"]
+    roles: Roles
+    settings: ProtocolSettings
+    goal: SettingsView | None = None
+    complete: bool = False
+    """The default author says the whole set it stands for: what it made before and no longer suggests is taken
+    back. The AI adds as it goes, and only withdraws or replaces by name."""
+    requested_by: str | None = None
+    """The user id whose message caused the turn."""
+    standing: StandingAnswerStore | None = None
+    """The client's remembered answers, applied to the questions asked now (`engine.doctor.standing`)."""
+
+
+@dataclass
+class Applied:
+    """The case after the actions, and what happened to each."""
+
+    case: Case
+    events: list[EventDraft] = field(default_factory=list)
+    refused: list[tuple[int, Refusal]] = field(default_factory=list)
+    """The index of the action and why it was not applied."""
+    made: list[str] = field(default_factory=list)
+    """Ids of the items, questions and doubts created or changed."""
+    after: list[Callable[[Case], None]] = field(default_factory=list)
+    """Side effects once the case is written (a standing answer's use); each is idempotent."""
+
+
+def check_action(case: Case, action: AuthorAction, ctx: ApplyContext) -> Refusal | None:
+    """The guard layer's check of one action, before anything is written (filled in with `guards_layer`)."""
+    del case, action, ctx  # the hook's signature: P4's guards read all three
+    return None
+
+
+def apply_actions(case: Case, actions: Sequence[AuthorAction], ctx: ApplyContext) -> Applied:
+    """The case with `actions` applied, in order; a refused action is recorded and the next one still runs."""
+    raise NotImplementedError("filled in by the next commit")
