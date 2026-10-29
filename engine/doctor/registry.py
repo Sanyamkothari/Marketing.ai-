@@ -76,6 +76,7 @@ if TYPE_CHECKING:
     from engine.doctor.locale import LocaleProfile
     from engine.doctor.readiness import CheckReadinessArgs, ReadinessInputs
     from engine.doctor.tools_formats import FormatToolContext
+    from engine.doctor.visit import DetectorPort
     from engine.storage import Storage
 
 __all__ = [
@@ -141,11 +142,11 @@ FORBIDDEN_PREFIXES: Final[tuple[str, ...]] = (
 Caller = Literal["rules", "ai", "person"]
 CALLERS: Final[frozenset[str]] = frozenset({"rules", "ai", "person"})
 _MIN_PROPOSE_ROLE: Final[frozenset[Role]] = frozenset({Role.ANALYST, Role.APPROVER, Role.ADMIN})
-_LAST_ROW: Final[int] = 92
+_LAST_ROW: Final[int] = 98
 """The catalogue's last row (`engine.doctor.catalogue`): #82 and #83 are M240's tools, given rows in M236;
 #84 is `propose_sql_step`, #85 `preview_working_copy`, #86 `propose_features`, #87 `propose_combine_rows`,
 #88 `propose_amount_outcome`, #89 `check_history`, #90 `describe_order_file`, #91 `find_test_columns`,
-#92 `goal_details`."""
+#92 `goal_details`, #93 to #98 the visit's rules as fact tools (`engine.doctor.tools_facts`)."""
 _LETTERS: Final[dict[int, int]] = str.maketrans("0123456789abcdef", "abcdefghijklmnop")
 
 
@@ -264,6 +265,8 @@ class DataToolContext:
     case_items: tuple[CaseItem, ...] | None = None
     """The case's items as they stand (the section on screen): the plan `preview_working_copy` tries on the files.
     None where the caller did not hand them over: the tool is then not available."""
+    detectors: tuple[DetectorPort, ...] = ()
+    """The design §7.1's detectors (`VisitDeps.detectors`), for `detector_facts`; empty: it finds nothing."""
 
     def require_agent(self) -> AgentContext:
         if self.agent is None:  # unreachable through the registry: `needs` makes the tool unavailable
