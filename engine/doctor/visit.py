@@ -66,6 +66,7 @@ from pydantic import JsonValue
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, RecipeStepKind
 from engine.agent.tools import AgentToolError
 from engine.config import ConfigError
+from engine.content_cache import digest_memo
 from engine.doctor.agent_apply import (
     AGENT_APPLIED_STEPS,
     agent_applies,
@@ -3855,6 +3856,12 @@ _SETTLE_TRIES: Final[int] = 3
 
 
 def _settle(run: _Run, client_id: str, case_id: str, case: Case, *, applied: bool = False) -> Case:
+    """One step of the visit: a big column is hashed once for the whole step (`digest_memo`)."""
+    with digest_memo():
+        return _settle_step(run, client_id, case_id, case, applied=applied)
+
+
+def _settle_step(run: _Run, client_id: str, case_id: str, case: Case, *, applied: bool = False) -> Case:
     """Advance to the next rest; when another writer moved the case on, read it again and continue from there.
 
     `applied`: the person's action is already written, so a writer that keeps racing does not make it fail;

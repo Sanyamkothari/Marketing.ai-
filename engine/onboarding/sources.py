@@ -33,10 +33,12 @@ from __future__ import annotations
 import re
 import sys
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
 from engine.config import RoleCatalogue, RoleSpec, UseCaseConfig, config_root, get_roles
+from engine.content_cache import ContentCache, content_digest
 from engine.onboarding.specs import (
     KeyCandidate,
     RoleCandidate,
@@ -188,13 +190,39 @@ def _day_first_ambiguous(values: pd.Series[Any]) -> bool:
     catches a value like `2025-04-03` staying unambiguous under both readings (ISO order pins the
     year, so `dayfirst` cannot change the answer) without this function having to know the format.
     """
-    import pandas as pd
+    from engine.agent.formats import to_datetime_mixed
 
-    day_first = pd.to_datetime(values, errors="coerce", dayfirst=True, format="mixed")
-    month_first = pd.to_datetime(values, errors="coerce", dayfirst=False, format="mixed")
+    day_first = to_datetime_mixed(values, dayfirst=True)
+    month_first = to_datetime_mixed(values, dayfirst=False)
     if bool(day_first.isna().any()) or bool(month_first.isna().any()):
         return False
     return bool((day_first != month_first).any())
+
+
+_TIME_CANDIDATES: Final[ContentCache[TimeCandidate | None]] = ContentCache(32)
+"""A column's time candidate (None: it does not parse as dates), by what the column holds: reading every value as a
+date is slow, and a visit asks again at every step."""
+
+
+def _time_candidate(series: pd.Series[Any]) -> TimeCandidate | None:
+    from engine.agent.formats import to_datetime_mixed
+
+    observed = series.dropna()
+    if observed.empty:
+        return None
+    text = observed.astype(str)
+    parsed = to_datetime_mixed(text)
+    parse_rate = float(parsed.notna().mean())
+    if parse_rate < MIN_TIME_PARSE_RATE:
+        return None
+    valid = parsed.dropna()
+    return TimeCandidate(
+        column=str(series.name),
+        parse_rate=round(parse_rate, 4),
+        earliest=valid.min().date() if not valid.empty else None,
+        latest=valid.max().date() if not valid.empty else None,
+        day_first_ambiguous=_day_first_ambiguous(text),
+    )
 
 
 def time_candidates(frame: pd.DataFrame, profile: DatasetProfile) -> tuple[TimeCandidate, ...]:
@@ -205,30 +233,14 @@ def time_candidates(frame: pd.DataFrame, profile: DatasetProfile) -> tuple[TimeC
     answered by parsing every value two ways and comparing, which a five-value sample could not
     tell honestly either way.
     """
-    import pandas as pd
-
     candidates: list[TimeCandidate] = []
     for column in profile.columns:
         if column.inferred_type.value not in _TIME_CANDIDATE_TYPES:
             continue
-        observed = frame[column.name].dropna()
-        if observed.empty:
-            continue
-        text = observed.astype(str)
-        parsed = pd.to_datetime(text, errors="coerce", format="mixed")
-        parse_rate = float(parsed.notna().mean())
-        if parse_rate < MIN_TIME_PARSE_RATE:
-            continue
-        valid = parsed.dropna()
-        candidates.append(
-            TimeCandidate(
-                column=column.name,
-                parse_rate=round(parse_rate, 4),
-                earliest=valid.min().date() if not valid.empty else None,
-                latest=valid.max().date() if not valid.empty else None,
-                day_first_ambiguous=_day_first_ambiguous(text),
-            )
-        )
+        series = frame[column.name]
+        found = _TIME_CANDIDATES.get_or_compute(content_digest(series), partial(_time_candidate, series))
+        if found is not None:
+            candidates.append(found)
     candidates.sort(key=lambda candidate: (-candidate.parse_rate, candidate.column))
     return tuple(candidates)
 

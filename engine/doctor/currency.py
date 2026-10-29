@@ -56,6 +56,7 @@ from engine.agent.currency_steps import (
 )
 from engine.agent.formats import MIN_CONVERT_SHARE, currency_codes, parse_numbers
 from engine.config import StrictBase
+from engine.content_cache import ContentCache, content_digest
 from engine.doctor.indian_values import money_header
 from engine.doctor.out_of_scope import out_of_scope
 from engine.pilot.roi import format_inr
@@ -243,35 +244,55 @@ def _header_unit(name: str) -> str | None:
     return next(iter(found)) if len(found) == 1 else None
 
 
+_COUNTED: Final[ContentCache[tuple[dict[str, int], int, int, int, list[str]]]] = ContentCache(64)
+"""A column's currency counts by what the column holds (small, and a visit reads every column at every step)."""
+
+
 def _counts(series: pd.Series[Any]) -> tuple[dict[str, int], int, int, int, list[str]]:
     """(rows per currency, rows naming several, unmarked amounts, non-empty rows, distinct texts) of a column."""
+    digest = content_digest(series)
+    rows, several, unmarked, non_empty, texts = _COUNTED.get_or_compute(digest, lambda: _count(series))
+    return dict(rows), several, unmarked, non_empty, list(texts)
+
+
+def _count(series: pd.Series[Any]) -> tuple[dict[str, int], int, int, int, list[str]]:
     present = series.dropna()
     rows: dict[str, int] = {}
     several = unmarked = non_empty = 0
     texts: list[str] = []
     table: dict[str, frozenset[str]] = {}
-    for value in present.tolist():
+    if pd.api.types.is_bool_dtype(present):
+        return rows, several, unmarked, non_empty, texts
+    if pd.api.types.is_numeric_dtype(present):  # every filled number is an amount with no currency written
+        return rows, several, len(present), len(present), texts
+    if pd.api.types.infer_dtype(present, skipna=True) == "string":
+        weighted = present.value_counts(
+            sort=False
+        ).items()  # each distinct text once, in order of first appearance
+    else:
+        weighted = ((value, 1) for value in present.tolist())
+    for value, weight in weighted:
         if isinstance(value, str):
             if not value.strip():
                 continue
-            non_empty += 1
+            non_empty += weight
             if value not in table:
                 table[value] = currency_codes(value)
                 if len(texts) < MAX_DISTINCT:
                     texts.append(value)
             codes = table[value]
             if len(codes) > 1:
-                several += 1
+                several += weight
             elif codes:
                 code = next(iter(codes))
-                rows[code] = rows.get(code, 0) + 1
+                rows[code] = rows.get(code, 0) + weight
             else:
-                unmarked += 1
+                unmarked += weight
         elif isinstance(value, (int, float)) and not isinstance(value, bool):
             if isinstance(value, float) and math.isnan(value):
                 continue
-            non_empty += 1
-            unmarked += 1
+            non_empty += weight
+            unmarked += weight
     return rows, several, unmarked, non_empty, texts
 
 

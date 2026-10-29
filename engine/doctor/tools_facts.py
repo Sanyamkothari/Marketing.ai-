@@ -28,7 +28,9 @@ from pydantic import Field
 
 from api.access_policy import RoutePolicy
 from engine.access.roles import Role
+from engine.agent.formats import to_datetime_mixed
 from engine.config import ProblemType, StrictBase, UseCaseConfig
+from engine.content_cache import ContentCache, frame_digest
 from engine.doctor.registry import (
     DataTool,
     DataToolContext,
@@ -135,8 +137,17 @@ def _hint(name: str) -> str | None:
     return None
 
 
+_ORDER_FACTS: Final[ContentCache[OrderFileFacts]] = ContentCache(8)
+"""The facts of a table of orders by what it holds (every step of a visit asks again, and reads every cell)."""
+
+
 def order_file_facts(upload_id: str, frame: pd.DataFrame) -> OrderFileFacts:
     """The facts of one file of orders: per column, and the rows with a negative number."""
+    found = _ORDER_FACTS.get_or_compute(frame_digest(frame), lambda: _order_file_facts(upload_id, frame))
+    return found.model_copy(update={"upload_id": upload_id})
+
+
+def _order_file_facts(upload_id: str, frame: pd.DataFrame) -> OrderFileFacts:
     numbers = {str(c): pd.to_numeric(frame[c], errors="coerce") for c in frame.columns}
     negative = pd.Series(False, index=frame.index)
     for name, parsed in numbers.items():
@@ -149,11 +160,7 @@ def order_file_facts(upload_id: str, frame: pd.DataFrame) -> OrderFileFacts:
         series = frame[raw]
         parsed = numbers[name]
         is_number = _share(parsed, series) >= 0.8
-        dates = (
-            pd.Series(dtype="datetime64[ns]")
-            if is_number
-            else pd.to_datetime(series, errors="coerce", format="mixed")
-        )
+        dates = pd.Series(dtype="datetime64[ns]") if is_number else to_datetime_mixed(series)
         distinct = int(series.nunique(dropna=True))
         on_neg = elsewhere = None
         if not pd.api.types.is_numeric_dtype(series) and negative.any():
