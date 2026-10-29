@@ -898,3 +898,19 @@ test("an approved case with a run going says it is approved and going, with the 
   assert.ok(!$("[data-dds-continue]"), "no second start");
   assert.equal($("[data-dds-run-link]").getAttribute("href"), "#/campaigns/run/cr_dds");
 });
+
+test("a finished run, or a run seen from the wizard, keeps Start: the run says nothing of the plan now approved", async () => {
+  const remount = async (run, place, ready) => {
+    world.runOfCase = run;
+    _resetDataDoctorForTests();
+    app.innerHTML = `<main><h1>Data</h1><div class="dds-layout"><div id="m"></div><aside id="a"></aside></div></main>`;
+    mountDataDoctor({ main: $("#m"), aside: $("#a") }, { place });
+    await until(() => $(ready), 3000, ready);
+    await settle(2);
+  };
+  await show("ready");
+  await remount({ record: { campaign_run_id: "cr_dds", state: "done" }, pct: 100, summary: "" }, "data", "[data-dds-continue]");
+  assert.ok(!$("[data-dds-run-says]"), "a done run on the Data page: Start stays, nothing is claimed");
+  await remount({ record: { campaign_run_id: "cr_dds", state: "running" }, pct: 40, summary: "" }, "wizard", "[data-dds-continue]");
+  assert.ok(!$("[data-dds-run-link]"), "the wizard does not read the run");
+});

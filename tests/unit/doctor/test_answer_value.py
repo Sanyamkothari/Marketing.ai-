@@ -135,3 +135,23 @@ def test_a_suggestion_never_points_at_an_answer_that_needs_a_value(
     step = visit._Step(to=case.state)
     assert visit._suggested(case, step, ("q8", typed.option_id)) is None
     assert visit._suggested(case, step, ("q8", "c0")) is not None
+
+
+def test_a_suggestion_may_point_at_the_safe_option_when_it_is_a_real_answer() -> None:
+    """`safe` is what "I don't know" stands for (the recommended audience, say); it is still an answer to point at."""
+    question = CaseQuestion.model_validate(
+        {
+            "question_id": "qa",
+            "text": "Which customers?",
+            "options": [
+                {"option_id": "quiet", "label": "Only the quiet ones", "safe": True},
+                {"option_id": "none", "label": "Neither"},
+                {"option_id": "dk", "label": "I don't know"},
+            ],
+        }
+    )
+    case = Case.model_construct(questions=(question,))
+    step = visit._Step(to=None)
+    suggested = visit._suggested(case, step, ("qa", "quiet"))
+    assert suggested is not None and suggested.option_id == "quiet"
+    assert visit._suggested(case, step, ("qa", "dk")) is None

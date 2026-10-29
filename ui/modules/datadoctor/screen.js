@@ -523,12 +523,12 @@ async function refresh(entry) {
   watchFullCheck(entry);
 }
 
-/** A campaign run already started from this case: an approved case that is being followed up says so, and does not offer to start again. */
+/** A campaign run still being prepared from this case: the Data page says so, and does not offer to start again. A finished run says nothing here (the record does not say which approval it came from), and the wizard never reads it. */
 async function readRun(entry) {
   const s = entry.state;
   const start = s.screen && s.screen.view && s.screen.view.start;
   s.run = null;
-  if (!start || entry.host.place === "setup" || !canAccess("GET", "/campaign-runs")) return;
+  if (!start || entry.host.place !== "data" || !canAccess("GET", "/campaign-runs")) return;
   try {
     s.run = await getRunOfCase(s.caseId);
   } catch {
@@ -536,24 +536,21 @@ async function readRun(entry) {
   }
 }
 
-const RUN_SAYS = Object.freeze({
-  running: "The campaign is being prepared now. You can close this page.",
-  done: "The campaign is ready. Nothing in the approved plan has changed since.",
-});
+const RUN_SAYS = "The campaign is being prepared now. You can close this page.";
 
-/** The run's line and link when one is going (or done) from the approved plan: there is no second Start. */
+/** The run's line and link while one is going from the approved plan: there is no second Start. */
 function runParts(entry) {
   const run = entry.state.run;
   const record = run && run.record;
-  if (!record || !RUN_SAYS[record.state]) return null;
-  const pct = record.state === "running" && Number.isFinite(run.pct) ? ` ${run.pct}% done.` : "";
+  if (entry.host.place !== "data" || !record || record.state !== "running") return null;
+  const pct = Number.isFinite(run.pct) ? ` ${run.pct}% done.` : "";
   const link = `<div class="dds-actions">${button({
-    label: record.state === "running" ? "See how it is going" : "See the campaign",
+    label: "See how it is going",
     kind: "primary",
     href: runHref(record.campaign_run_id),
     attrs: "data-dds-run-link",
   })}</div>`;
-  return { sentence: `<p class="dds-why" data-dds-run-says>${esc(RUN_SAYS[record.state])}${esc(pct)}</p>`, action: link, running: true };
+  return { sentence: `<p class="dds-why" data-dds-run-says>${esc(RUN_SAYS)}${esc(pct)}</p>`, action: link, running: true };
 }
 
 /** Next month: can last month's model score this file? Not in a goal's setup; only once the file is ready to start. */
