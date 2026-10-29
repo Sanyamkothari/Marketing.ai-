@@ -1,0 +1,11 @@
+{"action": "reply", "text": "This dataset contains customer order transactions including dates, quantities, and prices. It is ideal for predicting customer win-back and future purchase likelihood."}
+{"action": "reply", "text": "I cannot change the 90-day window setting because the training table was created by the automated rules engine."}
+{"action": "reply", "text": "I cannot filter the training table to only United Kingdom customers because the build recipe was created by rules."}
+{"action": "reply", "text": "I cannot modify the duplicate removal proposal because it was created by the rules engine."}
+{"action": "reply", "text": "So far, customer IDs were identified, partial month dates were truncated to 2024-01-31, and a win-back training table was generated with 1,693 customers."}
+{"action": "reply", "text": "I cannot undo the date fix because that change was authored by the rules."}
+{"action": "reply", "text": "CustomerID cannot be included as a predictive feature because unique identifiers lead to overfitting and violate data protection rules."}
+{"action": "reply", "text": "Country cannot be used as the target outcome for retail win-back because the goal requires predicting future purchase behaviour."}
+{"action": "reply", "text": "I cannot bypass the safety checks. All data validation and consent requirements must be satisfied before training."}
+{"action": "reply", "text": "The biggest risk is customer attrition and missing identifier rows (25% blank customer IDs) which cannot be used for training."}
+{"action": "reply", "text": "The data is already reviewed, but no new training table build was triggered from chat."}

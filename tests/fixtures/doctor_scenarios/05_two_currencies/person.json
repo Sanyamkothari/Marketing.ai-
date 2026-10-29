@@ -1,0 +1,5 @@
+[
+  {"action": "upload", "file": "two_currencies", "use_case": "customer-spend"},
+  {"action": "consent"},
+  {"action": "visit"}
+]

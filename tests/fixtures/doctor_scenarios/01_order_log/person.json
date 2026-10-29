@@ -1,0 +1,10 @@
+[
+  {"action": "upload", "file": "order_log", "use_case": "retail-win-back"},
+  {"action": "consent"},
+  {"action": "visit"},
+  {"action": "goal", "goal_id": "retail-win-back"},
+  {"action": "answer", "match": "customer", "option": "recommended"},
+  {"action": "answer", "match": "ranks", "option": "active"},
+  {"action": "answer", "match": "column", "option": "recommended"},
+  {"action": "approve"}
+]

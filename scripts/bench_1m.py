@@ -50,12 +50,13 @@ def cpu_model() -> str:
             return out.stdout.strip() or "unknown CPU"
         except (OSError, subprocess.CalledProcessError):
             return "unknown CPU"
-    cpuinfo = Path("/proc/cpuinfo")
-    if cpuinfo.is_file():
-        for line in cpuinfo.read_text(encoding="utf-8", errors="replace").splitlines():
-            if line.lower().startswith("model name"):
-                return line.split(":", 1)[1].strip()
-    return platform.processor() or "unknown CPU"
+    else:
+        cpuinfo = Path("/proc/cpuinfo")
+        if cpuinfo.is_file():
+            for line in cpuinfo.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.lower().startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+        return platform.processor() or "unknown CPU"
 
 
 def memory_gib() -> float | None:
@@ -66,12 +67,13 @@ def memory_gib() -> float | None:
             return int(out.stdout.strip()) / 1024**3
         except (OSError, ValueError, subprocess.CalledProcessError):
             return None
-    meminfo = Path("/proc/meminfo")
-    if meminfo.is_file():
-        for line in meminfo.read_text(encoding="utf-8").splitlines():
-            if line.startswith("MemTotal:"):
-                return int(line.split()[1]) / 1024**2
-    return None
+    else:
+        meminfo = Path("/proc/meminfo")
+        if meminfo.is_file():
+            for line in meminfo.read_text(encoding="utf-8").splitlines():
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) / 1024**2
+        return None
 
 
 def machine() -> dict[str, object]:

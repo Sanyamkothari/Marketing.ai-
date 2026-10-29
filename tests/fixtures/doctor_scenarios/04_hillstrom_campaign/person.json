@@ -1,0 +1,8 @@
+[
+  {"action": "upload", "file": "hillstrom", "use_case": "hillstrom-email"},
+  {"action": "consent"},
+  {"action": "visit"},
+  {"action": "goal", "goal_id": "hillstrom-email"},
+  {"action": "answer", "option": "recommended"},
+  {"action": "approve"}
+]

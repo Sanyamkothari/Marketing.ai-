@@ -1,0 +1,7 @@
+[
+  {"action": "upload", "file": "wide_monthly", "use_case": "customer-spend"},
+  {"action": "consent"},
+  {"action": "visit"},
+  {"action": "goal", "goal_id": "customer-spend"},
+  {"action": "answer", "match": "unpivot", "option": "recommended"}
+]

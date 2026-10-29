@@ -1,0 +1,5 @@
+{
+  "state": ["approve", "ready", "verify", "follow_up", "hand_off"],
+  "min_rows": 1000,
+  "min_positives": 200
+}

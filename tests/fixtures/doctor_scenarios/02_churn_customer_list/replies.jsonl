@@ -1,0 +1,2 @@
+{"action": "finish", "text": "The churn list is ready for model training with 1500 subscriber records. Customer ID is uniquely identified and churn outcome is verified."}
+{"action": "finish", "text": "The churn list is configured for Telco Customer Churn. All 1500 rows are valid with key customerID and outcome Churn. Ready for training."}

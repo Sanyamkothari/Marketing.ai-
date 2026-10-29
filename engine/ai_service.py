@@ -110,6 +110,7 @@ __all__ = [
     "ResolvedAi",
     "ServiceInput",
     "TestOutcome",
+    "build_client",
     "build_state",
     "build_states",
     "candidate_from",

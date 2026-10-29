@@ -1,0 +1,2 @@
+{"action": "finish", "text": "Two tables identified: customers and orders. Join proposed to combine them on customer_id."}
+{"action": "finish", "text": "Combined table configured for retail win-back. Key customer_id verified across both tables."}
