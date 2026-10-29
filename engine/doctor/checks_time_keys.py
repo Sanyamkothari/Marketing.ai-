@@ -164,8 +164,10 @@ def key_quality(
         Check(
             "KEY_REPORT",
             "note",
-            f"'{column}': {unique_share:.1%} of {filled:,} values are different from each other; "
-            f"the most common appears {top[0][1]:,} times"
+            f"'{column}' has {distinct:,} different value{'s' if distinct != 1 else ''} in {filled:,} filled "
+            f"row{'s' if filled != 1 else ''}"
+            + (" (every value is different)" if distinct == filled else "")
+            + f"; the most common value appears {top[0][1]:,} times"
             + (" in the sample." if exact is not None and sampled < filled else "."),
             column,
             {"filled": filled, "distinct": distinct, "unique_share": round(unique_share, 4), "top": top},

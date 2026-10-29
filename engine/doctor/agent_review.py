@@ -67,8 +67,9 @@ from engine.agent.loop import (
     unavailable_reply,
 )
 from engine.agent.tools import AgentContext, AgentToolError
-from engine.agent.untrusted import for_prompt
+from engine.agent.untrusted import clean_text, for_prompt
 from engine.doctor.actions import prompt_variables
+from engine.doctor.build_facts import build_facts, decided_numbers, goal_line, to_do_now
 from engine.doctor.decisions import decisions
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL
 from engine.doctor.guards import ExpectationBook, Expectations, Finding
@@ -113,6 +114,19 @@ _LOG = get_logger(__name__)
 
 PROMPT: Final[str] = "data_doctor_agent"
 _DIGIT: Final = re.compile(r"\d")
+MAKES_CHANGES_WITH_ARGS: Final[frozenset[str]] = frozenset(
+    {
+        "propose_step",
+        "propose_sql",
+        "propose_features",
+        "propose_combine_rows",
+        "propose_unpivot",
+        "propose_amount_outcome",
+        "propose_test_column",
+    }
+)
+"""The actions whose accepted arguments are the AI's own settings (a window, a date): it may repeat them."""
+_ARGUMENT_TEXT: Final[frozenset[str]] = frozenset({"sql", "description", "reason", "text", "title"})
 SQL_ARGS: Final[frozenset[str]] = frozenset(
     {"sql", "output_name", "as_of", "as_of_rule", "as_of_column", "reads_future", "outcome_window_days"}
 )
@@ -212,6 +226,11 @@ def agent_review(
             registry or visit_registry(),
             storage=storage,
         )
+        digest = used.state_digest()
+        if case.visit is not None and case.visit.done.get("agent_state") == digest:
+            # The state the AI reads is the one it already finished on (a tick that changes nothing it sees): asking
+            # again would only bring the same answer back.
+            return Detected(unchanged=True, state_digest=digest)
         found = used.run()
         return dataclasses.replace(
             found, model_calls=meter.calls_used() - calls, tokens=meter.tokens_used() - tokens
@@ -234,6 +253,29 @@ def _expect_problems(exc: ValidationError) -> str:
     ]
     allowed = ", ".join(sorted(Expectations.model_fields))
     return f"`expect` is not valid: {'; '.join(found[:6])}. Allowed fields: {allowed}."[:600]
+
+
+def own_numbers(value: Any, key: str = "") -> list[Any]:
+    """The numbers an accepted action's arguments set (`outcome_window_days: 90`, `as_of: "2011-09-01"`): settings
+    the AI chose and the engine took, which it may repeat. The `expect` bounds are predictions about the data, not
+    settings, so they are never read. Text (a query, a reason) is not read for numbers, and a number a look tool was
+    given is never one of these."""
+    if isinstance(value, bool) or value is None:
+        return []
+    if isinstance(value, (int, float)):
+        return [value]
+    if isinstance(value, str):
+        return [value] if key in {"as_of", "training_as_of"} else []
+    if isinstance(value, dict):
+        return [
+            n
+            for k, v in value.items()
+            if k not in _ARGUMENT_TEXT and k != "expect"
+            for n in own_numbers(v, str(k))
+        ]
+    if isinstance(value, (list, tuple)):
+        return [n for v in value for n in own_numbers(v, key)]
+    return []
 
 
 class _Review:
@@ -262,6 +304,7 @@ class _Review:
         # tables its queries build. The uploads (`self.files`) stay what the tools that read a file by id are given.
         current = current_for(case, files, context_for)
         self.built = current.built
+        self.current = current
         self.labels = labels_for(current)
         self.ctxs = [context_for(case, (t,)) for t in current.tables]
         overviews = file_overviews(
@@ -285,17 +328,62 @@ class _Review:
             overview["time_column"] = gate.label(built.time_column) if built.time_column else None
         names = [str(c) for ctx in self.ctxs for c in ctx.frame.columns]
         names += [g.label(c) for g, ctx in zip(self.gates, self.ctxs, strict=True) for c in ctx.frame.columns]
+        self.limits = limits(self.ctxs[0].config)
+        self.max_steps = self.limits.turn.review_steps
         self.state = {
             "files": self.overviews,
             "plan_so_far": self._decided(),
             "open_questions": [q.code for q in case.questions if q.answer is None],
-            "left": {"blocking_questions": limits(self.ctxs[0].config).asks.blocking},
+            "left": {"blocking_questions": self._blocking_room()},
+            **self._goal_state(),
         }
         self.checker = _Checker(
-            grounded=grounded_numbers([self.state]), names=tuple(names), guardrails=guardrails
+            grounded=grounded_numbers([self.state, decided_numbers(case)]),
+            names=tuple(names),
+            guardrails=guardrails,
         )
-        self.limits = limits(self.ctxs[0].config)
-        self.max_steps = self.limits.turn.review_steps
+
+    def _blocking_room(self) -> int:
+        """How many more blocking questions may be asked: the limit less those already waiting for an answer."""
+        from engine.doctor.visit import open_blocking
+
+        return max(0, self.limits.asks.blocking - len(open_blocking(self.case)))
+
+    def _goal_state(self) -> dict[str, Any]:
+        """The chosen goal with what a yes means, the build's parameters when its outcome is built from events, and
+        what to do first when that build is still missing."""
+        facts = build_facts(
+            self.case,
+            self.brief,
+            self.current.files,
+            self.config_root,
+            lambda upload_id, name: self._gate_of(upload_id).label(name),
+        )
+        todo = to_do_now(self.case)
+        return {**facts, **({"to_do_now": todo} if todo else {})}
+
+    def _gate_of(self, upload_id: str | None) -> Any:
+        index = next((i for i, ctx in enumerate(self.ctxs) if ctx.upload_id == upload_id), 0)
+        return self.gates[index]
+
+    def _text(self, upload_id: str | None, value: str) -> str:
+        """`value` for the prompt: through its file's gate, and for text about no one file (or the conversation)
+        through every file's gate, so a column name of any file the person typed or a title carried is aliased.
+        """
+        if upload_id is not None and any(ctx.upload_id == upload_id for ctx in self.ctxs):
+            return str(self._gate_of(upload_id).text(value))
+        for gate in self.gates[1:]:
+            value = gate.apply_aliases(value)
+        return str(self.gates[0].text(value))
+
+    def state_digest(self) -> str:
+        """A short digest of the state the AI reads: the same state gives the same digest, so a review that already
+        finished on it need not be asked again."""
+        from engine.agentic.canonical import sha256_hex
+
+        return sha256_hex(json.dumps(self.state, sort_keys=True, ensure_ascii=False, default=str).encode())[
+            :16
+        ]
 
     # -- the files -------------------------------------------------------------------------------------
     @staticmethod
@@ -337,9 +425,81 @@ class _Review:
             updated_at=now,
         )
 
-    def _decided(self) -> list[dict[str, str]]:
-        """What the rules already put in the plan, by file and column (names through the file's gate)."""
-        found: list[dict[str, str]] = []
+    def _receipt_view(self, item: CaseItem) -> dict[str, Any] | None:
+        """What our code counted for a query in the plan, so the AI can quote it without looking it up again: the
+        rows read and made, the customers before, after, lost and repeated, what the guards found, and whether the
+        counts are of the whole file or of a sample (then they are estimates: say "about")."""
+        receipt = item.payload.get("receipt")
+        if not isinstance(receipt, dict):
+            return None
+        rows_in = receipt.get("rows_in")
+        view: dict[str, Any] = {
+            "rows_read": next(iter(rows_in.values()), None) if isinstance(rows_in, dict) else None,
+            "rows_made": receipt.get("rows_out"),
+        }
+        if receipt.get("keys_in") is not None:
+            view.update(
+                customers_before=receipt.get("keys_in"),
+                customers_after=receipt.get("keys_out"),
+                customers_lost=receipt.get("keys_lost"),
+                customers_repeated=receipt.get("keys_repeated"),
+            )
+        sampled = bool(item.payload.get("sampled")) or "sentence_estimate" in item.payload
+        whole = self._whole_file_step(item)
+        if whole is not None:  # the plan check counted every row: those are the numbers
+            sampled = False
+            view.update(
+                rows_read=whole.get("rows_in"),
+                rows_made=whole.get("rows_out"),
+                **(
+                    {
+                        "customers_before": whole.get("customers_in"),
+                        "customers_after": whole.get("customers_out"),
+                        "customers_lost": whole.get("customers_lost"),
+                    }
+                    if whole.get("customers_in") is not None
+                    else {}
+                ),
+            )
+        view["counted_on"] = (
+            f"a sample of {self.limits.trial.dry_run_rows:,} rows of each file: these counts are estimates, say "
+            "'about' or wait for the whole file's count"
+            if sampled
+            else "the whole file"
+        )
+        findings = item.payload.get("findings")
+        found = [
+            {
+                "level": str(f.get("level")),
+                "code": str(f.get("code")),
+                "says": self._text(item.upload_id, clean_text(str(f.get("message", "")), 240)),
+            }
+            for f in (findings if isinstance(findings, list) else [])
+            if isinstance(f, dict) and f.get("level") in {"stop", "flag"}
+        ]
+        if found:
+            view["findings"] = found[:4]
+        return view
+
+    def _whole_file_step(self, item: CaseItem) -> dict[str, Any] | None:
+        """The plan check's row for `item`, when it counted every row of the files (its `basis` is set)."""
+        check = self.case.visit.plan_check if self.case.visit is not None else None
+        if check is None or check.basis is None:
+            return None
+        steps = check.ledger.get("steps")
+        return next(
+            (
+                row
+                for row in (steps if isinstance(steps, list) else [])
+                if isinstance(row, dict) and row.get("item_id") == item.item_id
+            ),
+            None,
+        )
+
+    def _decided(self) -> list[dict[str, Any]]:
+        """What the rules already put in the plan, by file and column (names through the file's gate), each with the
+        receipt our code counted when it is a query."""
+        found: list[dict[str, Any]] = []
         for item in self.case.items[:60]:
             index = next(
                 (i for i, c in enumerate(self.ctxs[: self.nfiles]) if c.upload_id == item.upload_id), None
@@ -362,6 +522,7 @@ class _Review:
                     "column": self.gates[index].label(column) if index is not None else column[:60],
                     "by": item.source.value,  # the AI sees its own items too, and whether each still waits
                     "state": item.state.value,
+                    **({"receipt": view} if (view := self._receipt_view(item)) is not None else {}),
                 }
             )
         return found
@@ -475,10 +636,11 @@ class _Review:
         from engine.doctor.visit import Detected
 
         turn, strikes, summary = self.turn, 0, ""
+        self.finished = False
         failed: _NoAnswerError | None = None  # why the first call got no answer
         prompt = load_prompt(PROMPT, self.config_root)
         tools = self._tools()
-        goal = self.brief.goal_name if self.brief is not None else "see what these tables can be used for"
+        goal = goal_line(self.brief, "see what these tables can be used for")
         lessons = approved_lessons(self.storage)
         for step in range(self.max_steps + 1):
             variables = {
@@ -503,8 +665,10 @@ class _Review:
                 action = _parse(text)
                 if str(action["action"]) == "finish":
                     summary = self._finish(action)
+                    self.finished = True
                     break
                 self._act(action)
+                self._own_settings(action)
             except AgentToolError as exc:
                 strikes += 1
                 if strikes >= self.limits.turn.strikes:
@@ -529,7 +693,24 @@ class _Review:
             blocked_by=None if failed is None else failed.reason,
             error_codes=() if failed is None else failed.codes,
             reply="" if failed is None else failed.reply,
+            state_digest=self.state_digest() if self.finished and failed is None else "",
         )
+
+    sql_failed: bool = False
+    """The latest `propose_sql` failed its own `expect` checks."""
+
+    finished: bool = False
+    """The model ended the review with `finish` (not a limit, a refusal or an AI service that stopped answering)."""
+
+    def _own_settings(self, action: dict[str, Any]) -> None:
+        """The numbers of a change the engine accepted are the AI's own settings (the window it put in its query's
+        arguments): it may say them. A number it gave a look tool, or one in its query's text, is not one of them.
+        """
+        raw = action.get("args")
+        if str(action.get("action")) == "propose_sql" and self.sql_failed:
+            return  # a query whose own checks failed is not accepted: its settings are not yet the build's
+        if str(action.get("action")) in MAKES_CHANGES_WITH_ARGS and isinstance(raw, dict):
+            self.checker.grounded = self.checker.grounded | grounded_numbers(own_numbers(raw))
 
     def _act(self, action: dict[str, Any]) -> None:
         name = str(action["action"])
@@ -670,10 +851,19 @@ class _Review:
         result = self.registry.call(
             "propose_sql_step", given, self._context(first, primary_key=key, replacing=self.replacing)
         )
+        proposal = SqlStepProposal.model_validate(result.output)
+        if proposal.receipt.key_missing:
+            kept = proposal.receipt.key_missing
+            raise AgentToolError(
+                "AGENT_KEY_DROPPED",
+                f"The query's result has no column that holds the customer ID {kept}, under that name or another, "
+                f"so the customers it keeps cannot be counted. Keep {kept} in the result (select it, or group by "
+                "it) and propose it again.",
+            )
         order = turn.orders.setdefault(name, len(turn.orders) + 1)
         changed = turn.book.declare(order, expectations)
-        proposal = SqlStepProposal.model_validate(result.output)
         outcome = turn.book.check(order, proposal.receipt)
+        self.sql_failed = bool(outcome.failures)
         prior = turn.queries[name].findings if name in turn.queries else ()
         rewrites = [f for f in prior if f.code.startswith("EXPECTATION_CHANGED")]  # a rewrite stays flagged
         findings = (*proposal.findings, *rewrites, *changed, *outcome.findings)
@@ -693,11 +883,23 @@ class _Review:
                     "findings": [f.model_dump(mode="json") for f in findings],
                     "failed_checks": list(outcome.failures),
                     "retries_left": outcome.retries_left,
+                    **(
+                        {
+                            "counted_on": f"a sample of {self.limits.trial.dry_run_rows:,} rows of each file: "
+                            "these counts are estimates, say 'about' or wait for the whole file's count"
+                        }
+                        if proposal.sampled
+                        else {"counted_on": "the whole file"}
+                    ),
                 },
-                extra_text_keys=frozenset({"message", "code", "level", "key", "column", "kind"}),
+                extra_text_keys=frozenset(
+                    {"message", "code", "level", "key", "column", "kind", "counted_on"}
+                ),
             ),
         }
-        self.checker.grounded = self.checker.grounded | grounded_numbers([shown["result"]])
+        # what the AI expected and did not get is its prediction, not a fact: only what our code counted is grounded
+        counted = {k: v for k, v in shown["result"].items() if k != "failed_checks"}
+        self.checker.grounded = self.checker.grounded | grounded_numbers([counted])
         turn.feedback.append(shown)
 
     def _guide(self, args: dict[str, Any]) -> None:

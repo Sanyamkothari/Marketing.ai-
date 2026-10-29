@@ -206,6 +206,7 @@ class SqlStepProposal(StrictBase):
             "changed_cells": self.changed_cells,
             "compared_cells": self.compared_cells,
             "needs_yes": self.needs_yes,
+            "sampled": self.sampled,  # the counts above are a sample's: the whole file's replace them once counted
             "detail": str(self.step["params"]["sql"]),  # the query, shown only as detail
             **({"sentence_estimate": dict(self.estimate)} if self.estimate else {}),
         }

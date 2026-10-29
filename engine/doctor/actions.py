@@ -14,7 +14,7 @@ unchanged, so an action stays as strict or as lenient as it was.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal, get_args, get_origin
 
@@ -178,7 +178,9 @@ class ProposeGoalArgs(_Args):
     click on "Choose this goal" sets it. Nothing is chosen by this action."""
 
     goal_id: str = Field(description="a goal that fits (ready, check or buildable), by its id")
-    reason: str = Field(description="why this goal, in a sentence")
+    reason: str = Field(
+        description="why this goal, one sentence of at most {effect_chars} characters; a longer one is refused"
+    )
 
 
 class ReadGuideArgs(_Args):
@@ -207,9 +209,17 @@ class AskChatArgs(_Args):
     question: str | None = Field(default=None, description="a question id below")
     values: dict[str, Any] = Field(default_factory=dict)
     choices: list[str] = Field(default_factory=list)
-    text: str | None = Field(default=None, description="a quick question instead of an id")
-    options: list[str] = Field(default_factory=list, description="the quick question's options")
-    why: str | None = Field(default=None)
+    text: str | None = Field(
+        default=None,
+        description="a quick question instead of an id, at most {short_chars} characters, not about consent, the "
+        "outcome, the ID or the date",
+    )
+    options: list[str] = Field(
+        default_factory=list,
+        description="the quick question's options, each at most {short_chars} characters, no numbers; "
+        '"I don\'t know" is added for you',
+    )
+    why: str | None = Field(default=None, description="at most {short_chars} characters")
 
 
 class SuggestAnswerArgs(_Args):
@@ -435,22 +445,36 @@ def _surface_of(info: Any, default: str) -> Any:
     return extra.get("surface", default) if isinstance(extra, dict) else default
 
 
-def _fields(model: type[BaseModel], skip: tuple[str, ...], surface: str) -> str:
+def _fields(
+    model: type[BaseModel], skip: tuple[str, ...], surface: str, numbers: Mapping[str, int | float]
+) -> str:
     parts = []
     for name, info in model.model_fields.items():
         if name in skip or _surface_of(info, surface) != surface:
             continue
         mark = "" if info.is_required() else "?"
-        tail = f" - {info.description}" if info.description else ""
+        described = info.description or ""
+        for limit, value in numbers.items():  # a limit a description states is the configured one
+            described = described.replace("{" + limit + "}", str(value))
+        tail = f" - {described}" if described else ""
         kind = _type_of(info.annotation)
         parts.append(f"`{name}{mark}`" + ("" if kind == "text" else f" {kind}") + tail)
     return "; ".join(parts)
 
 
-def action_lines(surface: str, *, callable_: Callable[[ActionSpec], bool] | None = None) -> list[str]:
+def action_lines(
+    surface: str,
+    *,
+    callable_: Callable[[ActionSpec], bool] | None = None,
+    numbers: Mapping[str, int | float] | None = None,
+) -> list[str]:
     """One line per action offered on `surface`, generated from the argument models: its reply shape, its arguments
     (`?` marks an optional one) and what it does. `callable_` is the same availability predicate the dispatch uses.
+    A limit named in an argument's description (`{effect_chars}`) is filled from `numbers` (`prompt_limits`).
     """
+    from engine.doctor.limits import prompt_limits
+
+    numbers = prompt_limits() if numbers is None else numbers
     lines = []
     for spec in ACTIONS:
         if surface not in spec.surfaces or (callable_ is not None and not callable_(spec)):
@@ -464,7 +488,7 @@ def action_lines(surface: str, *, callable_: Callable[[ActionSpec], bool] | None
             body = ""
         else:
             shape = head + ', "args": {...}}'
-            body = " Args: " + _fields(model, spec.top_level, surface) + "."
+            body = " Args: " + _fields(model, spec.top_level, surface, numbers) + "."
         lines.append(f"`{shape}` - {spec.summary}{body}")
     return lines
 
@@ -502,7 +526,7 @@ def prompt_variables(
     index = index_text(config_root)
     learned = lessons_text(lessons)
     return {
-        "actions": action_lines(surface, callable_=callable_),
+        "actions": action_lines(surface, callable_=callable_, numbers=prompt_limits(config)),
         "step_kinds": step_kind_lines(surface),
         "doctor_limits": prompt_limits(config),
         "guide_index": f"{index}\n\n{learned}" if learned else index,
