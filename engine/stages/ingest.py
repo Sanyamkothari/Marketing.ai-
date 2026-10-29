@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 from engine import pii
 from engine.config import ColumnType, ProblemType
+from engine.content_cache import ContentCache, content_digest, frame_digest
 from engine.contracts import CategoryCount, ColumnProfile, DatasetFingerprint, DatasetProfile
 from engine.pii import PiiDetector
 from engine.utils.logging import get_logger, log_stage
@@ -1043,6 +1044,22 @@ def dataset_fingerprint(
     rows to train and test when the rows arrive in a different order, so row-permuted data is not
     the same input and must not claim the same identity.
     """
+    whole = frame_digest(frame)
+    key = (
+        None
+        if whole is None
+        else f"{whole}|{chunk_rows}|{n_rows}|{sorted(types.items()) if types is not None else None}"
+    )
+    return _FINGERPRINTS.get_or_compute(key, lambda: _dataset_fingerprint(frame, types, chunk_rows, n_rows))
+
+
+_FINGERPRINTS: Final[ContentCache[DatasetFingerprint]] = ContentCache(16)
+"""Fingerprints by what the table holds: the same rows are not hashed twice."""
+
+
+def _dataset_fingerprint(
+    frame: pd.DataFrame, types: Mapping[str, ColumnType] | None, chunk_rows: int, n_rows: int | None
+) -> DatasetFingerprint:
     digest = _ContentDigest()
     step = max(1, chunk_rows)
     for start in range(0, len(frame), step):
@@ -1083,13 +1100,20 @@ def _all_midnight(values: pd.Series[Any]) -> bool:
     return bool((observed.dt.normalize() == observed).all())
 
 
+_COLUMN_TYPES: Final[ContentCache[ColumnType]] = ContentCache(64)
+
+
 def infer_column_type(series: pd.Series[Any]) -> ColumnType:
     """The engine-level type of `series`, by the ordered table of §1.4.
 
     The order *is* the mixed-column rule: a column is whatever the earliest branch it satisfies says
     it is. Branch 8 (numeric text) precedes branch 9 (datetime text), so a column of digit strings is
-    an integer column and never a date.
+    an integer column and never a date. The answer is kept by what the column holds.
     """
+    return _COLUMN_TYPES.get_or_compute(content_digest(series), lambda: _infer_column_type(series))
+
+
+def _infer_column_type(series: pd.Series[Any]) -> ColumnType:
     import pandas as pd
 
     observed = series.dropna()
@@ -1230,10 +1254,30 @@ def _top_categories(
     )
 
 
+_COLUMN_PROFILES: Final[ContentCache[ColumnProfile]] = ContentCache(64)
+"""Column profiles by what the column holds: a Data Doctor visit profiles the same big table at every step, and a
+step that changed one column should read only that column again."""
+
+
 def profile_column(
     series: pd.Series[Any], *, position: int, profiled_rows: int, time_like: re.Pattern[str]
 ) -> ColumnProfile:
     """Everything the profile records about one column; PII content never reaches a field."""
+    digest = content_digest(series)
+    key = (
+        None
+        if digest is None
+        else f"{digest}|{position}|{profiled_rows}|{time_like.pattern}|{time_like.flags}"
+    )
+    return _COLUMN_PROFILES.get_or_compute(
+        key,
+        lambda: _profile_column(series, position=position, profiled_rows=profiled_rows, time_like=time_like),
+    )
+
+
+def _profile_column(
+    series: pd.Series[Any], *, position: int, profiled_rows: int, time_like: re.Pattern[str]
+) -> ColumnProfile:
     name = str(series.name)
     inferred = infer_column_type(series)
     null_count = int(series.isna().sum())

@@ -21,20 +21,19 @@ is `too_small` rather than `buildable` when the table the goal would train on co
 from __future__ import annotations
 
 import calendar
-import threading
-import weakref
-from collections import OrderedDict
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import pandas as pd
 from pydantic import Field
 
 from engine.agent.config import AgentLevel
+from engine.agent.formats import to_datetime_mixed
 from engine.config import StrictBase
+from engine.content_cache import ContentCache, content_digest
 from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -183,51 +182,35 @@ def _ids_days(frame: pd.DataFrame, key: str, when: str) -> tuple[pd.Series[str],
     """The customer (text, trimmed) and the day of every row of `frame` that has both."""
     ids = frame[key].astype("string").str.strip()
     ids = ids.mask(ids == "")
-    how = "mixed" if frame[when].dtype == object else None
-    days = pd.to_datetime(frame[when], errors="coerce", format=how)
+    if frame[when].dtype == object:
+        days = to_datetime_mixed(frame[when])
+    else:
+        days = pd.to_datetime(frame[when], errors="coerce")
     keep = (ids.notna() & days.notna()).to_numpy()
     return ids[keep], days[keep].dt.normalize()
 
 
-_CACHE: OrderedDict[int, tuple[weakref.ref[pd.DataFrame], _Events | None]] = OrderedDict()
-_WHOLE: OrderedDict[int, tuple[weakref.ref[pd.DataFrame], pd.DataFrame | None]] = OrderedDict()
-_CACHE_SIZE: Final[int] = 4
-_LOCK = threading.Lock()
-
-
-def _cached(cache: OrderedDict[int, Any], frame: pd.DataFrame, make: Callable[[], Any]) -> Any:
-    """`make()` once per frame. An entry keeps a weak reference to its frame (a negative one too) and is used only
-    while that reference still reaches this very frame: an id that a freed frame left behind and a new frame took is
-    never mistaken for it, and the cache never keeps a frame alive."""
-    with _LOCK:
-        entry = cache.get(id(frame))
-        if entry is not None:
-            if entry[0]() is frame:
-                cache.move_to_end(id(frame))
-                return entry[1]
-            del cache[id(frame)]
-    found = make()
-    with _LOCK:
-        for stale in [k for k, (ref, _e) in cache.items() if ref() is None]:
-            del cache[stale]
-        cache[id(frame)] = (weakref.ref(frame), found)
-        while len(cache) > _CACHE_SIZE:
-            cache.popitem(last=False)
-    return found
+_EVENTS: Final[ContentCache[_Events | None]] = ContentCache(4)
+_WHOLE: Final[ContentCache[pd.DataFrame | None]] = ContentCache(4)
+"""Read once per content, not per frame object: every step of a visit loads its files again, and reading the dates
+is the slow part. (A cache keyed by `id(frame)` never hit across steps, and one keyed by a freed frame's id could
+hand back another table's answer.)"""
 
 
 def _events(frame: pd.DataFrame) -> _Events | None:
-    """`frame` as events, or None. Read once per frame: every goal asks, and reading the dates is the slow part."""
+    """`frame` as events, or None."""
+    found = _columns(frame)
+    if found is None:
+        return None
+    key, when, amount, quantity, order = found
+    digests = (content_digest(frame[key]), content_digest(frame[when]))
+    cache_key = None if None in digests else f"{key}|{when}|{amount}|{quantity}|{order}|{digests}"
 
     def make() -> _Events | None:
-        found = _columns(frame)
-        if found is None:
-            return None
-        key, when, amount, quantity, order = found
         ids, days = _ids_days(frame, key, when)
         return _Events(key, when, amount, quantity, order, ids, days) if len(ids) else None
 
-    return cast("_Events | None", _cached(_CACHE, frame, make))
+    return _EVENTS.get_or_compute(cache_key, make)
 
 
 def _every_row(loaded: LoadedFile, events: _Events) -> pd.DataFrame | None:
@@ -258,7 +241,10 @@ def _every_row(loaded: LoadedFile, events: _Events) -> pd.DataFrame | None:
             return None
         return pd.concat(parts, ignore_index=True).drop_duplicates()
 
-    return cast("pd.DataFrame | None", _cached(_WHOLE, loaded.frame, make))
+    # The pairs depend on the whole stored file (its fingerprint covers every row) and on the customers and days read.
+    digests = (content_digest(events.ids), content_digest(events.days))
+    cache_key = None if None in digests else f"{loaded.profile.fingerprint.hash}|{reader is None}|{digests}"
+    return _WHOLE.get_or_compute(cache_key, make)
 
 
 @dataclass(frozen=True)

@@ -33,11 +33,13 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import pandas as pd
 
 from engine.agent.formats import date_order_conflict, masked_cut
+from engine.content_cache import ContentCache, frame_digest
 from engine.doctor.impossible import _FUTURE_ALLOWED, column_words
 
 if TYPE_CHECKING:
@@ -638,39 +640,51 @@ def _repeated_headers(frame: pd.DataFrame) -> int:
     return int((matches >= max(2, len(names) // 2)).sum())
 
 
+_FILE_CHECKS: Final[ContentCache[tuple[Check, ...]]] = ContentCache(8)
+"""The checks of one file by what it holds (they read every cell, and a visit asks again at every step)."""
+
+
 def file_checks(files: Sequence[tuple[str, pd.DataFrame]]) -> list[Check]:
     """For each file `(name, rows)`: header rows repeated in the middle and rows that are complete copies of
     another (reported, never dropped); for files laid out alike: rows two of them both hold."""
     found: list[Check] = []
     for name, frame in files:
-        headers = _repeated_headers(frame)
-        if headers:
-            found.append(
-                Check(
-                    "REPEATED_HEADER_ROWS",
-                    "flag",
-                    f"{headers:,} rows of {name} repeat the column names (the file looks pasted together from "
-                    "several pieces). They are counted as customers unless they are removed.",
-                    None,
-                    {"rows": headers, "file": name},
-                )
-            )
-        copies = int(frame.duplicated().sum()) if len(frame.columns) else 0
-        if copies:
-            found.append(
-                Check(
-                    "DUPLICATE_ROWS",
-                    "flag",
-                    f"{copies:,} rows of {name} are exact copies of another row ({_pct(copies, len(frame))}). "
-                    "Nothing is removed without a yes, and spend or counts would be inflated if they stay.",
-                    None,
-                    {"rows": copies, "file": name, "file_rows": len(frame)},
-                )
-            )
+        digest = frame_digest(frame)
+        key = None if digest is None else f"{name}|{digest}"
+        found.extend(_FILE_CHECKS.get_or_compute(key, partial(_file_checks, name, frame)))
     for i, (name_a, a) in enumerate(files):
         for name_b, b in files[i + 1 :]:
             found.extend(_shared_rows(name_a, a, name_b, b))
     return found
+
+
+def _file_checks(name: str, frame: pd.DataFrame) -> tuple[Check, ...]:
+    found: list[Check] = []
+    headers = _repeated_headers(frame)
+    if headers:
+        found.append(
+            Check(
+                "REPEATED_HEADER_ROWS",
+                "flag",
+                f"{headers:,} rows of {name} repeat the column names (the file looks pasted together from "
+                "several pieces). They are counted as customers unless they are removed.",
+                None,
+                {"rows": headers, "file": name},
+            )
+        )
+    copies = int(frame.duplicated().sum()) if len(frame.columns) else 0
+    if copies:
+        found.append(
+            Check(
+                "DUPLICATE_ROWS",
+                "flag",
+                f"{copies:,} rows of {name} are exact copies of another row ({_pct(copies, len(frame))}). "
+                "Nothing is removed without a yes, and spend or counts would be inflated if they stay.",
+                None,
+                {"rows": copies, "file": name, "file_rows": len(frame)},
+            )
+        )
+    return tuple(found)
 
 
 def _shared_rows(name_a: str, a: pd.DataFrame, name_b: str, b: pd.DataFrame) -> list[Check]:
