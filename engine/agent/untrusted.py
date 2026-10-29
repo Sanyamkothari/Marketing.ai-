@@ -52,7 +52,10 @@ def clean_text(text: str, limit: int = MAX_TEXT_CHARS) -> str:
     single = " ".join(kept.split())
     if len(single) <= limit:
         return single
-    return single[: max(1, limit - 1)].rstrip() + "…"
+    cut = single[: max(1, limit - 1)]
+    if " " in cut and len(cut) > 10:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip() + "…"
 
 
 def display_name(name: object) -> str:

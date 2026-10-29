@@ -1044,11 +1044,28 @@ def _propose_step(
     except RecipeError as exc:
         raise AgentToolError(exc.code, exc.message) from exc
     receipt = trial.receipt.steps[0]
+    if (
+        receipt.changed == 0
+        and len(ctx.frame) > STEP_SAMPLE_ROWS
+        and kind not in (RecipeStepKind.DROP_COLUMN, RecipeStepKind.RENAME_COLUMN)
+    ):
+        try:
+            full_trial = run_recipe(
+                ctx.frame,
+                [step],
+                upload_id=ctx.upload_id,
+                primary_key=key,
+                target=target,
+                levels=agent.levels,
+                max_failure_pct=agent.max_conversion_failure_pct,
+            )
+            receipt = full_trial.receipt.steps[0]
+        except RecipeError:
+            pass
     if receipt.changed == 0 and kind not in (RecipeStepKind.DROP_COLUMN, RecipeStepKind.RENAME_COLUMN):
         raise AgentToolError(
             "AGENT_STEP_NO_EFFECT",
-            f"That fix changes nothing in the first {min(STEP_SAMPLE_ROWS, len(ctx.frame))} rows of "
-            f"'{display_name(column)}'. Look again, or reply instead.",
+            f"That fix changes nothing in the rows of '{display_name(column)}'. Look again, or reply instead.",
         )
     # Tried on the first rows (the trial above), held to decision O10, never ticked: the approval's
     # "new patterns, with permission" for an AI's fix.
