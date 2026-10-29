@@ -669,9 +669,31 @@ def test_a_refusal_from_the_guards_skips_that_action_and_the_next_one_still_runs
     assert [i.title for i in out.case.items] == ["parse_date date"]
 
 
-def test_a_refusal_always_says_how_to_fix_it() -> None:
-    with pytest.raises(ValueError):
-        Refusal(code="X", what_failed="y", how_to_fix="")
+def test_every_refusal_the_author_makes_says_what_failed_and_how_to_fix_it() -> None:
+    gone = stored("parse_number", "spend", state=ProposalState.REJECTED, decided_by=PERSON)
+    no = stored("parse_date", "date", state=ProposalState.REJECTED, decided_by=PERSON)
+    made = [
+        apply_actions(
+            make_case([gone, no]),
+            [
+                create("parse_date", "ship", replaces="nope"),
+                create("parse_date", "ship", replaces=gone.item_id),
+                Withdraw(item_id="nope", reason="r", consequence="c"),
+                Withdraw(item_id=gone.item_id, reason="r", consequence="c"),
+                create("parse_date", "date", reason="in other words"),
+                setting("45"),
+            ],
+            ai(goal=Window()),
+        )
+    ]
+    refusals = [r for out in made for _i, r in out.refused]
+    assert {r.code for r in refusals} == {
+        "ITEM_NOT_FOUND",
+        "ITEM_ALREADY_LEFT_OUT",
+        "LEFT_OUT_BY_PERSON",
+        "SETTING_VALUE_NOT_ALLOWED",
+    }
+    assert len(refusals) == 6 and all(r.what_failed and r.how_to_fix for r in refusals)
 
 
 # -- standing answers ---------------------------------------------------------------------------------------------

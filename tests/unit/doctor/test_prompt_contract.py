@@ -1,5 +1,5 @@
-"""The Data Doctor's prompts and the code agree: every action and argument a prompt names exists, every action the
-dispatch handles is in the registry, and every number a prompt states is a limit (`data_doctor.limits`)."""
+"""The Data Doctor's prompt and the code agree: every action and argument the prompt names exists, every action the
+dispatch handles is in the registry, and every number the prompt states is a limit (`data_doctor.limits`)."""
 
 from __future__ import annotations
 
@@ -9,34 +9,33 @@ from pathlib import Path
 
 import pytest
 
-from engine.agent.loop import CHAT_STEP_KINDS, DOCTOR_STEP_KINDS
+from engine.agent.loop import DOCTOR_STEP_KINDS
 from engine.doctor import actions
 from engine.doctor.actions import ACTIONS, ALIASES, argument_names, prompt_variables
-from engine.doctor.agent_review import SQL_ARGS
+from engine.doctor.agent_turn import SQL_ARGS
 from engine.doctor.config import AsksLimits, DataDoctorConfig, DataDoctorLimits, GateLimits, TurnLimits
 from engine.doctor.limits import limits, prompt_limits, use_limits
 from engine.doctor.questions import catalogue_lines
 from engine.doctor.tools_sql import ProposeSqlStepArgs
 from engine.generative.prompts import load_prompt, render
 
-SURFACES = {"data_doctor_agent": "review", "data_doctor_chat": "chat"}
+NAME = "data_doctor"
 ROOT = Path(__file__).resolve().parents[3]
 LOOK = "<look tool>"
 
 
-def _render(name: str) -> str:
-    surface = SURFACES[name]
+def _render() -> str:
     values = {
         "goal": "g",
         "tools": [],
-        "questions": catalogue_lines(chat=surface == "chat"),
+        "questions": catalogue_lines(chat=True),
         "state": "{}",
         "conversation": "c",
-        "message": "m",
+        "event": "THE PERSON SAYS:\nm",
         "turn_results": "none",
-        **prompt_variables(surface),
+        **prompt_variables(),
     }
-    done = render(load_prompt(name), values)
+    done = render(load_prompt(NAME), values)
     return done.system
 
 
@@ -44,20 +43,23 @@ def _known() -> set[str]:
     return {a.name for a in ACTIONS} | set(ALIASES)
 
 
-@pytest.mark.parametrize("name", SURFACES)
-def test_every_action_a_prompt_names_is_in_the_registry(name: str) -> None:
-    text = _render(name)
+def test_every_action_the_prompt_names_is_in_the_registry() -> None:
+    text = _render()
     named = set(re.findall(r'"action": "([^"]+)"', text))
     assert named - {LOOK} <= _known(), named - _known()
-    offered = {a.name for a in ACTIONS if SURFACES[name] in a.surfaces}
+    offered = {a.name for a in ACTIONS}
     shown = {ALIASES.get(n, n) for n in named}
-    assert offered <= shown, f"{name} does not offer {offered - shown}"
+    assert offered <= shown, f"the prompt does not offer {offered - shown}"
     assert shown - {ALIASES.get(LOOK, LOOK)} <= {a.name for a in ACTIONS} | {LOOK}
 
 
-@pytest.mark.parametrize("name", SURFACES)
-def test_every_argument_a_prompt_lists_is_a_field_of_that_action(name: str) -> None:
-    text = _render(name)
+def test_the_aliases_are_the_names_older_turns_used() -> None:
+    assert ALIASES == {"ask_question": "ask", "finish": "reply"}
+    assert all(target in {a.name for a in ACTIONS} for target in ALIASES.values())
+
+
+def test_every_argument_the_prompt_lists_is_a_field_of_that_action() -> None:
+    text = _render()
     checked = 0
     for line in text.splitlines():
         found = re.match(r'- `\{"action": "([^"]+)"', line)
@@ -73,11 +75,9 @@ def test_every_argument_a_prompt_lists_is_a_field_of_that_action(name: str) -> N
     assert checked >= 5
 
 
-@pytest.mark.parametrize("name", SURFACES)
-def test_every_step_kind_a_prompt_lists_is_one_the_surface_may_propose(name: str) -> None:
-    kinds = DOCTOR_STEP_KINDS if SURFACES[name] == "chat" else CHAT_STEP_KINDS
-    lines = prompt_variables(SURFACES[name])["step_kinds"]
-    assert {line.split(" ")[0] for line in lines} == {k.value for k in kinds}
+def test_every_step_kind_the_prompt_lists_is_one_the_turn_may_propose() -> None:
+    lines = prompt_variables()["step_kinds"]
+    assert {line.split(" ")[0] for line in lines} == {k.value for k in DOCTOR_STEP_KINDS}
 
 
 def _compared_names(path: Path, function: str) -> set[str]:
@@ -97,25 +97,18 @@ def _compared_names(path: Path, function: str) -> set[str]:
     return names
 
 
-@pytest.mark.parametrize("module", ["agent_review", "agent_chat"])
-def test_every_action_the_dispatch_handles_is_in_the_registry(module: str) -> None:
-    handled = _compared_names(ROOT / "engine" / "doctor" / f"{module}.py", "_act")
+def test_every_action_the_dispatch_handles_is_in_the_registry() -> None:
+    handled = _compared_names(ROOT / "engine" / "doctor" / "agent_turn.py", "_act")
     assert handled, "the dispatch compares no action name; this test no longer reads it"
     assert handled <= _known() | {"find_values"}, handled - _known()
 
 
 def test_the_registry_offers_what_the_dispatch_takes() -> None:
-    chat = _compared_names(ROOT / "engine" / "doctor" / "agent_chat.py", "_act")
-    review = _compared_names(ROOT / "engine" / "doctor" / "agent_review.py", "_act")
+    taken = _compared_names(ROOT / "engine" / "doctor" / "agent_turn.py", "_act")
     for spec in ACTIONS:
-        if spec.name == "finish":  # the review's loop takes it before `_act`
+        if spec.name == "reply":  # the loop takes it before `_act`: it ends the turn
             continue
-        taken = chat if "chat" in spec.surfaces and spec.name not in review else review
-        assert (
-            spec.name in taken
-            or spec.name in {ALIASES[a] for a in taken & set(ALIASES)}
-            or spec.name == "reply"
-        ), spec.name
+        assert spec.name in taken, spec.name
 
 
 def test_the_sql_arguments_are_the_tools_arguments() -> None:
@@ -126,9 +119,8 @@ def test_the_sql_arguments_are_the_tools_arguments() -> None:
     assert {"files", "as_of_file", "expect"} <= fields
 
 
-@pytest.mark.parametrize("name", SURFACES)
-def test_a_prompt_states_no_number_of_its_own(name: str) -> None:
-    raw = load_prompt(name).system
+def test_the_prompt_states_no_number_of_its_own() -> None:
+    raw = load_prompt(NAME).system
     # The data rules (R-numbers) quote the data's own numbers; what is checked is the words of a limit.
     pattern = (
         r"(at most|up to|no more than)\s+\d+\b|\b\d+\s+blocking|\b\d+ to \d+ options|fails twice|twice\b"
@@ -171,24 +163,17 @@ def test_the_guided_setup_replies_use_the_same_default() -> None:
     assert (TurnLimits().guided_reply_chars, TurnLimits().prompt_chars) == (MAX_REPLY_CHARS, MAX_PROMPT_CHARS)
 
 
-@pytest.mark.parametrize(
-    ("name", "numbers"),
-    [
-        ("data_doctor_agent", {"retries": 7, "blocking": 9, "summary_chars": 1234}),
-        (
-            "data_doctor_chat",
-            {
-                "strikes": 7,
-                "quick": 5,
-                "quick_options_min": 3,
-                "quick_options_max": 6,
-                "chat_reply_chars": 3333,
-            },
-        ),
-    ],
-)
-def test_every_limit_a_prompt_states_is_the_one_in_the_limits(name: str, numbers: dict[str, int]) -> None:
+def test_every_limit_the_prompt_states_is_the_one_in_the_limits() -> None:
     """Change a limit and the prompt follows it: the number in the prompt is read, not copied."""
+    numbers = {
+        "retries": 7,
+        "blocking": 9,
+        "strikes": 7,
+        "quick": 5,
+        "quick_options_min": 3,
+        "quick_options_max": 6,
+        "chat_reply_chars": 3333,
+    }
     replacement = DataDoctorLimits(
         turn=TurnLimits(strikes=7, summary_chars=1234, chat_reply_chars=3333),
         asks=AsksLimits(blocking=9, quick=5, quick_options_min=3, quick_options_max=6),
@@ -196,10 +181,10 @@ def test_every_limit_a_prompt_states_is_the_one_in_the_limits(name: str, numbers
     )
     with use_limits(replacement):
         assert {k: prompt_limits()[k] for k in numbers} == numbers
-        text = _render(name)
+        text = _render()
     for value in numbers.values():
-        assert str(value) in text, (name, value)
-    default = _render(name)
+        assert str(value) in text, value
+    default = _render()
     assert default != text
 
 
@@ -270,15 +255,17 @@ def _fields(model: type) -> set[str]:
 @pytest.mark.parametrize(
     ("module", "function", "model", "all_read"),
     [
-        ("agent_review", "_guide", actions.ReadGuideArgs, True),
-        ("agent_review", "_sql", actions.ProposeSqlArgs, False),
-        ("agent_review", "_ask", actions.AskReviewArgs, False),
-        ("agent_review", "_doubt", actions.ExpressDoubtArgs, False),
-        ("agent_review", "_request", actions.RequestDataArgs, False),
-        ("agent_chat", "_quick", actions.AskChatArgs, False),
-        ("agent_chat", "_suggest", actions.SuggestAnswerArgs, True),
-        ("agent_chat", "_withdraw", actions.WithdrawArgs, True),
-        ("agent_chat", "_combine", actions.CombineArgs, False),
+        ("agent_turn", "_guide", actions.ReadGuideArgs, True),
+        ("agent_turn", "_sql", actions.ProposeSqlArgs, False),
+        ("agent_turn", "_catalogue_ask", actions.AskArgs, False),
+        ("agent_turn", "_quick", actions.AskArgs, False),
+        ("agent_turn", "_doubt", actions.ExpressDoubtArgs, False),
+        ("agent_turn", "_request", actions.RequestDataArgs, False),
+        ("agent_turn", "_suggest", actions.SuggestAnswerArgs, True),
+        ("agent_turn", "_withdraw", actions.WithdrawArgs, True),
+        ("agent_turn", "_setting", actions.ProposeSettingArgs, True),
+        ("agent_turn", "_adopt", actions.AdoptSuggestionArgs, True),
+        ("agent_turn", "_combine", actions.CombineArgs, False),
     ],
 )
 def test_a_handler_reads_only_keys_the_registry_lists(
@@ -292,32 +279,31 @@ def test_a_handler_reads_only_keys_the_registry_lists(
         assert read == _fields(model), (function, _fields(model) - read)
 
 
-@pytest.mark.parametrize("name", SURFACES)
-def test_the_rendered_system_text_is_identical_whatever_the_turn_results_are(name: str) -> None:
+def test_the_rendered_system_text_is_identical_whatever_the_event_and_the_turn_results_are() -> None:
     """Prompt caching: instructions, the action contract and the guide index come first and do not move."""
-    surface = SURFACES[name]
 
-    def system(results: str, state: str) -> str:
+    def system(results: str, state: str, event: str = "an event") -> str:
         values = {
             "goal": "g",
             "tools": [],
-            "questions": catalogue_lines(chat=surface == "chat"),
+            "questions": catalogue_lines(chat=True),
             "state": state,
             "conversation": "c",
-            "message": "m",
+            "event": event,
             "turn_results": results,
-            **prompt_variables(surface),
+            **prompt_variables(),
         }
-        done = render(load_prompt(name), values)
-        assert state in done.user and results in done.user
+        done = render(load_prompt(NAME), values)
+        assert state in done.user and results in done.user and event in done.user
         return done.system
 
-    assert system("none", "{}") == system('[{"tool": "read_guide", "text": ["x"]}]', '{"files": ["F1"]}')
+    assert system("none", "{}") == system(
+        '[{"tool": "read_guide", "text": ["x"]}]', '{"files": ["F1"]}', "THE PERSON SAYS:\nhello"
+    )
     assert "## Guides" in system("none", "{}") and "- features:" in system("none", "{}")
 
 
-@pytest.mark.parametrize("name", SURFACES)
-def test_the_prompts_offer_read_guide_and_name_the_guides_to_read(name: str) -> None:
-    text = _render(name)
+def test_the_prompt_offers_read_guide_and_names_the_guides_to_read() -> None:
+    text = _render()
     assert '"action": "read_guide"' in text and "`read_guide`" in text
-    assert "features" in text and "time_and_as_of" in text
+    assert "features" in text and "time_and_as_of" in text and "`rules`" in text

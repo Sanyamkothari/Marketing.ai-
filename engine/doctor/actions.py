@@ -1,15 +1,17 @@
-"""The Data Doctor AI's actions, defined once: the prompts' action and argument lists are generated from here.
+"""The Data Doctor AI's actions, defined once: the prompt's action and argument lists are generated from here.
 
-Each action the review or the chat takes has an :class:`ActionSpec` with a Pydantic model of its arguments. The prompts
-(`configs/prompts/data_doctor_agent.v2.md`, `data_doctor_chat.v2.md`) no longer carry hand-written argument prose:
-:func:`action_lines`, :func:`step_kind_lines` and :func:`engine.doctor.limits.prompt_limits` render it into the prompt
-variables, as `{tools}` always was. The contract test (`tests/unit/doctor/test_prompt_contract.py`) holds the
-prompts to this registry: every action and argument a prompt names is here, every action the dispatch handles is here,
-and every number a prompt states is a limit.
+There is one turn (`engine.doctor.agent_turn.DoctorTurn`), one prompt (`configs/prompts/data_doctor.v3.md`) and one
+action set: every action has an :class:`ActionSpec` with a Pydantic model of its arguments. The prompt carries no
+hand-written argument prose: :func:`action_lines`, :func:`step_kind_lines` and
+:func:`engine.doctor.limits.prompt_limits` render it into the prompt variables, as `{tools}` always was. The contract
+test (`tests/unit/doctor/test_prompt_contract.py`) holds the prompt to this registry: every action and argument it
+names is here, every action the dispatch handles is here, and every number it states is a limit.
 
-The look tools are not here: they come from the data-tool registry with their own input models (`agent_review._tools`).
-The models describe the arguments the dispatch reads; the dispatch (`agent_review._act`, `agent_chat._act`) is
-unchanged, so an action stays as strict or as lenient as it was.
+The look tools are not here: they come from the data-tool registry with their own input models
+(`DoctorTurn._tools`). The models describe the arguments the dispatch reads; the dispatch (`DoctorTurn._act`) is
+unchanged, so an action stays as strict or as lenient as it was. Every action that changes the plan becomes an
+`AuthorAction` and goes through `engine.doctor.author.apply_actions`; `replaces` names the item a new change takes
+the place of, and `withdraw` takes any item out: what is in the plan or the person's waits for their yes.
 """
 
 from __future__ import annotations
@@ -21,11 +23,10 @@ from typing import Any, Final, Literal, get_args, get_origin
 from pydantic import BaseModel, ConfigDict, Field
 
 from engine.agent.contracts import RecipeStepKind
-from engine.agent.loop import CHAT_STEP_KINDS, DOCTOR_STEP_KINDS
+from engine.agent.loop import DOCTOR_STEP_KINDS
 from engine.agent.recipe import STEP_PARAMETERS
 from engine.agent.value_steps import REMOVE_OPERATORS
 from engine.doctor.guards import Expectations
-from engine.doctor.tools_sql import ProposeSqlStepArgs
 
 __all__ = [
     "ACTIONS",
@@ -38,15 +39,12 @@ __all__ = [
     "step_kind_lines",
 ]
 
-Surface = Literal["review", "chat"]
-
 
 class _Args(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-def _sql(name: str) -> str:
-    return ProposeSqlStepArgs.model_fields[name].description or ""
+_REPLACES: Final[str] = "id of the change this replaces"
 
 
 class ProposeStepArgs(_Args):
@@ -55,15 +53,11 @@ class ProposeStepArgs(_Args):
     params: dict[str, Any] = Field(default_factory=dict, description="below")
     reason: str = Field(description="cite a rule id (R4) when one asks")
     evidence_ids: list[str] = Field(default_factory=list)
-    replaces: str | None = Field(
-        default=None,
-        description="the id of your change this swaps out",
-        json_schema_extra={"surface": "chat"},
-    )
+    replaces: str | None = Field(default=None, description=_REPLACES)
 
 
 class ProposeSqlArgs(_Args):
-    description: str = Field()
+    description: str = Field(description="what the query does, in plain words")
     sql: str = Field(description="one SELECT over `t_<file name>`; `$as_of` is the date")
     output_name: str = Field()
     files: list[str] = Field(
@@ -84,11 +78,7 @@ class ProposeSqlArgs(_Args):
         default=None,
         description="days the outcome looks past `$as_of`; the data must run that far",
     )
-    replaces: str | None = Field(
-        default=None,
-        description="the id of your change this swaps out",
-        json_schema_extra={"surface": "chat"},
-    )
+    replaces: str | None = Field(default=None, description=_REPLACES)
 
 
 class ProposeFeaturesArgs(_Args):
@@ -109,11 +99,7 @@ class ProposeFeaturesArgs(_Args):
     output_name: str | None = Field(default=None)
     as_of: str | None = Field(default=None)
     as_of_rule: Literal["latest_date_in_file", "last_complete_month_end"] | None = Field(default=None)
-    replaces: str | None = Field(
-        default=None,
-        description="the id of your change this swaps out",
-        json_schema_extra={"surface": "chat"},
-    )
+    replaces: str | None = Field(default=None, description=_REPLACES)
 
 
 class ProposeCombineRowsArgs(_Args):
@@ -127,11 +113,7 @@ class ProposeCombineRowsArgs(_Args):
     columns: list[dict[str, Any]] = Field(
         default_factory=list, description="edits: column, functions, reason"
     )
-    replaces: str | None = Field(
-        default=None,
-        description="the id of your change this swaps out",
-        json_schema_extra={"surface": "chat"},
-    )
+    replaces: str | None = Field(default=None, description=_REPLACES)
 
 
 class ProposeUnpivotArgs(_Args):
@@ -143,7 +125,7 @@ class ProposeUnpivotArgs(_Args):
     year: int | None = Field(default=None, description="undated months; evidence in reason")
 
 
-class ProposeAmountOutcomeChatArgs(_Args):
+class ProposeAmountOutcomeArgs(_Args):
     """`propose_amount_outcome` (`engine.doctor.amount_outcome`): the spend after the snapshot, as you define it from
     `describe_order_file`; the person approves the sentence, which says every choice."""
 
@@ -157,11 +139,7 @@ class ProposeAmountOutcomeChatArgs(_Args):
         default=None, description="only when the case has no as-of date and the person agreed"
     )
     reason: str = Field()
-    replaces: str | None = Field(
-        default=None,
-        description="the id of your change this swaps out",
-        json_schema_extra={"surface": "chat"},
-    )
+    replaces: str | None = Field(default=None, description=_REPLACES)
 
 
 class ProposeTestColumnArgs(_Args):
@@ -171,16 +149,33 @@ class ProposeTestColumnArgs(_Args):
     column: str = Field()
     control: str = Field(description="the control group's level id, such as L2")
     reason: str = Field()
+    replaces: str | None = Field(default=None, description=_REPLACES)
 
 
 class ProposeGoalArgs(_Args):
-    """`propose_goal` (`engine.doctor.agent_chat`): a goal that fits the files, offered with a reason; the person's
+    """`propose_goal` (`engine.doctor.agent_turn`): a goal that fits the files, offered with a reason; the person's
     click on "Choose this goal" sets it. Nothing is chosen by this action."""
 
     goal_id: str = Field(description="a goal that fits (ready, check or buildable), by its id")
     reason: str = Field(
         description="why this goal, one sentence of at most {effect_chars} characters; a longer one is refused"
     )
+
+
+class ProposeSettingArgs(_Args):
+    """`propose_setting` (`engine.doctor.author.SetSetting`): one of the chosen goal's settings, to a value its
+    config allows (`allowed` in the state). The person's yes puts it in the plan; the build is made again."""
+
+    setting: str = Field(description="a setting of the chosen goal, such as window_days")
+    value: str = Field(description="one of its allowed values")
+    reason: str = Field()
+
+
+class AdoptSuggestionArgs(_Args):
+    """`adopt_suggestion` (`engine.doctor.author`): a change a fact tool suggested, put in the plan as it stands."""
+
+    id: str = Field(description="the id of a suggestion in the state")
+    reason: str = Field()
 
 
 class ReadGuideArgs(_Args):
@@ -196,19 +191,13 @@ class ProposeLessonArgs(_Args):
     text: str = Field(description="one general rule, at most 18 words, no number, quote or name")
 
 
-class AskReviewArgs(_Args):
-    question: str = Field(description="a question id below")
+class AskArgs(_Args):
+    question: str | None = Field(default=None, description="a question id below")
     column: str | None = Field(default=None)
     values: dict[str, Any] = Field(default_factory=dict)
     choices: list[str] = Field(default_factory=list)
     effects: list[str] = Field(default_factory=list, description="one short sentence per choice, no numbers")
     evidence_ids: list[str] = Field(default_factory=list)
-
-
-class AskChatArgs(_Args):
-    question: str | None = Field(default=None, description="a question id below")
-    values: dict[str, Any] = Field(default_factory=dict)
-    choices: list[str] = Field(default_factory=list)
     text: str | None = Field(
         default=None,
         description="a quick question instead of an id, at most {short_chars} characters, not about consent, the "
@@ -223,7 +212,7 @@ class AskChatArgs(_Args):
 
 
 class SuggestAnswerArgs(_Args):
-    question_id: str = Field()
+    question_id: str = Field(description="a question's id from the state")
     option_id: str = Field(description="such as c0")
 
 
@@ -246,173 +235,125 @@ class RequestDataArgs(_Args):
 
 class CombineArgs(_Args):
     files: list[str] = Field(description="two or more, such as F1, F2")
-    replaces: str | None = Field(
-        default=None,
-        description="the id of your change this swaps out",
-        json_schema_extra={"surface": "chat"},
-    )
+    replaces: str | None = Field(default=None, description=_REPLACES)
 
 
 class WithdrawArgs(_Args):
-    item_id: str = Field(description="one of your own changes")
+    item: str = Field(description="any change in the plan, by its id in the state")
+    reason: str = Field()
+    consequence: str = Field(description="what changes in the training table without it")
 
 
 class ReplyArgs(_Args):
-    text: str = Field(description="what you tell the person")
-
-
-class FinishArgs(_Args):
-    text: str = Field(description="what you found, suggest, want to know")
+    text: str = Field(description="what you tell the person; at most {chat_reply_chars} characters")
 
 
 @dataclass(frozen=True)
 class ActionSpec:
-    """One action: its name, the model of its arguments, a one-line summary, and where it is offered."""
+    """One action: its name, the model of its arguments and a one-line summary."""
 
     name: str
-    args_model: type[BaseModel] | None
+    args_model: type[BaseModel]
     summary: str
-    surfaces: frozenset[str]
-    surface_models: tuple[tuple[str, type[BaseModel]], ...] = ()
-    """Per-surface argument models where the two surfaces take different arguments."""
     top_level: tuple[str, ...] = ()
     """Fields at the top of the reply rather than in `args`."""
     needs_file: bool = False
 
-    def model_for(self, surface: str) -> type[BaseModel] | None:
-        return dict(self.surface_models).get(surface, self.args_model)
 
-
-_BOTH: Final = frozenset({"review", "chat"})
 ACTIONS: Final[tuple[ActionSpec, ...]] = (
     ActionSpec(
         "propose_step",
         ProposeStepArgs,
-        "one typed change to one column; cite your looks.",
-        _BOTH,
+        "one typed change to one column (also leaving rows out by a rule); cite your looks.",
         needs_file=True,
     ),
-    ActionSpec(
-        "propose_sql",
-        ProposeSqlArgs,
-        "one SELECT building a new table.",
-        _BOTH,
-    ),
+    ActionSpec("propose_sql", ProposeSqlArgs, "one SELECT building a new table."),
     ActionSpec(
         "propose_features",
         ProposeFeaturesArgs,
         "customer behaviour features, up to `$as_of`.",
-        _BOTH,
         needs_file=True,
     ),
     ActionSpec(
         "propose_combine_rows",
         ProposeCombineRowsArgs,
         "one row per ID; edit its plan.",
-        _BOTH,
         needs_file=True,
     ),
     ActionSpec(
         "propose_unpivot",
         ProposeUnpivotArgs,
         "period columns (spend_jan..) as rows.",
-        frozenset({"review"}),
         needs_file=True,
-    ),
-    ActionSpec(
-        "read_guide",
-        ReadGuideArgs,
-        "a guide: its rules plus the section (else all).",
-        _BOTH,
-    ),
-    ActionSpec(
-        "propose_lesson",
-        ProposeLessonArgs,
-        "once the case is ready: a general rule for later cases; the owner approves it.",
-        frozenset({"chat"}),
     ),
     ActionSpec(
         "propose_amount_outcome",
-        ProposeAmountOutcomeChatArgs,
+        ProposeAmountOutcomeArgs,
         "an amount outcome (spend in N days after the snapshot) from a file of orders; say why.",
-        frozenset({"chat"}),
         needs_file=True,
-    ),
-    ActionSpec(
-        "propose_goal",
-        ProposeGoalArgs,
-        "with no goal yet: one goal that fits the files (or can be built from them); the person confirms.",
-        frozenset({"chat"}),
     ),
     ActionSpec(
         "propose_test_column",
         ProposeTestColumnArgs,
         "which column holds a campaign test and which group is the control; the person confirms.",
-        frozenset({"chat"}),
         needs_file=True,
     ),
-    ActionSpec("join_files", CombineArgs, "join the files on their key; code counts.", frozenset({"chat"})),
+    ActionSpec("join_files", CombineArgs, "join the files on their key; code counts."),
+    ActionSpec("stack_files", CombineArgs, "stack files of the same shape; code counts."),
     ActionSpec(
-        "stack_files", CombineArgs, "stack files of the same shape; code counts.", frozenset({"chat"})
+        "propose_setting",
+        ProposeSettingArgs,
+        "a setting of the chosen goal to an allowed value; the person says yes.",
     ),
     ActionSpec(
-        "ask",
-        AskReviewArgs,
-        "ask the person.",
-        _BOTH,
-        surface_models=(("review", AskReviewArgs), ("chat", AskChatArgs)),
-        needs_file=True,
+        "adopt_suggestion",
+        AdoptSuggestionArgs,
+        "put a change a fact tool suggested in the plan as it stands; only this makes you sure of it.",
     ),
+    ActionSpec(
+        "withdraw",
+        WithdrawArgs,
+        "take any change out of the plan, yours or not; one in the plan waits for the person's yes.",
+    ),
+    ActionSpec(
+        "propose_goal",
+        ProposeGoalArgs,
+        "with no goal yet: one goal that fits the files (or can be built from them); the person confirms.",
+    ),
+    ActionSpec("ask", AskArgs, "ask the person.", needs_file=True),
     ActionSpec(
         "suggest_answer",
         SuggestAnswerArgs,
         "suggest the answer that matches the person's words; they click to confirm.",
-        frozenset({"chat"}),
     ),
+    ActionSpec("express_doubt", ExpressDoubtArgs, "say you are unsure.", needs_file=True),
+    ActionSpec("request_data", RequestDataArgs, "a missing column or file.", needs_file=True),
+    ActionSpec("read_guide", ReadGuideArgs, "a guide: its rules plus the section (else all)."),
     ActionSpec(
-        "express_doubt",
-        ExpressDoubtArgs,
-        "say you are unsure.",
-        _BOTH,
-        needs_file=True,
+        "propose_lesson",
+        ProposeLessonArgs,
+        "once the case is ready: a general rule for later cases; the owner approves it.",
     ),
-    ActionSpec(
-        "request_data",
-        RequestDataArgs,
-        "a missing column or file.",
-        _BOTH,
-        needs_file=True,
-    ),
-    ActionSpec("withdraw", WithdrawArgs, "take back one of your own changes.", frozenset({"chat"})),
     ActionSpec(
         "reply",
         ReplyArgs,
-        "what you tell the person; always end with it.",
-        frozenset({"chat"}),
-        top_level=("text",),
-    ),
-    ActionSpec(
-        "finish",
-        FinishArgs,
-        "3 to 5 plain sentences.",
-        frozenset({"review"}),
+        "what you tell the person, in plain words; always end with it.",
         top_level=("text",),
     ),
 )
-ALIASES: Final[dict[str, str]] = {"ask_question": "ask"}
-"""Names a stored turn or an older prompt used: the review's `ask_question` is `ask`."""
+ALIASES: Final[dict[str, str]] = {"ask_question": "ask", "finish": "reply"}
+"""Names a stored turn or an older prompt used: the review's `ask_question` is `ask`, its `finish` is `reply`."""
 
 
-def action_names(surface: str | None = None) -> tuple[str, ...]:
-    """The names offered on `surface` (all surfaces when None), without aliases."""
-    return tuple(a.name for a in ACTIONS if surface is None or surface in a.surfaces)
+def action_names() -> tuple[str, ...]:
+    """The names offered, without aliases."""
+    return tuple(a.name for a in ACTIONS)
 
 
 def argument_names(name: str) -> frozenset[str]:
-    """Every argument any surface of the action takes (top-level fields included)."""
+    """Every argument the action takes (top-level fields included)."""
     spec = next(a for a in ACTIONS if a.name == ALIASES.get(name, name))
-    models = {spec.args_model, *(m for _s, m in spec.surface_models)} - {None}
-    return frozenset(f for m in models if m is not None for f in m.model_fields) | frozenset(spec.top_level)
+    return frozenset(spec.args_model.model_fields) | frozenset(spec.top_level)
 
 
 def _type_of(annotation: Any) -> str:
@@ -439,18 +380,10 @@ def _type_of(annotation: Any) -> str:
     return "text"
 
 
-def _surface_of(info: Any, default: str) -> Any:
-    """The one surface a field is offered on (`json_schema_extra={"surface": ...}`), else `default`."""
-    extra = info.json_schema_extra
-    return extra.get("surface", default) if isinstance(extra, dict) else default
-
-
-def _fields(
-    model: type[BaseModel], skip: tuple[str, ...], surface: str, numbers: Mapping[str, int | float]
-) -> str:
+def _fields(model: type[BaseModel], skip: tuple[str, ...], numbers: Mapping[str, int | float]) -> str:
     parts = []
     for name, info in model.model_fields.items():
-        if name in skip or _surface_of(info, surface) != surface:
+        if name in skip:
             continue
         mark = "" if info.is_required() else "?"
         described = info.description or ""
@@ -463,41 +396,36 @@ def _fields(
 
 
 def action_lines(
-    surface: str,
     *,
     callable_: Callable[[ActionSpec], bool] | None = None,
     numbers: Mapping[str, int | float] | None = None,
 ) -> list[str]:
-    """One line per action offered on `surface`, generated from the argument models: its reply shape, its arguments
-    (`?` marks an optional one) and what it does. `callable_` is the same availability predicate the dispatch uses.
-    A limit named in an argument's description (`{effect_chars}`) is filled from `numbers` (`prompt_limits`).
+    """One line per action, generated from the argument models: its reply shape, its arguments (`?` marks an
+    optional one) and what it does. `callable_` is the same availability predicate the dispatch uses. A limit named
+    in an argument's description (`{effect_chars}`) is filled from `numbers` (`prompt_limits`).
     """
     from engine.doctor.limits import prompt_limits
 
     numbers = prompt_limits() if numbers is None else numbers
     lines = []
     for spec in ACTIONS:
-        if surface not in spec.surfaces or (callable_ is not None and not callable_(spec)):
+        if callable_ is not None and not callable_(spec):
             continue
-        model = spec.model_for(surface)
-        assert model is not None
-        name = "ask_question" if (surface == "review" and spec.name == "ask") else spec.name
-        head = f'{{"action": "{name}"' + (', "file": "F1"' if spec.needs_file else "")
+        head = f'{{"action": "{spec.name}"' + (', "file": "F1"' if spec.needs_file else "")
         if spec.top_level:
             shape = head + ", " + ", ".join(f'"{f}": "..."' for f in spec.top_level) + "}"
             body = ""
         else:
             shape = head + ', "args": {...}}'
-            body = " Args: " + _fields(model, spec.top_level, surface, numbers) + "."
+            body = " Args: " + _fields(spec.args_model, spec.top_level, numbers) + "."
         lines.append(f"`{shape}` - {spec.summary}{body}")
     return lines
 
 
-def step_kind_lines(surface: str) -> list[str]:
-    """The step kinds the surface may propose, each with the parameters it takes; `remove_rows` also its operators."""
-    kinds: frozenset[RecipeStepKind] = DOCTOR_STEP_KINDS if surface == "chat" else CHAT_STEP_KINDS
+def step_kind_lines() -> list[str]:
+    """The step kinds the turn may propose, each with the parameters it takes; `remove_rows` also its operators."""
     lines = []
-    for kind in sorted(kinds, key=lambda k: k.value):
+    for kind in sorted(DOCTOR_STEP_KINDS, key=lambda k: k.value):
         names = sorted(STEP_PARAMETERS.get(kind, frozenset()))
         line = kind.value + (f" ({', '.join(names)})" if names else "")
         if kind is RecipeStepKind.REMOVE_ROWS:
@@ -507,14 +435,13 @@ def step_kind_lines(surface: str) -> list[str]:
 
 
 def prompt_variables(
-    surface: str,
     config: Any = None,
     *,
     callable_: Callable[[ActionSpec], bool] | None = None,
     config_root: Any = None,
     lessons: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """The generated variables of a Doctor prompt: `actions`, `step_kinds`, `doctor_limits` and `guide_index`.
+    """The generated variables of the Doctor prompt: `actions`, `step_kinds`, `doctor_limits` and `guide_index`.
 
     `lessons` (the owner-approved lessons, `engine.doctor.lessons.approved_lessons`) follow the guide index, so an
     approved lesson reaches every prompt whether or not the AI reads the `lessons` guide.
@@ -526,8 +453,8 @@ def prompt_variables(
     index = index_text(config_root)
     learned = lessons_text(lessons)
     return {
-        "actions": action_lines(surface, callable_=callable_, numbers=prompt_limits(config)),
-        "step_kinds": step_kind_lines(surface),
+        "actions": action_lines(callable_=callable_, numbers=prompt_limits(config)),
+        "step_kinds": step_kind_lines(),
         "doctor_limits": prompt_limits(config),
         "guide_index": f"{index}\n\n{learned}" if learned else index,
     }

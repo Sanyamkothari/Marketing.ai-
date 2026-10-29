@@ -31,7 +31,7 @@ from typing import Annotated, Any, Final, Literal, Protocol
 
 from pydantic import Field, JsonValue
 
-from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
+from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, Refusal
 from engine.config import StrictBase
 from engine.doctor.agent_apply import Roles, person_owns, twin_of, waits_because
 from engine.doctor.case import (
@@ -79,15 +79,6 @@ __all__ = [
 PRODUCER: Final[str] = AUTHOR
 """The producer every item, question and doubt of the author carries (`CaseItem.producer`)."""
 Effects = tuple[OptionEffect, ...]
-
-
-class Refusal(StrictBase):
-    """Why an action was not applied, in words a person (or the AI, to fix its next try) can act on."""
-
-    code: str = Field(description="What kind of refusal, machine-readable.")
-    what_failed: str = Field(description="What was refused, in one plain sentence.")
-    value: str | None = Field(default=None, description="The name or count it is about; never a cell value.")
-    how_to_fix: str = Field(min_length=1, description="What to change; never empty.")
 
 
 class ItemDraft(StrictBase):

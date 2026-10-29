@@ -30,6 +30,7 @@ from engine.agent.tools import AgentContext
 from engine.config import BudgetConfig, LlmConfig, RunMode, load_use_case
 from engine.doctor import visit
 from engine.doctor.agent_review import agent_review, lazy_review
+from engine.doctor.agent_turn import DoctorTurn
 from engine.doctor.ai_guard import AiGuard
 from engine.doctor.case import Case, CaseStore, TimelineKind, VisitState
 from engine.doctor.config import AiLimitsConfig
@@ -686,9 +687,8 @@ def test_a_brief_of_another_goal_is_refused_as_unknown_and_the_mode_is_the_visit
     world: World, storage: LocalStorage
 ) -> None:
     from engine.agent.tools import AgentToolError
-    from engine.doctor.agent_review import _Review
 
-    review = _build(_Review, _goal_case(storage, world), world)
+    review = _build(_goal_case(storage, world), world)
     with pytest.raises(AgentToolError) as raised:
         review._act({"action": "load_goal_brief", "file": "F1", "args": {"goal_id": "telco-churn"}})
     assert raised.value.code == "AGENT_GOAL_UNKNOWN"
@@ -706,29 +706,26 @@ def _named(tools: list[dict[str, str]]) -> list[str]:
 def test_every_tool_the_prompt_lists_is_a_tool_the_ai_can_call(
     world: World, storage: LocalStorage, with_goal: bool
 ) -> None:
-    """A guard: the review's and the chat's listed tools all dispatch (never AGENT_TOOL_UNKNOWN)."""
+    """A guard: the turn's listed tools all dispatch (never AGENT_TOOL_UNKNOWN)."""
     from engine.agent.tools import AgentToolError
-    from engine.doctor.agent_chat import _Chat
-    from engine.doctor.agent_review import _Review
 
     case = _goal_case(storage, world) if with_goal else vs.open_case(storage, world)
     checked = 0
-    for cls in (_Review, _Chat):
-        review = _build(cls, case, world)
-        listed = _named(review._tools())
-        assert ("load_goal_brief" in listed) is with_goal
-        for name in listed:
-            try:
-                review._act({"action": name, "file": "F1", "args": {}})
-            except AgentToolError as exc:
-                assert exc.code != "AGENT_TOOL_UNKNOWN", f"{cls.__name__} lists {name} but cannot call it"
-            except Exception:
-                pass
-            checked += 1
+    review = _build(case, world)
+    listed = _named(review._tools())
+    assert ("load_goal_brief" in listed) is with_goal
+    for name in listed:
+        try:
+            review._act({"action": name, "file": "F1", "args": {}})
+        except AgentToolError as exc:
+            assert exc.code != "AGENT_TOOL_UNKNOWN", f"the turn lists {name} but cannot call it"
+        except Exception:
+            pass
+        checked += 1
     assert checked >= 2
 
 
-def _build(cls: Any, case: Case, world: World) -> Any:
+def _build(case: Case, world: World) -> DoctorTurn:
     def context_for(_case: Case, files: tuple[LoadedFile, ...]) -> AgentContext:
         return AgentContext(
             use_case_id=GOAL_A,
@@ -740,8 +737,7 @@ def _build(cls: Any, case: Case, world: World) -> Any:
             frame=files[0].frame,
         )
 
-    extra = {"chat_steps": 3} if cls.__name__ == "_Chat" else {}
-    return cls(
+    return DoctorTurn(
         case,
         _files(world),
         None,
@@ -751,7 +747,7 @@ def _build(cls: Any, case: Case, world: World) -> Any:
         ASHA,
         None,
         _Cached(visit.visit_registry(), _MEMORY),
-        **extra,
+        chat_steps=3,
     )
 
 
@@ -782,7 +778,7 @@ def test_the_plan_view_lists_the_ais_own_waiting_query(world: World, storage: Lo
     client = Script([{"action": "finish", "text": "Looked."}])
     _review(_guard(client))(case, _files(world), None)
     shown = next(c for c in client.calls if c.kind == "complete").prompt
-    assert '"by": "ai"' in shown and '"state": "pending"' in shown and "all files" in shown
+    assert '"by": "you"' in shown and '"state": "waiting"' in shown and "all files" in shown
 
 
 def test_the_ai_proposes_behaviour_features_and_they_are_a_pending_never_ticked_item(

@@ -115,10 +115,10 @@ def test_the_registry_offers_it_to_the_rules_the_ai_and_the_person_never_ticked(
 
 def test_the_ai_action_is_offered_and_its_arguments_are_only_names() -> None:
     from engine.doctor.actions import ACTIONS, ProposeCombineRowsArgs
-    from engine.doctor.agent_chat import _MAKES_CHANGES
+    from engine.doctor.agent_turn import MAKES_CHANGES
 
     spec = next(a for a in ACTIONS if a.name == "propose_combine_rows")
-    assert spec.surfaces == frozenset({"review", "chat"}) and spec.needs_file
+    assert spec.needs_file
     assert set(ProposeCombineRowsArgs.model_fields) == {
         "time_column",
         "snapshot_column",
@@ -126,7 +126,7 @@ def test_the_ai_action_is_offered_and_its_arguments_are_only_names() -> None:
         "columns",
         "replaces",
     }
-    assert "propose_combine_rows" in _MAKES_CHANGES
+    assert "propose_combine_rows" in MAKES_CHANGES
 
 
 def _consent_ctx(column: str = "marketing_opt_in") -> DataToolContext:

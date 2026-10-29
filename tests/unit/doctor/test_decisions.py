@@ -354,9 +354,8 @@ def test_the_old_private_readers_are_gone(name: str) -> None:
     for path in sorted((ROOT / "engine/doctor").glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
-        # `AgentReview._decided` lists the plan for the prompt, and `tools_time._decided` reads the Guided-setup
-        # agent's own session: neither reads a decision out of the case's items
-        if name == "_decided" and path.name in {"agent_review.py", "tools_time.py"}:
+        # `tools_time._decided` reads the Guided-setup agent's own session: it reads no decision out of the case's items
+        if name == "_decided" and path.name == "tools_time.py":
             continue
         assert name not in defined, f"{path.name} still defines {name}"
 

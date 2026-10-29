@@ -30,17 +30,17 @@ from engine.agent.recipe import RecipeError, check_recipe, run_recipe
 from engine.agent.tools import AgentToolError
 from engine.agent.unpivot import MAX_YEAR, MIN_YEAR, WideGroup, parse_period, wide_column_groups
 from engine.agent.untrusted import display_name
+from engine.doctor.agent_amount import whole_reason
 from engine.doctor.decisions import decisions
 from engine.doctor.questions import QuestionError, build_ask
 from engine.doctor.reshape_guard import doctor_levels
 from engine.doctor.visit_contracts import OptionEffect
 
 if TYPE_CHECKING:
-    from engine.doctor.agent_review import _Review
+    from engine.doctor.agent_turn import DoctorTurn
 
 __all__ = ["first_month_of", "run_unpivot", "typed_year_effect"]
 
-REASON_CHARS = 200
 YEARS_OFFERED = 4
 """The years offered besides the AI's own for months that name none: this year and the three before it."""
 _MONTH_NAMES = ("", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -136,7 +136,7 @@ def typed_year_effect(effect: OptionEffect, typed: str) -> OptionEffect:
     return effect.model_copy(update={"payload": {**effect.payload, "step": step}, "title": title})
 
 
-def run_unpivot(review: _Review, index: int, args: dict[str, Any]) -> None:
+def run_unpivot(review: DoctorTurn, index: int, args: dict[str, Any]) -> None:
     from engine.agent.advisor import ordered_steps, recipe_steps
     from engine.doctor import policy as data_policy
 
@@ -172,7 +172,7 @@ def run_unpivot(review: _Review, index: int, args: dict[str, Any]) -> None:
     # Every other column stays on every row, personal ones too (by name; the engine hides their values as anywhere).
     kept = [c for c in columns if c not in wide and c != outcome]
     measures = [display_name(m) for m in group.measures]
-    reason = str(args.get("reason") or "").strip()[:REASON_CHARS] or (
+    reason = whole_reason(args) or (
         f"The {group.kind} columns hold the same measures for different {group.kind}s; as rows they can be "
         "combined back into one row per customer."
     )

@@ -348,13 +348,12 @@ DATA_AGENT_ALLOWANCE = 3000
 DATA_AGENT_FAMILY = (
     GenerativePurpose.DATA_AGENT,
     GenerativePurpose.DATA_AGENT_ASSIST,
-    GenerativePurpose.DOCTOR_AGENT,
-    GenerativePurpose.DOCTOR_CHAT,
+    GenerativePurpose.DOCTOR,
     GenerativePurpose.DATA_EXPLAIN,
     GenerativePurpose.AGENT_PLANNER,
     GenerativePurpose.AGENT_NARRATIVE,
 )
-"""Guided setup's two purposes, the Data Doctor's three and the campaign planner's two - every purpose of the
+"""Guided setup's two purposes, the Data Doctor's two and the campaign planner's two - every purpose of the
 Product AI slot, whose connection test sends this allowance - written out so a change to the set is a visible one."""
 ALLOWANCES = LlmConfig(
     max_output_tokens=ORDINARY_ALLOWANCE, data_agent_max_output_tokens=DATA_AGENT_ALLOWANCE

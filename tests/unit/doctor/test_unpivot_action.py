@@ -44,9 +44,9 @@ def storage(tmp_path: Path) -> LocalStorage:
     return LocalStorage(tmp_path / "data")
 
 
-def test_the_action_is_offered_to_the_review_prompt() -> None:
+def test_the_action_is_offered_to_the_prompt() -> None:
     assert "propose_unpivot" in {a.name for a in ACTIONS}
-    assert any(line.startswith('`{"action": "propose_unpivot"') for line in action_lines("review"))
+    assert any(line.startswith('`{"action": "propose_unpivot"') for line in action_lines())
 
 
 def _asked(case: Case, code: str) -> CaseQuestion:

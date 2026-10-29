@@ -19,7 +19,8 @@ import pytest
 
 from engine.agent.contracts import ProposalSource, ProposalState
 from engine.agent.loop import UNAVAILABLE
-from engine.doctor import agent_chat, visit
+from engine.doctor import agent_turn, visit
+from engine.doctor.agent_turn import handle_of
 from engine.doctor.case import Case, CaseChatEntry, TimelineKind, VisitState
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.limits import limits
@@ -77,8 +78,8 @@ def reply(text: str) -> dict[str, object]:
     return {"action": "reply", "text": text}
 
 
-def handle_of(seen: Seen, containing: str) -> str:
-    """The handle the case gave a change (`c3`), found by what it says."""
+def handle_of_plan(seen: Seen, containing: str) -> str:
+    """The handle the case gave a change (`c3f9a1`), found by what it says."""
     return next(p["id"] for p in seen.state["plan"] if containing in p["what"])
 
 
@@ -109,7 +110,7 @@ SCRIPT: dict[str, list[object]] = {
     THIS_YEAR: [
         look("describe_dates", "order_date"),
         lambda seen: rows_step(
-            "order_date", "before", "2026-01-01", replaces=handle_of(seen, "starts with 999")
+            "order_date", "before", "2026-01-01", replaces=handle_of_plan(seen, "starts with 999")
         )(seen),
         reply("Understood: I took my earlier filter back and now only this year's orders stay."),
     ],
@@ -205,16 +206,23 @@ def test_the_person_can_undo_what_the_agent_applied_and_it_is_not_put_back(
     assert talk.reply.item_ids == (), "no change is attributed to this reply"
 
 
-def test_the_agent_cannot_take_back_a_change_the_person_ticked_themselves(
+def test_taking_out_a_change_the_person_ticked_themselves_waits_for_their_yes(
     storage: LocalStorage, world: World
 ) -> None:
     def withdraw_it(seen: Seen) -> dict[str, object]:
-        return {"action": "withdraw", "args": {"item_id": handle_of(seen, "starts with 999")}}
+        return {
+            "action": "withdraw",
+            "args": {
+                "item": handle_of_plan(seen, "starts with 999"),
+                "reason": "You asked me to.",
+                "consequence": "The test accounts stay in.",
+            },
+        }
 
     client = ChatScript(
         {
             **SCRIPT,
-            "take it back": [withdraw_it, reply("I could not take that back; it is yours to untick.")],
+            "take it back": [withdraw_it, reply("I asked you; your tick stays until you say yes.")],
         }
     )
     talk = Talk(storage, world, client)
@@ -225,9 +233,16 @@ def test_the_agent_cannot_take_back_a_change_the_person_ticked_themselves(
     assert ai_items(case)[0].decided_by == ANALYST
 
     case = talk.say("take it back")
-    assert ai_items(case)[0].state is ProposalState.ACCEPTED, "the person's tick stands"
-    assert talk.reply.withdrawn == ()
-    assert any(r.get("error") == "AGENT_ITEM_PERSONS" for r in client.seen[-1].results)
+    assert next(i for i in ai_items(case) if i.item_id == item.item_id).state is ProposalState.ACCEPTED
+    assert talk.reply.withdrawn == (), "the person's tick stands: the Doctor does not undo it"
+    (waiting,) = [i for i in ai_items(case) if i.kind == "withdraw"]
+    assert (
+        waiting.state is ProposalState.PENDING and waiting.replaces == item.item_id
+    ), "a proposal for their yes"
+    assert "their yes" in told(client, "withdrawn")["result"], "the model is told it waits"
+    # Their yes to the proposal is what takes the change out.
+    case = talk.decide(waiting.item_id, True)
+    assert next(i for i in ai_items(case) if i.item_id == item.item_id).state is ProposalState.REJECTED
 
 
 def test_without_an_ai_service_the_chat_says_so_and_nothing_else_changes(
@@ -444,7 +459,7 @@ def test_a_quick_question_may_be_the_first_thing_the_agent_does(storage: LocalSt
     asked = next(q for q in case.questions if q.code == "CHAT_ASK")
     assert asked.why == "Both exist." and talk.reply.tools == ("ask",)
     told_back = client.seen[-1].results[0]
-    assert told_back["asked"] == "CHAT_ASK" and told_back["question_id"] == "k2"
+    assert told_back["asked"] == "CHAT_ASK" and told_back["question_id"] == handle_of("q", asked.question_id)
     assert [o["id"] for o in told_back["options"]] == ["c0", "c1"], "the model learns the ids to suggest by"
 
 
@@ -459,11 +474,14 @@ def test_the_answer_is_recorded_only_by_the_persons_click(storage: LocalStorage,
     assert answered.answer == "c0" and answered.answered_by == ANALYST, "the person's click"
 
 
-@pytest.mark.parametrize("handle", ["k99", "k1"])
+@pytest.mark.parametrize("which", ["nothing", "answered"])
 def test_a_suggestion_for_a_question_that_is_not_open_is_refused(
-    storage: LocalStorage, world: World, handle: str
+    storage: LocalStorage, world: World, which: str
 ) -> None:
-    """`k99` is nothing; `k1` is the key question, which the person has answered already."""
+    """`q00000` is nothing; the other is the key question, which the person has answered already."""
+    talk = Talk(storage, world, None)
+    answered = next(q for q in talk.case.questions if q.answer is not None)
+    handle = "q00000" if which == "nothing" else handle_of("q", answered.question_id)
     client = ChatScript(
         {
             "suggest": [
@@ -472,28 +490,48 @@ def test_a_suggestion_for_a_question_that_is_not_open_is_refused(
             ]
         }
     )
-    talk = Talk(storage, world, client)
+    talk.converse = cs.chat_port(client, storage)
     talk.say("suggest something")
     assert talk.reply.suggestion is None and talk.reply.text == "Nothing to suggest."
-    assert [r["error"] for r in client.seen[-1].results if "error" in r] == ["AGENT_SUGGESTION_UNKNOWN"]
+    assert [r["error"] for r in client.seen[-1].results if "error" in r] == ["ITEM_NOT_FOUND"]
 
 
-def test_the_agent_cannot_take_back_a_change_the_rules_made_and_is_told_which_are_its_own(
+def test_taking_out_a_change_the_rules_made_waits_for_the_persons_yes_and_a_wrong_id_is_told_the_right_ones(
     storage: LocalStorage, world: World
 ) -> None:
-    """Replacing anything with the person's yes is a later stage; today only its own changes can be taken back."""
+    """The AI may take out any change, whoever made it; one in the plan stays until the person says yes."""
 
-    def withdraw_a_rules_change(seen: Seen) -> dict[str, object]:
-        rules = next(p for p in seen.state["plan"] if p["made_by"] == "the rules")
-        return {"action": "withdraw", "args": {"item_id": rules["id"]}}
+    def withdraw(item: str) -> Callable[[Seen], dict[str, object]]:
+        def action(seen: Seen) -> dict[str, object]:
+            rules = next(p for p in seen.state["plan"] if p["by"] == "default")
+            return {
+                "action": "withdraw",
+                "args": {
+                    "item": rules["id"] if item == "rules" else item,
+                    "reason": "You asked me to.",
+                    "consequence": "It stays in the table.",
+                },
+            }
 
-    client = ChatScript({"take it back": [withdraw_a_rules_change, reply("I could not take that back.")]})
+        return action
+
+    client = ChatScript(
+        {
+            "take it back": [
+                withdraw("c99"),
+                withdraw("rules"),
+                reply("I asked you; it stays until you say yes."),
+            ]
+        }
+    )
     talk = Talk(storage, world, client)
     before = talk.say("start").items
     case = talk.say("take it back")
-    assert talk.reply.withdrawn == () and case.items == before, "nothing is taken back"
-    refused = next(r for r in client.seen[-1].results if r.get("error") == "AGENT_ITEM_UNKNOWN")
-    assert "Your own changes: none" in refused["message"]
+    assert talk.reply.withdrawn == () and all(i in case.items for i in before), "nothing is taken out yet"
+    (waiting,) = [i for i in case.items if i.kind == "withdraw"]
+    assert waiting.state is ProposalState.PENDING, "a proposal for the person's yes"
+    refused = next(r for r in client.seen[-1].results if r.get("error") == "ITEM_NOT_FOUND")
+    assert refused["value"] == "c99" and "Use the id of a change in the plan" in refused["how_to_fix"]
 
 
 def test_a_suggestion_names_the_open_questions_and_never_points_at_i_dont_know(
@@ -521,11 +559,11 @@ def test_a_suggestion_names_the_open_questions_and_never_points_at_i_dont_know(
     talk = Talk(storage, world, client)
     talk.say("sale")
     assert talk.reply.suggestion is None
-    refusals = [r for r in client.seen[-1].results if r.get("error") == "AGENT_SUGGESTION_UNKNOWN"]
+    refusals = [r for r in client.seen[-1].results if r.get("error") == "ITEM_NOT_FOUND"]
     assert (
         refusals
-        and "Open questions: ['k" in refusals[0]["message"]
-        and "Choices of" in refusals[0]["message"]
+        and "Open questions: q" in refusals[0]["how_to_fix"]
+        and "Choices of" in refusals[0]["how_to_fix"]
     )
 
 
@@ -630,17 +668,24 @@ def test_the_agent_never_changes_the_outcome_or_the_date_column_once_a_goal_is_c
     assert "what the model learns" in told(client)["result"]
 
 
-def test_the_agent_cannot_take_back_a_change_the_person_gave_their_own_yes(
+def test_taking_out_a_change_the_person_gave_their_own_yes_waits_for_their_yes_again(
     storage: LocalStorage, world: World
 ) -> None:
     from engine.doctor.protocol import item_sentence
     from tests.unit.doctor.chat_support import ASHA
 
     def withdraw_it(seen: Seen) -> dict[str, object]:
-        return {"action": "withdraw", "args": {"item_id": handle_of(seen, "starts with 999")}}
+        return {
+            "action": "withdraw",
+            "args": {
+                "item": handle_of_plan(seen, "starts with 999"),
+                "reason": "You asked me to.",
+                "consequence": "The test accounts stay in.",
+            },
+        }
 
     client = ChatScript(
-        {**SCRIPT, "take it back": [withdraw_it, reply("I could not take that back; it is yours.")]}
+        {**SCRIPT, "take it back": [withdraw_it, reply("I asked you; your yes stays until you say so.")]}
     )
     talk = Talk(storage, world, client)
     (item,) = ai_items(talk.say(TEST_ACCOUNTS))
@@ -655,9 +700,10 @@ def test_the_agent_cannot_take_back_a_change_the_person_gave_their_own_yes(
     ), "the yes makes the tick the person's"
 
     case = talk.say("take it back")
-    assert ai_items(case)[0].state is ProposalState.ACCEPTED, "their yes stands"
-    assert talk.reply.withdrawn == ()
-    assert any(r.get("error") == "AGENT_ITEM_PERSONS" for r in client.seen[-1].results)
+    assert next(i for i in ai_items(case) if i.item_id == mine.item_id).state is ProposalState.ACCEPTED
+    assert talk.reply.withdrawn == (), "their yes stands"
+    (waiting,) = [i for i in ai_items(case) if i.kind == "withdraw"]
+    assert waiting.state is ProposalState.PENDING and waiting.replaces == mine.item_id
 
 
 def test_an_undo_sticks_when_the_agent_proposes_the_same_filter_in_other_words(
@@ -775,7 +821,10 @@ def test_the_next_turn_reads_the_conversation_the_case_and_its_earlier_looks(
     assert [h["who"] for h in seen.history] == ["person", "you"], "the conversation so far"
     assert seen.history[0]["text"] == TEST_ACCOUNTS and "test accounts" in seen.history[1]["text"]
     plan = {p["id"]: p for p in seen.state["plan"]}
-    assert any(p["what"].endswith("starts with 999") and p["decided_by"] == "you" for p in plan.values())
+    assert any(
+        p["what"].endswith("starts with 999") and p["by"] == "you" and p["decided_by"] == "none"
+        for p in plan.values()
+    )
     assert seen.state["earlier_looks"] == [
         {"id": "e1", "tool": "find_values", "file": "F1", "column": "customer_id"}
     ]
@@ -829,12 +878,12 @@ def test_a_refused_number_is_named_to_the_ai_and_a_turn_that_still_fails_tells_t
 def test_a_turn_that_ends_on_a_refused_action_names_the_action_and_the_refusal(
     storage: LocalStorage, world: World
 ) -> None:
-    bad = {"action": "withdraw", "args": {"item_id": "c99"}}
+    bad = {"action": "withdraw", "args": {"item": "c99", "reason": "Not needed.", "consequence": "None."}}
     client = ChatScript({"prepare": [bad] * 6})
     talk = Talk(storage, world, client)
     talk.say("prepare the file for that then")
     text = talk.reply.text
-    assert text.startswith("I tried to take a change back.") and "refused" in text
+    assert text.startswith("I tried to take a change out.") and "refused" in text
     assert text.endswith("Ask me again and I will try another way.")
     assert talk.reply.blocked_by is not None
 
@@ -949,7 +998,7 @@ def test_a_step_that_breaks_is_named_failed_and_every_cause_the_chat_can_give_is
     def broken(self: object, action: dict[str, object]) -> None:
         raise RuntimeError("an odd action nobody planned for")
 
-    monkeypatch.setattr(agent_chat._Chat, "_act", broken)
+    monkeypatch.setattr(agent_turn.DoctorTurn, "_act", broken)
     talk = Talk(storage, world, ChatScript({"look": [look("describe_missing")]}))
     talk.say("look")
     assert (talk.reply.blocked_by, talk.reply.error_codes) == ("failed", ())
@@ -1212,7 +1261,7 @@ def test_no_last_word_when_the_case_spending_ran_out(
     storage: LocalStorage, world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tried: list[str | None] = []
-    monkeypatch.setattr(agent_chat._Chat, "_last_word", lambda self, *a: tried.append("x") or "never")
+    monkeypatch.setattr(agent_turn.DoctorTurn, "_last_word", lambda self, *a: tried.append("x") or "never")
     client = ChatScript({"look": [look("describe_missing")] * 5})
     talk = Talk(storage, world, client, limits=AiLimitsConfig(max_calls_per_case=1))
     talk.say("look")
@@ -1224,7 +1273,7 @@ def test_no_last_word_when_the_steps_used_up_the_spending(
     storage: LocalStorage, world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tried: list[str] = []
-    monkeypatch.setattr(agent_chat._Chat, "_last_word", lambda self, *a: tried.append("x") or "never")
+    monkeypatch.setattr(agent_turn.DoctorTurn, "_last_word", lambda self, *a: tried.append("x") or "never")
     client = ChatScript({"look": [look("describe_missing")] * 5})
     limits = AiLimitsConfig(max_chat_steps=2, max_calls_per_case=3)
     talk = Talk(storage, world, client, limits=limits)
@@ -1318,7 +1367,7 @@ def test_guided_setup_keeps_its_shorter_reply_ceiling() -> None:
 def test_an_invalid_expect_tells_the_ai_which_fields_and_why_without_a_link_or_a_value() -> None:
     from pydantic import ValidationError
 
-    from engine.doctor.agent_review import _expect_problems
+    from engine.doctor.agent_turn import _expect_problems
     from engine.doctor.guards import Expectations
 
     with pytest.raises(ValidationError) as caught:

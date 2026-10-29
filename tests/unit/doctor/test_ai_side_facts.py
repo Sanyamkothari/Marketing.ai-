@@ -21,7 +21,7 @@ from engine.agent.grounding import grounded_numbers, ungrounded_numbers
 from engine.agent.loop import _Checker
 from engine.doctor import visit
 from engine.doctor.actions import prompt_variables
-from engine.doctor.agent_review import own_numbers
+from engine.doctor.agent_turn import own_numbers
 from engine.doctor.build_facts import build_is_owed, goal_line
 from engine.doctor.case import Case, CaseStore
 from engine.doctor.checks_time_keys import key_quality
@@ -127,8 +127,9 @@ def test_the_chat_prompt_names_the_chosen_goal_and_what_a_yes_means(
     assert brief is not None
     assert goal_line(brief, "x") in prompt, "the system text carries the goal and the definition of a yes"
     assert "see what these files can be used for" not in prompt
-    chosen = client.seen[-1].state["chosen_goal"]
-    assert chosen["goal"] == brief.goal_name and chosen["a_yes_means"] == brief.outcome.definition
+    chosen = client.seen[-1].state["goal"]
+    assert chosen["name"] == brief.goal_name and chosen["a_yes_means"] == brief.outcome.definition
+    assert set(chosen["minimums"]) == {"rows", "positives"}, "the product's minimums are in the goal's state"
 
 
 def test_the_state_counts_the_blocking_room_left_and_says_what_an_option_adds(
@@ -171,7 +172,8 @@ def test_a_change_the_rules_made_and_the_visit_left_out_is_not_the_ais_decision(
     talk.case = CaseStore(storage).get(vs.CLIENT, talk.case.case_id)
     talk.say("hello")
     plan = client.seen[-1].state["plan"]
-    assert next(p for p in plan if p["what"].startswith(first.title[:40]))["decided_by"] == "the rules"
+    row = next(p for p in plan if p["what"].startswith(first.title[:40]))
+    assert (row["by"], row["state"], row["decided_by"]) == ("default", "left out", "none")
 
 
 def test_a_buildable_goal_with_no_build_is_owed_until_a_query_waits_or_is_planned(
@@ -220,7 +222,7 @@ def test_a_refused_quick_question_names_the_word_and_a_question_about_rows_is_al
 
 
 def test_the_action_contract_states_the_limits_of_a_goal_reason_and_a_quick_question() -> None:
-    lines = " ".join(prompt_variables("chat")["actions"])
+    lines = " ".join(prompt_variables()["actions"])
     effect = limits(None).turn.effect_chars
     assert f"at most {effect} characters" in lines
     assert "{effect_chars}" not in lines and "{short_chars}" not in lines
@@ -290,8 +292,10 @@ def test_the_review_reads_the_receipt_of_its_plan_and_is_not_asked_again_on_a_st
     planned = [i.model_copy(update={"state": ProposalState.PENDING}) for i in first.items]
     case = case.model_copy(update={"items": (*case.items, *planned)})
     again = ar._review(ar._guard(client))(case, files, None)
-    state = json.loads(client.users[-1].split("State of this case")[1].split("\n", 1)[1].split("\n\n")[0])
-    receipt = next(p["receipt"] for p in state["plan_so_far"] if "receipt" in p)
+    shown = (
+        client.users[-1].split("THE CASE NOW")[1].split("\n", 1)[1].split("\n\nWhat you have looked up")[0]
+    )
+    receipt = next(p["receipt"] for p in json.loads(shown)["plan"] if "receipt" in p)
     assert receipt["rows_made"] == 1_200 and receipt["customers_lost"] == 0
     assert receipt["counted_on"] == "the whole file" and again.state_digest != first.state_digest
     # a tick that changes nothing it reads: same state, same digest, no call
