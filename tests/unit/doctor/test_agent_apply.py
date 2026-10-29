@@ -100,10 +100,9 @@ def test_a_kind_the_agent_may_apply_waits_when_it_decides_how_the_values_are_rea
     assert waits_because(item(step(kind, **params))) == "how it reads the values is yours to confirm"
 
 
-def test_a_warning_a_yes_of_its_own_or_a_person_s_item_waits() -> None:
+def test_a_warning_or_a_yes_of_its_own_waits() -> None:
     assert "many" in str(waits_because(item({**step("parse_number"), "warnings": ["AI_STEP_CHANGES_MANY"]})))
     assert waits_because(item({**step("parse_number"), "needs_yes": True})) == "it needs your own yes"
-    assert waits_because(item(step("parse_number"), source=ProposalSource.PERSON)) is not None
     ticked = item(step("parse_number")).model_copy(update={"state": ProposalState.ACCEPTED})
     assert waits_because(ticked) is not None, "only a new, waiting change is the agent's to apply"
 
@@ -203,6 +202,19 @@ def test_a_column_renamed_to_a_protected_name_or_named_like_consent_waits_too() 
     # Without any goal or key decided, a name that reads as consent is still not the agent's to change.
     for name in ("marketing_opt_in", "Opt Out", "unsubscribed", "sms_consent", "DND"):
         assert waits_because(item(step("rename_column", name))) is not None, name
+
+
+def test_what_the_values_prove_never_lifts_the_protection_of_a_column_that_holds_a_meaning() -> None:
+    def sure(payload: dict[str, Any]) -> CaseItem:
+        return item(payload).model_copy(update={"confidence": AgentConfidence.SURE})
+
+    assert waits_because(sure(step("parse_date", "channel")), ROLES) is None
+    for column in ("marketing_opt_in", "converted", "snapshot_date"):
+        for kind, params in (("parse_date", {}), ("remove_rows", {"operator": "equals", "values": ["0"]})):
+            why = waits_because(sure(step(kind, column, **params)), ROLES)
+            assert why is not None and "who may be contacted" in why, (kind, column)
+    # a name that reads as consent is protected before any goal or key is decided
+    assert waits_because(sure(step("parse_date", "Opt Out"))) is not None
 
 
 def test_leaving_rows_out_by_the_id_is_the_one_step_on_the_id_the_agent_may_apply() -> None:
@@ -311,3 +323,23 @@ def test_the_check_binds_the_decided_as_of_date_to_a_query_already_in_the_plan(
     assert given == [day, day]
     # and the query really runs with it: no step is reported as unable to run
     assert not [f for f in check_plan(files, [], [accepted], as_of=day).findings if f.level == "stop"]
+
+
+def test_whoever_proposes_it_a_change_is_placed_by_the_same_rule() -> None:
+    """The rule is about the change, not the author: the AI's and the default author's are placed alike."""
+    for source in (ProposalSource.AI, ProposalSource.RULES):
+        assert waits_because(item(step("parse_number"), source=source)) is None
+        assert (
+            waits_because(item(step("parse_date"), source=source)) == "this kind of change is yours to tick"
+        )
+
+
+def test_what_the_values_prove_and_the_goals_own_build_go_into_the_plan() -> None:
+    sure = item(step("parse_date")).model_copy(update={"confidence": AgentConfidence.SURE})
+    assert waits_because(sure) is None
+    build = {**step("sql_query"), "needs_yes": True, "buildable": {"goal_id": "g"}}
+    assert waits_because(item(build)) is None, "its own yes comes at Approve"
+    assert waits_because(item({**build, "buildable": None})) == "it needs your own yes"
+    assert waits_because(sure.model_copy(update={"payload": {**sure.payload, "needs_yes": True}})) == (
+        "it needs your own yes"
+    )

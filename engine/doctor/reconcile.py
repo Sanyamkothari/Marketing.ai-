@@ -6,8 +6,10 @@ review added its items blindly, the chat checked for twins. So a proposal outliv
 column has the outcome" beside "which column is the outcome?"), a rejected change came back in other words, and a
 replaced query stayed beside its replacement.
 
-Every producer (`rules`, `detectors`, `review`, `chat`) now hands over an :class:`Emission`: what it proposes, asks
-and doubts for its scope. For that emission the store, by *subject* (`engine.doctor.subjects`):
+The one producer is `author` (`engine.doctor.author`); a case stored before it has items made by `rules`, `detectors`,
+`review` and `chat`, which the author's complete emission treats as its own (`rules`, `detectors`) or as the AI's
+(`review`, `chat`). A producer hands over an :class:`Emission`: what it proposes, asks and doubts for its scope. For
+that emission the store, by *subject* (`engine.doctor.subjects`):
 
 * **adds** a proposal whose subject is new;
 * leaves the same proposal alone (same id), and does not add a **twin** (the same change in other words, compared by
@@ -18,8 +20,9 @@ and doubts for its scope. For that emission the store, by *subject* (`engine.doc
 * never touches what the person owns. A proposal that would replace one of theirs (ticked, unticked, or given their
   own yes) or one the rules ticked is added waiting, with `replaces` naming it: the plan shows a swap, the old one
   stays until the new one is ticked (`visit.decide` then leaves it out), so the two are never both in the plan;
-* **retracts**, when the emission is `complete`, the waiting proposals, unanswered questions and open doubts of that
-  producer, in that scope, which it no longer emits (`withdrawn_because` says why; a doubt becomes `resolved`).
+* **retracts**, when the emission is `complete`, the waiting proposals (the author's: also those in the plan that nobody
+  decided), unanswered questions and open doubts of that producer, in that scope, which it no longer emits
+  (`withdrawn_because` says why; a doubt becomes `resolved`). The AI's proposals are never taken back by omission.
 
 Questions: an unanswered question whose options changed is asked again (same id, the new options); an answered one
 stays answered unless the option chosen is no longer offered, then it is asked again and says why (`refit`, the
@@ -44,25 +47,39 @@ from engine.doctor.protocol import AGENT
 from engine.doctor.subjects import doubt_subject, item_subject, options_digest, question_subject
 
 __all__ = [
+    "AUTHOR",
     "Emission",
     "Reconciled",
     "find_twin",
     "is_withdrawn",
+    "left_out_event",
     "open_doubts",
     "reconcile",
+    "take_back",
 ]
 
 Effects = tuple[Any, ...]
 
 NO_LONGER_EMITTED: Final[str] = "it is no longer proposed: what it rested on has changed"
+AUTHOR: Final[str] = "author"
+"""The one producer of the plan (`engine.doctor.author`), the AI's and the default author's alike."""
 AI_PRODUCERS: Final[frozenset[str]] = frozenset({"review", "chat"})
 """The AI's proposals are taken back only by an explicit withdraw/replace or by the person, never by omission: a
-later review or another turn is not the pass that made them, so what it does not mention says nothing."""
+later review or another turn is not the pass that made them, so what it does not mention says nothing. (The author's
+own AI items are told apart by `CaseItem.source`.)"""
+RULE_PRODUCERS: Final[frozenset[str]] = frozenset({"rules", "detectors"})
+"""The producers of a case stored before the one author: aliases of the author, so its complete emission takes back
+what they made and it no longer suggests."""
 REPLACED: Final[str] = "a newer proposal about the same thing took its place"
 
 
 def _everywhere(_goal_id: str | None) -> bool:
     return True
+
+
+def _made_by(stored: str | None, producer: str) -> bool:
+    """Whether what `stored` names as its producer is `producer`'s to take back."""
+    return stored == producer or (producer == AUTHOR and stored in RULE_PRODUCERS)
 
 
 @dataclass(frozen=True)
@@ -168,7 +185,8 @@ def _tagged(item: CaseItem, producer: str) -> CaseItem:
     return item.model_copy(update=update) if update else item
 
 
-def _taken_back(item: CaseItem, now: datetime, because: str, *, by: str | None = None) -> CaseItem:
+def take_back(item: CaseItem, now: datetime, because: str, *, by: str | None = None) -> CaseItem:
+    """`item` left out by the Doctor itself, with the reason (and the item that took its place, if one did)."""
     return item.model_copy(
         update={
             "state": ProposalState.REJECTED,
@@ -181,7 +199,8 @@ def _taken_back(item: CaseItem, now: datetime, because: str, *, by: str | None =
     )
 
 
-def _event(kind: str, item: CaseItem, **details: str | int | bool) -> EventDraft:
+def left_out_event(kind: str, item: CaseItem, **details: str | int | bool) -> EventDraft:
+    """The timeline line of an item the Doctor took back (not the person's no): `kind` says why."""
     return EventDraft(
         kind=TimelineKind.ITEM_DECIDED,
         upload_id=item.upload_id,
@@ -250,12 +269,12 @@ def _fold_items(case: Case, emission: Emission, work: Reconciled, now: datetime)
                 }
             )
             swapped.append(item)
-            work.events.append(_event("swap", item, replaces=holding[0].item_id))
+            work.events.append(left_out_event("swap", item, replaces=holding[0].item_id))
         for rival in rivals:
             if rival in holding:
                 continue
-            items[items.index(rival)] = _taken_back(rival, now, REPLACED, by=item.item_id)
-            work.events.append(_event("superseded", rival, by=item.item_id))
+            items[items.index(rival)] = take_back(rival, now, REPLACED, by=item.item_id)
+            work.events.append(left_out_event("superseded", rival, by=item.item_id))
         if slot is not None:
             items[slot] = item
         else:
@@ -265,16 +284,23 @@ def _fold_items(case: Case, emission: Emission, work: Reconciled, now: datetime)
     if emission.complete and emission.producer not in AI_PRODUCERS:
         for n, current in enumerate(items):
             if (
-                current.producer == emission.producer
+                _made_by(current.producer, emission.producer)
+                # the AI's items are taken back by name, never by the author's omission
+                and not (emission.producer == AUTHOR and current.source is ProposalSource.AI)
                 and emission.in_scope(current.goal_id)
-                and (current.state is ProposalState.PENDING or required_by_goal(current))
+                and (
+                    current.state is ProposalState.PENDING
+                    or required_by_goal(current)
+                    # in the plan and nobody's decision: the author takes it back when it no longer suggests it
+                    or (emission.producer == AUTHOR and current.state is ProposalState.ACCEPTED)
+                )
                 and current.withdrawn_because is None
                 and current.item_id not in kept
                 and not person_owns(case, current)
                 and not _skipped(emission, current.kind)
             ):
-                items[n] = _taken_back(current, now, NO_LONGER_EMITTED)
-                work.events.append(_event("retracted", current))
+                items[n] = take_back(current, now, NO_LONGER_EMITTED)
+                work.events.append(left_out_event("retracted", current))
 
 
 def _pair_replacements(case: Case, emission: Emission, work: Reconciled, swapped: list[CaseItem]) -> None:
@@ -308,7 +334,7 @@ def _pair_replacements(case: Case, emission: Emission, work: Reconciled, swapped
         work.items[work.items.index(next(i for i in work.items if i.item_id == paired.item_id))] = paired
         work.added[work.added.index(fits[0])] = paired
         taken.add(old_id)
-        work.events.append(_event("swap", paired, replaces=old_id))
+        work.events.append(left_out_event("swap", paired, replaces=old_id))
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +400,7 @@ def _fold_questions(
         gone = [
             q
             for q in questions
-            if q.producer == emission.producer
+            if _made_by(q.producer, emission.producer)
             and q.answer is None
             and emission.in_scope(q.goal_id)
             and q.question_id not in emitted_ids
@@ -394,7 +420,7 @@ def _fold_questions(
             q
             for q in questions
             if not (
-                q.producer == emission.producer
+                _made_by(q.producer, emission.producer)
                 and q.answer is None
                 and emission.in_scope(q.goal_id)
                 and q.question_id not in emitted_ids
@@ -425,7 +451,9 @@ def _fold_doubts(emission: Emission, work: Reconciled) -> None:
             doubts.append(doubt)
         elif doubts[slot].status != "open":
             doubts[slot] = doubt  # it holds again
-        elif doubts[slot].producer in (None, emission.producer) and _words(doubts[slot]) != _words(doubt):
+        elif (doubts[slot].producer is None or _made_by(doubts[slot].producer, emission.producer)) and _words(
+            doubts[slot]
+        ) != _words(doubt):
             doubts[slot] = doubt  # the same doubt with newer words: one doubt, not two
         elif doubts[slot].producer is None and emission.complete:
             doubts[slot] = doubts[slot].model_copy(
@@ -435,7 +463,7 @@ def _fold_doubts(emission: Emission, work: Reconciled) -> None:
         for n, doubt in enumerate(doubts):
             if (
                 doubt.status == "open"
-                and doubt.producer == emission.producer
+                and _made_by(doubt.producer, emission.producer)
                 and doubt.doubt_id not in emitted_ids
                 and doubt_subject(doubt) not in emitted_subjects
                 and not _skipped(emission, doubt.doubt_id)

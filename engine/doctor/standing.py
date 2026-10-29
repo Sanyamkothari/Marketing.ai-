@@ -28,16 +28,30 @@ a column name, the values the question was about (spellings such as `haan` / `na
 
 from __future__ import annotations
 
+import functools
 import re
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
 
 from pydantic import AwareDatetime, Field
 
+from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.config import StrictBase
-from engine.doctor.case import CASE_PREFIX, CLIENT_ID_PATTERN, CaseQuestion, payload_digest
+from engine.doctor.case import (
+    CASE_PREFIX,
+    CLIENT_ID_PATTERN,
+    Case,
+    CaseItem,
+    CaseQuestion,
+    EventDraft,
+    StandingAnswerUse,
+    TimelineKind,
+    payload_digest,
+)
+from engine.doctor.visit_contracts import OptionEffect
 from engine.storage import Storage, StorageError
 
 __all__ = [
@@ -47,11 +61,14 @@ __all__ = [
     "StandingAnswer",
     "StandingAnswerStore",
     "StandingAnswers",
+    "StandingApplied",
     "answer_id_for",
+    "apply_standing",
     "describe",
     "fingerprint_of",
     "may_stand",
     "meaning_of",
+    "no_longer_fits",
     "signature_of",
     "standing_key",
 ]
@@ -317,3 +334,149 @@ def describe(answer: StandingAnswer, *, at: datetime | None = None) -> str:
     when = (at or answer.answered_at).strftime("%d %b").lstrip("0")
     what = answer.title or answer.option_label
     return f"Using your answer from {when}: {what}"
+
+
+# ---------------------------------------------------------------------------
+# Applying them
+# ---------------------------------------------------------------------------
+Effects = tuple[OptionEffect, ...]
+
+
+@dataclass
+class StandingApplied:
+    """What the client's standing answers made of the questions about to be asked."""
+
+    questions: list[tuple[CaseQuestion, Effects]]
+    """The questions, those a standing answer settled now carrying its answer."""
+    items: list[CaseItem] = field(default_factory=list)
+    """The answers' changes, ticked by the person who gave the answer."""
+    uses: tuple[StandingAnswerUse, ...] = ()
+    """The case's `standing_answers_used` after these."""
+    events: list[EventDraft] = field(default_factory=list)
+    after: list[Callable[[Case], None]] = field(default_factory=list)
+    """Once the case is written: count each answer's use (idempotent)."""
+
+
+def _everywhere(_goal_id: str | None) -> bool:
+    return True
+
+
+def _note_use(store: StandingAnswerStore, answer_id: str, written: Case) -> None:
+    store.used(written.client_id, answer_id, written.case_id)
+
+
+def apply_standing(
+    store: StandingAnswerStore,
+    case: Case,
+    questions: Sequence[tuple[CaseQuestion, Effects]],
+    *,
+    now: datetime,
+    in_scope: Callable[[str | None], bool] = _everywhere,
+) -> StandingApplied:
+    """Apply this client's standing answers to the questions about to be asked: pre-ticked, visible, revocable.
+
+    A standing answer is the person's earlier decision, so its change carries their id. It is applied only to a
+    question that is new to the case, in `in_scope`, whose code may stand, and only while the option chosen still
+    means what it meant then (`meaning_of`); otherwise the question is asked again and says why."""
+    out = StandingApplied(questions=[], uses=case.standing_answers_used)
+    candidates = {
+        q.question_id
+        for q, _e in questions
+        if q.code in STANDING_CODES and q.answer is None and in_scope(q.goal_id)
+    }
+    if not candidates:
+        out.questions = list(questions)
+        return out
+    have = {q.question_id for q in case.questions}
+    uses = list(case.standing_answers_used)
+    for question, effects in questions:
+        answer = None
+        if question.question_id not in have and question.question_id in candidates:
+            answer = store.find(case.client_id, question)
+        option = (
+            None
+            if answer is None
+            else next((o for o in question.options if o.label == answer.option_label), None)
+        )
+        effect = None if option is None else {e.option_id: e for e in effects}.get(option.option_id)
+        if answer is not None and (
+            option is None or effect is None or answer.meaning != meaning_of(effect.kind, effect.payload)
+        ):
+            # The same question, but the choice behind the earlier answer now does something else (or is gone):
+            # it is asked again, and says why, never applied to a change the person did not choose.
+            out.questions.append((no_longer_fits(question, answer), effects))
+            out.events.append(
+                EventDraft(
+                    kind=TimelineKind.STANDING_UNFIT,
+                    upload_id=question.upload_id,
+                    item_id=answer.answer_id,
+                    details={"code": question.code, "question": question.question_id},
+                )
+            )
+            continue
+        if (
+            answer is None
+            or option is None
+            or effect is None
+            or not may_stand(question, effect.kind, effect.payload)
+        ):
+            out.questions.append((question, effects))
+            continue
+        out.questions.append(
+            (
+                question.model_copy(
+                    update={
+                        "answer": option.option_id,
+                        "answered_by": answer.answered_by,
+                        "answered_at": now,
+                        "standing_answer_id": answer.answer_id,
+                    }
+                ),
+                effects,
+            )
+        )
+        if effect.kind is not None:
+            given = effect.payload.get("upload_id")
+            out.items.append(
+                CaseItem(
+                    item_id=f"{question.question_id}:{option.option_id}"[:128],
+                    kind=effect.kind,
+                    title=f"{describe(answer)}. {effect.title}".strip(),
+                    source=ProposalSource.RULES,
+                    confidence=AgentConfidence.SURE,
+                    state=ProposalState.ACCEPTED,
+                    upload_id=question.upload_id or (given if isinstance(given, str) else None),
+                    payload=dict(effect.payload),
+                    payload_digest=payload_digest(effect.payload),
+                    proposed_at=now,
+                    decided_by=answer.answered_by,
+                    decided_at=now,
+                    goal_id=question.goal_id,
+                    standing_answer_id=answer.answer_id,
+                )
+            )
+        uses.append(
+            StandingAnswerUse(
+                answer_id=answer.answer_id,
+                detector=question.code,
+                upload_id=question.upload_id,
+                column=question.column,
+                value_signature=answer.value_signature,
+                option_id=option.option_id,
+                effect_digest=option.effect_digest,
+                applied_at=now,
+            )
+        )
+        out.after.append(functools.partial(_note_use, store, answer.answer_id))
+    out.uses = tuple(uses)
+    return out
+
+
+def no_longer_fits(question: CaseQuestion, answer: Any) -> CaseQuestion:
+    """The question, saying that the client's earlier answer was not applied because it no longer fits."""
+    when = answer.answered_at.strftime("%d %b").lstrip("0")
+    note = (
+        f"Your answer from {when} (“{answer.option_label}”) was not used: that choice now makes a different "
+        "change, so please answer again."
+    )
+    return question.model_copy(update={"why": f"{note} {question.why}".strip()})
