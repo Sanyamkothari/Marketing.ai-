@@ -258,17 +258,6 @@ def handle_of(prefix: str, ident: str, width: int = HANDLE_CHARS) -> str:
     return prefix + hashlib.sha256(ident.encode("utf-8")).hexdigest()[:width]
 
 
-def _handles(prefix: str, ids: Iterable[str]) -> dict[str, str]:
-    """Handle -> id for `ids`; two ids that share a handle both get longer ones."""
-    found: dict[str, str] = {}
-    for ident in dict.fromkeys(ids):
-        width = HANDLE_CHARS
-        while (handle := handle_of(prefix, ident, width)) in found and found[handle] != ident:
-            width += 1
-        found[handle] = ident
-    return found
-
-
 class _NoAnswerError(Exception):
     """The model cannot be asked now: `reason` is `prompt_too_large` or `unavailable` (no service, or no money).
 
@@ -672,11 +661,15 @@ class DoctorTurn:
         self._roles: Roles | None = None
         # Handles are the same in every turn. The state shows the latest of each; any item or question of the case
         # (and any suggestion) can be named by its handle, so a change the state window left out still can be.
-        self.handles: dict[str, str] = {
-            **_handles("c", (i.item_id for i in case.items)),
-            **_handles("q", (q.question_id for q in case.questions)),
-            **_handles("s", self.suggestions),
-        }
+        self.handles: dict[str, str] = {}
+        """Handle -> id. Two ids that share a handle each keep their own: the later one gets a longer handle."""
+        self._named: dict[tuple[str, str], str] = {}
+        for item in case.items:
+            self._name("c", item.item_id)
+        for q in case.questions:
+            self._name("q", q.question_id)
+        for suggestion_id in self.suggestions:
+            self._name("s", suggestion_id)
         self.checker = _Checker(grounded=frozenset(), names=tuple(names), guardrails=guardrails)
         self.state: dict[str, Any] = {
             "files": self.overviews,
@@ -690,6 +683,18 @@ class DoctorTurn:
         )
 
     # -- what the model reads ----------------------------------------------------------------------
+    def _name(self, prefix: str, ident: str) -> str:
+        """The handle the model reads for an id, and the only way one is made: the first id to take a handle keeps it
+        and an id that shares it gets a longer one, so a handle always names one id."""
+        if (named := self._named.get((prefix, ident))) is not None:
+            return named
+        width = HANDLE_CHARS
+        while (handle := handle_of(prefix, ident, width)) in self.handles and self.handles[handle] != ident:
+            width += 1
+        self.handles[handle] = ident
+        self._named[(prefix, ident)] = handle
+        return handle
+
     def _blocking_room(self) -> int:
         """How many more blocking questions may be asked: the limit less those already waiting for an answer."""
         from engine.doctor.visit import open_blocking
@@ -886,7 +891,7 @@ class DoctorTurn:
                 chosen = f"{chosen}: {self._text(q.upload_id, clean_text(q.answer_value, self.limits.turn.short_chars))}"
             asked.append(
                 {
-                    "id": handle_of("q", q.question_id),
+                    "id": self._name("q", q.question_id),
                     "text": self._text(q.upload_id, clean_text(q.text, self.limits.turn.short_chars)),
                     "options": options,
                     "answer": chosen,
@@ -901,7 +906,7 @@ class DoctorTurn:
         if suggested:
             out["suggested"] = [
                 {
-                    "id": handle_of("s", s.id),
+                    "id": self._name("s", s.id),
                     "what": self._text(None, clean_text(_what_of(s.action), TITLE_CHARS)),
                     "reason": self._text(None, clean_text(s.reason, self.limits.turn.short_chars)),
                 }
@@ -927,14 +932,14 @@ class DoctorTurn:
             else ("person" if item.decided_by not in (None, AGENT) else "none")
         )
         return {
-            "id": handle_of("c", item.item_id),
+            "id": self._name("c", item.item_id),
             "what": self._text(item.upload_id, clean_text(item.title, TITLE_CHARS)),
             "kind": str(step.get("kind")) if isinstance(step, dict) else item.kind,
             **self._where(item, index, step, column),
             "state": _SHOWN[item.state],
             "by": _BY[item.source.value],
             "decided_by": decided,
-            **({"replaces": handle_of("c", item.replaces)} if item.replaces else {}),
+            **({"replaces": self._name("c", item.replaces)} if item.replaces else {}),
             **({"tried_on_first_rows": tried} if isinstance(tried, dict) else {}),
             **({"receipt": view} if (view := self._receipt_view(item)) is not None else {}),
             # A query's own table, so the model sees what it built (names only, through the file's gate).
@@ -1587,7 +1592,7 @@ class DoctorTurn:
             except ValidationError:
                 continue
             self.suggestions.setdefault(suggestion.id, suggestion)
-            self.handles.setdefault(handle_of("s", suggestion.id), suggestion.id)
+            self._name("s", suggestion.id)
 
     def _record(self, index: int, result: ToolResult, keys: frozenset[str], *, gate: Any = None) -> None:
         """Put one result in the next prompt through its file's gate, noting what is sent."""
@@ -1825,13 +1830,13 @@ class DoctorTurn:
         so it can suggest one."""
         ask = self._catalogue_ask(action, args) if "question" in args else self._quick(action, args)
         qid = question_id_of(ask.code, ask.subject, ask.goal_id)
-        self.handles.setdefault(handle_of("q", qid), qid)
+        self._name("q", qid)
         self.chosen.asked[qid] = ask
         gate = self._gate_of(ask.upload_id)
         self.turn.feedback.append(
             {
                 "asked": ask.code,
-                "question_id": handle_of("q", qid),
+                "question_id": self._name("q", qid),
                 "options": [{"id": o.effect.option_id, "label": gate.text(o.label)} for o in ask.options],
             }
         )
@@ -1966,7 +1971,7 @@ class DoctorTurn:
             (q for q in self.case.questions if q.question_id == qid and q.answer is None), None
         )
         if question is None:
-            open_q = [handle_of("q", q.question_id) for q in self.case.questions if q.answer is None]
+            open_q = [self._name("q", q.question_id) for q in self.case.questions if q.answer is None]
             raise AgentToolError(
                 "ITEM_NOT_FOUND",
                 f"There is no open question '{raw_qid[:40]}'. Use the id of an open question: "
@@ -2233,7 +2238,7 @@ class DoctorTurn:
         found = next((i for i in self.work_case.items if i.item_id == item_id), None)
         if found is None:
             live = [
-                handle_of("c", i.item_id)
+                self._name("c", i.item_id)
                 for i in self.work_case.items
                 if i.state is not ProposalState.REJECTED
             ]
@@ -2251,7 +2256,7 @@ class DoctorTurn:
                 Refusal(
                     code="ITEM_ALREADY_LEFT_OUT",
                     what_failed=f"“{found.title[:80]}” is already left out of the plan.",
-                    value=handle_of("c", found.item_id),
+                    value=self._name("c", found.item_id),
                     how_to_fix="Nothing to take out or replace; check the plan for what is still in it.",
                 )
             )
@@ -2292,7 +2297,7 @@ class DoctorTurn:
             self._apply_cancelling(here)
             self.turn.feedback.append(
                 {
-                    "withdrawn": handle_of("c", item.item_id),
+                    "withdrawn": self._name("c", item.item_id),
                     "result": "It was made in this very turn, so it is not made.",
                 }
             )
@@ -2304,7 +2309,7 @@ class DoctorTurn:
         waiting = any(i.kind == "withdraw" and i.replaces == item.item_id for i in self.work_case.items)
         self.turn.feedback.append(
             {
-                "withdrawn": handle_of("c", item.item_id),
+                "withdrawn": self._name("c", item.item_id),
                 "result": (
                     "It is in the plan or the person's, so taking it out waits for their yes."
                     if waiting
@@ -2355,7 +2360,7 @@ class DoctorTurn:
         reason = str(args.get("reason") or "").strip()
         suggestion = self.suggestions.get(self.handles.get(given, given))
         if suggestion is None:
-            offered = [handle_of("s", s) for s in self.suggestions]
+            offered = [self._name("s", s) for s in self.suggestions]
             raise _RefusedError(
                 Refusal(
                     code="ITEM_NOT_FOUND",
@@ -2389,7 +2394,7 @@ class DoctorTurn:
         """A refusal with the ids it names as the model reads them (handles), not the case's own."""
         if refusal.code == "ITEM_NOT_FOUND":
             live = [
-                handle_of("c", i.item_id)
+                self._name("c", i.item_id)
                 for i in self.work_case.items
                 if i.state is not ProposalState.REJECTED
             ]
@@ -2401,7 +2406,7 @@ class DoctorTurn:
                 }
             )
         if refusal.value and refusal.value in self._began() | {i.item_id for i in self.work_case.items}:
-            return refusal.model_copy(update={"value": handle_of("c", refusal.value)})
+            return refusal.model_copy(update={"value": self._name("c", refusal.value)})
         return refusal
 
     # -- what an action made -----------------------------------------------------------------------
@@ -2646,7 +2651,7 @@ class DoctorTurn:
             self.chosen.reported.add(item.item_id)
             self.turn.feedback.append(
                 {
-                    "id": handle_of("c", item.item_id),
+                    "id": self._name("c", item.item_id),
                     "change": self._text(item.upload_id, clean_text(item.title, TITLE_CHARS)),
                     "result": "It takes the place of a change that is in the plan or the person's, so it waits for "
                     "the person's yes; the old one stays until then.",
@@ -2665,7 +2670,7 @@ class DoctorTurn:
         for item, waits in decided:
             self.chosen.reported.add(item.item_id)
             said = {
-                "id": handle_of("c", item.item_id),
+                "id": self._name("c", item.item_id),
                 "change": self._text(item.upload_id, clean_text(item.title, TITLE_CHARS)),
             }
             if waits is None:

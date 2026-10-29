@@ -340,16 +340,48 @@ def test_a_raw_id_names_a_change_too(storage: LocalStorage, world: World) -> Non
     assert done.withdrawn == (mine.item_id,)
 
 
-def test_two_ids_that_share_a_handle_get_longer_ones(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_two_changes_that_share_a_handle_are_told_apart_and_withdrawn_one_by_one(
+    monkeypatch: pytest.MonkeyPatch, storage: LocalStorage, world: World
+) -> None:
     from engine.doctor import agent_turn
 
+    talk = Talk(storage, world, None)
+    case, first = _applied_filter(talk, world)
+    (mine,) = [i for i in first.case.items if i.source is ProposalSource.AI]
+    one = mine.model_copy(update={"state": ProposalState.PENDING})
+    two = one.model_copy(update={"item_id": one.item_id + "-twin", "title": "The twin change"})
+    case = _with(case, items=(*case.items, one, two))
+    real = agent_turn.handle_of
+
     def clash(prefix: str, ident: str, width: int = 5) -> str:
-        return prefix + ("same0" if width == 5 else ident.ljust(width, "-"))
+        if ident in (one.item_id, two.item_id):
+            return prefix + "same0" + ("x" * (width - 5) if ident == one.item_id else ident[-(width - 5) :])
+        return real(prefix, ident, width)
 
     monkeypatch.setattr(agent_turn, "handle_of", clash)
-    found = agent_turn._handles("c", ["xx", "yy"])
-    assert sorted(found.values()) == ["xx", "yy"] and len(found) == 2
-    assert agent_turn.handle_of is clash
+    turn = _turn(case, world, ChatScript({}))
+    shown = {row["id"]: row["what"] for row in turn.state["plan"]}
+    first_handle = next(h for h, what in shown.items() if what == one.title)
+    second_handle = next(h for h, what in shown.items() if what == "The twin change")
+    assert first_handle != second_handle and turn.handles[second_handle] == two.item_id
+    assert turn.handles[first_handle] == one.item_id
+    client = ChatScript(
+        {
+            "take it out": [
+                {
+                    "action": "withdraw",
+                    "args": {"item": second_handle, "reason": "You asked.", "consequence": "The twin stays."},
+                },
+                reply("Done."),
+            ]
+        }
+    )
+    done = _turn(case, world, client).run("take it out")
+    assert done.withdrawn == (two.item_id,)
+    left = {i.item_id: i for i in done.case.items}
+    assert (
+        left[two.item_id].state is ProposalState.REJECTED and left[one.item_id].state is ProposalState.PENDING
+    )
 
 
 # ---------------------------------------------------------------------------
