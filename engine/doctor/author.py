@@ -13,8 +13,9 @@ Who decides what:
 
 * The author only *proposes*. Whether a proposal is in the plan at once or waits for the person's tick is decided by
   code (:func:`engine.doctor.agent_apply.waits_because`), never by the author.
-* Nothing the person decided is ever changed here. Replacing or withdrawing it is a new proposal that waits for their
-  yes (a swap); their yes then leaves the old one out (`engine.doctor.swaps`).
+* Nothing in the plan is changed here, decided or not. Replacing or withdrawing it is a new proposal that waits for
+  the person's yes (a swap); their yes then leaves the old one out (`engine.doctor.swaps`). Only a change that is
+  still waiting (in no plan, nobody's decision) is the author's own to swap or take back at once.
 * `decided_by` is never set here. A change in the plan that nobody decided is "in the plan, undecided"; the approval
   stamps it.
 
@@ -111,7 +112,7 @@ class Create(StrictBase):
     reason: str = Field(description="Why, in the author's words.")
     replaces: str | None = Field(
         default=None,
-        description="The item this takes the place of; a change the person decided waits for a yes.",
+        description="The item this takes the place of; one in the plan or the person's waits for a yes.",
     )
     basis: str = Field(
         description='What it rests on: "s:<suggestion id>", an evidence reference ("r<n>") or "msg:<n>".'
@@ -119,7 +120,7 @@ class Create(StrictBase):
 
 
 class Withdraw(StrictBase):
-    """Take a change out of the plan; one the person decided, or that is already in the plan, waits for a yes."""
+    """Take a change out of the plan; one that is in the plan or the person's waits for a yes."""
 
     op: Literal["withdraw"] = "withdraw"
     item_id: str
@@ -190,6 +191,8 @@ class ApplyContext:
     complete emission does not take them back, because their absence says nothing."""
     standing: StandingAnswerStore | None = None
     """The client's remembered answers, applied to the questions asked now (`engine.doctor.standing`)."""
+    suggested: frozenset[str] = frozenset()
+    """The ids of the suggestions the fact tools made this turn: the only `s:<id>` basis the AI may be sure by."""
 
 
 @dataclass
@@ -302,8 +305,8 @@ class _Run:
         self, draft: ItemDraft, basis: str, *, state: ProposalState, replaces: str | None = None
     ) -> CaseItem:
         ctx = self.ctx
-        # Only what the values prove is sure; the AI says so by adopting a fact tool's suggestion (`s:<id>`).
-        proven = ctx.author == "default" or basis.startswith("s:")
+        # Only what the values prove is sure; the AI says so by adopting a suggestion a fact tool really made.
+        proven = ctx.author == "default" or (basis.startswith("s:") and basis[2:] in ctx.suggested)
         return CaseItem(
             item_id=item_id_of(draft.kind, draft.payload, draft.goal_id),
             kind=draft.kind,
@@ -353,8 +356,8 @@ class _Run:
                     value=old.item_id,
                     how_to_fix="Propose the new change without `replaces`.",
                 )
-            if person_owns(self.case, old) or (old.state is ProposalState.ACCEPTED and not placed):
-                # A swap for the person to approve: the old one stays until their yes leaves it out.
+            if person_owns(self.case, old) or old.state is ProposalState.ACCEPTED:
+                # A swap for the person to approve: what is in the plan stays until their yes leaves it out.
                 item = item.model_copy(update={"replaces": old.item_id})
                 placed = False
             else:

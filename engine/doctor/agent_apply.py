@@ -231,10 +231,12 @@ def waits_because(item: CaseItem, roles: Roles = NO_ROLES) -> str | None:
     if payload.get("needs_yes"):
         # The goal's own build is in the plan and has its yes at Approve; any other change that needs one waits.
         return None if isinstance(payload.get("buildable"), dict) else "it needs your own yes"
-    if item.confidence is AgentConfidence.SURE:
-        return None  # the values prove it: in the plan, shown, and the person may untick it
+    # What the values prove is in the plan, shown, and the person may untick it; it still keeps to the rules below.
+    sure = item.confidence is AgentConfidence.SURE
     if item.kind == "recipe_step":
         raw = payload.get("step")
+        if sure:  # proof does not lift the protection of a column that holds a meaning
+            return _TOUCHES_MEANING if isinstance(raw, dict) and roles.touches(raw) else None
         allowed = AGENT_APPLIED_STEPS.get(str(raw.get("kind"))) if isinstance(raw, dict) else None
         if allowed is None:
             return "this kind of change is yours to tick"
@@ -258,7 +260,7 @@ def waits_because(item: CaseItem, roles: Roles = NO_ROLES) -> str | None:
         if approve_class_of(item.kind, payload) is not None:
             return "it needs your own yes"
         return None
-    return "this kind of change is yours to tick"
+    return None if sure else "this kind of change is yours to tick"
 
 
 def _filter_waits(files: Sequence[LoadedFile], item: CaseItem) -> str | None:

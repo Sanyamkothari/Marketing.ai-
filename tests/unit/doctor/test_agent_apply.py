@@ -204,6 +204,19 @@ def test_a_column_renamed_to_a_protected_name_or_named_like_consent_waits_too() 
         assert waits_because(item(step("rename_column", name))) is not None, name
 
 
+def test_what_the_values_prove_never_lifts_the_protection_of_a_column_that_holds_a_meaning() -> None:
+    def sure(payload: dict[str, Any]) -> CaseItem:
+        return item(payload).model_copy(update={"confidence": AgentConfidence.SURE})
+
+    assert waits_because(sure(step("parse_date", "channel")), ROLES) is None
+    for column in ("marketing_opt_in", "converted", "snapshot_date"):
+        for kind, params in (("parse_date", {}), ("remove_rows", {"operator": "equals", "values": ["0"]})):
+            why = waits_because(sure(step(kind, column, **params)), ROLES)
+            assert why is not None and "who may be contacted" in why, (kind, column)
+    # a name that reads as consent is protected before any goal or key is decided
+    assert waits_because(sure(step("parse_date", "Opt Out"))) is not None
+
+
 def test_leaving_rows_out_by_the_id_is_the_one_step_on_the_id_the_agent_may_apply() -> None:
     assert (
         waits_because(item(step("remove_rows", "customer_id", operator="starts_with", values=["999"])), ROLES)

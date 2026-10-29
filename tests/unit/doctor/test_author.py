@@ -16,7 +16,7 @@ import pytest
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.doctor import author
-from engine.doctor.agent_apply import NO_ROLES, meaning_key, person_owns, waits_because
+from engine.doctor.agent_apply import NO_ROLES, Roles, meaning_key, person_owns, waits_because
 from engine.doctor.author import (
     ApplyContext,
     AskPerson,
@@ -201,12 +201,38 @@ def test_who_wrote_it_is_the_source_and_the_default_author_may_say_what_the_valu
     assert (
         by_default.state is ProposalState.ACCEPTED
     ), "proven by the values: in the plan, the person may untick it"
-    adopted = apply_actions(make_case(), [sure], ai()).case.items[0]
+    adopted = apply_actions(make_case(), [sure], ai(suggested=frozenset({"abc123"}))).case.items[0]
     assert adopted.source is ProposalSource.AI and adopted.state is ProposalState.ACCEPTED
+    made_up = apply_actions(make_case(), [sure], ai()).case.items[0]
+    assert made_up.confidence is AgentConfidence.CHECK, "an `s:` basis names a suggestion a tool really made"
+    assert made_up.state is ProposalState.PENDING
     own = create("parse_date", "date", confidence=AgentConfidence.SURE, basis="r2")
     claimed = apply_actions(make_case(), [own], ai()).case.items[0]
     assert claimed.confidence is AgentConfidence.CHECK, "the AI is never sure on its own say"
     assert claimed.state is ProposalState.PENDING
+
+
+@pytest.mark.parametrize("who", ["ai", "default"])
+def test_being_sure_never_puts_a_step_on_a_column_that_holds_a_meaning_into_the_plan(who: str) -> None:
+    roles = Roles(protected=frozenset({"opt_in"}))
+    context = ApplyContext(
+        now=NOW,
+        author=who,  # type: ignore[arg-type]
+        roles=roles,
+        settings=DEFAULT_SETTINGS,
+        suggested=frozenset({"abc123"}),
+    )
+    for basis in ("s:abc123", "s:made-up"):
+        out = apply_actions(
+            make_case(),
+            [
+                create(
+                    "remove_rows", "opt_in", confidence=AgentConfidence.SURE, basis=basis, operator="equals"
+                )
+            ],
+            context,
+        )
+        assert [i.state for i in out.case.items] == [ProposalState.PENDING], (who, basis)
 
 
 def test_the_goals_own_build_is_in_the_plan_and_any_other_change_that_needs_a_yes_waits() -> None:
@@ -243,14 +269,15 @@ def test_replacing_a_waiting_change_swaps_at_once() -> None:
     assert old.item_id in out.made and new.item_id in out.made
 
 
-def test_replacing_a_change_in_the_plan_that_nobody_decided_swaps_at_once_when_the_new_one_is_in_the_plan() -> (
+def test_replacing_a_change_in_the_plan_that_nobody_decided_is_a_swap_that_waits_for_the_persons_yes() -> (
     None
 ):
     old = in_plan("spend")
     new = create("normalise_text", "spend", strip=True, replaces=old.item_id, reason="trim it too")
     out = apply_actions(make_case([old]), [new], ai())
-    assert by_id(out.case, old.item_id).state is ProposalState.REJECTED
-    assert [i.state for i in made_by(out.case, old)] == [ProposalState.ACCEPTED]
+    assert by_id(out.case, old.item_id) == old, "the plan does not change without a yes"
+    added = made_by(out.case, old)[0]
+    assert added.state is ProposalState.PENDING and added.replaces == old.item_id and added.decided_by is None
 
 
 def test_a_replacement_that_must_wait_does_not_take_a_change_out_of_the_plan() -> None:
