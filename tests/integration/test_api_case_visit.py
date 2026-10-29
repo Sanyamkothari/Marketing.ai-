@@ -122,6 +122,37 @@ def test_a_visit_goes_from_generic_to_a_goal_to_a_readiness_verdict(
         assert case["state"] == "approve", "not ready: back to the person with the reason"
 
 
+def test_a_file_added_after_approval_is_bound_to_the_prescription_and_reopens_the_visit(
+    client: TestClient, data_dir: Path
+) -> None:
+    from engine.doctor.prescription_runs import bound
+    from engine.storage import LocalStorage
+
+    case_id = client.post("/cases", json={"upload_ids": [_upload(client)]}).json()["case_id"]
+    case = _answer_open(client, client.post(f"/cases/{case_id}/visit", json={}).json())
+    case = _answer_open(
+        client,
+        client.post(f"/cases/{case_id}/goal", json={"version": case["version"], "goal_id": GOAL}).json(),
+    )
+    case = settled(client, case_id)
+    case = client.post(f"/cases/{case_id}/approval", json={"version": case["version"]}).json()
+    assert case["prescriptions"], "approval stored a prescription"
+    storage = LocalStorage(data_dir)
+    first = case["files"][0]["upload_id"]
+    assert bound(storage, upload_id=first) is not None
+
+    second = _upload(client)
+    assert bound(storage, upload_id=second) is None
+    added = client.post(f"/cases/{case_id}/files", json={"version": case["version"], "upload_id": second})
+    assert added.status_code == 200, added.text
+    ref = bound(storage, upload_id=second)
+    assert ref is not None and ref.prescription_hash == case["prescriptions"][-1]["prescription_hash"]
+    events = client.get(f"/cases/{case_id}/timeline").json()["events"]
+    after = events[[e["upload_id"] for e in events].index(second) :]
+    reopened = [e for e in after if e["kind"] == "state.changed" and e["details"].get("to") == "intake"]
+    assert reopened, "the added file sends the visit back to intake"
+
+
 class _Killed(BaseException):
     """The process dies during the AI call: nothing after it runs."""
 

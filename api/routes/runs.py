@@ -504,7 +504,6 @@ def start_run(
             dataset_id=dataset.manifest.dataset_id if dataset is not None else None,
             primary_key=primary_key,
             target=target,
-            manifest=dataset.manifest if dataset is not None else None,
             registry=registry,
         )
         if prescribed is not None and prescribed.upload is not None and prescribed.profile is not None:

@@ -56,8 +56,6 @@ from engine.contracts import RunRecord
 from engine.doctor.currency import MoneyBasis, MoneyColumn, load_money_basis
 from engine.doctor.outcome_definition import OutcomeDefinition, ValueMeaning, approval_for
 from engine.doctor.prescription import (
-    BuildPart,
-    CasePrescriber,
     FilePart,
     GoalSection,
     LocalePart,
@@ -139,11 +137,9 @@ def _prescribe(
     files: tuple[FilePart, ...] = (),
     basis: MoneyBasis | None = BASIS,
     goals: tuple[GoalSection, ...] = (),
-    build: BuildPart | None = None,
 ) -> tuple[PrescriptionRef, Prescription]:
     made = make_prescription(
         files=files,
-        build=build,
         post_build=post_build,
         contract=contract,
         goals=goals,
@@ -581,64 +577,6 @@ def test_a_dataset_trains_on_its_approved_outcome_and_carries_only_the_post_buil
 # ---------------------------------------------------------------------------
 # Review fixes: files and datasets made after PRESCRIBE
 # ---------------------------------------------------------------------------
-def _build_record() -> Any:
-    from engine.config import LabelDefinition, LabelType
-    from engine.doctor.build_driver import approval_for as build_approval
-    from engine.doctor.build_driver import drive_builder, plan_build
-    from tests.unit.doctor.m237_support import RecordingBuilder, diagnosis, frames
-
-    label = LabelDefinition(
-        name="churn_next_60d", type=LabelType.EVENT_ABSENCE, role="bills", horizon_days=60
-    )
-    loaded = frames()
-    plan = plan_build(diagnosis(loaded), loaded, use_case="rca", label_spec=label)
-    port = RecordingBuilder()
-    drive_builder(plan, loaded, port, build_approval(plan, user_id="analyst", at=utc_now()))
-    return port.records["spec_1"]
-
-
-class _Case:
-    """What PRESCRIBE reads of a case to bind it."""
-
-    client_id = "default"
-    case_id = CASE
-
-    def upload_ids(self) -> tuple[str, ...]:
-        return ()
-
-
-def test_a_scheduled_training_firing_on_a_fresh_build_of_the_prescribed_spec_follows_the_prescription(
-    built: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root, dataset_id = built
-    storage = LocalStorage(root / "data")
-    manifest = storage.read_model(dataset_key(dataset_id, "dataset_manifest.json"), DatasetManifest)
-    made = make_prescription(
-        build=BuildPart(record=_build_record(), dataset_id=dataset_id),
-        post_build=_recipe(),
-        locale=LocalePart(money_basis=BASIS),
-        provenance=Provenance(case_id=CASE, client_id="default", created_at=utc_now()),
-    )
-    monkeypatch.setattr(CasePrescriber, "prescription", lambda self, case, brief: made)
-    written = CasePrescriber(storage)(_Case(), None)  # type: ignore[arg-type]
-    ref = PrescriptionRef(client_id="default", case_id=CASE, prescription_hash=written)
-    spec = (manifest.client_id, manifest.spec_id)
-    spec_key = f"cases/{manifest.client_id}/prescribed_specs/{manifest.spec_id}.json"
-    try:
-        assert bound(storage, spec=spec) == ref, "PRESCRIBE binds the spec that built the approved dataset"
-        # A firing's fresh build of that spec is another dataset: bound to nothing itself.
-        _unbind(storage, dataset_id)
-        record = _fire(root, dataset_id, RunMode.TRAIN)
-        _assert_trained_prepared(storage, record.run_id, dataset_id, ref)
-        response = _train(root, dataset_id)
-        assert response.status_code == 202, response.text
-        _assert_trained_prepared(storage, response.json()["run_id"], dataset_id, ref)
-    finally:
-        _unbind(storage, dataset_id)
-        if storage.exists(spec_key):
-            storage.delete(spec_key)
-
-
 def test_next_months_upload_follows_the_prescription_its_champion_was_trained_under(
     api: tuple[TestClient, Path], built: tuple[Path, str]
 ) -> None:

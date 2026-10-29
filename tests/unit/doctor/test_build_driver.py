@@ -1,12 +1,10 @@
-"""`build_dataset` proposes, `drive_builder` runs an approved plan (Plan O M237, DEC-1807 (e), (f)).
+"""`build_dataset` proposes a plan, `prepare_sources` reads its sources (Plan O M237, DEC-1807 (e), (f)).
 
-Closes DEC-1550 and DEC-1578: Data Doctor no longer prints the onboarding calls (`next_steps`) - it plans them,
-and once the person approves the plan's hash and its exact sentence, makes them through a `BuilderPort`.
+Closes DEC-1550 and DEC-1578: Data Doctor no longer prints the onboarding calls (`next_steps`) - it plans the build,
+and the plan's sources are stacked and their IDs written as the customer list writes them.
 """
 
 from __future__ import annotations
-
-from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -15,17 +13,14 @@ from engine.config import LabelDefinition, LabelType
 from engine.doctor.build_driver import (
     BuildDriveError,
     BuildPlan,
-    approval_for,
-    drive_builder,
-    mapping_columns,
+    PreparedSources,
     plan_build,
-    replay_build,
+    prepare_sources,
 )
 from engine.doctor.contracts import Diagnosis
-from tests.unit.doctor.m237_support import CUSTOMERS, RecordingBuilder, diagnosis, file, frames
+from tests.unit.doctor.m237_support import CUSTOMERS, diagnosis, file, frames
 
 LABEL = LabelDefinition(name="churn_next_60d", type=LabelType.EVENT_ABSENCE, role="bills", horizon_days=60)
-NOW = datetime(2026, 10, 12, tzinfo=UTC)
 
 
 def _plan() -> tuple[BuildPlan, dict[str, pd.DataFrame]]:
@@ -65,23 +60,20 @@ def test_the_plan_hash_is_stable_and_ignores_wording() -> None:
     assert reworded.plan_hash == first.plan_hash
 
 
-def test_an_approved_plan_drives_the_builder_in_the_manual_setup_order() -> None:
+def _prepare(plan: BuildPlan, loaded: dict[str, pd.DataFrame]) -> PreparedSources:
+    return prepare_sources(
+        plan,
+        {
+            source.source_name: [loaded[upload_id] for upload_id in source.upload_ids]
+            for source in (plan.entity, *plan.events)
+        },
+    )
+
+
+def test_the_sources_are_stacked_and_the_logs_ids_written_as_the_list_writes_them() -> None:
     plan, loaded = _plan()
-    port = RecordingBuilder()
-    result = drive_builder(plan, loaded, port, approval_for(plan, user_id="u-analyst", at=NOW))
-    assert [name for name, _ in port.calls] == [
-        "add_source",
-        "suggest_mapping",
-        "save_mapping",
-        "add_source",
-        "suggest_mapping",
-        "save_mapping",
-        "save_spec",
-        "save_record",
-        "build",
-    ]
-    assert result.approved_by == "u-analyst" and result.dataset_id == "ds_1" and result.spec_id == "spec_1"
-    customers, bills = port.data["s1"], port.data["s2"]
+    ready = _prepare(plan, loaded)
+    (_, customers), (_, bills) = ready.sources
     assert list(customers["customer_id"]) == list(
         loaded["u_list"]["customer_id"]
     ), "the list's IDs as written"
@@ -93,40 +85,13 @@ def test_an_approved_plan_drives_the_builder_in_the_manual_setup_order() -> None
     assert set(bills["customer_id"]) == set(customers["customer_id"])
     assert len(bills) == 3 * 2 * CUSTOMERS, "each bill once"
     assert list(bills.columns) == ["customer_id", "invoice_date", "amount"]
-    (key_receipt,) = result.key_receipts  # the bills' own step (zeros); the list has none
+    (key_receipt,) = ready.key_receipts  # the bills' own step (zeros); the list has none
     assert key_receipt.steps[0].kind == "normalise_key" and key_receipt.steps[0].changed == 0
-    (matched,) = result.match_receipts
+    (matched,) = ready.match_receipts
     assert (matched.rows, matched.rows_matched, matched.rows_rewritten) == (6 * CUSTOMERS,) * 3
     assert matched.rows_not_on_list == matched.rows_ambiguous == matched.rows_without_key == 0
-    assert result.record_key == "records/spec_1" and port.records["spec_1"].plan == plan
-    spec = dict(port.calls)["save_spec"]
-    assert spec["label_spec"]["name"] == "churn_next_60d" and spec["label_spec"]["horizon_days"] == 60
-    assert spec["event_source_ids"] == ["s2"] and spec["entity_source_id"] == "s1"
-    saved = [call for name, call in port.calls if name == "save_mapping"][1]["columns"]
-    assert {(c["source"], c["standard"]) for c in saved} >= {
-        ("customer_id", "entity_key"),
-        ("invoice_date", "event_time"),
-    }
-
-
-def test_a_plan_not_approved_or_reworded_is_refused_and_nothing_is_called() -> None:
-    plan, loaded = _plan()
-    approval = approval_for(plan, user_id="u-analyst", at=NOW)
-    port = RecordingBuilder()
-    for bad, code in (
-        (approval.model_copy(update={"plan_hash": "x"}), "BUILD_PLAN_NOT_APPROVED"),
-        (approval.model_copy(update={"sentence": approval.sentence + " Also."}), "APPROVAL_SENTENCE_CHANGED"),
-    ):
-        with pytest.raises(BuildDriveError) as raised:
-            drive_builder(plan, loaded, port, bad)
-        assert raised.value.code == code
-    changed = plan.model_copy(
-        update={"snapshot_spec": plan.snapshot_spec.model_copy(update={"max_snapshots": 3})}
-    )
-    with pytest.raises(BuildDriveError) as raised:
-        drive_builder(changed, loaded, port, approval)
-    assert raised.value.code == "BUILD_PLAN_NOT_APPROVED"
-    assert port.calls == []
+    (stacked,) = ready.stack_receipts
+    assert stacked.duplicates_removed == 2 * CUSTOMERS
 
 
 def test_conflicting_exports_wait_for_the_answer() -> None:
@@ -136,9 +101,6 @@ def test_conflicting_exports_wait_for_the_answer() -> None:
     loaded["u_feb"] = feb
     plan = plan_build(diagnosis(loaded), loaded, use_case="rca", label_spec=LABEL)
     assert plan.blocking == ("STACK_CONFLICTS_UNDECIDED",) and len(plan.questions) == 1
-    with pytest.raises(BuildDriveError) as raised:
-        drive_builder(plan, loaded, RecordingBuilder(), approval_for(plan, user_id="u", at=NOW))
-    assert raised.value.code == "BUILD_PLAN_INCOMPLETE"
     answered = plan_build(
         diagnosis(loaded), loaded, use_case="rca", label_spec=LABEL, stack_answers={"u_jan": "later_file"}
     )
@@ -161,23 +123,6 @@ def test_no_customer_list_is_refused() -> None:
     with pytest.raises(BuildDriveError) as raised:
         plan_build(without, loaded, use_case="rca", label_spec=LABEL)
     assert raised.value.code == "BUILD_PLAN_INCOMPLETE"
-
-
-def test_the_required_columns_win_over_the_builders_suggestion() -> None:
-    columns = mapping_columns(
-        [
-            {"source": "cust", "standard": "entity_key", "decided_by": "auto"},
-            {"source": "region", "standard": "region", "decided_by": "auto"},
-            {"source": "invoice_date", "standard": "signup_date", "decided_by": "auto"},
-        ],
-        {"entity_key": ("customer_id", None), "event_time": ("invoice_date", "date")},
-    )
-    assert [(c["source"], c["standard"], c["decided_by"]) for c in columns] == [
-        ("customer_id", "entity_key", "user"),
-        ("invoice_date", "event_time", "user"),
-        ("region", "region", "auto"),
-    ]
-    assert columns[1]["transform"] == {"kind": "cast", "to_type": "date"}
 
 
 def test_the_plan_holds_no_customer_id_or_cell() -> None:
@@ -239,11 +184,10 @@ def test_a_join_that_drops_more_than_two_percent_of_a_log_needs_approval() -> No
 def test_the_strangers_rows_are_counted_and_kept_as_written() -> None:
     found, loaded = _log_with_strangers(15)
     plan = plan_build(found, loaded, use_case="rca", label_spec=None)
-    port = RecordingBuilder()
-    result = drive_builder(plan, loaded, port, approval_for(plan, user_id="u", at=NOW))
-    (matched,) = result.match_receipts
+    ready = _prepare(plan, loaded)
+    (matched,) = ready.match_receipts
     assert (matched.rows_matched, matched.rows_not_on_list, matched.dropped_share) == (85, 15, 0.15)
-    log = port.data["s2"]["customer_id"]
+    log = ready.sources[1][1]["customer_id"]
     assert list(log[:2]) == ["C-001", "C-002"] and list(log[-2:]) == ["513", "514"]
 
 
@@ -272,11 +216,10 @@ def test_an_id_two_customers_share_under_the_rule_is_never_given_to_one() -> Non
     )
     (event,) = plan.events
     assert event.rows_dropped == 1
-    port = RecordingBuilder()
-    result = drive_builder(plan, frames_, port, approval_for(plan, user_id="u", at=NOW))
-    (matched,) = result.match_receipts
+    ready = _prepare(plan, frames_)
+    (matched,) = ready.match_receipts
     assert matched.rows_ambiguous == 1 and matched.rows_matched == 50
-    assert port.data["s2"]["customer_id"].iloc[0] == " c-007", "left as written: it names no one customer"
+    assert ready.sources[1][1]["customer_id"].iloc[0] == " c-007", "left as written: it names no one customer"
 
 
 def test_a_prefix_or_zeros_rule_that_would_make_two_customers_one_is_never_planned() -> None:
@@ -292,36 +235,21 @@ def test_a_prefix_or_zeros_rule_that_would_make_two_customers_one_is_never_plann
     assert not plan.entity.key_rule.zeros and plan.entity.key_rule.prefix is None
 
 
-def test_next_months_files_replay_the_approved_rules_and_keep_the_lists_ids() -> None:
-    """M237 review: the rule and the stack are kept with the recipe, and a replay applies them."""
+def test_next_months_files_are_prepared_by_the_approved_rules_and_keep_the_lists_ids() -> None:
+    """M237 review: the stack and the ID rules are frozen in the plan, and preparing other files applies them."""
     plan, loaded = _plan()
-    port = RecordingBuilder()
-    drive_builder(plan, loaded, port, approval_for(plan, user_id="u-analyst", at=NOW))
-    record = port.records["spec_1"]
     april = loaded["u_mar"].rename(columns={"bill_amount": "amount"})
     april["invoice_date"] = (
         april["invoice_date"].str.replace("2025-03", "2025-04").str.replace("2025-02", "2025-03")
     )
-    later = RecordingBuilder()
-    replayed = replay_build(
-        record,
-        {"customers.csv": [loaded["u_list"]], "bills_stacked.csv": [loaded["u_mar"], april]},
-        later,
-        mode="score",
+    ready = prepare_sources(
+        plan, {"customers.csv": [loaded["u_list"]], "bills_stacked.csv": [loaded["u_mar"], april]}
     )
-    assert later.calls[-1] == ("build", {"spec_id": "spec_1", "mode": "score"})
-    bills = later.data["s2"]
+    bills = ready.sources[1][1]
     assert set(bills["customer_id"]) == set(
         loaded["u_list"]["customer_id"]
     ), "CUST- IDs, as the list writes them"
-    (stacked,) = replayed.stack_receipts
+    (stacked,) = ready.stack_receipts
     assert stacked.duplicates_removed == CUSTOMERS, "the overlapping day counted once, by the frozen stack"
-    (matched,) = replayed.match_receipts
+    (matched,) = ready.match_receipts
     assert matched.rows_rewritten == matched.rows == len(bills)
-    with pytest.raises(BuildDriveError) as raised:
-        replay_build(record, {"customers.csv": [loaded["u_list"]]}, RecordingBuilder())
-    assert raised.value.code == "BUILD_REPLAY_FILES"
-    tampered = record.model_copy(update={"plan": record.plan.model_copy(update={"use_case": "other"})})
-    with pytest.raises(BuildDriveError) as raised:
-        replay_build(tampered, {"customers.csv": [loaded["u_list"]]}, RecordingBuilder())
-    assert raised.value.code == "BUILD_PLAN_NOT_APPROVED"

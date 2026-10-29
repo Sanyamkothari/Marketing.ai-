@@ -43,8 +43,8 @@ pending items; the ones whose guard run shows no stop and no flag, in the kinds 
 Nothing about meaning is ever applied or answered by the AI: it may suggest an answer, and only a click records it.
 
 **What later milestones fill in.** PREVIEW, PRESCRIBE, VERIFY and HAND_OFF call ports (:class:`VisitDeps`). The
-defaults are the honest minimum today: PREVIEW counts what would change; PRESCRIBE hashes the approved items, the
-answers and the brief (M243 writes the prescription itself); VERIFY runs M234's `check_readiness` on the file that
+defaults are the honest minimum when no port is given: PREVIEW counts what would change; PRESCRIBE hashes the
+approved items, the answers and the brief (the API passes `CasePrescriber`, which writes the prescription); VERIFY runs M234's `check_readiness` on the file that
 holds the goal's outcome (:func:`readiness_verify`); HAND_OFF records where the data goes and starts nothing.
 
 Nothing here logs a value or a column name: counts, ids and codes only.

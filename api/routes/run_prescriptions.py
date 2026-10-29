@@ -39,7 +39,6 @@ if TYPE_CHECKING:
     from engine.doctor.prescription import Prescription, PrescriptionError
     from engine.doctor.prescription_contract import DriftFinding
     from engine.doctor.prescription_runs import PrescriptionRef, TrainingRows
-    from engine.onboarding.specs import DatasetManifest
     from engine.registry import ModelRegistry
     from engine.storage import Storage
 
@@ -106,7 +105,6 @@ def prescribed_training(
     dataset_id: str | None,
     primary_key: Any,
     target: str | None,
-    manifest: DatasetManifest | None = None,
     registry: ModelRegistry | None = None,
 ) -> Prescribed | None:
     """The rows a training run reads under its prescription, or None (nothing bound) before anything is
@@ -118,9 +116,7 @@ def prescribed_training(
         if dataset_id is not None:
             from engine.config import key_columns
 
-            training = dataset_for_training(
-                storage, config, dataset_id, key_columns(primary_key), manifest=manifest
-            )
+            training = dataset_for_training(storage, config, dataset_id, key_columns(primary_key))
             if training is None:
                 return None
             carried = (
@@ -194,9 +190,8 @@ def _upload_training(
     recipe = part.recipe
     already = load_recipe(storage, upload.upload_id)
     prepared_already = recipe is not None and already is not None and already.prepares_like(recipe)
-    # Steps 6-8 on the file: with one file and no build, the file is the built file (a build's sources are replayed
-    # through the build, never trained on one by one).
-    after = prescription.build is None and changes_rows(prescription, mode="train", goal_id=found.goal_id)
+    # Steps 6-8 on the file: the file is the built file (the goal's table is made once, when files are combined).
+    after = changes_rows(prescription, mode="train", goal_id=found.goal_id)
     warnings: list[DriftFinding] = list(found.warnings)
 
     def finish(rows: Any) -> Any:

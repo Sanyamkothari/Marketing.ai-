@@ -10,7 +10,7 @@ rules and counts - never an ID or another cell (the multi-file privacy rule, Pla
 | `join_files` | `engine.doctor.join_files.plan_join` | a `JoinSpec`: per-customer files and outcome lists onto a customer list |
 | `stack_files` | `engine.doctor.stack_files.plan_stack` | a `StackSpec`: exports stacked, repeated rows counted once; one question for conflicts |
 | `normalise_key` | `engine.agent.key_steps.propose_key_rules` | a `normalise_key` recipe step on one file's ID column |
-| `build_dataset` | `engine.doctor.build_driver.plan_build` | a `BuildPlan` the builder runs once approved (`drive_builder`, never a tool) |
+| `build_dataset` | `engine.doctor.build_driver.plan_build` | a `BuildPlan` for the goal's table, built once approved (`combine_run`, never a tool) |
 
 M232's registry (`engine/doctor/registry.py`) is not on this branch, so the specs are plain declarations
 (`DataToolSpec`) shaped like the design's §5.2 entry, and `register(registry)` hands each one to any object
@@ -303,7 +303,7 @@ TOOLS: Final[tuple[DataToolSpec, ...]] = (
         role=Role.ANALYST,
         mode="rules",
         wraps=(
-            "engine.doctor.stack_files.plan_stack (joins.file_stacks' drift; drive_builder stacks before the "
+            "engine.doctor.stack_files.plan_stack (joins.file_stacks' drift; `prepare_sources` stacks before the "
             "builder sees one source; build.py's concat is unchanged)"
         ),
         policy_kind="data.stack_files",
@@ -331,7 +331,7 @@ TOOLS: Final[tuple[DataToolSpec, ...]] = (
         exposure="session-only",
         role=Role.ANALYST,
         mode="rules",
-        wraps="engine.doctor.build_driver.plan_build (executor drive_builder, never a tool)",
+        wraps="engine.doctor.build_driver.plan_build (the table is built by `combine_run`, never a tool)",
         policy_kind="data.build_dataset",
         run=_build,
     ),

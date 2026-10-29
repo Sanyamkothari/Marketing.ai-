@@ -1,14 +1,12 @@
 """Prescriptions meet uploads, datasets and runs (Plan O M243, DEC-1813).
 
-PRESCRIBE (`engine.doctor.prescription.CasePrescriber`) binds each upload of the case, the dataset its approved
-build made, and the onboarding spec that built it, to the prescription it wrote: a small reference
-(`prescription_ref.json`: client, case, hash; no value, no user id). A file added to the case later is bound to the
+PRESCRIBE (`engine.doctor.prescription.CasePrescriber`) binds each upload of the case to the prescription it wrote:
+a small reference (`prescription_ref.json`: client, case, hash; no value, no user id). A file added to the case later is bound to the
 case's latest prescription (`engine.doctor.visit.add_files`), so next month's file replays it. The run paths read the
 references:
 
 * **Training from a built dataset** (`POST /runs` with `dataset_id`, and a scheduled training firing):
-  :func:`dataset_for_training` finds the prescription bound to the dataset - or, for a dataset a firing built fresh
-  from a spec, the one bound to that spec - and replays the design's steps 6-8 on every row
+  :func:`dataset_for_training` finds the prescription bound to the dataset (:func:`bind_dataset`) and replays the design's steps 6-8 on every row
   (`engine.doctor.prescription_replay.replay_after_build`): the approved outcome (M239: a column's values become
   1/0, rows left out are removed and counted), the post-build recipe (with the training file's full future-data
   check), then the contract. The run trains on the rows it wrote (`datasets/<id>/prepared_rx_<hash16>.parquet`)
@@ -36,7 +34,6 @@ prescription is exactly as before: byte-identical, which the tests pin.
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal
@@ -64,7 +61,6 @@ if TYPE_CHECKING:
     from engine.doctor.currency import MoneyBasis
     from engine.doctor.outcome_definition import OutcomeReceipt
     from engine.intake.contracts import IntakeReport
-    from engine.onboarding.specs import DatasetManifest
     from engine.storage import Storage
 
 __all__ = [
@@ -80,7 +76,6 @@ __all__ = [
     "attach_to_run",
     "bind_case_uploads",
     "bind_dataset",
-    "bind_spec",
     "bind_upload",
     "bound",
     "check_for_scoring",
@@ -120,27 +115,6 @@ def bind_dataset(storage: Storage, dataset_id: str, ref: PrescriptionRef) -> Non
     storage.write_model(_dataset_ref_key(dataset_id), ref)
 
 
-_SPEC_ID: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-_CLIENT_ID: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-
-
-def _spec_ref_key(client_id: str, spec_id: str) -> str | None:
-    """`cases/<client>/prescribed_specs/<spec_id>.json`: beside the client's cases (never read as one)."""
-    if not (_CLIENT_ID.fullmatch(client_id) and _SPEC_ID.fullmatch(spec_id)):
-        return None
-    from engine.doctor.case import CASE_PREFIX
-
-    return f"{CASE_PREFIX}{client_id}/prescribed_specs/{spec_id}.json"
-
-
-def bind_spec(storage: Storage, client_id: str, spec_id: str, ref: PrescriptionRef) -> None:
-    """The onboarding spec that built the approved dataset: every dataset a firing builds from it later follows the
-    same prescription. A spec id that is not a plain id is not bound."""
-    key = _spec_ref_key(client_id, spec_id)
-    if key is not None:
-        storage.write_model(key, ref)
-
-
 def bind_case_uploads(storage: Storage, case: Case, upload_ids: Sequence[str]) -> int:
     """Bind files added to a case to its latest stored prescription (next month's file replays it); the number
     bound. Nothing when the case has no prescription yet, or its latest was never stored (PRESCRIBE binds them).
@@ -175,38 +149,13 @@ def bound(
     *,
     upload_id: str | None = None,
     dataset_id: str | None = None,
-    spec: tuple[str, str] | None = None,
 ) -> PrescriptionRef | None:
-    """The prescription an upload, a dataset or an onboarding spec (`(client_id, spec_id)`) is bound to, or None."""
+    """The prescription an upload or a dataset is bound to, or None."""
     if upload_id is not None:
         return _read_ref(storage, upload_key(upload_id, PRESCRIPTION_REF_FILENAME))
     if dataset_id is not None:
         return _read_ref(storage, _dataset_ref_key(dataset_id))
-    if spec is not None:
-        key = _spec_ref_key(*spec)
-        return None if key is None else _read_ref(storage, key)
     return None
-
-
-def _dataset_ref(
-    storage: Storage, dataset_id: str, manifest: DatasetManifest | None
-) -> PrescriptionRef | None:
-    """The dataset's own reference, else the one bound to the spec that built it (a firing's fresh build)."""
-    ref = bound(storage, dataset_id=dataset_id)
-    if ref is not None:
-        return ref
-    if manifest is None:
-        from engine.onboarding.datasets import DATASET_MANIFEST_FILENAME, dataset_key
-        from engine.onboarding.specs import DatasetManifest as Manifest
-
-        try:
-            key = dataset_key(dataset_id, DATASET_MANIFEST_FILENAME)
-            if not storage.exists(key):
-                return None
-            manifest = storage.read_model(key, Manifest)
-        except (StorageError, ValidationError, ValueError):
-            return None
-    return bound(storage, spec=(manifest.client_id, manifest.spec_id))
 
 
 def run_ref(storage: Storage, run_id: str) -> PrescriptionRef | None:
@@ -378,18 +327,16 @@ def dataset_for_training(
     dataset_id: str,
     key: Sequence[str] = (),
     *,
-    manifest: DatasetManifest | None = None,
     capped: pd.DataFrame | None = None,
 ) -> DatasetTraining | None:
     """The dataset prepared by its prescription for training, or None (nothing bound) before anything
-    is read. `manifest` names the spec a fresh build came from (read from the dataset when not given); `capped` is the
-    built rows up to the profiling cap, when the caller has read them already.
+    is read. `capped` is the built rows up to the profiling cap, when the caller has read them already.
 
     Raises `PrescriptionError` when the post-build recipe names another ID column than the dataset's `key`, or touches
     the rest of its key (`RECIPE_ROLES_MISMATCH`, before anything is prepared), the outcome cannot run (`OUTCOME_*`),
     a step cannot run on the dataset (a column it needs is gone or changed), or the rows break the contract.
     """
-    ref = _dataset_ref(storage, dataset_id, manifest)
+    ref = bound(storage, dataset_id=dataset_id)
     if ref is None:
         return None
     from engine.agent.dataset_recipe import dataset_key_conflict, store_prepared_rows
@@ -482,8 +429,7 @@ def upload_for_training(
         return None
     prescription = resolve(storage, ref)
     part = _slot_for(prescription, upload_id)
-    if part is None or (prescription.build is not None and upload_id not in part.upload_ids):
-        # A file that is one source of a build is replayed through the build, never on its own.
+    if part is None:
         return None
     from engine.doctor.prescription_replay import ReplayFile, check_files, training_goal
 
@@ -552,7 +498,7 @@ def check_for_scoring(
 
         warnings.extend(check_files(prescription, [ReplayFile(slot=single.slot, frame=sent, intake=intake)]))
     contract = prescription.contract
-    if contract is None and single is not None and prescription.build is None:
+    if contract is None and single is not None:
         contract = single.contract
     if contract is not None:
         found = check_contract(prepared, contract, mode="score")

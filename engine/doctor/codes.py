@@ -41,7 +41,7 @@ PLAN_O_CODES: Final[frozenset[str]] = frozenset(
         "X_VALUE_COLUMN_MISSING_SHARE",
         # M237 (DEC-1807): several files (`engine.doctor.join_files.JOIN_CODES`, `stack_files.STACK_CODES`,
         # `build_driver.BUILD_CODES`). APPROVAL_SENTENCE_CHANGED is the plan's shared exact-text code (M239, M246);
-        # M237's `drive_builder` is the first to raise it.
+        # M237's build plan was the first to raise it.
         "APPROVAL_SENTENCE_CHANGED",
         "BUILD_DEFINES_OUTCOME",
         "BUILD_FILE_LEFT_OUT",

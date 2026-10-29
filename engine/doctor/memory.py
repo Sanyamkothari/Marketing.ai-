@@ -221,7 +221,7 @@ def remember_approved_case(
         storage, case.client_id, case.case_id, case.prescriptions[-1].prescription_hash
     )
     recipes = prescription.recipes()
-    if prescription.build is not None or len(recipes) != 1:
+    if len(recipes) != 1:
         return None
     intake = prescription.files[0].intake if prescription.files else None
     storage.write_model(upload_key(loaded.upload_id, TREATMENT_RECIPE_FILENAME), recipes[0])

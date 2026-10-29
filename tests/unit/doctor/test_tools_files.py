@@ -1,4 +1,4 @@
-"""The M237 tool specs and `register(registry)` (Plan O M237, DEC-1807 (g)), and the builder adapter's refusals.
+"""The M237 tool specs and `register(registry)` (Plan O M237, DEC-1807 (g)).
 
 Every tool is PROPOSE, rules, `session-only`, for an Analyst, with an input model that refuses unknown fields;
 its output is a pending, `check`, never-ticked proposal. The privacy canary plants personal data as IDs and in
@@ -18,7 +18,6 @@ from pydantic import ValidationError
 from engine.access.roles import Role
 from engine.config import LabelDefinition, LabelType
 from engine.doctor.build_driver import BuildDriveError
-from engine.doctor.builder_api import ApiBuilderPort
 from engine.doctor.contracts import Diagnosis
 from engine.doctor.join_files import JoinError
 from engine.doctor.stack_files import StackProposal
@@ -158,78 +157,6 @@ def test_the_privacy_canary_finds_no_id_or_cell_in_any_tool_output() -> None:
         text = json.dumps(out.model_dump(mode="json"))
         leaked = [value for value in planted if value in text]
         assert leaked == [], f"{spec.name} returned {leaked[:3]}"
-
-
-@dataclass
-class Answer:
-    status_code: int
-    body: Any
-
-    def json(self) -> Any:
-        if isinstance(self.body, Exception):
-            raise self.body
-        return self.body
-
-
-@dataclass
-class Http:
-    answers: list[Answer]
-    sent: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
-
-    def post(self, url: str, **kwargs: Any) -> Answer:
-        self.sent.append(("POST", url, kwargs))
-        return self.answers.pop(0)
-
-    def put(self, url: str, **kwargs: Any) -> Answer:
-        self.sent.append(("PUT", url, kwargs))
-        return self.answers.pop(0)
-
-
-def test_the_adapter_calls_the_builders_routes() -> None:
-    http = Http(
-        [
-            Answer(201, {"source_id": "s1"}),
-            Answer(200, {"mapping_id": "m1", "columns": []}),
-            Answer(200, {"mapping_id": "m1", "checks": []}),
-            Answer(201, {"spec_id": "sp1", "checks": []}),
-            Answer(202, {"dataset_id": "d1"}),
-        ]
-    )
-    port = ApiBuilderPort(http, "c1")
-    assert port.add_source(file_name="a.csv", data=b"x\n1\n", role="entity") == "s1"
-    assert port.suggest_mapping(source_id="s1", use_case="rca")["mapping_id"] == "m1"
-    assert (
-        port.save_mapping(mapping_id="m1", source_id="s1", use_case="rca", role="entity", columns=[]) == "m1"
-    )
-    assert port.save_spec({"use_case": "rca"}) == "sp1"
-    assert port.build(spec_id="sp1", mode="train") == "d1"
-    assert [(method, url) for method, url, _ in http.sent] == [
-        ("POST", "/clients/c1/sources"),
-        ("POST", "/clients/c1/mappings/suggest"),
-        ("PUT", "/clients/c1/mappings/m1"),
-        ("POST", "/clients/c1/onboarding-specs"),
-        ("POST", "/datasets"),
-    ]
-    assert http.sent[0][2]["data"] == {"role": "entity"}
-
-
-@pytest.mark.parametrize(
-    ("answer", "code"),
-    [
-        (Answer(409, {"detail": {"code": "TOO_MANY_SOURCES", "message": "too many"}}), "TOO_MANY_SOURCES"),
-        (
-            Answer(409, {"checks": [{"code": "JOIN_KEY_COVERAGE_LOW", "severity": "error", "message": "m"}]}),
-            "JOIN_KEY_COVERAGE_LOW",
-        ),
-        (Answer(500, ValueError("not json")), "BUILD_STEP_FAILED"),
-        (Answer(201, ["not", "an", "object"]), "BUILD_STEP_FAILED"),
-    ],
-)
-def test_a_refused_call_raises_the_routes_own_code(answer: Answer, code: str) -> None:
-    port = ApiBuilderPort(Http([answer]), "c1")
-    with pytest.raises(BuildDriveError) as raised:
-        port.add_source(file_name="a.csv", data=b"", role="entity")
-    assert raised.value.code == code
 
 
 def test_a_missing_column_is_the_coded_join_error_not_a_key_error() -> None:

@@ -357,7 +357,7 @@ def _prescribed(
     try:
         if mode is RunMode.TRAIN:
             training = dataset_for_training(
-                storage, config, dataset_id, tuple(manifest.primary_key), manifest=manifest, capped=capped
+                storage, config, dataset_id, tuple(manifest.primary_key), capped=capped
             )
             if training is None:
                 return None

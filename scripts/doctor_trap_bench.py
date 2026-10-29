@@ -571,8 +571,12 @@ def _apply(
     deps: Any, config: Any, stored_brief: Callable[..., Any],
 ) -> None:  # fmt: skip
     """The approved changes on the whole files, by the product's own replay; the main file's result is `final`."""
-    from engine.doctor.prescription import CasePrescriber
-    from engine.doctor.prescription_replay import ReplayFile, replay_prescription
+    import pandas as pd
+
+    from engine.agent.contracts import RecipeStepKind
+    from engine.doctor.prescription import CasePrescriber, case_tables
+    from engine.doctor.prescription_replay import ReplayFile, check_files, replay_after_build, run_part_recipe
+    from engine.doctor.prescription_runs import check_prepared
 
     prescriber = CasePrescriber(deps.storage, load_files=deps.load_files)
     prescription = prescriber.prescription(done, stored_brief(deps.storage, done))
@@ -583,19 +587,55 @@ def _apply(
         for u in part.upload_ids
         if u in world.full
     ]
-    if prescription.build is not None:
-        shipped.notes.append("the approved build was not replayed (the bench has no builder)")
-    result = replay_prescription(prescription, files, mode="train", goal_id=goal, config=config)
+    # The run paths' own parts, in their order: the raw-file checks, each slot's recipe and contract, then the
+    # outcome, post-build recipe and contract on the final file.
+    check_files(prescription, files)
+    prepared: dict[str, list[Any]] = {}
+    for file in files:
+        part = prescription.file(file.slot)
+        assert part is not None
+        frame = file.frame
+        if part.recipe is not None:
+            frame = run_part_recipe(
+                part.recipe,
+                frame,
+                config=config,
+                upload_id=file.upload_id or part.slot,
+                leak_check="full",
+                contract=part.contract,
+                slot=part.slot,
+            ).frame
+        prepared.setdefault(part.slot, []).append(frame)
+    frames = {
+        slot: parts[0] if len(parts) == 1 else pd.concat(parts, ignore_index=True)
+        for slot, parts in prepared.items()
+    }
+    for part in prescription.files:
+        if part.slot in frames:
+            check_prepared(part, frames[part.slot], mode="train")
+    final: Any = None
+    if len(frames) == 1 or (
+        prescription.post_build is not None
+        and any(step.kind is RecipeStepKind.SQL_QUERY for step in prescription.post_build.steps)
+    ):
+        final = replay_after_build(
+            prescription,
+            next(iter(frames.values())),
+            mode="train",
+            goal_id=goal,
+            config=config,
+            tables=case_tables(frames, prescription.files),
+        ).frame
     slot_of = {u: part.slot for part in prescription.files for u in part.upload_ids}
-    by_upload = {u: result.frames[slot] for u, slot in slot_of.items() if slot in result.frames}
+    by_upload = {u: frames[slot] for u, slot in slot_of.items() if slot in frames}
     first = uploads[case.primary[0]]
     made = next((f for f in done.files if f.original_upload_id == first), None)
     holder = made.upload_id if made is not None else first
     shipped.final = by_upload.get(holder)
-    if shipped.final is None and result.frame is not None:
-        shipped.final = result.frame
-    if result.frame is not None and made is None and len(result.frames) == 1:
-        shipped.final = result.frame  # the outcome step may have changed the one file
+    if shipped.final is None and final is not None:
+        shipped.final = final
+    if final is not None and made is None and len(frames) == 1:
+        shipped.final = final  # the outcome step may have changed the one file
     shipped.tables = {t: by_upload[u] for t, u in uploads.items() if u in by_upload}
 
 
