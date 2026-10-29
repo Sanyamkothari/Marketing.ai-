@@ -257,6 +257,7 @@ def add_case_file(
             visit_deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
+            settle=False,  # the UI adds files one at a time, then asks POST /visit once for the whole set
         )
     except CaseError as exc:
         set_audit_context(request, details={"reason_code": exc.code})

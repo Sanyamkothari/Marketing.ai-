@@ -3,8 +3,8 @@
 Each case under `tests/fixtures/doctor_traps/<case>/` is a few small CSV files and a `case.json` written by a human:
 one line saying what the trap is, the scenario ID it comes from (`SCENARIOS.md`), what a correct result looks like,
 and the checks that grade it. The runner puts the files through the unified Data Doctor visit with **no AI** (the
-rules path) and approves, then applies the approved changes to the files with the product's own replay
-(`engine.doctor.prescription_replay`). What comes out is the table the next step would train or contact on. Only
+rules path) and approves, then applies the approved changes to the files with the run paths' own parts
+(`engine.doctor.prescription_replay`, composed as the unit tests compose them). What comes out is the table the next step would train or contact on. Only
 that table (and the questions the Doctor asked) is graded; the Doctor's own wording never counts as evidence.
 
 Two drivers walk the visit:
@@ -570,13 +570,11 @@ def _apply(
     case: TrapCase, shipped: Shipped, done: Any, world: _World, uploads: dict[str, str],
     deps: Any, config: Any, stored_brief: Callable[..., Any],
 ) -> None:  # fmt: skip
-    """The approved changes on the whole files, by the product's own replay; the main file's result is `final`."""
-    import pandas as pd
+    """The approved changes on the whole files, by the run paths' parts (`tests.unit.doctor.prescription_support.replay`); the main file's result is `final`."""
+    from tests.unit.doctor.prescription_support import replay
 
-    from engine.agent.contracts import RecipeStepKind
-    from engine.doctor.prescription import CasePrescriber, case_tables
-    from engine.doctor.prescription_replay import ReplayFile, check_files, replay_after_build, run_part_recipe
-    from engine.doctor.prescription_runs import check_prepared
+    from engine.doctor.prescription import CasePrescriber
+    from engine.doctor.prescription_replay import ReplayFile
 
     prescriber = CasePrescriber(deps.storage, load_files=deps.load_files)
     prescription = prescriber.prescription(done, stored_brief(deps.storage, done))
@@ -587,45 +585,10 @@ def _apply(
         for u in part.upload_ids
         if u in world.full
     ]
-    # The run paths' own parts, in their order: the raw-file checks, each slot's recipe and contract, then the
-    # outcome, post-build recipe and contract on the final file.
-    check_files(prescription, files)
-    prepared: dict[str, list[Any]] = {}
-    for file in files:
-        part = prescription.file(file.slot)
-        assert part is not None
-        frame = file.frame
-        if part.recipe is not None:
-            frame = run_part_recipe(
-                part.recipe,
-                frame,
-                config=config,
-                upload_id=file.upload_id or part.slot,
-                leak_check="full",
-                contract=part.contract,
-                slot=part.slot,
-            ).frame
-        prepared.setdefault(part.slot, []).append(frame)
-    frames = {
-        slot: parts[0] if len(parts) == 1 else pd.concat(parts, ignore_index=True)
-        for slot, parts in prepared.items()
-    }
-    for part in prescription.files:
-        if part.slot in frames:
-            check_prepared(part, frames[part.slot], mode="train")
-    final: Any = None
-    if len(frames) == 1 or (
-        prescription.post_build is not None
-        and any(step.kind is RecipeStepKind.SQL_QUERY for step in prescription.post_build.steps)
-    ):
-        final = replay_after_build(
-            prescription,
-            next(iter(frames.values())),
-            mode="train",
-            goal_id=goal,
-            config=config,
-            tables=case_tables(frames, prescription.files),
-        ).frame
+    # The one composition of the run paths' parts (file checks, each slot's recipe and contract, then the outcome,
+    # post-build recipe and contract on the final file), shared with the unit tests.
+    replayed = replay(prescription, files, mode="train", goal_id=goal, config=config)
+    frames, final = replayed.frames, replayed.frame
     slot_of = {u: part.slot for part in prescription.files for u in part.upload_ids}
     by_upload = {u: frames[slot] for u, slot in slot_of.items() if slot in frames}
     first = uploads[case.primary[0]]

@@ -441,7 +441,6 @@ def _prepared_verify(storage: Storage, root: Path) -> Any:
                 storage,
                 config,
                 upload=load_upload(storage, upload_id),
-                dataset_id=None,
                 primary_key=primary_key,
                 target=target,
             )

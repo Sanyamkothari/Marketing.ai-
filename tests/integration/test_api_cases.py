@@ -80,18 +80,18 @@ def test_open_read_add_and_follow_a_case(client: TestClient) -> None:
 
     added = client.post(f"/cases/{case['case_id']}/files", json={"version": 1, "upload_id": second})
     assert added.status_code == 200, added.text
-    assert added.json()["version"] > 1, "the visit goes on after the file is added"
+    assert added.json()["version"] == 2, "adding a file only writes it; the visit is asked separately"
     assert [f["upload_id"] for f in added.json()["files"]] == [first, second]
 
     timeline = client.get(f"/cases/{case['case_id']}/timeline")
     assert timeline.status_code == 200
     events = timeline.json()["events"]
-    assert [(e["kind"], e["upload_id"], e["version"]) for e in events][:3] == [
+    assert [(e["kind"], e["upload_id"], e["version"]) for e in events] == [
         ("case.created", None, 1),
         ("file.added", first, 1),
         ("file.added", second, 2),
-    ], "the first events are the case's own; the visit's follow"
-    assert events[0]["actor"] == events[2]["actor"] == "local-operator"
+    ]
+    assert {e["actor"] for e in events} == {"local-operator"}
 
 
 def test_two_writers_of_one_version_the_second_is_refused(client: TestClient) -> None:
@@ -102,7 +102,7 @@ def test_two_writers_of_one_version_the_second_is_refused(client: TestClient) ->
     assert first.status_code == 200
     assert second.status_code == 409 and code_of(second) == "CASE_VERSION_CONFLICT"
     now = client.get(f"/cases/{case['case_id']}").json()
-    assert now["version"] > 1 and [f["upload_id"] for f in now["files"]] == [a], "nothing was overwritten"
+    assert now["version"] == 2 and [f["upload_id"] for f in now["files"]] == [a], "nothing was overwritten"
 
 
 def test_another_clients_case_is_not_found(client: TestClient) -> None:

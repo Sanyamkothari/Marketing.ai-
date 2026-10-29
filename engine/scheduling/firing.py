@@ -332,48 +332,25 @@ class _Prescribed:
     ref: Any
     prescription: Any
     mode: Literal["train", "score"]
-    rows: Any = None
-    """`TrainingRows` the run trains on when the prescription changed them."""
-    carried: tuple[DataRecipe, Any] | None = None
-    """The post-build recipe the run carries to scoring, and its receipt."""
     warnings: tuple[Any, ...] = ()
 
 
 def _prescribed(
     storage: Storage,
-    config: UseCaseConfig,
     manifest: DatasetManifest,
     mode: RunMode,
     version: ModelVersion | None,
     capped: Any,
 ) -> _Prescribed | None:
-    """Plan O M243 (DEC-1813): the prescription a scheduled run follows - the one bound to its dataset, or to the
-    spec a fresh build came from - or None (switch off, or nothing bound), before anything is read. A stop is the
+    """Plan O M243 (DEC-1813): the prescription a scheduled scoring run follows - the one its model was trained
+    under - or None (nothing bound), before anything is read. A stop is the
     firing's failure code."""
     from engine.doctor.prescription import PrescriptionError
-    from engine.doctor.prescription_runs import check_for_scoring, dataset_for_training
+    from engine.doctor.prescription_runs import check_for_scoring
 
     dataset_id = manifest.dataset_id
     try:
-        if mode is RunMode.TRAIN:
-            training = dataset_for_training(
-                storage, config, dataset_id, tuple(manifest.primary_key), capped=capped
-            )
-            if training is None:
-                return None
-            return _Prescribed(
-                ref=training.ref,
-                prescription=training.prescription,
-                mode="train",
-                rows=training.rows,
-                carried=(
-                    None
-                    if training.recipe is None or training.receipt is None
-                    else (training.recipe, training.receipt)
-                ),
-                warnings=training.warnings,
-            )
-        if version is None:
+        if mode is RunMode.TRAIN or version is None:  # only a scoring run follows a prescription
             return None
         checked = check_for_scoring(storage, version.run_id, capped)
     except PrescriptionError as exc:
@@ -462,10 +439,7 @@ def start_dataset_run(
         frame_key, profile, capped = ready.source_key, ready.profile, ready.frame
     # Plan O M243 (DEC-1813): a dataset bound to a prescription trains with its
     # post-build recipe, and a model trained under one checks every dataset it scores; None otherwise.
-    prescribed = _prescribed(storage, config, manifest, mode, version, capped)
-    if prescribed is not None and prescribed.rows is not None:
-        rows = prescribed.rows
-        frame_key, profile, capped = rows.source_key, rows.profile, rows.frame
+    prescribed = _prescribed(storage, manifest, mode, version, capped)
     if mode is RunMode.TRAIN:
         report = validate.validate_for_training(
             capped,
@@ -519,11 +493,7 @@ def start_dataset_run(
         requested_by=requested_by,
         synthetic=is_demo_client(storage, manifest.client_id),  # Plan J M95: planted data stays flagged
     )
-    if prescribed is not None and prescribed.carried is not None:
-        attach_dataset_recipe(
-            storage, record.run_id, *prescribed.carried
-        )  # Plan O M243: the post-build recipe
-    elif prepared is not None:
+    if prepared is not None:
         attach_dataset_recipe(storage, record.run_id, prepared[0], prepared[1].receipt)  # Plan L M155
     if prescribed is not None:
         # Plan O M243: the run keeps its prescription's reference, its money basis and its warnings.

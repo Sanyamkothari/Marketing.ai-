@@ -4,9 +4,7 @@ Three hooks `api.routes.runs.create_run_endpoint` calls, each a no-op - returnin
 nothing is bound to a prescription (`engine.doctor.prescription_runs`), so every run is
 exactly as before:
 
-* :func:`prescribed_training` - a training run of a built dataset bound to a prescription (or built from a spec bound
-  to one) trains on the rows the prescription's steps 6-8 make: the approved outcome, the post-build recipe, the
-  contract. A training run of an upload bound to one (or, unbound, of a use case whose champion was trained under
+* :func:`prescribed_training` - a training run of an upload bound to one (or, unbound, of a use case whose champion was trained under
   one) trains on the copy the prescription makes - the file slot's recipe, the slot's contract, then the outcome,
   the post-build recipe and the final contract - after the intake, locale and currency checks. Rows nothing changes
   are checked against the contract all the same.
@@ -33,12 +31,12 @@ from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from api.schemas import UploadRecord
-    from engine.agent.contracts import DataRecipe, RecipeReceipt
+    from engine.agent.contracts import DataRecipe
     from engine.config import UseCaseConfig
     from engine.contracts import DatasetProfile, ModelVersion
     from engine.doctor.prescription import Prescription, PrescriptionError
     from engine.doctor.prescription_contract import DriftFinding
-    from engine.doctor.prescription_runs import PrescriptionRef, TrainingRows
+    from engine.doctor.prescription_runs import PrescriptionRef
     from engine.registry import ModelRegistry
     from engine.storage import Storage
 
@@ -49,18 +47,13 @@ _LOGGER = get_logger(__name__)
 
 @dataclass(frozen=True)
 class Prescribed:
-    """What a prescription changed about a run: the upload or the dataset rows it reads, and what it keeps.
-
-    `dataset_rows`: the rows a dataset trains on when the prescription changed them; `dataset_recipe`: the post-build
-    recipe the run carries to scoring, and what it did."""
+    """What a prescription changed about a run: the upload it reads, and what it keeps."""
 
     ref: PrescriptionRef
     prescription: Prescription
     mode: Literal["train", "score"]
     upload: UploadRecord | None = None
     profile: DatasetProfile | None = None
-    dataset_rows: TrainingRows | None = None
-    dataset_recipe: tuple[DataRecipe, RecipeReceipt] | None = None
     warnings: tuple[DriftFinding, ...] = field(default=())
 
 
@@ -102,7 +95,6 @@ def prescribed_training(
     config: UseCaseConfig,
     *,
     upload: UploadRecord | None,
-    dataset_id: str | None,
     primary_key: Any,
     target: str | None,
     registry: ModelRegistry | None = None,
@@ -110,28 +102,8 @@ def prescribed_training(
     """The rows a training run reads under its prescription, or None (nothing bound) before anything is
     read."""
     from engine.doctor.prescription import PrescriptionError
-    from engine.doctor.prescription_runs import dataset_for_training
 
     try:
-        if dataset_id is not None:
-            from engine.config import key_columns
-
-            training = dataset_for_training(storage, config, dataset_id, key_columns(primary_key))
-            if training is None:
-                return None
-            carried = (
-                None
-                if training.recipe is None or training.receipt is None
-                else (training.recipe, training.receipt)
-            )
-            return Prescribed(
-                ref=training.ref,
-                prescription=training.prescription,
-                mode="train",
-                dataset_rows=training.rows,
-                dataset_recipe=carried,
-                warnings=training.warnings,
-            )
         if upload is None:
             return None
         return _upload_training(

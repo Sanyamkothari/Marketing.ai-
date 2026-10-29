@@ -151,6 +151,9 @@ def test_a_file_added_after_approval_is_bound_to_the_prescription_and_reopens_th
     after = events[[e["upload_id"] for e in events].index(second) :]
     reopened = [e for e in after if e["kind"] == "state.changed" and e["details"].get("to") == "intake"]
     assert reopened, "the added file sends the visit back to intake"
+    assert (
+        added.json()["version"] == case["version"] + 1 and added.json()["state"] == "intake"
+    ), "adding a file only writes it: the visit does not run until it is asked"
 
 
 class _Killed(BaseException):
