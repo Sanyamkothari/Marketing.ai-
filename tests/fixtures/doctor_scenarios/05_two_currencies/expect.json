@@ -1,4 +1,79 @@
 {
-  "blocking_questions": ["CURRENCY_MIXED"],
-  "can_approve": false
+  "after": {
+    "first_look": {
+      "state": [
+        "ask"
+      ],
+      "files": {
+        "two_currencies.csv": 1500
+      },
+      "verdict": "needs_answers",
+      "open_blocking": [
+        "CURRENCY_MIXED"
+      ],
+      "can_approve": false,
+      "approvals": "unchanged",
+      "none_accepted_by_ai": true
+    },
+    "goal": {
+      "open_blocking": [
+        "CURRENCY_MIXED"
+      ],
+      "can_approve": false,
+      "approvals": "unchanged",
+      "no_item_has": [
+        [
+          "sum("
+        ]
+      ]
+    },
+    "euros_only": {
+      "answers": {
+        "CURRENCY_MIXED": "c1"
+      },
+      "open_blocking": []
+    },
+    "approved": {
+      "approvals": 1,
+      "none_accepted_by_ai": true
+    },
+    "euros_only#spend_outcome": {
+      "kept_items": [
+        {
+          "has": [
+            "sum(",
+            "eur"
+          ]
+        }
+      ]
+    },
+    "approved#spend_outcome": {
+      "kept_items": [
+        {
+          "has": [
+            "sum(",
+            "eur"
+          ]
+        }
+      ],
+      "verdict": "ready"
+    }
+  },
+  "final": {
+    "verdict": "ready",
+    "kept_items": [
+      {
+        "has": [
+          "sum(",
+          "eur"
+        ]
+      }
+    ]
+  },
+  "xfail": {
+    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision.",
+    "euros_only#spend_outcome": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows",
+    "approved#spend_outcome": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows",
+    "final": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows"
+  }
 }

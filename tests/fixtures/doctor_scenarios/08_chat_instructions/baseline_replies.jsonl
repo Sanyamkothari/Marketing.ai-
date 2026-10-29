@@ -1,3 +1,4 @@
+{"action": "finish", "text": "Reviewed the order log for retail win-back."}
 {"action": "reply", "text": "This dataset contains customer order transactions including dates, quantities, and prices. It is ideal for predicting customer win-back and future purchase likelihood."}
 {"action": "reply", "text": "I cannot change the 90-day window setting because the training table was created by the automated rules engine."}
 {"action": "reply", "text": "I cannot filter the training table to only United Kingdom customers because the build recipe was created by rules."}

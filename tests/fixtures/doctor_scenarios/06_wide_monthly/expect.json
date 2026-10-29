@@ -1,3 +1,60 @@
 {
-  "has_unpivot_step": true
+  "after": {
+    "first_look": {
+      "files": {
+        "wide_monthly.csv": 1500
+      },
+      "approvals": "unchanged",
+      "none_accepted_by_ai": true
+    },
+    "goal": {
+      "open_blocking": [
+        "Q26_UNPIVOT_YEAR"
+      ],
+      "can_approve": false,
+      "approvals": "unchanged"
+    },
+    "unpivot": {
+      "has_unpivot_step": true,
+      "open_blocking": [],
+      "approvals": "unchanged",
+      "accepted_items": [
+        {
+          "has": [
+            "unpivot",
+            "2023"
+          ]
+        }
+      ]
+    },
+    "unpivot#plan_runs": {
+      "open_stops": 0
+    },
+    "approved": {
+      "state": [
+        "follow_up"
+      ],
+      "verdict": "ready",
+      "files": {
+        "wide_monthly.csv": 1500
+      },
+      "approvals": 1
+    },
+    "approved#safety": {
+      "none_accepted_by_ai": true
+    }
+  },
+  "final": {
+    "state": [
+      "follow_up"
+    ],
+    "verdict": "ready"
+  },
+  "xfail": {
+    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision.",
+    "invariant:same_plan_without_ai": "AI-first Stage 2: the default author turns the fact tools' suggestion (turn the month columns into rows) into the same plan when no AI is connected.",
+    "unpivot#plan_runs": "AI-first Stage 4: one guard layer. The unpivot the Doctor offers must be a step the goal's helper may run (customer-spend's may not, so its own offer stops the plan).",
+    "approved": "AI-first Stage 4: one guard layer. The unpivot the Doctor offers must be a step the goal's helper may run, so the plan can be approved.",
+    "final": "AI-first Stage 4: one guard layer. The unpivot the Doctor offers must be a step the goal's helper may run, so the plan can be approved."
+  }
 }

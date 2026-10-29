@@ -1,5 +1,29 @@
 [
-  {"action": "upload", "file": "two_currencies", "use_case": "customer-spend"},
-  {"action": "consent"},
-  {"action": "visit"}
+  {
+    "action": "upload",
+    "file": "two_currencies",
+    "use_case": "customer-spend"
+  },
+  {
+    "action": "consent"
+  },
+  {
+    "action": "visit",
+    "name": "first_look"
+  },
+  {
+    "action": "goal",
+    "goal_id": "customer-spend",
+    "name": "goal"
+  },
+  {
+    "action": "answer",
+    "match": "currency",
+    "option": "euros",
+    "name": "euros_only"
+  },
+  {
+    "action": "approve",
+    "name": "approved"
+  }
 ]

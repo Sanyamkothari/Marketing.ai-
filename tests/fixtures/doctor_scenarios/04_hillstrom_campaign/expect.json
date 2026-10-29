@@ -1,5 +1,81 @@
 {
-  "state": ["approve", "ready", "verify", "follow_up", "hand_off"],
-  "min_rows": 1000,
-  "min_positives": 200
+  "after": {
+    "first_look": {
+      "files": {
+        "hillstrom.csv": 1500
+      },
+      "approvals": "unchanged",
+      "none_accepted_by_ai": true,
+      "item_state": [
+        {
+          "title_has": "customer_id",
+          "state": [
+            "pending",
+            "accepted"
+          ]
+        },
+        {
+          "title_has": "Remove 'spend'",
+          "state": [
+            "pending",
+            "accepted"
+          ]
+        }
+      ],
+      "no_item_has": [
+        [
+          "drop_column",
+          "segment"
+        ]
+      ]
+    },
+    "goal": {
+      "item_state": [
+        {
+          "title_has": "“conversion” in hillstrom.csv is the outcome",
+          "state": [
+            "pending",
+            "accepted"
+          ]
+        }
+      ],
+      "approvals": "unchanged"
+    },
+    "approved": {
+      "state": [
+        "follow_up"
+      ],
+      "verdict": "ready",
+      "primary_key": "customer_id",
+      "outcome": "conversion",
+      "files": {
+        "hillstrom.csv": 1500
+      },
+      "approvals": 1,
+      "none_accepted_by_ai": true,
+      "no_item_has": [
+        [
+          "drop_column",
+          "segment"
+        ]
+      ]
+    },
+    "approved#counts": {
+      "ledger": {
+        "rows_eq": 1500,
+        "positives_eq": 343,
+        "rows_min": 1000,
+        "positives_min": 200
+      }
+    }
+  },
+  "final": {
+    "state": [
+      "follow_up"
+    ],
+    "verdict": "ready"
+  },
+  "xfail": {
+    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision."
+  }
 }

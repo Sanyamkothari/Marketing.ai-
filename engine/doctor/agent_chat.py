@@ -44,7 +44,7 @@ from engine.doctor.agent_apply import person_owns
 from engine.doctor.agent_review import _NoAnswerError, _Review
 from engine.doctor.build_facts import goal_line
 from engine.doctor.lessons import approved_lessons
-from engine.doctor.protocol import Ask, AskOption, question_id_of
+from engine.doctor.protocol import DONT_KNOW, Ask, AskOption, question_id_of
 from engine.doctor.questions import catalogue_lines
 from engine.doctor.visit_contracts import OptionEffect
 from engine.generative.contracts import GenerativePurpose
@@ -659,13 +659,33 @@ class _Chat(_Review):
             self.turn.feedback.append(said)
 
     def _own(self, handle: str) -> CaseItem:
-        """One of the plan's changes (by handle or id) that it may take back or replace."""
-        item_id = self.handles.get(handle, handle)
+        """One of the agent's own changes (by the handle the state gave it) that it may take back: waiting, or
+        applied by the agent itself."""
+        item_id = self.handles.get(handle)
         item = next((i for i in self.case.items if i.item_id == item_id), None)
-        if item is None:
-            raise AgentToolError("AGENT_ITEM_UNKNOWN", f"No change found with id '{handle}'.")
+        if item is None or item.source is not ProposalSource.AI:
+            valid = sorted(
+                h
+                for h, known in self.handles.items()
+                if any(
+                    c.item_id == known
+                    and c.source is ProposalSource.AI
+                    and c.state is not ProposalState.REJECTED
+                    and not person_owns(self.case, c)
+                    for c in self.case.items
+                )
+            )
+            raise AgentToolError(
+                "AGENT_ITEM_UNKNOWN",
+                f"You have no change of your own with id '{handle}'. Your own changes: {valid or 'none'}.",
+            )
         if item.state is ProposalState.REJECTED:
-            raise AgentToolError("AGENT_ITEM_UNKNOWN", f"Change '{handle}' is already left out.")
+            raise AgentToolError("AGENT_ITEM_UNKNOWN", "That change is already left out.")
+        if person_owns(self.case, item):
+            raise AgentToolError(
+                "AGENT_ITEM_PERSONS",
+                "The person ticked that change or gave it their own yes; only they can take it back.",
+            )
         return item
 
     def _ready(self) -> bool:
@@ -876,57 +896,33 @@ class _Chat(_Review):
 
     def _suggest(self, args: dict[str, Any]) -> None:
         """Point at one answer of an open question. Nothing is recorded; the person's click does that."""
-        raw_qid = str(args.get("question_id", ""))
-        qid = self.handles.get(raw_qid, raw_qid)
-        oid = str(args.get("option_id", "")).strip()
-
-        target_q: Any = None
+        qid = self.handles.get(str(args.get("question_id", "")), "")
+        oid = str(args.get("option_id", ""))
+        labels: dict[str, str] = {}
         if qid in self.chosen.asked:
-            target_q = self.chosen.asked[qid]
+            labels = {
+                o.effect.option_id: o.label for o in self.chosen.asked[qid].options if o.label != DONT_KNOW
+            }
         else:
-            target_q = next(
-                (
-                    q
-                    for q in self.case.questions
-                    if (q.question_id == qid or self.handles.get(q.question_id) == qid) and q.answer is None
-                ),
-                None,
+            question = next(
+                (q for q in self.case.questions if q.question_id == qid and q.answer is None), None
             )
-        if target_q is None and len(self.case.questions) == 1 and self.case.questions[0].answer is None:
-            target_q = self.case.questions[0]
-
-        if target_q is None:
-            open_q_names = [
-                self.handles.get(q.question_id, q.question_id)
-                for q in self.case.questions
-                if q.answer is None
-            ]
+            if question is not None:
+                labels = {o.option_id: o.label for o in question.options if o.label != DONT_KNOW}
+        if oid not in labels:
+            open_handles = sorted(
+                h
+                for h, known in self.handles.items()
+                if known in self.chosen.asked
+                or any(q.question_id == known and q.answer is None for q in self.case.questions)
+            )
             raise AgentToolError(
                 "AGENT_SUGGESTION_UNKNOWN",
-                f"No open question found matching '{raw_qid}'. Open questions: {open_q_names or 'none'}.",
+                "Suggest an answer of a question that is open, by its ids. "
+                f"Open questions: {open_handles or 'none'}. "
+                + (f"Choices of '{args.get('question_id')}': {sorted(labels)}." if labels else ""),
             )
-
-        actual_qid = getattr(target_q, "question_id", qid)
-        # Match option by option_id, handle or label
-        options = getattr(target_q, "options", ())
-        matched_oid = None
-        for o in options:
-            opt_id = getattr(o, "option_id", getattr(getattr(o, "effect", None), "option_id", ""))
-            opt_label = getattr(o, "label", "")
-            if oid in (opt_id, self.handles.get(opt_id)) or oid.casefold() == opt_label.casefold():
-                matched_oid = opt_id
-                break
-
-        if matched_oid is None:
-            opt_names = [
-                getattr(o, "option_id", getattr(getattr(o, "effect", None), "option_id", "")) for o in options
-            ]
-            raise AgentToolError(
-                "AGENT_SUGGESTION_UNKNOWN",
-                f"Option '{oid}' does not match any choice for question '{actual_qid}'. Choices: {opt_names}.",
-            )
-
-        self.chosen.suggestions[actual_qid] = matched_oid
+        self.chosen.suggestions[qid] = oid
         self.turn.feedback.append({"suggested": str(args.get("question_id"))})
 
     # -- files -------------------------------------------------------------------------------------

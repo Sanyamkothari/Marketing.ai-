@@ -1,5 +1,66 @@
 {
-  "state": ["approve", "ready", "verify", "follow_up", "hand_off"],
-  "min_rows": 1000,
-  "min_positives": 200
+  "after": {
+    "first_look": {
+      "files": {
+        "churn_list.csv": 1500
+      },
+      "approvals": "unchanged",
+      "none_accepted_by_ai": true,
+      "item_state": [
+        {
+          "title_has": "customerID",
+          "state": [
+            "pending",
+            "accepted"
+          ]
+        }
+      ]
+    },
+    "goal": {
+      "open_blocking": [],
+      "can_approve": true,
+      "verdict": "needs_approval",
+      "approvals": "unchanged",
+      "item_state": [
+        {
+          "title_has": "“Churn” in churn_list.csv is the outcome",
+          "state": [
+            "pending",
+            "accepted"
+          ]
+        }
+      ]
+    },
+    "approved": {
+      "state": [
+        "follow_up"
+      ],
+      "verdict": "ready",
+      "primary_key": "customerID",
+      "outcome": "Churn",
+      "files": {
+        "churn_list.csv": 1500
+      },
+      "approvals": 1,
+      "none_accepted_by_ai": true
+    },
+    "approved#counts": {
+      "outcome_counts": {
+        "file": "churn_list.csv",
+        "column": "Churn",
+        "positive": "Yes",
+        "rows_min": 1000,
+        "positives_min": 200
+      }
+    }
+  },
+  "final": {
+    "state": [
+      "follow_up"
+    ],
+    "verdict": "ready"
+  },
+  "xfail": {
+    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision."
+  }
 }

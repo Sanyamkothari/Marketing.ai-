@@ -1,5 +1,65 @@
 {
-  "state": ["approve", "ready", "verify", "follow_up", "hand_off"],
-  "min_rows": 1000,
-  "min_positives": 200
+  "after": {
+    "first_look": {
+      "files": {
+        "bank_marketing.csv": 1500
+      },
+      "approvals": "unchanged",
+      "none_accepted_by_ai": true
+    },
+    "first_look#no_invented_key": {
+      "no_item_has": [
+        [
+          "names each row of bank_marketing.csv"
+        ]
+      ]
+    },
+    "goal": {
+      "open_blocking": [],
+      "item_state": [
+        {
+          "title_has": "“y” in bank_marketing.csv is the outcome",
+          "state": [
+            "pending",
+            "accepted"
+          ]
+        }
+      ]
+    },
+    "approved": {
+      "state": [
+        "follow_up"
+      ],
+      "verdict": "ready",
+      "outcome": "y",
+      "files": {
+        "bank_marketing.csv": 1500
+      },
+      "approvals": 1,
+      "none_accepted_by_ai": true
+    },
+    "approved#no_invented_key": {
+      "primary_key": null
+    },
+    "approved#counts": {
+      "outcome_counts": {
+        "file": "bank_marketing.csv",
+        "column": "y",
+        "positive": "yes",
+        "rows_min": 1000,
+        "positives_min": 200
+      }
+    }
+  },
+  "final": {
+    "state": [
+      "follow_up"
+    ],
+    "verdict": "ready"
+  },
+  "xfail": {
+    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision.",
+    "first_look#no_invented_key": "AI-first Stage 1: the key fact tool reports that no column names the rows and the author asks, instead of the rules proposing a measurement ('balance') as the ID.",
+    "approved#no_invented_key": "AI-first Stage 1: the key fact tool reports that no column names the rows and the author asks, instead of the rules proposing a measurement ('balance') as the ID."
+  }
 }

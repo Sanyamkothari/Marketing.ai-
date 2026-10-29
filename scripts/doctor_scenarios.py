@@ -10,8 +10,10 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +25,12 @@ from fastapi.testclient import TestClient
 import engine.ai_service as ai_service
 from api.main import create_app
 from engine.llm import APPROX_CHARS_PER_TOKEN, FakeLLMClient, FakeLLMMode, LLMCall, LLMCompletion
+from scripts.doctor_scenario_checks import (
+    INVARIANTS,
+    check_invariants,
+    evaluate,
+    plan_kind,
+)
 from scripts.doctor_scenario_data import (
     generate_bank_marketing,
     generate_churn_list,
@@ -38,7 +46,6 @@ __all__ = [
     "ReplayLLMClient",
     "ScenarioResult",
     "UsageTracker",
-    "check_invariants",
     "run_scenario",
 ]
 
@@ -89,6 +96,8 @@ class ReplayLLMClient(FakeLLMClient):
         self.prompt_log_path = prompt_log_path
         self.usage_tracker = usage_tracker
         self.reply_index = 0
+        self.prompts: list[str] = []
+        """Every prompt the AI was sent, for the invariant that reads the refusals it received."""
 
     def complete(
         self,
@@ -102,6 +111,7 @@ class ReplayLLMClient(FakeLLMClient):
         input_chars = len(system) + len(prompt)
         in_tokens = -(-len(system) // APPROX_CHARS_PER_TOKEN) + -(-len(prompt) // APPROX_CHARS_PER_TOKEN)
         self.usage_tracker.record_call(input_chars=input_chars, input_tokens=in_tokens)
+        self.prompts.append(prompt)
 
         if self.reply_index < len(self.replies):
             text = self.replies[self.reply_index].strip()
@@ -133,7 +143,6 @@ class ReplayLLMClient(FakeLLMClient):
         # Out of replies: log prompt to next_prompt.txt and stop run cleanly!
         prompt_content = f"=== SYSTEM ===\n{system}\n\n=== USER ===\n{prompt}\n"
         self.prompt_log_path.write_text(prompt_content, encoding="utf-8")
-        Path("next_prompt.txt").write_text(prompt_content, encoding="utf-8")
         print(f"\n[REPLAY] Out of replies! Next prompt written to {self.prompt_log_path}")
         print(self.usage_tracker.cost_line())
         raise OutOfRepliesError(f"Scenario out of recorded replies. Prompt written to {self.prompt_log_path}")
@@ -146,82 +155,36 @@ class ScenarioResult:
     name: str
     status: str  # "PASS" or "FAIL"
     cost_line: str
-    invariant_violations: list[str] = field(default_factory=list)
-    expectation_failures: list[str] = field(default_factory=list)
+    invariants: dict[str, list[str]] = field(default_factory=dict)
+    """Invariants 1 to 6: what broke, by invariant, over every step."""
+    checkpoints: dict[str, list[str]] = field(default_factory=dict)
+    """What differs from `expect.json`, by checkpoint: the names of its `after` steps, and `final`."""
     chat_results: dict[str, str] = field(default_factory=dict)
+    plan_kind: tuple[Any, ...] = ()
+    """The kind of plan before the first chat message (or at the end), for invariant 7."""
+    replies_from: str = ""
     details: str = ""
+    notes: list[str] = field(default_factory=list)
+    """What the person's script could not do, by step: no such question, no such change, an approval the app refused."""
+
+    @property
+    def invariant_violations(self) -> list[str]:
+        return [f"{name}: {v}" for name, found in self.invariants.items() for v in found]
+
+    @property
+    def expectation_failures(self) -> list[str]:
+        return [f"{name}: {v}" for name, found in self.checkpoints.items() for v in found]
 
 
-def check_invariants(case: dict[str, Any], screen: dict[str, Any] | None = None) -> list[str]:
-    """Check the 7 required invariants on the case state and screen."""
-    violations: list[str] = []
+@dataclass
+class _Step:
+    """The case and screen after one step of the person's script."""
 
-    # Invariant 1: No plan item reaches accepted without a person's decision or approval
-    approvals = case.get("approvals", [])
-    has_approval = len(approvals) > 0
-    for item in case.get("items", []):
-        if item.get("state") == "accepted":
-            decided_by = str(item.get("decided_by") or "")
-            # Valid decision: by person (user id, not rules or agent) or covered by approval
-            is_person = (
-                bool(decided_by)
-                and not decided_by.startswith("system:")
-                and not decided_by.startswith("rules")
-                and not decided_by.startswith("agent:")
-            )
-            if not is_person and not has_approval:
-                violations.append(
-                    f"Invariant 1 violation: item '{item.get('item_id')}' accepted without person decision (decided_by={decided_by})"
-                )
-
-    # Invariant 2: The plan never contains a feature that reads data after the snapshot
-    for item in case.get("items", []):
-        payload = item.get("payload") or {}
-        if isinstance(payload, dict) and payload.get("reads_future") and not payload.get("outcome"):
-            violations.append(
-                f"Invariant 2 violation: item '{item.get('item_id')}' reads future data outside outcome"
-            )
-
-    # Invariant 3: Screen numbers equal AI numbers for the same item; sample counts marked
-    if screen is not None:
-        screen_items = screen.get("items") or screen.get("view", {}).get("items") or []
-        for s_item in screen_items:
-            if isinstance(s_item, dict):
-                item_id = s_item.get("item_id")
-                matching = next((i for i in case.get("items", []) if i.get("item_id") == item_id), None)
-                if matching is not None:
-                    # check count consistency if rows are presented
-                    s_rows = s_item.get("rows")
-                    m_rows = matching.get("payload", {}).get("tried", {}).get("rows")
-                    if s_rows is not None and m_rows is not None and s_rows != m_rows:
-                        violations.append(
-                            f"Invariant 3 violation: screen rows ({s_rows}) != case rows ({m_rows}) for {item_id}"
-                        )
-
-    # Invariant 4: Every refusal the AI received has a non-empty how_to_fix
-    for chat_entry in case.get("chat", []):
-        if isinstance(chat_entry, dict) and chat_entry.get("role") == "agent":
-            blocked_by = chat_entry.get("blocked_by")
-            error_codes = chat_entry.get("error_codes") or []
-            if blocked_by or error_codes:
-                text = str(chat_entry.get("text") or "")
-                if not text:
-                    violations.append(
-                        f"Invariant 4 violation: agent refusal has empty explanation: {chat_entry}"
-                    )
-
-    # Invariant 6: No tool call stops the visit for size (no TOOL_OUTPUT_TOO_LARGE reaching person)
-    for chat_entry in case.get("chat", []):
-        if isinstance(chat_entry, dict):
-            error_codes = chat_entry.get("error_codes") or []
-            if "TOOL_OUTPUT_TOO_LARGE" in error_codes:
-                violations.append("Invariant 6 violation: TOOL_OUTPUT_TOO_LARGE reached the chat/person")
-            if "TOOL_OUTPUT_TOO_LARGE" in str(chat_entry.get("text", "")):
-                violations.append(
-                    "Invariant 6 violation: TOOL_OUTPUT_TOO_LARGE reached the person in reply text"
-                )
-
-    return violations
+    case: dict[str, Any]
+    screen: dict[str, Any] | None
+    previous: dict[str, Any] | None
+    notes: list[str]
+    frames: dict[str, pd.DataFrame]
 
 
 def _get_fixture_frame(fixture_name: str) -> pd.DataFrame:
@@ -247,309 +210,291 @@ def _get_fixture_frame(fixture_name: str) -> pd.DataFrame:
     raise ValueError(f"Unknown fixture name: {fixture_name}")
 
 
+def _csv(frame: pd.DataFrame) -> bytes:
+    buf = io.StringIO()
+    frame.to_csv(buf, index=False)
+    return buf.getvalue().encode()
+
+
+class _Person:
+    """The person: plays the script of `person.json` against the app, one action at a time."""
+
+    def __init__(self, client: TestClient) -> None:
+        self.client = client
+        self.case_id = ""
+        self.case: dict[str, Any] = {}
+        self.frames: dict[str, pd.DataFrame] = {}
+        self.notes: list[str] = []
+
+    def _upload(self, name: str, frame: pd.DataFrame, use_case: str) -> str:
+        self.frames[f"{name}.csv"] = frame
+        res = self.client.post(
+            "/uploads",
+            files={"file": (f"{name}.csv", _csv(frame), "text/csv")},
+            data={"use_case": use_case, "mode": "train"},
+        )
+        assert res.status_code == 201, res.text
+        return str(res.json()["upload_id"])
+
+    def upload(self, action: dict[str, Any]) -> None:
+        file_key, use_case = str(action.get("file")), str(action.get("use_case", ""))
+        if file_key == "customers_and_orders":
+            customers, orders = generate_customers_and_orders()
+            ids = [self._upload("customers", customers, use_case), self._upload("orders", orders, use_case)]
+        else:
+            ids = [self._upload(file_key, _get_fixture_frame(file_key), use_case)]
+        res = self.client.post("/cases", json={"upload_ids": ids})
+        assert res.status_code == 201, res.text
+        self.case = res.json()
+        self.case_id = str(self.case["case_id"])
+
+    def consent(self, _action: dict[str, Any]) -> None:
+        res = self.client.post(f"/cases/{self.case_id}/ai-consent", json={})
+        assert res.status_code == 200, res.text
+        self.case = self.client.get(f"/cases/{self.case_id}").json()
+
+    def visit(self, _action: dict[str, Any]) -> None:
+        res = self.client.post(f"/cases/{self.case_id}/visit", json={})
+        assert res.status_code == 200, res.text
+        self.case = res.json()
+
+    def goal(self, action: dict[str, Any]) -> None:
+        res = self.client.post(
+            f"/cases/{self.case_id}/goal",
+            json={"goal_id": str(action.get("goal_id")), "version": self.case["version"]},
+        )
+        assert res.status_code == 200, res.text
+        self.case = res.json()
+
+    def answer(self, action: dict[str, Any]) -> None:
+        match = str(action.get("match", "")).lower()
+        option = str(action.get("option", "recommended"))
+        question = next(
+            (
+                q
+                for q in self.case.get("questions", [])
+                if q.get("answer") is None
+                and (
+                    not match
+                    or match in str(q.get("text", "")).lower()
+                    or match in str(q.get("code", "")).lower()
+                )
+            ),
+            None,
+        )
+        if question is None:
+            self.notes.append(f"the person found no open question matching '{match}'")
+            return
+        option_id = question.get("recommended") if option == "recommended" else None
+        for o in question.get("options", []):
+            if option_id is None and (
+                option in str(o.get("label", "")).lower() or option == o.get("option_id")
+            ):
+                option_id = o.get("option_id")
+        if option_id is None:
+            self.notes.append(f"question '{question.get('code')}' has no option '{option}'")
+            return
+        res = self.client.post(
+            f"/cases/{self.case_id}/answers",
+            json={
+                "version": self.case["version"],
+                "question_id": question["question_id"],
+                "option_id": option_id,
+                "value": action.get("value"),
+            },
+        )
+        assert res.status_code == 200, res.text
+        self.case = res.json()
+
+    def decide(self, action: dict[str, Any]) -> None:
+        """Say yes (or no) to the first change waiting for the person whose title or payload holds `match` (a word,
+        or a list of words of which any will do)."""
+        raw = action.get("match", "")
+        match = [str(m).lower() for m in (raw if isinstance(raw, list) else [raw])]
+        item = next(
+            (
+                i
+                for i in self.case.get("items", [])
+                if i.get("state") == "pending"
+                and any(
+                    m in json.dumps([i.get("title"), i.get("payload")], default=str).lower() for m in match
+                )
+            ),
+            None,
+        )
+        if item is None:
+            self.notes.append(f"the person found no change waiting for a yes that matches {match}")
+            return
+        res = self.client.post(
+            f"/cases/{self.case_id}/decisions",
+            json={
+                "version": self.case["version"],
+                "item_id": item["item_id"],
+                "accept": bool(action.get("accept", True)),
+                "park_for": action.get("park_for"),
+            },
+        )
+        if res.status_code != 200:
+            self.notes.append(f"the app refused the person's decision on {match}: {res.text[:200]}")
+            return
+        self.case = res.json()
+
+    def chat(self, action: dict[str, Any]) -> None:
+        res = self.client.post(
+            f"/cases/{self.case_id}/chat",
+            json={"version": self.case["version"], "message": str(action.get("message", ""))},
+        )
+        if res.status_code != 200:
+            self.notes.append(f"the chat was refused: {res.text[:200]}")
+            return
+        self.case = res.json()
+
+    def _wait_for_full_check(self, seconds: float = 120.0) -> None:
+        """Approve is refused while the count of the whole file runs beside the request: wait, as the screen's poll
+        does (each tick asks the visit to continue, which takes a finished count into the case)."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            res = self.client.post(f"/cases/{self.case_id}/visit", json={})
+            assert res.status_code == 200, res.text
+            self.case = res.json()
+            shown = (self.client.get(f"/cases/{self.case_id}/screen").json().get("view") or {}).get(
+                "full_check"
+            )
+            if shown is None or shown["state"] in {"done", "failed"}:
+                return
+            time.sleep(0.05)
+        self.notes.append("the check of the whole file did not finish")
+
+    def approve(self, _action: dict[str, Any]) -> None:
+        """Say yes to the one approval on the screen, once the screen has one and the app accepts it."""
+        deadline = time.monotonic() + 120
+        while True:
+            self._wait_for_full_check()
+            view = (self.client.get(f"/cases/{self.case_id}/screen").json().get("view")) or {}
+            approval = view.get("approval")
+            if not approval or not approval.get("sentence") or not approval.get("digest"):
+                if (view.get("verdict") or {}).get("key") == "working" and time.monotonic() < deadline:
+                    time.sleep(0.2)
+                    continue
+                self.notes.append("the screen offers nothing to approve")
+                return
+            yeses = [
+                {k: y.get(k) for k in ("kind", "key", "item_id", "sentence")}
+                | {"reason": y.get("reason", "")}
+                for y in approval.get("yeses", [])
+            ]
+            res = self.client.post(
+                f"/cases/{self.case_id}/approval",
+                json={
+                    "version": self.case["version"],
+                    "sentence": approval["sentence"],
+                    "digest": approval["digest"],
+                    "yeses": yeses,
+                },
+            )
+            if res.status_code == 409 and "FULL_CHECK_RUNNING" in res.text and time.monotonic() < deadline:
+                time.sleep(0.2)
+                continue
+            if res.status_code != 200:
+                self.notes.append(f"the app refused the approval: {res.text[:200]}")
+                return
+            self.case = res.json()
+            return
+
+
+def _replies_for(scenario_path: Path) -> tuple[list[str], str]:
+    """The recorded replies: `replies.jsonl` once an AI player has recorded them, else the baseline of today."""
+    for name in ("replies.jsonl", "baseline_replies.jsonl"):
+        file = scenario_path / name
+        if file.exists():
+            return [
+                line.strip() for line in file.read_text(encoding="utf-8").splitlines() if line.strip()
+            ], name
+    return [], ""
+
+
 def run_scenario(
     scenario_path: Path,
     *,
     with_ai: bool = True,
     config_root: Path = Path("configs"),
 ) -> ScenarioResult:
-    """Run a scenario end-to-end, checking invariants and expectations."""
+    """Run a scenario end-to-end, checking the invariants after every step and the expectations at their steps."""
     name = scenario_path.name
     person_file = scenario_path / "person.json"
     expect_file = scenario_path / "expect.json"
-    replies_file = scenario_path / "replies.jsonl"
-    prompt_log_path = scenario_path / "next_prompt.txt"
-
     if not person_file.exists():
         raise FileNotFoundError(f"Missing person.json in {scenario_path}")
 
-    person_actions: list[dict[str, Any]] = json.loads(person_file.read_text(encoding="utf-8"))
+    script: list[dict[str, Any]] = json.loads(person_file.read_text(encoding="utf-8"))
     expectations: dict[str, Any] = (
         json.loads(expect_file.read_text(encoding="utf-8")) if expect_file.exists() else {}
     )
-
-    replies: list[str] = []
-    if replies_file.exists():
-        replies = [
-            line.strip() for line in replies_file.read_text(encoding="utf-8").splitlines() if line.strip()
-        ]
+    replies, replies_from = _replies_for(scenario_path)
 
     usage_tracker = UsageTracker()
-    replay_client = ReplayLLMClient(replies, prompt_log_path, usage_tracker) if with_ai else None
-
-    import shutil
-
+    replay_client = (
+        ReplayLLMClient(replies, scenario_path / "next_prompt.txt", usage_tracker) if with_ai else None
+    )
     temp_dir = tempfile.mkdtemp()
-    data_dir = Path(temp_dir)
     old_fake_env = os.environ.get("MARKETING_AI_ALLOW_FAKE_AI")
     os.environ["MARKETING_AI_ALLOW_FAKE_AI"] = "true" if with_ai else "false"
-
     old_build_client = ai_service.build_client
-    if with_ai and replay_client is not None:
-        ai_service.build_client = lambda *_args, **_kwargs: replay_client
-    elif not with_ai:
-        ai_service.build_client = lambda *_args, **_kwargs: None  # type: ignore[assignment]
+    ai_service.build_client = lambda *_args, **_kwargs: replay_client  # type: ignore[assignment]
 
-    invariant_violations: list[str] = []
-    expectation_failures: list[str] = []
+    invariants: dict[str, list[str]] = {n: [] for n in INVARIANTS}
+    steps: dict[str, _Step] = {}
     chat_results: dict[str, str] = {}
-    case: dict[str, Any] = {}
+    kind_before_chat: tuple[Any, ...] | None = None
+    last: _Step | None = None
+    app: Any = None
+    memo: dict[Any, Any] = {}
+    prompts_seen = 0
+    all_notes: list[str] = []
 
     try:
-        app = create_app(config_root=config_root, data_dir=data_dir)
+        app = create_app(config_root=config_root, data_dir=Path(temp_dir))
         with TestClient(app) as client:
-            case_id = ""
-
-            for action in person_actions:
+            person = _Person(client)
+            for number, action in enumerate(script):
                 kind = str(action.get("action"))
+                if kind == "chat" and kind_before_chat is None:
+                    kind_before_chat = plan_kind(person.case)
+                if kind == "chat" and not with_ai:
+                    break  # nobody to answer: the chat is the AI's, and what follows it builds on its answers
+                previous = person.case
+                person.notes = []
+                getattr(person, kind)(action)
 
-                if kind == "upload":
-                    file_key = str(action.get("file"))
-                    use_case = str(action.get("use_case", ""))
-                    if file_key == "customers_and_orders":
-                        # Two uploads
-                        cust_df, ords_df = generate_customers_and_orders()
-                        c_buf = io.StringIO()
-                        cust_df.to_csv(c_buf, index=False)
-                        o_buf = io.StringIO()
-                        ords_df.to_csv(o_buf, index=False)
-
-                        res_c = client.post(
-                            "/uploads",
-                            files={"file": ("customers.csv", c_buf.getvalue().encode(), "text/csv")},
-                            data={"use_case": use_case, "mode": "train"},
-                        )
-                        assert res_c.status_code == 201, res_c.text
-                        u1 = str(res_c.json()["upload_id"])
-
-                        res_o = client.post(
-                            "/uploads",
-                            files={"file": ("orders.csv", o_buf.getvalue().encode(), "text/csv")},
-                            data={"use_case": use_case, "mode": "train"},
-                        )
-                        assert res_o.status_code == 201, res_o.text
-                        u2 = str(res_o.json()["upload_id"])
-
-                        case_res = client.post("/cases", json={"upload_ids": [u1, u2]})
-                    else:
-                        frame = _get_fixture_frame(file_key)
-                        buf = io.StringIO()
-                        frame.to_csv(buf, index=False)
-                        res = client.post(
-                            "/uploads",
-                            files={"file": (f"{file_key}.csv", buf.getvalue().encode(), "text/csv")},
-                            data={"use_case": use_case, "mode": "train"},
-                        )
-                        assert res.status_code == 201, res.text
-                        upload_id = str(res.json()["upload_id"])
-                        case_res = client.post("/cases", json={"upload_ids": [upload_id]})
-
-                    assert case_res.status_code == 201, case_res.text
-                    case = case_res.json()
-                    case_id = str(case["case_id"])
-
-                elif kind == "consent":
-                    c_res = client.post(f"/cases/{case_id}/ai-consent", json={})
-                    assert c_res.status_code == 200, c_res.text
-                    case = client.get(f"/cases/{case_id}").json()
-
-                elif kind == "visit":
-                    v_res = client.post(f"/cases/{case_id}/visit", json={})
-                    assert v_res.status_code == 200, v_res.text
-                    case = v_res.json()
-
-                elif kind == "goal":
-                    goal_id = str(action.get("goal_id"))
-                    g_res = client.post(
-                        f"/cases/{case_id}/goal",
-                        json={"goal_id": goal_id, "version": case["version"]},
-                    )
-                    assert g_res.status_code == 200, g_res.text
-                    case = g_res.json()
-
-                elif kind == "answer":
-                    match = str(action.get("match", "")).lower()
-                    opt = str(action.get("option", "recommended"))
-                    open_q = None
-                    for q in case.get("questions", []):
-                        q_text = str(q.get("text", "")).lower()
-                        q_code = str(q.get("code", "")).lower()
-                        if q.get("answer") is None and (not match or match in q_text or match in q_code):
-                            open_q = q
-                            break
-                    if open_q is not None:
-                        opt_id = open_q.get("recommended") if opt == "recommended" else None
-                        if opt_id is None:
-                            for o in open_q.get("options", []):
-                                if opt in str(o.get("label", "")).lower() or opt == o.get("option_id"):
-                                    opt_id = o.get("option_id")
-                                    break
-                        if opt_id is None and open_q.get("options"):
-                            opt_id = open_q["options"][0].get("option_id")
-                        if opt_id is not None:
-                            a_res = client.post(
-                                f"/cases/{case_id}/answers",
-                                json={
-                                    "version": case["version"],
-                                    "question_id": open_q["question_id"],
-                                    "option_id": opt_id,
-                                    "value": action.get("value"),
-                                },
-                            )
-                            assert a_res.status_code == 200, a_res.text
-                            case = a_res.json()
-
-                elif kind == "decide":
-                    match = str(action.get("match", "")).lower()
-                    accept = bool(action.get("accept", True))
-                    matched_item = None
-                    for item in case.get("items", []):
-                        title = str(item.get("title", "")).lower()
-                        item_id = str(item.get("item_id", "")).lower()
-                        if match in title or match in item_id:
-                            matched_item = item
-                            break
-                    if matched_item is not None:
-                        d_res = client.post(
-                            f"/cases/{case_id}/decisions",
-                            json={
-                                "version": case["version"],
-                                "item_id": matched_item["item_id"],
-                                "accept": accept,
-                                "park_for": action.get("park_for"),
-                            },
-                        )
-                        if d_res.status_code == 200:
-                            case = d_res.json()
-
-                elif kind == "chat":
-                    msg = str(action.get("message", ""))
-                    inst_id = str(action.get("instruction_id", ""))
-                    chat_res = client.post(
-                        f"/cases/{case_id}/chat",
-                        json={"version": case["version"], "message": msg},
-                    )
-                    if chat_res.status_code == 200:
-                        case = chat_res.json()
-                        reply = case.get("chat", [])[-1].get("text", "")
-                        if inst_id:
-                            chat_results[inst_id] = reply
-
-                elif kind == "approve":
-                    s_res = client.get(f"/cases/{case_id}/screen")
-                    if s_res.status_code == 200:
-                        screen = s_res.json()
-                        approval = screen.get("approval") or screen.get("view", {}).get("approval")
-                        if approval and approval.get("sentence") and approval.get("digest"):
-                            filtered_yeses = [
-                                {
-                                    "kind": y["kind"],
-                                    "key": y.get("key"),
-                                    "item_id": y.get("item_id"),
-                                    "sentence": y.get("sentence"),
-                                    "reason": y.get("reason", ""),
-                                }
-                                for y in approval.get("yeses", [])
-                            ]
-                            app_res = client.post(
-                                f"/cases/{case_id}/approval",
-                                json={
-                                    "version": case["version"],
-                                    "sentence": approval["sentence"],
-                                    "digest": approval["digest"],
-                                    "yeses": filtered_yeses,
-                                },
-                            )
-                            if app_res.status_code == 200:
-                                case = app_res.json()
-
-                # Invariant checks after every step
-                s_res = client.get(f"/cases/{case_id}/screen")
-                screen_data = s_res.json() if s_res.status_code == 200 else None
-                step_violations = check_invariants(case, screen_data)
-                for v in step_violations:
-                    if v not in invariant_violations:
-                        invariant_violations.append(v)
-
-            # Check final expectations from expect.json
-            if "state" in expectations:
-                expected_states = expectations["state"]
-                if isinstance(expected_states, str):
-                    expected_states = [expected_states]
-                if case.get("state") not in expected_states:
-                    expectation_failures.append(
-                        f"Expected state in {expected_states}, got '{case.get('state')}'"
-                    )
-
-            if "min_rows" in expectations:
-                expected_min = int(expectations["min_rows"])
-                screen_rows = screen_data.get("rows") if screen_data else None
-                if screen_rows is not None and screen_rows < expected_min:
-                    expectation_failures.append(f"Expected >= {expected_min} rows, got {screen_rows}")
-
-            if "min_positives" in expectations:
-                expected_pos = int(expectations["min_positives"])
-                pos = None
-                for item in case.get("items", []):
-                    if "buildable" in item.get("payload", {}):
-                        pos = item.get("payload", {}).get("buildable", {}).get("yes")
-                if pos is not None and pos < expected_pos:
-                    expectation_failures.append(f"Expected >= {expected_pos} positives, got {pos}")
-
-            if "blocking_questions" in expectations:
-                expected_bq = expectations["blocking_questions"]
-                actual_bq = [
-                    q.get("code")
-                    for q in case.get("questions", [])
-                    if q.get("blocking") and q.get("answer") is None
-                ]
-                for b in expected_bq:
-                    if b not in actual_bq:
-                        expectation_failures.append(f"Expected blocking question '{b}', got {actual_bq}")
-
-            if "can_approve" in expectations:
-                expected_can_approve = bool(expectations["can_approve"])
-                actual_can_approve = bool(
-                    screen_data
-                    and (screen_data.get("approval") or screen_data.get("view", {}).get("approval"))
+                screen_res = client.get(f"/cases/{person.case_id}/screen")
+                screen = screen_res.json() if screen_res.status_code == 200 else None
+                prompts = replay_client.prompts[prompts_seen:] if replay_client is not None else []
+                prompts_seen += len(prompts)
+                found = check_invariants(
+                    person.case,
+                    screen,
+                    previous=previous,
+                    instruction=action if kind == "chat" else None,
+                    prompts=prompts,
+                    frames=person.frames,
+                    memo=memo,
                 )
-                if actual_can_approve != expected_can_approve:
-                    expectation_failures.append(
-                        f"Expected can_approve={expected_can_approve}, got {actual_can_approve}"
-                    )
-
-            if "has_unpivot_step" in expectations:
-                unpivot_items = [
-                    item
-                    for item in case.get("items", [])
-                    if item.get("payload", {}).get("step", {}).get("kind") == "unpivot"
-                    or "unpivot" in item.get("kind", "").lower()
-                ]
-                if expectations["has_unpivot_step"] and not unpivot_items:
-                    expectation_failures.append("Expected unpivot step in case items, none found")
-
-            if "has_join_step" in expectations:
-                join_items = [
-                    item
-                    for item in case.get("items", [])
-                    if "join" in str(item.get("payload", {})).lower()
-                    or "join" in str(item.get("title", "")).lower()
-                    or "combine" in str(item.get("title", "")).lower()
-                    or "build_dataset" in item.get("kind", "").lower()
-                ]
-                if expectations["has_join_step"] and not join_items:
-                    expectation_failures.append("Expected join step in case items, none found")
-
-            if "instructions_tested" in expectations:
-                expected_count = int(expectations["instructions_tested"])
-                actual_count = len(chat_results)
-                if actual_count < expected_count:
-                    expectation_failures.append(
-                        f"Expected {expected_count} chat responses, got {actual_count}"
-                    )
-
+                for invariant, violations in found.items():
+                    # a violation that lasts over many steps is reported once, at the step it first showed
+                    invariants[invariant] += [
+                        f"step {number} ({kind}): {v}"
+                        for v in violations
+                        if not any(e.endswith(f": {v}") for e in invariants[invariant])
+                    ]
+                all_notes += [f"step {number} ({kind}): {n}" for n in person.notes]
+                last = _Step(person.case, screen, previous, list(person.notes), person.frames)
+                if action.get("name"):
+                    steps[str(action["name"])] = last
+                if kind == "chat" and action.get("instruction_id"):
+                    reply = person.case.get("chat", [{}])[-1].get("text", "")
+                    chat_results[str(action["instruction_id"])] = reply
     finally:
-        jobs_runner = getattr(app.state, "jobs", None)
+        jobs_runner = getattr(getattr(app, "state", None), "jobs", None)
         if jobs_runner is not None and hasattr(jobs_runner, "shutdown"):
             with contextlib.suppress(Exception):
                 jobs_runner.shutdown(wait=True)
@@ -560,14 +505,41 @@ def run_scenario(
             os.environ["MARKETING_AI_ALLOW_FAKE_AI"] = old_fake_env
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-    status = "PASS" if not expectation_failures and not invariant_violations else "FAIL"
+    checkpoints: dict[str, list[str]] = {}
+    # `after` maps a step's name to what must hold once it is done; "name#label" adds a second, separately
+    # reported group for the same step; "final" is the last step of the script.
+    for checkpoint, checks in {
+        **expectations.get("after", {}),
+        "final": expectations.get("final", {}),
+    }.items():
+        step_name = checkpoint.split("#")[0]
+        step = last if step_name == "final" else steps.get(step_name)
+        if step is None:
+            checkpoints[checkpoint] = [f"no step named '{step_name}' ran"]
+            continue
+        checkpoints[checkpoint] = evaluate(
+            checks,
+            step.case,
+            step.screen,
+            previous=step.previous,
+            notes=(
+                [] if checkpoint.endswith("#safety") else step.notes
+            ),  # a "#safety" group asks for safety, not for the step to have done anything
+            frames=step.frames,
+            earlier={n: s.case for n, s in steps.items()},
+        )
+
+    failed = any(checkpoints.values()) or any(invariants.values())
     return ScenarioResult(
         name=name,
-        status=status,
+        status="FAIL" if failed else "PASS",
         cost_line=usage_tracker.cost_line(),
-        invariant_violations=invariant_violations,
-        expectation_failures=expectation_failures,
+        invariants=invariants,
+        checkpoints=checkpoints,
         chat_results=chat_results,
+        plan_kind=kind_before_chat if kind_before_chat is not None else plan_kind(last.case if last else {}),
+        replies_from=replies_from,
+        notes=all_notes,
     )
 
 
@@ -591,7 +563,7 @@ def main() -> None:
             res = run_scenario(sc_path, with_ai=not args.no_ai)
             results.append(res)
             print(f"Status: {res.status}")
-            print(res.cost_line)
+            print(res.cost_line, f"(replies: {res.replies_from or 'none'})")
             if res.invariant_violations:
                 print(f"Invariant violations ({len(res.invariant_violations)}):")
                 for v in res.invariant_violations:
