@@ -13,8 +13,9 @@ holds a sample, the ID and date columns alone are read over the whole file (`Loa
 goal's outcome names a narrower audience (`configs/outcomes.yaml`: `audience`, such as the shoppers who have gone
 quiet for 90 days), both readings are counted and the person picks one; the code never narrows it on its own. The
 build is proposed afterwards (`engine.doctor.visit`, through `propose_features` and the point-in-time query) and the
-person approves it. The snapshot is the latest month-end whose window is over, a first date to discuss, not a
-decision. The floors (`validation.min_rows`, `validation.min_positive`) are checked on those counts, so the verdict
+person approves it. The window and the audience are parameters (`buildable_outcome(window_days=, audience_id=)`),
+read from the goal's settings (`engine.doctor.goal_settings`). The snapshot is the latest month-end whose window is
+over, a first date to discuss, not a decision. The floors (`validation.min_rows`, `validation.min_positive`) are checked on those counts, so the verdict
 is `too_small` rather than `buildable` when the table the goal would train on could not reach them.
 """
 
@@ -81,6 +82,15 @@ class BuildableOutcome(StrictBase):
         default=None, description="A hint: the order number when a row is a line."
     )
     label_type: Literal["event_absence", "event_presence"]
+    outcome_column: str | None = Field(
+        default=None,
+        description="The column the build names its outcome, the same for every window; null in a case stored "
+        "before it was recorded (the use case's own target column).",
+    )
+    recipe: Literal["rfm", "events"] = Field(
+        default="rfm",
+        description="The features the build measures: `rfm` when there is an amount, else counts.",
+    )
     window_days: int
     snapshot: date | None = Field(
         description="The latest month-end whose window is over; null when the history is shorter than the window."
@@ -299,11 +309,21 @@ def _measure(pairs: pd.DataFrame, window_days: int, label_type: str, quiet_days:
 
 
 def buildable_outcome(
-    files: Sequence[LoadedFile], config: UseCaseConfig, root: Path | None
+    files: Sequence[LoadedFile],
+    config: UseCaseConfig,
+    root: Path | None,
+    *,
+    window_days: int | None = None,
+    audience_id: str | None = None,
 ) -> BuildableOutcome | None:
     """The outcome of `config` that an event file among `files` can define, counted on every row; None when the goal
     does not allow building it, has no event outcome in `configs/outcomes.yaml`, or no file is an event table (an ID
-    that repeats and a date)."""
+    that repeats and a date).
+
+    `window_days` is the days after the snapshot the outcome looks at (the template's default when None) and must be
+    one the template allows. Both audiences are always counted; with `audience_id` the table is judged on that one
+    (`enough` is its floors), which the template must offer. A value the template does not allow is a ValueError: the
+    caller checks it first (`GoalSettings.allowed`)."""
     from engine.config import config_root
     from engine.doctor.outcomes import load_outcome_catalogue
 
@@ -313,8 +333,13 @@ def buildable_outcome(
     if template is None:
         return None
     noun = config.entity or "customer"
-    days = template.default_days
+    days = template.default_days if window_days is None else window_days
+    if days not in template.days:
+        raise ValueError(f"a window of {days} days is not one of {list(template.days)} for {config.id}")
     narrower = template.audience
+    if audience_id is not None and (narrower is None or narrower.option(audience_id) is None):
+        raise ValueError(f"{config.id} does not offer the audience {audience_id!r}")
+    quiet_option = narrower.option("quiet") if narrower is not None else None
     floors = (config.validation.min_rows, config.validation.min_positive)
     for loaded in files:
         frame = loaded.frame
@@ -328,7 +353,9 @@ def buildable_outcome(
         exact = pairs is not None
         if pairs is None:  # a sample only: its counts are a floor of the file's at best
             pairs = pd.DataFrame({"id": events.ids, "day": events.days}).drop_duplicates()
-        counted = _measure(pairs, days, template.label_type, narrower.quiet_days if narrower else None)
+        counted = _measure(
+            pairs, days, template.label_type, quiet_option.quiet_days if quiet_option is not None else None
+        )
         start, end, snapshot = counted.start, counted.end, counted.snapshot
 
         presence = template.label_type == "event_presence"
@@ -337,27 +364,29 @@ def buildable_outcome(
         trusted = snapshot is not None and exact
         floor_ok = snapshot is not None and (exact or presence)
         audiences: tuple[BuildAudience, ...] = ()
-        if narrower is not None and snapshot is not None:
+        active_option = narrower.option("active") if narrower is not None else None
+        if active_option is not None and quiet_option is not None and snapshot is not None:
             audiences = (
                 BuildAudience(
                     audience_id="active",
-                    label=f"every {noun} active on or before the snapshot",
+                    label=active_option.phrase(_plural(noun)),
                     customers=counted.active,
                     yes=counted.yes,
                     enough=floor_ok and _reaches(counted.active, counted.yes, floors),
                 ),
                 BuildAudience(
                     audience_id="quiet",
-                    quiet_days=narrower.quiet_days,
-                    label=narrower.label.format(entities=_plural(noun), quiet_days=narrower.quiet_days),
+                    quiet_days=quiet_option.quiet_days,
+                    label=quiet_option.phrase(_plural(noun)),
                     customers=counted.quiet,
                     yes=counted.quiet_yes,
                     # quiet is "no row seen lately": a sample can miss the recent row, so only every row says it
                     enough=trusted and _reaches(counted.quiet, counted.quiet_yes, floors),
                 ),
             )
+        picked = [a for a in audiences if audience_id in {None, a.audience_id}]
         enough = (
-            any(a.enough for a in audiences)
+            any(a.enough for a in picked)
             if audiences
             else floor_ok and _reaches(counted.active, counted.yes, floors)
         )
@@ -391,6 +420,8 @@ def buildable_outcome(
             quantity_column=events.quantity,
             order_column=events.order,
             label_type=template.label_type,
+            outcome_column=template.build.outcome_column or config.target.column,
+            recipe=template.build.recipe,
             window_days=days,
             snapshot=snapshot,
             data_start=start,
@@ -426,18 +457,33 @@ def compile_build(
     """(the query, its description) that builds one row per customer known at `$as_of` over the table whose SQL name is
     `table`: the behaviour features measured at that date (`propose_features`'s own compiler, so none reads a row
     after it) and the outcome, read from the `window_days` days after it (the only part that reads the future). The
-    outcome is 1 for a yes and 0 for a no, named as the goal's target column. With the `quiet` audience the person
+    outcome is 1 for a yes and 0 for a no, named `built.outcome_column`: the same name for every window (the window is in
+    the query and in the setting), so a decision about the outcome never points at a column that no longer exists. With the `quiet` audience the person
     picked, only the customers with no row in its `quiet_days` days up to `$as_of` are kept (read on or before it).
     """
     from engine.doctor.tools_features import FeatureArg, ProposeFeaturesArgs, _col, compile_features
 
-    outcome = config.target.column
+    outcome = built.outcome_column or config.target.column
     assert outcome is not None  # buildable_outcome returns nothing for a goal without a target column
     key, when = built.entity_key, built.time_column
+    counts = (
+        FeatureArg(name="days_since_last_event", agg="days_since_last"),
+        FeatureArg(name="events_90d", agg="count", window_days=90),
+        FeatureArg(name="events_365d", agg="count", window_days=365),
+        FeatureArg(name="events_total", agg="count"),
+    )
     pricey = built.amount_column is not None and any(
         w in built.amount_column.casefold() for w in ("price", "rate", "cost")
     )
-    if built.quantity_column and built.amount_column and pricey:
+    if built.recipe == "events":
+        given = ProposeFeaturesArgs(
+            upload_id=built.upload_id,
+            entity_key=key,
+            time_column=when,
+            output_name="training_table",
+            features=counts,
+        )
+    elif built.quantity_column and built.amount_column and pricey:
         quantity, price = built.quantity_column, built.amount_column
         given = ProposeFeaturesArgs(
             upload_id=built.upload_id,
@@ -465,12 +511,7 @@ def compile_build(
             entity_key=key,
             time_column=when,
             output_name="training_table",
-            features=(
-                FeatureArg(name="days_since_last_event", agg="days_since_last"),
-                FeatureArg(name="events_90d", agg="count", window_days=90),
-                FeatureArg(name="events_365d", agg="count", window_days=365),
-                FeatureArg(name="events_total", agg="count"),
-            ),
+            features=counts,
         )
     features = compile_features(given, table, outcome=outcome)
     days = built.window_days

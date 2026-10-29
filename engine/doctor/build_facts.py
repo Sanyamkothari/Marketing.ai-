@@ -1,9 +1,9 @@
 """What the AI is told about the chosen goal and the build it asks for, so it does not guess.
 
 The chosen goal is named with its outcome definition (`goal_line`), and while the goal's outcome has to be built from
-events (`engine.doctor.buildable`) the AI reads the build's parameters: the outcome column the goal expects, the
-window, the customer and date columns, the snapshot rule and the snapshot it gives now, and the audience the person
-chose. `build_is_owed` says when the next AI turn has to propose that build: a buildable goal is chosen, nothing
+events (`engine.doctor.buildable`) the AI reads the build's parameters: the outcome column the build makes (the same
+name for every window), the window and the audience as the case has them (`engine.doctor.goal_settings`), the customer
+and date columns, the snapshot rule and the snapshot it gives now. `build_is_owed` says when the next AI turn has to propose that build: a buildable goal is chosen, nothing
 decides its outcome yet, and no query that makes the table is waiting or in the plan.
 
 Everything here is a count, a column name (through the file's egress gate) or a sentence of ours; no cell text.
@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import ProposalState
 from engine.doctor.decisions import decisions
+from engine.doctor.goal_settings import load_goal_settings
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -24,14 +25,18 @@ if TYPE_CHECKING:
     from engine.doctor.case import Case
     from engine.doctor.diagnose import LoadedFile
     from engine.doctor.goal_brief import GoalBrief
+    from engine.doctor.goal_settings import GoalSettings
 
-__all__ = ["build_facts", "build_is_owed", "decided_numbers", "goal_line", "to_do_now"]
+__all__ = ["SNAPSHOT_RULES", "build_facts", "build_is_owed", "decided_numbers", "goal_line", "to_do_now"]
 
-SNAPSHOT_RULE: Final[str] = (
-    "the snapshot is the latest month-end whose outcome window is over by the last day of data (when the data has "
-    "no such month-end after its first day, the latest day whose window is over); every feature is read on or "
-    "before it and only the outcome reads the window after it"
-)
+SNAPSHOT_RULES: Final[dict[str, str]] = {
+    "latest_month_end_with_window_over": (
+        "the snapshot is the latest month-end whose outcome window is over by the last day of data (when the data "
+        "has no such month-end after its first day, the latest day whose window is over); every feature is read on "
+        "or before it and only the outcome reads the window after it"
+    )
+}
+"""What each `snapshot_rule` of `configs/outcomes.yaml` says, in words the AI may repeat."""
 TO_DO_BUILD: Final[str] = (
     "The goal's outcome is not in the files, so it has to be built, and no build is waiting or in the plan yet. "
     "Propose it now with `propose_sql` (one row per customer, features read on or before the snapshot, the outcome "
@@ -52,7 +57,9 @@ def to_do_now(case: Case) -> str | None:
         return None
     from engine.doctor.visit import active_section
 
-    open_audience = any(q.code == "BUILD_AUDIENCE" and q.answer is None for q in active_section(case)[1])
+    open_audience = any(
+        q.code in {"BUILD_AUDIENCE", "GOAL_SETTING"} and q.answer is None for q in active_section(case)[1]
+    )
     return TO_DO_AUDIENCE if open_audience else TO_DO_BUILD
 
 
@@ -116,13 +123,20 @@ def build_facts(
     }
     try:
         config = load_use_case(goal.goal_id, config_root)
-        built = buildable_outcome(files, config, config_root)
+        settings = load_goal_settings(goal.goal_id, config_root)
+        window = settings.value("window_days", decisions(case)) if "window_days" in settings.names else None
+        built = buildable_outcome(
+            files, config, config_root, window_days=window if isinstance(window, int) else None
+        )
     except Exception:  # a goal whose configuration cannot be read has no build to describe
         built = None
     if built is None or _outcome_in_files(case, goal.goal_id):
         return {"chosen_goal": chosen}
-    chosen["outcome_column"] = config.target.column or chosen["outcome_column"]
-    return {"chosen_goal": chosen, "goal_build": _parameters(case, goal.goal_id, built, config.entity, label)}
+    chosen["outcome_column"] = built.outcome_column or config.target.column or chosen["outcome_column"]
+    return {
+        "chosen_goal": chosen,
+        "goal_build": _parameters(case, settings, built, config.entity, label),
+    }
 
 
 def _outcome_in_files(case: Case, goal_id: str) -> bool:
@@ -131,18 +145,14 @@ def _outcome_in_files(case: Case, goal_id: str) -> bool:
 
 
 def _parameters(
-    case: Case, goal_id: str, built: BuildableOutcome, entity: str, label: Callable[[str, str], str]
+    case: Case, settings: GoalSettings, built: BuildableOutcome, entity: str, label: Callable[[str, str], str]
 ) -> dict[str, Any]:
-    chosen = next(
-        (
-            q
-            for q in case.questions
-            if q.code == "BUILD_AUDIENCE" and q.goal_id == goal_id and q.answer is not None
-        ),
-        None,
-    )
+    template = settings.template
+    assert template is not None  # a build exists only for a goal with an outcome sentence
+    decided = decisions(case)
+    chosen = decided.setting(settings.goal_id, "audience")
     audience = (
-        next((a.label for a in built.audiences if a.audience_id == chosen.answer), "the person's choice")
+        next((a.label for a in built.audiences if a.audience_id == chosen.value), "the person's choice")
         if chosen is not None
         else (
             "not chosen yet: the person picks between the readings below"
@@ -160,9 +170,14 @@ def _parameters(
         "customer_column": label(built.upload_id, built.entity_key),
         "date_column": label(built.upload_id, built.time_column),
         "data_runs": f"{built.data_start.isoformat()} to {built.data_end.isoformat()}",
-        "snapshot_rule": SNAPSHOT_RULE,
+        "snapshot_rule": SNAPSHOT_RULES[template.snapshot_rule],
         "audience": audience,
     }
+    if decided.setting(settings.goal_id, "window_days") is None:
+        why = template.settings.window_days.why
+        facts["outcome_window_proposed"] = (
+            f"{built.window_days} days is proposed, not decided{': ' + why if why else ''}; the person may change it"
+        )
     if built.snapshot is not None:
         facts["snapshot_now"] = built.snapshot.isoformat()
     if built.audiences and chosen is None:

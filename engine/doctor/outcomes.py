@@ -37,7 +37,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
 import yaml
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from engine.config import ConfigError, LabelType, StrictBase
 from engine.onboarding.specs import LabelSpec
@@ -52,14 +60,18 @@ if TYPE_CHECKING:
 
 __all__ = [
     "OUTCOMES_FILENAME",
+    "AudienceOption",
+    "AudienceSetting",
     "OutcomeAgreement",
-    "OutcomeAudience",
     "OutcomeCatalogue",
     "OutcomeChoice",
     "OutcomeFile",
     "OutcomeOffer",
     "OutcomeRequest",
     "OutcomeTemplate",
+    "TemplateBuild",
+    "TemplateSettings",
+    "WindowSetting",
     "attach_outcome_offers",
     "event_word",
     "load_outcome_catalogue",
@@ -84,32 +96,137 @@ MAX_JOIN_COLUMNS: Final[int] = 40
 # ---------------------------------------------------------------------------
 # configs/outcomes.yaml
 # ---------------------------------------------------------------------------
-class OutcomeAudience(BaseModel):
-    """A narrower audience a goal is for, as its configuration describes it (a win-back goal: shoppers who have
-    stopped buying). A build counts both readings - every customer active on or before the snapshot, and only these
-    - and the person picks one; the code never applies it on its own."""
+class WindowSetting(BaseModel):
+    """The days after the snapshot that the outcome looks at: the windows allowed, the one proposed first, and why."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 
-    quiet_days: int = Field(
-        ge=1,
-        le=3650,
-        description="Days before the snapshot with no row: a customer quiet that long is in it.",
+    allowed: tuple[Annotated[int, Field(ge=1, le=3650)], ...] = Field(
+        min_length=1, max_length=6, description="The windows offered, in days."
     )
+    default: int = Field(description="The window proposed first; one of `allowed`.")
+    ask: bool = Field(
+        default=False,
+        description="True: the person is asked before anything is built. False: the default is proposed with its "
+        "reason and the person may change it in the chat.",
+    )
+    why: str = Field(default="", description="Why the default fits the goal, in a sentence.")
+
+    @field_validator("allowed")
+    @classmethod
+    def _sorted_once(cls, days: tuple[int, ...]) -> tuple[int, ...]:
+        if len(set(days)) != len(days):
+            raise ValueError("a window is listed twice")
+        return tuple(sorted(days))
+
+    def model_post_init(self, _context: Any) -> None:
+        if self.default not in self.allowed:
+            raise ValueError(f"the default window {self.default} is not one of {list(self.allowed)}")
+
+
+class AudienceOption(BaseModel):
+    """One reading of who the built table is about: every customer active on or before the snapshot (`active`), or
+    only those who have gone quiet (`quiet`: no row in the `quiet_days` days before it)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    id: Literal["active", "quiet"]
     label: str = Field(
         min_length=1,
         description='Who they are, in plain words; blanks {entities} ("shoppers") and {quiet_days}.',
     )
+    description: str = Field(default="", description="What choosing it means for the table, in a sentence.")
+    quiet_days: int | None = Field(
+        default=None, ge=1, le=3650, description="For `quiet`: days before the snapshot with no row."
+    )
 
     def model_post_init(self, _context: Any) -> None:
+        if (self.id == "quiet") != (self.quiet_days is not None):
+            raise ValueError("`quiet_days` belongs to the `quiet` audience, and to it alone")
         try:
             self.label.format(entities="customers", quiet_days=self.quiet_days)
         except (KeyError, IndexError, ValueError) as exc:
             raise ValueError(f"the audience label has an unknown blank: {exc}") from exc
 
+    def phrase(self, entities: str) -> str:
+        """The label with `entities` filled in ("shoppers", or "1,204 shoppers" once counted)."""
+        return self.label.format(entities=entities, quiet_days=self.quiet_days)
+
+
+class AudienceSetting(BaseModel):
+    """Who the built table is about, when the goal names a narrower audience than every customer known by the
+    snapshot. A build counts both readings; the goal says which one it is for and the person decides."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    ask: bool = Field(default=True, description="The person is asked before anything is built.")
+    options: tuple[AudienceOption, ...] = Field(description="Both readings: `active` and `quiet`.")
+    recommended: Literal["active", "quiet"] | None = Field(
+        default=None,
+        description="The reading the goal's own meaning points at, stated here and never read from text. It is "
+        "offered only when the facts show it reaches the minimums.",
+    )
+    because: str = Field(default="", description="Why `recommended` fits the goal, in a sentence.")
+    dont_know: Literal["active", "quiet"] | None = Field(
+        default=None,
+        description='The reading "I don\'t know" takes; when it is too small, the widest one that is large enough.',
+    )
+
+    def model_post_init(self, _context: Any) -> None:
+        ids = [option.id for option in self.options]
+        if sorted(ids) != ["active", "quiet"]:
+            raise ValueError("the audience offers exactly two readings, `active` and `quiet`")
+        for name in ("recommended", "dont_know"):
+            if getattr(self, name) is not None and getattr(self, name) not in ids:
+                raise ValueError(f"{name} is not one of the audience options")
+        if self.recommended is not None and not self.because:
+            raise ValueError("a recommended audience needs its `because`")
+
+    def option(self, option_id: str) -> AudienceOption | None:
+        return next((o for o in self.options if o.id == option_id), None)
+
+
+class TemplateSettings(BaseModel):
+    """What the person may set for a goal's outcome."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    window_days: WindowSetting
+    audience: AudienceSetting | None = Field(
+        default=None, description="Set when the goal names a narrower audience; a build then asks which one."
+    )
+
+
+class TemplateBuild(BaseModel):
+    """How the outcome is built from events."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    recipe: Literal["rfm", "events"] = Field(
+        default="rfm",
+        description="`rfm`: recency, frequency and amount measures when the file has an amount; `events`: counts of "
+        "events only.",
+    )
+    outcome_column: str | None = Field(
+        default=None,
+        min_length=1,
+        description="The built outcome column, named for every window (`reactivated`, never `reactivated_90d`); "
+        "null: the use case's own target column.",
+    )
+
+
+_LEGACY_QUIET_LABEL: Final[str] = (
+    "{entities} who have gone quiet (nothing in the {quiet_days} days before the snapshot)"
+)
+_LEGACY_ACTIVE_LABEL: Final[str] = "{entities} active on or before the snapshot"
+
 
 class OutcomeTemplate(BaseModel):
-    """One use case's outcome sentence, the `LabelSpec` kind it builds, and the person's choices."""
+    """One use case's outcome sentence, the `LabelSpec` kind it builds, and the person's choices.
+
+    `days`, `default_days` and `audience` are the older spelling of `settings`: a template that gives them is read
+    into `settings` (`window_days` and `audience`), so it needs no edit.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 
@@ -121,26 +238,52 @@ class OutcomeTemplate(BaseModel):
     event_kinds: tuple[str, ...] = Field(
         min_length=1, description="What the event file may be (onboarding roles), best first."
     )
-    days: tuple[Annotated[int, Field(ge=1, le=3650)], ...] = Field(
-        min_length=1, max_length=6, description="The windows offered, in days."
+    settings: TemplateSettings = Field(description="What the person may set: the window and the audience.")
+    snapshot_rule: Literal["latest_month_end_with_window_over"] = Field(
+        default="latest_month_end_with_window_over", description="Where the snapshot is put."
     )
-    default_days: int = Field(description="The window shown first; one of `days`.")
-    audience: OutcomeAudience | None = Field(
-        default=None,
-        description="The narrower audience the goal is for, when its configuration names one; a build then asks "
-        "which reading the person means.",
-    )
+    build: TemplateBuild = Field(default_factory=TemplateBuild, description="How the outcome is built.")
 
-    @field_validator("days")
+    @model_validator(mode="before")
     @classmethod
-    def _sorted_once(cls, days: tuple[int, ...]) -> tuple[int, ...]:
-        if len(set(days)) != len(days):
-            raise ValueError("a window is listed twice")
-        return tuple(sorted(days))
+    def _read_older_spelling(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping) or not {"days", "default_days", "audience"} & set(data):
+            return data
+        if "settings" in data:
+            raise ValueError(
+                "`settings` replaces `days`, `default_days` and `audience`: give one or the other"
+            )
+        rest = {k: v for k, v in data.items() if k not in {"days", "default_days", "audience"}}
+        settings: dict[str, Any] = {
+            "window_days": {"allowed": data.get("days", ()), "default": data.get("default_days")}
+        }
+        older = data.get("audience")
+        if older is not None:
+            quiet = (
+                older.get("quiet_days") if isinstance(older, Mapping) else getattr(older, "quiet_days", None)
+            )
+            label = older.get("label") if isinstance(older, Mapping) else getattr(older, "label", None)
+            settings["audience"] = {
+                "options": [
+                    {"id": "active", "label": _LEGACY_ACTIVE_LABEL},
+                    {"id": "quiet", "label": label or _LEGACY_QUIET_LABEL, "quiet_days": quiet},
+                ]
+            }
+        return {**rest, "settings": settings}
+
+    @property
+    def days(self) -> tuple[int, ...]:
+        return self.settings.window_days.allowed
+
+    @property
+    def default_days(self) -> int:
+        return self.settings.window_days.default
+
+    @property
+    def audience(self) -> AudienceSetting | None:
+        return self.settings.audience
 
     def model_post_init(self, _context: Any) -> None:
-        if self.default_days not in self.days:
-            raise ValueError(f"default_days {self.default_days} is not one of {list(self.days)}")
         try:
             sentence_for(self, entity="customer", event="event", days=self.days[0])
         except (KeyError, IndexError, ValueError) as exc:

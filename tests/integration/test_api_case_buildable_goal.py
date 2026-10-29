@@ -133,7 +133,7 @@ def test_a_raw_order_log_fits_the_goal_as_buildable_then_builds(client: TestClie
     assert len(proposals) == 1 and proposals[0]["state"] == "accepted", "in the plan: the goal needs it"
     params = proposals[0]["payload"]["step"]["params"]
     assert params["reads_future"] and params["outcome_window_days"] == 90 and params["as_of"] == "2023-11-30"
-    assert "reactivated_90d" in proposals[0]["payload"]["columns"]
+    assert "reactivated" in proposals[0]["payload"]["columns"], "named for every window, not for 90 days"
     assert proposals[0]["payload"]["audience"]["audience_id"] == "active"
 
     # 3. the build is in the plan (its yes is the one approval's): the built table is what the fit counts
@@ -164,7 +164,7 @@ def test_a_raw_order_log_fits_the_goal_as_buildable_then_builds(client: TestClie
         [(q["code"], q["answer"]) for q in case["questions"]],
         [(i["kind"], i["state"]) for i in case["items"]],
     )
-    assert outcome[0]["payload"]["column"] == "reactivated_90d"
+    assert outcome[0]["payload"]["column"] == "reactivated"
 
     approval = client.get(f"/cases/{case_id}/screen").json()["view"]["approval"]
     kinds = [y["kind"] for y in approval["yeses"]]
@@ -189,9 +189,7 @@ def test_a_raw_order_log_fits_the_goal_as_buildable_then_builds(client: TestClie
     # ready on the table the goal trains on: the built one-row-per-shopper table, not the 19,000-line log
     assert report["source"]["rows_parsed"] == counted["active_before"]
     assert report["source"]["original_rows_parsed"] == len(order_rows)
-    assert report["roles"]["target"] == "reactivated_90d" and report["roles"]["primary_key"] == [
-        "customer_id"
-    ]
+    assert report["roles"]["target"] == "reactivated" and report["roles"]["primary_key"] == ["customer_id"]
     floors = {
         c["id"]: c["status"]
         for c in _checks(report)

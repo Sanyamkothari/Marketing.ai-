@@ -7,8 +7,9 @@ label in a third). :func:`decisions` is the only reader. It answers, for a case:
 * **the key** of each table (`key` items),
 * **the outcome** of each goal (`outcome_column` items),
 * **the as-of date** of the data, and the **as-of column** (the date each row describes) of each table,
-* **the outcome window** in days, and
-* **the consent column** of each goal,
+* **the outcome window** in days,
+* **the consent column** of each goal, and
+* **the settings** of each goal (`goal_setting` items: the window, the audience),
 
 each as a :class:`Decided`: the value, who decided it, when, and from what (`item:<id>` or `question:<id>:<option>`).
 
@@ -29,6 +30,13 @@ Older cases stored no `sets`: Q8's options are read as `as_of` (the lazy migrati
   materialiser binds this date when it runs the step, so a later answer reaches a step already in the plan. With
   none decided, a step keeps its own frozen date or rule (a date one step carries is never the whole case's).
 * outcome window: the newest accepted `setting` that sets it.
+* goal setting: the newest accepted `goal_setting` item for that goal and name, else the answer to the older
+  `BUILD_AUDIENCE` question (`active` or `quiet`; "Neither" sets nothing), else the older window `setting`. The
+  config default is not a decision: it is `GoalSettings.value`'s (`engine.doctor.goal_settings`).
+
+**A build declares its outcome.** An accepted query step that builds the goal's table (`buildable` in its payload) and
+names `outcome_column` decides that column as the goal's outcome, in the file the build reads: the person's yes to
+the build covers it (a build needs one), so no separate question is asked.
 
 Nothing here reads a cell: values are column names, dates and whole numbers.
 """
@@ -62,7 +70,9 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-DecisionKind = Literal["key", "outcome", "as_of", "training_as_of", "as_of_column", "consent", "window"]
+DecisionKind = Literal[
+    "key", "outcome", "as_of", "training_as_of", "as_of_column", "consent", "window", "setting"
+]
 Sets = Literal["as_of", "training_as_of", "outcome", "key", "as_of_column", "consent", "note"]
 """What an option of a question may declare it sets (`CaseOption.sets`); `note` = it sets nothing, on purpose."""
 
@@ -87,6 +97,7 @@ _KIND_SETS: Final[dict[str, Sets]] = {
 _ROLE_PROTECTED: Final[frozenset[str]] = frozenset({"outcome_column", "consent_column", "as_of_column"})
 _ISO_DATE: Final = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _WINDOW_PATH: Final[str] = "outcome_window_days"
+_AUDIENCE_QUESTION: Final[str] = "BUILD_AUDIENCE"
 
 
 @dataclass(frozen=True)
@@ -105,6 +116,8 @@ class Decided:
     in_upload: str | None = None
     """The file the column is in: a goal item names it in its payload, else the item's file."""
     goal_id: str | None = None
+    name: str | None = None
+    """For a `setting`: which one (`window_days`, `audience`)."""
 
     @property
     def column(self) -> str:
@@ -185,6 +198,17 @@ class Decisions:
         """`(upload id, column)` decided for a goal: the file the column is in, and its name."""
         found = self._per_goal(kind, goal_id)
         return (found.in_upload, found.column) if found is not None and found.in_upload is not None else None
+
+    def setting(self, goal_id: str, name: str) -> Decided | None:
+        """What was decided for a goal's setting (`window_days`, `audience`), or None while nobody decided it: the
+        config default is not a decision."""
+        found = next((r for r in self.of("setting") if r.goal_id == goal_id and r.name == name), None)
+        if found is None and name == "window_days":  # the window an older `setting` item decided
+            windows = [r for r in self.of("window") if isinstance(r.value, int)]
+            found = next((r for r in windows if r.goal_id == goal_id), None) or next(
+                (r for r in windows if r.goal_id is None), None
+            )
+        return found
 
     # -- the named decisions -----------------------------------------------------------------------------------
     def key(self, upload_id: str) -> str | None:
@@ -273,7 +297,14 @@ class Decisions:
     def digest(self) -> str:
         """What was decided, for a memo's key: the same decisions give the same digest, whoever decided them."""
         rows = sorted(
-            [r.kind, str(r.value), r.upload_id or "", r.in_upload or "", r.goal_id or ""]
+            [
+                r.kind,
+                str(r.value),
+                r.upload_id or "",
+                r.in_upload or "",
+                r.goal_id or "",
+                *([r.name] if r.name else []),
+            ]
             for r in self.records
         )
         return sha256_hex(canonical_bytes(rows))[:16]
@@ -312,6 +343,8 @@ def decisions_from(items: Iterable[CaseItem], questions: Sequence[CaseQuestion] 
     for item in accepted:
         kind = _ITEM_KINDS.get(item.kind)
         column = item.payload.get("column")
+        if kind is None and item.kind == "recipe_step" and isinstance(item.payload.get("buildable"), dict):
+            kind, column = "outcome", item.payload.get("outcome_column")  # the build declares its outcome
         if kind is None or not isinstance(column, str):
             continue
         named = item.payload.get("upload_id")
@@ -332,6 +365,7 @@ def decisions_from(items: Iterable[CaseItem], questions: Sequence[CaseQuestion] 
     _as_of(accepted, questions, add)
     _as_of(accepted, questions, add, "training_as_of")
     _window(accepted, add)
+    _settings(accepted, questions, add)
     return Decisions(records=tuple(records), ignored=ignored, shadowed=tuple(shadowed))
 
 
@@ -431,6 +465,65 @@ def _window(accepted: Sequence[CaseItem], add: Any) -> None:
                 goal_id=item.goal_id,
             ),
             ("window", item.goal_id),
+        )
+
+
+def _settings(accepted: Sequence[CaseItem], questions: Sequence[CaseQuestion], add: Any) -> None:
+    """Each goal's settings: the newest accepted `goal_setting` item, else (for the audience) the older question."""
+    items = [
+        i
+        for i in accepted
+        if i.kind == "goal_setting"
+        and isinstance(i.payload.get("setting"), str)
+        and isinstance(i.payload.get("value"), (str, int))
+        and not isinstance(i.payload.get("value"), bool)
+    ]
+    items.sort(key=lambda i: i.decided_at or i.proposed_at, reverse=True)
+    placed: set[tuple[str | None, str]] = set()
+    for item in items:
+        named = item.payload.get("goal_id")
+        goal = named if isinstance(named, str) else item.goal_id
+        value = item.payload["value"]
+        assert isinstance(value, (str, int))
+        if (goal, str(item.payload["setting"])) in placed:
+            continue  # a newer answer holds the place
+        placed.add((goal, str(item.payload["setting"])))
+        add(
+            Decided(
+                kind="setting",
+                value=value,
+                by=item.decided_by,
+                at=item.decided_at,
+                source=f"item:{item.item_id}",
+                upload_id=item.upload_id,
+                goal_id=goal,
+                name=str(item.payload["setting"]),
+            ),
+            ("setting", goal, str(item.payload["setting"])),
+        )
+    for question in questions:
+        # An answer to the older BUILD_AUDIENCE question is the audience setting ("none" = the person brings the
+        # outcome column: it chooses no audience).
+        if (
+            question.code != _AUDIENCE_QUESTION
+            or question.answer not in {"active", "quiet"}
+            or not question.goal_id
+        ):
+            continue
+        if (question.goal_id, "audience") in placed:
+            continue
+        add(
+            Decided(
+                kind="setting",
+                value=question.answer,
+                by=question.answered_by,
+                at=question.answered_at,
+                source=f"question:{question.question_id}:{question.answer}",
+                upload_id=question.upload_id,
+                goal_id=question.goal_id,
+                name="audience",
+            ),
+            ("setting", question.goal_id, "audience"),
         )
 
 

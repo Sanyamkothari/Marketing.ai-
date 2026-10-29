@@ -471,9 +471,9 @@ def feature_schema(
     `nullable` states what was *observed*, so the score-time check can report a column that has
     suddenly become null; it is information for that check, not a rule this stage enforces.
     """
+    excluded = (*key_columns(primary_key), *((target,) if target is not None else ()))
     columns = tuple(
-        _schema_column(train, name)
-        for name in _feature_columns(train, config, excluded=key_columns(primary_key))
+        _schema_column(train, name) for name in _feature_columns(train, config, excluded=excluded)
     )
     return FeatureSchema(
         use_case_id=config.id,

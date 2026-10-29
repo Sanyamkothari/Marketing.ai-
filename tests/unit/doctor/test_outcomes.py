@@ -238,7 +238,7 @@ def test_a_template_with_an_unknown_blank_or_default_is_refused() -> None:
             days=(30,),
             default_days=30,
         )
-    with pytest.raises(ValueError, match="default_days"):
+    with pytest.raises(ValueError, match="default window"):
         OutcomeTemplate(
             question="q",
             sentence="{An_entity} left",

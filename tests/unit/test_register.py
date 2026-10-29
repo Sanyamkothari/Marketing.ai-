@@ -656,6 +656,18 @@ def test_the_schema_leaves_out_every_reserved_column(resolved: ResolvedConfig) -
     assert "last_contacted_at" not in names  # the recent-contact column
 
 
+def test_the_schema_leaves_out_the_runs_own_label_when_it_is_not_the_configs(
+    resolved: ResolvedConfig,
+) -> None:
+    """A built outcome is named for every window (`reactivated`), not as the use case names its target: the run's label
+    is still not a feature, so a scoring file is never asked to carry it."""
+    frame = train_frame().rename(columns={"converted_30d": "converted"})
+    schema = feature_schema(
+        frame, resolved.config, primary_key=PRIMARY_KEY, target="converted", model_version_id="m_x_1"
+    )
+    assert "converted" not in {column.name for column in schema.columns}
+
+
 def test_the_schema_leaves_out_excluded_columns(config_root: Path) -> None:
     resolved = resolve(config_root, **{"prepare.exclude_columns": ["region"]})
     names = {column.name for column in build_schema(train_frame(), resolved).columns}

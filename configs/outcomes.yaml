@@ -10,6 +10,13 @@
 # (that is M151's diagnosis), and a `value_threshold` outcome needs a condition the person writes
 # (Build from raw tables). Nothing here is ever built until the person picks one sentence and says yes.
 #
+# What the person may set is `settings`: `window_days` (the windows allowed, the default, whether the person is asked
+# first, and why) and, for a goal about a narrower audience, `audience` (the two readings, which one the goal is for and
+# why, and which one "I don't know" takes). A template may instead give `days`, `default_days` and `audience:
+# {quiet_days, label}`, which are read into `settings`. `build` says how the outcome is built: its `recipe`, and its
+# `outcome_column`, the same name for every window. The minimums are not repeated here: they are the use case's
+# `validation.min_rows` and `validation.min_positive`.
+#
 # Placeholders in `sentence`: {An_entity} ("A customer", "An asset"), {entity}, {an_event} ("a
 # recharge", "an order"), {event}, {days}. A use case with no template here is offered no sentence.
 schema_version: 1
@@ -58,6 +65,7 @@ templates:
     event_kinds: [activity, payments, usage, orders, bills, other_event]
     days: [30, 60, 90]
     default_days: 60
+    build: {outcome_column: churned}
 
   telco-churn:
     question: When has a subscriber churned?
@@ -66,6 +74,7 @@ templates:
     event_kinds: [activity, payments, usage, bills, other_event]
     days: [30, 60, 90]
     default_days: 60
+    build: {outcome_column: churned}
 
   win-back-campaign:
     question: When has a lapsed customer come back?
@@ -74,20 +83,39 @@ templates:
     event_kinds: [activity, orders, payments, usage, other_event]
     days: [30, 60, 90]
     default_days: 90
+    build: {outcome_column: reactivated}
 
   retail-win-back:
     question: When has a shopper come back?
     sentence: "{An_entity} has come back when there is {an_event} within {days} days after the snapshot."
     label_type: event_presence
     event_kinds: [orders, payments, activity, other_event]
-    days: [30, 60, 90]
-    default_days: 90
-    # The goal is for shoppers who have stopped buying (configs/use_cases/retail_win_back.yaml: its description, and
-    # its reference file is the lapsed audience - no order in the 90 days before the snapshot). A build counts both
-    # readings (every shopper active on or before the snapshot, and only these); the AI proposes one, the person picks.
-    audience:
-      quiet_days: 90
-      label: "{entities} who have gone quiet (nothing in the {quiet_days} days before the snapshot)"
+    settings:
+      window_days:
+        allowed: [30, 60, 90]
+        default: 90
+        ask: false                    # proposed with its reason; the person may change it in the chat
+        why: "90 days gives a lapsed shopper a full quarter to come back."
+      # The goal is for shoppers who have stopped buying (configs/use_cases/retail_win_back.yaml: its description, and
+      # its reference file is the lapsed audience - no order in the 90 days before the snapshot). A build counts both
+      # readings; this says which one the goal is for, and the person picks.
+      audience:
+        ask: true
+        options:
+          - id: active
+            label: "{entities} active on or before the snapshot"
+            description: "Includes shoppers still buying; ranks everyone by return chance."
+          - id: quiet
+            quiet_days: 90
+            label: "{entities} who have gone quiet (no order in the {quiet_days} days before the snapshot)"
+            description: "The shoppers who have stopped buying: who this goal is for."
+        recommended: quiet            # from the goal's own meaning, stated here, never read from text
+        because: "Retail Win-back is for shoppers who have stopped buying."
+        dont_know: quiet              # the safe choice; falls back to the widest reading that reaches the minimums
+    snapshot_rule: latest_month_end_with_window_over
+    build:
+      recipe: rfm
+      outcome_column: reactivated     # the same name for every window; the window lives in the sentence and the setting
 
   targeted-advertisement:
     question: When has a customer converted?
@@ -96,6 +124,7 @@ templates:
     event_kinds: [orders, payments]
     days: [7, 14, 30]
     default_days: 30
+    build: {outcome_column: converted}
 
   fault-prediction:
     question: When has an asset had a fault?
@@ -104,3 +133,4 @@ templates:
     event_kinds: [complaints, other_event]
     days: [1, 3, 7]
     default_days: 3
+    build: {outcome_column: fault}
