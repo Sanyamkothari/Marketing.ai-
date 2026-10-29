@@ -86,40 +86,61 @@ def test_an_order_log_with_blank_ids_asks_which_column_names_the_customer_and_go
     assert key["recommended"] == by_label[customer]
     assert "customer_id" in key["why"]
 
-    # 2. the goal: audience, build and approval
+    # 2. the goal: the audience (every question has "I don't know" with a stated safe choice), then the build
     client.post(f"/cases/{case_id}/goal", json={"version": case["version"], "goal_id": GOAL, "op_id": "g1"})
     case = settled(client, case_id)
+
+    def cards(kind: str) -> list[dict[str, Any]]:
+        screen = client.get(f"/cases/{case_id}/screen").json()
+        return [c for c in screen["view"]["conversation"] if c["type"] == kind]
+
+    audience = next(c for c in cards("question") if c["code"] == "BUILD_AUDIENCE")
+    assert audience["dont_know"] is not None, "the audience question offers I don't know"
+    safe = next(o for o in case["questions"] if o["code"] == "BUILD_AUDIENCE")["options"]
+    assert [o["label"] for o in safe if o.get("safe")] == ["Neither: I will bring the outcome column"]
     case = answer(client, case_id, case, "BUILD_AUDIENCE", "active")
     (proposal,) = [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
     sentence = proposal["payload"]["sentence"]
     left_out = counted["ids"] - counted["active_before"]
-    assert (
-        f"The {left_out:,} of the file's {counted['ids']:,}" in sentence and "audience you chose" in sentence
-    )
+    assert f"Left out, of the file's {counted['ids']:,}" in sentence, sentence
+    assert f"{left_out:,} have no activity on or before" in sentence, sentence
     assert f"would have {counted['active_before']:,} rows" in sentence, sentence
-    assert open_question(case, "OUTCOME_COLUMN") is None, "not asked before the build is approved"
-    approved = client.post(
-        f"/cases/{case_id}/decisions",
-        json={"version": case["version"], "item_id": proposal["item_id"], "accept": True},
-    )
-    assert approved.status_code == 200, approved.text
-    case = settled(client, case_id)
+    assert not cards("ready"), "no approval card while a question is open"
 
-    # 3. the approved build supplies the customer: that question is gone; the outcome points at the built column
-    assert open_question(case, "KEY_NOT_UNIQUE") is None
+    # 3. the customer, then the outcome: asked now, before the one approval, and answered by the build in the plan
+    key = open_question(case, "KEY_NOT_UNIQUE")
+    assert key is not None
+    case = answer(client, case_id, case, "KEY_NOT_UNIQUE", key["recommended"])
     outcome = open_question(case, "OUTCOME_COLUMN")
     assert outcome is not None and outcome["recommended"] is not None
     chosen = next(o for o in outcome["options"] if o["option_id"] == outcome["recommended"])
-    assert chosen["label"] == "reactivated_90d" and "approved" in outcome["why"]
+    assert chosen["label"] == "reactivated_90d" and "training table in this plan" in outcome["why"]
+    assert next(c for c in cards("question") if c["code"] == "OUTCOME_COLUMN")["dont_know"] is not None
+    assert not cards("ready"), "still a question open"
     case = answer(client, case_id, case, "OUTCOME_COLUMN", outcome["recommended"])
+    (proposal,) = [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
+    assert (
+        proposal["state"] == "accepted"
+    ), "the goal needs the build: it is in the plan, its yes is Approve's"
 
-    # 4. nothing left to stop at: the build's own yes, and no stop for the two dates or for the audience's shoppers
+    # 4. one approval card: the build is in the plan (counted, its yes given by Approve), not a box left unticked
+    (ready,) = cards("ready")
+    assert ready["stage"] == "approve" and "with 3 changes" in ready["sentence"], ready["sentence"]
+    (yes_card,) = [c for c in ready["confirmations"] if c["item_id"] == proposal["item_id"]]
+    assert yes_card["required"] is True and yes_card["can_agree"] is True
+    # approving without the build's own yes is refused: it is never silently left out
+    case = settled(client, case_id)
+    refused = client.post(
+        f"/cases/{case_id}/approval", json={"version": case["version"], "sentence": ready["sentence"]}
+    )
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "APPROVAL_CONFIRMATION_MISSING"
+    case = settled(client, case_id)
     approval = client.get(f"/cases/{case_id}/screen").json()["view"]["approval"]
     stops = [y["sentence"] for y in approval["yeses"] if y["kind"] == "acknowledge"]
     assert not [s for s in stops if "reads the data as of" in s or "leaves out" in s], stops
     assert "confirm" in [y["kind"] for y in approval["yeses"]]
     shown = next(y["sentence"] for y in approval["yeses"] if y["item_id"] == proposal["item_id"])
-    assert "the audience you chose" in shown and "sampled" not in shown
+    assert "Who is kept is the audience you chose" in shown and "sampled" not in shown
     # ... and the approval goes through to ready, the customers the audience leaves out being agreed
     case = settled(client, case_id)
     done = client.post(
@@ -136,6 +157,11 @@ def test_an_order_log_with_blank_ids_asks_which_column_names_the_customer_and_go
     assert done.status_code == 200, done.text
     (readiness,) = done.json()["readiness"]
     assert readiness["goal_id"] == GOAL and readiness["verdict"] == "ready"
+    # the person's decision and the count they agreed to are recorded by that yes, not before it
+    recorded = next(
+        i for i in client.get(f"/cases/{case_id}").json()["items"] if i["item_id"] == proposal["item_id"]
+    )
+    assert recorded["decided_by"] and recorded["agreed_rows"] == left_out, recorded
 
 
 def test_a_customer_column_chosen_for_a_log_is_not_expected_to_be_unique(client: TestClient) -> None:
@@ -155,3 +181,65 @@ def test_a_customer_column_chosen_for_a_log_is_not_expected_to_be_unique(client:
     assert open_question(case, "KEY_NOT_UNIQUE") is None
     said = [i["title"] for i in case["items"] if i["kind"] == "data_check"]
     assert not [t for t in said if "should name each customer once" in t], said
+
+
+def _log_case(client: TestClient) -> tuple[str, dict[str, Any]]:
+    buffer = io.StringIO()
+    blank_log().to_csv(buffer, index=False)
+    uploaded = client.post(
+        "/uploads",
+        files={"file": ("orders.csv", buffer.getvalue().encode(), "text/csv")},
+        data={"use_case": GOAL, "mode": "train"},
+    )
+    case = client.post("/cases", json={"upload_ids": [uploaded.json()["upload_id"]]}).json()
+    case_id = case["case_id"]
+    case = client.post(f"/cases/{case_id}/visit", json={}).json()
+    client.post(f"/cases/{case_id}/goal", json={"version": case["version"], "goal_id": GOAL, "op_id": "g1"})
+    return case_id, settled(client, case_id)
+
+
+def _goal_builds(case: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        i
+        for i in case["items"]
+        if i["kind"] == "recipe_step"
+        and i.get("goal_id") == GOAL
+        and i["state"] == "accepted"
+        and not i.get("withdrawn_because")
+    ]
+
+
+def test_the_goals_build_is_nobodys_decision_until_approve_and_follows_the_audience(
+    client: TestClient,
+) -> None:
+    case_id, case = _log_case(client)
+    case = answer(client, case_id, case, "BUILD_AUDIENCE", "active")
+    (build,) = _goal_builds(case)
+    # in the plan by default, but no person has decided it: no decider, no agreed count, no card saying "your choice"
+    assert build.get("decided_by") is None and build.get("agreed_rows") is None, build
+    screen = client.get(f"/cases/{case_id}/screen").json()["view"]
+    cards = [c for c in screen["conversation"] if c.get("item_id") == build["item_id"]]
+    assert not [c for c in cards if c.get("by") in {"you", "someone"}], cards
+    assert build["payload"]["audience"]["audience_id"] == "active"
+    # the preview says how many rows the built table has in the whole file, whatever the sample the plan was checked on
+    (previewed,) = screen["preview"]["files"]
+    assert previewed["after_table"] and previewed["after_rows"] == build["payload"]["audience"]["customers"]
+    assert previewed["after_rows"] < previewed["total_rows"]
+
+    # the audience is answered again: the plan's build follows it, the earlier one is taken back
+    case = answer_again(client, case_id, case, "BUILD_AUDIENCE", "quiet")
+    now = _goal_builds(case)
+    assert not [b for b in now if b["payload"].get("audience", {}).get("audience_id") == "active"], now
+    assert all(b["payload"]["audience"]["audience_id"] == "quiet" for b in now), now
+
+
+def answer_again(
+    client: TestClient, case_id: str, case: dict[str, Any], code: str, option_id: str
+) -> dict[str, Any]:
+    held = next(q for q in case["questions"] if q["code"] == code)
+    sent = client.post(
+        f"/cases/{case_id}/answers",
+        json={"version": case["version"], "question_id": held["question_id"], "option_id": option_id},
+    )
+    assert sent.status_code == 200, sent.text
+    return settled(client, case_id)

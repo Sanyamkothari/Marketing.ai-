@@ -194,7 +194,7 @@ def test_the_plan_the_wizard_registers_is_the_planner_s_and_is_frozen(fixtures: 
     assert _read(fixtures, "campaign_draft")["plan"] is None
 
 
-def test_the_speed_minutes_are_the_servers_with_5_15_40_as_the_fallback() -> None:
+def test_the_speed_minutes_are_the_servers_with_8_20_45_as_the_fallback() -> None:
     node = skip_without_jsdom(NODE_DIR)
     result = subprocess.run(
         [node, "--test", str(TESTS_DIR / "run_rules_speeds.test.mjs")],

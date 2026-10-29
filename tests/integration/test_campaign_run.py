@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +29,9 @@ from engine.campaign_run import (
     speed_minutes,
 )
 from engine.config import DEFAULT_CONFIG_ROOT, load_engine_config
-from engine.contracts import FeatureSchema, RunRecord, RunState, RunStatus
+from engine.contracts import FeatureSchema, RunMode, RunRecord, RunState, RunStatus, StageKey
 from engine.jobs import NullJobRunner
+from engine.run_progress import PastDurations, about_minutes, expected_durations, expected_run_minutes
 from engine.storage import LocalStorage, run_key
 from tests.fixtures.make_data import CLEAN, GenerationSpec, generate
 
@@ -149,6 +151,59 @@ def test_a_run_whose_job_the_server_no_longer_knows_is_stopped_with_a_reason(
     assert storage.read_model(run_key(lost, "run.json"), RunRecord).state is RunState.FAILED
 
 
+@pytest.mark.parametrize("speed", [Speed.QUICK, Speed.BALANCED, Speed.THOROUGH])
+@pytest.mark.parametrize("elapsed", [0, 9, 40])
+def test_the_run_page_starts_counting_from_the_minutes_the_card_promised(
+    tmp_path: Path, speed: Speed, elapsed: int
+) -> None:
+    """The first time left, said in minutes, is the card's minutes for the speed - a few seconds in as well as at the
+    very start - not the next figure down."""
+    storage = LocalStorage(tmp_path)
+    promised = expected_run_minutes(speed_minutes(speed))
+    train_flow = [StageKey.INGEST, StageKey.VALIDATE, StageKey.PREPARE, StageKey.SPLIT, StageKey.TRAIN]
+    train_flow += [StageKey.EVALUATE, StageKey.EXPLAIN, StageKey.REGISTER]
+    expected = expected_durations(
+        train_flow,
+        budget_seconds=speed_minutes(speed) * 60.0,
+        past=PastDurations(stages={}),
+    )
+    assert expected is not None
+    run_id = "r_20261015_cafe0001"
+    storage.write_model(
+        run_key(run_id, "status.json"),
+        RunStatus(
+            run_id=run_id,
+            mode=RunMode.TRAIN,
+            state=RunState.RUNNING,
+            updated_at=datetime.now(UTC),
+            stages=(),
+            progress_pct=0,
+            estimated_pct=0,
+            eta_seconds=round(sum(expected.seconds.values())) - elapsed,
+            estimate_basis="time_budget",
+        ),
+    )
+    store = CampaignRunStore(storage)
+    started = store.create(use_case_id=USE_CASE, upload_id="u_x", train_run_id=run_id)
+    started = store.save(
+        started.model_copy(
+            update={
+                "steps": (
+                    started.steps[0].model_copy(update={"state": StepState.RUNNING}),
+                    *started.steps[1:],
+                )
+            }
+        )
+    )
+    never: Any = None
+    runner = CampaignRunRunner(
+        storage, NullJobRunner(), StepActions(never, never, never, never, never, never)
+    )
+    view = runner.view(started)
+    assert view.eta_seconds is not None
+    assert about_minutes(view.eta_seconds) == promised, (view.eta_seconds, promised)
+
+
 def test_the_training_time_choice_sets_the_search_time_unless_the_person_set_one() -> None:
     assert overrides_for({}, Speed.QUICK) == {"model_search.time_limit_minutes": speed_minutes(Speed.QUICK)}
     assert overrides_for({}, Speed.THOROUGH)["model_search.time_limit_minutes"] > speed_minutes(
@@ -195,7 +250,11 @@ def test_next_month_the_current_model_scores_the_new_file_without_learning(
     assert offer.status_code == 200, offer.text
     assert offer.json()["model_version_id"] == model_id and offer.json()["usable"] is True
     # The Start panel shows the server's own minutes for each speed (`campaign_speeds` in configs/engine.yaml).
-    assert offer.json()["speeds"] == load_engine_config(DEFAULT_CONFIG_ROOT).campaign_speeds
+    # ... as the whole run's expected time (`expected_run_minutes`), the one estimate the approval card and the run page use.
+    assert offer.json()["speeds"] == {
+        name: expected_run_minutes(minutes)
+        for name, minutes in load_engine_config(DEFAULT_CONFIG_ROOT).campaign_speeds.items()
+    }
     created = client.post(
         "/campaign-runs",
         json={

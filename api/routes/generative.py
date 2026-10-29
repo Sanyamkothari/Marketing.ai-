@@ -2426,7 +2426,7 @@ def delete_index(index_id: str, request: Request, storage: StorageDep) -> Respon
         if not key.endswith(f"/{_INDEX_OWNER_FILENAME}"):
             storage.delete(key)
     storage.delete(index_key(index_id, _INDEX_OWNER_FILENAME))  # last: until now it is still listed
-    set_audit_context(request, object_id=index_id, object_type="index", details={"files": len(keys)})
+    set_audit_context(request, object_id=index_id, object_type="index", details={"count": len(keys)})
     return Response(status_code=204)
 
 

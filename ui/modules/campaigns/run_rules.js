@@ -1,18 +1,18 @@
 // What a person chooses when they start a campaign, and how a campaign run is told back to them. Pure: no DOM,
-// no fetch. The minutes are the server's (`campaign_speeds` in `configs/engine.yaml`, sent with the model offer);
-// 5, 15 and 40 stand until it has answered.
+// no fetch. The minutes are the server's (the expected time of the whole run for each of `campaign_speeds` in
+// `configs/engine.yaml`, sent with the model offer); 8, 20 and 45 stand until it has answered.
 
 import { COST_NEEDS_CONFIRMATION } from "../../cost.js";
 import { esc, fmtInt } from "../../dom.js";
 import { userText } from "../../labels.js";
 
-/** The minutes each speed falls back to when the server has not said (the same as `campaign_speeds` in configs/engine.yaml). */
-const FALLBACK_MINUTES = Object.freeze({ quick: 5, balanced: 15, thorough: 40 });
+/** The minutes each speed falls back to when the server has not said (its `expected_run_minutes` of `campaign_speeds` in configs/engine.yaml). */
+const FALLBACK_MINUTES = Object.freeze({ quick: 8, balanced: 20, thorough: 45 });
 const minutes = { ...FALLBACK_MINUTES };
 
 /**
- * The server's minutes per speed (`speeds` in `GET /campaign-runs/model-offer`, from `campaign_speeds` in
- * configs/engine.yaml). A speed the server did not give, or gave as anything but a positive number, keeps its fallback.
+ * The server's minutes per speed (`speeds` in `GET /campaign-runs/model-offer`: the whole run's expected time for
+ * each of `campaign_speeds` in configs/engine.yaml). A speed the server did not give, or gave as anything but a positive number, keeps its fallback.
  */
 export function applySpeedMinutes(speeds) {
   for (const id of Object.keys(FALLBACK_MINUTES)) {

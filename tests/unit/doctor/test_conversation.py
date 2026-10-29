@@ -10,7 +10,7 @@ the reply; a suggestion is offered only for an open question and records nothing
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -806,3 +806,33 @@ def test_a_later_reply_that_suggests_another_question_first_still_supersedes_the
     asked = {c.question_id for c in cards if isinstance(c, QuestionCard)}
     assert first_q.question_id in asked, "its question card is back: no reply shows its live answer"
     assert other_q.question_id not in asked
+
+
+def test_a_steps_counts_say_what_was_kept_and_left_out_and_whether_they_are_the_sample() -> None:
+    from engine.doctor.conversation import _counts
+
+    step = CaseItem(
+        item_id="i1",
+        kind="recipe_step",
+        title="t",
+        source=ProposalSource.RULES,
+        confidence=AgentConfidence.SURE,
+        state=ProposalState.ACCEPTED,
+        payload={},
+        payload_digest="d",
+        proposed_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    counted = {"rows_in": 541_909, "rows_out": 516_384}
+    # the whole file's count: kept, then left out (never "rows in, N out")
+    assert _counts(step, counted) == "Whole file: 541,909 rows, 516,384 kept, 25,525 left out"
+    assert _counts(step, {"rows_in": 1_000, "rows_out": 1_000}) == "Whole file: 1,000 rows, none left out"
+    # a count of the first rows only says so
+    assert (
+        _counts(step, counted, sampled_from=541_909)
+        == "Sample: the first 541,909 of 541,909 rows, 516,384 kept, 25,525 left out"
+    )
+    tried = step.model_copy(update={"payload": {"rows_in": 1_000, "rows_out": 1_000}})
+    assert (
+        _counts(tried, None, total_rows=541_909) == "Sample: the first 1,000 of 541,909 rows, none left out"
+    )
+    assert "rows in" not in _counts(step, {**counted, "customers_lost": 41})

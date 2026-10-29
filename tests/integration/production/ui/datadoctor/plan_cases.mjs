@@ -90,8 +90,8 @@ test("the funnel: rows and customers in and out, the yes share before and after,
   await show("approve_class", { patch: withLedger() });
   const funnel = $("[data-dds-funnel]");
   const row = (kind) => funnel.querySelector(`[data-dds-funnel-row="${kind}"]`);
-  assert.match(row("rows").textContent, /12,000 in, 11,100 out \(900 fewer, 7\.5%\)/);
-  assert.match(row("customers").textContent, /10,000 in, 9,700 out \(300 fewer, 3\.0%\)/);
+  assert.match(row("rows").textContent, /12,000 before, 11,100 after \(900 fewer, 7\.5%\)/);
+  assert.match(row("customers").textContent, /10,000 before, 9,700 after \(300 fewer, 3\.0%\)/);
   assert.match(row("rate").textContent, /14\.2% before, 12\.9% after/);
   assert.ok(row("rows").classList.contains("is-flag") && row("rate").classList.contains("is-flag"), "a loss over 5% and a move over 1 point stand out");
   assert.ok(!row("customers").classList.contains("is-flag"));
@@ -113,7 +113,7 @@ test("with no ledger the funnel draws only each step's own losses, never a total
   });
   assert.ok(!$("[data-dds-funnel-row]"), "only what was counted is drawn");
   assert.match($("[data-dds-funnel] [data-dds-goto]").textContent, /Add each customer's total spend: 100 rows/);
-  assert.match($('[data-dds-step-receipt="sql.spend"]').textContent, /1,200 in, 1,100 out/, "the step's own counts still show");
+  assert.match($('[data-dds-step-receipt="sql.spend"]').textContent, /1,200 before, 1,100 after/, "the step's own counts still show");
 });
 
 // --- three things to check --------------------------------------------------------------------------------------
@@ -162,7 +162,7 @@ test("a step shows what our code counted: lost and counted-twice apart, totals, 
   assert.match(receipt.querySelector("[data-dds-lost]").textContent, /Customers lost100/);
   assert.match(receipt.querySelector("[data-dds-duplicated]").textContent, /Customers that appear twice40/, "never netted off against each other");
   assert.match(receipt.querySelector("[data-dds-total]").textContent, /100500 before, 98200 after/);
-  assert.match(receipt.textContent, /1,200 in, 1,100 out/);
+  assert.match(receipt.textContent, /1,200 before, 1,100 after/);
   const [before, after] = receipt.querySelectorAll("[data-dds-sample]");
   assert.equal(before.querySelector("caption").textContent, "Before");
   assert.equal(after.querySelector("caption").textContent, "After");

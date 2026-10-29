@@ -486,7 +486,7 @@ def test_the_screen_serves_the_preview_and_fills_the_steps_samples(tmp_path: Pat
     assert all(row[opted] == "1" for row in shown.after)
     served = view.model_dump(mode="json")
     assert set(served["preview"]["files"][0]) == {
-        "upload_id", "file_name", "total_rows", "columns", "before", "after", "left_out_columns", "note"
+        "upload_id", "file_name", "total_rows", "columns", "before", "after", "left_out_columns", "note", "after_table", "after_rows"
     }  # fmt: skip
     assert set(served["preview"]["files"][0]["columns"][0]) == {"name", "changed", "personal"}
 
@@ -535,3 +535,14 @@ def test_a_length_of_time_is_shown_as_a_length_not_as_nanoseconds() -> None:
     frame = pd.DataFrame({"gap": pd.to_timedelta(["1 days", "90 minutes", None])})
     rows = masked_rows(frame, ("gap",), (), 5)
     assert rows == (("1 days 00:00:00",), ("0 days 01:30:00",), ("",))
+
+
+def test_a_plan_that_builds_a_table_says_which_table_the_after_rows_are() -> None:
+    """After a build the rows shown are the new table's, not the file's: the preview names it."""
+    first, _ = _people_case()
+    per_customer = "SELECT customer_id, count(*) AS n FROM t_this GROUP BY customer_id"
+    built = preview_rows([first], [_item(_sql(per_customer, inputs=("this",)), "i-build")])
+    (shown,) = built.files
+    assert shown.after_table == "out"
+    plain = preview_rows([first], [_item(STRIP, "i-strip")])
+    assert plain.files[0].after_table is None

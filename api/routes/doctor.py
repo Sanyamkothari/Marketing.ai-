@@ -478,7 +478,7 @@ def renamed_copy(
         request,
         object_id=copied.upload_id,
         object_type="upload",
-        details={"source_upload_id": upload_id, "count": len(renames)},
+        details={"count": len(renames)},
     )
     response.headers["Location"] = f"/uploads/{copied.upload_id}/profile"
     return copied

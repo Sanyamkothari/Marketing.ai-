@@ -415,6 +415,10 @@ def _plural(noun: str) -> str:
     return noun if noun.endswith("s") else f"{noun}s"
 
 
+_DESCRIPTION_ROOM = 300
+"""The most characters a query step's description holds (`SqlStepProposal`, `SqlParams`)."""
+
+
 def compile_build(
     built: BuildableOutcome, config: UseCaseConfig, table: str, audience: BuildAudience | None = None
 ) -> tuple[str, str]:
@@ -498,9 +502,15 @@ def compile_build(
         if quiet is not None
         else "known at the snapshot"
     )
-    description = (
-        f"Training table: one row per {noun} {who}, with behaviour measured on or before it "
-        f"({', '.join(f.name for f in features.features)}), and {outcome}: 1 when the {noun} {word} in the "
-        f"{days} days after the snapshot, else 0."
-    )
-    return sql, description[:300]
+    names = [f.name for f in features.features]
+    ending = f", and {outcome}: 1 when the {noun} {word} in the {days} days after the snapshot, else 0."
+    head = f"Training table: one row per {noun} {who}, with behaviour measured on or before it"
+    # The description has a fixed room (`_DESCRIPTION_ROOM`): when the feature names do not fit, fewer of them are named
+    # ("such as ...") so the sentence is always told to its end, never cut in the middle of the outcome.
+    description = f"{head} ({', '.join(names)}){ending}"
+    shown = len(names)
+    while len(description) > _DESCRIPTION_ROOM and shown > 0:
+        shown -= 1
+        listed = f" ({len(names)} measures, such as {', '.join(names[:shown])})" if shown else ""
+        description = f"{head}{listed}{ending}"
+    return sql, description[:_DESCRIPTION_ROOM]

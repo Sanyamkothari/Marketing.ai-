@@ -53,6 +53,7 @@ __all__ = [
     "agent_applies",
     "meaning_key",
     "person_owns",
+    "required_by_goal",
     "roles_of",
     "twin_of",
     "waits_because",
@@ -155,6 +156,18 @@ def person_owns(case: Case, item: CaseItem) -> bool:
     """Whether the person has taken a change as their own: they ticked or unticked it, or gave it their own yes
     (an agent-applied change they confirmed keeps its place in the plan whatever the agent says later)."""
     return (item.decided_by not in (None, AGENT)) or any(item.item_id in a.item_ids for a in case.approvals)
+
+
+def required_by_goal(item: CaseItem) -> bool:
+    """Whether the item is the goal's build as the rules put it in the plan: ticked because the goal needs it, with no
+    person's decision on it yet. Their own yes at Approve is what makes it theirs (`visit.confirm`)."""
+    return (
+        item.state is ProposalState.ACCEPTED
+        and item.decided_by is None
+        and item.source is not ProposalSource.AI
+        and bool(item.payload.get("needs_yes"))
+        and isinstance(item.payload.get("buildable"), dict)
+    )
 
 
 _WORDING: Final[frozenset[str]] = frozenset({"reason", "order", "proposal_id", "decided_by"})

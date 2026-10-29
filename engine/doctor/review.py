@@ -28,7 +28,7 @@ from pydantic import Field
 from engine.agent.contracts import ProposalState
 from engine.config import StrictBase
 from engine.doctor.case import Case, CaseItem, CaseOption, CaseQuestion
-from engine.doctor.conversation import _counts, _is_agent, approval_holds
+from engine.doctor.conversation import _counts, _is_agent, approval_holds, total_rows_of
 from engine.doctor.decisions import AS_OF_QUESTION, decisions
 from engine.doctor.ledger import findings_of
 from engine.doctor.protocol import AGENT, REQUEST_CODES
@@ -300,7 +300,9 @@ def _problems(case: Case, titles: dict[str, str]) -> tuple[ReviewProblem, ...]:
     return tuple(sorted(out, key=lambda p: (not p.hard, p.acknowledged)))
 
 
-def _swaps(case: Case, steps: dict[str, dict[str, object]]) -> tuple[ReviewSwap, ...]:
+def _swaps(
+    case: Case, steps: dict[str, dict[str, object]], sampled: int | None = None
+) -> tuple[ReviewSwap, ...]:
     by_id = {i.item_id: i for i in case.items}
     out: list[ReviewSwap] = []
     for item in case.items:
@@ -312,9 +314,9 @@ def _swaps(case: Case, steps: dict[str, dict[str, object]]) -> tuple[ReviewSwap,
                 new_item_id=item.item_id,
                 old_item_id=old.item_id,
                 old_title=old.title or old.kind,
-                old_counts=_counts(old, steps.get(old.item_id)),
+                old_counts=_counts(old, steps.get(old.item_id), total_rows_of(case, old), sampled),
                 new_title=item.title or item.kind,
-                new_counts=_counts(item, steps.get(item.item_id)),
+                new_counts=_counts(item, steps.get(item.item_id), total_rows_of(case, item), sampled),
                 by=_by(item),
                 state="accepted" if item.state is ProposalState.ACCEPTED else "pending",
             )
@@ -331,11 +333,13 @@ def build_review(case: Case, view: CaseScreenView) -> ApprovalReview:
         for s in (view.ledger or {}).get("steps", [])
         if isinstance(s, dict) and "item_id" in s
     }
+    sampled_raw = (view.ledger or {}).get("sampled_from")
+    sampled = sampled_raw if isinstance(sampled_raw, int) and not isinstance(sampled_raw, bool) else None
     plan = tuple(
         ReviewLine(
             item_id=i.item_id,
             text=i.title or i.kind,
-            counts=_counts(i, steps.get(i.item_id)),
+            counts=_counts(i, steps.get(i.item_id), total_rows_of(case, i), sampled),
             by=_by(i),
         )
         for i in plan_change_items(case)
@@ -352,7 +356,7 @@ def build_review(case: Case, view: CaseScreenView) -> ApprovalReview:
     order: dict[str, int] = {"customer_id": 0, "outcome": 1, "date": 2, "consent": 3, "other": 4}
     shown.sort(key=lambda d: (order[d.kind], d.answered))
     problems = _problems(case, titles)
-    swaps = _swaps(case, steps)
+    swaps = _swaps(case, steps, sampled)
     agreements = tuple(
         ReviewAgreement(
             item_id=a.item_id,

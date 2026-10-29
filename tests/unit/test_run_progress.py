@@ -459,3 +459,16 @@ def test_a_status_written_before_m189_still_reads_with_the_new_fields_null() -> 
     status = RunStatus.model_validate(old)
     assert (status.estimated_pct, status.eta_seconds, status.estimate_basis) == (None, None, None)
     assert status.stages[0].fraction is None
+
+
+def test_one_estimate_of_the_whole_run_is_said_before_it_starts_and_counted_down_in_it() -> None:
+    """The approval card, the model offer and the run page say one time: the search's budget, the stages around it and
+    the steps after it, rounded the way the run page rounds its countdown (`ui/run_progress.js` `etaText`)."""
+    from engine.run_progress import LATER_STEP_SECONDS, about_minutes, expected_run_minutes
+
+    assert [expected_run_minutes(m) for m in (5, 15, 40)] == [8, 20, 45]
+    assert expected_run_minutes(15) >= 15, "never less than the search's own budget"
+    # the rounding of the countdown: to the minute under ten, to five under an hour, to ten beyond
+    assert [about_minutes(s) for s in (30, 90, 540, 600, 1065, 3000, 5400)] == [1, 2, 9, 10, 20, 50, 90]
+    assert [about_minutes(s) for s in (541, 1050, 1051, 3301)] == [10, 20, 20, 60]
+    assert LATER_STEP_SECONDS == {"score": 60, "list": 20, "campaign": 10}

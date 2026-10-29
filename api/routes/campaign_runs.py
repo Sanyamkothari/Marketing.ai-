@@ -56,6 +56,7 @@ from engine.measurement.cycle import MEASURE_NOT_OFFERED, CycleError, open_campa
 from engine.model_approval import model_not_approved
 from engine.model_reuse import ModelOffer, missing_columns, model_offer, outcome_conflict
 from engine.registry import RegistryError
+from engine.run_progress import expected_run_minutes
 from engine.runs import RUN_CONFIG_FILENAME
 from engine.storage import Storage, StorageError, run_key
 from engine.utils.logging import get_logger, log_failure
@@ -441,7 +442,7 @@ def create_campaign_run(
         requested_by=requested_by(request),
         model_version_id=body.model_version_id,
     )
-    set_audit_context(request, object_id=record.campaign_run_id, details={"use_case": body.use_case})
+    set_audit_context(request, object_id=record.campaign_run_id, details={"use_case_id": body.use_case})
     started = runner.advance(record.campaign_run_id) or record
     runner.ensure_running()
     response.headers["Location"] = f"/campaign-runs/{record.campaign_run_id}"
@@ -483,8 +484,13 @@ def read_model_offer(
         rules=engine_config.model_reuse,
         conflict=None if model is None else outcome_conflict(storage, model, outcome),
     )
-    # The minutes the Start panel shows for Quick / Balanced / Thorough are the server's own.
-    return offer.model_copy(update={"speeds": dict(engine_config.campaign_speeds)})
+    # The minutes the Start panel shows for Quick / Balanced / Thorough are the server's own: the whole run's expected
+    # time (`expected_run_minutes`), the same the approval card says and the run page counts down from.
+    return offer.model_copy(
+        update={
+            "speeds": {name: expected_run_minutes(m) for name, m in engine_config.campaign_speeds.items()}
+        }
+    )
 
 
 def _require_readable(request: Request, storage: StorageDep, body: CampaignRunRequest) -> None:

@@ -406,6 +406,7 @@ function chatMainHtml(entry) {
     alertHtml: alertInCard ? `${notice}${err}` : "",
     openSent,
     kitHref: (ids) => dataRequestUrl((ids.length ? ids : goalIds).slice(0, 4)),
+    consented: s.consented === true,
     composer: {
       ai: s.ai,
       use: s.use,
@@ -585,6 +586,15 @@ async function act(entry, busy, work, { announce = "", pending = "" } = {}) {
 }
 
 const theCase = (entry) => entry.state.screen.case;
+
+/** The person lets the Doctor's AI read masked summaries; the chat says so in a line of its own once it is recorded. */
+async function consent(entry) {
+  await act(entry, "consent", () => giveAiConsent(entry.state.caseId), { announce: "The Doctor's AI may now read masked summaries" });
+  if (!entry.state.error && entry.state.use && entry.state.use.consent) {
+    entry.state.consented = true;
+    draw(entry);
+  }
+}
 
 /** The goal an upload is read for: the host's goal, else the first goal on offer (as Data Doctor's page did). */
 async function uploadGoal(host) {
@@ -975,7 +985,7 @@ function bind(entry) {
       entry.state.side = d.ddsSide;
       draw(entry);
     } else if (target.hasAttribute("data-dds-ai-consent")) {
-      act(entry, "consent", () => giveAiConsent(entry.state.caseId), { announce: "The Doctor's AI may now read masked summaries" });
+      consent(entry);
     } else if (target.hasAttribute("data-dds-dont-know") && d.ddsQ) {
       // "I don't know" first asks who would know; the safe choice is one click further, never a guess.
       openWho(entry, `q:${d.ddsQ}`, `[data-dds-who-pick]`);
@@ -1098,9 +1108,7 @@ function bind(entry) {
   });
   entry.aside.addEventListener("click", (event) => {
     const target = event.target && event.target.closest ? event.target.closest("button") : null;
-    if (target && !target.disabled && target.hasAttribute("data-dds-ai-consent")) {
-      act(entry, "consent", () => giveAiConsent(entry.state.caseId), { announce: "The Doctor's AI may now read masked summaries" });
-    }
+    if (target && !target.disabled && target.hasAttribute("data-dds-ai-consent")) consent(entry);
   });
   // The composer: in the side card of the plan view, and in the conversation of the chat view (one of them is drawn).
   for (const where of [entry.aside, entry.main]) {

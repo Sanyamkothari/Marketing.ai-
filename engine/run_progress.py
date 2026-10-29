@@ -56,10 +56,13 @@ __all__ = [
     "Expectations",
     "PastDurations",
     "ProgressTracker",
+    "about_minutes",
     "estimate_progress",
     "expected_durations",
+    "expected_run_minutes",
     "install_progress_estimate",
     "past_durations",
+    "told_seconds",
     "train_budget_seconds",
     "trainer_of",
 ]
@@ -161,6 +164,49 @@ def train_budget_seconds(config: UseCaseConfig) -> float | None:
             return float(config.uplift.time_limit_minutes * 60)
         return None
     return float(config.model_search.time_limit_minutes * 60)
+
+
+LATER_STEP_SECONDS: Final[Mapping[str, int]] = MappingProxyType({"score": 60, "list": 20, "campaign": 10})
+"""Rough seconds the steps of a campaign run after the learning step need (scoring, the list, the campaign)."""
+
+_TRAIN_FLOW_OVERHEAD: Final[tuple[StageKey, ...]] = (
+    StageKey.INGEST,
+    StageKey.VALIDATE,
+    StageKey.PREPARE,
+    StageKey.SPLIT,
+    StageKey.EVALUATE,
+    StageKey.EXPLAIN,
+    StageKey.REGISTER,
+)
+
+
+def about_minutes(seconds: float) -> int:
+    """Seconds as the minutes a person is told, rounded up to the figure the run page's countdown shows
+    (`ui/run_progress.js` `etaText`): to the minute up to ten, to five up to an hour (never under ten), to ten beyond.
+    Up, so a time promised before the run is still the time shown for the first stretch of it, not one that has
+    become the next figure down a few seconds in."""
+    minutes = seconds / 60
+    if minutes <= 10:
+        return max(1, math.ceil(minutes))
+    if minutes <= 55:
+        return math.ceil(minutes / 5) * 5
+    return math.ceil(minutes / 10) * 10
+
+
+def told_seconds(seconds: int) -> int:
+    """The time left the run page is given: `seconds` as the whole figure of minutes it counts down in
+    (`about_minutes`), so the countdown starts from the minutes the approval card promised. Under a minute as it is.
+    """
+    return seconds if seconds < 60 else about_minutes(seconds) * 60
+
+
+def expected_run_minutes(search_minutes: int) -> int:
+    """How long a campaign run is expected to take from start to its list when the learning step may search for
+    `search_minutes`: the search's own budget (`train_budget_seconds`), the other stages of the learning flow
+    (`DEFAULT_STAGE_SECONDS`) and the steps after it (`LATER_STEP_SECONDS`). The one estimate the approval card, the
+    model offer and the run page say."""
+    seconds = search_minutes * 60 + sum(DEFAULT_STAGE_SECONDS[k] for k in _TRAIN_FLOW_OVERHEAD)
+    return about_minutes(seconds + sum(LATER_STEP_SECONDS.values()))
 
 
 def expected_durations(

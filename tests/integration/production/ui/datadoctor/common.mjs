@@ -53,6 +53,13 @@ export function serverFor(world) {
       const goal = (c.goals || []).find((g) => g.active);
       return ok({ cases: [{ case_id: CASE, title: c.title, goal_id: goal ? goal.goal_id : null, state: c.state, files: [], updated_at: c.updated_at }] });
     }
+    // the Doctor's AI on this case (`world.use`: null answers nothing, as before); allowing it flips `consent`
+    if (method === "GET" && p === `/cases/${CASE}/ai` && world.use) return ok(world.use);
+    if (method === "POST" && p === `/cases/${CASE}/ai-consent` && world.use) {
+      world.posted.push({ path: p, body: request.body });
+      world.use = { ...world.use, consent: true };
+      return ok(world.use);
+    }
     if (method === "GET" && p === `/cases/${CASE}/screen`) return ok(world.patch ? world.patch(screen(world.at)) : screen(world.at));
     if (method === "GET" && p === `/cases/${CASE}_other/screen`) {
       // a second case of the same shape, for the tests that switch or reopen a case

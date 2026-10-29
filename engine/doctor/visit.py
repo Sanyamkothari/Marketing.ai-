@@ -66,7 +66,14 @@ from pydantic import JsonValue
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, RecipeStepKind
 from engine.agent.tools import AgentToolError
 from engine.config import ConfigError
-from engine.doctor.agent_apply import AGENT_APPLIED_STEPS, agent_applies, person_owns, roles_of, twin_of
+from engine.doctor.agent_apply import (
+    AGENT_APPLIED_STEPS,
+    agent_applies,
+    person_owns,
+    required_by_goal,
+    roles_of,
+    twin_of,
+)
 from engine.doctor.carry import approved_marks, carries_on, last_month, plain_fix
 from engine.doctor.case import (
     PARK_ROLES,
@@ -2082,13 +2089,15 @@ def _question(
     blocking: bool = True,
     recommended: str | None = None,
     why: str = "",
+    safe: str | None = None,
 ) -> tuple[CaseQuestion, tuple[OptionEffect, ...]]:
     """A question whose id is its code, its goal (none for the base) and its subject - never the mode it is asked
     in - so a question answered once is found, not asked again, whenever the rules need the same answer.
 
     The rules recommend no column on a guess of their own (which column is which is the person's to say). A
     `recommended` option is only ever one that a step the person already approved, or the build the goal
-    offers, uses as a fact; `why` says so in plain words. The person still answers."""
+    offers, uses as a fact; `why` says so in plain words. The person still answers. `safe` is the option "I don't know"
+    stands for (the one that decides nothing for them)."""
     question_id = f"q.{code.lower()}.{goal_id or 'base'}.{_short(dict(subject))}"[:128]
     options = tuple(
         CaseOption(
@@ -2096,6 +2105,7 @@ def _question(
             label=label,
             effect_digest=payload_digest(effect.payload) if effect.kind is not None else None,
             sets=sets_of_effect(effect.kind),
+            safe=effect.option_id == safe,
         )
         for label, effect in choices
     )
@@ -2499,6 +2509,16 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
     )  # the tables as the plan leaves them: the files, and the tables its queries build
     files = current.files
     # The outcome: the configured column where it is; otherwise one question over the current tables' likely columns.
+    if any(
+        i.goal_id == goal
+        and i.kind == "recipe_step"
+        and i.state is not ProposalState.REJECTED
+        and isinstance(i.payload.get("buildable"), dict)
+        for i in active_section(case)[0]
+    ):
+        # The build this plan carries makes the outcome column (it is among the tables the rules read below), so it is
+        # proposed again every time, else the store takes it back: "no longer proposed".
+        _offer_build(run, case, brief, step, files, now)
     outcome = decisions(case).pair("outcome", goal)
     if outcome is not None and _outcome_is_gone(case, files, outcome, current):
         step.doubts.append(
@@ -2544,6 +2564,8 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                 )
             ]
             built_likely: list[tuple[LoadedFile, str]] = []
+            planned = _planned_build_outcomes(case, step, brief, files)
+            offered = False
             if not likely:
                 built_likely = _built_outcomes(current, brief, case)
                 likely = built_likely + [
@@ -2551,6 +2573,13 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                     for pair in _prepared_outcomes(case, brief, files, current)
                     if pair not in built_likely
                 ]
+            if not likely:
+                if (
+                    not planned
+                ):  # no build in the plan yet: the goal's build is proposed, and the outcome is its column
+                    offered = _offer_build(run, case, brief, step, files, now)
+                    planned = _planned_build_outcomes(case, step, brief, files) if offered else []
+                likely = planned  # the build makes it, whether or not its table can be read yet
             if likely:
                 choices = [
                     (
@@ -2566,13 +2595,16 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                 ]
                 choices.append(("None of these", OptionEffect(option_id="none")))
                 what = brief.outcome.definition.rstrip(".") or f"the outcome of {brief.goal_name}"
-                # A column a step the person approved builds is a fact, not a guess: it is the one recommended.
+                # A column the plan's build makes (a step the person approved, or the one the goal needs, whose yes is
+                # the approval's) is a fact, not a guess: it is the one recommended.
+                made = {(lf.upload_id, c) for lf, c in planned} | {
+                    (b.upload_id, c) for b, c in built_likely if _built_by_approved(case, current, c)
+                }
                 approved = next(
                     (
                         f"c{index}"
                         for index, (lf, column) in enumerate(likely[:5])
-                        if (lf.upload_id, column) in {(b.upload_id, c) for b, c in built_likely}
-                        and _built_by_approved(case, current, column)
+                        if (lf.upload_id, column) in made
                     ),
                     None,
                 )
@@ -2587,10 +2619,15 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                         ),
                         goal_id=goal,
                         recommended=approved,
-                        why="It is built by the step you approved." if approved is not None else "",
+                        why=(
+                            "The training table in this plan builds it, and your yes to the plan covers that."
+                            if approved is not None
+                            else ""
+                        ),
+                        safe="none",
                     )
                 )
-            elif not _offer_build(run, case, brief, step, files, now):
+            elif not offered:
                 step.doubts.append(
                     CaseDoubt(
                         doubt_id=f"d.outcome_missing.{goal}"[:128],
@@ -2631,9 +2668,10 @@ def _offer_build(
 ) -> bool:
     """No file has the goal's outcome, but an event table can define it (`engine.doctor.buildable`): propose the build
     - one row per customer at a snapshot, behaviour measured on or before it and the outcome read from the window
-    after it, through the ordinary point-in-time `sql_query` step - instead of asking for a column. The step waits for
-    the person's yes (never ticked); its own date is the training snapshot, and the case's as-of date (the scoring
-    date) is checked against it as for any query. True when a proposal was made; False leaves the request to ask for
+    after it, through the ordinary point-in-time `sql_query` step - instead of asking for a column. The goal needs it,
+    so it is in the plan (ticked; the person can Undo it, and it is not proposed again then) and it needs the
+    person's own yes, which the one Approve gives (never silently left out); its own date is the training snapshot, and
+    the case's as-of date (the scoring date) is checked against it as for any query. True when a proposal was made; False leaves the request to ask for
     the column (the goal does not allow building, the table is too small, the trial refused the query, or the person
     already declined this goal's build: it is not proposed again, and the column is asked for instead)."""
     from engine.agent.sql_step import table_alias
@@ -2669,13 +2707,21 @@ def _offer_build(
         asked = _audience_question(config, built)
         held = next((q for q in case.questions if q.question_id == asked[0].question_id), None)
         if held is None or held.answer is None:
-            if held is None:
-                step.questions.append(asked)
+            # asked again on every pass while it is open: a question the rules stop emitting is taken back, and the
+            # plan would go to Approve (and back) as other answers come in
+            step.questions.append(asked)
             return True
         audience = next((a for a in built.audiences if a.audience_id == held.answer and a.enough), None)
         if audience is None:  # neither, or a reading too small to learn from: the column is asked for instead
             return False
-    ctx = run.context(case, files=files, case_items=active_section(case)[0])
+    # The plan already carries this build (it is proposed again every time): it is tried as if it were not there, else
+    # its own table is among the ones it reads from.
+    others = [
+        i
+        for i in active_section(case)[0]
+        if not (i.kind == "recipe_step" and i.goal_id == brief.goal_id and "buildable" in i.payload)
+    ]
+    ctx = run.context(case, files=files, case_items=others)
     table = table_names(ctx.files)[loaded.upload_id]
     try:
         sql, description = compile_build(built, config, table_alias(table), audience)
@@ -2705,18 +2751,21 @@ def _offer_build(
     _say_build_counts(
         payload, built, config.entity or "customer", audience, decisions(case).training_as_of_date
     )
-    step.items.append(
-        _item(
-            "recipe_step",
-            payload,
-            title=made.title,
-            upload_id=loaded.upload_id,
-            confidence=AgentConfidence.CHECK,
-            evidence=(result.evidence_id,),
-            now=now,
-            goal_id=brief.goal_id,
-        )
+    build = _item(
+        "recipe_step",
+        payload,
+        title=made.title,
+        upload_id=loaded.upload_id,
+        confidence=AgentConfidence.CHECK,
+        evidence=(result.evidence_id,),
+        now=now,
+        goal_id=brief.goal_id,
+        ticked=True,
     )
+    # The goal needs it, so it is in the plan, ticked: but nobody has decided it yet. The person's yes to its sentence
+    # (the customers the audience leaves out are said in it, by group and reason) comes with Approve, and that yes is
+    # what records who decided it and the count they agreed to (`confirm`).
+    step.items.append(build)
     return True
 
 
@@ -2758,18 +2807,34 @@ def _say_build_counts(
         # The customers clause is a sample's too; the sentence below says who the audience leaves out.
         sentence = replace_estimate(sentence, estimate, rows)
         payload.pop("sentence_estimate")
-    left = _audience_left_out(payload)
-    if left and built.snapshot is not None:
+    if built.snapshot is not None:
         plural = entity if entity.endswith("s") else f"{entity}s"
-        sentence += (
-            f" The {left:,} of the file's {built.ids:,} {plural} with no activity on or before "
-            f"{built.snapshot:%d %b %Y} are left out: "
-            + (
-                "that is the audience you chose."
-                if audience is not None
-                else "the table is about those active by then."
+        # Each group left out has its own reason: not known yet at the snapshot (no activity on or before it), and, for
+        # the gone-quiet audience, still active in the days before it.
+        not_yet = max(0, built.ids - built.active_before)
+        quiet = audience if audience is not None and audience.audience_id == "quiet" else None
+        not_quiet = max(0, built.active_before - quiet.customers) if quiet is not None else 0
+        reasons = []
+        if not_yet:
+            reasons.append(
+                f"{not_yet:,} have no activity on or before {built.snapshot:%d %b %Y}, so they were not "
+                "known by then"
             )
-        )
+        if quiet is not None and not_quiet:
+            reasons.append(
+                f"{not_quiet:,} were active in the {quiet.quiet_days} days before "
+                f"{built.snapshot:%d %b %Y}, so they have not gone quiet"
+            )
+        if reasons:
+            sentence += (
+                f" Left out, of the file's {built.ids:,} {plural}: "
+                + "; ".join(reasons)
+                + (
+                    ". Who is kept is the audience you chose."
+                    if audience is not None
+                    else ". The table is about those active by then."
+                )
+            )
     if (
         decided is not None
         and built.snapshot is not None
@@ -2784,12 +2849,21 @@ def _say_build_counts(
     payload["sentence"] = sentence
 
 
+_LAPSED_WORDS: Final[re.Pattern[str]] = re.compile(
+    r"\b(stopped|stop|lapsed|quiet|inactive|dormant|churned|churn|win-?back|no longer|gone|left|lost)\b", re.I
+)
+"""A goal described as being about customers who have stopped (buying, ordering, paying)."""
+
+
 def _audience_question(
     config: UseCaseConfig, built: BuildableOutcome
 ) -> tuple[CaseQuestion, tuple[OptionEffect, ...]]:
     """BUILD_AUDIENCE: which customers the built table is about, with both readings' counts (every customer active
     on or before the snapshot, or the narrower audience the goal's configuration names). A reading too small to
-    learn from says so; "Neither" asks for the outcome column instead. Nothing is recommended by the rules."""
+    learn from says so; "Neither" asks for the outcome column instead and is the safe choice ("I don't know"). The
+    goal's description decides the recommendation, with its reason: a goal about customers who have stopped buying
+    fits the narrower reading (when it is large enough), and a description that says nothing of the sort recommends
+    nothing."""
     noun = config.entity or "customer"
     plural = noun if noun.endswith("s") else f"{noun}s"
     assert built.snapshot is not None
@@ -2805,13 +2879,24 @@ def _audience_question(
             (f"{who} ({audience.yes:,} of them a yes){short}", OptionEffect(option_id=audience.audience_id))
         )
     choices.append(("Neither: I will bring the outcome column", OptionEffect(option_id="none")))
+    description = config.description.rstrip(".")
+    narrower = next((a for a in built.audiences if a.audience_id == "quiet" and a.enough), None)
+    lapsed = narrower is not None and _LAPSED_WORDS.search(description) is not None
     return _question(
         "BUILD_AUDIENCE",
         {"upload_id": built.upload_id, "snapshot": built.snapshot.isoformat()},
-        text=f"{config.description.rstrip('.')}. Which {plural} should the training table be built from?",
+        text=f"{description}. Which {plural} should the training table be built from?",
         choices=choices,
         upload_id=built.upload_id,
         goal_id=config.id,
+        recommended="quiet" if lapsed else None,
+        why=(
+            f"The goal is described as: “{description}”. That is about {plural} who have stopped buying, so the "
+            "table is built from the ones who have gone quiet."
+            if lapsed
+            else ""
+        ),
+        safe="none",
     )
 
 
@@ -2919,6 +3004,36 @@ def _built_outcomes(
             ranked.append((tier, len(ranked), table.origin, column))
     ranked.sort(key=lambda r: (r[0], r[1]))
     return [(origin, column) for _t, _i, origin, column in ranked]
+
+
+def _planned_build_outcomes(
+    case: Case, step: _Step, brief: GoalBrief, files: Sequence[LoadedFile]
+) -> list[tuple[LoadedFile, str]]:
+    """The outcome column of the goal's build that is in the plan (or was just proposed in this pass): the columns the
+    build declares that are named like the goal's outcome, with the file it reads. The build makes the column, so it is
+    known before its table can be read (the rules read the plan's tables on the rows sampled)."""
+    found: list[tuple[LoadedFile, str]] = []
+    for item in (*active_section(case)[0], *step.items):
+        built = item.payload.get("buildable")
+        columns = item.payload.get("columns")
+        if (
+            item.kind != "recipe_step"
+            or item.goal_id != brief.goal_id
+            or item.state is ProposalState.REJECTED
+            or not isinstance(built, dict)
+            or not isinstance(columns, list)
+        ):
+            continue
+        origin = next((f for f in files if f.upload_id == built.get("upload_id")), None)
+        if origin is None:
+            continue
+        names = _named(
+            [str(c) for c in columns],
+            [c for c in (brief.outcome.column, *brief.outcome.synonyms) if c],
+            parts=False,
+        )
+        found += [(origin, column) for column in names if (origin, column) not in found]
+    return found
 
 
 def _built_by_approved(case: Case, current: CurrentTables, column: str) -> bool:
@@ -4449,8 +4564,10 @@ def confirm(
         )
         ticked = (
             item
-            if item.state is ProposalState.ACCEPTED and item.decided_by != AGENT
-            else item.model_copy(  # a change the agent applied becomes the person's own with their yes
+            if item.state is ProposalState.ACCEPTED
+            and item.decided_by != AGENT
+            and not required_by_goal(item)
+            else item.model_copy(  # a change the agent applied, or the goal's build, becomes the person's own with their yes
                 update={
                     "state": ProposalState.ACCEPTED,
                     "decided_by": principal.user_id,

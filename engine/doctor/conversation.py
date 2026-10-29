@@ -56,6 +56,7 @@ from engine.doctor.visit import (
     open_blocking,
     plan_change_count,
 )
+from engine.run_progress import expected_run_minutes
 
 if TYPE_CHECKING:
     from engine.doctor.screen import CaseScreenView
@@ -366,8 +367,36 @@ def _is_agent(actor: str | None) -> bool:
     return actor is not None and actor.startswith("agent")
 
 
-def _counts(item: CaseItem, step: dict[str, Any] | None) -> str:
-    """The counts sentence of a change: a sentence the item carries, else the guards' count of its step."""
+def file_rows(case: Case) -> dict[str, int]:
+    """Rows of each file as the diagnosis counted them (`upload_id` -> rows): what a count of "rows" is measured against."""
+    listed = (case.diagnosis or {}).get("files")
+    found: dict[str, int] = {}
+    for f in listed if isinstance(listed, list) else []:
+        rows = _n(f.get("rows")) if isinstance(f, dict) else None
+        if rows is not None and isinstance(f, dict):
+            found[str(f.get("upload_id"))] = rows
+    return found
+
+
+def total_rows_of(case: Case, item: CaseItem) -> int | None:
+    """The rows of the file a step reads (the only file, when the step names none): the count a step's rows are
+    compared with to say whether they are the whole file or a sample."""
+    rows = file_rows(case)
+    if item.upload_id is not None:
+        return rows.get(item.upload_id)
+    return next(iter(rows.values())) if len(rows) == 1 else None
+
+
+def _counts(
+    item: CaseItem,
+    step: dict[str, Any] | None,
+    total_rows: int | None = None,
+    sampled_from: int | None = None,
+) -> str:
+    """The counts sentence of a change: a sentence the item carries, else the guards' count of its step. It says which
+    rows were counted - the whole file, or a sample of it - and, of them, how many were kept and how many left out.
+    The plan's count (`step`) is a sample while the ledger says it was `sampled_from` more rows; a count the item
+    carries is the trial on the first rows, a sample when the file (`total_rows`) has more."""
     said = item.payload.get("counts")
     if isinstance(said, str) and said.strip():
         return said.strip()
@@ -375,15 +404,27 @@ def _counts(item: CaseItem, step: dict[str, Any] | None) -> str:
     rows_out = _n((step or {}).get("rows_out", item.payload.get("rows_out")))
     parts: list[str] = []
     if rows_in is not None and rows_out is not None:
-        if rows_out == rows_in:
-            parts.append(f"{_plural(rows_in, 'row', 'rows')}, none left out")
+        of = sampled_from if step is not None else total_rows
+        sample = of is not None and (sampled_from is not None if step is not None else rows_in < of)
+        scope = (
+            f"Sample: the first {rows_in:,} of {of:,} rows"
+            if sample and of is not None
+            else f"Whole file: {_plural(rows_in, 'row', 'rows')}"
+        )
+        left = max(0, rows_in - rows_out)
+        recipe = item.payload.get("step")
+        if isinstance(recipe, dict) and recipe.get("kind") == "sql_query":
+            # a query makes a new table (one row per customer, say): rows read and rows made, not rows kept
+            parts.append(f"{scope}, makes a table of {_plural(rows_out, 'row', 'rows')}")
         else:
-            parts.append(f"{rows_in:,} rows in, {rows_out:,} out")
+            parts.append(
+                f"{scope}, none left out" if not left else f"{scope}, {rows_out:,} kept, {left:,} left out"
+            )
     elif (changed := _n(item.payload.get("changed"))) is not None:
         parts.append(f"{_plural(changed, 'value', 'values')} changed")
     lost, twice = _n((step or {}).get("customers_lost")), _n((step or {}).get("customers_duplicated"))
     if lost:
-        parts.append(f"{_plural(lost, 'customer', 'customers')} lost")
+        parts.append(f"{_plural(lost, 'customer', 'customers')} left out")
     if twice:
         parts.append(f"{_plural(twice, 'customer appears', 'customers appear')} twice")
     return " · ".join(parts)
@@ -399,7 +440,11 @@ def _is_check(item: CaseItem) -> bool:
 
 
 def _change(
-    item: CaseItem, steps: dict[str, dict[str, Any]], principal: Principal | None = None
+    item: CaseItem,
+    steps: dict[str, dict[str, Any]],
+    principal: Principal | None = None,
+    total_rows: int | None = None,
+    sampled_from: int | None = None,
 ) -> ChangeCard | None:
     state = item.state.value
     if state == "rejected" and (item.decided_by is None or _is_agent(item.decided_by)):
@@ -415,7 +460,7 @@ def _change(
     return ChangeCard(
         item_id=item.item_id,
         title=item.title or item.kind,
-        counts=_counts(item, steps.get(item.item_id)),
+        counts=_counts(item, steps.get(item.item_id), total_rows, sampled_from),
         source=item.source.value,
         state=state,  # type: ignore[arg-type]
         by=by,
@@ -541,7 +586,12 @@ def _speeds(config_root: Path | None) -> tuple[Speed, ...]:
     except ConfigError:
         return ()
     return tuple(
-        Speed(id=name, name=name.capitalize(), minutes=int(value), recommended=name == "balanced")
+        Speed(
+            id=name,
+            name=name.capitalize(),
+            minutes=expected_run_minutes(int(value)),
+            recommended=name == "balanced",
+        )
         for name, value in minutes.items()
     )
 
@@ -596,6 +646,10 @@ def _ready(
     answered: Collection[str] = (),
 ) -> ReadyCard | None:
     verdict = view.verdict
+    if open_blocking(case):
+        return (
+            None  # one approval, after every question the plan needs is answered: no card while one is open
+        )
     entries = tuple(view.approve_class)
     accepted = {i.item_id for i in case.items if i.state is ProposalState.ACCEPTED}
     confirmations = tuple(
@@ -823,6 +877,8 @@ def build_conversation(
         for s in (view.ledger or {}).get("steps", [])
         if isinstance(s, dict) and "item_id" in s
     }
+    sampled_raw = (view.ledger or {}).get("sampled_from")
+    sampled = sampled_raw if isinstance(sampled_raw, int) and not isinstance(sampled_raw, bool) else None
     carried_gone = set(view.carried.gone) if view.carried is not None else set()
     asked_at: dict[str, datetime] = {}
     for event in timeline:
@@ -867,7 +923,7 @@ def build_conversation(
             or _is_check(item)
         ):
             continue
-        card = _change(item, steps, principal)
+        card = _change(item, steps, principal, total_rows_of(case, item), sampled)
         if card is None:
             continue
         changes.append(card)
@@ -895,7 +951,7 @@ def build_conversation(
         prefix = f"{question.question_id}:"
         for item in made.values():
             if item.item_id.startswith(prefix) and item.state is ProposalState.ACCEPTED:
-                return _counts(item, steps.get(item.item_id))
+                return _counts(item, steps.get(item.item_id), total_rows_of(case, item), sampled)
         return ""
 
     # How long training may take is the ready card's speeds (one place, one set of minutes); the question about it

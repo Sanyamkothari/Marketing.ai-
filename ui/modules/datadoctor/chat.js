@@ -23,7 +23,7 @@ import { AI_SETTINGS_HREF } from "../../availability.js";
 import { minutesText } from "../campaigns/run_rules.js";
 import { sentHtml, plain, TOOL_PHRASES } from "../ask/sent.js";
 import { samplesHtml } from "./plan_view.js";
-import { AI_CONSENT_BUTTON, AI_CONSENT_LINE, AI_SPENT_LINE, VERDICTS, columnNote, namesOf, standingHtml, userTextIn as nameIn } from "./view.js";
+import { AI_CONSENT_BUTTON, AI_CONSENT_DONE, AI_CONSENT_LINE, AI_CONSENT_NEVER, AI_CONSENT_SEES, AI_CONSENT_WITHOUT, AI_SPENT_LINE, VERDICTS, columnNote, namesOf, standingHtml, userTextIn as nameIn } from "./view.js";
 
 /** A server sentence with the person's names in it; a column is said in words (`marketing opt in`), not as the file spells it. */
 const userTextIn = (text, names) => nameIn(text, names, { friendly: true });
@@ -45,6 +45,17 @@ export const cardOf = (screen, type) => cards(screen).find((c) => c.type === typ
 
 // --- the checklist ----------------------------------------------------------------------------------------------
 
+/** The goal as the screens name it: the server's own name (the goal's fit card, else its goal card), else the known display name, else the id in words. Never the raw id. */
+function goalLabel(screen) {
+  const id = screen.view.goal_id;
+  const fit = cardOf(screen, "fit");
+  const goals = cardOf(screen, "goals");
+  const named = (fit && fit.goal_id === id && fit.name) || ((goals && goals.cards) || []).find((c) => c.goal_id === id)?.name;
+  if (named) return named;
+  const known = goalName(id);
+  return known && known !== id ? known : id.replace(/[-_]+/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
 /**
  * The short live checklist beside the chat: looked at / changes / questions left / goal / ready. Every number is one the
  * server counted (`first_look`: the same count of changes the approval sentence says).
@@ -56,12 +67,16 @@ export function checklistOf(screen) {
   // answer's fix is told on its question and a suggested answer waits in its reply, but each still counts once.
   const changes = first ? first.fixes_count : 0;
   const open = first ? first.questions_count : 0;
-  const ready = ["ready", "ready_with_warnings"].includes(view.verdict.key);
+  // The ready line is the ready card's own word (one source of truth): the card says "Ready to start" in the approve stage
+  // and the start stage alike, and nothing while a question is open or something blocks it.
+  const card = cardOf(screen, "ready");
+  const ready = Boolean(card) && (card.stage === "start" || (card.stage === "approve" && !card.blocked && !card.hold));
+  const goal = view.goal_id ? goalLabel(screen) : "";
   return [
     { id: "looked", done: Boolean(first), text: first ? `Looked at ${plural(first.files.length, "file", "files")}` : "Looking at your data" },
     { id: "fixes", done: Boolean(first), text: changes ? `${plural(changes, "change", "changes")} made` : "No changes needed so far" },
     { id: "questions", done: open === 0, text: open ? `${plural(open, "question", "questions")} left` : "No questions left" },
-    { id: "goal", done: Boolean(view.goal_id), text: view.goal_id ? `Goal: ${goalName(view.goal_id)}` : "Goal: not chosen yet" },
+    { id: "goal", done: Boolean(view.goal_id), text: view.goal_id ? `Goal: ${goal}` : "Goal: not chosen yet" },
     { id: "ready", done: ready, text: ready ? "Ready to start" : "Not ready to start yet" },
   ];
 }
@@ -84,12 +99,14 @@ export const previewFiles = (view) => (view && view.preview && Array.isArray(vie
 function previewTable(file, side) {
   const columns = file.columns || [];
   const rows = (side === "before" ? file.before : file.after) || [];
+  // After a build the table is a new one: its columns are not the file's columns fixed.
+  const built = side === "after" && file.after_table ? file.after_table : "";
   if (!columns.length || !rows.length) return `<p class="dds-why">No rows to show for this file yet.</p>`;
   const head = columns
     .map(
       (c) =>
-        `<th scope="col"${c.changed && side === "after" ? ` class="is-changed"` : ""}>${userText(plain(c.name))}${
-          c.changed && side === "after" ? ` <span class="ddc-mark">fixed</span>` : ""
+        `<th scope="col"${c.changed && side === "after" && !built ? ` class="is-changed"` : ""}>${userText(plain(c.name))}${
+          c.changed && side === "after" && !built ? ` <span class="ddc-mark">fixed</span>` : ""
         }</th>`,
     )
     .join("");
@@ -97,9 +114,13 @@ function previewTable(file, side) {
     .map((r) => `<tr>${columns.map((c, i) => `<td${c.personal ? ` class="dds-hidden-cell"` : ""}>${userText(plain(String(r[i] ?? "")))}</td>`).join("")}</tr>`)
     .join("");
   const changed = columns.filter((c) => c.changed).length;
-  const caption = `${side === "before" ? "First rows of your file, as they are" : "First rows after the fixes"}${
-    file.total_rows ? ` (of ${count(file.total_rows)})` : ""
-  }${side === "after" && changed ? `, ${plural(changed, "column", "columns")} fixed` : ""}. Personal details are hidden.`;
+  // Which table is shown and how many rows it has: the file, or (after a build) the new table the plan makes, whose
+  // rows are not the file's.
+  const caption = built
+    ? `First rows of the table the plan builds from this file (${plain(built)}${Number.isFinite(file.after_rows) ? `, ${count(file.after_rows)} rows` : ""}; the file has ${count(file.total_rows)} rows). Personal details are hidden.`
+    : `${side === "before" ? "First rows of your file, as they are" : "First rows after the fixes"}${
+        file.total_rows ? ` (of ${count(file.total_rows)} rows)` : ""
+      }${side === "after" && changed ? `, ${plural(changed, "column", "columns")} fixed` : ""}. Personal details are hidden.`;
   return `<div class="ddc-table-wrap"><table class="ddc-table" data-dds-preview-table="${side}"><caption class="sr">${esc(caption)}</caption><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div><p class="dds-why">${esc(caption)}</p>${
     file.note ? `<p class="dds-why">${esc(file.note)}</p>` : ""
   }`;
@@ -315,7 +336,7 @@ function goalsHtml(g, names, busy, clicked = "") {
         `<li class="dds-card ddc-goal" data-dds-goal-row="${esc(c.goal_id)}"><span class="dds-card-t">${esc(c.name)}${
           c.best ? ` <span class="chip neutral" data-dds-goal-best>Best fit</span>` : ""
         }</span>${c.why ? `<span class="dds-why">${userTextIn(c.why, names)}</span>` : ""}${button({
-          label: "Use this",
+          label: "Choose this goal",
           kind: c.best ? "primary" : "secondary",
           attrs: `data-dds-goal="${esc(c.goal_id)}" aria-label="Choose the goal: ${esc(c.name)}"`,
           disabled: busy,
@@ -521,6 +542,26 @@ export function promptsOf(screen) {
   ];
 }
 
+/**
+ * What the AI may read, said before it is asked for (and confirmed once it is given): masked summaries (column names,
+ * counts, patterns), never a cell value. Drawn after the first look while the Doctor's AI has not been allowed to read this
+ * client's data; once allowed, one line says so (`consented`: the person gave it in this visit).
+ */
+export function consentCardHtml({ ai = null, use = null, busy = false, canConsent = true, consented = false } = {}) {
+  if (ai === false || !use) return "";
+  if (use.consent) {
+    return consented
+      ? agentRow(`<div class="ddc-bubble" data-dds-consent-done role="status">${icon("check", { size: 14 })} ${esc(AI_CONSENT_DONE)}</div>`)
+      : "";
+  }
+  const ask = canConsent
+    ? `<div class="dds-actions">${button({ label: AI_CONSENT_BUTTON, kind: "primary", size: "sm", attrs: "data-dds-ai-consent", disabled: Boolean(busy), busy: busy === "consent" })}</div>`
+    : `<p class="dds-why">Ask someone who can change this check to allow it.</p>`;
+  return agentRow(
+    `<section class="ddc-ready" data-dds-consent-card aria-labelledby="ddc-consent-t"><h3 class="dds-group-t" id="ddc-consent-t">Let the Doctor's AI help?</h3><ul class="dds-reasons"><li>${esc(AI_CONSENT_SEES)}</li><li>${esc(AI_CONSENT_NEVER)}</li><li>${esc(AI_CONSENT_WITHOUT)}</li></ul>${ask}</section>`,
+  );
+}
+
 /** The composer. With no AI service the box says so in plain words (the buttons above still work). */
 export function composerHtml(screen, { ai = null, use = null, draft = "", busy = false, canConnect = true, canConsent = true } = {}) {
   let note = "";
@@ -567,7 +608,7 @@ export function conversationHtml(screen, ctx) {
     .map((card) => {
       switch (card.type) {
         case "first_look":
-          return firstLookHtml(card, names);
+          return `${firstLookHtml(card, names)}${consentCardHtml({ ...(ctx.composer || {}), busy: ctx.busy, consented: Boolean(ctx.consented) })}`;
         case "change":
           return changeHtml(card, names, busy, { clicked, column: columnOf.get(`item:${card.item_id}`) || "" });
         case "question":

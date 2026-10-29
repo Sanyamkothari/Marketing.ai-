@@ -91,7 +91,7 @@ test("a fix is a one-line change card with its counts and Undo; undo posts the u
   const s = await show("approve_class", {
     patch: (a) => {
       const change = a.view.conversation.find((c) => c.type === "change");
-      change.counts = "4,000 rows in, 3,812 out (188 fewer)";
+      change.counts = "Whole file: 4,000 rows, 3,812 kept, 188 left out";
       return a;
     },
   });
@@ -99,7 +99,7 @@ test("a fix is a one-line change card with its counts and Undo; undo posts the u
   const el = $(`[data-dds-change-card="${change.item_id}"]`);
   assert.equal(el.dataset.ddsChangeState, "accepted");
   assert.ok(el.textContent.includes(change.title.replace(/[“”]/g, "").slice(0, 10)) || el.textContent.length > 10);
-  assert.match(el.textContent, /4,000 rows in, 3,812 out/);
+  assert.match(el.textContent, /Whole file: 4,000 rows, 3,812 kept, 188 left out/);
   assert.match(el.textContent, /Done by|Your choice/);
   const undo = el.querySelector("[data-dds-undo]");
   assert.equal(undo.textContent.trim(), "Undo");
@@ -368,7 +368,7 @@ test("Approve and start: the own yes, Approve with the sentence read, then the s
   assert.match($(`[data-dds-confirm-row="${consent.item_id}"]`).textContent, /Also include: .*Left out unless you tick it/);
   assert.deepEqual(
     $$("[data-dds-speeds] .btn").map((b) => b.textContent.trim()),
-    ["Quick: about 5 minutes", "Balanced: about 15 minutes (recommended)", "Thorough: about 40 minutes"],
+    ["Quick: about 8 minutes", "Balanced: about 20 minutes (recommended)", "Thorough: about 45 minutes"],
   );
   $('[data-dds-speed="quick"]').click();
   await settle(1);
@@ -575,7 +575,7 @@ test("approved already: the card is the start - the sentence, what was left out,
   assert.ok(el && !$("[data-dds-approve-start]"));
   assert.equal(el.querySelector("[data-dds-approved-sentence]").textContent, card(s, "ready").sentence);
   assert.match(el.querySelector("[data-dds-left-out]").textContent, /Left out, because nobody agreed:.*says who agreed to be contacted/);
-  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from .+ Balanced: about 15 minutes\./);
+  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from .+ Balanced: about 20 minutes\./);
   $("[data-dds-continue]").click();
   await until(() => world.posted.some((p) => p.path === "/campaign-runs"), 3000, "the start");
 });
@@ -733,4 +733,110 @@ test("a refused start is told in the card with the Start button, not at the top 
   await until(() => $("[data-dds-ready] [role=alert]"), 3000, "the refusal in the card");
   assert.equal($$("[role=alert]").length, 1, "and said once");
   assert.ok($("[data-dds-ready] [data-dds-continue]"), "next to the button that can try again");
+});
+
+// --- what a real browser walk of the whole Online Retail file found (U1) --------------------------------------------
+
+test("the progress line 'Ready to start' is the ready card's own word: one source of truth", () => {
+  const ready = chat.checklistOf(screen("approve_class")).find((r) => r.id === "ready");
+  assert.equal(ready.text, "Ready to start", "the card says Ready to start, so does the list");
+  assert.equal(ready.done, true);
+  const asked = chat.checklistOf(screen("question")).find((r) => r.id === "ready");
+  assert.deepEqual([asked.text, asked.done], ["Not ready to start yet", false], "no card while a question is open");
+  const held = structuredClone(screen("approve_class"));
+  Object.assign(chat.cardOf(held, "ready"), { hold: "Choose what the campaign is for first." });
+  assert.equal(chat.checklistOf(held).find((r) => r.id === "ready").done, false, "a card that holds Approve is not ready");
+});
+
+test("the goal is named by its display name in the progress list, never by its id", () => {
+  const s = structuredClone(screen("approve_class"));
+  s.view.goal_id = "retail-win-back";
+  s.view.conversation = s.view.conversation.filter((c) => c.type !== "fit");
+  assert.equal(chat.checklistOf(s).find((r) => r.id === "goal").text, "Goal: Retail win back", "never the raw id");
+  s.view.conversation.push({ type: "goals", cards: [{ goal_id: "retail-win-back", name: "Retail Win-back", why: "", best: true, status: "fits" }], more_count: 0 });
+  assert.equal(chat.checklistOf(s).find((r) => r.id === "goal").text, "Goal: Retail Win-back", "the goal card's name");
+  s.view.conversation.push({ type: "fit", goal_id: "retail-win-back", name: "Win back lapsed shoppers", ok: true, sentence: "x" });
+  assert.equal(chat.checklistOf(s).find((r) => r.id === "goal").text, "Goal: Win back lapsed shoppers", "the server's own name when it gave one");
+});
+
+test("the goal button says 'Choose this goal', as every goal button of the Data Doctor does", async () => {
+  await show("question");
+  assert.ok($$("[data-dds-goal]").length > 0);
+  assert.ok($$("[data-dds-goal-row] [data-dds-goal]").every((b) => b.textContent.trim() === "Choose this goal"));
+});
+
+test("a change the goal needs is part of the plan the one approval gives, not a box left unticked", () => {
+  const html = chat.readyHtml(
+    {
+      type: "ready",
+      stage: "approve",
+      sentence: "Prepare 1 file with 3 changes for the goal “Retail Win-back”. Nothing else changes.",
+      stops: [],
+      speeds: [],
+      confirmations: [
+        { item_id: "build", sentence: "Training table: one row per shopper.", why: "it makes a new table with a query", role: "analyst", required: true, can_agree: true, separate: true, shown: true, answered: false },
+      ],
+    },
+    { stops: new Set(), confirms: new Set(), names: [] },
+  );
+  assert.match(html, /data-dds-agreed="build"/);
+  assert.doesNotMatch(html, /Left out unless you tick it/, "no 'left out unless you tick it' for what the goal needs");
+  assert.doesNotMatch(html, /type="checkbox"/);
+  assert.match(html, /Approve and start gives your yes/);
+});
+
+test("the consent prompt says what the AI will and will not see, and a line confirms once it is given", () => {
+  const ask = chat.consentCardHtml({ ai: true, use: { consent: false }, canConsent: true });
+  assert.match(ask, /data-dds-consent-card/);
+  assert.match(ask, /masked summaries/);
+  assert.match(ask, /never see a cell value/);
+  assert.match(ask, /rules still run/);
+  assert.match(ask, /data-dds-ai-consent/);
+  assert.equal(chat.consentCardHtml({ ai: false, use: { consent: false } }), "", "no AI service: nothing to allow");
+  assert.equal(chat.consentCardHtml({ ai: true, use: { consent: true } }), "", "allowed earlier: no prompt");
+  const done = chat.consentCardHtml({ ai: true, use: { consent: true }, consented: true });
+  assert.match(done, /data-dds-consent-done/);
+  assert.match(done, /Allowed\./);
+  assert.match(done, /never cell values/);
+  assert.doesNotMatch(done, /data-dds-ai-consent/);
+  assert.match(chat.consentCardHtml({ ai: true, use: { consent: false }, canConsent: false }), /Ask someone who can change this check/);
+});
+
+test("the consent prompt follows the first look, and allowing it replaces the prompt with a confirmation", async () => {
+  world = makeWorld({ at: "question" });
+  const open = {
+    ...(await show("question", { ai: connected() })),
+  };
+  assert.ok(open);
+  world.use = { consent: false, spent: false };
+  world.ai = connected();
+  _resetDataDoctorForTests();
+  forgetAiServiceStatus();
+  app.innerHTML = `<main><h1>Data</h1><div class="dds-layout"><div id="m"></div><aside id="a"></aside></div></main>`;
+  mountDataDoctor({ main: $("#m"), aside: $("#a") }, { place: "data" });
+  await until(() => $("[data-dds-consent-card]"), 3000, "the consent prompt");
+  const prompt = $("[data-dds-consent-card]");
+  assert.equal(prompt.closest(".ddc-row").previousElementSibling.querySelector("[data-dds-first-look]") !== null, true, "right after the first look");
+  assert.match(prompt.textContent, /masked summaries/);
+  assert.match(prompt.textContent, /never see a cell value/);
+  prompt.querySelector("[data-dds-ai-consent]").click();
+  await until(() => $("[data-dds-consent-done]"), 3000, "the confirmation");
+  assert.equal(posts("ai-consent").length, 1);
+  assert.match($("[data-dds-consent-done]").textContent, /Allowed\..*never cell values/);
+  assert.ok(!$("[data-dds-consent-card]"), "the prompt is gone once it is given");
+});
+
+test("the data panel says which table the rows are: the file, or the table a build makes, with its rows", () => {
+  const s = structuredClone(screen("approve_class"));
+  const file = { upload_id: "u1", file_name: "orders.csv", total_rows: 541909, columns: [{ name: "InvoiceNo", changed: false, personal: false }, { name: "n", changed: true, personal: false }], before: [["1", "2"]], after: [["", "5"]], left_out_columns: 0, after_table: "training_retail_win_back", after_rows: 1402 };
+  s.view.preview = { files: [file] };
+  s.view.ledger = { ...(s.view.ledger || {}), rows_out: 9999, sampled_from: 1000 }; // a sampled plan check, as on any real file
+  const built = chat.panelHtml(s, { tab: "u1", side: "after" });
+  assert.match(built, /First rows of the table the plan builds from this file \(training_retail_win_back, 1,402 rows; the file has 541,909 rows\)/);
+  assert.doesNotMatch(built, /after the fixes \(of 541,909\)/i);
+  assert.doesNotMatch(built, /ddc-mark">fixed|is-changed/, "the columns of a new table are not the file's columns fixed");
+  const before = chat.panelHtml(s, { tab: "u1", side: "before" });
+  assert.match(before, /First rows of your file, as they are \(of 541,909 rows\)/);
+  s.view.preview = { files: [{ ...file, after_table: null }] };
+  assert.match(chat.panelHtml(s, { tab: "u1", side: "after" }), /First rows after the fixes \(of 541,909 rows\), 1 column fixed/);
 });

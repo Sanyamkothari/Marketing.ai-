@@ -302,7 +302,7 @@ test("in the wizard, approving a plan that leaves nothing out still starts nothi
   await settle(3);
   assert.deepEqual(started, [], "Approve did not start the run");
   assert.ok(!world.posted.some((p) => p.path === "/campaign-runs"), "Approve did not post a run");
-  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from .+ Balanced: about 15 minutes\./);
+  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from .+ Balanced: about 20 minutes\./);
   assert.ok($("[data-dds-speed-open]"), "the Quick/Balanced choice sits behind Change");
   $("[data-dds-continue]").click();
   await until(() => world.posted.some((p) => p.path === "/campaign-runs"), 3000, "the one Start");
@@ -428,18 +428,18 @@ test("ready on the Data page: one sentence with the time, Change picks another, 
   const s = await show("ready");
   assert.equal($("[data-dds-verdict]").dataset.ddsVerdict, "ready");
   const sentence = $("[data-dds-start-sentence]").textContent;
-  assert.match(sentence, /^We will learn from .+, 1,200 customers, and build your contact list\. Balanced: about 15 minutes\./);
+  assert.match(sentence, /^We will learn from .+, 1,200 customers, and build your contact list\. Balanced: about 20 minutes\./);
   assert.match($("[data-dds-start-leave]").textContent, /You can close this page\./);
   assert.ok(!$("[data-dds-speeds]"), "the choices wait behind Change");
   $("[data-dds-speed-open]").click();
   await settle(1);
   assert.deepEqual(
     $$("[data-dds-speed]").map((b) => b.textContent.trim()),
-    ["Quick: about 5 minutes", "Balanced: about 15 minutes (recommended)", "Thorough: about 40 minutes"],
+    ["Quick: about 8 minutes", "Balanced: about 20 minutes (recommended)", "Thorough: about 45 minutes"],
   );
   $('[data-dds-speed="thorough"]').click();
   await settle(1);
-  assert.match($("[data-dds-start-sentence]").textContent, /Thorough: about 40 minutes\./);
+  assert.match($("[data-dds-start-sentence]").textContent, /Thorough: about 45 minutes\./);
   const button = $("[data-dds-continue]");
   assert.equal(button.textContent.trim(), "Start the campaign");
   button.click();

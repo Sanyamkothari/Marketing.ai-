@@ -256,3 +256,40 @@ def test_the_whole_file_reader_reads_only_the_named_columns_over_every_row(
     assert len(whole) == 2_500 and whole["customer_id"].iloc[7] == "000007", "an ID keeps its leading zeros"
     with pytest.raises(KeyError):
         list(read(["customer_id", "renamed"]))
+
+
+def test_the_build_description_is_told_to_its_end_even_with_many_features(config_root: Path) -> None:
+    """A description has a fixed room: a long list of features is shortened, never the outcome's sentence (it once
+    stopped at "...came back in the 90 days after the")."""
+    from engine.doctor.buildable import _DESCRIPTION_ROOM
+
+    frame = log(1_500)
+    config = load_use_case(GOAL, config_root)
+    found = buildable_outcome([loaded(frame, config_root)], config, config_root)
+    assert found is not None
+    _sql, description = compile_build(found, config, "t_orders", found.audiences[1])
+    assert len(description) <= _DESCRIPTION_ROOM
+    assert description.endswith("days after the snapshot, else 0.")
+    assert "reactivated_90d: 1 when the" in description
+
+
+def test_the_audience_question_recommends_by_the_goals_description_and_has_a_safe_choice(
+    config_root: Path,
+) -> None:
+    from engine.doctor.visit import _audience_question
+
+    frame = log(1_500)
+    config = load_use_case(GOAL, config_root)
+    found = buildable_outcome([loaded(frame, config_root)], config, config_root)
+    assert found is not None
+    active, quiet = found.audiences
+    found = found.model_copy(update={"audiences": (active, quiet.model_copy(update={"enough": True}))})
+    question, _effects = _audience_question(config, found)
+    # "customers who have stopped buying": the gone-quiet reading, with the goal's own words as the reason
+    assert question.recommended == "quiet"
+    assert "stopped buying" in question.why and "gone quiet" in question.why
+    # "I don't know" is the choice that decides nothing for the person: the outcome column is asked for instead
+    assert [o.option_id for o in question.options if o.safe] == ["none"]
+    plain = config.model_copy(update={"description": "Ranks customers by how likely they are to order."})
+    asked, _ = _audience_question(plain, found)
+    assert asked.recommended is None and asked.why == "", "a description that says nothing of the sort"
