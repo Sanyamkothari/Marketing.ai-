@@ -943,7 +943,7 @@ def _propose_step(
 
     Refused with a code the model can correct (once) when the kind is not the chat's to suggest, the column
     holds personal data, no cited look-tool result is about the column, the recipe engine refuses the step,
-    or the step changes nothing on the file's first `STEP_SAMPLE_ROWS` rows. A suggestion that passes is
+    or the step touches no row of the whole column. A suggestion that passes is
     pending, `check`, labelled as the AI's, and never ticked for the person.
     """
     from engine.agent.advisor import ordered_steps, recipe_steps
@@ -1044,29 +1044,36 @@ def _propose_step(
     except RecipeError as exc:
         raise AgentToolError(exc.code, exc.message) from exc
     receipt = trial.receipt.steps[0]
-    if (
-        receipt.changed == 0
-        and len(ctx.frame) > STEP_SAMPLE_ROWS
-        and kind not in (RecipeStepKind.DROP_COLUMN, RecipeStepKind.RENAME_COLUMN)
-    ):
-        try:
-            full_trial = run_recipe(
-                ctx.frame,
-                [step],
-                upload_id=ctx.upload_id,
-                primary_key=key,
-                target=target,
-                levels=agent.levels,
-                max_failure_pct=agent.max_conversion_failure_pct,
-            )
-            receipt = full_trial.receipt.steps[0]
-        except RecipeError:
-            pass
+    whole = ""
     if receipt.changed == 0 and kind not in (RecipeStepKind.DROP_COLUMN, RecipeStepKind.RENAME_COLUMN):
-        raise AgentToolError(
-            "AGENT_STEP_NO_EFFECT",
-            f"That fix changes nothing in the rows of '{display_name(column)}'. Look again, or reply instead.",
-        )
+        # Nothing in the sample: count what the step touches in the whole column (this one column, not the
+        # whole table), so a step that only matters further down is not lost and a refusal states its count.
+        rows = len(ctx.frame)
+        touched = 0
+        if rows > STEP_SAMPLE_ROWS:
+            try:
+                touched = (
+                    run_recipe(
+                        ctx.frame[[column]],
+                        [step],
+                        upload_id=ctx.upload_id,
+                        primary_key=key,
+                        target=target,
+                        levels=agent.levels,
+                        max_failure_pct=agent.max_conversion_failure_pct,
+                    )
+                    .receipt.steps[0]
+                    .changed
+                )
+            except RecipeError as exc:
+                raise AgentToolError(exc.code, exc.message) from exc
+        if touched == 0:
+            raise AgentToolError(
+                "AGENT_STEP_NO_EFFECT",
+                f"That fix touches 0 of the {rows} rows of '{display_name(column)}' (the whole column, "
+                "not only the first rows). Look again, or reply instead.",
+            )
+        whole = f" In the whole column it changes {touched} of {rows} rows."
     # Tried on the first rows (the trial above), held to decision O10, never ticked: the approval's
     # "new patterns, with permission" for an AI's fix.
     effect = data_policy.effect_of(
@@ -1089,6 +1096,7 @@ def _propose_step(
         f"{'' if receipt.changed == 1 else 's'}"
         + (f" and cannot read {receipt.failed}" if receipt.failed else "")
         + "."
+        + whole
     )
     result = ToolResult(
         evidence_id=evidence_id,

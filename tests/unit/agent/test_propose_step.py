@@ -108,6 +108,20 @@ def test_a_fix_that_changes_nothing_is_refused(started: tuple[Any, Any]) -> None
     assert result.blocked_by == "AGENT_STEP_NO_EFFECT"
 
 
+def test_a_fix_that_only_matters_below_the_first_rows_is_judged_on_the_whole_column() -> None:
+    frame = messy_frame()
+    frame["city"] = ["Mumbai" if index < 1500 else "Bombay" for index in range(len(frame))]
+    ctx = context_for(frame)
+    late = (ctx, start_session(ctx, session_id="s2"))
+    result = turn(late, LOOK, step("map_values", mapping={"Bombay": "Mumbai"}), reply())
+    assert result.blocked_by is None
+    (proposal,) = result.proposals
+    assert "In the whole column it changes 1500 of 3000 rows." in proposal.reason
+    nothing = step("map_values", mapping={"Delhi": "New Delhi"})
+    refused = turn(late, LOOK, nothing, nothing)
+    assert refused.blocked_by == "AGENT_STEP_NO_EFFECT"
+
+
 def test_a_bad_parameter_is_refused_by_the_recipe_engine(started: tuple[Any, Any]) -> None:
     attempt = step("fill_missing", value="median")
     result = turn(started, LOOK, attempt, attempt)

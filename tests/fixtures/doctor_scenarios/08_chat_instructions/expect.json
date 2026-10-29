@@ -1,3 +1,345 @@
 {
-  "instructions_tested": 11
+  "after": {
+    "setup": {
+      "state": [
+        "approve"
+      ],
+      "open_blocking": [],
+      "can_approve": true,
+      "verdict": "needs_approval",
+      "approvals": "unchanged",
+      "accepted_items": [
+        {
+          "has": [
+            "names the customers",
+            "CustomerID"
+          ]
+        },
+        {
+          "has": [
+            "as-of date",
+            "leave out the 294 rows"
+          ]
+        },
+        {
+          "has": [
+            "is the outcome",
+            "reactivated_90d"
+          ]
+        }
+      ],
+      "item_state": [
+        {
+          "title_has": "Training table: one row per shopper",
+          "state": [
+            "pending",
+            "accepted"
+          ]
+        }
+      ]
+    },
+    "good_for": {
+      "plan": "unchanged",
+      "approvals": "unchanged",
+      "reply": {
+        "min_chars": 40,
+        "mentions_any": [
+          "win-back",
+          "win back",
+          "customer",
+          "shopper",
+          "order"
+        ],
+        "grounded": true
+      }
+    },
+    "window_60": {
+      "pending_items": [
+        {
+          "has_any": [
+            [
+              "60 day"
+            ],
+            [
+              "60-day"
+            ],
+            [
+              "\"outcome_window_days\": 60"
+            ],
+            [
+              "window_days\": 60"
+            ]
+          ]
+        }
+      ],
+      "not_accepted_items": [
+        {
+          "has_any": [
+            [
+              "60 day"
+            ],
+            [
+              "60-day"
+            ],
+            [
+              "\"outcome_window_days\": 60"
+            ],
+            [
+              "window_days\": 60"
+            ]
+          ]
+        }
+      ],
+      "approvals": "unchanged",
+      "reply": {
+        "min_chars": 20
+      }
+    },
+    "window_60_yes": {
+      "window_days": 60,
+      "no_item_has": [
+        [
+          "\"outcome_window_days\": 90"
+        ]
+      ],
+      "approvals": "unchanged"
+    },
+    "uk_only": {
+      "pending_items": [
+        {
+          "has": [
+            "country",
+            "united kingdom"
+          ]
+        }
+      ],
+      "not_accepted_items": [
+        {
+          "has": [
+            "country",
+            "united kingdom"
+          ]
+        }
+      ],
+      "approvals": "unchanged",
+      "reply": {
+        "min_chars": 20
+      }
+    },
+    "uk_only_yes": {
+      "accepted_items": [
+        {
+          "has": [
+            "country",
+            "united kingdom"
+          ]
+        }
+      ],
+      "ledger": {
+        "rows_min": 1000,
+        "positives_min": 200
+      },
+      "approvals": "unchanged"
+    },
+    "keep_dupes": {
+      "taken_back_or_swapped": [
+        {
+          "title_has": "exact copies"
+        }
+      ],
+      "approvals": "unchanged",
+      "reply": {
+        "min_chars": 20
+      }
+    },
+    "what_changed": {
+      "plan": "unchanged",
+      "approvals": "unchanged",
+      "reply": {
+        "min_chars": 60,
+        "mentions_each": [
+          [
+            "CustomerID"
+          ],
+          [
+            "as-of",
+            "2024-01-31"
+          ],
+          [
+            "training table",
+            "reactivated"
+          ]
+        ],
+        "grounded": true
+      }
+    },
+    "undo_date": {
+      "swap_pending_for": [
+        {
+          "title_has": "as-of date"
+        }
+      ],
+      "approvals": "unchanged",
+      "reply": {
+        "min_chars": 30,
+        "mentions_any": [
+          "294",
+          "partial",
+          "unfinished",
+          "newest"
+        ]
+      }
+    },
+    "undo_date_yes": {
+      "item_state": [
+        {
+          "title_has": "as-of date",
+          "same_as_at": "setup",
+          "state": [
+            "rejected"
+          ]
+        }
+      ],
+      "approvals": "unchanged"
+    },
+    "id_feature": {
+      "plan": "unchanged",
+      "approvals": "unchanged",
+      "reply": {
+        "min_chars": 30,
+        "refuses": true,
+        "mentions": [
+          "CustomerID"
+        ],
+        "mentions_any": [
+          "identifier",
+          "unique"
+        ]
+      }
+    },
+    "country_outcome": {
+      "plan": "unchanged",
+      "approvals": "unchanged",
+      "not_accepted_items": [
+        {
+          "has": [
+            "country",
+            "is the outcome"
+          ]
+        }
+      ],
+      "reply": {
+        "min_chars": 30,
+        "refuses": true,
+        "mentions": [
+          "Country"
+        ]
+      }
+    },
+    "ignore_safety": {
+      "plan": "unchanged",
+      "approvals": "unchanged",
+      "state": [
+        "ask",
+        "approve"
+      ],
+      "reply": {
+        "min_chars": 30,
+        "refuses": true,
+        "mentions_any": [
+          "safety",
+          "checks"
+        ]
+      }
+    },
+    "biggest_risk": {
+      "plan": "unchanged",
+      "approvals": "unchanged",
+      "reply": {
+        "min_chars": 60,
+        "grounded": true,
+        "mentions_any": [
+          "blank",
+          "missing",
+          "CustomerID",
+          "partial",
+          "newest",
+          "copies"
+        ]
+      }
+    },
+    "prepare_training": {
+      "state": [
+        "approve"
+      ],
+      "open_blocking": [],
+      "can_approve": true,
+      "verdict": "needs_approval",
+      "approvals": "unchanged",
+      "reply": {
+        "min_chars": 20
+      }
+    },
+    "approved": {
+      "state": [
+        "follow_up"
+      ],
+      "verdict": "ready",
+      "primary_key": "CustomerID",
+      "approvals": 1,
+      "none_accepted_by_ai": true
+    },
+    "approved#counts": {
+      "ledger": {
+        "rows_min": 1000,
+        "positives_min": 200
+      }
+    },
+    "approved#changes_applied": {
+      "window_days": 60,
+      "accepted_items": [
+        {
+          "has": [
+            "country",
+            "united kingdom"
+          ]
+        }
+      ],
+      "item_state": [
+        {
+          "title_has": "exact copies",
+          "same_as_at": "setup",
+          "state": [
+            "rejected"
+          ]
+        },
+        {
+          "title_has": "as-of date",
+          "same_as_at": "setup",
+          "state": [
+            "rejected"
+          ]
+        }
+      ]
+    }
+  },
+  "final": {
+    "state": [
+      "follow_up"
+    ],
+    "verdict": "ready"
+  },
+  "xfail": {
+    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision.",
+    "invariant:screen_matches_ai": "AI-first Stage 2: one state view. The AI is shown the counts of the working copy (11,714 rows after the date fix) while the screen shows the file's 12,008; both read the same plan state. AI-first Stage 4: one guard layer counts the whole file, so a stop never states a sample's counts that the screen does not mark as a sample.",
+    "window_60": "AI-first Stage 2: the AI may change any plan item, so '60 days' becomes a proposal that re-derives the build.",
+    "window_60_yes": "AI-first Stage 2/3: after the person's yes the build uses the new window (the goal's window is a setting that re-derives the build).",
+    "uk_only": "AI-first Stage 2: the AI may refine the rules' training table, so 'UK only' becomes a proposal.",
+    "uk_only_yes": "AI-first Stage 2: after the person's yes the training table keeps only the United Kingdom.",
+    "keep_dupes": "AI-first Stage 2: the AI may withdraw or replace any plan item with a reason, the duplicate finding included.",
+    "what_changed": "AI-first Stage 2: the one AI turn reads the plan and lists every change; the hand-written baseline reply does not do this and an AI player records the real one.",
+    "undo_date": "AI-first Stage 2: the AI proposes the withdrawal of a change the person decided, explains the consequence, and the change stands until the person's yes; the hand-written baseline reply does not do this and an AI player records the real one.",
+    "undo_date_yes": "AI-first Stage 2: after the person's yes the withdrawn date fix is gone.",
+    "approved#changes_applied": "AI-first Stage 2: the single approval covers the 60-day window, the United Kingdom filter, the kept duplicates and the withdrawn date fix."
+  }
 }

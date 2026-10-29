@@ -11,6 +11,7 @@ the files' own gates, the case's spending), and that without an AI service the c
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -474,6 +475,57 @@ def test_a_suggestion_for_a_question_that_is_not_open_is_refused(
     talk.say("suggest something")
     assert talk.reply.suggestion is None and talk.reply.text == "Nothing to suggest."
     assert [r["error"] for r in client.seen[-1].results if "error" in r] == ["AGENT_SUGGESTION_UNKNOWN"]
+
+
+def test_the_agent_cannot_take_back_a_change_the_rules_made_and_is_told_which_are_its_own(
+    storage: LocalStorage, world: World
+) -> None:
+    """Replacing anything with the person's yes is a later stage; today only its own changes can be taken back."""
+
+    def withdraw_a_rules_change(seen: Seen) -> dict[str, object]:
+        rules = next(p for p in seen.state["plan"] if p["made_by"] == "the rules")
+        return {"action": "withdraw", "args": {"item_id": rules["id"]}}
+
+    client = ChatScript({"take it back": [withdraw_a_rules_change, reply("I could not take that back.")]})
+    talk = Talk(storage, world, client)
+    before = talk.say("start").items
+    case = talk.say("take it back")
+    assert talk.reply.withdrawn == () and case.items == before, "nothing is taken back"
+    refused = next(r for r in client.seen[-1].results if r.get("error") == "AGENT_ITEM_UNKNOWN")
+    assert "Your own changes: none" in refused["message"]
+
+
+def test_a_suggestion_names_the_open_questions_and_never_points_at_i_dont_know(
+    storage: LocalStorage, world: World
+) -> None:
+    def suggest(option: str) -> Callable[[Seen], dict[str, object]]:
+        def action(seen: Seen) -> dict[str, object]:
+            return {
+                "action": "suggest_answer",
+                "args": {"question_id": seen.last("question_id"), "option_id": option},
+            }
+
+        return action
+
+    ask = {
+        "action": "ask",
+        "file": "F1",
+        "args": {
+            "question": "Q24",
+            "values": {"file": "orders.csv"},
+            "choices": ["A big order", "Any order"],
+        },
+    }
+    client = ChatScript({"sale": [ask, suggest("dont_know"), suggest("c9"), reply("No suggestion.")]})
+    talk = Talk(storage, world, client)
+    talk.say("sale")
+    assert talk.reply.suggestion is None
+    refusals = [r for r in client.seen[-1].results if r.get("error") == "AGENT_SUGGESTION_UNKNOWN"]
+    assert (
+        refusals
+        and "Open questions: ['k" in refusals[0]["message"]
+        and "Choices of" in refusals[0]["message"]
+    )
 
 
 def test_a_doubt_about_meaning_and_a_request_for_data_reach_the_case(

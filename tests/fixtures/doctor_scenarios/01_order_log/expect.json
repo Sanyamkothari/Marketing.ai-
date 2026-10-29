@@ -1,5 +1,119 @@
 {
-  "state": ["approve", "ready", "verify", "follow_up", "hand_off"],
-  "min_rows": 1000,
-  "min_positives": 200
+  "after": {
+    "first_look": {
+      "state": [
+        "ask"
+      ],
+      "files": {
+        "order_log.csv": 12008
+      },
+      "open_blocking": [
+        "KEY_NOT_UNIQUE"
+      ],
+      "can_approve": false,
+      "verdict": "needs_answers",
+      "approvals": "unchanged",
+      "none_accepted_by_ai": true
+    },
+    "goal": {
+      "state": [
+        "ask"
+      ],
+      "open_blocking": [
+        "BUILD_AUDIENCE",
+        "KEY_NOT_UNIQUE"
+      ],
+      "can_approve": false,
+      "verdict": "needs_answers",
+      "approvals": "unchanged"
+    },
+    "audience": {
+      "open_blocking": [
+        "OUTCOME_COLUMN"
+      ],
+      "item_state": [
+        {
+          "title_has": "Training table: one row per shopper",
+          "state": [
+            "pending",
+            "accepted"
+          ]
+        }
+      ]
+    },
+    "audience#build_is_a_proposal": {
+      "item_state": [
+        {
+          "title_has": "Training table: one row per shopper",
+          "state": [
+            "pending"
+          ]
+        }
+      ]
+    },
+    "outcome": {
+      "state": [
+        "approve"
+      ],
+      "open_blocking": [],
+      "can_approve": true,
+      "verdict": "needs_approval",
+      "approvals": "unchanged",
+      "accepted_items": [
+        {
+          "has": [
+            "names the customers",
+            "CustomerID"
+          ]
+        },
+        {
+          "has": [
+            "is the outcome",
+            "reactivated_90d"
+          ]
+        }
+      ],
+      "window_days": 90
+    },
+    "approved": {
+      "state": [
+        "follow_up"
+      ],
+      "verdict": "ready",
+      "primary_key": "CustomerID",
+      "outcome": "reactivated_90d",
+      "files": {
+        "order_log.csv": 12008
+      },
+      "approvals": 1,
+      "none_accepted_by_ai": true,
+      "accepted_items": [
+        {
+          "has": [
+            "training table",
+            "one row per shopper"
+          ]
+        }
+      ]
+    },
+    "approved#counts": {
+      "ledger": {
+        "rows_eq": 1693,
+        "positives_eq": 639,
+        "rows_min": 1000,
+        "positives_min": 200
+      }
+    }
+  },
+  "final": {
+    "state": [
+      "follow_up"
+    ],
+    "verdict": "ready"
+  },
+  "xfail": {
+    "audience#build_is_a_proposal": "AI-first Stage 2: the training table is proposed through the one author and waits for the person's yes; the rules do not pre-accept it.",
+    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision.",
+    "invariant:screen_matches_ai": "AI-first Stage 4: one guard layer counts the whole file, so a stop never states a sample's counts that the screen does not mark as a sample."
+  }
 }

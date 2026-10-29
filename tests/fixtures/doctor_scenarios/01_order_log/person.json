@@ -1,10 +1,41 @@
 [
-  {"action": "upload", "file": "order_log", "use_case": "retail-win-back"},
-  {"action": "consent"},
-  {"action": "visit"},
-  {"action": "goal", "goal_id": "retail-win-back"},
-  {"action": "answer", "match": "customer", "option": "recommended"},
-  {"action": "answer", "match": "ranks", "option": "active"},
-  {"action": "answer", "match": "column", "option": "recommended"},
-  {"action": "approve"}
+  {
+    "action": "upload",
+    "file": "order_log",
+    "use_case": "retail-win-back"
+  },
+  {
+    "action": "consent"
+  },
+  {
+    "action": "visit",
+    "name": "first_look"
+  },
+  {
+    "action": "goal",
+    "goal_id": "retail-win-back",
+    "name": "goal"
+  },
+  {
+    "action": "answer",
+    "match": "customer",
+    "option": "recommended",
+    "name": "key"
+  },
+  {
+    "action": "answer",
+    "match": "ranks",
+    "option": "active",
+    "name": "audience"
+  },
+  {
+    "action": "answer",
+    "match": "column",
+    "option": "recommended",
+    "name": "outcome"
+  },
+  {
+    "action": "approve",
+    "name": "approved"
+  }
 ]

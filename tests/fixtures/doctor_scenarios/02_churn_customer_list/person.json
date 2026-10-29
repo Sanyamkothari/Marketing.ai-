@@ -1,8 +1,29 @@
 [
-  {"action": "upload", "file": "churn_list", "use_case": "telco-churn"},
-  {"action": "consent"},
-  {"action": "visit"},
-  {"action": "goal", "goal_id": "telco-churn"},
-  {"action": "answer", "option": "recommended"},
-  {"action": "approve"}
+  {
+    "action": "upload",
+    "file": "churn_list",
+    "use_case": "telco-churn"
+  },
+  {
+    "action": "consent"
+  },
+  {
+    "action": "visit",
+    "name": "first_look"
+  },
+  {
+    "action": "goal",
+    "goal_id": "telco-churn",
+    "name": "goal"
+  },
+  {
+    "action": "answer",
+    "match": "training",
+    "option": "recommended",
+    "name": "budget"
+  },
+  {
+    "action": "approve",
+    "name": "approved"
+  }
 ]

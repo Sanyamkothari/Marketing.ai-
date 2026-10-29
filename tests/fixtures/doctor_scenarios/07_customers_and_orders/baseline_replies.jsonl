@@ -1,2 +1,5 @@
 {"action": "finish", "text": "Two tables identified: customers and orders. Join proposed to combine them on customer_id."}
 {"action": "finish", "text": "Combined table configured for retail win-back. Key customer_id verified across both tables."}
+{"action": "finish", "text": "The join is in the plan."}
+{"action": "finish", "text": "The leak check column is left out."}
+{"action": "finish", "text": "The combined table is configured for retail win-back."}

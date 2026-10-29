@@ -80,3 +80,15 @@ Under `08_chat_instructions`, the person issues 11 instructions to test the AI's
    - Update `what_can_this_power` to return compact verdicts + `left_out` count to prevent exceeding `AGGREGATE_BUDGET`.
 3. **Unify Tool-Spec Dataclasses:**
    - Consolidate disparate tool-spec classes across wave modules.
+
+---
+
+## 6. The suite after it was made honest
+
+Section 2 was written when `expect.json` held trivial checks (`08_chat_instructions` only said `{"instructions_tested": 11}`)
+and the test asserted no invariant. Now every scenario states its real end state and key counts, `08` states the end
+state of each of the eleven instructions after a named step, and the test asserts the seven invariants as well.
+
+The checks that fail on today's code are `xfail(strict=True)`, each with the AI-first stage that fixes it (the
+`"xfail"` map of each `expect.json`; `pytest -rx` lists them). The day one starts to pass, the suite fails until its
+entry is removed. The recorded replies are kept only as `baseline_replies.jsonl`: hand-written prose with no tool use.

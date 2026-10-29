@@ -1,3 +1,58 @@
 {
-  "has_join_step": true
+  "after": {
+    "first_look": {
+      "files": {
+        "customers.csv": 1500,
+        "orders.csv": 4000
+      },
+      "approvals": "unchanged",
+      "none_accepted_by_ai": true
+    },
+    "goal": {
+      "has_join_step": true,
+      "pending_items": [
+        {
+          "has": [
+            "combine",
+            "customers.csv",
+            "orders.csv"
+          ]
+        }
+      ],
+      "approvals": "unchanged"
+    },
+    "join_yes": {
+      "accepted_items": [
+        {
+          "has": [
+            "combine",
+            "customers.csv",
+            "orders.csv"
+          ]
+        }
+      ],
+      "approvals": "unchanged"
+    },
+    "approved": {
+      "approvals": 1,
+      "none_accepted_by_ai": true
+    },
+    "approved#ready": {
+      "state": [
+        "follow_up"
+      ],
+      "verdict": "ready"
+    }
+  },
+  "final": {
+    "state": [
+      "follow_up"
+    ],
+    "verdict": "ready"
+  },
+  "xfail": {
+    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision.",
+    "approved#ready": "AI-first Stage 3: the goal's recipe builds the outcome from the orders table once it is joined to the customers; today the Doctor asks the person to add an outcome column.",
+    "final": "AI-first Stage 3: the goal's recipe builds the outcome from the orders table once it is joined to the customers; today the Doctor asks the person to add an outcome column."
+  }
 }

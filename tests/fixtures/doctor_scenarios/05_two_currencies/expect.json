@@ -1,4 +1,75 @@
 {
-  "blocking_questions": ["CURRENCY_MIXED"],
-  "can_approve": false
+  "after": {
+    "first_look": {
+      "state": [
+        "ask"
+      ],
+      "files": {
+        "two_currencies.csv": 1500
+      },
+      "verdict": "needs_answers",
+      "open_blocking": [
+        "CURRENCY_MIXED"
+      ],
+      "can_approve": false,
+      "approvals": "unchanged",
+      "none_accepted_by_ai": true
+    },
+    "goal": {
+      "open_blocking": [
+        "CURRENCY_MIXED"
+      ],
+      "can_approve": false,
+      "approvals": "unchanged",
+      "no_item_has": [
+        [
+          "sql_query"
+        ],
+        [
+          "sum("
+        ]
+      ]
+    },
+    "euros_only": {
+      "answers": {
+        "CURRENCY_MIXED": "c1"
+      },
+      "open_blocking": [],
+      "no_item_has": [
+        [
+          "sql_query"
+        ],
+        [
+          "sum("
+        ]
+      ]
+    },
+    "approved": {
+      "approvals": 1,
+      "verdict": "not_ready",
+      "none_accepted_by_ai": true,
+      "no_item_has": [
+        [
+          "sql_query"
+        ],
+        [
+          "sum("
+        ]
+      ]
+    }
+  },
+  "final": {
+    "verdict": "not_ready",
+    "no_item_has": [
+      [
+        "sql_query"
+      ],
+      [
+        "sum("
+      ]
+    ]
+  },
+  "xfail": {
+    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision."
+  }
 }
