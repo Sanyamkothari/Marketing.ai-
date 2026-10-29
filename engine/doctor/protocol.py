@@ -270,7 +270,7 @@ def _stated(option: AskOption) -> str:
     """What our code can say about an answer that has no sentence of its own: the step it adds, never a number."""
     if option.effect.kind is None or not option.effect.title:
         return ""
-    return f"Adds the step “{option.effect.title}”."
+    return f"Adds the step “{option.effect.title.rstrip(' .')}”."  # a title's own full stop would double
 
 
 NO_STEP: Final[str] = "Your answer is recorded; it does not change the data."

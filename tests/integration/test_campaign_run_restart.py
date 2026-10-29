@@ -44,3 +44,17 @@ def test_a_stopped_run_goes_through_the_same_checks_as_a_new_one(
     assert again.status_code == 404, again.text
     assert again.json()["detail"]["code"] != "CAMPAIGN_RUN_NOT_FOUND"
     assert [r.campaign_run_id for r in store.list()] == [run.campaign_run_id]
+
+
+def test_the_runs_of_one_case_are_listed_by_case_id(
+    app_and_store: tuple[TestClient, CampaignRunStore],
+) -> None:
+    """The Data Doctor screen asks which run an approved case started, so it can say it is going."""
+    client, store = app_and_store
+    mine = store.create(use_case_id=USE_CASE, upload_id="u_gone", case_id="case_mine")
+    store.create(use_case_id=USE_CASE, upload_id="u_gone", case_id="case_other")
+    store.create(use_case_id=USE_CASE, upload_id="u_gone")
+    found = client.get("/campaign-runs", params={"case_id": "case_mine"})
+    assert found.status_code == 200, found.text
+    assert [r["record"]["campaign_run_id"] for r in found.json()["campaign_runs"]] == [mine.campaign_run_id]
+    assert client.get("/campaign-runs", params={"case_id": "case_none"}).json()["campaign_runs"] == []

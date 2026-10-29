@@ -528,11 +528,18 @@ def list_campaign_runs(
     score_run_id: Annotated[
         str | None, Query(description="Keep only the run that made this contact list.")
     ] = None,
+    case_id: Annotated[
+        str | None, Query(description="Keep only the runs started from this Data Doctor case.")
+    ] = None,
 ) -> CampaignRunListResponse:
     runner = get_runner(request.app)
     allowed = client_scope(get_settings(request))
     runs = runner.store.list(
-        state=state, limit=limit, score_run_id=score_run_id, accept=lambda run: _in_scope(run, allowed)
+        state=state,
+        limit=limit,
+        score_run_id=score_run_id,
+        case_id=case_id,
+        accept=lambda run: _in_scope(run, allowed),
     )
     return CampaignRunListResponse(campaign_runs=tuple(runner.view(run) for run in runs))
 

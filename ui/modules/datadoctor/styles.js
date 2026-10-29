@@ -175,6 +175,7 @@ ol.dds-list{list-style:decimal;padding-left:var(--s5);gap:var(--s2)}
 .ddc-tick{padding:var(--s2) 0}
 .ddc-ask{padding:var(--s2) 0}
 .ddc-composer{position:sticky;bottom:0;z-index:1;background:var(--bg);padding:var(--s2) 0 var(--s3);display:flex;flex-direction:column;gap:var(--s2)}
+.ddc-composer.is-asking{position:static}
 .ddc-prompts{display:flex;flex-wrap:wrap;gap:var(--s2)}
 .ddc-prompts .btn{min-height:40px;border:1px solid var(--line);border-radius:var(--r-pill);background:var(--surface)}
 .ddc-form{display:flex;gap:var(--s2);align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:var(--s2)}

@@ -840,3 +840,61 @@ test("the data panel says which table the rows are: the file, or the table a bui
   s.view.preview = { files: [{ ...file, after_table: null }] };
   assert.match(chat.panelHtml(s, { tab: "u1", side: "after" }), /First rows after the fixes \(of 541,909 rows\), 1 column fixed/);
 });
+
+
+// --- coming back to an approved case (the walk's revisit) ------------------------------------------------------------
+
+test("the preview caption is said once, and a built table shows its own columns while the file keeps its own", async () => {
+  const built = structuredClone(PREVIEW);
+  built.files[0].columns = [{ name: "customer_id", changed: false, personal: false }, { name: "n", changed: false, personal: false }];
+  built.files[0].before_columns = [{ name: "order_id", changed: false, personal: false }, { name: "when", changed: false, personal: false }, { name: "amount", changed: false, personal: false }];
+  built.files[0].before = [["o1", "2026-01-01", "5"]];
+  built.files[0].after = [["c1", "3"]];
+  built.files[0].after_table = "out";
+  await show("approve_class", { patch: (a) => ((a.view.preview = built), a) });
+  assert.deepEqual($$('[data-dds-preview-table="after"] th').map((th) => th.textContent.trim()), ["customer_id", "n"]);
+  const captions = $$("[data-dds-data] p.dds-why").filter((p) => /^First rows/.test(p.textContent));
+  assert.equal(captions.length, 1, "one caption");
+  assert.ok(!$("[data-dds-data] caption"), "no second copy of it in a hidden caption");
+  assert.equal(visibleText($("[data-dds-data]")).split("First rows").length - 1, 1, "said once in everything a reader gets");
+  assert.equal($('[data-dds-preview-table="after"]').getAttribute("aria-describedby"), captions[0].id, "the table is described by that one caption");
+  $('[data-dds-side="before"]').click();
+  await settle(1);
+  assert.deepEqual($$('[data-dds-preview-table="before"] th').map((th) => th.textContent.trim()), ["order_id", "when", "amount"], "the file as it is");
+  assert.deepEqual($$('[data-dds-preview-table="before"] tbody tr td').map((td) => td.textContent), ["o1", "2026-01-01", "5"]);
+});
+
+test("while a question waits the chat box rests at the end of the conversation instead of floating over its choices", async () => {
+  await show("question");
+  assert.ok($("[data-dds-composer]").classList.contains("is-asking"));
+  assert.match(CSS, /\.ddc-composer\.is-asking\{position:static\}/);
+  await show("ready");
+  assert.ok(!$("[data-dds-composer]").classList.contains("is-asking"), "nothing is waiting: the box stays in reach");
+});
+
+test("coming back to a screen drawn before reads the case again: an approved case is not shown as new", async () => {
+  await show("question");
+  assert.ok($("[data-dds-question]"), "a question is open");
+  world.at = "ready"; // approved meanwhile (another page, a teammate)
+  app.innerHTML = `<main><h1>Data</h1><div class="dds-layout"><div id="m"></div><aside id="a"></aside></div></main>`;
+  const kept = mountDataDoctor({ main: $("#m"), aside: $("#a") }, { place: "data" }); // the Data page mounts it again
+  kept.refreshedAt = 0; // (the screen was read a moment ago; a revisit is later)
+  mountDataDoctor({ main: $("#m"), aside: $("#a") }, { place: "data" });
+  await until(() => $("[data-dds-ready=\"start\"]"), 3000, "the approved card after the screen is read again");
+  assert.ok(!$$("[data-dds-question]").some((q) => !q.querySelector("[data-dds-answered]")), "nothing answered is asked again");
+});
+
+test("an approved case with a run going says it is approved and going, with the way to the run, and offers no second start", async () => {
+  await show("ready", { runOfCase: null });
+  assert.ok($("[data-dds-continue]"), "no run yet: Start is offered");
+  world.runOfCase = { record: { campaign_run_id: "cr_dds", state: "running" }, pct: 40, summary: "" };
+  _resetDataDoctorForTests();
+  app.innerHTML = `<main><h1>Data</h1><div class="dds-layout"><div id="m"></div><aside id="a"></aside></div></main>`;
+  mountDataDoctor({ main: $("#m"), aside: $("#a") }, { place: "data" });
+  await until(() => $("[data-dds-run-link]"), 3000, "the run link");
+  assert.equal($("[data-dds-ready=\"start\"] h3").textContent.trim(), "Approved");
+  assert.match($("[data-dds-run-says]").textContent, /being prepared now.*40% done/);
+  assert.ok($("[data-dds-approved-sentence]"), "what was approved is shown");
+  assert.ok(!$("[data-dds-continue]"), "no second start");
+  assert.equal($("[data-dds-run-link]").getAttribute("href"), "#/campaigns/run/cr_dds");
+});

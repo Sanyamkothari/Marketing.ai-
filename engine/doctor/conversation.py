@@ -714,7 +714,9 @@ def _current(case: Case, digest: str) -> bool:
     return digest == plan_digest(case.files, items)
 
 
-def _first_look(case: Case, fixes: int, questions: int, timeline: Sequence[TimelineEvent]) -> FirstLookCard:
+def _first_look(
+    case: Case, fixes: int, questions: int, timeline: Sequence[TimelineEvent], needed: int | None = None
+) -> FirstLookCard:
     listed = (case.diagnosis or {}).get("files")
     diagnosed = {
         str(f.get("upload_id")): f
@@ -751,6 +753,8 @@ def _first_look(case: Case, fixes: int, questions: int, timeline: Sequence[Timel
         sentence += " Your files stay as they are."
     if questions:
         sentence += f" {_plural(questions, 'question is', 'questions are')} only yours to answer."
+        if needed is not None and 0 < needed < questions:  # the header counts the ones that stop the check
+            sentence += f" {_plural(needed, 'is', 'are')} needed to go on; the other{'s are' if questions - needed > 1 else ' is'} optional."
     return FirstLookCard(
         rows=sum(known) if known else None,
         files=tuple(files),
@@ -991,7 +995,17 @@ def build_conversation(
         add(base_end, 6, goals)
 
     # One count of changes everywhere: the plan's own (what the approval sentence says), not the cards alone.
-    add(case.created_at, 0, _first_look(case, plan_change_count(case), len(open_questions), timeline))
+    add(
+        case.created_at,
+        0,
+        _first_look(
+            case,
+            plan_change_count(case),
+            len(open_questions),
+            timeline,
+            needed=len([q for q in open_questions if q.blocking]),
+        ),
+    )
 
     # Shown: a card with Undo. Answered: the person's own answer made it, and it is told on that question.
     # Only the viewer's own answer counts: a rule's decision ("Decided for you"), the agent's or a teammate's is not

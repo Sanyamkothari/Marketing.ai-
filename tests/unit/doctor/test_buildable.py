@@ -288,8 +288,17 @@ def test_the_audience_question_recommends_by_the_goals_description_and_has_a_saf
     # "customers who have stopped buying": the gone-quiet reading, with the goal's own words as the reason
     assert question.recommended == "quiet"
     assert "stopped buying" in question.why and "gone quiet" in question.why
-    # "I don't know" is the choice that decides nothing for the person: the outcome column is asked for instead
-    assert [o.option_id for o in question.options if o.safe] == ["none"]
+    # "I don't know" takes the recommended audience (never "Neither", which hands the work back), and says so
+    assert [o.option_id for o in question.options if o.safe] == ["quiet"]
+    assert "Not sure? Data Doctor takes that reading" in question.why
     plain = config.model_copy(update={"description": "Ranks customers by how likely they are to order."})
     asked, _ = _audience_question(plain, found)
-    assert asked.recommended is None and asked.why == "", "a description that says nothing of the sort"
+    assert asked.recommended is None, "a description that says nothing of the sort"
+    # nothing recommended: the safe choice is the widest reading, which leaves out nobody the data knew, with the reason
+    assert [o.option_id for o in asked.options if o.safe] == ["active"]
+    assert "Not sure? Data Doctor takes all" in asked.why and "leaves out nobody" in asked.why
+    thin = found.model_copy(update={"audiences": (active.model_copy(update={"enough": False}), quiet)})
+    nothing, _ = _audience_question(plain, thin)
+    assert [o.option_id for o in nothing.options if o.safe] == [
+        "none"
+    ], "no reading is large enough: the outcome column"

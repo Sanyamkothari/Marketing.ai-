@@ -129,3 +129,10 @@ export const giveAiConsent = (caseId) => call(one(caseId, "/ai-consent"), { meth
 /** The list of what to ask the data team for, for these goals (the data request kit, `GET /pilot/data-request`). */
 export const dataRequestUrl = (goalIds = []) =>
   `${API_BASE}/pilot/data-request${goalIds.length ? `?${goalIds.map((g) => `use_case=${enc(g)}`).join("&")}` : ""}`;
+
+/** The newest campaign run started from this case (`{ record, pct, summary, ... }`), or null when none was. */
+export const getRunOfCase = async (caseId) => {
+  const found = await call(`/campaign-runs?case_id=${enc(caseId)}&limit=1`);
+  const runs = found && Array.isArray(found.campaign_runs) ? found.campaign_runs : [];
+  return runs[0] || null;
+};

@@ -218,9 +218,11 @@ class CampaignRunStore:
         state: CampaignRunState | None = None,
         limit: int = 50,
         score_run_id: str | None = None,
+        case_id: str | None = None,
         accept: Callable[[CampaignRun], bool] | None = None,
     ) -> list[CampaignRun]:
-        """Newest first (ids sort by date); `score_run_id` keeps only the run that made that contact list.
+        """Newest first (ids sort by date); `score_run_id` keeps only the run that made that contact list,
+        `case_id` only the runs started from that Data Doctor case.
 
         `accept` filters while scanning, so `limit` counts the runs kept, not the runs looked at."""
         kept: list[CampaignRun] = []
@@ -231,6 +233,8 @@ class CampaignRunStore:
             if run is None or (state is not None and run.state is not state):
                 continue
             if score_run_id is not None and run.score_run_id != score_run_id:
+                continue
+            if case_id is not None and run.case_id != case_id:
                 continue
             if accept is not None and not accept(run):
                 continue

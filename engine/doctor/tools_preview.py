@@ -111,15 +111,22 @@ def _pick(file: PreviewFile, wanted: tuple[str, ...]) -> list[int]:
 def _shaped(file: PreviewFile, label: str, picked: list[int], rows: int, values: bool) -> WorkingCopyFile:
     names = tuple(display_name(file.columns[i].name) for i in picked)
 
-    def table(shown: _Table) -> WorkingCopyTable:
-        cells = tuple(tuple(row[i] for i in picked) for row in shown[:rows]) if values else ()
-        return WorkingCopyTable(columns=names, rows=cells)
+    def table(shown: _Table, spots: list[int] = picked, heads: tuple[str, ...] = names) -> WorkingCopyTable:
+        cells = tuple(tuple(row[i] for i in spots) for row in shown[:rows]) if values else ()
+        return WorkingCopyTable(columns=heads, rows=cells)
+
+    if file.before_columns is not None:  # a built table: the file as it is has its own columns
+        was = [display_name(c.name) for c in file.before_columns]
+        spots = [was.index(n) for n in names if n in was] or list(range(min(len(was), DEFAULT_COLUMNS)))
+        before = table(file.before, spots, tuple(was[i] for i in spots))
+    else:
+        before = table(file.before)
 
     return WorkingCopyFile(
         file=label,
         total_rows=file.total_rows,
         changed_columns=tuple(display_name(c.name) for c in file.columns if c.changed)[:40],
-        before=table(file.before),
+        before=before,
         after=table(file.after),
         left_out_columns=file.left_out_columns + len(file.columns) - len(picked),
         note=file.note,
@@ -184,16 +191,17 @@ def _rows_cut(file: WorkingCopyFile, rows: int) -> WorkingCopyFile:
 
 def _fewer(file: WorkingCopyFile) -> WorkingCopyFile:
     """One column fewer (the last shown), the rows cut to match."""
-    keep = max(1, len(file.before.columns) - 1)
+    keep = max(1, len(file.after.columns) - 1)
 
     def narrow(table: WorkingCopyTable) -> WorkingCopyTable:
+        keep = max(1, len(table.columns) - 1)
         return WorkingCopyTable(columns=table.columns[:keep], rows=tuple(row[:keep] for row in table.rows))
 
     return file.model_copy(
         update={
             "before": narrow(file.before),
             "after": narrow(file.after),
-            "left_out_columns": file.left_out_columns + len(file.before.columns) - keep,
+            "left_out_columns": file.left_out_columns + len(file.after.columns) - keep,
         }
     )
 

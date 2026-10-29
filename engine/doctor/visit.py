@@ -2879,10 +2879,13 @@ def _audience_question(
 ) -> tuple[CaseQuestion, tuple[OptionEffect, ...]]:
     """BUILD_AUDIENCE: which customers the built table is about, with both readings' counts (every customer active
     on or before the snapshot, or the narrower audience the goal's configuration names). A reading too small to
-    learn from says so; "Neither" asks for the outcome column instead and is the safe choice ("I don't know"). The
-    goal's description decides the recommendation, with its reason: a goal about customers who have stopped buying
-    fits the narrower reading (when it is large enough), and a description that says nothing of the sort recommends
-    nothing."""
+    learn from says so; "Neither" asks for the outcome column instead. The goal's description decides the
+    recommendation, with its reason: a goal about customers who have stopped buying fits the narrower reading (when
+    it is large enough), and a description that says nothing of the sort recommends nothing.
+
+    "I don't know" takes the safe choice, which is never "Neither" (that hands the work back to the person): it is
+    the recommended audience when there is one, else the widest reading that is large enough (every customer known
+    by the snapshot: it leaves out nobody the data knew), else "Neither". The question says which and why."""
     noun = config.entity or "customer"
     plural = noun if noun.endswith("s") else f"{noun}s"
     assert built.snapshot is not None
@@ -2901,6 +2904,18 @@ def _audience_question(
     description = config.description.rstrip(".")
     narrower = next((a for a in built.audiences if a.audience_id == "quiet" and a.enough), None)
     lapsed = narrower is not None and _LAPSED_WORDS.search(description) is not None
+    widest = next((a for a in built.audiences if a.audience_id == "active" and a.enough), None)
+    safe = "quiet" if lapsed else widest.audience_id if widest is not None else "none"
+    safe_why = (
+        "Not sure? Data Doctor takes that reading, the one that fits the goal."
+        if lapsed
+        else (
+            f"Not sure? Data Doctor takes all {widest.customers:,} {plural} known by then: it leaves out nobody "
+            "the data knew, and you can change the answer later."
+            if widest is not None
+            else ""
+        )
+    )
     return _question(
         "BUILD_AUDIENCE",
         {"upload_id": built.upload_id, "snapshot": built.snapshot.isoformat()},
@@ -2911,11 +2926,11 @@ def _audience_question(
         recommended="quiet" if lapsed else None,
         why=(
             f"The goal is described as: “{description}”. That is about {plural} who have stopped buying, so the "
-            "table is built from the ones who have gone quiet."
+            f"table is built from the ones who have gone quiet. {safe_why}"
             if lapsed
-            else ""
+            else safe_why
         ),
-        safe="none",
+        safe=safe,
     )
 
 
