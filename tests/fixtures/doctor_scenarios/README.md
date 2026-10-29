@@ -9,7 +9,10 @@ Each folder is one scenario that `scripts/doctor_scenarios.py` plays against the
 | `replies.jsonl` | The AI's replies, recorded by an AI player (one JSON line per model call). Not recorded yet: the player records them after Stage 2. |
 | `baseline_replies.jsonl` | Hand-written prose that stands in for the AI until then, with no tool use. It is the baseline of today's behaviour and nothing else. It is used only while there is no `replies.jsonl`. |
 
-`xfail` keys are checkpoint names, or `invariant:<name>` for the seven invariants of the brief (Stage 0, item 5). The
+`xfail` keys are checkpoint names, or `invariant:<name>` for the seven invariants of the brief (Stage 0, item 5; the first
+is two checks, `accepted_not_by_ai`, which holds today, and `accepted_needs_person`, which holds from Stage 2). What must hold
+whatever the AI does (`approvals`, `none_accepted_by_ai`) goes in its own `"step#safety"` group, never in a group that is
+marked `xfail` (the "#safety" group does not fail for a step that did nothing). `approvals` is an exact count. The
 test marks each one `xfail(strict=True)`: the day a check passes, the suite fails until its entry is removed.
 
 Run one scenario with `python -m scripts.doctor_scenarios --scenario 01` (add `--no-ai` for the default author). When the

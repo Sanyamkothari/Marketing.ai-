@@ -1045,40 +1045,38 @@ def _propose_step(
         raise AgentToolError(exc.code, exc.message) from exc
     receipt = trial.receipt.steps[0]
     whole = ""
-    if receipt.changed == 0 and kind not in (RecipeStepKind.DROP_COLUMN, RecipeStepKind.RENAME_COLUMN):
+    sample = ctx.frame.head(STEP_SAMPLE_ROWS)
+    counted, changed, failed = receipt.rows, receipt.changed, receipt.failed
+    if changed == 0 and kind not in (RecipeStepKind.DROP_COLUMN, RecipeStepKind.RENAME_COLUMN):
         # Nothing in the sample: count what the step touches in the whole column (this one column, not the
-        # whole table), so a step that only matters further down is not lost and a refusal states its count.
+        # whole table), so a step that only matters further down is not lost, a refusal states its count and
+        # O10 below is held to that count, not to the sample's 0%.
         rows = len(ctx.frame)
-        touched = 0
         if rows > STEP_SAMPLE_ROWS:
             try:
-                touched = (
-                    run_recipe(
-                        ctx.frame[[column]],
-                        [step],
-                        upload_id=ctx.upload_id,
-                        primary_key=key,
-                        target=target,
-                        levels=agent.levels,
-                        max_failure_pct=agent.max_conversion_failure_pct,
-                    )
-                    .receipt.steps[0]
-                    .changed
-                )
+                everywhere = run_recipe(
+                    ctx.frame[[column]],
+                    [step],
+                    upload_id=ctx.upload_id,
+                    primary_key=key,
+                    target=target,
+                    levels=agent.levels,
+                    max_failure_pct=agent.max_conversion_failure_pct,
+                ).receipt.steps[0]
             except RecipeError as exc:
                 raise AgentToolError(exc.code, exc.message) from exc
-        if touched == 0:
+            sample = ctx.frame[[column]]
+            counted, changed, failed = everywhere.rows, everywhere.changed, everywhere.failed
+        if changed == 0:
             raise AgentToolError(
                 "AGENT_STEP_NO_EFFECT",
                 f"That fix touches 0 of the {rows} rows of '{display_name(column)}' (the whole column, "
                 "not only the first rows). Look again, or reply instead.",
             )
-        whole = f" In the whole column it changes {touched} of {rows} rows."
+        whole = f" In the whole column it changes {changed} of {rows} rows."
     # Tried on the first rows (the trial above), held to decision O10, never ticked: the approval's
     # "new patterns, with permission" for an AI's fix.
-    effect = data_policy.effect_of(
-        step, ctx.frame.head(STEP_SAMPLE_ROWS), changed=receipt.changed, failed=receipt.failed
-    )
+    effect = data_policy.effect_of(step, sample, changed=changed, failed=failed)
     # Plan O M246 (DEC-1816): O10's warning (above 30% of the column) travels with the suggestion.
     warned = gate(
         data_policy.TRIED,
@@ -1105,9 +1103,9 @@ def _propose_step(
         result={
             "kind": kind.value,
             "column": column,
-            "rows": receipt.rows,
-            "changed": receipt.changed,
-            "failed": receipt.failed,
+            "rows": counted,
+            "changed": changed,
+            "failed": failed,
             **({"warnings": [str(w.detail["warning"]) for w in warned]} if warned else {}),
         },
         created_at=clock(),

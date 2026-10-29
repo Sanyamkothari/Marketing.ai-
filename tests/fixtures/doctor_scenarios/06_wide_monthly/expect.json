@@ -38,7 +38,9 @@
       "files": {
         "wide_monthly.csv": 1500
       },
-      "approvals": 1,
+      "approvals": 1
+    },
+    "approved#safety": {
       "none_accepted_by_ai": true
     }
   },

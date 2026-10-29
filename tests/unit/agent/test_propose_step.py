@@ -117,9 +117,22 @@ def test_a_fix_that_only_matters_below_the_first_rows_is_judged_on_the_whole_col
     assert result.blocked_by is None
     (proposal,) = result.proposals
     assert "In the whole column it changes 1500 of 3000 rows." in proposal.reason
+    measured = next(r for r in result.tool_results if r.tool == "propose_step")
+    assert (measured.result["rows"], measured.result["changed"]) == (3000, 1500)
+    assert measured.result["warnings"]  # 50% of the column: above O10's warning line, below its refusal
     nothing = step("map_values", mapping={"Delhi": "New Delhi"})
     refused = turn(late, LOOK, nothing, nothing)
     assert refused.blocked_by == "AGENT_STEP_NO_EFFECT"
+
+
+def test_a_fix_that_changes_most_of_the_column_below_the_first_rows_is_refused_by_o10() -> None:
+    frame = messy_frame()
+    frame["city"] = ["Mumbai" if index < 1000 else "Bombay" for index in range(len(frame))]
+    ctx = context_for(frame)
+    late = (ctx, start_session(ctx, session_id="s3"))
+    attempt = step("map_values", mapping={"Bombay": "Mumbai"})
+    result = turn(late, LOOK, attempt, attempt)  # 2000 of 3000 rows (67%), none of them in the first 1000
+    assert result.proposals == () and result.blocked_by == "AI_STEP_CHANGES_TOO_MANY"
 
 
 def test_a_bad_parameter_is_refused_by_the_recipe_engine(started: tuple[Any, Any]) -> None:

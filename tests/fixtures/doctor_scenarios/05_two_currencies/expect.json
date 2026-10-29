@@ -23,9 +23,6 @@
       "approvals": "unchanged",
       "no_item_has": [
         [
-          "sql_query"
-        ],
-        [
           "sum("
         ]
       ]
@@ -34,42 +31,49 @@
       "answers": {
         "CURRENCY_MIXED": "c1"
       },
-      "open_blocking": [],
-      "no_item_has": [
-        [
-          "sql_query"
-        ],
-        [
-          "sum("
-        ]
-      ]
+      "open_blocking": []
     },
     "approved": {
       "approvals": 1,
-      "verdict": "not_ready",
-      "none_accepted_by_ai": true,
-      "no_item_has": [
-        [
-          "sql_query"
-        ],
-        [
-          "sum("
-        ]
+      "none_accepted_by_ai": true
+    },
+    "euros_only#spend_outcome": {
+      "kept_items": [
+        {
+          "has": [
+            "sum(",
+            "eur"
+          ]
+        }
       ]
+    },
+    "approved#spend_outcome": {
+      "kept_items": [
+        {
+          "has": [
+            "sum(",
+            "eur"
+          ]
+        }
+      ],
+      "verdict": "ready"
     }
   },
   "final": {
-    "verdict": "not_ready",
-    "no_item_has": [
-      [
-        "sql_query"
-      ],
-      [
-        "sum("
-      ]
+    "verdict": "ready",
+    "kept_items": [
+      {
+        "has": [
+          "sum(",
+          "eur"
+        ]
+      }
     ]
   },
   "xfail": {
-    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision."
+    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision.",
+    "euros_only#spend_outcome": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows",
+    "approved#spend_outcome": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows",
+    "final": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows"
   }
 }

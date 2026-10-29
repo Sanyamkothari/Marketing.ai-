@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from engine.doctor.amount_outcome import ProposeAmountOutcomeArgs, compile_amount_outcome
 from scripts.doctor_scenario_checks import (
     check_invariants,
     evaluate,
@@ -15,10 +16,12 @@ from scripts.doctor_scenario_checks import (
     same_plan_without_ai,
 )
 
-SQL = (
-    "SELECT * FROM t WHERE d <= CAST($as_of AS DATE) AND w AS (SELECT 1 WHERE d > CAST($as_of AS DATE) "
+FEATURES = "f AS (SELECT k AS entity_key, COUNT(*) AS n FROM t WHERE d <= CAST($as_of AS DATE) GROUP BY k)"
+OUTCOME = (
+    "w AS (SELECT DISTINCT k AS entity_key FROM t WHERE d > CAST($as_of AS DATE) "
     "AND d <= CAST($as_of AS DATE) + INTERVAL 90 DAY)"
 )
+SQL = f"WITH {FEATURES}, {OUTCOME} SELECT f.*, w.entity_key IS NOT NULL AS yes FROM f LEFT JOIN w USING (entity_key)"
 
 
 def item(
@@ -53,13 +56,21 @@ def found(name: str, *args: Any, **kwargs: Any) -> list[str]:
 def test_an_item_the_rules_accepted_is_found_until_an_approval_records_it() -> None:
     rules = item("k1", "accepted", title="A key")
     assert found("accepted_needs_person", case(rules)) != []
-    assert found("accepted_needs_person", case(item("k1", "accepted", by="agent:data-doctor"))) != []
+    assert found("accepted_not_by_ai", case(rules)) == [], "the rules' part is the other check"
     approved = case(rules, approvals=[{"item_ids": ["k1"]}])
     assert found("accepted_needs_person", approved) == []
 
 
+def test_an_item_an_ai_accepted_is_found_whatever_the_rules_do() -> None:
+    by_ai = item("k1", "accepted", by="agent:data-doctor")
+    assert found("accepted_not_by_ai", case(by_ai)) != []
+    assert found("accepted_needs_person", case(by_ai)) == []
+    assert found("accepted_not_by_ai", case(by_ai, approvals=[{"item_ids": ["k1"]}])) == []
+
+
 def test_an_item_a_person_decided_or_that_waits_is_not_found() -> None:
-    assert found("accepted_needs_person", case(item("k1", "accepted", by="local-operator"), item("k2"))) == []
+    plan = case(item("k1", "accepted", by="local-operator"), item("k2"))
+    assert found("accepted_needs_person", plan) == [] and found("accepted_not_by_ai", plan) == []
 
 
 # -- 2: no leak -------------------------------------------------------------------------------------------------------
@@ -75,6 +86,25 @@ def test_a_step_may_read_past_the_snapshot_only_inside_its_outcome_window() -> N
     assert (
         found("no_leak", case(sql_item(unbounded, state="rejected"))) == []
     ), "a change left out reads nothing"
+
+
+def test_a_feature_that_reads_past_the_snapshot_is_found_next_to_a_bounded_outcome() -> None:
+    leaky = FEATURES.replace("d <= CAST($as_of AS DATE)", "d > CAST($as_of AS DATE)")
+    sql = f"WITH {leaky}, {OUTCOME} SELECT f.*, w.entity_key IS NOT NULL AS yes FROM f LEFT JOIN w USING (entity_key)"
+    assert "outside a bounded outcome window" in found("no_leak", case(sql_item(sql)))[0]
+    window_in_feature = leaky.replace("GROUP BY", "AND d <= CAST($as_of AS DATE) + INTERVAL 90 DAY GROUP BY")
+    sql = f"WITH {window_in_feature}, {OUTCOME} SELECT f.*, w.entity_key IS NOT NULL AS yes FROM f LEFT JOIN w USING (entity_key)"
+    assert (
+        "returns ['n']" in found("no_leak", case(sql_item(sql)))[0]
+    ), "bounded, but not in the outcome's part"
+
+
+def test_both_spellings_of_the_window_bound_and_a_look_back_are_accepted() -> None:
+    amount = build_amount_sql(window_days=90)
+    assert found("no_leak", case(sql_item(amount)), screen=outcome_screen("spend_next_90d")) == []
+    assert found("no_leak", case(sql_item(amount, window=60)), screen=outcome_screen("spend_next_90d")) != []
+    back = f"WITH r AS (SELECT k FROM t WHERE d > CAST($as_of AS DATE) - INTERVAL 90 DAY AND d <= CAST($as_of AS DATE)), {OUTCOME} SELECT * FROM r"
+    assert found("no_leak", case(sql_item(back))) == [], "a look back from the snapshot reads no future"
 
 
 def leaky_case(*extra: dict[str, Any]) -> tuple[dict[str, Any], dict[str, pd.DataFrame]]:
@@ -93,6 +123,77 @@ def test_a_column_the_leak_probe_flags_must_be_hidden_by_the_plan() -> None:
     hide = item("d1", "pending", payload={"step": {"kind": "drop_column", "column": "gives_away"}})
     plan, frames = leaky_case(hide)
     assert found("no_leak", plan, frames=frames) == []
+
+
+def build_amount_sql(window_days: int) -> str:
+    given = ProposeAmountOutcomeArgs(
+        upload_id="u1",
+        entity_key="id",
+        time_column="d",
+        amount_column="amount",
+        window_days=window_days,
+        returns="net",
+    )
+    return compile_amount_outcome(given, "t_orders")
+
+
+def outcome_screen(name: str) -> dict[str, Any]:
+    return {"view": {"start": {"outcome": name, "primary_key": "id"}}}
+
+
+def built_case(sql: str) -> tuple[dict[str, Any], dict[str, pd.DataFrame]]:
+    """An order log of 600 customers, half of whom order again after the snapshot, and a plan that builds its
+    training table with `sql`."""
+    ids = [f"c{i}" for i in range(600)]
+    early = pd.DataFrame({"id": ids, "d": "2024-01-10"})
+    later = pd.DataFrame({"id": ids[::2], "d": "2024-02-20"})
+    orders = pd.concat([early, later], ignore_index=True)
+    params = {
+        "sql": sql,
+        "inputs": ["orders"],
+        "output_name": "training",
+        "description": "A training table.",
+        "as_of": "2024-02-01",
+        "reads_future": True,
+        "outcome_window_days": 90,
+    }
+    step = {"order": 1, "kind": "sql_query", "column": "training", "params": params}
+    plan = item("s1", "accepted", payload={"step": step})
+    return case(plan, files=[{"upload_id": "u1", "file_name": "orders.csv", "key_columns": ["id"]}]), {
+        "orders.csv": orders
+    }
+
+
+BUILT = (
+    "WITH f AS (SELECT id, COUNT(*) AS n FROM t_orders WHERE TRY_CAST(d AS DATE) <= CAST($as_of AS DATE) GROUP BY id), "
+    "w AS (SELECT DISTINCT id AS entity_key FROM t_orders WHERE TRY_CAST(d AS DATE) > CAST($as_of AS DATE) "
+    "AND TRY_CAST(d AS DATE) <= CAST($as_of AS DATE) + INTERVAL 90 DAY) "
+    'SELECT f.*, CASE WHEN w.entity_key IS NULL THEN 0 ELSE 1 END AS "came_back" '
+    "FROM f LEFT JOIN w ON f.id = w.entity_key ORDER BY f.id"
+)
+
+
+def test_an_outcome_the_plan_builds_is_probed_for_leaks_on_the_table_it_builds() -> None:
+    screen = outcome_screen("came_back")
+    plan, frames = built_case(BUILT)
+    assert found("no_leak", plan, screen, frames=frames) == []
+    # the answer handed over as a feature: one that is 1 for each customer who orders after the snapshot
+    leaky = BUILT.replace(
+        "COUNT(*) AS n FROM t_orders WHERE TRY_CAST(d AS DATE) <= CAST($as_of AS DATE) GROUP BY id",
+        "COUNT(*) AS n, MAX(CASE WHEN TRY_CAST(d AS DATE) > CAST($as_of AS DATE) THEN 1 ELSE 0 END) AS later "
+        "FROM t_orders GROUP BY id",
+    )
+    plan, frames = built_case(leaky)
+    problems = found("no_leak", plan, screen, frames=frames)
+    assert "'later' in the table 'training' the plan builds gives away the outcome" in " ".join(problems)
+    hide = item("d1", "pending", payload={"step": {"kind": "drop_column", "column": "later"}})
+    assert any("'n' in" in p for p in problems), "the count of all rows gives the answer away too"
+    hide_n = item("d2", "pending", payload={"step": {"kind": "drop_column", "column": "n"}})
+    plan = {**plan, "items": [*plan["items"], hide_n]}
+    assert not any(
+        "gives away" in p
+        for p in found("no_leak", {**plan, "items": [*plan["items"], hide]}, screen, frames=frames)
+    )
 
 
 # -- 3: the screen shows what the AI saw ------------------------------------------------------------------------------
@@ -242,3 +343,15 @@ def test_a_file_that_is_its_own_training_table_is_counted_from_the_screen_and_th
     assert evaluate(rule, case(), {"view": view}, frames={"f.csv": frame}) == []
     short = {"outcome_counts": {**rule["outcome_counts"], "positives_min": 300}}
     assert evaluate(short, case(), {"view": view}, frames={"f.csv": frame}) != []
+
+
+def test_approvals_are_an_exact_count_and_kept_items_may_wait_or_be_accepted() -> None:
+    once = case(approvals=[{"item_ids": []}])
+    assert evaluate({"approvals": 1}, once, None) == []
+    assert evaluate({"approvals": 1}, case(approvals=[{}, {}]), None) != []
+    assert evaluate({"approvals": 1}, case(), None) != []
+    spend = {"kept_items": [{"has": ["sum(", "eur"]}]}
+    build: dict[str, Any] = {"payload": {"sql": "SELECT SUM(x) FROM t WHERE currency = 'EUR'"}}
+    assert evaluate(spend, case(item("s1", "pending", **build)), None) == []
+    assert evaluate(spend, case(item("s1", "accepted", **build)), None) == []
+    assert evaluate(spend, case(item("s1", "rejected", **build)), None) != []

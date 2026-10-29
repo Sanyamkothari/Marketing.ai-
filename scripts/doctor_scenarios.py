@@ -522,7 +522,9 @@ def run_scenario(
             step.case,
             step.screen,
             previous=step.previous,
-            notes=step.notes,
+            notes=(
+                [] if checkpoint.endswith("#safety") else step.notes
+            ),  # a "#safety" group asks for safety, not for the step to have done anything
             frames=step.frames,
             earlier={n: s.case for n, s in steps.items()},
         )
