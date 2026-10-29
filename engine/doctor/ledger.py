@@ -238,6 +238,7 @@ def findings_of(
     only = None if counted is None or counted.basis is None else _TRIAL_ONLY
     out.extend(_from_trials(items, said, told, only=only))
     out = _one_per_key(out)
+    out = [_asked_with_its_yes(case, items, f) for f in out]
     # a doubt the reconcile store resolved or superseded (`CaseDoubt.status`) is no longer the person's to clear
     for doubt in [d for d in case.doubts if d.status == "open"][-_DOUBTS_KEPT:]:
         key = _key("DOUBT", doubt.doubt_id)
@@ -271,6 +272,36 @@ def findings_of(
             )
         )
     return tuple(sorted(out, key=lambda f: _ORDER[f.level]))
+
+
+def _asked_with_its_yes(case: Case, items: Sequence[CaseItem], found: Finding) -> Finding:
+    """A loss that a step the goal needs (its build) names in its own sentence is asked once, in that step's required
+    yes at Approve - which records the count the person agreed to - not again as a stop of its own. Until that yes is
+    recorded nothing is exempt: approving without it is refused (`APPROVAL_CONFIRMATION_MISSING`)."""
+    from engine.doctor.agent_apply import required_by_goal
+    from engine.doctor.protocol import AGENT
+    from engine.doctor.visit import _agreed_update, confirmed
+
+    if (
+        found.code != "PLAN_LOSES_TOO_MUCH"
+        or found.level != "stop"
+        or found.acknowledged
+        or found.count is None
+    ):
+        return found
+    agreed = 0  # what the yes given to a build already recorded
+    pending = 0  # what the yes it still waits for will record
+    for item in items:
+        if item.state is not ProposalState.ACCEPTED or not isinstance(item.payload.get("buildable"), dict):
+            continue
+        if required_by_goal(item):
+            if not confirmed(case, item):
+                pending += _agreed_update(case, item, True).get("agreed_rows", 0)
+        elif item.decided_by not in (None, AGENT) and item.standing_answer_id is None:
+            agreed += item.agreed_rows or 0
+    if agreed + pending and found.count <= agreed + pending:
+        return found.model_copy(update={"acknowledged": True})
+    return found
 
 
 def blocking(

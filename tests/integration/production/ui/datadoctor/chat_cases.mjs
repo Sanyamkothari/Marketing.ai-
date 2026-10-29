@@ -828,12 +828,13 @@ test("the consent prompt follows the first look, and allowing it replaces the pr
 
 test("the data panel says which table the rows are: the file, or the table a build makes, with its rows", () => {
   const s = structuredClone(screen("approve_class"));
-  const file = { upload_id: "u1", file_name: "orders.csv", total_rows: 541909, columns: [{ name: "InvoiceNo", changed: false, personal: false }, { name: "n", changed: true, personal: false }], before: [["1", "2"]], after: [["", "5"]], left_out_columns: 0, after_table: "training_retail_win_back" };
+  const file = { upload_id: "u1", file_name: "orders.csv", total_rows: 541909, columns: [{ name: "InvoiceNo", changed: false, personal: false }, { name: "n", changed: true, personal: false }], before: [["1", "2"]], after: [["", "5"]], left_out_columns: 0, after_table: "training_retail_win_back", after_rows: 1402 };
   s.view.preview = { files: [file] };
-  s.view.ledger = { ...(s.view.ledger || {}), rows_out: 1402, sampled_from: null };
+  s.view.ledger = { ...(s.view.ledger || {}), rows_out: 9999, sampled_from: 1000 }; // a sampled plan check, as on any real file
   const built = chat.panelHtml(s, { tab: "u1", side: "after" });
   assert.match(built, /First rows of the table the plan builds from this file \(training_retail_win_back, 1,402 rows; the file has 541,909 rows\)/);
   assert.doesNotMatch(built, /after the fixes \(of 541,909\)/i);
+  assert.doesNotMatch(built, /ddc-mark">fixed|is-changed/, "the columns of a new table are not the file's columns fixed");
   const before = chat.panelHtml(s, { tab: "u1", side: "before" });
   assert.match(before, /First rows of your file, as they are \(of 541,909 rows\)/);
   s.view.preview = { files: [{ ...file, after_table: null }] };

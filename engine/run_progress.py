@@ -62,6 +62,7 @@ __all__ = [
     "expected_run_minutes",
     "install_progress_estimate",
     "past_durations",
+    "told_seconds",
     "train_budget_seconds",
     "trainer_of",
 ]
@@ -180,15 +181,23 @@ _TRAIN_FLOW_OVERHEAD: Final[tuple[StageKey, ...]] = (
 
 
 def about_minutes(seconds: float) -> int:
-    """Seconds as the minutes a person is told: to the minute under ten, to five under an hour (never under ten), to
-    ten beyond. The same rounding as `ui/run_progress.js` `etaText`, so a time said before the run and the time left
-    during it agree."""
+    """Seconds as the minutes a person is told, rounded up to the figure the run page's countdown shows
+    (`ui/run_progress.js` `etaText`): to the minute up to ten, to five up to an hour (never under ten), to ten beyond.
+    Up, so a time promised before the run is still the time shown for the first stretch of it, not one that has
+    become the next figure down a few seconds in."""
     minutes = seconds / 60
-    if minutes < 10:
-        return max(1, round(minutes))
-    if minutes < 57.5:
-        return max(10, round(minutes / 5) * 5)
-    return round(minutes / 10) * 10
+    if minutes <= 10:
+        return max(1, math.ceil(minutes))
+    if minutes <= 55:
+        return math.ceil(minutes / 5) * 5
+    return math.ceil(minutes / 10) * 10
+
+
+def told_seconds(seconds: int) -> int:
+    """The time left the run page is given: `seconds` as the whole figure of minutes it counts down in
+    (`about_minutes`), so the countdown starts from the minutes the approval card promised. Under a minute as it is.
+    """
+    return seconds if seconds < 60 else about_minutes(seconds) * 60
 
 
 def expected_run_minutes(search_minutes: int) -> int:

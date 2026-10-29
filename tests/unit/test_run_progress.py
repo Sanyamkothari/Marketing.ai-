@@ -470,4 +470,5 @@ def test_one_estimate_of_the_whole_run_is_said_before_it_starts_and_counted_down
     assert expected_run_minutes(15) >= 15, "never less than the search's own budget"
     # the rounding of the countdown: to the minute under ten, to five under an hour, to ten beyond
     assert [about_minutes(s) for s in (30, 90, 540, 600, 1065, 3000, 5400)] == [1, 2, 9, 10, 20, 50, 90]
+    assert [about_minutes(s) for s in (541, 1050, 1051, 3301)] == [10, 20, 20, 60]
     assert LATER_STEP_SECONDS == {"score": 60, "list": 20, "campaign": 10}

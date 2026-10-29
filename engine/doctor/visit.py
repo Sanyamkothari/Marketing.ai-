@@ -66,7 +66,14 @@ from pydantic import JsonValue
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, RecipeStepKind
 from engine.agent.tools import AgentToolError
 from engine.config import ConfigError
-from engine.doctor.agent_apply import AGENT_APPLIED_STEPS, agent_applies, person_owns, roles_of, twin_of
+from engine.doctor.agent_apply import (
+    AGENT_APPLIED_STEPS,
+    agent_applies,
+    person_owns,
+    required_by_goal,
+    roles_of,
+    twin_of,
+)
 from engine.doctor.carry import approved_marks, carries_on, last_month, plain_fix
 from engine.doctor.case import (
     PARK_ROLES,
@@ -2694,8 +2701,6 @@ def _offer_build(
     if loaded is None:
         return False
     audience = None
-    chosen = active_goal(case)
-    chooser = chosen.set_by if chosen is not None else None  # who chose the goal that needs it
     if built.audiences:
         # The goal names a narrower audience (`configs/outcomes.yaml`): who the table is about is a meaning, so the
         # person picks it from both readings' counts (the AI may point at one in the chat, with its reason).
@@ -2707,10 +2712,16 @@ def _offer_build(
             step.questions.append(asked)
             return True
         audience = next((a for a in built.audiences if a.audience_id == held.answer and a.enough), None)
-        chooser = held.answered_by or chooser
         if audience is None:  # neither, or a reading too small to learn from: the column is asked for instead
             return False
-    ctx = run.context(case, files=files, case_items=active_section(case)[0])
+    # The plan already carries this build (it is proposed again every time): it is tried as if it were not there, else
+    # its own table is among the ones it reads from.
+    others = [
+        i
+        for i in active_section(case)[0]
+        if not (i.kind == "recipe_step" and i.goal_id == brief.goal_id and "buildable" in i.payload)
+    ]
+    ctx = run.context(case, files=files, case_items=others)
     table = table_names(ctx.files)[loaded.upload_id]
     try:
         sql, description = compile_build(built, config, table_alias(table), audience)
@@ -2751,12 +2762,10 @@ def _offer_build(
         goal_id=brief.goal_id,
         ticked=True,
     )
-    # The person who chose the goal (and the audience) put it in the plan; their yes to its sentence comes with Approve.
-    # The customers the chosen audience leaves out are said in that sentence, by group and reason: the yes agrees to up
-    # to that count, so the plan's loss stop does not ask a second time.
-    left_out = _audience_left_out(payload)
-    owned = {"decided_by": chooser, "decided_at": now} if chooser and chooser != AGENT else {}
-    step.items.append(build.model_copy(update={**owned, **({"agreed_rows": left_out} if left_out else {})}))
+    # The goal needs it, so it is in the plan, ticked: but nobody has decided it yet. The person's yes to its sentence
+    # (the customers the audience leaves out are said in it, by group and reason) comes with Approve, and that yes is
+    # what records who decided it and the count they agreed to (`confirm`).
+    step.items.append(build)
     return True
 
 
@@ -4555,8 +4564,10 @@ def confirm(
         )
         ticked = (
             item
-            if item.state is ProposalState.ACCEPTED and item.decided_by != AGENT
-            else item.model_copy(  # a change the agent applied becomes the person's own with their yes
+            if item.state is ProposalState.ACCEPTED
+            and item.decided_by != AGENT
+            and not required_by_goal(item)
+            else item.model_copy(  # a change the agent applied, or the goal's build, becomes the person's own with their yes
                 update={
                     "state": ProposalState.ACCEPTED,
                     "decided_by": principal.user_id,

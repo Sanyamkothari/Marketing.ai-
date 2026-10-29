@@ -45,6 +45,7 @@ from engine.doctor.goal_brief import load_goal_brief
 from engine.doctor.protocol import settle
 from engine.doctor.registry import DataToolContext, DataToolError, data_registry
 from engine.registry import LocalModelRegistry
+from engine.run_progress import expected_run_minutes
 from engine.storage import LocalStorage, run_key
 from tests.unit.agent.egress_canary import canary_context
 from tests.unit.doctor.readiness_fixtures import report
@@ -216,7 +217,7 @@ def test_the_three_choices_each_show_about_n_minutes_and_never_a_raw_minutes_fie
     for choice in budget.choices:
         assert LABEL.match(choice.label), choice.label
         assert choice.label == ts.choice_label(choice.choice, choice.about_minutes)
-        assert choice.about_minutes == max(1, round(choice.expected_seconds / 60))
+        assert choice.about_minutes == expected_run_minutes(choice.minutes), "the one estimate everywhere"
         assert choice.buys
     assert [c.recommended for c in budget.choices] == [False, True, False]
     assert budget.choices[0].minutes < budget.choices[1].minutes < budget.choices[2].minutes

@@ -96,15 +96,17 @@ function checklistHtml(screen) {
 /** The preview's files (`view.preview.files`), or none when the server sent no preview. */
 export const previewFiles = (view) => (view && view.preview && Array.isArray(view.preview.files) ? view.preview.files : []);
 
-function previewTable(file, side, { builtRows = null } = {}) {
+function previewTable(file, side) {
   const columns = file.columns || [];
   const rows = (side === "before" ? file.before : file.after) || [];
+  // After a build the table is a new one: its columns are not the file's columns fixed.
+  const built = side === "after" && file.after_table ? file.after_table : "";
   if (!columns.length || !rows.length) return `<p class="dds-why">No rows to show for this file yet.</p>`;
   const head = columns
     .map(
       (c) =>
-        `<th scope="col"${c.changed && side === "after" ? ` class="is-changed"` : ""}>${userText(plain(c.name))}${
-          c.changed && side === "after" ? ` <span class="ddc-mark">fixed</span>` : ""
+        `<th scope="col"${c.changed && side === "after" && !built ? ` class="is-changed"` : ""}>${userText(plain(c.name))}${
+          c.changed && side === "after" && !built ? ` <span class="ddc-mark">fixed</span>` : ""
         }</th>`,
     )
     .join("");
@@ -114,21 +116,14 @@ function previewTable(file, side, { builtRows = null } = {}) {
   const changed = columns.filter((c) => c.changed).length;
   // Which table is shown and how many rows it has: the file, or (after a build) the new table the plan makes, whose
   // rows are not the file's.
-  const built = side === "after" && file.after_table ? file.after_table : "";
   const caption = built
-    ? `First rows of the table the plan builds from this file (${plain(built)}${builtRows ? `, ${count(builtRows)} rows` : ""}; the file has ${count(file.total_rows)} rows). Personal details are hidden.`
+    ? `First rows of the table the plan builds from this file (${plain(built)}${Number.isFinite(file.after_rows) ? `, ${count(file.after_rows)} rows` : ""}; the file has ${count(file.total_rows)} rows). Personal details are hidden.`
     : `${side === "before" ? "First rows of your file, as they are" : "First rows after the fixes"}${
         file.total_rows ? ` (of ${count(file.total_rows)} rows)` : ""
       }${side === "after" && changed ? `, ${plural(changed, "column", "columns")} fixed` : ""}. Personal details are hidden.`;
   return `<div class="ddc-table-wrap"><table class="ddc-table" data-dds-preview-table="${side}"><caption class="sr">${esc(caption)}</caption><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div><p class="dds-why">${esc(caption)}</p>${
     file.note ? `<p class="dds-why">${esc(file.note)}</p>` : ""
   }`;
-}
-
-/** Rows of the table the plan builds, when the server counted the whole file for it (the plan's own `rows_out`), else null. */
-function builtRowsOf(screen) {
-  const ledger = screen.view && screen.view.ledger;
-  return ledger && Number.isFinite(ledger.rows_out) && !ledger.sampled_from ? ledger.rows_out : null;
 }
 
 /** Without a preview: the sample rows each step of the plan already holds (`ledger.steps[].samples`), personal ones hidden. */
@@ -179,7 +174,7 @@ export function panelHtml(screen, { tab = null, side = "after", intake = "", bus
         .join("")}</div>`
     : "";
   const data = chosen
-    ? `${tabs}${sides}${previewTable(chosen, side === "before" ? "before" : "after", { builtRows: builtRowsOf(screen) })}`
+    ? `${tabs}${sides}${previewTable(chosen, side === "before" ? "before" : "after")}`
     : samplesPanel(screen);
   const names = (screen.case.files || []).map((f) => userText(plain(f.file_name))).join(", ");
   const heading = chosen ? `Your data: ${userText(plain(chosen.file_name))}` : "Your data";

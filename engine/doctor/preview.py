@@ -125,6 +125,11 @@ class PreviewFile(ExactModel):
         description="Set when the plan makes a new table from this file (a query, one row per customer, say): the "
         "name of the table `after` shows, whose rows are not the file's rows.",
     )
+    after_rows: int | None = Field(
+        default=None,
+        description="Rows of that new table in the whole file, when the plan counted them on every row; null "
+        "otherwise (never a sample's count).",
+    )
     note: str | None = Field(
         default=None,
         description="Set when a step could not run on the sample: `after` is then the same rows as `before`.",
@@ -393,8 +398,10 @@ def _served_columns(names: list[str], changed: Collection[str]) -> list[str]:
     return [names[i] for i in sorted(order[:MAX_COLUMNS])]
 
 
-def _made_table(done: PreparedFile, items: Sequence[CaseItem]) -> str:
-    """The name of the table the plan's last reshaping step makes (a query's output), else the file's own table."""
+def _made_table(done: PreparedFile, items: Sequence[CaseItem]) -> tuple[str, int | None]:
+    """The name of the table the plan's last reshaping step makes (a query's output), else the file's own table, and
+    its rows when the step counted them on every row of the file (a build says "would have N rows"), else None.
+    """
     reshaping = {k.value for k in _RESHAPING}
     for item_id, receipt in reversed(done.receipts):
         if receipt.kind not in reshaping:
@@ -404,9 +411,19 @@ def _made_table(done: PreparedFile, items: Sequence[CaseItem]) -> str:
         params = step.get("params") if isinstance(step, dict) else None
         name = params.get("output_name") if isinstance(params, dict) else None
         if isinstance(name, str) and name:
-            return name
+            return name, _made_rows(item)
         break
-    return done.table
+    return done.table, None
+
+
+def _made_rows(item: CaseItem | None) -> int | None:
+    """The rows of the table a build makes, counted on every row of the file (never a sample's estimate)."""
+    built = item.payload.get("buildable") if item is not None else None
+    if not isinstance(built, dict) or built.get("exact") is not True:
+        return None
+    chosen = item.payload.get("audience") if item is not None else None
+    rows = chosen.get("customers") if isinstance(chosen, dict) else built.get("active_before")
+    return rows if isinstance(rows, int) and not isinstance(rows, bool) else None
 
 
 def _one_file(
@@ -434,6 +451,7 @@ def _one_file(
         key = done.key or key
         reshaped = any(r.kind in {k.value for k in _RESHAPING} for _, r in done.receipts)
     after = after.loc[:, ~after.columns.duplicated()]
+    made = _made_table(done, items) if reshaped and done is not None else None
     changed = _changed_columns(base, after, reshaped=reshaped, key=key)
     names = [str(c) for c in after.columns] + [str(c) for c in base.columns if c not in after.columns]
     served = _served_columns(names, changed)
@@ -447,7 +465,8 @@ def _one_file(
         before=masked_rows(shown_before, tuple(served), personal, rows),
         after=masked_rows(shown_after, tuple(served), personal, rows),
         left_out_columns=len(names) - len(served),
-        after_table=_made_table(done, items) if reshaped and done is not None else None,
+        after_table=made[0] if made is not None else None,
+        after_rows=made[1] if made is not None else None,
         note=note,
     )
 

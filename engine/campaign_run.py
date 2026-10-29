@@ -33,7 +33,7 @@ from pydantic import AwareDatetime, Field
 from engine.config import PrimaryKey, load_engine_config
 from engine.contracts import Artefact, RunError, RunRecord, RunState, RunStatus
 from engine.jobs import JobRunner, ReconcilingJobRunner
-from engine.run_progress import LATER_STEP_SECONDS
+from engine.run_progress import LATER_STEP_SECONDS, told_seconds
 from engine.runs import cancel_run, fail_run
 from engine.storage import Storage, StorageError, run_key
 from engine.utils.logging import get_logger, log_failure
@@ -519,7 +519,10 @@ class CampaignRunRunner:
                 gained += _WEIGHT[current.key] * share / 100
                 if status.eta_seconds is not None:
                     later = live[live.index(current) + 1 :]
-                    eta = status.eta_seconds + sum(LATER_STEP_SECONDS.get(s.key, 0) for s in later)
+                    # said in the minutes the approval card promised (`expected_run_minutes`), counted down from them
+                    eta = told_seconds(
+                        round(status.eta_seconds) + sum(LATER_STEP_SECONDS.get(s.key, 0) for s in later)
+                    )
         pct = 100 if run.state is CampaignRunState.DONE else min(99, round(gained * 100 / total))
         return CampaignRunView(record=run, pct=pct, eta_seconds=eta, summary=_summary(run, current))
 

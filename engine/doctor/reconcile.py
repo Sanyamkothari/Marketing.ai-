@@ -38,7 +38,7 @@ from types import SimpleNamespace
 from typing import Any, Final
 
 from engine.agent.contracts import ProposalSource, ProposalState
-from engine.doctor.agent_apply import person_owns, twin_of
+from engine.doctor.agent_apply import person_owns, required_by_goal, twin_of
 from engine.doctor.case import Case, CaseDoubt, CaseItem, CaseQuestion, EventDraft, TimelineKind
 from engine.doctor.protocol import AGENT
 from engine.doctor.subjects import doubt_subject, item_subject, options_digest, question_subject
@@ -267,7 +267,7 @@ def _fold_items(case: Case, emission: Emission, work: Reconciled, now: datetime)
             if (
                 current.producer == emission.producer
                 and emission.in_scope(current.goal_id)
-                and current.state is ProposalState.PENDING
+                and (current.state is ProposalState.PENDING or required_by_goal(current))
                 and current.withdrawn_because is None
                 and current.item_id not in kept
                 and not person_owns(case, current)

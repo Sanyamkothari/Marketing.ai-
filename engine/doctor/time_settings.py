@@ -73,6 +73,7 @@ from engine.run_progress import (
     Expectations,
     PastDurations,
     ProgressTracker,
+    expected_run_minutes,
 )
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -287,7 +288,9 @@ class BudgetChoice(StrictBase):
     choice: Choice
     minutes: int = Field(description="The time limit it sets (`model_search.time_limit_minutes`).")
     label: str = Field(description="'Quick (about 5 min)', 'Balanced (about 15 min, recommended)'.")
-    about_minutes: int
+    about_minutes: int = Field(
+        description="The whole run's minutes as said everywhere (`expected_run_minutes`)."
+    )
     expected_seconds: int
     stages: dict[str, int]
     base: dict[str, float]
@@ -1023,12 +1026,15 @@ def propose_budget(inputs: TimeInputs) -> TrainingBudget:
     choices = []
     for choice in CHOICES:
         expected = estimate(inputs, minutes[choice])
+        # The minutes said are the whole run's, the same the approval card and the run page say (`expected_run_minutes`);
+        # `expected_seconds` stays the data-aware training estimate the run is later measured against.
+        told = expected_run_minutes(expected.minutes)
         choices.append(
             BudgetChoice(
                 choice=choice,
                 minutes=expected.minutes,
-                label=choice_label(choice, expected.about_minutes),
-                about_minutes=expected.about_minutes,
+                label=choice_label(choice, told),
+                about_minutes=told,
                 expected_seconds=expected.expected_seconds,
                 stages=expected.stages,
                 base=expected.base,

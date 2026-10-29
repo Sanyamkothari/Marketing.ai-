@@ -157,6 +157,11 @@ def test_an_order_log_with_blank_ids_asks_which_column_names_the_customer_and_go
     assert done.status_code == 200, done.text
     (readiness,) = done.json()["readiness"]
     assert readiness["goal_id"] == GOAL and readiness["verdict"] == "ready"
+    # the person's decision and the count they agreed to are recorded by that yes, not before it
+    recorded = next(
+        i for i in client.get(f"/cases/{case_id}").json()["items"] if i["item_id"] == proposal["item_id"]
+    )
+    assert recorded["decided_by"] and recorded["agreed_rows"] == left_out, recorded
 
 
 def test_a_customer_column_chosen_for_a_log_is_not_expected_to_be_unique(client: TestClient) -> None:
@@ -176,3 +181,65 @@ def test_a_customer_column_chosen_for_a_log_is_not_expected_to_be_unique(client:
     assert open_question(case, "KEY_NOT_UNIQUE") is None
     said = [i["title"] for i in case["items"] if i["kind"] == "data_check"]
     assert not [t for t in said if "should name each customer once" in t], said
+
+
+def _log_case(client: TestClient) -> tuple[str, dict[str, Any]]:
+    buffer = io.StringIO()
+    blank_log().to_csv(buffer, index=False)
+    uploaded = client.post(
+        "/uploads",
+        files={"file": ("orders.csv", buffer.getvalue().encode(), "text/csv")},
+        data={"use_case": GOAL, "mode": "train"},
+    )
+    case = client.post("/cases", json={"upload_ids": [uploaded.json()["upload_id"]]}).json()
+    case_id = case["case_id"]
+    case = client.post(f"/cases/{case_id}/visit", json={}).json()
+    client.post(f"/cases/{case_id}/goal", json={"version": case["version"], "goal_id": GOAL, "op_id": "g1"})
+    return case_id, settled(client, case_id)
+
+
+def _goal_builds(case: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        i
+        for i in case["items"]
+        if i["kind"] == "recipe_step"
+        and i.get("goal_id") == GOAL
+        and i["state"] == "accepted"
+        and not i.get("withdrawn_because")
+    ]
+
+
+def test_the_goals_build_is_nobodys_decision_until_approve_and_follows_the_audience(
+    client: TestClient,
+) -> None:
+    case_id, case = _log_case(client)
+    case = answer(client, case_id, case, "BUILD_AUDIENCE", "active")
+    (build,) = _goal_builds(case)
+    # in the plan by default, but no person has decided it: no decider, no agreed count, no card saying "your choice"
+    assert build.get("decided_by") is None and build.get("agreed_rows") is None, build
+    screen = client.get(f"/cases/{case_id}/screen").json()["view"]
+    cards = [c for c in screen["conversation"] if c.get("item_id") == build["item_id"]]
+    assert not [c for c in cards if c.get("by") in {"you", "someone"}], cards
+    assert build["payload"]["audience"]["audience_id"] == "active"
+    # the preview says how many rows the built table has in the whole file, whatever the sample the plan was checked on
+    (previewed,) = screen["preview"]["files"]
+    assert previewed["after_table"] and previewed["after_rows"] == build["payload"]["audience"]["customers"]
+    assert previewed["after_rows"] < previewed["total_rows"]
+
+    # the audience is answered again: the plan's build follows it, the earlier one is taken back
+    case = answer_again(client, case_id, case, "BUILD_AUDIENCE", "quiet")
+    now = _goal_builds(case)
+    assert not [b for b in now if b["payload"].get("audience", {}).get("audience_id") == "active"], now
+    assert all(b["payload"]["audience"]["audience_id"] == "quiet" for b in now), now
+
+
+def answer_again(
+    client: TestClient, case_id: str, case: dict[str, Any], code: str, option_id: str
+) -> dict[str, Any]:
+    held = next(q for q in case["questions"] if q["code"] == code)
+    sent = client.post(
+        f"/cases/{case_id}/answers",
+        json={"version": case["version"], "question_id": held["question_id"], "option_id": option_id},
+    )
+    assert sent.status_code == 200, sent.text
+    return settled(client, case_id)

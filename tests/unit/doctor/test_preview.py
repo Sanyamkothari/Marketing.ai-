@@ -486,7 +486,7 @@ def test_the_screen_serves_the_preview_and_fills_the_steps_samples(tmp_path: Pat
     assert all(row[opted] == "1" for row in shown.after)
     served = view.model_dump(mode="json")
     assert set(served["preview"]["files"][0]) == {
-        "upload_id", "file_name", "total_rows", "columns", "before", "after", "left_out_columns", "note", "after_table"
+        "upload_id", "file_name", "total_rows", "columns", "before", "after", "left_out_columns", "note", "after_table", "after_rows"
     }  # fmt: skip
     assert set(served["preview"]["files"][0]["columns"][0]) == {"name", "changed", "personal"}
 
