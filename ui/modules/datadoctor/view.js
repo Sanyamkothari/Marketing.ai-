@@ -567,6 +567,10 @@ export function uploadHtml({ accept = "", busy = "", first = true, quiet = false
  */
 export const AI_CONSENT_LINE = "The Doctor is working with its rules only. Its AI has not been allowed to read this client's data.";
 export const AI_CONSENT_BUTTON = "Let the Doctor's AI read masked summaries of this client's data";
+export const AI_CONSENT_SEES = "It would read masked summaries: column names, counts and patterns.";
+export const AI_CONSENT_NEVER = "It would never see a cell value: no names, emails, phone numbers or amounts.";
+export const AI_CONSENT_WITHOUT = "Without it the rules still run, and every change and every meaning is still yours to approve.";
+export const AI_CONSENT_DONE = "Allowed. The Doctor's AI now reads masked summaries of this client's data, never cell values. You can still approve or undo everything.";
 export const AI_SPENT_LINE = "The AI has used up what this check may spend on it. The Doctor goes on with its rules only.";
 
 export function chatHtml(

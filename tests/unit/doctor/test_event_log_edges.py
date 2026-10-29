@@ -165,10 +165,51 @@ def test_a_build_says_its_two_dates_and_who_its_audience_leaves_out() -> None:
     said = payload["sentence"]
     assert "would have 3,360 rows" in said and "estimate" not in said and "sentence_estimate" not in payload
     assert (
-        "The 1,012 of the file's 4,372 shoppers with no activity on or before 31 Aug 2011 are left out"
-        in said
-    )
+        "Left out, of the file's 4,372 shoppers: 1,012 have no activity on or before 31 Aug 2011, so they were "
+        "not known by then. The table is about those active by then."
+    ) in said
     assert "the 90 days after it give the outcome, and 30 Nov 2011 is the date your case is read at" in said
     other: dict[str, Any] = {"sentence": "Build.", "buildable": built.model_dump(mode="json")}
     _say_build_counts(other, built, "shopper", None, date(2011, 10, 15))  # the window runs past the case date
     assert "is the date your case is read at" not in other["sentence"]
+
+
+def test_the_gone_quiet_audience_says_each_group_it_leaves_out_and_why() -> None:
+    from datetime import date
+
+    from engine.doctor.buildable import BuildableOutcome, BuildAudience
+    from engine.doctor.visit import _say_build_counts
+
+    quiet = BuildAudience(
+        audience_id="quiet",
+        quiet_days=90,
+        label="shoppers who have gone quiet",
+        customers=1_402,
+        yes=552,
+        enough=True,
+    )
+    built = BuildableOutcome(
+        upload_id="u",
+        file_name="f.csv",
+        entity_key="CustomerID",
+        time_column="InvoiceDate",
+        label_type="event_presence",
+        window_days=90,
+        snapshot=date(2011, 8, 31),
+        data_start=date(2010, 12, 1),
+        data_end=date(2011, 12, 9),
+        ids=4_331,
+        active_before=3_360,
+        yes=1_893,
+        rows_read=541_909,
+        file_rows=541_909,
+        enough=True,
+        sentence="s",
+        audiences=(quiet,),
+    )
+    payload: dict[str, Any] = {"sentence": "Build.", "buildable": built.model_dump(mode="json")}
+    _say_build_counts(payload, built, "shopper", quiet, None)
+    said = payload["sentence"]
+    assert "971 have no activity on or before 31 Aug 2011, so they were not known by then" in said
+    assert "1,958 were active in the 90 days before 31 Aug 2011, so they have not gone quiet" in said
+    assert "Who is kept is the audience you chose." in said

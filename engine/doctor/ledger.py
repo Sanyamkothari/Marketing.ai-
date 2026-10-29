@@ -149,11 +149,19 @@ def _from_trials(
     count of every row does not measure again). A code no yes can lift (`materialize.HARD_CODES`, or a payload entry
     marked `hard`) is a hard rule here too."""
     from engine.doctor.materialize import HARD_CODES
+    from engine.doctor.protocol import AGENT
 
     out: list[Finding] = []
     for item in items:
         if item.state is not ProposalState.ACCEPTED:
             continue
+        # What a person's yes to the step agreed to leave out (`CaseItem.agreed_rows`, the count its sentence or its
+        # question showed) is not a stop again: the trial counted the loss before that yes was said.
+        agreed = (
+            item.agreed_rows
+            if item.decided_by not in (None, AGENT) and item.standing_answer_id is None
+            else None
+        )
         raw = item.payload.get("findings")
         for entry in raw if isinstance(raw, list) else []:
             if not isinstance(entry, dict) or entry.get("level") != "stop":
@@ -166,6 +174,8 @@ def _from_trials(
             hard = code in HARD_CODES or entry.get("hard") is True
             count = entry.get("count")
             number = count if isinstance(count, int) and not isinstance(count, bool) else None
+            if code == "PLAN_LOSES_TOO_MUCH" and agreed and number is not None and number <= agreed:
+                continue
             # the subject the guards key a plan's own stop by (`materialize._finding`): per file, so a yes carries over
             # to the counted plan's stop and never to another file's
             subject = (

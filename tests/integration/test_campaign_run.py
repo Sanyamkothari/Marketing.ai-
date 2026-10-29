@@ -30,6 +30,7 @@ from engine.campaign_run import (
 from engine.config import DEFAULT_CONFIG_ROOT, load_engine_config
 from engine.contracts import FeatureSchema, RunRecord, RunState, RunStatus
 from engine.jobs import NullJobRunner
+from engine.run_progress import expected_run_minutes
 from engine.storage import LocalStorage, run_key
 from tests.fixtures.make_data import CLEAN, GenerationSpec, generate
 
@@ -195,7 +196,11 @@ def test_next_month_the_current_model_scores_the_new_file_without_learning(
     assert offer.status_code == 200, offer.text
     assert offer.json()["model_version_id"] == model_id and offer.json()["usable"] is True
     # The Start panel shows the server's own minutes for each speed (`campaign_speeds` in configs/engine.yaml).
-    assert offer.json()["speeds"] == load_engine_config(DEFAULT_CONFIG_ROOT).campaign_speeds
+    # ... as the whole run's expected time (`expected_run_minutes`), the one estimate the approval card and the run page use.
+    assert offer.json()["speeds"] == {
+        name: expected_run_minutes(minutes)
+        for name, minutes in load_engine_config(DEFAULT_CONFIG_ROOT).campaign_speeds.items()
+    }
     created = client.post(
         "/campaign-runs",
         json={

@@ -345,8 +345,12 @@ function sourcesHtml() {
   const problem = state.uploadsError
     ? errorBox(state.uploadsError, { title: "The uploaded files could not be listed." })
     : "";
-  return `${aiStatusHtml()}${connectHtml()}${chooserHtml()}<section class="dt-sec" aria-labelledby="dt-sources-h"><h2 id="dt-sources-h">Your sources</h2><p>Saved connections and uploaded files, with their health and when they last brought in data.</p>${list}${problem}</section>
-    <p class="dt-foot">Connect an AI service in <a href="${AI_SETTINGS_HREF}" data-dt-settings>Settings › AI service</a>.</p>`;
+  return `${aiStatusHtml()}${connectHtml()}${chooserHtml()}<section class="dt-sec" aria-labelledby="dt-sources-h"><h2 id="dt-sources-h">Your sources</h2><p>Saved connections and uploaded files, with their health and when they last brought in data.</p>${list}${problem}</section>${
+    // Said once: a connected Product AI is the status line above; the note says where to connect one only while it is not.
+    state.ai === true
+      ? ""
+      : `<p class="dt-foot">Connect an AI service in <a href="${AI_SETTINGS_HREF}" data-dt-settings>Settings › AI service</a>.</p>`
+  }`;
 }
 
 /** One line: whether the AI that helps your team (Data Doctor's chat) is connected, and where to connect it. */

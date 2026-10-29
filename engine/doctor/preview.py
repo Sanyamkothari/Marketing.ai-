@@ -120,6 +120,11 @@ class PreviewFile(ExactModel):
     left_out_columns: int = Field(
         default=0, description=f"Columns not served ({MAX_COLUMNS} at most: the changed ones come first)."
     )
+    after_table: str | None = Field(
+        default=None,
+        description="Set when the plan makes a new table from this file (a query, one row per customer, say): the "
+        "name of the table `after` shows, whose rows are not the file's rows.",
+    )
     note: str | None = Field(
         default=None,
         description="Set when a step could not run on the sample: `after` is then the same rows as `before`.",
@@ -388,6 +393,22 @@ def _served_columns(names: list[str], changed: Collection[str]) -> list[str]:
     return [names[i] for i in sorted(order[:MAX_COLUMNS])]
 
 
+def _made_table(done: PreparedFile, items: Sequence[CaseItem]) -> str:
+    """The name of the table the plan's last reshaping step makes (a query's output), else the file's own table."""
+    reshaping = {k.value for k in _RESHAPING}
+    for item_id, receipt in reversed(done.receipts):
+        if receipt.kind not in reshaping:
+            continue
+        item = next((i for i in items if i.item_id == item_id), None)
+        step = item.payload.get("step") if item is not None else None
+        params = step.get("params") if isinstance(step, dict) else None
+        name = params.get("output_name") if isinstance(params, dict) else None
+        if isinstance(name, str) and name:
+            return name
+        break
+    return done.table
+
+
 def _one_file(
     loaded: LoadedFile,
     items: Sequence[CaseItem],
@@ -426,6 +447,7 @@ def _one_file(
         before=masked_rows(shown_before, tuple(served), personal, rows),
         after=masked_rows(shown_after, tuple(served), personal, rows),
         left_out_columns=len(names) - len(served),
+        after_table=_made_table(done, items) if reshaped and done is not None else None,
         note=note,
     )
 

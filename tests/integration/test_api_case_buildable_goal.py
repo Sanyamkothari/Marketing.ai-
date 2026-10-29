@@ -130,18 +130,13 @@ def test_a_raw_order_log_fits_the_goal_as_buildable_then_builds(client: TestClie
     case = _audience(client, case_id, settled(client, case_id), counted)
     assert not [r for r in case.get("requests", []) if r.get("kind") == "more_data"]
     proposals = [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
-    assert len(proposals) == 1 and proposals[0]["state"] == "pending"
+    assert len(proposals) == 1 and proposals[0]["state"] == "accepted", "in the plan: the goal needs it"
     params = proposals[0]["payload"]["step"]["params"]
     assert params["reads_future"] and params["outcome_window_days"] == 90 and params["as_of"] == "2023-11-30"
     assert "reactivated_90d" in proposals[0]["payload"]["columns"]
     assert proposals[0]["payload"]["audience"]["audience_id"] == "active"
 
-    # 3. the person approves it: the built table is what the fit counts
-    approved = client.post(
-        f"/cases/{case_id}/decisions",
-        json={"version": case["version"], "item_id": proposals[0]["item_id"], "accept": True},
-    )
-    assert approved.status_code == 200, approved.text
+    # 3. the build is in the plan (its yes is the one approval's): the built table is what the fit counts
     case = settled(client, case_id)
     question = next(
         (q for q in case["questions"] if q["code"] == "OUTCOME_COLUMN" and q["answer"] is None), None
@@ -153,9 +148,6 @@ def test_a_raw_order_log_fits_the_goal_as_buildable_then_builds(client: TestClie
         )
         assert answered.status_code == 200, answered.text
         case = settled(client, case_id)
-    outcome = [i for i in case["items"] if i["kind"] == "outcome_column" and i["state"] == "accepted"]
-    assert outcome and outcome[0]["payload"]["column"] == "reactivated_90d"
-
     while (
         case["state"] == "ask"
     ):  # what is left is asked of the raw log (its repeating customer), as for any log
@@ -167,9 +159,16 @@ def test_a_raw_order_log_fits_the_goal_as_buildable_then_builds(client: TestClie
         assert answered.status_code == 200, answered.text
         case = answered.json()
     case = settled(client, case_id)
+    outcome = [i for i in case["items"] if i["kind"] == "outcome_column" and i["state"] == "accepted"]
+    assert outcome, (
+        [(q["code"], q["answer"]) for q in case["questions"]],
+        [(i["kind"], i["state"]) for i in case["items"]],
+    )
+    assert outcome[0]["payload"]["column"] == "reactivated_90d"
+
     approval = client.get(f"/cases/{case_id}/screen").json()["view"]["approval"]
     kinds = [y["kind"] for y in approval["yeses"]]
-    assert "confirm" in kinds, "the build waits for the person's own yes"
+    assert "confirm" in kinds, "the build waits for the person's own yes, given with the approval"
     # shoppers whose first order is after the snapshot are not in the table: the person sees that stop and says yes to it
     approved = client.post(
         f"/cases/{case_id}/approval",

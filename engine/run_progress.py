@@ -56,8 +56,10 @@ __all__ = [
     "Expectations",
     "PastDurations",
     "ProgressTracker",
+    "about_minutes",
     "estimate_progress",
     "expected_durations",
+    "expected_run_minutes",
     "install_progress_estimate",
     "past_durations",
     "train_budget_seconds",
@@ -161,6 +163,41 @@ def train_budget_seconds(config: UseCaseConfig) -> float | None:
             return float(config.uplift.time_limit_minutes * 60)
         return None
     return float(config.model_search.time_limit_minutes * 60)
+
+
+LATER_STEP_SECONDS: Final[Mapping[str, int]] = MappingProxyType({"score": 60, "list": 20, "campaign": 10})
+"""Rough seconds the steps of a campaign run after the learning step need (scoring, the list, the campaign)."""
+
+_TRAIN_FLOW_OVERHEAD: Final[tuple[StageKey, ...]] = (
+    StageKey.INGEST,
+    StageKey.VALIDATE,
+    StageKey.PREPARE,
+    StageKey.SPLIT,
+    StageKey.EVALUATE,
+    StageKey.EXPLAIN,
+    StageKey.REGISTER,
+)
+
+
+def about_minutes(seconds: float) -> int:
+    """Seconds as the minutes a person is told: to the minute under ten, to five under an hour (never under ten), to
+    ten beyond. The same rounding as `ui/run_progress.js` `etaText`, so a time said before the run and the time left
+    during it agree."""
+    minutes = seconds / 60
+    if minutes < 10:
+        return max(1, round(minutes))
+    if minutes < 57.5:
+        return max(10, round(minutes / 5) * 5)
+    return round(minutes / 10) * 10
+
+
+def expected_run_minutes(search_minutes: int) -> int:
+    """How long a campaign run is expected to take from start to its list when the learning step may search for
+    `search_minutes`: the search's own budget (`train_budget_seconds`), the other stages of the learning flow
+    (`DEFAULT_STAGE_SECONDS`) and the steps after it (`LATER_STEP_SECONDS`). The one estimate the approval card, the
+    model offer and the run page say."""
+    seconds = search_minutes * 60 + sum(DEFAULT_STAGE_SECONDS[k] for k in _TRAIN_FLOW_OVERHEAD)
+    return about_minutes(seconds + sum(LATER_STEP_SECONDS.values()))
 
 
 def expected_durations(

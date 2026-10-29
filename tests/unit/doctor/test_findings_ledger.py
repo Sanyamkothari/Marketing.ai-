@@ -492,3 +492,44 @@ def test_a_trials_plan_stop_has_the_guards_key_and_two_files_stay_two_findings(t
         file=FIRST,
     )
     assert found[343].key == guard.key
+
+
+def test_a_trials_loss_stop_is_not_asked_again_when_a_persons_yes_agreed_to_that_many_customers() -> None:
+    """The training table the goal needs is in the plan with the count its sentence says it leaves out: the trial's
+    "leaves out too many customers" is that count, said before the yes, so it is no stop on the approval card.
+    """
+    from datetime import UTC, datetime
+
+    from engine.doctor.ledger import _from_trials
+
+    def build(**update: Any) -> CaseItem:
+        payload: dict[str, Any] = {
+            "findings": [
+                {
+                    "level": "stop",
+                    "code": "PLAN_LOSES_TOO_MUCH",
+                    "message": "This step leaves out 2,736.",
+                    "count": 2_736,
+                }
+            ]
+        }
+        base = CaseItem(
+            item_id="recipe_step.g.1",
+            kind="recipe_step",
+            title="Training table",
+            source=ProposalSource.RULES,
+            confidence=AgentConfidence.CHECK,
+            state=ProposalState.ACCEPTED,
+            payload=payload,
+            payload_digest=digest_of(payload),
+            proposed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        return base.model_copy(update=update)
+
+    assert len(_from_trials([build()], [], set())) == 1, "no yes to it: the stop stands"
+    said = {"decided_by": "u-asha", "agreed_rows": 2_929}
+    assert _from_trials([build(**said)], [], set()) == [], "agreed to leave out 2,929: 2,736 is covered"
+    assert (
+        len(_from_trials([build(decided_by="u-asha", agreed_rows=1_000)], [], set())) == 1
+    ), "more than they agreed to"
+    assert len(_from_trials([build(decided_by="agent:data-doctor", agreed_rows=2_929)], [], set())) == 1

@@ -11,12 +11,13 @@ const connections = fixture("connections").connections;
 const uploads = fixture("uploads").uploads;
 const aiSlot = (over) => ({ connected: false, source: "none", provider: null, provider_label: null, model: null, has_key: false, key_readable: true, third_party: false, last_test: null, editable: true, locked_reason: null, ...over });
 
+let productConnected = false;
 const server = ({ method, path }) => {
   if (method !== "GET") return null;
   if (path === "/connections/kinds") return { status: 200, body: kinds };
   if (path === "/connections") return { status: 200, body: { connections } };
   if (path === "/uploads") return { status: 200, body: { uploads } };
-  if (path === "/ai-service") return { status: 200, body: { slots: { product: aiSlot({}), deliverable: aiSlot({}) }, providers: [] } };
+  if (path === "/ai-service") return { status: 200, body: { slots: { product: aiSlot({ connected: productConnected }), deliverable: aiSlot({}) }, providers: [] } };
   return null;
 };
 
@@ -87,6 +88,22 @@ test("the Sources tab says in one line whether the Product AI is connected", asy
   assert.equal(line.dataset.dtAi, "not-connected");
   assert.match(line.textContent, /Product AI not connected/);
   assert.equal(line.querySelector("a").getAttribute("href"), "#/settings/ai");
+});
+
+test("the Data page says once whether the Product AI is connected: the way to connect it is shown only while it is not", async () => {
+  const { forgetAiServiceStatus } = await import("../../../../../ui/availability.js");
+  productConnected = true;
+  forgetAiServiceStatus(); // the page reads the service's status once, and again after this
+  await show("#/data");
+  assert.equal($("[data-dt-ai]").dataset.dtAi, "connected");
+  assert.match($("[data-dt-ai]").textContent, /Product AI connected\./);
+  assert.equal($("[data-dt-settings]"), null, "no 'Connect an AI service' note beside 'Product AI connected'");
+  assert.doesNotMatch(app.textContent, /Connect an AI service/);
+  productConnected = false;
+  forgetAiServiceStatus();
+  await show("#/data");
+  assert.equal($("[data-dt-ai]").dataset.dtAi, "not-connected");
+  assert.ok($("[data-dt-settings]"), "the way to connect it is there while it is not connected");
 });
 
 test("the old Connections route is still registered and still draws", async () => {

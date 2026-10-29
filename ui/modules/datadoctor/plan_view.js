@@ -112,7 +112,7 @@ function barRow(label, inN, outN, kind) {
   if (!finite(inN) || !finite(outN)) return "";
   const share = inN > 0 ? Math.max(0, Math.min(100, (outN / inN) * 100)) : 0;
   const fewer = inN - outN;
-  const words = `${count(inN)} in, ${count(outN)} out${
+  const words = `${count(inN)} before, ${count(outN)} after${
     fewer > 0 ? ` (${count(fewer)} fewer, ${inN > 0 ? ((fewer / inN) * 100).toFixed(1) : "0.0"}%)` : fewer < 0 ? ` (${count(-fewer)} more)` : ""
   }`;
   return `<li class="dds-funnel-row${inN > 0 && fewer / inN > 0.05 ? " is-flag" : ""}" data-dds-funnel-row="${kind}"><span class="dds-funnel-label">${esc(label)}</span><span class="dds-funnel-bar" aria-hidden="true"><span class="dds-funnel-in"></span><span class="dds-funnel-out" style="width:${share.toFixed(1)}%"></span></span><span class="dds-funnel-num">${esc(words)}</span></li>`;
@@ -201,7 +201,7 @@ function queryOf(item) {
   return kindOf(item) === "sql_query" ? sql : "";
 }
 
-const pair = (label, a, b) => (finite(a) && finite(b) ? `<div><dt>${esc(label)}</dt><dd>${esc(`${count(a)} in, ${count(b)} out`)}</dd></div>` : "");
+const pair = (label, a, b) => (finite(a) && finite(b) ? `<div><dt>${esc(label)}</dt><dd>${esc(`${count(a)} before, ${count(b)} after`)}</dd></div>` : "");
 
 /** What we counted for a step, the sample rows before and after, and the query only behind "Show the query". */
 export function receiptHtml(item, ledger) {

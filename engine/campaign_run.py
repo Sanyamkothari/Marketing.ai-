@@ -33,6 +33,7 @@ from pydantic import AwareDatetime, Field
 from engine.config import PrimaryKey, load_engine_config
 from engine.contracts import Artefact, RunError, RunRecord, RunState, RunStatus
 from engine.jobs import JobRunner, ReconcilingJobRunner
+from engine.run_progress import LATER_STEP_SECONDS
 from engine.runs import cancel_run, fail_run
 from engine.storage import Storage, StorageError, run_key
 from engine.utils.logging import get_logger, log_failure
@@ -93,8 +94,6 @@ _ENDED: Final[dict[RunState, str]] = {
     RunState.FAILED: "failed",
     RunState.CANCELLED: "cancelled",
 }
-_LATER_SECONDS: Final[dict[str, int]] = {"score": 60, "list": 20, "campaign": 10}
-"""Rough seconds the steps after the running one still need, for the overall time left."""
 
 
 class CampaignStep(Artefact):
@@ -520,9 +519,9 @@ class CampaignRunRunner:
                 gained += _WEIGHT[current.key] * share / 100
                 if status.eta_seconds is not None:
                     later = live[live.index(current) + 1 :]
-                    eta = status.eta_seconds + sum(_LATER_SECONDS.get(s.key, 0) for s in later)
+                    eta = status.eta_seconds + sum(LATER_STEP_SECONDS.get(s.key, 0) for s in later)
         pct = 100 if run.state is CampaignRunState.DONE else min(99, round(gained * 100 / total))
-        return CampaignRunView(record=run, pct=pct, eta_seconds=eta, summary=_summary(run, current, eta))
+        return CampaignRunView(record=run, pct=pct, eta_seconds=eta, summary=_summary(run, current))
 
     def _status(self, run_id: str) -> RunStatus | None:
         try:
@@ -531,7 +530,7 @@ class CampaignRunRunner:
             return None
 
 
-def _summary(run: CampaignRun, current: CampaignStep | None, eta: int | None) -> str:
+def _summary(run: CampaignRun, current: CampaignStep | None) -> str:
     if run.state is CampaignRunState.DONE:
         return "Your campaign is ready."
     if run.error is not None:
@@ -539,6 +538,4 @@ def _summary(run: CampaignRun, current: CampaignStep | None, eta: int | None) ->
     if run.state is CampaignRunState.CANCELLED:
         return "This campaign run was cancelled."
     title = current.title if current is not None else "Finishing"
-    if eta is None:
-        return f"{title}."
-    return f"{title}: about {max(1, round(eta / 60))} min left."
+    return f"{title}."  # the time left is said once, under the bar, from `eta_seconds`
