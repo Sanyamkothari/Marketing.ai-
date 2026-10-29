@@ -36,10 +36,11 @@ from datetime import date
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+import numpy as np
 import pandas as pd
 
 from engine.agent.formats import date_order_conflict, masked_cut
-from engine.content_cache import ContentCache, frame_digest
+from engine.content_cache import ContentCache, cached_column, column_cache, frame_digest, map_distinct
 from engine.doctor.impossible import _FUTURE_ALLOWED, column_words
 
 if TYPE_CHECKING:
@@ -83,10 +84,19 @@ def _pct(part: int, whole: int) -> str:
     return f"{part / whole:.0%}" if whole else "0%"
 
 
+_CELLS: Final[ContentCache[pd.Series[Any]]] = column_cache(8, megabytes=128)
+"""The filled cells of a column as text, by what the column holds: a dozen checks read the same cells."""
+
+
 def _cells(series: pd.Series[Any]) -> pd.Series[Any]:
     """The filled cells as trimmed text."""
-    text = series.dropna().astype(str).str.strip()
-    return text[text != ""]
+
+    def make() -> pd.Series[Any]:
+        present = series.dropna()
+        text = map_distinct(present, lambda distinct: distinct.astype(str).str.strip())
+        return text[text != ""]
+
+    return cached_column(_CELLS, series, "cells", make)
 
 
 # ---------------------------------------------------------------------------
@@ -631,12 +641,33 @@ def _immature_month(days: pd.Series[Any], hits: pd.Series[Any]) -> tuple[float, 
 # ---------------------------------------------------------------------------
 # Rows that repeat, and files that share rows (G12)
 # ---------------------------------------------------------------------------
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
 def _repeated_headers(frame: pd.DataFrame) -> int:
     names = [str(c).strip().casefold() for c in frame.columns]
     if len(names) < 2 or frame.empty:
         return 0
-    text = frame.astype(str).apply(lambda column: column.str.strip().str.casefold())
-    matches = sum(text.iloc[:, i].eq(name) for i, name in enumerate(names))
+    matches = np.zeros(len(frame), dtype=np.int64)
+    for position, name in enumerate(names):
+        column = frame.iloc[:, position]
+        if (
+            pd.api.types.is_numeric_dtype(column)
+            and not pd.api.types.is_bool_dtype(column)
+            and not _is_number(name)
+        ):
+            continue  # a number is never written as a word
+        # Each distinct spelling is read once, then spread over the rows.
+        codes, spellings = pd.factorize(column.astype(str))
+        same = np.fromiter(
+            (text.strip().casefold() == name for text in spellings), dtype=bool, count=len(spellings)
+        )
+        matches += same[codes]
     return int((matches >= max(2, len(names) // 2)).sum())
 
 
@@ -723,13 +754,23 @@ _BLOCK_RUN: Final[float] = 5.0
 _UNIT_GAP: Final[float] = 50.0
 
 
+def _total_rows(series: pd.Series[Any]) -> int:
+    """How many rows of a column read 'Total' (each distinct spelling is matched once)."""
+    counts = _cells(series).value_counts()
+    return (
+        int(counts[counts.index.to_series().str.match(_TOTAL_ROW).to_numpy(dtype=bool)].sum())
+        if len(counts)
+        else 0
+    )
+
+
 def summary_check(frame: pd.DataFrame) -> Check | None:
     """A stop when the table is a summary, not customers: a 'Total' row, or counts per group with no ID column and
     no text column that is different on every row. Totals cannot be turned back into people."""
     if len(frame) < 2:
         return None
     text = [c for c in frame.columns if not pd.api.types.is_numeric_dtype(frame[c])]
-    total_rows = int(sum(_cells(frame[c]).str.match(_TOTAL_ROW).sum() for c in text))
+    total_rows = sum(_total_rows(frame[c]) for c in text)
     one_each = any(ID_NAME.search(str(c)) for c in frame.columns) or any(
         frame[c].notna().all() and frame[c].is_unique for c in text
     )

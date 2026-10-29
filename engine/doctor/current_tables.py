@@ -34,6 +34,8 @@ from engine.agent.contracts import ProposalSource, ProposalState, RecipeStep, Re
 from engine.agent.recipe import STEP_PHASE
 from engine.agent.sql_step import SqlStepError, sql_params
 from engine.agentic.canonical import canonical_bytes, sha256_hex
+from engine.content_cache import ContentCache, frame_digest
+from engine.contracts import DatasetFingerprint
 
 if TYPE_CHECKING:
     from engine.config import UseCaseConfig
@@ -200,6 +202,23 @@ def _cache_key(
     ]
 
 
+def _same_rows(built: pd.DataFrame, uploaded: pd.DataFrame) -> bool:
+    """Whether the plan left the table as uploaded: compared by content digest (a column the plan did not touch is
+    hashed once for the step), else cell by cell."""
+    if built.shape != uploaded.shape:
+        return False
+    built_digest, uploaded_digest = frame_digest(built), frame_digest(uploaded)
+    if built_digest is not None and uploaded_digest is not None:
+        return built_digest == uploaded_digest
+    return bool(built.equals(uploaded))
+
+
+_BUILT_FINGERPRINT: Final[str] = "sha256:columns:v1"
+_PROFILES: Final[ContentCache[Any]] = ContentCache(8)
+"""Profiles of built tables by what the table holds, the file it came from and the use case: a plan change that
+leaves a table as it was does not profile it again."""
+
+
 def _reprofiled(
     frame: pd.DataFrame,
     config: UseCaseConfig,
@@ -211,8 +230,66 @@ def _reprofiled(
     personal: dict[str, tuple[str, ...]],
 ) -> Any:
     """The profile of `frame`, with the personal-data marks its sources had (by column name)."""
+    whole = frame_digest(frame)
+    key = (
+        None
+        if whole is None
+        else sha256_hex(
+            canonical_bytes(
+                [
+                    whole,
+                    upload_id,
+                    file_name,
+                    row_count,
+                    [[k, list(v)] for k, v in sorted(personal.items())],
+                    _config_identity(config),
+                    like.profile.file_format,
+                    like.profile.file_size_bytes,
+                    like.profile.delimiter,
+                    like.profile.encoding,
+                ]
+            )
+        )
+    )
+    return _PROFILES.get_or_compute(
+        key,
+        lambda: _profile_built(
+            frame,
+            config,
+            like,
+            upload_id=upload_id,
+            file_name=file_name,
+            row_count=row_count,
+            personal=personal,
+        ),
+    )
+
+
+def _profile_built(
+    frame: pd.DataFrame,
+    config: UseCaseConfig,
+    like: LoadedFile,
+    *,
+    upload_id: str,
+    file_name: str,
+    row_count: int | None,
+    personal: dict[str, tuple[str, ...]],
+) -> Any:
     from engine.stages.ingest import profile_dataset
 
+    # A table the plan made is identified by what its columns hold, not by rendering every cell to text again: it
+    # is never compared with an uploaded file's `sha256:v1` fingerprint (the scheme in the name says which it is).
+    whole = frame_digest(frame)
+    fingerprint = (
+        None
+        if whole is None
+        else DatasetFingerprint(
+            hash=f"{_BUILT_FINGERPRINT}:{whole}",
+            algorithm=_BUILT_FINGERPRINT,
+            n_rows=row_count if row_count is not None else len(frame),
+            columns=tuple(str(c) for c in frame.columns),
+        )
+    )
     profile = profile_dataset(
         frame,
         config,
@@ -223,6 +300,7 @@ def _reprofiled(
         delimiter=like.profile.delimiter,
         encoding=like.profile.encoding,
         row_count=row_count if row_count is not None else len(frame),
+        fingerprint=fingerprint,
     )
     columns = tuple(
         (
@@ -307,7 +385,8 @@ def current_tables(
                 frame = prepared.tables.get(table) if table is not None else None
                 if loaded.upload_id in failed or frame is None or frame is loaded.frame:
                     continue
-                if frame.equals(loaded.frame):
+                same = _same_rows(frame, loaded.frame)
+                if same:
                     continue
                 try:
                     profile = _reprofiled(

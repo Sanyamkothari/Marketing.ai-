@@ -9,7 +9,13 @@ import pandas as pd
 import pytest
 
 from engine.agent.formats import parse_dates, parse_numbers, to_datetime_mixed
-from engine.content_cache import ContentCache, clear_content_caches, content_digest, frame_digest
+from engine.content_cache import (
+    ContentCache,
+    clear_content_caches,
+    content_digest,
+    frame_digest,
+    map_distinct,
+)
 
 DATES = ["2024-01-05 10:00", "2024-01-06 11:30", "2024-01-05 10:00", None, "2024-02-01 08:15"]
 
@@ -147,3 +153,74 @@ def test_cells_with_different_utc_offsets_are_read_the_plain_way() -> None:
 
 def test_a_digest_of_a_column_with_missing_numbers_is_stable() -> None:
     assert content_digest(pd.Series([1.5, np.nan, 3.0])) == content_digest(pd.Series([1.5, np.nan, 3.0]))
+
+
+def test_event_caches_keep_nothing_past_their_byte_budget() -> None:
+    """A table whose customer IDs and days outweigh the budget is read again, never kept in the process."""
+    from engine.doctor import buildable
+
+    ids = pd.Series([f"customer-{n}" for n in range(2_000)], dtype="string")
+    days = pd.Series(pd.date_range("2024-01-01", periods=2_000, freq="h")).dt.normalize()
+    events = buildable._Events("id", "when", None, None, None, ids, days)
+    cost = buildable._events_cost(events)
+    assert cost > 0
+    cache: ContentCache[buildable._Events | None] = ContentCache(
+        4, budget=cost - 1, cost=buildable._events_cost
+    )
+    assert cache.get_or_compute("k", lambda: events) is events
+    assert len(cache) == 0  # heavier than the budget: not kept
+    roomy: ContentCache[buildable._Events | None] = ContentCache(4, budget=cost, cost=buildable._events_cost)
+    roomy.get_or_compute("k", lambda: events)
+    assert len(roomy) == 1
+    assert buildable._EVENTS._budget > 0 and buildable._WHOLE._budget > 0
+
+
+def test_whole_file_pairs_cost_counts_every_column() -> None:
+    from engine.doctor import buildable
+
+    pairs = pd.DataFrame(
+        {"id": pd.Series(["a", "b"], dtype="string"), "day": pd.to_datetime(["2024-01-01"] * 2)}
+    )
+    assert buildable._WHOLE._cost is not None
+    assert buildable._WHOLE._cost(pairs) >= int(pairs.memory_usage(index=False, deep=True).sum()) > 0
+
+
+def test_digest_memo_hashes_a_column_once_and_notices_a_change_in_place() -> None:
+    from engine.content_cache import digest_memo
+
+    frame = pd.DataFrame({"a": ["x", "y", "z"] * 100, "b": np.arange(300)})
+    outside = content_digest(frame["a"])
+    with digest_memo():
+        first = content_digest(frame["a"])
+        assert content_digest(frame["a"]) == first == outside
+        assert content_digest(frame["b"]) == content_digest(frame["b"])
+        frame.loc[0, "a"] = "changed"  # a cell changed in place under a memo that holds the column
+        assert content_digest(frame["a"]) != first
+    from engine import content_cache
+
+    assert not content_cache._MEMO  # dropped when the step ends
+
+
+def test_map_distinct_matches_a_cell_by_cell_conversion() -> None:
+    series = pd.Series([" a ", None, "b", " a ", ""], index=[5, 6, 7, 8, 9])
+    spread = map_distinct(series.dropna(), lambda distinct: distinct.astype(str).str.strip())
+    assert spread.tolist() == ["a", "b", "a", ""]
+    assert list(spread.index) == [5, 7, 8, 9]
+
+
+def test_repeated_headers_counts_rows_that_repeat_the_header() -> None:
+    from engine.doctor.checks_time_keys import _repeated_headers
+
+    frame = pd.DataFrame({"name": ["Ann", " NAME ", "Bo"], "age": ["3", "age", "4"], "n": [1, 2, 3]})
+    assert _repeated_headers(frame) == 1
+    flags = pd.DataFrame({"True": [True, False], "x": ["x", "x"]})
+    assert _repeated_headers(flags) == 1  # a True cell is the text "true", the header of its column
+
+
+def test_currency_counts_agree_with_cell_by_cell_counting() -> None:
+    from engine.doctor.currency import _count
+
+    texts = pd.Series(["$5", "5", "  ", None, "$7", "EUR 3", "$5"], dtype=object)
+    assert _count(texts) == ({"USD": 3, "EUR": 1}, 0, 1, 5, ["$5", "5", "$7", "EUR 3"])
+    assert _count(pd.Series([1.5, np.nan, 2.0])) == ({}, 0, 2, 2, [])
+    assert _count(pd.Series([True, False])) == ({}, 0, 0, 0, [])

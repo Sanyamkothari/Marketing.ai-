@@ -190,11 +190,26 @@ def _ids_days(frame: pd.DataFrame, key: str, when: str) -> tuple[pd.Series[str],
     return ids[keep], days[keep].dt.normalize()
 
 
-_EVENTS: Final[ContentCache[_Events | None]] = ContentCache(4)
-_WHOLE: Final[ContentCache[pd.DataFrame | None]] = ContentCache(4)
+def _events_cost(events: _Events | None) -> int:
+    """What an `_Events` weighs in bytes. A customer ID is a Python string per row, so the text is counted too."""
+    return 0 if events is None else _series_bytes(events.ids) + _series_bytes(events.days)
+
+
+def _series_bytes(series: pd.Series[Any]) -> int:
+    return int(series.memory_usage(index=False, deep=True))
+
+
+_CACHE_BUDGET: Final[int] = 128 * 2**20
+_EVENTS: Final[ContentCache[_Events | None]] = ContentCache(4, budget=_CACHE_BUDGET, cost=_events_cost)
+_WHOLE: Final[ContentCache[pd.DataFrame | None]] = ContentCache(
+    4,
+    budget=_CACHE_BUDGET,
+    cost=lambda pairs: 0 if pairs is None else int(pairs.memory_usage(index=False, deep=True).sum()),
+)
 """Read once per content, not per frame object: every step of a visit loads its files again, and reading the dates
-is the slow part. (A cache keyed by `id(frame)` never hit across steps, and one keyed by a freed frame's id could
-hand back another table's answer.)"""
+is the slow part. Each cache has a byte budget: a table too big for it is read again by the next step, never kept
+(the customer IDs of an upload must not outlive the request in a long-lived process). (A cache keyed by `id(frame)`
+never hit across steps, and one keyed by a freed frame's id could hand back another table's answer.)"""
 
 
 def _events(frame: pd.DataFrame) -> _Events | None:
