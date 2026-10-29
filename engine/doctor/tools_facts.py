@@ -21,7 +21,10 @@ Neither tool changes anything, and neither returns a cell value.
 from __future__ import annotations
 
 import re
-from typing import Final
+from collections.abc import Sequence
+from datetime import date
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Final
 
 import pandas as pd
 from pydantic import Field
@@ -39,13 +42,26 @@ from engine.doctor.registry import (
 )
 from engine.doctor.tools import FileArgs, _config, _file_or_files, _loaded
 
+if TYPE_CHECKING:
+    from engine.doctor.diagnose import LoadedFile
+
 __all__ = [
     "M_FACT_TOOLS",
     "CampaignColumn",
     "CampaignColumns",
+    "ConsentFacts",
+    "FactQuestion",
+    "FactSuggestion",
+    "GoalBuildFacts",
+    "KeyFacts",
     "OrderColumn",
     "OrderFileFacts",
+    "TimeFacts",
     "campaign_columns",
+    "extract_consent_facts",
+    "extract_goal_build_facts",
+    "extract_key_facts",
+    "extract_time_facts",
     "level_labels",
     "order_file_facts",
     "register_fact_tools",
@@ -289,3 +305,393 @@ def register_fact_tools(registry: DataToolRegistry) -> tuple[str, ...]:
         )
     )
     return M_FACT_TOOLS
+
+
+# ---------------------------------------------------------------------------
+# Fact Models & Extractors (converting rule writers to read-only fact tools)
+# ---------------------------------------------------------------------------
+
+
+class FactSuggestion(StrictBase):
+    kind: str
+    payload: dict[str, Any]
+    title: str
+    reason: str
+    confidence: str = "sure"
+    ticked: bool = False
+    needs_yes: bool = False
+    upload_id: str | None = None
+    goal_id: str | None = None
+
+
+class FactQuestion(StrictBase):
+    code: str
+    text: str
+    choices: tuple[tuple[str, dict[str, Any]], ...]
+    upload_id: str | None = None
+    column: str | None = None
+    goal_id: str | None = None
+    blocking: bool = True
+    recommended: str | None = None
+    why: str = ""
+    safe: str | None = None
+
+
+class KeyFacts(StrictBase):
+    upload_id: str
+    unique_keys: tuple[dict[str, Any], ...] = ()
+    near_keys: tuple[dict[str, Any], ...] = ()
+    is_event_file: bool = False
+    candidate_key: str | None = None
+    candidate_customer_column: str | None = None
+    suggestions: tuple[FactSuggestion, ...] = ()
+    questions: tuple[FactQuestion, ...] = ()
+
+
+class GoalBuildFacts(StrictBase):
+    goal_id: str
+    buildable_outcome: Any | None = None
+    enough: bool = False
+    snapshot: date | None = None
+    window_days: int = 0
+    audiences: tuple[Any, ...] = ()
+    suggested_build: FactSuggestion | None = None
+    audience_question: FactQuestion | None = None
+
+
+class TimeFacts(StrictBase):
+    upload_id: str
+    time_columns: tuple[str, ...] = ()
+    partial_month: bool = False
+    partial_rows: int = 0
+    last_month_end: str | None = None
+    suggested_as_of: str | None = None
+    missing: bool = False
+    suggestions: tuple[FactSuggestion, ...] = ()
+    questions: tuple[FactQuestion, ...] = ()
+
+
+class ConsentFacts(StrictBase):
+    upload_id: str
+    consent_columns: tuple[str, ...] = ()
+    missing: bool = False
+    suggestions: tuple[FactSuggestion, ...] = ()
+
+
+_ID_NAMED: Final[re.Pattern[str]] = re.compile(
+    r"(^|[_\s-])id$|^id[_\s-]|_key$|(customer|cust|client|member|account)[_\s-]?(id|no|num|number|code|ref)$",
+    re.I,
+)
+
+
+def id_named(unique: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    named = [key for key in unique if _ID_NAMED.search(str(key.get("column", "")).strip())]
+    return named or list(unique)
+
+
+def dates_column(series: pd.Series) -> bool:
+    from engine.onboarding.sources import MIN_TIME_PARSE_RATE
+
+    seen = series.dropna().astype(str).head(500)
+    if seen.empty or seen.str.contains(r"\d[-/:.]\d", regex=True).mean() < MIN_TIME_PARSE_RATE:
+        return False
+    return bool(pd.to_datetime(seen, errors="coerce", format="mixed").notna().mean() >= MIN_TIME_PARSE_RATE)
+
+
+def near_keys(frame: pd.DataFrame, profile: Any) -> list[dict[str, Any]]:
+    from engine.onboarding.sources import key_candidates
+
+    found: list[dict[str, Any]] = []
+    for candidate in key_candidates(profile):
+        key = candidate.model_dump(mode="json")
+        col = str(key["column"])
+        if col not in frame.columns:
+            continue
+        named = bool(_ID_NAMED.search(col.strip()))
+        series = frame[col]
+        text = not (pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series))
+        repeats = float(key.get("rows_per_key") or 99.0)
+        blanks = float(key.get("null_rate") or 0.0)
+        if named or (
+            text and repeats <= 50.0 and blanks < 0.5 and series.nunique() > 1 and not dates_column(series)
+        ):
+            found.append(key)
+    found.sort(
+        key=lambda k: (not _ID_NAMED.search(str(k["column"]).strip()), float(k.get("rows_per_key") or 99.0))
+    )
+    return found
+
+
+def event_file(roles: dict[str, Any], event_roles: frozenset[str]) -> bool:
+    ranked = [r for r in roles.get("roles", []) if isinstance(r, dict)]
+    if not ranked or ranked[0].get("role") not in event_roles:
+        return False
+    top = ranked[0].get("confidence")
+    second = ranked[1].get("confidence") if len(ranked) > 1 else None
+    if not isinstance(top, (int, float)):
+        return False
+    return not isinstance(second, (int, float)) or top > second
+
+
+def extract_key_facts(
+    loaded: LoadedFile,
+    event_roles: frozenset[str] = frozenset(),
+    roles_output: dict[str, Any] | None = None,
+) -> KeyFacts:
+    from engine.onboarding.sources import key_candidates
+
+    raw_candidates = [c.model_dump(mode="json") for c in key_candidates(loaded.profile)]
+    unique = [
+        k
+        for k in raw_candidates
+        if float(k.get("rows_per_key") or 99.0) <= 1.0 and float(k.get("null_rate") or 0.0) < 0.05
+    ]
+    unique = id_named(unique)
+    near = near_keys(loaded.frame, loaded.profile)
+    is_events = event_file(roles_output or {}, event_roles) if event_roles else False
+
+    suggestions: list[FactSuggestion] = []
+    questions: list[FactQuestion] = []
+    candidate_key: str | None = None
+
+    name = loaded.file_name or "this file"
+    if len(unique) == 1:
+        col = str(unique[0]["column"])
+        candidate_key = col
+        suggestions.append(
+            FactSuggestion(
+                kind="key",
+                payload={"upload_id": loaded.upload_id, "column": col},
+                title=f"“{col}” names each row of {name}.",
+                reason=f"“{col}” has a unique value on every row and no missing values.",
+                confidence="sure",
+                ticked=True,
+                upload_id=loaded.upload_id,
+            )
+        )
+    elif len(unique) > 1:
+        choices: tuple[tuple[str, dict[str, Any]], ...] = (
+            *(
+                (
+                    str(k["column"]),
+                    {
+                        "option_id": f"c{i}",
+                        "kind": "key",
+                        "payload": {"upload_id": loaded.upload_id, "column": str(k["column"])},
+                        "title": f"“{k['column']}” names each row of {name}.",
+                    },
+                )
+                for i, k in enumerate(unique[:5])
+            ),
+            ("I don't know", {"option_id": "none"}),
+        )
+        questions.append(
+            FactQuestion(
+                code="KEY_AMBIGUOUS",
+                text=f"Which column names each row of {name}? Several hold a different value on every row.",
+                choices=choices,
+                upload_id=loaded.upload_id,
+            )
+        )
+    elif len(loaded.frame) > 0:
+        if near:
+            near_choices: tuple[tuple[str, dict[str, Any]], ...] = (
+                *(
+                    (
+                        f"{k['column']} (repeats ~{float(k.get('rows_per_key') or 1):.1f} times"
+                        + (
+                            f"; {float(k.get('null_rate') or 0.0):.0%} blank"
+                            if float(k.get("null_rate") or 0.0) >= 0.005
+                            else ""
+                        )
+                        + ")",
+                        {
+                            "option_id": f"c{i}",
+                            "kind": "key",
+                            "payload": {"upload_id": loaded.upload_id, "column": str(k["column"])},
+                            "title": f"“{k['column']}” names the customers of {name}.",
+                        },
+                    )
+                    for i, k in enumerate(near[:5])
+                ),
+                ("I don't know", {"option_id": "none"}),
+            )
+            questions.append(
+                FactQuestion(
+                    code="KEY_NOT_UNIQUE",
+                    text=(
+                        f"{name} has many rows for each customer, so no column is different on every row. "
+                        "Which column names the customer on each row?"
+                        if is_events
+                        else f"No column of {name} holds a different value on every row with no blanks. "
+                        "Which column names the customers in it?"
+                    ),
+                    choices=near_choices,
+                    upload_id=loaded.upload_id,
+                )
+            )
+
+    return KeyFacts(
+        upload_id=loaded.upload_id,
+        unique_keys=tuple(unique),
+        near_keys=tuple(near),
+        is_event_file=is_events,
+        candidate_key=candidate_key,
+        suggestions=tuple(suggestions),
+        questions=tuple(questions),
+    )
+
+
+def extract_goal_build_facts(
+    files: Sequence[LoadedFile],
+    config: UseCaseConfig,
+    config_root: Path | None = None,
+) -> GoalBuildFacts:
+    from engine.agent.sql_step import table_alias
+    from engine.doctor.buildable import buildable_outcome, compile_build
+    from engine.doctor.materialize import table_names
+
+    built = buildable_outcome(files, config, config_root)
+    if built is None or not built.enough or built.snapshot is None:
+        return GoalBuildFacts(goal_id=config.id, enough=False)
+
+    loaded = next((f for f in files if f.upload_id == built.upload_id), None)
+    if loaded is None:
+        return GoalBuildFacts(goal_id=config.id, enough=False)
+
+    suggested_build: FactSuggestion | None = None
+    audience_question: FactQuestion | None = None
+
+    table = table_names(files)[loaded.upload_id]
+    try:
+        sql, description = compile_build(built, config, table_alias(table), None)
+        suggested_build = FactSuggestion(
+            kind="recipe_step",
+            payload={
+                "description": description,
+                "sql": sql,
+                "upload_ids": [loaded.upload_id],
+                "as_of": built.snapshot.isoformat(),
+                "reads_future": True,
+                "outcome_window_days": built.window_days,
+                "buildable": built.model_dump(mode="json"),
+                "needs_yes": True,
+            },
+            title=f"Build training table for {config.name}",
+            reason=f"Builds one row per customer with the outcome from the event log around {built.snapshot}.",
+            confidence="check",
+            ticked=True,
+            needs_yes=True,
+            upload_id=loaded.upload_id,
+            goal_id=config.id,
+        )
+    except Exception:
+        suggested_build = None
+
+    return GoalBuildFacts(
+        goal_id=config.id,
+        buildable_outcome=built,
+        enough=True,
+        snapshot=built.snapshot,
+        window_days=built.window_days,
+        audiences=tuple(built.audiences),
+        suggested_build=suggested_build,
+        audience_question=audience_question,
+    )
+
+
+def extract_time_facts(
+    loaded: LoadedFile,
+    brief_time_names: Sequence[str] = (),
+    required: bool = False,
+    goal_id: str | None = None,
+) -> TimeFacts:
+    time_cols: list[str] = []
+    partial_month = False
+    partial_rows = 0
+    last_month_end_str: str | None = None
+
+    for col in loaded.frame.columns:
+        series = loaded.frame[col]
+        if dates_column(series):
+            time_cols.append(str(col))
+            # Check partial month on the primary date column
+            if not partial_month:
+                parsed_dates = pd.to_datetime(series.dropna(), errors="coerce", format="mixed")
+                if not parsed_dates.empty:
+                    max_dt = parsed_dates.max()
+                    # Month end for max_dt
+                    period = pd.Period(max_dt, freq="M")
+                    m_end = period.end_time.date()
+                    if max_dt.date() < m_end:
+                        # Partial month
+                        prev_m_end = (period.start_time - pd.Timedelta(days=1)).date()
+                        p_rows = int((parsed_dates > pd.Timestamp(prev_m_end)).sum())
+                        if p_rows > 0:
+                            partial_month = True
+                            partial_rows = p_rows
+                            last_month_end_str = prev_m_end.isoformat()
+
+    suggestions: list[FactSuggestion] = []
+    if time_cols:
+        target_col = next((c for c in time_cols if c in brief_time_names), time_cols[0])
+        suggestions.append(
+            FactSuggestion(
+                kind="as_of_column",
+                payload={"upload_id": loaded.upload_id, "column": target_col},
+                title=f"“{target_col}” is the date each row describes.",
+                reason="Testing splits by date and uses the newest dates.",
+                confidence="sure",
+                ticked=True,
+                upload_id=loaded.upload_id,
+                goal_id=goal_id,
+            )
+        )
+
+    return TimeFacts(
+        upload_id=loaded.upload_id,
+        time_columns=tuple(time_cols),
+        partial_month=partial_month,
+        partial_rows=partial_rows,
+        last_month_end=last_month_end_str,
+        suggested_as_of=last_month_end_str,
+        missing=required and not time_cols,
+        suggestions=tuple(suggestions),
+    )
+
+
+def extract_consent_facts(
+    loaded: LoadedFile,
+    brief_consent_names: Sequence[str] = (),
+    required: bool = False,
+    goal_id: str | None = None,
+) -> ConsentFacts:
+    consent_cols: list[str] = []
+    for col in loaded.frame.columns:
+        c_name = str(col).lower()
+        if c_name in brief_consent_names or any(
+            k in c_name for k in ("consent", "opt_in", "opt_out", "marketing_permission")
+        ):
+            consent_cols.append(str(col))
+
+    suggestions: list[FactSuggestion] = []
+    if consent_cols:
+        suggestions.append(
+            FactSuggestion(
+                kind="consent_column",
+                payload={"upload_id": loaded.upload_id, "column": consent_cols[0]},
+                title=f"“{consent_cols[0]}” says who agreed to be contacted.",
+                reason="Only contacted people who agreed to be contacted are included.",
+                confidence="check",
+                ticked=False,
+                upload_id=loaded.upload_id,
+                goal_id=goal_id,
+            )
+        )
+
+    return ConsentFacts(
+        upload_id=loaded.upload_id,
+        consent_columns=tuple(consent_cols),
+        missing=required and not consent_cols,
+        suggestions=tuple(suggestions),
+    )

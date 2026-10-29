@@ -18,10 +18,9 @@ date - the smallest interface this milestone needs from M232's `DataToolContext`
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Final, Generic, Literal, Protocol, TypeVar
+from typing import Any, Final, Literal, Protocol, TypeVar
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,6 +49,7 @@ from engine.doctor.synonyms import (
     check_ai_merge,
     find_synonym_clusters,
 )
+from engine.doctor.tool_spec import DoctorToolSpec
 from engine.doctor.units import UNIT_CODES, UnitReport, detect_units
 
 __all__ = [
@@ -128,30 +128,7 @@ In = TypeVar("In", bound=BaseModel)
 Out = TypeVar("Out", bound=BaseModel)
 
 
-@dataclass(frozen=True)
-class DataToolSpec(Generic[In, Out]):
-    """One Data Doctor tool, as the design's §5.2 registry entry needs it."""
-
-    name: str
-    kind: ToolKind
-    mode: Literal["rules", "rules+ai"]
-    description: str
-    input_model: type[In]
-    output_model: type[Out]
-    exposure: Exposure
-    role: Role
-    """The least role a caller needs (design §5.2: a Viewer calls READ tools only)."""
-    wraps: tuple[str, ...]
-    """The engine functions it calls, as `module:function`."""
-    deterministic: bool
-    """True when the same input on the same file always gives the same output (no AI inside)."""
-    step_kinds: tuple[RecipeStepKind, ...]
-    """The step kinds its proposals carry: what M233's policy rule set for it must allow."""
-    approve_class: bool | Literal["by_output"]
-    """Whether the item it proposes needs the person's explicit yes with the exact text (design §6.6);
-    `by_output` when that depends on the file, and each output's own `approve_class` field says."""
-    run: Callable[[In, RowToolContext], Out]
-    milestone: str = "M238"
+DataToolSpec = DoctorToolSpec
 
 
 class DataToolRegistrar(Protocol):

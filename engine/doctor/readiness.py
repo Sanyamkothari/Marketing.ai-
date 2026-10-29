@@ -66,7 +66,6 @@ from engine.config import (
 from engine.contracts import FeatureSchema, Severity, ValidationReport
 from engine.doctor.history import HistoryFinding
 from engine.doctor.readiness_contracts import (
-    PROBE_CODES,
     Acknowledgement,
     ApprovalRequired,
     DataReadinessReport,
@@ -92,6 +91,7 @@ from engine.doctor.readiness_probes import (
     run_probes,
     scan_source,
 )
+from engine.doctor.tool_spec import DoctorToolSpec
 from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
@@ -1328,19 +1328,7 @@ def _aggregate_reason(report: DataReadinessReport) -> str:
     return report.verdict_reason.split(" (", 1)[0]
 
 
-@dataclass(frozen=True)
-class ReadinessToolSpec:
-    """The registry entry for `check_readiness` (the design §5.5 #69), in the shape the registry needs."""
-
-    name: str
-    kind: Literal["read"]
-    exposure: Literal["aggregate"]
-    description: str
-    input_model: type[CheckReadinessArgs]
-    output_model: type[ReadinessSummary]
-    run: Callable[[CheckReadinessArgs, ReadinessToolContext], ReadinessSummary]
-    mirrors: tuple[str, ...] = ("engine.agent.checks.check_plan", "engine.uplift.checks.run_uplift_checks")
-    probe_codes: tuple[str, ...] = PROBE_CODES
+ReadinessToolSpec = DoctorToolSpec[Any, Any]
 
 
 def _run_tool(args: CheckReadinessArgs, ctx: ReadinessToolContext) -> ReadinessSummary:

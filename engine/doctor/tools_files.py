@@ -21,12 +21,11 @@ the M233 rule set each needs (listed in the milestone's cross-branch notes).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal, Protocol
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from engine.access.roles import Role
 from engine.agent.key_steps import KeyRule, propose_key_rules
@@ -35,6 +34,7 @@ from engine.doctor.build_driver import BuildPlan, plan_build
 from engine.doctor.contracts import ColumnDrift, Diagnosis, FileStack
 from engine.doctor.join_files import MAX_JOIN_PARTS, JoinError, JoinInput, JoinProposal, PartKind, plan_join
 from engine.doctor.stack_files import ConflictRule, StackProposal, plan_stack
+from engine.doctor.tool_spec import DoctorToolSpec
 
 __all__ = [
     "TOOLS",
@@ -63,22 +63,7 @@ class FilesContext(Protocol):
     def diagnosis(self) -> Diagnosis | None: ...
 
 
-@dataclass(frozen=True)
-class DataToolSpec:
-    """One tool, as the design's §5.2 registry entry describes it."""
-
-    name: str
-    kind: ToolKindName
-    description: str
-    input_model: type[BaseModel]
-    output_model: type[BaseModel]
-    exposure: Exposure
-    role: Role
-    mode: Literal["rules", "ai", "rules+ai"]
-    wraps: str
-    policy_kind: str
-    """The M233 rule set the policy needs for this PROPOSE kind (default deny without it)."""
-    run: Callable[[Any, FilesContext], BaseModel]
+DataToolSpec = DoctorToolSpec[Any, Any]
 
 
 # ---------------------------------------------------------------------------

@@ -19,10 +19,8 @@ returns counts only. `convert_currency`'s rate, date and source are the person's
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import date
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -33,6 +31,7 @@ from engine.doctor.currency import (
     propose_conversion,
     report_in,
 )
+from engine.doctor.tool_spec import DoctorToolSpec
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -202,26 +201,7 @@ ToolKindName = Literal["read", "propose", "ask"]
 Exposure = Literal["session-only", "aggregate"]
 
 
-@dataclass(frozen=True)
-class CurrencyToolSpec(Generic[In, Out]):
-    """One registry entry, as the design §5.2 shapes it, plus who may call it."""
-
-    name: str
-    kind: ToolKindName
-    mode: Literal["rules", "ai", "rules + ai"]
-    description: str
-    input_model: type[In]
-    output_model: type[Out]
-    exposure: Exposure
-    role: Role
-    wraps: str
-    deterministic: bool
-    run: Callable[[In, CurrencyToolContext], Out]
-    proposes: tuple[str, ...] = ()
-    approve_class: bool = False
-    """APPROVE-class (the design §6.6): its own confirmation, the exact sentence, the role named."""
-    person_only: bool = False
-    """Its arguments come only from a person's answer; it is never listed to a model."""
+CurrencyToolSpec = DoctorToolSpec
 
 
 CURRENCY_TOOLS: Final[tuple[CurrencyToolSpec[Any, Any], ...]] = (

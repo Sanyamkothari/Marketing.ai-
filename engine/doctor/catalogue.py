@@ -156,6 +156,7 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     # T. Facts the AI reads before it proposes a meaning (the name lists became hints)
     _R(90, "describe_order_file", "read", "rules + ai", "new"),
     _R(91, "find_test_columns", "read", "rules + ai", "new"),
+    _R(92, "goal_details", "read", "rules + ai", "wrapper", exposure="aggregate"),
 )
 """The design §5.5, row by row."""
 

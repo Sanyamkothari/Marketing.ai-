@@ -66,7 +66,9 @@ __all__ = [
     "DIAGNOSIS_ROWS",
     "LOOK_NUMBERS",
     "AdviceDigest",
+    "GoalDetailsArgs",
     "LookOutput",
+    "PowerVerdicts",
     "ProposeOutput",
     "register_all",
 ]
@@ -669,6 +671,29 @@ class PowerVerdicts(StrictBase):
     use_cases: tuple[UseCaseReadiness, ...] = Field(
         description="Each use case's verdict over the files, ready first."
     )
+    left_out: int = Field(
+        default=0,
+        description="Verdicts left out to fit within the aggregate budget; use goal_details to inspect any goal.",
+    )
+
+
+class GoalDetailsArgs(StrictBase):
+    goal_id: str = Field(
+        description="The use case / goal id to get full details for, e.g. 'retail-win-back'."
+    )
+
+
+def _goal_details(parsed: GoalDetailsArgs, ctx: DataToolContext) -> UseCaseReadiness:
+    from engine.doctor.diagnose import Offer, readiness
+
+    files = list(ctx.files) or [_loaded(ctx, None)]
+    offers = ctx.offers or (Offer(config=_config(ctx), stage=""),)
+    offers = confirmed_tests(offers, files, ctx.case_items or ())
+    verdicts = list(readiness(files, offers, _root(ctx)))
+    match = next((v for v in verdicts if v.use_case_id == parsed.goal_id), None)
+    if match is None:
+        raise DataToolError("GOAL_NOT_FOUND", f"No goal found matching '{parsed.goal_id}'.", status=404)
+    return match
 
 
 def _what_can_this_power(_parsed: NoArgs, ctx: DataToolContext) -> PowerVerdicts:
@@ -678,9 +703,10 @@ def _what_can_this_power(_parsed: NoArgs, ctx: DataToolContext) -> PowerVerdicts
     offers = ctx.offers or (Offer(config=_config(ctx), stage=""),)
     offers = confirmed_tests(offers, files, ctx.case_items or ())
     verdicts = list(readiness(files, offers, _root(ctx)))
+    left_out = 0
 
     def fits() -> bool:
-        shown = PowerVerdicts(use_cases=tuple(verdicts)).model_dump(mode="json")
+        shown = PowerVerdicts(use_cases=tuple(verdicts), left_out=left_out).model_dump(mode="json")
         return output_size(Exposure.AGGREGATE, shown) <= AGGREGATE_BUDGET
 
     # Each ready or check verdict carries its file's first look (about 3.6 KB). A table that powers four or five goals
@@ -710,7 +736,12 @@ def _what_can_this_power(_parsed: NoArgs, ctx: DataToolContext) -> PowerVerdicts
             verdicts[index] = verdicts[index].model_copy(
                 update={"next_steps": steps.model_copy(update={"options": others})}
             )
-    return PowerVerdicts(use_cases=tuple(verdicts))
+    # If the output still exceeds the budget after trims, page by popping verdicts and counting left_out.
+    while len(verdicts) > 1 and not fits():
+        verdicts.pop()
+        left_out += 1
+
+    return PowerVerdicts(use_cases=tuple(verdicts), left_out=left_out)
 
 
 TEST_COLUMN_KIND: Final[str] = "treatment_column"
@@ -968,6 +999,21 @@ def register_all(registry: DataToolRegistry) -> None:
             },
         ),
         (
+            92,
+            "goal_details",
+            "Detailed readiness verdict for one specific use case / goal by id.",
+            GoalDetailsArgs,
+            UseCaseReadiness,
+            _goal_details,
+            (),
+            {
+                "available": _file_or_files,
+                "wraps": "engine/doctor/diagnose.py:153 readiness",
+                "route_policy": _VERDICT_POLICY,
+                "exposure": Exposure.AGGREGATE,
+            },
+        ),
+        (
             37,
             "enough_data",
             "What is short for the use case, by how much, what can be done now and what to collect.",
@@ -1029,7 +1075,7 @@ def register_all(registry: DataToolRegistry) -> None:
                 route_policy=extra.get("route_policy", _DOCTOR_POLICY),
                 exposure=extra.get("exposure", Exposure.SESSION_ONLY),
                 run=run,
-                callers=_RULES_AND_SCREEN,
+                callers=extra.get("callers", _RULES_AND_SCREEN),
                 needs=needs,
                 available=extra.get("available", lambda _ctx: True),
                 max_output_bytes=extra.get("max_output_bytes", BY_EXPOSURE),

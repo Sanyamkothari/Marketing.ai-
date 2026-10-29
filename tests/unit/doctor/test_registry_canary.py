@@ -123,6 +123,7 @@ SPECS: dict[str, Calls | None] = {
     ),
     "how_files_fit": _fixed({}),
     "what_can_this_power": _fixed({}),
+    "goal_details": _fixed({"goal_id": "targeted-advertisement"}),
     "enough_data": _fixed({"outcome": "converted_30d"}),
     "data_request": _fixed({}),
     "find_time_columns": _fixed({}, {"upload_id": CUSTOMERS}, {"upload_id": EVENTS}),

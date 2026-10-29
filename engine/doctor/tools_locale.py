@@ -21,9 +21,7 @@ whether it may be offered at all. No tool here applies anything.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,6 +29,7 @@ from engine.access.roles import Role
 from engine.doctor.india_ids import detect_india_ids
 from engine.doctor.indian_values import propose_indian_booleans, propose_indian_numbers
 from engine.doctor.locale import LocaleProfile, detect_locale
+from engine.doctor.tool_spec import DoctorToolSpec
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -163,23 +162,7 @@ ToolKindName = Literal["read", "propose", "ask"]
 Exposure = Literal["session-only", "aggregate"]
 
 
-@dataclass(frozen=True)
-class LocaleToolSpec(Generic[In, Out]):
-    """One registry entry, as the design §5.2 shapes it."""
-
-    name: str
-    kind: ToolKindName
-    mode: Literal["rules", "ai", "rules + ai"]
-    description: str
-    input_model: type[In]
-    output_model: type[Out]
-    exposure: Exposure
-    role: Role
-    wraps: str
-    deterministic: bool
-    run: Callable[[In, LocaleToolContext], Out]
-    proposes: tuple[str, ...] = ()
-    """For PROPOSE: the recipe step kinds it may return (what M233's policy rule set allows)."""
+LocaleToolSpec = DoctorToolSpec
 
 
 LOCALE_TOOLS: Final[tuple[LocaleToolSpec[Any, Any], ...]] = (

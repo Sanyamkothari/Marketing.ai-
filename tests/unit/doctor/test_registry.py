@@ -78,6 +78,7 @@ FIRST_WRAPPERS = {
     38: "data_request",
     40: "find_time_columns",
     71: "recall_treatment",
+    92: "goal_details",
 }
 EVIDENCE_ID = re.compile(r"ev_[a-p]{16}")
 
@@ -183,17 +184,18 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
 def test_the_catalogue_is_the_designs_eighty_tools() -> None:
     """The design's 80 tools in 81 rows, and since Plan O M236 (DEC-1806) M240's two READ tools as #82, #83."""
     counted = [entry for entry in CATALOGUE if entry.counted_with is None]
-    assert len(CATALOGUE) == 90
-    assert [e.number for e in CATALOGUE] == [n for n in range(1, 92) if n != 30]  # #30 was dropped
-    assert len(counted) == 89
-    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 28, "new": 39}
+    assert len(CATALOGUE) == 91
+    assert [e.number for e in CATALOGUE] == [n for n in range(1, 93) if n != 30]  # #30 was dropped
+    assert len(counted) == 90
+    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 29, "new": 39}
     kinds = Counter(e.kind for e in counted)
     assert kinds["propose"] == 28 and kinds["ask"] == 4
     assert {e.name for e in CATALOGUE if e.exposure == "aggregate"} == {
         "what_can_this_power",
         "check_readiness",
+        "goal_details",
     }
-    assert len({e.name for e in CATALOGUE}) == 90
+    assert len({e.name for e in CATALOGUE}) == 91
     assert [(e.number, e.name, e.kind) for e in CATALOGUE[80:]] == [
         (82, "read_workbook_sheets", "read"),
         (83, "find_excel_serial_dates", "read"),
@@ -205,6 +207,7 @@ def test_the_catalogue_is_the_designs_eighty_tools() -> None:
         (89, "check_history", "read"),
         (90, "describe_order_file", "read"),
         (91, "find_test_columns", "read"),
+        (92, "goal_details", "read"),
     ]
     assert not EXECUTOR_NAMES & {e.name for e in CATALOGUE}, "an executor is never in the catalogue"
 
@@ -217,8 +220,8 @@ def test_only_aggregate_tools_may_be_listed_on_mcp_and_plan_o_lists_none(
     listed = data_registry().mcp_surface()
     assert listed, "a later plan could list the aggregate verdicts"
     assert all(tool.exposure is Exposure.AGGREGATE for tool in listed)
-    # The catalogue's two aggregates (#36, and M234's #69 since the wave 1 integration).
-    assert {tool.name for tool in listed} == {"what_can_this_power", "check_readiness"}
+    # The catalogue's aggregate tools (#36, #69, and #92).
+    assert {tool.name for tool in listed} == {"what_can_this_power", "check_readiness", "goal_details"}
 
 
 def test_the_mcp_surface_lists_no_data_doctor_tool(tmp_path: Path) -> None:
@@ -768,3 +771,21 @@ def test_a_table_that_powers_many_goals_still_gets_its_verdicts_with_the_best_fi
     assert len(verdicts) == 5, "every goal still has its verdict"
     assert verdicts[0]["first_look"] is not None, "the best goal keeps its first look"
     assert verdicts[-1]["first_look"] is None, "the last ones give theirs up to fit"
+
+
+def test_what_can_this_power_pages_verdicts_when_budget_exceeded() -> None:
+    from engine.config import load_use_case
+    from tests.unit.doctor import chat_support, visit_support
+
+    config = load_use_case("targeted-advertisement")
+    loaded = visit_support.loaded("u_many", "orders.csv", chat_support.orders_frame(), config)
+    ctx = DataToolContext(
+        files=(loaded,), offers=tuple(Offer(config=config, stage="") for _ in range(30)), principal=VIEWER
+    )
+    result = data_registry().call("what_can_this_power", {}, ctx)
+    assert result.output["left_out"] > 0
+    assert len(result.output["use_cases"]) >= 1
+
+    # And goal_details retrieves the full verdict for that goal
+    details = data_registry().call("goal_details", {"goal_id": config.id}, ctx)
+    assert details.output["use_case_id"] == config.id

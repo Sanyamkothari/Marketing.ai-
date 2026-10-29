@@ -29,16 +29,15 @@ Two things the integrator's context must provide (the case is M231's, not on thi
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from engine.agent.formats import find_excel_serial_dates
 from engine.config import StrictBase
 from engine.doctor.parser_loss import ParserLossReport, check_parser_loss
+from engine.doctor.tool_spec import DoctorToolSpec
 from engine.intake.config import IntakeConfig
 from engine.intake.other_formats import read_other_format
 from engine.intake.sheets import split_workbook
@@ -103,23 +102,7 @@ class _Model(StrictBase):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-@dataclass(frozen=True)
-class FormatToolSpec:
-    """One tool, shaped like the design's registry entry (section 5.2)."""
-
-    name: str
-    kind: ToolKind
-    mode: Literal["rules", "ai"]
-    exposure: Exposure
-    role: Literal["viewer", "analyst", "approver", "admin"]
-    """The least role that may call it (`RoutePolicy.role`); every READ tool is open to a Viewer."""
-    description: str
-    wraps: str
-    input_model: type[BaseModel]
-    output_model: type[BaseModel]
-    run: Callable[[Any, FormatToolContext], BaseModel]
-    step_kinds: tuple[str, ...] = ()
-    """The step kinds its result proposes, pending (M233: the registry decides them by the tool's rule set)."""
+FormatToolSpec = DoctorToolSpec[Any, Any]
 
 
 # ---------------------------------------------------------------------------
