@@ -279,10 +279,13 @@ def _finding(
     *,
     hard: bool = False,
     file: str | None = None,
+    named: str | None = None,
 ) -> PlanFinding:
     """A guard finding as the ledger holds it. Its subject is the step, or else the file's plan (`file`, an upload
     id): the key is the code and the subject, never the count, so a yes given to one file's stop never carries
-    to another file's. Two findings of one code about one subject are told apart by their number.
+    to another file's. Two findings of one code about one subject are told apart by their number. `named`: the file's
+    name, said first in a stop about the plan as a whole when the plan has several files, so two files' stops (each
+    with its own yes) are not two copies of one sentence.
     """
     subject = item_id or (f"plan:{file}" if file else "plan")
     place = (found.code, subject)
@@ -293,7 +296,7 @@ def _finding(
         key=sha256_hex(canonical_bytes([found.code, subject]))[:16],
         level=found.level,
         code=found.code,
-        text=found.message,
+        text=f"{named}: {found.message}" if named and item_id is None else found.message,
         item_id=item_id,
         detail=found.detail,
         count=found.count,
@@ -480,7 +483,12 @@ def materialize_plan(
         receipts.extend(made)
         mine_found = tuple(
             _finding(
-                f, by_order.get(f.order) if f.order is not None else None, scope, seen, file=loaded.upload_id
+                f,
+                by_order.get(f.order) if f.order is not None else None,
+                scope,
+                seen,
+                file=loaded.upload_id,
+                named=file_name if len(plans) > 1 else None,
             )
             for f in guarded.findings
         )

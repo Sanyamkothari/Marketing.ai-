@@ -161,17 +161,6 @@ def _step_row(receipt: Receipt, item_id: str) -> dict[str, JsonValue]:
     }
 
 
-def one_per_key(found: Sequence[PlanFinding]) -> tuple[PlanFinding, ...]:
-    """One finding per key, where it first stood; of two with the same key the one that counts more rows wins. A stop
-    the guards raise per file (`PLAN_LOSES_TOO_MUCH`) is one stop on the screen, with one yes."""
-    by_key: dict[str, PlanFinding] = {}
-    for f in found:
-        had = by_key.get(f.key)
-        if had is None or (f.count or 0) > (had.count or 0):
-            by_key[f.key] = f
-    return tuple(by_key.values())
-
-
 def plan_check_of(prepared: Prepared, *, basis: str | None = None) -> PlanCheck:
     """What the guards counted when the plan was materialised, as the case keeps it (the ledger and the findings).
     `basis` is set when every row of the files was counted (see :attr:`PlanCheck.basis`).
@@ -180,7 +169,7 @@ def plan_check_of(prepared: Prepared, *, basis: str | None = None) -> PlanCheck:
     """
     steps = [_step_row(receipt, item_id) for item_id, receipt in prepared.receipts]
     if not steps:
-        return PlanCheck(digest=prepared.digest, findings=one_per_key(prepared.findings), basis=basis)
+        return PlanCheck(digest=prepared.digest, findings=prepared.findings, basis=basis)
     totals = {"rows_in": 0, "rows_out": 0, "customers_in": 0, "customers_out": 0}
     counted = True
     customer_tables = 0  # a log's rows (orders, payments) are never added to the customers
@@ -212,9 +201,7 @@ def plan_check_of(prepared: Prepared, *, basis: str | None = None) -> PlanCheck:
         "sampled_from": sampled if sampled > totals["rows_in"] else None,
         "steps": list(steps),
     }
-    return PlanCheck(
-        digest=prepared.digest, ledger=view, findings=one_per_key(prepared.findings), basis=basis
-    )
+    return PlanCheck(digest=prepared.digest, ledger=view, findings=prepared.findings, basis=basis)
 
 
 def check_plan(
@@ -258,11 +245,7 @@ def with_full_findings(check: PlanCheck, found: Sequence[PlanFinding]) -> PlanCh
     # what the last check said (readiness) goes; the guards' findings stay unless the new ones say it again
     kept = tuple(f for f in check.findings if f.key not in keys and f.source != "readiness")
     return check.model_copy(
-        update={
-            "findings": one_per_key((*kept, *found)),
-            "basis": check.basis or check.digest,
-            "verified": True,
-        }
+        update={"findings": (*kept, *found), "basis": check.basis or check.digest, "verified": True}
     )
 
 
@@ -287,7 +270,7 @@ def open_stops(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement])
     """The stops nobody has said yes to (:func:`stop_is_open`)."""
     if check is None:
         return []
-    return [f for f in one_per_key(check.findings) if stop_is_open(f, acknowledged)]
+    return [f for f in check.findings if stop_is_open(f, acknowledged)]
 
 
 def acknowledged_codes(visit: CaseVisit | None, items: Sequence[CaseItem] = ()) -> tuple[str, ...] | None:
@@ -328,7 +311,7 @@ def ledger_view(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement]
     if check is None:
         return None
     shown: list[dict[str, Any]] = []
-    for found in sorted(one_per_key(check.findings), key=lambda f: _ORDER[f.level]):
+    for found in sorted(check.findings, key=lambda f: _ORDER[f.level]):
         ack = found.level == "stop" and not found.hard and not stop_is_open(found, acknowledged)
         shown.append(
             {

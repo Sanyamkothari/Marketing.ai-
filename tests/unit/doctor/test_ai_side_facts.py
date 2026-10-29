@@ -87,6 +87,19 @@ def test_a_feature_named_for_its_window_sets_that_window_and_a_failed_check_sets
     assert ungrounded_numbers("At least 4,000 customers.", mine) == ["4,000"]
 
 
+def test_only_the_window_suffix_of_a_name_is_a_setting_never_other_digits_or_a_querys_name() -> None:
+    for args in (
+        {"features": [{"name": "buyers_8812", "expr": "count(*)"}]},
+        {"name": "step_8812", "sql": "select 1"},
+    ):
+        mine = grounded_numbers(own_numbers(args))
+        assert ungrounded_numbers("There are 8,812 buyers.", mine) == ["8,812"]
+    spend = grounded_numbers(
+        own_numbers({"features": [{"name": "spend_90_days"}, {"name": "visits_30d_total"}]})
+    )
+    assert ungrounded_numbers("Spend over 90 days and visits in 30 days.", spend) == []
+
+
 def test_a_refused_number_is_named_with_how_to_fix_it() -> None:
     checker = _Checker(
         grounded=grounded_numbers([{"customers": 1134}]), names=(), guardrails=Guardrails(load_policy())

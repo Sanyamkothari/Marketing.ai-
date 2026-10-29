@@ -32,7 +32,7 @@ from engine.doctor import visit
 from engine.doctor.case import Case, CaseError, CaseFile, CaseItem, CaseStore, VisitState, payload_digest
 from engine.doctor.goal_brief import load_goal_brief
 from engine.doctor.materialize import Full, Sample, materialize_plan, table_names
-from engine.doctor.plan_check import ledger_view, one_per_key, open_stops
+from engine.doctor.plan_check import open_stops
 from engine.doctor.protocol import item_sentence
 from engine.doctor.screen import build_screen
 from engine.doctor.visit import VerifyResult, VisitDeps
@@ -678,22 +678,27 @@ def test_a_step_that_cannot_run_is_hard_in_every_form_and_its_file_is_recorded_a
     assert all(f.hard for f in prepared.findings if f.level == "stop")
 
 
-def test_a_stop_raised_twice_is_one_stop_on_the_screen_and_in_the_yes_list() -> None:
-    def stop(count: int) -> PlanFinding:
-        return PlanFinding(
-            level="stop",
-            code="PLAN_LOSES_TOO_MUCH",
-            key="PLAN_LOSES_TOO_MUCH:plan",
-            text="Too many.",
-            count=count,
-        )
-
-    other = PlanFinding(level="flag", code="STEP_NOT_COUNTED", key="STEP_NOT_COUNTED:s1", text="Not counted.")
-    check = PlanCheck(digest="d", findings=(stop(40), other, stop(90)))
-    assert [(f.key, f.count) for f in one_per_key(check.findings)] == [
-        ("PLAN_LOSES_TOO_MUCH:plan", 90),
-        ("STEP_NOT_COUNTED:s1", None),
-    ], "the bigger count stands where the first stood"
-    assert len(open_stops(check, [])) == 1
-    shown = ledger_view(check, [])
-    assert shown is not None and [f["code"] for f in shown["findings"]].count("PLAN_LOSES_TOO_MUCH") == 1
+def test_two_files_that_each_lose_too_much_are_two_stops_that_name_their_file() -> None:
+    files, case_files, items = _orders_case(2_000, 0.3)
+    again = vs.loaded("up-d", "customers_late.csv", files[0].frame, load_use_case(GOAL_A))
+    step = {**items[0].payload, "upload_id": "up-d"}
+    other = items[0].model_copy(
+        update={
+            "item_id": "remove.d",
+            "upload_id": "up-d",
+            "payload": step,
+            "payload_digest": payload_digest(step),
+        }
+    )
+    both = [
+        *case_files,
+        CaseFile(upload_id="up-d", file_name="customers_late.csv", added_at=T0, added_by=ANALYST),
+    ]
+    prepared = materialize_plan(both, [*items, other], [*files, again], Full())
+    stops = [f for f in prepared.findings if f.code == "PLAN_LOSES_TOO_MUCH"]
+    assert len({f.key for f in stops}) == 2, "each file's stop has its own yes"
+    assert sorted(f.text.split(":")[0] for f in stops) == ["customers.csv", "customers_late.csv"]
+    alone = materialize_plan(case_files, items, files, Full())
+    assert [
+        f.text.startswith("customers.csv:") for f in alone.findings if f.code == "PLAN_LOSES_TOO_MUCH"
+    ] == [False]

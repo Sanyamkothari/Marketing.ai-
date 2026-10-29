@@ -255,6 +255,10 @@ def _expect_problems(exc: ValidationError) -> str:
     return f"`expect` is not valid: {'; '.join(found[:6])}. Allowed fields: {allowed}."[:600]
 
 
+_NAME_WINDOW: Final = re.compile(r"_(\d{1,4})(?:d|_?days?)(?![A-Za-z0-9])")
+"""The window a feature's name states (`orders_365d`, `spend_90_days`): only that suffix, never other digits."""
+
+
 def own_numbers(value: Any, key: str = "") -> list[Any]:
     """The numbers an accepted action's arguments set (`outcome_window_days: 90`, `as_of: "2011-09-01"`): settings
     the AI chose and the engine took, which it may repeat. The `expect` bounds are predictions about the data, not
@@ -265,11 +269,11 @@ def own_numbers(value: Any, key: str = "") -> list[Any]:
     if isinstance(value, (int, float)):
         return [value]
     if isinstance(value, str):
-        if key == "name":  # a feature called `orders_365d` sets the window 365
-            return re.findall(r"\d+", value)
         return [value] if key in {"as_of", "training_as_of"} else []
     if isinstance(value, dict):
-        return [
+        named = value.get("name") if key == "features" else None
+        window = [int(n) for n in _NAME_WINDOW.findall(named)] if isinstance(named, str) else []
+        return window + [
             n
             for k, v in value.items()
             if k not in _ARGUMENT_TEXT and k != "expect"
