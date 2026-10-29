@@ -3,8 +3,7 @@
 The plan's acceptance for M243, at the engine (the API and the scheduled paths are in
 `tests/integration/test_prescription_runs.py`):
 
-* next month's training file replays every part (intake, locale, currency, recipe, contract, outcome; with a build:
-  the build and the post-build recipe);
+* next month's training file replays every part (intake, locale, currency, recipe, contract, outcome, post-build recipe);
 * scoring with a single-file recipe is byte-identical to today (a `DataRecipe` reads as a one-part prescription);
 * a contract breach that breaks a step is `PRESCRIPTION_DRIFT`; one that breaks no step is a warning and a question;
   a changed column, a new value, a new currency or a different locale stops and asks - and nothing is re-learnt;
@@ -27,21 +26,17 @@ import pytest
 
 from engine.agent.contracts import RecipeStepKind
 from engine.agent.dataset_recipe import run_saved_recipe
-from engine.config import LabelDefinition, LabelType, load_use_case
+from engine.config import load_use_case
 from engine.doctor import prescription as prescription_module
 from engine.doctor import prescription_contract
-from engine.doctor.build_driver import approval_for as build_approval
-from engine.doctor.build_driver import drive_builder, plan_build
 from engine.doctor.case import CaseStore
 from engine.doctor.currency import money_basis
 from engine.doctor.outcome_definition import OutcomeDefinition
 from engine.doctor.prescription import (
     PRESCRIPTION_CODES,
     PRESCRIPTION_DRIFT,
-    BuildPart,
     CasePrescriber,
     FilePart,
-    GoalSection,
     IntakeDecision,
     LocalePart,
     OutcomePart,
@@ -50,22 +45,17 @@ from engine.doctor.prescription import (
     Provenance,
     SettingChoice,
     load_prescription,
-    make_prescription,
     one_part,
     prescription_hash,
     prescription_key,
     save_prescription,
-    slot_name,
 )
 from engine.doctor.prescription_contract import ColumnContract, DataContract, learn_contract
-from engine.doctor.prescription_replay import ReplayFile, replay_prescription
+from engine.doctor.prescription_replay import ReplayFile
 from engine.doctor.prescription_runs import bound
 from engine.storage import LocalStorage
 from tests.unit.doctor import prescription_support as ps
 from tests.unit.doctor import visit_support as vs
-from tests.unit.doctor.m237_support import RecordingBuilder, diagnosis, frames
-
-LABEL = LabelDefinition(name="churn_next_60d", type=LabelType.EVENT_ABSENCE, role="bills", horizon_days=60)
 
 
 @pytest.fixture(scope="module")
@@ -85,7 +75,7 @@ def _stopped(
     monkeypatch.setattr(prescription_module, "learn_contract", never)
     before = approved.model_dump_json()
     with pytest.raises(PrescriptionError) as stopped:
-        replay_prescription(approved, [ps.replay_file(frame, **extra)], mode="train")
+        ps.replay(approved, [ps.replay_file(frame, **extra)], mode="train")
     assert approved.model_dump_json() == before, "the approved prescription is never changed by a replay"
     return stopped.value
 
@@ -266,15 +256,15 @@ def test_scoring_with_a_single_file_recipe_is_byte_identical_to_today() -> None:
     october = ps.october()
     today = run_saved_recipe(october, recipe, config, upload_id="u_oct", leak_check="narrow")
     part = one_part(recipe)
-    assert part.files == (FilePart(slot="file", recipe=recipe),) and part.build is None and part.goals == ()
-    replayed = replay_prescription(
+    assert part.files == (FilePart(slot="file", recipe=recipe),) and part.goals == ()
+    replayed = ps.replay(
         part, [ReplayFile(slot="file", frame=october, upload_id="u_oct")], mode="score", config=config
     )
     assert replayed.frame is not None
     assert _parquet(replayed.frame) == _parquet(today.frame)
-    (receipt,) = replayed.receipt.recipe_receipts
+    (receipt,) = replayed.recipe_receipts
     assert receipt.model_dump(exclude={"created_at"}) == today.receipt.model_dump(exclude={"created_at"})
-    assert replayed.receipt.replayed() == ("recipe",), "nothing else is in a one-part prescription"
+    assert replayed.replayed == ("recipe",), "nothing else is in a one-part prescription"
     assert one_part(recipe).prescription_hash == part.prescription_hash
 
 
@@ -283,9 +273,9 @@ def test_scoring_with_a_single_file_recipe_is_byte_identical_to_today() -> None:
 # ---------------------------------------------------------------------------
 def test_next_months_training_file_replays_every_part(approved: Prescription) -> None:
     october = ps.october()
-    replayed = replay_prescription(approved, [ps.replay_file(october)], mode="train")
-    assert replayed.receipt.replayed() == ("intake", "locale", "currency", "recipe", "contract", "outcome")
-    assert replayed.receipt.warnings == ()
+    replayed = ps.replay(approved, [ps.replay_file(october)], mode="train")
+    assert replayed.replayed == ("recipe", "contract", "outcome")
+    assert replayed.warnings == ()
     frame = replayed.frame
     assert frame is not None
     # The conversion replays with its frozen rate, date and source (never proposed again).
@@ -294,87 +284,17 @@ def test_next_months_training_file_replays_every_part(approved: Prescription) ->
     assert frame["amount"].tolist() == pytest.approx((dollars[kept] * 83.1).tolist())
     # The approved outcome, by its hash: Churned is yes, Active no, Suspended left out and counted.
     assert set(frame["status"]) == {0, 1}
-    outcome = replayed.receipt.outcome
+    outcome = replayed.outcome
     assert outcome is not None and outcome.excluded == int((~kept).sum()) and outcome.rows_out == len(frame)
     assert set(frame["active"].dropna()) <= {0.0, 1.0}
 
 
 def test_scoring_replays_every_part_but_the_outcome(approved: Prescription) -> None:
     october = ps.october().drop(columns=["status"])
-    replayed = replay_prescription(approved, [ps.replay_file(october)], mode="score")
-    assert "outcome" not in replayed.receipt.replayed()
-    assert replayed.receipt.replayed() == ("intake", "locale", "currency", "recipe", "contract")
+    replayed = ps.replay(approved, [ps.replay_file(october)], mode="score")
+    assert "outcome" not in replayed.replayed
+    assert replayed.replayed == ("recipe", "contract")
     assert replayed.frame is not None and len(replayed.frame) == len(october)
-
-
-def _build_prescription() -> tuple[Prescription, dict[str, pd.DataFrame]]:
-    loaded = frames()
-    plan = plan_build(diagnosis(loaded), loaded, use_case="rca", label_spec=LABEL)
-    port = RecordingBuilder()
-    drive_builder(plan, loaded, port, build_approval(plan, user_id=ps.ANALYST, at=ps.NOW))
-    record = port.records["spec_1"]
-    post_build = ps.recipe(
-        (ps.step(RecipeStepKind.MAP_VALUES, "region", mapping={"North": "Northern"}),),
-        primary_key="entity_key",
-        target="churn_next_60d",
-    )
-    event = OutcomeDefinition(
-        kind="event_absence",
-        name="churn_next_60d",
-        entity_upload_id="u_list",
-        entity_id_column="customer_id",
-        event_upload_id="u_jan",
-        event_id_column="customer_id",
-        date_column="invoice_date",
-        event_role="bills",
-        days=60,
-        censoring="leave_out",
-    )
-    parts = tuple(
-        FilePart(slot=slot_name(source.source_name), upload_ids=source.upload_ids)
-        for source in (plan.entity, *plan.events)
-    )
-    made = make_prescription(
-        files=parts,
-        build=BuildPart(record=record, dataset_id="ds_1"),
-        post_build=post_build,
-        goals=(GoalSection(goal_id="rca", active=True, outcome=OutcomePart(definition=event)),),
-        provenance=Provenance(created_at=ps.NOW),
-    )
-    return made, loaded
-
-
-def test_a_built_dataset_replays_its_build_and_its_post_build_recipe() -> None:
-    made, loaded = _build_prescription()
-    april = loaded["u_mar"].rename(columns={"bill_amount": "amount"})
-    april["invoice_date"] = april["invoice_date"].str.replace("2025-03", "2025-04")
-    built = pd.DataFrame(
-        {
-            "entity_key": [f"CUST-{n:05d}" for n in range(1, 121)],
-            "region": ["North", "South", "East"] * 40,
-            "churn_next_60d": [0, 1] * 60,
-        }
-    )
-    port = RecordingBuilder()
-    replayed = replay_prescription(
-        made,
-        [
-            ReplayFile(slot="customers.csv", frame=loaded["u_list"]),
-            ReplayFile(slot="bills_stacked.csv", frame=loaded["u_mar"]),
-            ReplayFile(slot="bills_stacked.csv", frame=april),
-        ],
-        mode="train",
-        builder=port,
-        load_built=lambda dataset_id: built if dataset_id == "ds_1" else pd.DataFrame(),
-    )
-    assert replayed.receipt.replayed() == ("build", "outcome", "post_build")
-    assert port.calls[-1] == ("build", {"spec_id": "spec_1", "mode": "train"})
-    assert replayed.receipt.build is not None and replayed.receipt.build.dataset_id == "ds_1"
-    assert replayed.frame is not None and "North" not in set(replayed.frame["region"])
-    assert (replayed.frame["region"] == "Northern").sum() == 40
-    with pytest.raises(PrescriptionError) as stopped:
-        replay_prescription(made, [ReplayFile(slot="customers.csv", frame=loaded["u_list"])], mode="score")
-    assert stopped.value.code == PRESCRIPTION_DRIFT and stopped.value.findings[0].detector == "MISSING_FILE"
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +381,7 @@ def test_a_breach_that_breaks_no_step_is_a_warning_and_a_question(approved: Pres
     october["tenure_months"] = range(len(october))
     october.loc[: len(october) // 4, "spend"] = None
     october.loc[:59, "city"] = "City 99"
-    replayed = replay_prescription(approved, [ps.replay_file(october)], mode="train")
+    replayed = ps.replay(approved, [ps.replay_file(october)], mode="train")
     found = {(w.detector, w.column) for w in replayed.warnings}
     assert {("NEW_COLUMN", "tenure_months"), ("VALUE_DRIFT", "spend"), ("NEW_CATEGORY", "city")} <= found
     assert all(not w.stops and not w.question.blocking for w in replayed.warnings)
@@ -596,11 +516,3 @@ def test_the_intake_decision_is_what_a_different_read_would_break() -> None:
         "header_rows": 1,
         "turned_off": False,
     }
-
-
-def test_guided_setups_record_names_its_recipe_as_a_one_part_prescription() -> None:
-    from api.routes.agent import _one_part_hash
-
-    recipe = ps.recipe()
-    assert _one_part_hash(recipe) == one_part(recipe).prescription_hash
-    assert _one_part_hash(None) is None

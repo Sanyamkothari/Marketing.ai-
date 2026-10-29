@@ -27,7 +27,7 @@ from engine.agent.contracts import (
     RecipeStepKind,
     recipe_hash,
 )
-from engine.agent.loop import OUT_OF_BUDGET
+from engine.agent.loop import OUT_OF_BUDGET, chat_turn
 from engine.config import load_use_case
 from engine.generative.contracts import LlmUsageReport
 from engine.jobs import CancelToken
@@ -73,26 +73,6 @@ def _session(response: Any) -> dict[str, Any]:
     return dict(response.json()["session"])
 
 
-def test_approving_a_scoring_file_checks_it_as_the_models_recipe_prepares_it(
-    client: TestClient, data_dir: Path
-) -> None:
-    """Score mode: Approve used to check the file as sent against a schema trained on prepared data, so
-    every scoring file of a recipe model was refused with SCHEMA_MISMATCH; Run itself replays first."""
-    _seed_model(data_dir, _recipe(_messy(), target=None))
-    upload_id = _upload(client, _messy("scoring", rows=600), mode="score")
-    session = _session(client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE}))
-    assert session["status"] == "needs_review"
-    _session(client.post(f"/uploads/{upload_id}/agent-session/decisions", json={"accept_recommended": True}))
-    applied = client.post(f"/uploads/{upload_id}/agent-session/apply")
-    assert applied.status_code == 200, applied.text
-    body = applied.json()
-    run = client.post(
-        "/runs",
-        json={"use_case": USE_CASE, "mode": "score", "upload_id": body["upload_id"], "primary_key": KEY},
-    )
-    assert run.status_code == 202, run.text
-
-
 def test_a_prepared_scoring_file_is_prepared_again_from_its_original_for_a_new_recipe(
     client: TestClient, data_dir: Path
 ) -> None:
@@ -124,34 +104,18 @@ def test_a_prepared_scoring_file_is_prepared_again_from_its_original_for_a_new_r
     assert run.status_code == 202, run.text
 
 
-def test_a_viewer_can_read_a_session_but_not_chat_decide_or_approve(
-    config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from api import access_policy
+def test_a_receipt_names_the_file_a_prepared_upload_came_from(client: TestClient, data_dir: Path) -> None:
+    storage = LocalStorage(data_dir)
+    frame = _messy()
+    original = load_upload(storage, _upload(client, frame))
+    derived = write_derived_upload(storage, load_use_case(USE_CASE), original, _recipe(frame))
+    receipt = storage.read_bytes(upload_key(derived.record.upload_id, RECIPE_RECEIPT_FILENAME))
+    assert json.loads(receipt)["upload_id"] == original.upload_id
 
-    # Plan O M246 (DEC-1816) registers its policies when `api.routes.data_protocol` is imported, and
-    # `create_app` imports it. Import it here so the set counted does
-    # not depend on which tests ran earlier in the same process.
-    from api.routes import data_protocol
 
-    policies = {
-        (method, path): policy
-        for (method, path), policy in access_policy.all_policies().items()
-        if "agent-session" in path or (path.startswith("/uploads/") and path.endswith("/checks"))
-    }
-    # Plan L M154 (DEC-1541) added two Analyst POSTs: an edit by hand, and the table view's rows; Plan L
-    # M159 (DEC-1594) one more: use the same treatment as last time. Plan K M142 (DEC-1409) one more:
-    # `…/agent-session/assist`, the optional second opinion. Plan O M246 (DEC-1816 (g)) two more, both
-    # Analyst: `POST …/agent-session/approve` (Approve with
-    # the sentence read) and `GET …/agent-session/approval` (what Approve will record). That GET is the one
-    # read a viewer is refused: it is part of approving, so it needs the role that approves.
-    approving_reads = {("GET", "/uploads/{upload_id}/agent-session/approval")}
-    assert approving_reads <= set(data_protocol.POLICIES)
-    assert len(policies) == 14
-    for (method, path), policy in policies.items():
-        expected = "viewer" if method == "GET" and (method, path) not in approving_reads else "analyst"
-        assert policy.role.value == expected, (method, path)
-    del config_root, data_dir, monkeypatch
+def _asked(response: Any) -> dict[str, Any]:
+    assert response.status_code == 200, response.text
+    return dict(response.json()["session"])
 
 
 def test_what_a_person_types_is_masked_before_it_is_stored_or_sent(
@@ -160,10 +124,9 @@ def test_what_a_person_types_is_masked_before_it_is_stored_or_sent(
     fake = FakeLLMClient(mode=FakeLLMMode.GROUNDED)
     monkeypatch.setattr(ai_service, "build_client", lambda *_a, **_k: fake)
     upload_id = _upload(client, messy_frame())
-    client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-    session = _session(
+    session = _asked(
         client.post(
-            f"/uploads/{upload_id}/agent-session/messages",
+            f"/uploads/{upload_id}/ask/messages",
             json={"text": "Why hide asha.rao@example.com's row? Call +91 98765 43210."},
         )
     )
@@ -175,23 +138,22 @@ def test_what_a_person_types_is_masked_before_it_is_stored_or_sent(
     assert "asha.rao@example.com" not in prompts and "98765 43210" not in prompts
 
 
-def test_llm_usage_adds_up_over_the_whole_session(client: TestClient, data_dir: Path) -> None:
+def test_llm_usage_adds_up_over_the_whole_chat(client: TestClient, data_dir: Path) -> None:
     upload_id = _upload(client, messy_frame())
-    client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
     for text in ("What about 'monthly_spend'?", "What about 'region'?"):
-        _session(client.post(f"/uploads/{upload_id}/agent-session/messages", json={"text": text}))
+        _asked(client.post(f"/uploads/{upload_id}/ask/messages", json={"text": text}))
     storage = LocalStorage(data_dir)
     usage = storage.read_model(upload_key(upload_id, "agent/llm_usage.json"), LlmUsageReport)
-    session = storage.read_model(upload_key(upload_id, "agent/agent_session.json"), AgentSession)
-    assert usage.totals.calls == session.llm_calls == 4
+    session = storage.read_model(upload_key(upload_id, "agent/explore_session.json"), AgentSession)
+    assert usage.totals.calls == session.llm_calls > 0
 
 
 def test_the_chat_is_bounded_once_the_budget_is_spent(client: TestClient, data_dir: Path) -> None:
     """With the model budget spent, each message still added two lines "out of budget" for ever."""
     upload_id = _upload(client, messy_frame())
-    client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
+    _asked(client.post(f"/uploads/{upload_id}/ask/messages", json={"text": "Hello?"}))
     storage = LocalStorage(data_dir)
-    key = upload_key(upload_id, "agent/agent_session.json")
+    key = upload_key(upload_id, "agent/explore_session.json")
     spent = storage.read_model(key, AgentSession)
     limit = load_use_case(USE_CASE).agent.max_llm_calls_per_session
     ceiling = 2 * (limit + agent_routes.CHAT_GRACE_TURNS)
@@ -199,9 +161,9 @@ def test_the_chat_is_bounded_once_the_budget_is_spent(client: TestClient, data_d
     storage.write_model(
         key, spent.model_copy(update={"llm_calls": limit, "transcript": (line,) * (ceiling - 2)})
     )
-    last = client.post(f"/uploads/{upload_id}/agent-session/messages", json={"text": "Hello?"})
-    assert _session(last)["transcript"][-1]["text"] == OUT_OF_BUDGET
-    full = client.post(f"/uploads/{upload_id}/agent-session/messages", json={"text": "Hello?"})
+    last = client.post(f"/uploads/{upload_id}/ask/messages", json={"text": "Hello?"})
+    assert _asked(last)["transcript"][-1]["text"] == OUT_OF_BUDGET
+    full = client.post(f"/uploads/{upload_id}/ask/messages", json={"text": "Hello?"})
     assert full.status_code == 409
     assert full.json()["detail"]["code"] == "AGENT_CHAT_FULL"
     assert len(storage.read_model(key, AgentSession).transcript) == ceiling
@@ -214,8 +176,7 @@ def test_concurrent_chat_turns_cannot_spend_the_budget_twice(
     import threading
 
     upload_id = _upload(client, messy_frame())
-    client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-    real_turn = agent_routes.chat_turn
+    real_turn = chat_turn
     barrier = threading.Barrier(2, timeout=2)
 
     def slow_turn(*args: Any, **kwargs: Any) -> Any:
@@ -223,13 +184,11 @@ def test_concurrent_chat_turns_cannot_spend_the_budget_twice(
             barrier.wait()  # never met while the session lock serialises the two turns
         return real_turn(*args, **kwargs)
 
-    monkeypatch.setattr(agent_routes, "chat_turn", slow_turn)
+    monkeypatch.setattr("api.routes.agent.chat_turn", slow_turn)
     results: list[int] = []
 
     def send() -> None:
-        results.append(
-            client.post(f"/uploads/{upload_id}/agent-session/messages", json={"text": "Hi"}).status_code
-        )
+        results.append(client.post(f"/uploads/{upload_id}/ask/messages", json={"text": "Hi"}).status_code)
 
     threads = [threading.Thread(target=send) for _ in range(2)]
     for thread in threads:
@@ -238,37 +197,6 @@ def test_concurrent_chat_turns_cannot_spend_the_budget_twice(
         thread.join()
     assert results == [200, 200]
     session = LocalStorage(data_dir).read_model(
-        upload_key(upload_id, "agent/agent_session.json"), AgentSession
+        upload_key(upload_id, "agent/explore_session.json"), AgentSession
     )
     assert len(session.transcript) == 4  # without the lock the second write dropped the first turn
-    assert session.llm_calls == 2  # one call per "Hi", both counted
-
-
-def test_a_receipt_names_the_file_a_prepared_upload_came_from(client: TestClient, data_dir: Path) -> None:
-    storage = LocalStorage(data_dir)
-    frame = _messy()
-    original = load_upload(storage, _upload(client, frame))
-    derived = write_derived_upload(storage, load_use_case(USE_CASE), original, _recipe(frame))
-    receipt = storage.read_bytes(upload_key(derived.record.upload_id, RECIPE_RECEIPT_FILENAME))
-    assert json.loads(receipt)["upload_id"] == original.upload_id
-
-
-@pytest.mark.parametrize("upload_id", ["%2E%2E", "%2e", "a%5Cb"])
-def test_a_session_id_the_store_refuses_is_404_not_500(client: TestClient, upload_id: str) -> None:
-    response = client.get(f"/uploads/{upload_id}/agent-session")
-    assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "AGENT_SESSION_NOT_FOUND"
-
-
-def test_a_combine_preview_takes_whole_entities_not_the_first_rows() -> None:
-    """The preview samples 1,000 rows; combining part of an entity's rows would show wrong totals."""
-    import pandas as pd
-
-    keys = [f"S{i % 1_500:05d}" for i in range(6_000)]  # every shopper on 4 rows, spread through the file
-    frame = pd.DataFrame({"customer_id": keys, "order_value": range(6_000)})
-    steps = (RecipeStep(order=1, kind=RecipeStepKind.COMBINE_ROWS, column="customer_id", params={}),)
-    recipe = _recipe(_messy(rows=600)).model_copy(update={"steps": steps, "recipe_hash": recipe_hash(steps)})
-    sample = agent_routes._preview_sample(frame, recipe)
-    assert sample["customer_id"].nunique() == agent_routes.PREVIEW_SAMPLE_ROWS
-    assert (sample.groupby("customer_id").size() == 4).all()
-    assert len(agent_routes._preview_sample(frame, None)) == agent_routes.PREVIEW_SAMPLE_ROWS

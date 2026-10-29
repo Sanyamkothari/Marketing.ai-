@@ -63,7 +63,6 @@ __all__ = [
     "prepared_dataset_key",
     "recipe_levels",
     "replay_identity",
-    "run_replay",
     "run_saved_recipe",
     "store_prepared_rows",
 ]
@@ -77,19 +76,21 @@ _MIXED: Final[frozenset[str]] = frozenset({"mixed", "mixed-integer"})
 """What `pandas.api.types.infer_dtype` calls a column holding text beside numbers or flags."""
 
 
-def recipe_levels(recipe: DataRecipe, config: UseCaseConfig) -> tuple[tuple[AgentLevel, ...], float]:
+def recipe_levels(
+    recipe: DataRecipe, config: UseCaseConfig | None = None
+) -> tuple[tuple[AgentLevel, ...], float]:
     """The levels and failure limit a replay of `recipe` runs under: the ones it was approved with.
 
     A recipe saved before they were recorded has neither, and runs under the use case's current
-    ones, as it always did. Otherwise a use case that later drops a level, or tightens the limit,
-    would refuse every scoring file of a model already trained on data that level prepared.
+    ones, as it always did (the agent defaults when there is no use case). Otherwise a use case that
+    later drops a level, or tightens the limit, would refuse every scoring file of a model already
+    trained on data that level prepared.
     """
-    levels = recipe.levels if recipe.levels is not None else tuple(config.agent.levels)
-    limit = (
-        recipe.max_failure_pct
-        if recipe.max_failure_pct is not None
-        else config.agent.max_conversion_failure_pct
-    )
+    from engine.agent.config import AgentConfig
+
+    agent = config.agent if config is not None else AgentConfig()
+    levels = recipe.levels if recipe.levels is not None else tuple(agent.levels)
+    limit = recipe.max_failure_pct if recipe.max_failure_pct is not None else agent.max_conversion_failure_pct
     return levels, limit
 
 
@@ -137,36 +138,6 @@ def consistent_types(frame: Any) -> Any:
     return out
 
 
-def run_replay(
-    frame: Any,
-    recipe: DataRecipe,
-    *,
-    levels: Sequence[AgentLevel],
-    max_failure_pct: float,
-    upload_id: str,
-    derived_upload_id: str | None = None,
-    leak_check: LeakCheck | None = None,
-    tables: Mapping[str, Any] | None = None,
-) -> RecipeRun:
-    """Run an approved recipe's steps on new rows. Raises `RecipeError`.
-
-    A thin caller: :func:`engine.doctor.materialize.replay_recipe` is the one place an approved recipe is applied to
-    a file (training, scoring, a scheduled firing and the prescription's replay all come through it).
-    """
-    from engine.doctor.materialize import replay_recipe
-
-    return replay_recipe(
-        frame,
-        recipe,
-        levels=levels,
-        max_failure_pct=max_failure_pct,
-        upload_id=upload_id,
-        derived_upload_id=derived_upload_id,
-        leak_check=leak_check,
-        tables=tables,
-    )
-
-
 def run_saved_recipe(
     frame: Any,
     recipe: DataRecipe,
@@ -177,12 +148,15 @@ def run_saved_recipe(
     leak_check: LeakCheck | None = None,
     tables: Mapping[str, Any] | None = None,
 ) -> RecipeRun:
-    """Run a saved recipe on `frame` under the levels and limit it was approved with (:func:`run_replay`: a Data
+    """Run a saved recipe on `frame` under the levels and limit it was approved with, through
+    :func:`engine.doctor.materialize.replay_recipe`, the one place an approved recipe is applied to a file (a Data
     Doctor recipe stops on the guards' stops). Raises `RecipeError`.
 
     `tables` are the other tables a `sql_query` step may read (see `run_recipe`)."""
+    from engine.doctor.materialize import replay_recipe
+
     levels, limit = recipe_levels(recipe, config)
-    return run_replay(
+    return replay_recipe(
         frame,
         recipe,
         levels=levels,

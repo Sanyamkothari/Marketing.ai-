@@ -13,9 +13,7 @@ from typing import Any
 import pytest
 
 from engine.agent.advisor import advise
-from engine.agent.contracts import ProposalState
 from engine.agent.grounding import numbers_in
-from engine.agent.session import SessionError, decide, start_session
 from engine.agent.untrusted import plain_value, quoted
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.unit.agent.helpers import context_for
@@ -61,16 +59,3 @@ def test_quoted_values_are_still_numbers_to_the_grounding_check(advice: Any) -> 
     numbers = next(p for p in advice.proposals if p.title == "Turn 'ad_ctr_90d' into numbers")
     assert numbers_in(numbers.reason, ["ad_ctr_90d"])
     assert numbers_in(numbers.title, ["ad_ctr_90d"]) == []
-
-
-def test_a_refused_value_is_named_without_python_syntax() -> None:
-    ctx = context_for(messy_frame())
-    session = start_session(ctx, session_id="s1")
-    split = next(p for p in session.proposals if p.path == "split.type")
-    with pytest.raises(SessionError) as refused:
-        decide(session, ctx, [(split.proposal_id, ProposalState.ACCEPTED, ["a", "b"])])
-    assert refused.value.code == "AGENT_VALUE_NOT_ALLOWED"
-    assert refused.value.message.startswith("'a', 'b' is not a value"), refused.value.message
-    with pytest.raises(SessionError) as unknown:
-        decide(session, ctx, [("nope", ProposalState.ACCEPTED, None)])
-    assert "'nope'" in unknown.value.message

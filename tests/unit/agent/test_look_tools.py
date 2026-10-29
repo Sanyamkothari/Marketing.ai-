@@ -814,11 +814,11 @@ class _FakeClientMeter:
 )
 def test_a_chat_turn_can_look_at_rows_and_values_and_the_reply_is_grounded(message: str, tool: str) -> None:
     from engine.agent.loop import chat_turn
-    from engine.agent.session import start_session
+    from engine.agent.proposals import rules_session
     from tests.unit.agent.helpers import synthetic
 
     ctx = context_for(synthetic(rows=400))
-    session = start_session(ctx, session_id="s-look")
+    session = rules_session(ctx, session_id="s-look")
     turn = chat_turn(
         ctx,
         session,

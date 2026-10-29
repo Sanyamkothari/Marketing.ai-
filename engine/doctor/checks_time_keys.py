@@ -33,11 +33,14 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+import numpy as np
 import pandas as pd
 
 from engine.agent.formats import date_order_conflict, masked_cut
+from engine.content_cache import ContentCache, cached_column, column_cache, frame_digest, map_distinct
 from engine.doctor.impossible import _FUTURE_ALLOWED, column_words
 
 if TYPE_CHECKING:
@@ -81,10 +84,19 @@ def _pct(part: int, whole: int) -> str:
     return f"{part / whole:.0%}" if whole else "0%"
 
 
+_CELLS: Final[ContentCache[pd.Series[Any]]] = column_cache(8, megabytes=128)
+"""The filled cells of a column as text, by what the column holds: a dozen checks read the same cells."""
+
+
 def _cells(series: pd.Series[Any]) -> pd.Series[Any]:
     """The filled cells as trimmed text."""
-    text = series.dropna().astype(str).str.strip()
-    return text[text != ""]
+
+    def make() -> pd.Series[Any]:
+        present = series.dropna()
+        text = map_distinct(present, lambda distinct: distinct.astype(str).str.strip())
+        return text[text != ""]
+
+    return cached_column(_CELLS, series, "cells", make)
 
 
 # ---------------------------------------------------------------------------
@@ -629,13 +641,38 @@ def _immature_month(days: pd.Series[Any], hits: pd.Series[Any]) -> tuple[float, 
 # ---------------------------------------------------------------------------
 # Rows that repeat, and files that share rows (G12)
 # ---------------------------------------------------------------------------
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
 def _repeated_headers(frame: pd.DataFrame) -> int:
     names = [str(c).strip().casefold() for c in frame.columns]
     if len(names) < 2 or frame.empty:
         return 0
-    text = frame.astype(str).apply(lambda column: column.str.strip().str.casefold())
-    matches = sum(text.iloc[:, i].eq(name) for i, name in enumerate(names))
+    matches = np.zeros(len(frame), dtype=np.int64)
+    for position, name in enumerate(names):
+        column = frame.iloc[:, position]
+        if (
+            pd.api.types.is_numeric_dtype(column)
+            and not pd.api.types.is_bool_dtype(column)
+            and not _is_number(name)
+        ):
+            continue  # a number is never written as a word
+        # Each distinct spelling is read once, then spread over the rows.
+        codes, spellings = pd.factorize(column.astype(str))
+        same = np.fromiter(
+            (text.strip().casefold() == name for text in spellings), dtype=bool, count=len(spellings)
+        )
+        matches += same[codes]
     return int((matches >= max(2, len(names) // 2)).sum())
+
+
+_FILE_CHECKS: Final[ContentCache[tuple[Check, ...]]] = ContentCache(8)
+"""The checks of one file by what it holds (they read every cell, and a visit asks again at every step)."""
 
 
 def file_checks(files: Sequence[tuple[str, pd.DataFrame]]) -> list[Check]:
@@ -643,34 +680,42 @@ def file_checks(files: Sequence[tuple[str, pd.DataFrame]]) -> list[Check]:
     another (reported, never dropped); for files laid out alike: rows two of them both hold."""
     found: list[Check] = []
     for name, frame in files:
-        headers = _repeated_headers(frame)
-        if headers:
-            found.append(
-                Check(
-                    "REPEATED_HEADER_ROWS",
-                    "flag",
-                    f"{headers:,} rows of {name} repeat the column names (the file looks pasted together from "
-                    "several pieces). They are counted as customers unless they are removed.",
-                    None,
-                    {"rows": headers, "file": name},
-                )
-            )
-        copies = int(frame.duplicated().sum()) if len(frame.columns) else 0
-        if copies:
-            found.append(
-                Check(
-                    "DUPLICATE_ROWS",
-                    "flag",
-                    f"{copies:,} rows of {name} are exact copies of another row ({_pct(copies, len(frame))}). "
-                    "Nothing is removed without a yes, and spend or counts would be inflated if they stay.",
-                    None,
-                    {"rows": copies, "file": name, "file_rows": len(frame)},
-                )
-            )
+        digest = frame_digest(frame)
+        key = None if digest is None else f"{name}|{digest}"
+        found.extend(_FILE_CHECKS.get_or_compute(key, partial(_file_checks, name, frame)))
     for i, (name_a, a) in enumerate(files):
         for name_b, b in files[i + 1 :]:
             found.extend(_shared_rows(name_a, a, name_b, b))
     return found
+
+
+def _file_checks(name: str, frame: pd.DataFrame) -> tuple[Check, ...]:
+    found: list[Check] = []
+    headers = _repeated_headers(frame)
+    if headers:
+        found.append(
+            Check(
+                "REPEATED_HEADER_ROWS",
+                "flag",
+                f"{headers:,} rows of {name} repeat the column names (the file looks pasted together from "
+                "several pieces). They are counted as customers unless they are removed.",
+                None,
+                {"rows": headers, "file": name},
+            )
+        )
+    copies = int(frame.duplicated().sum()) if len(frame.columns) else 0
+    if copies:
+        found.append(
+            Check(
+                "DUPLICATE_ROWS",
+                "flag",
+                f"{copies:,} rows of {name} are exact copies of another row ({_pct(copies, len(frame))}). "
+                "Nothing is removed without a yes, and spend or counts would be inflated if they stay.",
+                None,
+                {"rows": copies, "file": name, "file_rows": len(frame)},
+            )
+        )
+    return tuple(found)
 
 
 def _shared_rows(name_a: str, a: pd.DataFrame, name_b: str, b: pd.DataFrame) -> list[Check]:
@@ -709,13 +754,23 @@ _BLOCK_RUN: Final[float] = 5.0
 _UNIT_GAP: Final[float] = 50.0
 
 
+def _total_rows(series: pd.Series[Any]) -> int:
+    """How many rows of a column read 'Total' (each distinct spelling is matched once)."""
+    counts = _cells(series).value_counts()
+    return (
+        int(counts[counts.index.to_series().str.match(_TOTAL_ROW).to_numpy(dtype=bool)].sum())
+        if len(counts)
+        else 0
+    )
+
+
 def summary_check(frame: pd.DataFrame) -> Check | None:
     """A stop when the table is a summary, not customers: a 'Total' row, or counts per group with no ID column and
     no text column that is different on every row. Totals cannot be turned back into people."""
     if len(frame) < 2:
         return None
     text = [c for c in frame.columns if not pd.api.types.is_numeric_dtype(frame[c])]
-    total_rows = int(sum(_cells(frame[c]).str.match(_TOTAL_ROW).sum() for c in text))
+    total_rows = sum(_total_rows(frame[c]) for c in text)
     one_each = any(ID_NAME.search(str(c)) for c in frame.columns) or any(
         frame[c].notna().all() and frame[c].is_unique for c in text
     )

@@ -606,35 +606,6 @@ def chat_turn(
                     PROPOSE_TEXT_KEYS if name == PROPOSE_TOOL else STEP_TEXT_KEYS,
                 )
                 continue
-            if name == PROPOSE_TOOL:
-                result, proposal = _propose(
-                    ctx,
-                    args,
-                    fields,
-                    checker,
-                    f"{prefix}e{len(results) + 1}",
-                    f"{prefix}p{len(proposals) + 1}",
-                    clock,
-                )
-                results.append(result)
-                proposals.append(proposal)
-                _record(gate, names, feedback, items, result, PROPOSE_TEXT_KEYS)
-                continue
-            if name == STEP_TOOL:
-                result, proposal = _propose_step(
-                    ctx,
-                    session,
-                    args,
-                    results,
-                    checker,
-                    f"{prefix}e{len(results) + 1}",
-                    f"{prefix}p{len(proposals) + 1}",
-                    clock,
-                )
-                results.append(result)
-                proposals.append(proposal)
-                _record(gate, names, feedback, items, result, STEP_TEXT_KEYS)
-                continue
             if not doctor.reads(name):
                 raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name[:40]!r}.")
             if name == "find_values":

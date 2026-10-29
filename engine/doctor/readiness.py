@@ -976,8 +976,9 @@ def _scoring_read(
     """
     import json
 
-    from engine.agent.dataset_recipe import consistent_types, run_saved_recipe
+    from engine.agent.dataset_recipe import consistent_types, recipe_levels
     from engine.agent.recipe import RecipeError
+    from engine.doctor.materialize import replay_recipe
     from engine.stages import ingest
     from engine.storage import upload_key
 
@@ -1011,10 +1012,12 @@ def _scoring_read(
         json.loads(storage.read_text(record_key)).get("mode") if storage.exists(record_key) else "score"
     )
     try:
-        run = run_saved_recipe(
+        levels, max_failure_pct = recipe_levels(recipe, config)
+        run = replay_recipe(
             rows,
             recipe,
-            config,
+            levels=levels,
+            max_failure_pct=max_failure_pct,
             upload_id=source,
             leak_check="full" if sent_for == RunMode.TRAIN.value else "narrow",
         )

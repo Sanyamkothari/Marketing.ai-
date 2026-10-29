@@ -1,44 +1,43 @@
 """Replay a prescription at training and at scoring, for files and built datasets (Plan O M243, DEC-1813).
 
-The design §9.3. One function, :func:`replay_prescription`, runs every part of an approved prescription on new files -
-next month's training file, a scoring file, a scheduled firing's - in a fixed order, and returns the prepared rows and
-a receipt naming each part it replayed or checked:
+The design §9.3. An approved prescription runs on new files - next month's training file, a scoring file, a scheduled
+firing's - in a fixed order. The run paths (`engine.doctor.prescription_runs`) call the parts of it they need:
 
 1. **intake** - each file was read as approved (the same sheet, header row, intake on or off); new words read as empty
-   are noted.
+   are noted. :func:`check_files` (steps 1-3, on the raw files, before anything is prepared).
 2. **locale** - the files still read as the approved locale profile says (number marks, date order, number and
    yes/no words, ...); M241's `detect_locale` on the frozen profile.
 3. **currency** - every money column is still in the currencies the money basis (M242) froze; a `convert_currency`
    step replays with its frozen rate, date and source and is never proposed again.
-4. **recipes** - each file slot's `DataRecipe`, under the levels and limit it was approved with; a `map_boolean`
-   step's frozen spellings are checked first, so a new spelling is asked rather than failed quietly under the limit.
-   Each prepared file is checked against its slot's column contract.
-5. **build** - M237's `replay_build` through the same builder (training and scoring alike).
+4. **recipes** - each file slot's `DataRecipe`, under the levels and limit it was approved with (:func:`run_part_recipe`,
+   which is `materialize.replay_recipe`); a `map_boolean` step's frozen spellings are checked first, so a new
+   spelling is asked rather than failed quietly under the limit. Each prepared file is checked against its slot's
+   column contract (`prescription_runs.check_prepared`).
+5. **build** - none to replay: the goal's table is made once, when the files are combined
+   (`engine.doctor.combine_run`), and comes back as a file of the case.
 6. **outcome** (training only) - the approved definition (M239) by its hash: a column's frozen value map, or the
-   builder's label for an outcome from events.
+   builder's label for an outcome from events. :func:`replay_after_build` (steps 6-8, on the prepared or built rows).
 7. **post-build recipe** - for training **and** scoring (closing [INV] §8: a built dataset trains with it).
 8. **contract** - the final prepared file against the prescription's contract.
 
 **It stops and asks; it never re-learns.** A changed column, a new value, a new currency or a different locale raises
 :class:`~engine.doctor.prescription.PrescriptionError` - `PRESCRIPTION_DRIFT`, `CURRENCY_FOREIGN` or `CURRENCY_MIXED`,
-or the step's own `RECIPE_*`, `BUILD_*` or `OUTCOME_*` code - carrying what it found and the one question it asks. A
-change that breaks nothing is a warning with a question, in the receipt. Nothing here writes a prescription, learns a
-contract, proposes a step or calls an AI service: what was approved is what replays, or nothing does.
+or the step's own `RECIPE_*` or `OUTCOME_*` code - carrying what it found and the one question it asks. A change that
+breaks nothing is a warning with a question. Nothing here writes a prescription, learns a contract, proposes a step or
+calls an AI service: what was approved is what replays, or nothing does.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
-from pydantic import Field
 
-from engine.agent.contracts import DataRecipe, RecipeReceipt, RecipeStepKind
+from engine.agent.contracts import DataRecipe, RecipeReceipt
 from engine.agent.recipe import RecipeError
 from engine.config import StrictBase
-from engine.doctor.build_driver import BuildDriveError, BuildDriveResult, replay_build
 from engine.doctor.materialize import ApprovedSettingsError, check_approved_settings, step_drift
 from engine.doctor.outcome_definition import OutcomeError, OutcomeReceipt, apply_outcome_values
 from engine.doctor.prescription import (
@@ -47,8 +46,6 @@ from engine.doctor.prescription import (
     IntakeDecision,
     Prescription,
     PrescriptionError,
-    case_tables,
-    slot_name,
 )
 from engine.doctor.prescription_contract import (
     DataContract,
@@ -61,28 +58,24 @@ from engine.intake.contracts import IntakeReport
 if TYPE_CHECKING:
     from engine.agent.reshape import LeakCheck
     from engine.config import UseCaseConfig
-    from engine.doctor.build_driver import BuilderPort
 
 __all__ = [
     "Mode",
     "PartReceipt",
     "PreparedReplay",
     "ReplayFile",
-    "ReplayReceipt",
-    "ReplayResult",
     "changes_rows",
     "check_files",
     "drift_stop",
     "replay_after_build",
     "replay_on_prepared",
-    "replay_prescription",
     "run_part_recipe",
     "step_drift",
     "training_goal",
 ]
 
 Mode = Literal["train", "score"]
-PartName = Literal["intake", "locale", "currency", "recipe", "build", "outcome", "post_build", "contract"]
+PartName = Literal["intake", "locale", "currency", "recipe", "outcome", "post_build", "contract"]
 
 
 @dataclass(frozen=True)
@@ -104,44 +97,6 @@ class PartReceipt(StrictBase):
     detail: str = ""
     rows_in: int | None = None
     rows_out: int | None = None
-
-
-class ReplayReceipt(StrictBase):
-    """Every part replayed or checked, the warnings (each with its question), and the steps' own receipts."""
-
-    prescription_hash: str
-    mode: Mode
-    goal_id: str | None = None
-    parts: tuple[PartReceipt, ...] = ()
-    warnings: tuple[DriftFinding, ...] = ()
-    recipe_receipts: tuple[RecipeReceipt, ...] = ()
-    build: BuildDriveResult | None = None
-    outcome: OutcomeReceipt | None = None
-    rows_out: int | None = Field(
-        default=None, description="Rows of the final prepared file, when there is one."
-    )
-
-    def replayed(self) -> tuple[str, ...]:
-        """The parts that ran or were checked, in order, each once."""
-        return tuple(dict.fromkeys(p.part for p in self.parts if p.status != "skipped"))
-
-
-@dataclass(frozen=True)
-class ReplayResult:
-    """The prepared rows (`frame`: the final file - the built dataset, or the one file - when there is one; `frames`:
-    each slot's prepared file) and the receipt."""
-
-    frame: pd.DataFrame | None
-    frames: Mapping[str, pd.DataFrame]
-    receipt: ReplayReceipt
-
-    @property
-    def warnings(self) -> tuple[DriftFinding, ...]:
-        return self.receipt.warnings
-
-    @property
-    def questions(self) -> tuple[Any, ...]:
-        return tuple(finding.question for finding in self.receipt.warnings)
 
 
 @dataclass
@@ -251,11 +206,9 @@ def _check_settings(prescription: Prescription, by_slot: Mapping[str, pd.DataFra
         trail.add("currency", "skipped", detail="no money basis in the prescription")
 
 
-def check_files(
-    prescription: Prescription, files: Sequence[ReplayFile], *, trail: _Trail | None = None
-) -> tuple[DriftFinding, ...]:
+def check_files(prescription: Prescription, files: Sequence[ReplayFile]) -> tuple[DriftFinding, ...]:
     """The raw-file checks (intake, locale, currency) on `files`; raises on a stop, returns the warnings."""
-    own = trail if trail is not None else _Trail()
+    own = _Trail()
     by_slot = _frames_by_slot(files)
     for file in files:
         part = prescription.file(file.slot)
@@ -290,27 +243,19 @@ def run_part_recipe(
     part: PartName = "recipe",
     tables: Mapping[str, pd.DataFrame] | None = None,
 ) -> Any:
-    """One recipe, exactly as a saved recipe runs today (`run_saved_recipe`), with the levels and limit it was
-    approved with. A step that fails on a column the contract knows is `PRESCRIPTION_DRIFT` (the column changed);
+    """One recipe, exactly as a saved recipe runs today (`materialize.replay_recipe`), with the levels and limit it
+    was approved with. A step that fails on a column the contract knows is `PRESCRIPTION_DRIFT` (the column changed);
     otherwise the step's own code."""
-    from engine.agent.config import AgentConfig
-    from engine.agent.dataset_recipe import run_replay, run_saved_recipe
+    from engine.agent.dataset_recipe import recipe_levels
+    from engine.doctor.materialize import replay_recipe
 
+    levels, max_failure_pct = recipe_levels(recipe, config)
     try:
-        if config is not None:
-            return run_saved_recipe(
-                frame, recipe, config, upload_id=upload_id, leak_check=leak_check, tables=tables
-            )
-        agent = AgentConfig()
-        return run_replay(  # under the guards: a stop raises RECIPE_GUARD_STOP, never a silent score
+        return replay_recipe(  # under the guards: a stop raises RECIPE_GUARD_STOP, never a silent score
             frame,
             recipe,
-            levels=recipe.levels if recipe.levels is not None else tuple(agent.levels),
-            max_failure_pct=(
-                recipe.max_failure_pct
-                if recipe.max_failure_pct is not None
-                else agent.max_conversion_failure_pct
-            ),
+            levels=levels,
+            max_failure_pct=max_failure_pct,
             upload_id=upload_id,
             leak_check=leak_check,
             tables=tables,
@@ -365,8 +310,8 @@ def replay_on_prepared(
     else:
         own.add(
             "outcome",
-            "checked" if prescription.build is not None else "skipped",
-            detail="built by the builder from the approved definition",
+            "skipped",
+            detail="measured by the builder from the approved definition",
         )
     if prescription.post_build is not None:
         rows_in = len(frame)
@@ -430,138 +375,24 @@ def replay_after_build(
     goal_id: str | None = None,
     config: UseCaseConfig | None = None,
     upload_id: str = "prescription",
+    tables: Mapping[str, pd.DataFrame] | None = None,
 ) -> PreparedReplay:
     """:func:`replay_on_prepared` for a run: the outcome (training only), the post-build recipe and the contract on
-    every row of a built dataset or a prepared file. Raises `PrescriptionError` on a stop."""
+    every row of a built dataset or a prepared file. `tables` are the other prepared files a `sql_query` step may
+    read (`prescription.case_tables`). Raises `PrescriptionError` on a stop."""
     trail = _Trail()
     rows, outcome, warnings = replay_on_prepared(
-        prescription, frame, mode=mode, goal_id=goal_id, config=config, upload_id=upload_id, trail=trail
+        prescription,
+        frame,
+        mode=mode,
+        goal_id=goal_id,
+        config=config,
+        upload_id=upload_id,
+        trail=trail,
+        tables=tables,
     )
     receipt = trail.recipes[-1] if prescription.post_build is not None and trail.recipes else None
     replayed = tuple(dict.fromkeys(p.part for p in trail.parts if p.status != "skipped"))
     return PreparedReplay(
         frame=rows, outcome=outcome, post_build=receipt, warnings=warnings, replayed=replayed
     )
-
-
-# ---------------------------------------------------------------------------
-# The whole replay
-# ---------------------------------------------------------------------------
-def replay_prescription(
-    prescription: Prescription,
-    files: Sequence[ReplayFile],
-    *,
-    mode: Mode,
-    goal_id: str | None = None,
-    config: UseCaseConfig | None = None,
-    builder: BuilderPort | None = None,
-    load_built: Callable[[str], pd.DataFrame] | None = None,
-    clock: Any = None,
-) -> ReplayResult:
-    """Every part of `prescription` on `files`, in the design's order (see the module docstring).
-
-    `builder` and `load_built` replay a build part (the builder's port, and how to read the dataset it builds);
-    `config` is the use case a recipe saved without its levels runs under. Raises `PrescriptionError` on any stop.
-    """
-    trail = _Trail()
-    given = {file.slot for file in files}
-    unknown = sorted(given - {part.slot for part in prescription.files})
-    missing = [part.slot for part in prescription.files if part.slot not in given]
-    if unknown or missing:
-        slot = (unknown or missing)[0]
-        raise drift_stop(
-            "MISSING_FILE",
-            (
-                f"The approved preparation has no place for '{slot}'."
-                if unknown
-                else f"The approved preparation reads a file for '{slot}', and none was given."
-            ),
-            "Which approved file is this?" if unknown else f"Where is the file for '{slot}'?",
-            part="intake",
-            slot=slot,
-        )
-    check_files(prescription, files, trail=trail)
-    prepared: dict[str, list[pd.DataFrame]] = {}
-    for file in files:
-        part = prescription.file(file.slot)
-        assert part is not None  # every slot was matched above
-        frame = file.frame
-        if part.recipe is not None:
-            run = run_part_recipe(
-                part.recipe,
-                frame,
-                config=config,
-                upload_id=file.upload_id or part.slot,
-                leak_check=_leak(mode),
-                contract=part.contract,
-                slot=part.slot,
-            )
-            trail.recipes.append(run.receipt)
-            trail.add("recipe", "replayed", slot=part.slot, rows_in=len(frame), rows_out=len(run.frame))
-            frame = run.frame
-        else:
-            trail.add("recipe", "skipped", slot=part.slot, detail="no recipe for this file")
-        prepared.setdefault(part.slot, []).append(frame)
-    frames = {
-        slot: parts[0] if len(parts) == 1 else pd.concat(parts, ignore_index=True)
-        for slot, parts in prepared.items()
-    }
-    for part in prescription.files:
-        if part.contract is not None:
-            trail.findings(
-                check_contract(frames[part.slot], part.contract, mode=mode, slot=part.slot), part="recipe"
-            )
-            trail.add("contract", "checked", slot=part.slot)
-    built: BuildDriveResult | None = None
-    final: pd.DataFrame | None = None
-    if prescription.build is not None:
-        if builder is None or load_built is None:
-            raise PrescriptionError(
-                "BUILD_REPLAY_FILES",
-                "This preparation builds a dataset: the builder is needed to replay it.",
-                part="build",
-            )
-        record = prescription.build.record
-        sources = {
-            source.source_name: prepared.get(slot_name(source.source_name), [])
-            for source in (record.plan.entity, *record.plan.events)
-        }
-        try:
-            built = replay_build(record, sources, builder, mode=mode, clock=clock)
-        except BuildDriveError as exc:
-            raise PrescriptionError(exc.code, exc.message, part="build") from exc
-        if built.dataset_id is None:
-            raise PrescriptionError("BUILD_STEP_FAILED", "The builder built no dataset.", part="build")
-        final = load_built(built.dataset_id)
-        trail.add("build", "replayed", detail=f"plan {record.plan.plan_hash[:16]}", rows_out=len(final))
-    else:
-        trail.add("build", "skipped", detail="no build in the prescription")
-        if len(frames) == 1:
-            final = next(iter(frames.values()))
-        elif prescription.post_build is not None and any(
-            step.kind is RecipeStepKind.SQL_QUERY for step in prescription.post_build.steps
-        ):
-            final = next(iter(frames.values()))  # the first file is `this`; a query reads the others by name
-    outcome_receipt: OutcomeReceipt | None = None
-    if final is not None:
-        final, outcome_receipt, _ = replay_on_prepared(
-            prescription,
-            final,
-            mode=mode,
-            goal_id=goal_id,
-            config=config,
-            trail=trail,
-            tables=case_tables(frames, prescription.files),
-        )
-    receipt = ReplayReceipt(
-        prescription_hash=prescription.prescription_hash,
-        mode=mode,
-        goal_id=goal_id if goal_id is not None else getattr(prescription.section(), "goal_id", None),
-        parts=tuple(trail.parts),
-        warnings=tuple(trail.warnings),
-        recipe_receipts=tuple(trail.recipes),
-        build=built,
-        outcome=outcome_receipt,
-        rows_out=None if final is None else len(final),
-    )
-    return ReplayResult(frame=final, frames=frames, receipt=receipt)

@@ -34,9 +34,11 @@ import re
 import warnings
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from functools import partial
 from typing import Any, Final
 
 import numpy as np
@@ -44,6 +46,7 @@ import pandas as pd
 
 from engine.agent.egress import assert_clean
 from engine.agent.untrusted import quoted
+from engine.content_cache import ContentCache, content_digest
 from engine.pii import REDACTION_MARKER_PATTERN
 from engine.stages import ingest
 
@@ -422,6 +425,24 @@ def parse_numbers(
         raise ValueError("decimal must be '.' or ','")
     if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
         return ParseOutcome(values=series.astype("float64"), changed=0, failed=0, failed_examples=())
+    digest = content_digest(series)
+    key = None if digest is None else f"numbers|{decimal}|{percent_to_fraction}|{indian_scale_words}|{digest}"
+    return _fresh(
+        _PARSED.get_or_compute(
+            key,
+            lambda: _parse_numbers(
+                series,
+                decimal=decimal,
+                percent_to_fraction=percent_to_fraction,
+                indian_scale_words=indian_scale_words,
+            ),
+        )
+    )
+
+
+def _parse_numbers(
+    series: pd.Series[Any], *, decimal: str, percent_to_fraction: bool, indian_scale_words: bool
+) -> ParseOutcome:
     positions, cells = _present(series)
     numeric = _numeric_cells(series, positions)
     text = cells[~numeric]
@@ -584,6 +605,26 @@ _FAST_PARSE_MIN: Final[int] = 1_000
 """Fewer distinct spellings than this are read one at a time: the time is not worth a format guess."""
 
 
+def to_datetime_mixed(values: pd.Series[Any], *, dayfirst: bool | None = None) -> pd.Series[Any]:
+    """`pd.to_datetime(values, errors="coerce", format="mixed")`, reading each distinct spelling once.
+
+    The answer is the same, cell for cell, because `format="mixed"` reads every cell on its own; a timestamp column
+    of half a million rows written to the minute has a few thousand spellings, and pandas reads that path one cell at
+    a time. A result that is not plain datetimes (cells with different UTC offsets) is read the plain way."""
+    kwargs: dict[str, Any] = {"errors": "coerce", "format": "mixed"}
+    if dayfirst is not None:
+        kwargs["dayfirst"] = dayfirst
+    distinct = values.dropna().drop_duplicates()
+    if len(distinct) * 2 > len(values):  # (nearly) every cell is its own spelling: nothing to save
+        return pd.Series(pd.to_datetime(values, **kwargs).array, index=values.index, name=values.name)
+    read = pd.to_datetime(distinct, **kwargs)
+    if not pd.api.types.is_datetime64_any_dtype(read):
+        return pd.Series(pd.to_datetime(values, **kwargs).array, index=values.index, name=values.name)
+    lookup = pd.Series(read.array, index=pd.Index(distinct.array, dtype=object))
+    mapped = values.map(lookup)
+    return pd.Series(mapped.array, index=values.index, name=values.name)
+
+
 def _one_datetime(text: str, dayfirst: bool) -> pd.Timestamp | None:
     if not _is_dateable(text):
         return None  # "now" / "today" / "09:30": pandas reads them as the current time or date
@@ -670,10 +711,28 @@ def _to_datetimes(cells: pd.Series[Any], *, dayfirst: bool) -> pd.Series[Any]:
     return pd.Series(spread.array, index=cells.index)
 
 
+_PARSED: Final[ContentCache[ParseOutcome]] = ContentCache(
+    64, budget=192 * 2**20, cost=lambda outcome: int(outcome.values.memory_usage(index=False))
+)
+"""Dates and numbers read from a column, by what the column holds and how it was read (a visit reads the same big
+column at every step)."""
+
+
+def _fresh(outcome: ParseOutcome) -> ParseOutcome:
+    """The cached outcome with a column of its own: a caller may change what it gets back."""
+    return replace(outcome, values=outcome.values.copy())
+
+
 def parse_dates(series: pd.Series[Any], *, dayfirst: bool) -> ParseOutcome:
     """Text to datetime, one value at a time (`format="mixed"`), with the day/month order decided."""
     if pd.api.types.is_datetime64_any_dtype(series):
         return ParseOutcome(values=series, changed=0, failed=0, failed_examples=())
+    digest = content_digest(series)
+    key = None if digest is None else f"dates|{dayfirst}|{digest}"
+    return _fresh(_PARSED.get_or_compute(key, lambda: _parse_dates(series, dayfirst=dayfirst)))
+
+
+def _parse_dates(series: pd.Series[Any], *, dayfirst: bool) -> ParseOutcome:
     cells = _text_cells(series)
     parsed = _to_datetimes(cells, dayfirst=dayfirst)
     out = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
@@ -1010,13 +1069,25 @@ def find_format_issues(
         series = frame[name]
         if not _is_text(series):
             continue
-        positions, cells = _present(series)
-        if cells.empty:
-            continue
-        present = series.iloc[positions]  # the numbers detector reads real numbers by value
-        for detector in (_number_issue, _date_issue, _boolean_issue, _category_issue):
-            issue = detector(str(name), present if detector is _number_issue else cells)
-            if issue is not None:
-                issues.append(issue)
-                break
+        digest = content_digest(series)
+        key = None if digest is None else f"issue|{name}|{digest}"
+        issue = _ISSUES.get_or_compute(key, partial(_column_issue, str(name), series))
+        if issue is not None:
+            issues.append(replace(issue, params=deepcopy(issue.params)))  # the cached issue is shared
     return tuple(issues)
+
+
+_ISSUES: Final[ContentCache[FormatIssue | None]] = ContentCache(64)
+"""The formatting problem of a text column (or None), by what the column holds."""
+
+
+def _column_issue(name: str, series: pd.Series[Any]) -> FormatIssue | None:
+    positions, cells = _present(series)
+    if cells.empty:
+        return None
+    present = series.iloc[positions]  # the numbers detector reads real numbers by value
+    for detector in (_number_issue, _date_issue, _boolean_issue, _category_issue):
+        issue = detector(name, present if detector is _number_issue else cells)
+        if issue is not None:
+            return issue
+    return None

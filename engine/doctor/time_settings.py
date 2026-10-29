@@ -65,6 +65,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from pydantic import AwareDatetime, Field, JsonValue
 
 from engine.config import RunMode, StrictBase
+from engine.content_cache import ContentCache
 from engine.contracts import RunState, RunStatus, StageKey
 from engine.doctor.decisions import decisions
 from engine.run_progress import (
@@ -1272,9 +1273,23 @@ def promised_tracker(flow: Any, keys: Sequence[StageKey]) -> ProgressTracker | N
 # ---------------------------------------------------------------------------
 # (b) The data time settings
 # ---------------------------------------------------------------------------
+_DATE_VALUES: Final[ContentCache[pd.Series[Any] | None]] = ContentCache(
+    16, budget=96 * 2**20, cost=lambda values: 0 if values is None else int(values.memory_usage(index=False))
+)
+"""A column read as dates, by what the column holds: every step of a visit reads the same big date column again."""
+
+
 def date_values(series: pd.Series[Any]) -> pd.Series[Any] | None:
     """A column as dates (naive), or None when it cannot be read without guessing the day/month order or fewer
     than `READABLE_SHARE` of its filled cells read as dates."""
+    from engine.content_cache import content_digest
+
+    key = content_digest(series)
+    found = _DATE_VALUES.get_or_compute(key, lambda: _date_values(series))
+    return None if found is None else found.copy()  # the cached column is shared: a caller gets its own
+
+
+def _date_values(series: pd.Series[Any]) -> pd.Series[Any] | None:
     import pandas as pd
 
     from engine.agent.formats import date_order, parse_dates

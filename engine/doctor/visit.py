@@ -43,8 +43,8 @@ pending items; the ones whose guard run shows no stop and no flag, in the kinds 
 Nothing about meaning is ever applied or answered by the AI: it may suggest an answer, and only a click records it.
 
 **What later milestones fill in.** PREVIEW, PRESCRIBE, VERIFY and HAND_OFF call ports (:class:`VisitDeps`). The
-defaults are the honest minimum today: PREVIEW counts what would change; PRESCRIBE hashes the approved items, the
-answers and the brief (M243 writes the prescription itself); VERIFY runs M234's `check_readiness` on the file that
+defaults are the honest minimum when no port is given: PREVIEW counts what would change; PRESCRIBE hashes the
+approved items, the answers and the brief (the API passes `CasePrescriber`, which writes the prescription); VERIFY runs M234's `check_readiness` on the file that
 holds the goal's outcome (:func:`readiness_verify`); HAND_OFF records where the data goes and starts nothing.
 
 Nothing here logs a value or a column name: counts, ids and codes only.
@@ -66,6 +66,7 @@ from pydantic import JsonValue
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, RecipeStepKind
 from engine.agent.tools import AgentToolError
 from engine.config import ConfigError
+from engine.content_cache import digest_memo
 from engine.doctor.agent_apply import (
     AGENT_APPLIED_STEPS,
     agent_applies,
@@ -3833,10 +3834,24 @@ def _person_step(
     (the process may have died before advancing) and a race with another writer end at the next rest: an
     applied action never answers `CASE_VERSION_CONFLICT`.
     """
+    case, seen = _person_write(run, client_id, case_id, expected_version, op_id, build)
+    if seen and case.read_only:
+        return case
+    return _settle(run, client_id, case_id, case, applied=True)
+
+
+def _person_write(
+    run: _Run,
+    client_id: str,
+    case_id: str,
+    expected_version: int,
+    op_id: str | None,
+    build: Callable[[Case], _Step],
+) -> tuple[Case, bool]:
+    """Write the person's action as one transition without advancing the machine; also whether it was already written."""
     case = run.store.get(client_id, case_id)
     if _seen(case, op_id):
-        # its first attempt was written: nothing is applied twice, and the visit goes on to its next rest
-        return case if case.read_only else _settle(run, client_id, case_id, case, applied=True)
+        return case, True
     if case.version != expected_version:
         raise CaseError(
             "CASE_VERSION_CONFLICT",
@@ -3848,13 +3863,19 @@ def _person_step(
     step = build(case)
     case = _write(run, case, step, op_id=op_id)
     _after(step, case)
-    return _settle(run, client_id, case_id, case, applied=True)
+    return case, False
 
 
 _SETTLE_TRIES: Final[int] = 3
 
 
 def _settle(run: _Run, client_id: str, case_id: str, case: Case, *, applied: bool = False) -> Case:
+    """One step of the visit: a big column is hashed once for the whole step (`digest_memo`)."""
+    with digest_memo():
+        return _settle_step(run, client_id, case_id, case, applied=applied)
+
+
+def _settle_step(run: _Run, client_id: str, case_id: str, case: Case, *, applied: bool = False) -> Case:
     """Advance to the next rest; when another writer moved the case on, read it again and continue from there.
 
     `applied`: the person's action is already written, so a writer that keeps racing does not make it fail;
@@ -3895,11 +3916,16 @@ def add_files(
     expected_version: int,
     actor: str,
     op_id: str | None = None,
+    settle: bool = True,
 ) -> Case:
     """Add files to the case; the visit reads them from INTAKE (next month's file: FOLLOW_UP -> INTAKE).
 
     Plan O M243 (DEC-1813): a file added to a case that already has a stored prescription is bound to it, so a run
-    on next month's file replays the approved preparation (and stops and asks where it changed)."""
+    on next month's file replays the approved preparation (and stops and asks where it changed).
+
+    The visit then runs to its next rest. `settle=False` only writes the files and leaves the case at INTAKE: the
+    UI adds files one at a time and then asks the visit once, so the files are read (and any AI review of them
+    is paid for) once, on the whole set."""
     run = _Run(deps, actor)
     added: list[str] = []
 
@@ -3911,7 +3937,10 @@ def add_files(
         to = VisitState.INTAKE if new and case.state not in {VisitState.INTAKE} else case.state
         return _Step(to=to, updates={"files": (*case.files, *new)} if new else {}, events=events)
 
-    case = _person_step(run, client_id, case_id, expected_version, op_id, build)
+    if settle:
+        case = _person_step(run, client_id, case_id, expected_version, op_id, build)
+    else:
+        case, _ = _person_write(run, client_id, case_id, expected_version, op_id, build)
     if added:
         from engine.doctor.prescription_runs import bind_case_uploads
 

@@ -80,7 +80,7 @@ def test_open_read_add_and_follow_a_case(client: TestClient) -> None:
 
     added = client.post(f"/cases/{case['case_id']}/files", json={"version": 1, "upload_id": second})
     assert added.status_code == 200, added.text
-    assert added.json()["version"] == 2
+    assert added.json()["version"] == 2, "adding a file only writes it; the visit is asked separately"
     assert [f["upload_id"] for f in added.json()["files"]] == [first, second]
 
     timeline = client.get(f"/cases/{case['case_id']}/timeline")

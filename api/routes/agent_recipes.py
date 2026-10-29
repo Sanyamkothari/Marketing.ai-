@@ -12,9 +12,7 @@ Three jobs, all through the storage the rest of the API uses:
 * `replay_for_scoring` looks up the recipe of the model version a scoring run will use and, when it
   has one, runs it on the scoring upload before the file is checked against the model's schema. A
   file the recipe cannot prepare comes back as a validation report with a `RECIPE_*` error, which
-  `POST /runs` answers with its usual 409. `scoring_source` is the rule it shares with the dry run
-  and with Guided setup for which file that is; `prepare_in_memory` is the same preparation without
-  writing anything, for the dry run.
+  `POST /runs` answers with its usual 409. `scoring_source` is the rule that says which file that is.
 
 This module imports nothing from `api.routes.runs`, which imports it.
 """
@@ -65,7 +63,6 @@ __all__ = [
     "consistent_types",
     "load_recipe",
     "model_recipe",
-    "prepare_in_memory",
     "recipe_failure_report",
     "recipe_levels",
     "refuse_other_roles",
@@ -426,44 +423,6 @@ def scoring_source(
             return _gone(upload.upload_id)
         source = storage.read_model(upload_key(receipt.upload_id, UPLOAD_RECORD_FILENAME), UploadRecord)
     return _gone(upload.upload_id)
-
-
-def prepare_in_memory(
-    storage: Storage,
-    config: UseCaseConfig,
-    upload: UploadRecord,
-    recipe: DataRecipe | None,
-    version: ModelVersion | None = None,
-) -> tuple[Any, int] | ValidationReport:
-    """The frame and row count `POST /runs` would check for a scoring `upload`, with nothing written.
-
-    `replay_for_scoring` without the derived upload: the same source, the same recipe run on every
-    row of it, then capped as `POST /runs` reads its prepared upload. A file the recipe cannot
-    prepare is the same one-error report (with `version`, carrying the proposed renames, DEC-1597).
-    """
-    chosen = scoring_source(storage, upload, recipe)
-    if isinstance(chosen, ValidationReport):
-        return chosen
-    source = chosen.upload
-    cap = profile_row_cap(config)
-    if chosen.ready or recipe is None:
-        read = ingest.read_upload(storage, source.source_key, file_format=source.file_format, row_cap=cap)
-        return read.frame, load_upload_profile(storage, source.upload_id).row_count
-    try:
-        run = run_saved_recipe(
-            _all_rows(storage, config, source, recipe),
-            recipe,
-            config,
-            upload_id=source.upload_id,
-            leak_check=_leak_check(source),
-        )
-    except RecipeError as exc:
-        report = recipe_failure_report(exc, upload_id=upload.upload_id, mode=RunMode.SCORE)
-        if version is None:
-            return report
-        return with_rename_suggestions(report, storage, config, version, source, recipe)
-    frame = consistent_types(run.frame)
-    return frame.head(cap).reset_index(drop=True), len(frame)
 
 
 def replay_for_scoring(

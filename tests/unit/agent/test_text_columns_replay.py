@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from api.routes.agent_recipes import prepare_in_memory, write_derived_upload
+from api.routes.agent_recipes import write_derived_upload
 from api.schemas import UploadRecord
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
@@ -94,16 +94,6 @@ def test_the_replay_of_a_scoring_file_reads_the_recorded_columns_as_text(storage
     frame = read_upload(storage, derived.record.source_key).frame
     assert frame["customer_id"].tolist() == ["0000125", "0000199", "0000123"]
     assert frame["spend"].tolist() == pytest.approx([2000.0, 15.0, 99.0])  # the recipe still ran
-
-
-def test_the_dry_run_reads_the_file_the_same_way(storage: LocalStorage) -> None:
-    source = upload(storage)
-    prepared = prepare_in_memory(
-        storage, load_use_case(USE_CASE), source, recipe(text_columns=("customer_id",))
-    )
-    assert isinstance(prepared, tuple)
-    frame, rows = prepared
-    assert rows == 3 and frame["customer_id"].tolist() == ["0000125", "0000199", "0000123"]
 
 
 def test_the_columns_a_read_used_as_text_are_what_the_approval_records_and_the_replay_applies(

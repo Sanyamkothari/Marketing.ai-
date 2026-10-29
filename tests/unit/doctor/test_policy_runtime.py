@@ -17,10 +17,8 @@ import pytest
 
 from engine.access.roles import Principal, Role
 from engine.agent.contracts import ProposalState, RecipeStepKind
-from engine.agent.edits import add_edit
 from engine.agent.loop import chat_turn
-from engine.agent.session import SessionError, accept_recommended, start_session
-from engine.doctor import policy as policy_module
+from engine.agent.proposals import rules_session
 from engine.doctor.registry import (
     DataTool,
     DataToolContext,
@@ -31,7 +29,8 @@ from engine.doctor.registry import (
 )
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.unit.agent.helpers import context_for
-from tests.unit.agent.test_session_and_loop import ScriptedMeter, _guardrails
+from tests.unit.agent.scripted_meter import ScriptedMeter
+from tests.unit.agent.scripted_meter import guardrails as _guardrails
 
 ANALYST = Principal(user_id="u-asha", username="asha", roles=frozenset({Role.ANALYST}), kind="user")
 
@@ -93,7 +92,7 @@ def _reply() -> str:
 
 def _chat(frame: pd.DataFrame, *script: str, config_root: Path | None = None) -> Any:
     ctx = context_for(frame, config_root=config_root)
-    session = start_session(ctx, session_id="s1")
+    session = rules_session(ctx, session_id="s1")
     meter = ScriptedMeter([*script, _reply()])
     return chat_turn(ctx, session, "Fix it", meter=meter, guardrails=_guardrails(), principal=ANALYST)
 
@@ -244,33 +243,6 @@ EDIT_REFUSALS: dict[str, dict[str, Any]] = {
 }
 
 
-@pytest.mark.parametrize("name", sorted(EDIT_REFUSALS))
-def test_every_edit_refusal_today_is_still_a_refusal_with_the_same_code(
-    name: str, frame: pd.DataFrame
-) -> None:
-    ctx = context_for(frame)
-    session = start_session(ctx, session_id="s1")
-    with pytest.raises(SessionError):
-        add_edit(session, ctx, **EDIT_REFUSALS[name])
-
-
-def test_what_is_allowed_today_is_still_allowed(frame: pd.DataFrame) -> None:
-    script = (
-        _look("city"),
-        _step("map_values", "city", mapping={"Bombay": "Mumbai"}),
-        _setting("split.test_fraction", 0.2),
-    )
-    assert len(_chat(frame, *script).proposals) == 2
-    ctx = context_for(frame)
-    session = start_session(ctx, session_id="s1")
-    edit: dict[str, Any] = {
-        "kind": RecipeStepKind.MAP_VALUES,
-        "column": "city",
-        "params": {"mapping": {"Bombay": "Mumbai"}},
-    }
-    assert add_edit(session, ctx, **edit).proposals
-
-
 ALLOWED_TODAY: dict[str, tuple[str, str]] = {
     # Decision O10 counts only what a step rewrites in its own column: a rename and a split into a new column
     # rewrite none, hiding a column rewrites none, and a unit conversion re-types every value it can read.
@@ -327,30 +299,3 @@ def test_a_chat_with_no_rule_set_for_its_fixes_suggests_none(
     script = (_look("city"), *(_step("map_values", "city", mapping={"Bombay": "Mumbai"}),) * 2)
     on = _chat(frame, *script, config_root=copy)
     assert on.proposals == () and on.blocked_by == "POLICY_NO_RULES"
-
-
-def test_the_never_ticked_kinds_are_read_from_the_policy_too(
-    frame: pd.DataFrame, tmp_path: Path, config_root: Path
-) -> None:
-    ctx = context_for(frame)
-    sure = [
-        p.step.kind
-        for p in accept_recommended(start_session(ctx, session_id="s1"), ctx).proposals
-        if p.state is ProposalState.ACCEPTED and p.step is not None
-    ]
-    assert sure, "the rules tick some steps they are sure of"
-    extra = sure[0]
-    copy = tmp_path / "configs"
-    shutil.copytree(config_root, copy)
-    path = copy / "agentic" / "policy.yaml"
-    text = path.read_text(encoding="utf-8")
-    old = "never_ticked_steps: [set_missing, valid_range, keep_latest_per_id, combine_rows, sql_query]"
-    assert old in text, "the shipped never-ticked list changed; update this test's copy of it"
-    path.write_text(text.replace(old, old[:-1] + f", {extra.value}]"), encoding="utf-8")
-    ctx = context_for(frame, config_root=copy)
-    session = accept_recommended(start_session(ctx, session_id="s1"), ctx)
-    kinds = {
-        p.step.kind for p in session.proposals if p.state is ProposalState.ACCEPTED and p.step is not None
-    }
-    assert extra not in kinds
-    assert policy_module.never_ticked_steps(copy) >= {extra, RecipeStepKind.VALID_RANGE}

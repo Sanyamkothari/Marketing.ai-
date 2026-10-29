@@ -16,8 +16,9 @@ from engine.agent.recipe import RecipeError, run_recipe
 from engine.agent.sql_step import SqlStepError, check_sql, run_sql, table_alias
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.prescription import FilePart, Provenance, make_prescription
-from engine.doctor.prescription_replay import ReplayFile, replay_prescription
+from engine.doctor.prescription_replay import ReplayFile
 from engine.doctor.registry import DataToolContext, DataToolError, data_registry
+from tests.unit.doctor import prescription_support as ps
 
 NOW = datetime(2026, 10, 12, 9, 0, tzinfo=UTC)
 LEVELS = (AgentLevel.CLEAN, AgentLevel.DERIVE, AgentLevel.RESHAPE)
@@ -105,12 +106,12 @@ def test_a_join_and_total_makes_a_new_table_and_counts_every_table() -> None:
 
 def test_the_step_is_replayed_on_next_months_files() -> None:
     saved = prescription_of(query())
-    june = replay_prescription(
+    june = ps.replay(
         saved,
         [ReplayFile("customers", customers()), ReplayFile("bills", bills())],
         mode="score",
     )
-    july = replay_prescription(
+    july = ps.replay(
         saved,
         [
             ReplayFile("customers", customers(("C7", "C8", "C9"))),
@@ -122,8 +123,8 @@ def test_the_step_is_replayed_on_next_months_files() -> None:
     assert june.frame["total"].tolist() == [15.0, 7.0, 0.0]
     assert july.frame["customer_id"].tolist() == ["C7", "C8", "C9"]
     assert july.frame["total"].tolist() == [2.5, 0.0, 5.0]
-    assert july.receipt.rows_out == 3
-    (receipt,) = july.receipt.recipe_receipts[-1].steps
+    assert len(july.frame) == 3
+    (receipt,) = july.recipe_receipts[-1].steps
     assert receipt.note is not None and "bills (3 rows)" in receipt.note
 
 
@@ -315,7 +316,7 @@ def test_propose_sql_step_tries_the_query_and_proposes_a_step(caller: str) -> No
     step = out["step"]
     assert step["kind"] == "sql_query" and step["params"]["inputs"] == ["customers", "bills"]
     # the proposed step runs on the same files, as a prescription would replay it
-    again = replay_prescription(
+    again = ps.replay(
         prescription_of(RecipeStep.model_validate(step)),
         [ReplayFile("customers", customers()), ReplayFile("bills", bills())],
         mode="score",

@@ -17,7 +17,6 @@ from engine.access.roles import Role
 from engine.agent.advisor import NEVER_TICKED_STEPS
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import RecipeStepKind, StepReceipt
-from engine.agent.edits import PERSON_STEP_KINDS
 from engine.agent.loop import CHAT_STEP_KINDS, DOCTOR_STEP_KINDS, NEVER_SUGGESTED_BY_CHAT
 from engine.agent.recipe import EXCEL_SERIAL_PARAMS
 from engine.agent.recommend import NEVER_RECOMMENDED
@@ -54,6 +53,20 @@ from tests.unit.doctor.policy_cases import (
     shipped,
     step,
 )
+
+PERSON_STEP_KINDS = {
+    RecipeStepKind.CORRECT_CELLS,
+    RecipeStepKind.MAP_VALUES,
+    RecipeStepKind.SET_MISSING_TEXT,
+    RecipeStepKind.CONVERT_UNITS,
+    RecipeStepKind.SPLIT_COLUMN,
+    RecipeStepKind.VALID_RANGE,
+    RecipeStepKind.FILL_MISSING,
+    RecipeStepKind.REMOVE_ROWS,
+    RecipeStepKind.RENAME_COLUMN,
+    RecipeStepKind.DROP_COLUMN,
+}
+"""What a person may do by hand, as the shipped policy lists it (`data.person_edit`)."""
 
 
 def codes(decisions: tuple[Any, ...]) -> set[str]:
@@ -190,9 +203,7 @@ def _declared_tools() -> dict[str, tuple[str, frozenset[RecipeStepKind]]]:
 
 def test_every_declared_propose_tool_has_a_rule_set_that_allows_what_it_proposes() -> None:
     declared = _declared_tools()
-    assert {"propose_step", "propose_setting", "edit_by_hand", "join_files", "keep_latest_per_id"} <= set(
-        declared
-    )
+    assert {"propose_step", "propose_setting", "join_files", "keep_latest_per_id"} <= set(declared)
     assert {"parse_indian_numbers", "indian_booleans", "find_excel_serial_dates", "split_file"} <= set(
         declared
     )
@@ -223,7 +234,7 @@ def test_the_rule_sets_hold_the_rules_the_code_holds_today() -> None:
     # Guided setup's chat does not, its own list (`CHAT_STEP_KINDS`) is checked first and still refuses it.
     assert set(policy.rule_sets["data.recipe_step"].step_kinds) == set(DOCTOR_STEP_KINDS)
     assert set(DOCTOR_STEP_KINDS) - set(CHAT_STEP_KINDS) == {RecipeStepKind.REMOVE_ROWS}
-    assert set(policy.rule_sets["data.person_edit"].step_kinds) == set(PERSON_STEP_KINDS)
+    assert set(policy.rule_sets["data.person_edit"].step_kinds) == PERSON_STEP_KINDS
     assert set(policy.never_ticked_steps) == set(NEVER_TICKED_STEPS)
     assert (
         set(policy.settings_never_suggested) == NEVER_SUGGESTED_BY_CHAT | NEVER_RECOMMENDED | ADVISORY_PATHS

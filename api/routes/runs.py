@@ -501,22 +501,14 @@ def start_run(
             storage,
             config,
             upload=upload,
-            dataset_id=dataset.manifest.dataset_id if dataset is not None else None,
             primary_key=primary_key,
             target=target,
-            manifest=dataset.manifest if dataset is not None else None,
             registry=registry,
         )
         if prescribed is not None and prescribed.upload is not None and prescribed.profile is not None:
             # The file as its prescription prepares it, written beside it as Guided setup's Approve does.
             upload, profile = prescribed.upload, prescribed.profile
             source_key, file_format, source_id = upload.source_key, upload.file_format, upload.upload_id
-        elif prescribed is not None and prescribed.dataset_rows is not None:
-            # A built dataset trains on the rows its prescription makes: the approved outcome and the post-build
-            # recipe (closes [INV] §8); the run carries the post-build recipe alone to scoring.
-            rows = prescribed.dataset_rows
-            dataset = replace(_require_dataset(dataset), profile=rows.profile, source_key=rows.source_key)
-            profile, source_key = rows.profile, rows.source_key
         report = validate.validate_for_training(
             read_frame(storage, source_key, file_format, profile_row_cap(config)),
             config,
@@ -623,8 +615,6 @@ def start_run(
     carried: DataRecipe | None = None  # the recipe that prepared a dataset's rows, if any
     if upload is not None:
         attach_recipe_to_run(storage, upload.upload_id, record.run_id)  # Plan G (DEC-1006)
-    elif prescribed is not None and prescribed.dataset_recipe is not None:
-        attach_dataset_recipe(storage, record.run_id, *prescribed.dataset_recipe)  # Plan O M243
     elif dataset_prepared is not None:
         attach_dataset_recipe(storage, record.run_id, dataset_prepared[0], dataset_prepared[1].receipt)
         carried = dataset_prepared[0]

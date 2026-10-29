@@ -7,11 +7,9 @@ from typing import Any
 
 import pytest
 
-from engine.agent.advisor import advise, recipe_steps
+from engine.agent.advisor import advise
 from engine.agent.config import AgentLevel
-from engine.agent.contracts import ProposalState, RecipeStepKind, SessionStatus
-from engine.agent.recipe import run_recipe
-from engine.agent.session import accept_recommended, answer, decide, start_session, unpivot_declined
+from engine.agent.contracts import RecipeStepKind, SessionStatus
 from engine.agent.tools import AgentContext
 from engine.config import RunMode
 from tests.fixtures.agent_bench.make_wide import wide_frame
@@ -76,86 +74,3 @@ def test_month_last_names_are_asked_the_same_way() -> None:
     advice = advise(context_for(wide_frame(period_first=False), USE_CASE))
     step = _unpivot_question(advice).options[0].proposal.step
     assert step.params["name_pattern"] == "{measure}_{period}"
-
-
-def test_keep_as_columns_is_remembered_and_the_sheet_is_advised_as_it_is(ctx: AgentContext) -> None:
-    session = start_session(ctx, session_id="s1")
-    question = _unpivot_question(session)
-    kept = answer(session, ctx, question.question_id, "keep")
-    assert unpivot_declined(kept)
-    assert kept.stop_reason is None
-    assert [q.question_id for q in kept.questions if q.answer is None] == []
-    assert not any(p.step is not None and p.step.kind is RecipeStepKind.UNPIVOT for p in kept.proposals)
-    assert any(r.tool == "check_data" for r in kept.tool_results)  # advised on the wide sheet now
-
-
-def test_turn_into_rows_then_combine_reaches_ready(ctx: AgentContext) -> None:
-    session = start_session(ctx, session_id="s1")
-    turned = answer(session, ctx, _unpivot_question(session).question_id, "unpivot")
-    assert not unpivot_declined(turned)
-    assert turned.stop_reason is None and turned.rounds == 2
-    (combine_question,) = [q for q in turned.questions if q.answer is None]
-    assert (
-        combine_question.text
-        == "Each shopper appears on 6 rows on average. Combine them into one row per shopper?"
-    )
-    combine: Any = combine_question.options[0].proposal.step  # type: ignore[union-attr]
-    assert combine.params["time_column"] == "month" and combine.params["outcome"] == TARGET
-    features = {f["name"]: f for f in combine.params["features"]}
-    assert features["country"] == {"name": "country", "function": "latest", "column": "country"}  # carried
-    assert {"spend_sum", "spend_latest", "orders_mean"} <= set(features)
-    combined = answer(turned, ctx, combine_question.question_id, "combine")
-    assert combined.stop_reason is None
-    decided = accept_recommended(combined, ctx)
-    pending = [
-        (p.proposal_id, ProposalState.ACCEPTED, None)
-        for p in decided.proposals
-        if p.state is ProposalState.PENDING
-    ]
-    decided = decide(decided, ctx, pending)  # the training time is offered to check, not ticked
-    assert decided.status is SessionStatus.READY
-    steps = recipe_steps(p for p in decided.proposals if p.state is ProposalState.ACCEPTED)
-    assert [s.kind for s in steps] == [RecipeStepKind.UNPIVOT, RecipeStepKind.COMBINE_ROWS]
-    assert decided.summary.intended_actions[:2] == (
-        "Turn the columns that hold one period each into rows, one per shopper per 'month'.",
-        "Combine those rows into one row per shopper by 'customer_id', using only rows dated on or before each "
-        "shopper's snapshot, and train on those.",
-    )
-    # The recipe runs on the wide sheet as it was sent: one row per shopper again, the outcome as it was.
-    out = run_recipe(
-        ctx.frame,
-        steps,
-        upload_id="u",
-        primary_key=KEY,
-        target=TARGET,
-        levels=ctx.config.agent.levels,
-        max_failure_pct=ctx.config.agent.max_conversion_failure_pct,
-        leak_check="full",
-    ).frame
-    assert len(out) == len(ctx.frame) and out[KEY].is_unique
-    original = ctx.frame.set_index(KEY)[TARGET]
-    assert (out.set_index(KEY)[TARGET] == original.loc[out[KEY]]).all()
-    spend = [c for c in ctx.frame.columns if c.endswith("_spend")]
-    assert (
-        out.set_index(KEY)["spend_sum"]
-        .round(2)
-        .equals(
-            ctx.frame.set_index(KEY)[spend]
-            .sum(axis=1, min_count=1)
-            .round(2)
-            .loc[out[KEY]]
-            .rename("spend_sum")
-        )
-    )
-
-
-def test_answering_again_withdraws_the_step(ctx: AgentContext) -> None:
-    session = start_session(ctx, session_id="s1")
-    question_id = _unpivot_question(session).question_id
-    turned = answer(session, ctx, question_id, "unpivot")
-    back = answer(turned, ctx, question_id, "keep")
-    assert not any(
-        p.step is not None and p.step.kind is RecipeStepKind.UNPIVOT and p.state is ProposalState.ACCEPTED
-        for p in back.proposals
-    )
-    assert unpivot_declined(back)

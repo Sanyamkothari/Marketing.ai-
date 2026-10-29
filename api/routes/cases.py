@@ -36,12 +36,14 @@ from pydantic import Field, ValidationError
 
 from api.access import PrincipalDep, set_audit_context
 from api.access_policy import RoutePolicy, register
-from api.deps import StorageDep
+from api.deps import ConfigRootDep, StorageDep
+from api.routes.case_visit import visit_deps
 from api.routes.uploads import http_error, load_upload
 from api.schemas import ErrorResponse
 from engine.access.roles import Role
 from engine.agent.contracts import AGENT_SESSION_FILENAME, AgentSession
 from engine.config import StrictBase
+from engine.doctor import visit as doctor_visit
 from engine.doctor.case import (
     CLIENT_ID_PATTERN,
     DEFAULT_CLIENT_ID,
@@ -231,7 +233,12 @@ def get_case(
     summary="Add a file to a Data Doctor case, against the version you read",
 )
 def add_case_file(
-    case_id: str, body: AddFileRequest, request: Request, storage: StorageDep, principal: PrincipalDep
+    case_id: str,
+    body: AddFileRequest,
+    request: Request,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    principal: PrincipalDep,
 ) -> Case:
     store = CaseStore(storage)
     try:
@@ -242,8 +249,15 @@ def add_case_file(
         raise _error(exc) from exc
     file = _case_file(storage, body.upload_id, principal.user_id)
     try:
-        case = store.add_file(
-            body.client_id, case_id, expected_version=body.version, actor=principal.user_id, file=file
+        # The visit's own path: it binds the file to the case's stored prescription and reopens a finished case.
+        case = doctor_visit.add_files(
+            body.client_id,
+            case_id,
+            [file],
+            visit_deps(storage, root, request, principal, body.client_id),
+            expected_version=body.version,
+            actor=principal.user_id,
+            settle=False,  # the UI adds files one at a time, then asks POST /visit once for the whole set
         )
     except CaseError as exc:
         set_audit_context(request, details={"reason_code": exc.code})

@@ -1,7 +1,7 @@
 """The Data Doctor tools registered in M232 (Plan O, DEC-1802; the design §5.5).
 
 **The 22 existing tools.** Plan G's 18 look tools (`engine.agent.tools.TOOLS`, in that order), the chat's two
-PROPOSE actions (`propose_setting`, `propose_step`), the person's `edit_by_hand`, and the conversation loop
+PROPOSE actions (`propose_setting`, `propose_step`), and the conversation loop
 itself, which is not a tool: it is the caller (`engine.agent.loop.chat_turn` calls every tool through this
 registry).
 
@@ -13,7 +13,7 @@ the AI reaches them through the visit (M235), so the chat's prompt is what it wa
 Roles (`RoutePolicy`, checked on every call):
 
 * a tool that returns a cell, a row or a masked example needs an **Analyst**, as reading the rows of a file
-  being set up does (`POST /uploads/{id}/agent-session/rows`) and as the Doctor's diagnosis does;
+  being set up does and as the Doctor's diagnosis does;
 * `what_can_this_power` (aggregate verdicts) and `data_request` (no data at all) need only a **Viewer**;
 * every PROPOSE tool needs an **Analyst**: a Viewer may call READ tools only.
 
@@ -32,8 +32,8 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel
 
 from api.access_policy import RoutePolicy
 from engine.access.roles import Role
-from engine.agent.contracts import Proposal, ProposalSource, RecipeStepKind
-from engine.agent.tools import TOOLS, AgentToolError, NoArgs, Tool, ToolKind
+from engine.agent.contracts import Proposal
+from engine.agent.tools import TOOLS, NoArgs, Tool, ToolKind
 from engine.config import ConfigError, StrictBase
 from engine.doctor.contracts import FileDiagnosis, FileLink, FileStack, UseCaseReadiness
 from engine.doctor.diagnose import ADVISE_ROWS
@@ -128,12 +128,6 @@ _CHAT_POLICY: Final[RoutePolicy] = RoutePolicy(
     purpose="ask the helper",
     object_type="upload",
 )
-_EDIT_POLICY: Final[RoutePolicy] = RoutePolicy(
-    role=Role.ANALYST,
-    action="agent.edit",
-    purpose="edit the data by hand",
-    object_type="upload",
-)
 _DOCTOR_POLICY: Final[RoutePolicy] = RoutePolicy(
     role=Role.ANALYST, action="doctor.diagnose", purpose="ask Data Doctor about uploaded files"
 )
@@ -191,7 +185,6 @@ def _look_tool(tool: Tool) -> DataTool[Any, LookOutput]:
         callers=_EVERYONE,
         needs=("agent",),
         available=_look_available(tool.name),
-        mirrors=("POST", "/uploads/{upload_id}/agent-session/rows"),
         session_tool=True,
         wraps=f"engine/agent/tools.py TOOLS[{tool.name!r}]",
     )
@@ -255,57 +248,6 @@ def _chat_propose(name: str) -> Callable[[BaseModel, DataToolContext], ProposeOu
         return ProposeOutput(args=dict(result.args), result=dict(result.result), proposal=proposal)
 
     return run
-
-
-class EditArgs(_Args):
-    """`edit_by_hand`'s arguments: the body of `POST /uploads/{id}/agent-session/edits`."""
-
-    kind: RecipeStepKind = Field(description="What the edit does: one of the step kinds a person may use.")
-    column: str = Field(min_length=1, max_length=512, description="The column it changes.")
-    params: dict[str, JsonValue] = Field(default_factory=dict, description="The step's parameters.")
-    new_column: str | None = Field(default=None, max_length=128, description="For a split or a rename.")
-
-
-def _edit_by_hand(parsed: EditArgs, ctx: DataToolContext) -> ProposeOutput:
-    """The person's edit as an accepted step (`engine.agent.edits.add_edit`).
-
-    The edited session goes to `ctx.save_session`, which the caller stores under its lock and version check (as
-    the edits route does); the tool is not available without one, so an edit is never made and dropped.
-    """
-    from engine.agent.edits import add_edit
-    from engine.agent.proposals import SessionError
-
-    session, save = ctx.session, ctx.save_session
-    if session is None or save is None:  # unreachable through the registry: `needs` makes it unavailable
-        raise DataToolError(
-            "TOOL_UNKNOWN", "edit_by_hand needs a session and somewhere to save it.", status=404
-        )
-    try:
-        edited = add_edit(
-            session,
-            ctx.require_agent(),
-            kind=parsed.kind,
-            column=parsed.column,
-            params=dict(parsed.params),
-            new_column=parsed.new_column,
-            clock=ctx.clock,
-        )
-    except SessionError as exc:
-        raise DataToolError(exc.code, exc.message, status=409) from exc
-    column = ctx.require_agent().resolve(parsed.column)
-    made = [
-        p
-        for p in edited.proposals
-        if p.source is ProposalSource.PERSON
-        and p.step is not None
-        and p.step.kind is parsed.kind
-        and p.step.column == column
-    ]
-    if not made:  # add_edit always adds or merges one; anything else is a bug, not the person's problem
-        raise AgentToolError("AGENT_TOOL_ARGS_INVALID", "The edit made no step.")
-    proposal = made[-1]
-    save(edited)
-    return ProposeOutput(args={"kind": parsed.kind.value, "column": column}, result={}, proposal=proposal)
 
 
 # ---------------------------------------------------------------------------
@@ -887,7 +829,6 @@ def register_all(registry: DataToolRegistry) -> None:
             callers=_RULES_AND_AI,
             needs=("agent", "turn"),
             max_output_bytes=None,  # Plan G's handler bounds the suggestion (the listed settings)
-            mirrors=("POST", "/uploads/{upload_id}/agent-session/messages"),
             policy_kind="data.setting",
             wraps="engine/agent/loop.py _propose",
         )
@@ -907,28 +848,8 @@ def register_all(registry: DataToolRegistry) -> None:
             callers=_RULES_AND_AI,
             needs=("agent", "turn"),
             max_output_bytes=None,  # Plan G's `check_recipe` bounds it (MAX_MAPPINGS = 500 spellings, ...)
-            mirrors=("POST", "/uploads/{upload_id}/agent-session/messages"),
             policy_kind="data.recipe_step",
             wraps="engine/agent/loop.py _propose_step",
-        )
-    )
-    registry.register(
-        DataTool(
-            number=49,
-            name="edit_by_hand",
-            kind=DataToolKind.PROPOSE,
-            description="The person's own edit, as a step like every other: ticked, undone by unticking.",
-            input_model=EditArgs,
-            output_model=ProposeOutput,
-            route_policy=_EDIT_POLICY,
-            exposure=Exposure.SESSION_ONLY,
-            run=_edit_by_hand,
-            callers=frozenset({"person"}),
-            needs=("agent", "session", "save_session"),
-            max_output_bytes=None,  # `add_edit`'s own checks bound it, as the edits route has no other cap
-            mirrors=("POST", "/uploads/{upload_id}/agent-session/edits"),
-            policy_kind="data.person_edit",
-            wraps="engine/agent/edits.py add_edit",
         )
     )
     wrappers: tuple[_Wrapper, ...] = (

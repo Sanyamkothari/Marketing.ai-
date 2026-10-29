@@ -41,6 +41,7 @@ from engine.agent.formats import (
     parse_numbers,
 )
 from engine.column_names import looks_like_code
+from engine.content_cache import ContentCache, cached_column, column_cache, map_distinct
 
 if TYPE_CHECKING:
     from engine.doctor.locale import LocaleProfile
@@ -206,10 +207,19 @@ def _text_columns(
     ]
 
 
+_PRESENT: Final[ContentCache[pd.Series[Any]]] = column_cache(8, megabytes=128)
+"""The text cells of a column, by what the column holds: each locale check reads the same cells."""
+
+
 def _present_text(series: pd.Series[Any]) -> pd.Series[Any]:
-    present = series.dropna()
-    present = present[[isinstance(v, str) for v in present.tolist()]]
-    return present[present.str.strip() != ""]
+    def make() -> pd.Series[Any]:
+        present = series.dropna()
+        stripped = map_distinct(
+            present, lambda distinct: [v.strip() if isinstance(v, str) else None for v in distinct]
+        )
+        return present[stripped.notna().to_numpy() & (stripped != "").to_numpy()]
+
+    return cached_column(_PRESENT, series, "text", make)
 
 
 def _unlisted_words(text: str) -> bool:
@@ -365,7 +375,9 @@ def propose_indian_booleans(
         cells = _present_text(frame[name])
         if cells.empty:
             continue
-        spellings = Counter(text.strip() for text in cells)
+        spellings: Counter[str] = Counter()
+        for text, count in cells.value_counts(sort=False).items():  # each distinct text once
+            spellings[str(text).strip()] += int(count)
         if len(spellings) > MAX_BOOLEAN_SPELLINGS:
             continue
         keys = {spelling: _key(spelling) for spelling in spellings}

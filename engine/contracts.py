@@ -1724,7 +1724,7 @@ AGENT_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
         # Kept in this literal, not the PLAN-O block: see the note there.
         "CURRENCY_MIXED",
         # A replay of an approved recipe that the guards stop (customers lost or doubled, an empty result): the rows
-        # are not prepared. `engine.agent.dataset_recipe.run_replay`.
+        # are not prepared. `engine.doctor.materialize.replay_recipe`.
         "RECIPE_GUARD_STOP",
         # A scoring file written another way than the settings the recipe was approved with, or holding a new yes/no
         # spelling: `api.routes.agent_recipes.recipe_failure_report` keeps these codes as they are.

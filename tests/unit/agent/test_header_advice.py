@@ -19,8 +19,7 @@ import pandas as pd
 import pytest
 
 from engine.agent.advisor import ROLE_PRIMARY_KEY, ROLE_TARGET, Advice, advise
-from engine.agent.contracts import AgentConfidence, ProposalKind, ProposalState, SessionStatus
-from engine.agent.session import accept_recommended, answer, start_session
+from engine.agent.contracts import AgentConfidence, ProposalKind
 from engine.agent.tools import AgentContext, call_tool
 from tests.fixtures.agent_bench.make_hinglish import CASES, hinglish_frame
 from tests.unit.agent.helpers import header_help_context as context_for
@@ -91,51 +90,6 @@ def test_the_headers_only_order_the_two_valued_columns_the_rules_found_and_never
     two_valued = {"churn_flg", "mkt_optin", "dnd_flag"}
     offered = {o.label for q in advice.questions for o in q.options}
     assert not offered & {"churn_amount"} and advice.target in two_valued
-
-
-def test_nothing_read_from_a_header_is_ticked_even_when_uncertain_suggestions_are() -> None:
-    ctx = _ticking(context_for(_case("telco_hinglish")))
-    session = accept_recommended(start_session(ctx, session_id="s-1"), ctx)
-    by_path = {p.path: p for p in session.proposals if p.kind is ProposalKind.ROLE}
-    assert by_path[ROLE_PRIMARY_KEY].from_headers and by_path[ROLE_PRIMARY_KEY].state is ProposalState.PENDING
-    assert by_path[ROLE_TARGET].from_headers and by_path[ROLE_TARGET].state is ProposalState.PENDING
-    assert session.status is SessionStatus.NEEDS_REVIEW
-
-
-def test_without_the_headers_the_same_switch_still_ticks_what_it_always_did() -> None:
-    """`tick_uncertain` keeps its meaning for every suggestion the headers did not make."""
-    frame = pd.DataFrame(
-        {"customer_id": [f"C{i}" for i in range(1000)], "y": [0, 1] * 500, "spend": range(1000)}
-    )
-    ctx = _ticking(context_for(frame))
-    session = accept_recommended(start_session(ctx, session_id="s-1"), ctx)
-    target = next(p for p in session.proposals if p.path == ROLE_TARGET)
-    assert not target.from_headers and target.state is ProposalState.ACCEPTED
-
-
-def test_the_opt_out_the_consent_and_the_last_contact_are_questions_with_no_change_behind_them() -> None:
-    ctx = context_for(_case("telco_prepaid_abbr"))
-    advice = advise(ctx)
-    notes = [q for q in advice.questions if "may say" in q.text]
-    assert [q.text.split("'")[1] for q in notes] == ["mkt_optin", "dnd_flag", "last_cntct_dt"]
-    for note in notes:
-        assert not note.blocking and note.answer is None
-        assert all(option.proposal is None for option in note.options)
-        assert "Nothing is changed here" in note.options[0].effect
-    # The column the use case holds back opted-out customers by is named, and the polarity is spelled out.
-    opt_out = next(q for q in notes if "dnd_flag" in q.text)
-    assert (
-        "'marketing_opt_in'" in opt_out.text
-        and "1 for customers who may be contacted" in opt_out.options[0].effect
-    )
-    session = start_session(ctx, session_id="s-1")
-    asked = [q for q in session.questions if "may say" in q.text]
-    assert [q.text for q in asked] == [q.text for q in notes]
-    for note in asked:
-        before = session.proposals
-        session = answer(session, ctx, note.question_id, "yes")
-        assert session.proposals == before  # answering changes nothing in the setup
-    assert session.status is SessionStatus.NEEDS_REVIEW  # the role suggestions are still the person's to tick
 
 
 def test_no_note_when_the_file_already_has_the_column_the_use_case_reads() -> None:

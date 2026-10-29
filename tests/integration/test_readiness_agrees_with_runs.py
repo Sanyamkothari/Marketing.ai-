@@ -224,7 +224,6 @@ def test_a_scoring_report_checks_the_copy_the_models_recipe_prepares(
         (foreign, KEY, "CURRENCY_FOREIGN"),
         (fits, "snapshot_date", "RECIPE_ROLES_MISMATCH"),
     ):
-        dry = client.post(f"/uploads/{upload_id}/checks", json={"use_case": USE_CASE, "primary_key": key})
         ours = check_readiness(
             inputs_for_upload(
                 storage,
@@ -238,25 +237,16 @@ def test_a_scoring_report_checks_the_copy_the_models_recipe_prepares(
         )
         assert ours.mode == "score"
         if expected is None:
-            assert dry.status_code == 200 and dry.json()["passed"] is True, dry.text
             assert ours.dry_run_passed, ours.verdict_reason
             assert ours.dry_run_report is not None
-            theirs = ValidationReport.model_validate(dry.json())
-            assert {(c.code, c.column, c.severity) for c in ours.dry_run_report.checks} == {
-                (c.code, c.column, c.severity) for c in theirs.checks
-            }
             # the recipe's steps ran on this file, in memory: the report is about the prepared rows
             assert ours.prepared is not None and ours.prepared.prepares_like_model_recipe is False
             assert [fix.step_kind for fix in ours.fixes_applied] == ["parse_number", "normalise_text"]
             assert ours.scoring_contract is not None and ours.scoring_contract.type_changed == ()
         elif expected == "RECIPE_ROLES_MISMATCH":
-            assert dry.status_code == 409 and dry.json()["detail"]["code"] == expected, dry.text
             assert not ours.dry_run_passed and ours.verdict == "not_ready"
             assert [r.id for r in ours.requirements if r.status == "fail"] == [expected]
         else:
-            assert dry.status_code == 200 and dry.json()["passed"] is False, dry.text
-            theirs = ValidationReport.model_validate(dry.json())
-            assert [(c.code, c.column) for c in theirs.checks] == [(expected, "ad_ctr_90d")]
             assert not ours.dry_run_passed and ours.verdict == "not_ready"
             assert [(r.id, r.column, r.gate) for r in ours.requirements if r.status == "fail"] == [
                 (expected, "ad_ctr_90d", "recipe_replay")

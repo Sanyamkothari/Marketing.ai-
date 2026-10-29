@@ -15,7 +15,7 @@ from __future__ import annotations
 import pandas as pd
 
 from engine.agent import egress
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from tests.unit.agent.egress_canary import ToolingClient, canary_context, run_session
 from tests.unit.agent.helpers import synthetic
 
@@ -27,7 +27,7 @@ def test_a_numeric_header_does_not_rewrite_the_ranges_in_the_settings_block() ->
     frame["240.0"] = 3
     ctx = canary_context(mode="masked_data", frame=frame)
     client = ToolingClient([{"action": "get_profile", "args": {}}], per_turn=1)
-    run_session(ctx, client, started=start_session(ctx, session_id="review-14"))
+    run_session(ctx, client, started=rules_session(ctx, session_id="review-14"))
     prompts = "\n".join(client.sent_text)
     assert "`model_search.tuning_trials`: 50; range 5.0 to 500.0" in prompts
     assert "`model_search.time_limit_minutes`: 30; range 1.0 to 240.0" in prompts

@@ -17,7 +17,7 @@ from engine.agent.advisor import ROLE_PRIMARY_KEY, ROLE_TARGET
 from engine.agent.assist import GENERIC_WHY, LEAK_REVIEW_TOOL, MAX_LEAK_QUESTIONS, RERANK_TOOL, assist_session
 from engine.agent.contracts import AgentSession, ProposalKind, ProposalState, RecipeStepKind, ToolResult
 from engine.agent.loop import UNAVAILABLE
-from engine.agent.session import accept_recommended, answer, start_session
+from engine.agent.proposals import rules_session
 from engine.agent.tools import AgentContext
 from engine.config import LlmConfig
 from engine.llm import LLMError
@@ -54,7 +54,7 @@ def _frame() -> pd.DataFrame:
 
 def _started(frame: pd.DataFrame | None = None) -> tuple[AgentContext, AgentSession]:
     ctx = context_for(_frame() if frame is None else frame)
-    return ctx, start_session(ctx, session_id="s-1")
+    return ctx, rules_session(ctx, session_id="s-1")
 
 
 def _assist(
@@ -141,18 +141,6 @@ def test_a_reply_that_is_not_json_or_not_what_was_asked_changes_nothing() -> Non
         assert result.reordered == () and result.leak_questions == 0
 
 
-def test_an_answered_question_is_left_as_the_person_left_it() -> None:
-    ctx, session = _started()
-    first = _outcome_question(session)
-    session = answer(session, ctx, first.question_id, first.options[0].option_id)
-    out, _, result = _assist(
-        ctx, session, AssistClient(orders=[{"kind": "outcome", "columns": ["kharida_flag", "churn_flg"]}])
-    )
-    kept = next(q for q in out.questions if q.question_id == first.question_id)
-    assert kept == next(q for q in session.questions if q.question_id == first.question_id)
-    assert result.llm_calls >= 0
-
-
 def test_the_leak_reviewer_adds_questions_beside_the_rules_never_a_suggestion() -> None:
     ctx, session = _started()
     out, client, result = _assist(
@@ -183,33 +171,6 @@ def test_the_leak_reviewer_adds_questions_beside_the_rules_never_a_suggestion() 
     )  # the rules' own are untouched
     assert client.tasks[-1] == "leaks"
     assert any(r.tool == LEAK_REVIEW_TOOL for r in out.tool_results)
-
-
-def test_pressing_hide_adds_the_step_pressing_keep_adds_nothing_and_nothing_else_is_ticked() -> None:
-    ctx, session = _started()
-    out, _, _ = _assist(
-        ctx,
-        session,
-        AssistClient(
-            columns=[
-                {"column": "cancellation_reason", "why": "Only known after a customer leaves."},
-                {"column": "final_status", "why": "Set when the outcome is known."},
-            ]
-        ),
-    )
-    ticked = accept_recommended(out, ctx)
-    assert not [
-        p for p in ticked.proposals if p.step is not None and p.step.kind is RecipeStepKind.DROP_COLUMN
-    ]
-    first, second = (q for q in out.questions if q.question_id.startswith("x1-"))
-    out = answer(out, ctx, first.question_id, "hide")
-    hidden = [p for p in out.proposals if p.step is not None and p.step.kind is RecipeStepKind.DROP_COLUMN]
-    assert [(p.step.column, p.state) for p in hidden if p.step] == [
-        ("cancellation_reason", ProposalState.ACCEPTED)
-    ]
-    before = out.proposals
-    out = answer(out, ctx, second.question_id, "keep")
-    assert out.proposals == before
 
 
 def test_the_reviewer_never_names_the_id_the_outcome_a_made_up_column_or_one_already_asked_about() -> None:
@@ -406,7 +367,7 @@ def test_nothing_a_pattern_can_recognise_reaches_either_prompt(mode: str) -> Non
     """The canary file: fake personal data in cells, in the ID column and in headers. The second opinions get
     names and counts only, through the same gate as a chat turn, so no planted value is in any prompt."""
     ctx = canary_context(mode=mode)
-    session = start_session(ctx, session_id="canary")
+    session = rules_session(ctx, session_id="canary")
     named = [{"column": c, "why": "Late."} for c in ("notes", "monthly_spend", "signup_date")]
     client = AssistClient(columns=named, orders=[{"kind": "id", "columns": ["customer_id", "phone_number"]}])
     out, _, result = _assist(ctx, session, client)
@@ -423,7 +384,7 @@ def test_nothing_a_pattern_can_recognise_reaches_either_prompt(mode: str) -> Non
 
 def test_the_always_hidden_and_personal_columns_are_never_offered_to_the_reviewer() -> None:
     ctx = canary_context(always_hide=["notes"])
-    session = start_session(ctx, session_id="canary")
+    session = rules_session(ctx, session_id="canary")
     client = AssistClient(
         columns=[{"column": "notes", "why": "Late."}, {"column": "pan_number", "why": "Late."}]
     )

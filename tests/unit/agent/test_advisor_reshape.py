@@ -7,10 +7,9 @@ from typing import Any
 
 import pytest
 
-from engine.agent.advisor import ROLE_PRIMARY_KEY, advise, recipe_steps, summarise
+from engine.agent.advisor import ROLE_PRIMARY_KEY, advise
 from engine.agent.config import AgentLevel
-from engine.agent.contracts import ProposalKind, ProposalState, RecipeStepKind, SessionStatus
-from engine.agent.session import accept_recommended, answer, decide, reshape_of, start_session
+from engine.agent.contracts import ProposalKind, RecipeStepKind, SessionStatus
 from engine.agent.tools import AgentContext
 from tests.fixtures.agent_bench.make_multirow import multirow_frame
 from tests.unit.agent.helpers import context_for
@@ -94,35 +93,3 @@ def test_after_combining_the_advice_is_about_the_combined_rows(ctx: AgentContext
 
 def _combine_question_or_none(question: Any) -> bool:
     return any(o.option_id == "combine" for o in question.options)
-
-
-def test_the_session_combines_on_the_answer_and_approves_on_the_combined_file(ctx: AgentContext) -> None:
-    session = start_session(ctx, session_id="s1")
-    question = _combine_question(session)
-    combined = answer(session, ctx, question.question_id, "combine")
-    step, declined = reshape_of(combined)
-    assert step is not None and not declined
-    assert combined.rounds == 2
-    assert combined.stop_reason is None
-    decided = accept_recommended(combined, ctx)
-    pending = [p for p in decided.proposals if p.state is ProposalState.PENDING]
-    assert [p.path for p in pending] == ["model_search.time_limit_minutes"]  # offered to check, not ticked
-    decided = decide(decided, ctx, [(p.proposal_id, ProposalState.ACCEPTED, None) for p in pending])
-    assert not [p for p in decided.proposals if p.state is ProposalState.PENDING]
-    assert decided.status is SessionStatus.READY
-    steps = recipe_steps(p for p in decided.proposals if p.state is ProposalState.ACCEPTED)
-    assert [s.kind for s in steps] == [RecipeStepKind.COMBINE_ROWS]
-    summary = summarise(ctx, decided.proposals, assumptions=decided.assumptions, engine_hidden=())
-    assert "Combine the rows into one row per shopper" in summary.decisions
-    assert any(
-        line.startswith("Combine the 7,652 rows into one row per shopper")
-        for line in summary.intended_actions
-    )
-
-
-def test_answering_stop_stops_the_session(ctx: AgentContext) -> None:
-    session = start_session(ctx, session_id="s1")
-    stopped = answer(session, ctx, _combine_question(session).question_id, "stop")
-    assert reshape_of(stopped) == (None, True)
-    assert stopped.status is SessionStatus.STOPPED
-    assert stopped.stop_reason is not None

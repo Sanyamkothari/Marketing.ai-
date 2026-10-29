@@ -18,8 +18,6 @@ from engine.doctor.case import CaseQuestion
 from engine.doctor.standing import StandingAnswerStore, meaning_of
 from engine.storage import LocalStorage
 from engine.utils.time import utc_now
-from tests.fixtures.agent_bench.make_messy import messy_frame
-from tests.integration.agent.test_api_session import _decide_everything, _session, _start, _upload
 
 pytestmark = pytest.mark.integration
 
@@ -43,42 +41,6 @@ def test_every_route_has_its_policy() -> None:
     policies = all_policies()
     for key in (*data_protocol.POLICIES, *case_visit.POLICIES):
         assert key in policies
-
-
-def test_guided_setup_approves_only_the_sentence_shown_and_a_remove_rows_edit_needs_it(
-    client: TestClient, data_dir: Path
-) -> None:
-    upload_id = _upload(client, messy_frame())
-    _start(client, upload_id)
-    _decide_everything(client, upload_id)
-    edited = client.post(
-        f"/uploads/{upload_id}/agent-session/edits",
-        json={
-            "kind": "remove_rows",
-            "column": "region",
-            "params": {"operator": "equals", "values": ["TEST"]},
-        },
-    )
-    session = _session(edited)
-    assert session["status"] == "ready"
-    client.post(f"/uploads/{upload_id}/agent-session/preview")
-    shown = client.get(f"/uploads/{upload_id}/agent-session/approval")
-    assert shown.status_code == 200, shown.text
-    view = shown.json()
-    assert view["preview_shown"] and view["reshape_missing"] == []
-    (special,) = view["approve_class"]
-    assert special["kind"] == "remove_rows" and special["role"] == "analyst"
-    plain = client.post(f"/uploads/{upload_id}/agent-session/apply")
-    assert plain.status_code == 409 and _code(plain) == "APPROVAL_SENTENCE_CHANGED"
-    assert view["sentence"] in plain.json()["detail"]["message"], "the refusal carries the sentence to read"
-    wrong = client.post(f"/uploads/{upload_id}/agent-session/approve", json={"sentence": "Prepare it."})
-    assert wrong.status_code == 409 and _code(wrong) == "APPROVAL_SENTENCE_CHANGED"
-    state = client.get(f"/uploads/{upload_id}/agent-session").json()["session"]
-    assert state["status"] == "ready" and state["applied_upload_id"] is None, "a refusal records nothing"
-    approved = client.post(f"/uploads/{upload_id}/agent-session/approve", json={"sentence": view["sentence"]})
-    assert approved.status_code == 200, approved.text
-    assert approved.json()["upload_id"] != upload_id
-    assert (data_dir / "uploads" / upload_id / "agent" / "preview_shown.json").exists()
 
 
 def test_a_case_item_gets_its_own_yes_with_its_exact_sentence(client: TestClient) -> None:
@@ -144,44 +106,3 @@ def test_standing_answers_are_listed_and_revoked_per_client(client: TestClient, 
     missing = client.post("/clients/default/standing-answers/sa_000000000000000000000000/revoke")
     assert missing.status_code == 404 and _code(missing) == "STANDING_ANSWER_NOT_FOUND"
     assert client.get("/data-doctor/candidate-rules").json() == []
-
-
-def test_guided_setup_keeps_nothing_of_an_approval_whose_ledger_entry_cannot_be_written(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Review fix: the approval's record comes first - before the client's memory of the recipe and the session."""
-    from api.routes import agent as agent_routes
-    from engine.agentic import config as agentic_config
-    from engine.agentic.errors import AgenticError
-    from engine.doctor import protocol
-
-    remembered: list[str] = []
-    monkeypatch.setattr(agent_routes, "remember", lambda *_a, **_k: remembered.append("recipe"))
-    monkeypatch.setattr(agentic_config, "agentic_enabled", lambda _root=None: True)
-
-    def broken(*_args: Any) -> Any:
-        def record(kind: str, actor: str, body: Any) -> str:
-            raise AgenticError("LEDGER_CHAIN_BROKEN", "The ledger could not be appended to.", status=503)
-
-        return record
-
-    monkeypatch.setattr(protocol, "ledger_port", broken)
-    upload_id = _upload(client, messy_frame())
-    _start(client, upload_id)
-    _decide_everything(client, upload_id)
-    client.post(f"/uploads/{upload_id}/agent-session/preview")
-    view = client.get(f"/uploads/{upload_id}/agent-session/approval").json()
-    refused = client.post(f"/uploads/{upload_id}/agent-session/approve", json={"sentence": view["sentence"]})
-    assert refused.status_code == 503 and _code(refused) == "LEDGER_CHAIN_BROKEN", refused.text
-    assert remembered == [], "no recipe is remembered for an approval that was not recorded"
-    state = client.get(f"/uploads/{upload_id}/agent-session").json()["session"]
-    assert state["status"] == "ready" and state["applied_upload_id"] is None
-    recorded: list[str] = []
-    monkeypatch.setattr(
-        protocol, "ledger_port", lambda *_a: lambda kind, actor, body: recorded.append(kind) or "e" * 64
-    )
-    approved = client.post(f"/uploads/{upload_id}/agent-session/approve", json={"sentence": view["sentence"]})
-    assert approved.status_code == 200, approved.text
-    assert recorded == ["data.prescription.approved"] and remembered == [
-        "recipe"
-    ], "recorded, then remembered"

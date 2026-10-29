@@ -1,6 +1,6 @@
-"""`/connections` end to end (Plan H M80): create, test, browse, preview, import - and then Guided setup.
+"""`/connections` end to end (Plan H M80): create, test, browse, preview, import - and then Ask your data.
 
-S3 is moto; the import lands as an ordinary upload, so `POST /uploads/{id}/agent-session` must work on
+S3 is moto; the import lands as an ordinary upload, so `GET /uploads/{id}/ask` must work on
 it exactly as on a file posted to `/uploads`. Throughout, the secret must appear in no response, no
 listing, no error and no audit event.
 """
@@ -143,11 +143,7 @@ def test_create_test_browse_preview_import_then_guided_setup(client: TestClient,
     )
     assert source["connection_id"] == cid and source["path"] == "exports/history.csv"
 
-    session = client.post(f"/uploads/{upload['upload_id']}/agent-session", json={"use_case": USE_CASE})
-    assert session.status_code == 201, session.text
-    imported_session = session.json()["session"]
-    assert imported_session["status"] in {"needs_review", "ready"}, imported_session.get("stop_reason")
-    # The same bytes posted to /uploads get the same advice: an import is an upload in every respect.
+    # The same bytes posted to /uploads give the same profile: an import is an upload in every respect.
     posted = client.post(
         "/uploads",
         files={"file": ("history.csv", HISTORY, "text/csv")},
@@ -155,12 +151,7 @@ def test_create_test_browse_preview_import_then_guided_setup(client: TestClient,
     )
     assert posted.status_code == 201
     assert posted.json()["profile"]["fingerprint"] == upload["profile"]["fingerprint"]
-    direct = client.post(
-        f"/uploads/{posted.json()['upload_id']}/agent-session", json={"use_case": USE_CASE}
-    ).json()
-    assert [p["title"] for p in direct["session"]["proposals"]] == [
-        p["title"] for p in imported_session["proposals"]
-    ]
+    assert client.get(f"/uploads/{upload['upload_id']}/ask").status_code == 200
 
     audit = client.get("/audit/events")
     if audit.status_code == 200:

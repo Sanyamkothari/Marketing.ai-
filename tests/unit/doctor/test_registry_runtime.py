@@ -18,7 +18,7 @@ import pytest
 from engine.access.roles import Principal, Role
 from engine.agent import loop as loop_module
 from engine.agent.loop import TurnResult, chat_turn
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from engine.doctor.registry import DataToolRegistry
 from tests.fixtures.agent_bench.cases import CASES, EXPECTED, HEADER_HELP_CASES, HINGLISH_PREFIX, run_case
 from tests.unit.agent.egress_canary import (
@@ -195,7 +195,7 @@ def test_a_refused_suggestion_leaves_nothing_behind(monkeypatch: pytest.MonkeyPa
 
 def _turn(principal: Principal, steps: list[dict[str, Any]]) -> TurnResult:
     ctx = canary_context(rows=600)
-    session = start_session(ctx, session_id="viewer")
+    session = rules_session(ctx, session_id="viewer")
     client = ToolingClient(steps, per_turn=len(steps))
     return chat_turn(
         ctx, session, "Look please.", meter=meter_for(client), guardrails=guardrails(), principal=principal

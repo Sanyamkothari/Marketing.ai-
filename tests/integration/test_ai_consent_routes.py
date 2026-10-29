@@ -84,33 +84,20 @@ def test_every_route_that_sends_the_clients_data_to_the_ai_refuses_without_conse
     client: TestClient,
 ) -> None:
     upload_id = _upload(client)
-    assert client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE}).status_code == 201
-    before = client.get(f"/uploads/{upload_id}/agent-session").json()["session"]
-
-    _refused(
-        client.post(f"/uploads/{upload_id}/agent-session/messages", json={"text": "what should I hide?"})
-    )
-    _refused(client.post(f"/uploads/{upload_id}/agent-session/assist"))  # Guided setup's second opinion
     _refused(
         client.post(f"/uploads/{upload_id}/ask/messages", json={"text": "how many rows?"})
     )  # Ask your data
     _refused(_index(client))  # the document assistant (Deliverable AI)
 
-    assert client.get(f"/uploads/{upload_id}/agent-session").json()["session"] == before, "nothing was stored"
     assert client.get(f"/uploads/{upload_id}/ask").json()["session"] is None
 
 
 def test_the_same_routes_work_once_the_client_has_said_yes(client: TestClient) -> None:
     upload_id = _upload(client)
-    client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-    _refused(client.post(f"/uploads/{upload_id}/agent-session/messages", json={"text": "hello"}))
+    _refused(client.post(f"/uploads/{upload_id}/ask/messages", json={"text": "hello"}))
 
     _give_consent_as_the_doctor_does(client, upload_id)
 
-    assert (
-        client.post(f"/uploads/{upload_id}/agent-session/messages", json={"text": "hello"}).status_code == 200
-    )
-    assert client.post(f"/uploads/{upload_id}/agent-session/assist").status_code == 200
     assert (
         client.post(f"/uploads/{upload_id}/ask/messages", json={"text": "how many rows?"}).status_code == 200
     )
@@ -121,16 +108,13 @@ def test_an_upload_in_another_clients_case_needs_that_clients_consent(client: Te
     upload_id = _upload(client)
     case = client.post("/cases", json={"upload_ids": [upload_id], "client_id": "acme"})
     assert case.status_code in (200, 201), case.text
-    client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
     text = {"text": "hello"}
 
     data_dir = Path(client.app.state.data_dir)  # type: ignore[attr-defined]
     consented(data_dir, "default")
-    _refused(client.post(f"/uploads/{upload_id}/agent-session/messages", json=text))
     _refused(client.post(f"/uploads/{upload_id}/ask/messages", json=text))
 
     consented(data_dir, "acme")
-    assert client.post(f"/uploads/{upload_id}/agent-session/messages", json=text).status_code == 200
     assert client.post(f"/uploads/{upload_id}/ask/messages", json=text).status_code == 200
 
 
@@ -157,6 +141,5 @@ def test_a_settings_object_without_the_fake_still_asks_for_consent_first(
                 json={"provider": "openai_compatible", "model": "m", "base_url": server.url + "/v1"},
             )
             upload_id = _upload(app)
-            app.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-            _refused(app.post(f"/uploads/{upload_id}/agent-session/messages", json={"text": "hello"}))
+            _refused(app.post(f"/uploads/{upload_id}/ask/messages", json={"text": "hello"}))
         assert server.requests == [], "a real provider was never reached"
