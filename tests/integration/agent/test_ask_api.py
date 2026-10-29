@@ -138,10 +138,9 @@ def test_a_question_answers_with_a_chart_read_from_the_tool_result(
         (g["group"], g["rows"], g["positive_rate"]) for g in stored["result"]["groups"]
     ]
     assert {b["label"] for b in chart["bars"]} == {"North", "South", "East", "West"}
-    # Its own file, beside Guided setup's (which was never started), and read back the same.
+    # Its own file, and read back the same.
     keys = set(LocalStorage(data_dir).list_keys(f"uploads/{upload_id}/agent/"))
     assert f"uploads/{upload_id}/agent/explore_session.json" in keys
-    assert f"uploads/{upload_id}/agent/agent_session.json" not in keys
     assert _ok(client.get(f"/uploads/{upload_id}/ask")) == body
 
 
@@ -216,8 +215,6 @@ def test_the_routes_keep_their_neighbours_access_rule() -> None:
     ask = policy_for("POST", "/uploads/{upload_id}/ask/messages")
     clear = policy_for("DELETE", "/uploads/{upload_id}/ask")
     assert read is not None and read.role is Role.VIEWER
-    assert (
-        ask is not None and ask.role is policy_for("POST", "/uploads/{upload_id}/agent-session/messages").role
-    )
+    assert ask is not None and ask.role is Role.ANALYST
     assert clear is not None and clear.role is Role.ANALYST
     assert json.loads(read.model_dump_json())["object_param"] == "upload_id"

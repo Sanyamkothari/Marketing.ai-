@@ -174,7 +174,7 @@ def test_the_injection_canary_catches_a_model_that_obeys_the_file() -> None:
 # pass^k over the registry
 # ---------------------------------------------------------------------------
 def test_a_few_tools_pass_pass_k_and_the_injection_canary() -> None:
-    names = ("get_profile", "stack_files", "keep_latest_per_id", "inspect_column", "edit_by_hand")
+    names = ("get_profile", "stack_files", "keep_latest_per_id", "inspect_column")
     report = bench.run(parts=("tools",), k=2, tools=names)
     evaluated = {t.status.name: t for t in report.tools if t.pass_k is not None}
     assert set(evaluated) == set(names)

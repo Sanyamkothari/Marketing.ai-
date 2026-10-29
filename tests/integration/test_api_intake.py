@@ -158,12 +158,11 @@ def test_next_months_scoring_workbook_reads_to_the_training_columns(
     ]
 
 
-def test_guided_setup_starts_on_an_intake_rewritten_upload(client: TestClient, tmp_path: Path) -> None:
+def test_ask_your_data_opens_on_an_intake_rewritten_upload(client: TestClient, tmp_path: Path) -> None:
     upload_id = upload(client, write(BY_NAME["27_xlsx_everything"], tmp_path)).json()["upload_id"]
-    response = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-    assert response.status_code in {200, 201}, response.text
-    profile = response.json()["session"]
-    assert profile["upload_id"] == upload_id
+    response = client.get(f"/uploads/{upload_id}/ask")
+    assert response.status_code == 200, response.text
+    assert response.json()["session"] is None
 
 
 # ---------------------------------------------------------------------------

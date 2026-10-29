@@ -15,7 +15,8 @@ registry milestone by milestone; the catalogue itself changes only with the desi
 The catalogue counts 82 tools in 83 rows: Ask your data (#78) is the conversation loop's read-only mode and is
 counted once with it (#77). Rows #82 and #83 were added with the design in Plan O M236 (DEC-1806): M240's
 `read_workbook_sheets` and `find_excel_serial_dates`, built in wave 1 before the design gave them a row. They are
-numbered after #81 so that no other tool's number changes.
+numbered after #81 so that no other tool's number changes. #49 (`edit_by_hand`, the Guided-setup session's
+person-only edit) was dropped with Guided setup; its number is not reused.
 """
 
 from __future__ import annotations
@@ -98,7 +99,6 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     _R(47, "check_target_type", "read", "rules", "new"),
     # E. Fixing: the step vocabulary
     _R(48, "propose_step", "propose", "rules + ai", "existing"),
-    _R(49, "edit_by_hand", "propose", "person", "existing"),
     _R(50, "propose_renamed_copy", "propose", "rules", "wrapper"),
     _R(51, "synonym_clusters", "read", "rules", "new"),
     _R(52, "impossible_values", "read", "rules", "new"),

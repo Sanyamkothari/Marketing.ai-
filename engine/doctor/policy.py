@@ -16,7 +16,7 @@ Plan K `Decision` or nothing, the context is computed by the server, never taken
   approval (an AI's fix cites a look at the column, is tried on the first 1,000 rows, and is never ticked).
 * **The code keeps its own checks.** Plan G's hard-coded rules (`loop.CHAT_STEP_KINDS`, the personal-data
   refusal, `setting_allowed`, `advisor.NEVER_TICKED_STEPS`, `check_recipe`'s ID and outcome rule) stay where they
-  are. The callers (`engine.agent.loop`, `engine.agent.edits`, the advisor and the
+  are. The callers (`engine.agent.loop`, the advisor and the
   registry) also ask the policy, at the same place and with the same refusal code, so a refusal today is still
   one, with the same code.
 
@@ -132,14 +132,13 @@ reuses the code the same refusal has today: Plan G's `AGENT_STEP_NOT_ALLOWED`, `
 
 NOT_ALLOWED_CODES: Final[tuple[str, ...]] = ("AGENT_STEP_NOT_ALLOWED", "AGENT_EDIT_NOT_ALLOWED")
 """What a rule set may name as its refusal of a step kind or of a personal-data column: the chat's code, or the
-person's edit's (`engine.agent.edits`), so the policy refuses with the code the caller refuses with today."""
+person's edit's, so the policy refuses with the code the caller refuses with today."""
 
 Source = Literal["rules", "ai", "person"]
 
 POLICY_KINDS: Final[Mapping[str, str]] = {
     "propose_setting": "data.setting",
     "propose_step": "data.recipe_step",
-    "edit_by_hand": "data.person_edit",
     "find_excel_serial_dates": "data.excel_serial_dates",
 }
 """The policy kind of each tool whose kind is not `data.<tool name>` (M232 named the chat's three; M240's

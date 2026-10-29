@@ -1,8 +1,7 @@
 r"""The ask / approve / doubt protocol (Plan O M246, DEC-1816; the design §6.1, §6.3, §6.5-§6.8, §7.2).
 
 Data Doctor may ask, ask for a yes, say it is unsure and ask for more data ([REQ] 3, 8). This module is the one
-place that says **how**, as pure functions the visit (`engine.doctor.visit`) and Guided setup's Approve
-(`engine.doctor.plan_g_approval`) call. Nothing here reads a file or calls an AI service.
+place that says **how**, as pure functions the visit (`engine.doctor.visit`) and the case's approval call. Nothing here reads a file or calls an AI service.
 
 **Questions (§6.5).** A question is asked only when the values cannot prove the answer, the options give
 materially different data (more than `min_rows_changed_pct`, 0.5%, of the rows differ between them, or the share

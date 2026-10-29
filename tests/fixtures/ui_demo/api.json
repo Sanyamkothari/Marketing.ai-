@@ -1543,94 +1543,6 @@
      "reason": null
     },
     {
-     "method": "GET",
-     "path": "/uploads/{upload_id}/agent-session",
-     "action": "agent.read",
-     "role": "viewer",
-     "allowed": true,
-     "reason": null
-    },
-    {
-     "method": "POST",
-     "path": "/uploads/{upload_id}/agent-session",
-     "action": "agent.start",
-     "role": "analyst",
-     "allowed": true,
-     "reason": null
-    },
-    {
-     "method": "POST",
-     "path": "/uploads/{upload_id}/agent-session/answers",
-     "action": "agent.answer",
-     "role": "analyst",
-     "allowed": true,
-     "reason": null
-    },
-    {
-     "method": "POST",
-     "path": "/uploads/{upload_id}/agent-session/apply",
-     "action": "agent.apply",
-     "role": "analyst",
-     "allowed": true,
-     "reason": null
-    },
-    {
-     "method": "POST",
-     "path": "/uploads/{upload_id}/agent-session/assist",
-     "action": "agent.assist",
-     "role": "analyst",
-     "allowed": true,
-     "reason": null
-    },
-    {
-     "method": "POST",
-     "path": "/uploads/{upload_id}/agent-session/decisions",
-     "action": "agent.decide",
-     "role": "analyst",
-     "allowed": true,
-     "reason": null
-    },
-    {
-     "method": "POST",
-     "path": "/uploads/{upload_id}/agent-session/edits",
-     "action": "agent.edit",
-     "role": "analyst",
-     "allowed": true,
-     "reason": null
-    },
-    {
-     "method": "POST",
-     "path": "/uploads/{upload_id}/agent-session/messages",
-     "action": "agent.chat",
-     "role": "analyst",
-     "allowed": true,
-     "reason": null
-    },
-    {
-     "method": "POST",
-     "path": "/uploads/{upload_id}/agent-session/preview",
-     "action": "agent.preview",
-     "role": "analyst",
-     "allowed": true,
-     "reason": null
-    },
-    {
-     "method": "POST",
-     "path": "/uploads/{upload_id}/agent-session/rows",
-     "action": "agent.rows",
-     "role": "analyst",
-     "allowed": true,
-     "reason": null
-    },
-    {
-     "method": "POST",
-     "path": "/uploads/{upload_id}/agent-session/same-treatment",
-     "action": "agent.same_treatment",
-     "role": "analyst",
-     "allowed": true,
-     "reason": null
-    },
-    {
      "method": "DELETE",
      "path": "/uploads/{upload_id}/ask",
      "action": "agent.ask.clear",
@@ -1650,14 +1562,6 @@
      "method": "POST",
      "path": "/uploads/{upload_id}/ask/messages",
      "action": "agent.ask",
-     "role": "analyst",
-     "allowed": true,
-     "reason": null
-    },
-    {
-     "method": "POST",
-     "path": "/uploads/{upload_id}/checks",
-     "action": "uploads.checks",
      "role": "analyst",
      "allowed": true,
      "reason": null

@@ -18,9 +18,7 @@ from api.access_policy import policy_for
 from api.main import create_app
 from engine.access.roles import Role
 from engine.storage import LocalStorage
-from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.fixtures.make_data import GenerationSpec, generate
-from tests.integration.agent.test_api_session import _decide_everything
 
 pytestmark = pytest.mark.integration
 
@@ -155,29 +153,6 @@ def test_a_renamed_copy_made_through_the_route_says_it_is_a_copy(client: TestCli
     assert listed[sent["upload_id"]]["made_by"] == "file"
     assert listed[copied.json()["upload_id"]]["made_by"] == "renamed_copy"
     assert listed[copied.json()["upload_id"]]["file_name"] == "billing.csv"
-
-
-def test_a_dataset_built_by_guided_setup_says_it_was_built(client: TestClient) -> None:
-    response = client.post(
-        "/uploads",
-        data={"use_case": USE_CASE, "mode": "train"},
-        files={"file": ("messy.csv", messy_frame(3_000, seed=7).to_csv(index=False).encode(), "text/csv")},
-    )
-    assert response.status_code == 201, response.text
-    upload_id = response.json()["upload_id"]
-    started = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-    assert started.status_code == 201, started.text
-    assert _decide_everything(client, upload_id)["status"] == "ready"
-    applied = client.post(f"/uploads/{upload_id}/agent-session/apply")
-    assert applied.status_code == 200, applied.text
-    listed = {u["upload_id"]: u["made_by"] for u in client.get("/uploads").json()["uploads"]}
-    assert listed[applied.json()["upload_id"]] == "recipe"
-    assert listed[upload_id] == "file"
-    sources = {u["upload_id"]: u["source_upload_id"] for u in client.get("/uploads").json()["uploads"]}
-    assert (
-        sources[applied.json()["upload_id"]] == upload_id
-    ), "a prepared copy names the upload it was made from"
-    assert sources[upload_id] is None
 
 
 def test_reading_the_list_needs_only_the_viewer_role() -> None:

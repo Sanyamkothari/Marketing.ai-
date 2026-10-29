@@ -10,14 +10,14 @@ import pytest
 
 from engine.agent.grounding import evidence_numbers, grounded_numbers, ungrounded_numbers
 from engine.agent.loop import FALLBACK, chat_turn
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from engine.agent.tools import call_tool
 from engine.doctor import registry
 from engine.generative.guardrails import Guardrails, load_policy
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.unit.agent.analyst import ANALYST
 from tests.unit.agent.helpers import context_for, synthetic
-from tests.unit.agent.test_session_and_loop import ScriptedMeter
+from tests.unit.agent.scripted_meter import ScriptedMeter
 
 
 def _guardrails() -> Guardrails:
@@ -35,7 +35,7 @@ def _reply(text: str, evidence: Any = ()) -> str:
 @pytest.fixture(scope="module")
 def started() -> tuple[Any, Any]:
     ctx = context_for(messy_frame())
-    return ctx, start_session(ctx, session_id="s1")
+    return ctx, rules_session(ctx, session_id="s1")
 
 
 def _turn(started: tuple[Any, Any], replies: Sequence[str], message: str = "hi") -> Any:

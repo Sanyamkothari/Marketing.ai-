@@ -6,12 +6,7 @@ and says where the answer is shown. Nothing here changes a file or a recipe:
 * **A file to score** (`model_changes`): the model's saved steps (or, with none, its columns) against the
   file the model was trained on - the upload its training run read, or the file that upload was prepared
   from. A replay that stops with `RECIPE_COLUMN_MISSING` carries the proposal in its check's `details`
-  (`with_rename_suggestions`): `POST /runs`, the dry run and Guided setup's Approve all answer with it.
-* **A file to learn from** (`memory_changes`): the steps Guided setup remembers (M159) for a file of this
-  shape, or - when none is remembered for this shape - for a remembered shape this file matches once at
-  most `MAX_MISSING` columns are renamed back.
-* Guided setup shows either as the session's `changes` (computed once, when the session starts, and kept
-  beside it), so the person sees "Your file has 'bill_amount' where last month had 'amount'" and ticks it.
+  (`with_rename_suggestions`): `POST /runs` answers with it.
 
 What the person's yes does (`write_renamed_copy`): a **copy** of the file with those columns renamed, as a
 new upload - the file they sent stays as it is, and the copy names it (`renamed_copy.json`). The model's
@@ -23,7 +18,7 @@ treatment. A model's recipe is never edited, and a rename step is never slipped 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Any
 
 from api.routes.uploads import (
     UPLOAD_FINGERPRINT_FILENAME,
@@ -38,13 +33,7 @@ from engine.agent.dataset_recipe import consistent_types
 from engine.config import UseCaseConfig
 from engine.contracts import DatasetProfile, FeatureSchema, ModelVersion, RunRecord, ValidationReport
 from engine.doctor.memory import (
-    TREATMENT_RECIPE_FILENAME,
-    TreatmentMemory,
     offer_for,
-    recall,
-    remembered,
-    remembered_recipe,
-    shape_of,
 )
 from engine.doctor.renames import (
     RENAMED_COPY_FILENAME,
@@ -59,29 +48,19 @@ from engine.doctor.renames import (
 )
 from engine.intake.contracts import IntakeReport
 from engine.stages import ingest
-from engine.storage import Storage, StorageError, run_key, upload_key
+from engine.storage import Storage, run_key, upload_key
 from engine.utils.ids import new_upload_id
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
 __all__ = [
-    "CHANGES_FILENAME",
-    "MAX_MISSING",
-    "load_changes",
-    "memory_changes",
     "model_changes",
-    "save_changes",
     "training_profile",
     "with_rename_suggestions",
     "write_renamed_copy",
 ]
 
 _LOGGER = get_logger(__name__)
-
-CHANGES_FILENAME: Final[str] = "agent/file_changes.json"
-"""Beside the Guided-setup session: what changed in this file, found when the session started."""
-MAX_MISSING: Final[int] = 3
-"""A file is a renamed remembered shape only when at most this many of its columns have new names."""
 
 
 # ---------------------------------------------------------------------------
@@ -251,101 +230,6 @@ def with_rename_suggestions(
 
 
 # ---------------------------------------------------------------------------
-# A file to learn from
-# ---------------------------------------------------------------------------
-def _near(memory: TreatmentMemory, columns: Sequence[str]) -> tuple[list[str], list[str]] | None:
-    """The remembered columns this file lacks and its own new ones, when renaming them back could give the
-    remembered shape; else None."""
-    if len(memory.columns) != len(columns):
-        return None
-    have = set(columns)
-    missing = [c for c in memory.columns if c not in have]
-    extras = [c for c in columns if c not in set(memory.columns)]
-    return (missing, extras) if 1 <= len(missing) <= MAX_MISSING else None
-
-
-def memory_changes(
-    storage: Storage,
-    config: UseCaseConfig,
-    upload: UploadRecord,
-    profile: DatasetProfile,
-    intake: IntakeReport | None,
-    frame: Any,
-) -> FileChanges | None:
-    """What changed in a file to learn from against the file whose treatment Guided setup remembers."""
-    sheet = intake.sheet if intake is not None else None
-    columns = list(profile.fingerprint.columns)
-    exact = recall(storage, upload.use_case_id, shape_of(columns, sheet))
-    if exact is not None:
-        if upload.upload_id in {exact.source_upload_id, exact.recipe_upload_id}:
-            return None
-        recipe = remembered_recipe(storage, exact)
-        trained = _profile(storage, exact.source_upload_id)
-        if recipe is None or trained is None:
-            return None
-        unseen = _unseen(storage, config, recipe, upload.upload_id, trained.upload_id, profile, (), frame)
-        return (
-            FileChanges(
-                basis="last_treatment",
-                source_upload_id=exact.source_upload_id,
-                source_file_name=_file_name(storage, exact.source_upload_id),
-                unseen_values=unseen,
-                sentence=_unseen_sentence(unseen),
-            )
-            if unseen
-            else None
-        )
-    near = []
-    for memory in remembered(storage, upload.use_case_id):
-        found = _near(memory, columns) if memory.sheet == sheet else None
-        if found is not None:
-            near.append((len(found[0]), -memory.remembered_at.timestamp(), memory, found))
-    for _, _, memory, (missing, extras) in sorted(near, key=lambda n: (n[0], n[1])):
-        recipe = remembered_recipe(storage, memory)
-        trained = _profile(storage, memory.source_upload_id)
-        if recipe is None or trained is None or set(missing) & recipe_columns(recipe.steps)[1]:
-            continue  # gone, or a month's column of a sheet turned into rows: not a rename (M156)
-        suggested, unresolved = _match(trained, profile, missing, extras)
-        if not suggested and not any(u.candidates for u in unresolved):
-            continue
-        back = {r.candidate: r.missing for r in suggested}
-        then_same = not unresolved and [back.get(c, c) for c in columns] == list(memory.columns)
-        unseen = _unseen(
-            storage, config, recipe, upload.upload_id, trained.upload_id, profile, suggested, frame
-        )
-        name = _file_name(storage, memory.source_upload_id)
-        which = name or "a file"
-        by = " with Data Doctor" if memory.recipe_file == TREATMENT_RECIPE_FILENAME else ""
-        sentence = f"This looks like {which}, which you prepared{by} on {_day(memory)}"
-        sentence += (
-            f", but your file has {_quoted(suggested)}."
-            if suggested
-            else ", but some of its columns have other names."
-        )
-        if then_same:
-            sentence += (
-                " Use the old names? A copy of your file is made with them, and last time's treatment is offered "
-                "on it; your file is left as it is."
-            )
-        return FileChanges(
-            basis="last_treatment",
-            source_upload_id=memory.source_upload_id,
-            source_file_name=name,
-            suggested_renames=suggested,
-            unresolved=unresolved,
-            unseen_values=unseen,
-            then_same_treatment=then_same,
-            sentence=sentence,
-        )
-    return None
-
-
-def _day(memory: TreatmentMemory) -> str:
-    moment = memory.approved_at
-    return f"{moment.day} {moment:%b %Y}"
-
-
-# ---------------------------------------------------------------------------
 # New spellings
 # ---------------------------------------------------------------------------
 def _unseen(
@@ -387,21 +271,6 @@ def _unseen_sentence(unseen: Sequence[Any]) -> str:
 # ---------------------------------------------------------------------------
 # The person's yes: a copy with the old names
 # ---------------------------------------------------------------------------
-def save_changes(storage: Storage, upload_id: str, changes: FileChanges | None) -> None:
-    key = upload_key(upload_id, CHANGES_FILENAME)
-    if changes is None:
-        if storage.exists(key):
-            storage.delete(key)
-        return
-    storage.write_model(key, changes)
-
-
-def load_changes(storage: Storage, upload_id: str) -> FileChanges | None:
-    key = upload_key(upload_id, CHANGES_FILENAME)
-    try:
-        return storage.read_model(key, FileChanges) if storage.exists(key) else None
-    except (StorageError, ValueError):
-        return None
 
 
 def write_renamed_copy(

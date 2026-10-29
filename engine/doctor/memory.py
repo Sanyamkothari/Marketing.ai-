@@ -1,12 +1,10 @@
 """Memory (Plan L M159, DEC-1590 … DEC-1595): the next file of the same shape is offered the same treatment.
 
-When a training file's steps are approved (by Guided setup's `apply` before, by the Data Doctor's approval now:
-`remember_approved_case`), `remember` writes down the file's **shape** and what treated it: the recipe's id, the prepared upload that holds it and how intake read the
+When a training file's steps are approved (by the Data Doctor's approval: `remember_approved_case`), `remember` writes down the file's **shape** and what treated it: the recipe's id, the prepared upload that holds it and how intake read the
 file (the sheet, intake on or off). When a later file of the same shape arrives - an upload, an import, a
 hand-off from Data Doctor, training or scoring - `offer_for` says so ("This looks like billing_sept.csv,
-which you prepared with Data Doctor on 3 Sep"), and **Use the same treatment**
-(`use_same_treatment`) ticks the saved steps in the session. They are still shown, previewed and approved
-like every other step: nothing is ever applied without Approve.
+which you prepared with Data Doctor on 3 Sep"), and the saved steps are offered again. They are still
+shown, previewed and approved like every other step: nothing is ever applied without Approve.
 
 **Shape.** The column names in file order as ingest fingerprints them (`engine.stages.ingest.fingerprint_columns`,
 the profile's `fingerprint.columns`), plus the sheet's name for a workbook, hashed (`shape_of`). Two files
@@ -43,7 +41,6 @@ from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
     from engine.agent.contracts import AgentSession, DataRecipe
-    from engine.agent.tools import AgentContext
     from engine.doctor.case import Case
     from engine.doctor.diagnose import LoadedFile
     from engine.intake.contracts import IntakeReport
@@ -63,7 +60,6 @@ __all__ = [
     "remembered",
     "remembered_recipe",
     "shape_of",
-    "use_same_treatment",
     "used_in",
 ]
 
@@ -406,165 +402,3 @@ def _file_name(storage: Storage, upload_id: str) -> str | None:
 def used_in(session: AgentSession, recipe_id: str) -> bool:
     """Whether the session already took this remembered treatment."""
     return any(r.tool == MEMORY_TOOL and r.args.get("recipe_id") == recipe_id for r in session.tool_results)
-
-
-def use_same_treatment(
-    session: AgentSession,
-    ctx: AgentContext,
-    recipe: DataRecipe,
-    memory: TreatmentMemory,
-    *,
-    clock: Callable[[], datetime] = utc_now,
-) -> AgentSession:
-    """The session with the remembered steps ticked, as the person's own decision; `SessionError` if not.
-
-    A step the helper suggested again is ticked where it is; one it did not is added, labelled as the
-    person's (they approved it last time) and ticked. The roles the recipe was approved with are ticked
-    when the helper proposes them. Nothing else is decided: what the helper found this time is still
-    there to decide, and Approve still runs the preview's checks on every row.
-    """
-    from engine.agent.advisor import ROLE_PRIMARY_KEY, ROLE_TARGET, recipe_steps
-    from engine.agent.contracts import (
-        AgentConfidence,
-        DecidedBy,
-        Proposal,
-        ProposalKind,
-        ProposalSource,
-        ProposalState,
-        RecipeStepKind,
-        SessionStatus,
-        ToolResult,
-    )
-    from engine.agent.proposals import SessionError, identity, roles_of, with_summary
-    from engine.agent.recipe import RecipeError, check_recipe
-    from engine.agent.untrusted import display_name
-
-    # Steps that change the rows come back only through their own blocking question (decision O3): memory
-    # never ticks one. `unpivot` keeps its Plan L behaviour (it is re-added ticked) until Plan L's owners decide.
-    asked_first: dict[RecipeStepKind, str] = {
-        RecipeStepKind.COMBINE_ROWS: (
-            "Last time the rows of each customer were combined. Answer the helper's question about "
-            "combining rows first, then use the same treatment."
-        ),
-        RecipeStepKind.KEEP_LATEST_PER_ID: (
-            "Last time only the latest row of each customer was kept. Answer the helper's question about "
-            "keeping the latest row first, then use the same treatment."
-        ),
-    }
-
-    if session.status is SessionStatus.APPLIED:
-        raise SessionError(
-            "AGENT_SESSION_APPLIED", "This setup was already approved. Start again to change it."
-        )
-    if session.explore or session.mode != "train":
-        raise SessionError(
-            "DOCTOR_MEMORY_NOT_TRAINING",
-            "The same treatment is used while setting up a file to learn from; a file to score is prepared by "
-            "the steps saved with its model.",
-        )
-    if session.stop_reason is not None:
-        raise SessionError("AGENT_SESSION_STOPPED", session.stop_reason)
-    if used_in(session, recipe.recipe_id):
-        raise SessionError("DOCTOR_MEMORY_USED", "The same treatment is already ticked in this setup.")
-
-    decided = {"state": ProposalState.ACCEPTED, "decided_by": DecidedBy.USER}
-    proposals = list(session.proposals)
-    for path, wanted in ((ROLE_PRIMARY_KEY, recipe.primary_key), (ROLE_TARGET, recipe.target)):
-        for index, proposal in enumerate(proposals):
-            if (
-                wanted is not None
-                and proposal.kind is ProposalKind.ROLE
-                and proposal.path == path
-                and proposal.value == wanted
-                and proposal.state is ProposalState.PENDING
-            ):
-                proposals[index] = proposal.model_copy(update=decided)
-
-    already = {
-        identity(p)
-        for p in proposals
-        if p.kind is ProposalKind.RECIPE_STEP and p.step is not None and p.state is ProposalState.ACCEPTED
-    }
-    for step in recipe.steps:
-        if step.kind in asked_first and not any(
-            p.step is not None and p.step.kind is step.kind and p.state is ProposalState.ACCEPTED
-            for p in proposals
-        ):
-            # A change to the rows comes back only through its own blocking question, never ticked by memory
-            # (decision O3, Plan O M238).
-            raise SessionError("DOCTOR_MEMORY_COMBINE", asked_first[step.kind])
-
-    evidence_id = f"m{len(session.tool_results) + 1}"
-    while any(r.evidence_id == evidence_id for r in session.tool_results):
-        evidence_id += "x"
-    when = _day(memory.approved_at)
-    added = 0
-    for step in recipe.steps:
-        if step.kind in asked_first:
-            continue  # accepted above, through the helper's own question
-        candidate = Proposal(
-            proposal_id="m0",
-            kind=ProposalKind.RECIPE_STEP,
-            title="-",
-            reason="-",
-            step=step,
-            evidence_ids=(evidence_id,),
-            confidence=AgentConfidence.CHECK,
-        )
-        wanted_identity = identity(candidate)
-        if wanted_identity in already:
-            continue
-        match = next((i for i, p in enumerate(proposals) if identity(p) == wanted_identity), None)
-        if match is not None:
-            proposals[match] = proposals[match].model_copy(update=decided)
-            already.add(wanted_identity)
-            continue
-        proposal_id = f"m{len(proposals) + 1}"
-        while any(p.proposal_id == proposal_id for p in proposals):
-            proposal_id += "x"
-        reason = (
-            f"You approved this on {when} for a file with the same columns. It is ticked because you chose the "
-            "same treatment; untick it to leave it out."
-        )
-        proposals.append(
-            candidate.model_copy(
-                update={
-                    "proposal_id": proposal_id,
-                    "title": f"As last time: {step.kind.value.replace('_', ' ')} in '{display_name(step.column)}'",
-                    "reason": reason,
-                    "step": step.model_copy(update={"decided_by": DecidedBy.USER}),
-                    "source": ProposalSource.PERSON,
-                    **decided,
-                }
-            )
-        )
-        already.add(wanted_identity)
-        added += 1
-
-    updated = session.model_copy(update={"proposals": tuple(proposals)})
-    key, target = roles_of(updated)
-    try:
-        check_recipe(
-            recipe_steps(p for p in proposals if p.state is ProposalState.ACCEPTED),
-            columns=[str(c) for c in ctx.frame.columns],
-            primary_key=key,
-            target=target,
-            levels=ctx.config.agent.levels,
-        )
-    except RecipeError as exc:
-        raise SessionError(exc.code, exc.message) from exc
-    result = ToolResult(
-        evidence_id=evidence_id,
-        tool=MEMORY_TOOL,
-        args={"recipe_id": recipe.recipe_id},
-        result={
-            "recipe_id": recipe.recipe_id,
-            "steps": len(recipe.steps),
-            "added": added,
-            "approved_at": memory.approved_at.isoformat(),
-            "shape_hash": memory.shape_hash,
-        },
-        created_at=clock(),
-    )
-    updated = updated.model_copy(update={"tool_results": (*session.tool_results, result)})
-    return with_summary(updated, ctx, clock=clock)

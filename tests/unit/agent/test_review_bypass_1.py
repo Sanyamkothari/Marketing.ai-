@@ -13,7 +13,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from tests.unit.agent.egress_canary import ToolingClient, canary_context, run_session
 from tests.unit.agent.helpers import synthetic
 
@@ -44,7 +44,7 @@ def test_advisor_reason_does_not_carry_values_of_an_always_hidden_column(
 ) -> None:
     ctx = canary_context(mode="masked_data", frame=_frame(), always_hide=[hidden])
     client = ToolingClient([{"action": "get_profile", "args": {}}], per_turn=1)
-    session = start_session(ctx, session_id="review-1")
+    session = rules_session(ctx, session_id="review-1")
     assert any(
         hidden in p.title for p in session.proposals
     ), "the advisor is expected to propose a fix for the column"

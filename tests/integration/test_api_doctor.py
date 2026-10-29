@@ -111,10 +111,6 @@ def test_three_mixed_files_reach_guided_setup_without_manual_setup(
     assert handed.json()["intake"]["sheet"] == "History"
     assert handed.json()["profile"]["row_count"] == 3000
 
-    session = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-    assert session.status_code in {200, 201}, session.text
-    assert session.json()["session"]["status"] in {"needs_review", "ready"}
-
 
 def test_a_handoff_to_the_files_own_use_case_is_the_same_upload(client: TestClient) -> None:
     bill_log = upload(client, "bills.csv", bills_csv())

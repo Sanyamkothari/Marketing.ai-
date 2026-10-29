@@ -264,10 +264,10 @@ def test_explore_refuses_propose_setting_and_lists_no_setting() -> None:
 
 def test_a_guided_session_still_takes_a_setting_suggestion() -> None:
     """The refusal is explore-only: Guided setup's chat suggests settings as before."""
-    from engine.agent.session import start_session
+    from engine.agent.proposals import rules_session
 
     ctx = canary_context(frame=_states_frame())
-    session = start_session(ctx, session_id="g-test")
+    session = rules_session(ctx, session_id="g-test")
     client = ToolingClient(
         [
             {

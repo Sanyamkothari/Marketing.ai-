@@ -23,7 +23,7 @@ the `RoutePolicy` whose role every call is checked against, and a run function. 
   (:meth:`DataToolRegistry.register` refuses one that does not), and every call checks the principal against the
   tool's `RoutePolicy` (`TOOL_ROLE_REQUIRED`), as Plan K does.
 * **Who may call.** Each tool says which callers it serves: the rules, the AI, the person. The AI never sees a
-  person-only tool (`edit_by_hand`), and in M232 the wrappers serve the rules and the screen only (the AI reaches
+  person-only tool, and in M232 the wrappers serve the rules and the screen only (the AI reaches
   them through the visit, M235).
 * **Content-hash evidence ids.** :func:`data_evidence_id` is Plan K's `evidence_id_for` - SHA-256 over the
   canonical JSON of `[tool, typed input, output]`, 64 bits kept - spelled in the letters `a`-`p` instead of hex
@@ -223,10 +223,6 @@ class DataToolContext:
     """The use cases a verdict is given for; empty means the use case of `agent` alone."""
     roles: RoleCatalogue | None = None
     session: AgentSession | None = None
-    save_session: Callable[[AgentSession], None] | None = None
-    """Where a tool that changes the session (`edit_by_hand`) hands the new one: the caller stores it, under its
-    own lock and version check (the edits route's `_session_lock` and `_save`). A tool that needs it is not
-    available without it, so an edit can never be made and lost."""
     turn: ChatTurn | None = None
     config_root: Path | None = None
     clock: Callable[[], datetime] = utc_now
@@ -286,7 +282,6 @@ Need = Literal[
     "files",
     "storage",
     "session",
-    "save_session",
     "turn",
     "case_files",
     "readiness",
@@ -324,8 +319,6 @@ class DataTool(Generic[In, Out]):
     needs: tuple[Need, ...] = ()
     available: Callable[[DataToolContext], bool] = _always
     """Beyond `needs`: whether the tool exists in this context (Plan G's M142 tools exist only with Plan K on)."""
-    mirrors: tuple[str, str] | None = None
-    """`(method, path)` of the HTTP route serving the same data, when there is one."""
     max_output_bytes: int | Literal["by-exposure"] | None = BY_EXPOSURE
     """The most a result may be through `call` (`TOOL_OUTPUT_TOO_LARGE` beyond it). By default it follows the
     exposure: `ROW_LEVEL_BUDGET` characters for `session-only`, `AGGREGATE_BUDGET` bytes for `aggregate`. A tool
@@ -615,8 +608,6 @@ def _met(tool: DataTool[Any, Any], ctx: DataToolContext) -> bool:
         if need == "storage" and ctx.storage is None:
             return False
         if need == "session" and ctx.session is None:
-            return False
-        if need == "save_session" and ctx.save_session is None:
             return False
         if need == "turn" and ctx.turn is None:
             return False

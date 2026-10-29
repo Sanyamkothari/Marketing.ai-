@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,9 @@ from api.main import create_app
 from engine.access.roles import LOCAL_OPERATOR
 from engine.platform_db import sqlite_engine
 from engine.privacy.erasure import erase, find_principal
+from engine.privacy.retention import plan_retention
 from engine.storage import LocalStorage
+from engine.utils.time import utc_now
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 PERSON = "CUST-1005"
@@ -109,3 +112,30 @@ def test_a_kept_csv_under_titles_goes_with_the_table_read_from_it(client: TestCl
     storage = LocalStorage(data_dir)
     keys = {location.key for location in find_principal(storage, "105").locations}
     assert f"uploads/{upload_id}/original.csv" in keys
+
+
+def test_an_unfinished_guided_session_left_in_the_store_is_still_found_erased_and_expired(
+    client: TestClient, data_dir: Path, tmp_path: Path
+) -> None:
+    """Guided setup is gone, but sessions it left in `uploads/<id>/agent/` are not orphaned from privacy."""
+    rows = "\n".join(f"CUST-{index},Gold,{index % 50},{index % 2}" for index in range(1000, 1300))
+    data = f"customer_id,plan,spend,paid_on_time\n{rows}\n".encode()
+    upload_id = upload(client, "export.csv", data, "text/csv")
+    storage = LocalStorage(data_dir)
+    left = f"uploads/{upload_id}/agent/agent_session.json"
+    storage.write_bytes(left, b'{"examples": ["CUST-1005"], "title": "Turn spend into numbers"}')
+
+    assert left in {location.key for location in find_principal(storage, PERSON).locations}
+    plan = plan_retention(storage, None, utc_now() + timedelta(days=40_000))
+    assert left in {item.key for item in plan.items}
+
+    outcome = erase(
+        storage,
+        PERSON,
+        engine=sqlite_engine(tmp_path / "platform.db"),
+        principal=LOCAL_OPERATOR,
+        salt="s" * 32,
+    )
+    assert outcome.status in {"completed", "completed_with_exceptions"}
+    assert not storage.exists(left) or PERSON.encode() not in storage.read_bytes(left)
+    assert left not in outcome.unrewritable_keys

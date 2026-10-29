@@ -315,7 +315,7 @@ def tool_world(root: Path, variant: Literal["plain", "planted", "control"] = "pl
             row_count=len(customers),
         )
 
-    from engine.agent.session import start_session
+    from engine.agent.proposals import rules_session
 
     return DataToolContext(
         agent=ctx,
@@ -323,8 +323,7 @@ def tool_world(root: Path, variant: Literal["plain", "planted", "control"] = "pl
         caller="person",
         storage=storage,
         files=files,
-        session=start_session(ctx, session_id="eval"),
-        save_session=lambda _session: None,
+        session=rules_session(ctx, session_id="eval"),
         config_root=ctx.config_root,
         primary_key="customer_id",
         case_files=CaseFiles(store=store, client_id="default", case_id=case.case_id, actor=ANALYST.user_id),
@@ -360,10 +359,6 @@ CALLS: Final[dict[str, Calls | None]] = {
     **{name: _look(name) for name in TOOLS},
     "propose_setting": None,
     "propose_step": None,
-    "edit_by_hand": _fixed(
-        {"kind": "drop_column", "column": "region"},
-        {"kind": "map_values", "column": "plan_tier", "params": {"mapping": {"basic": "standard"}}},
-    ),
     "diagnose_files": _fixed({}, {"upload_ids": [CUSTOMERS]}, {"upload_ids": [EVENTS, CUSTOMERS]}),
     "find_file_role": _fixed({"upload_id": CUSTOMERS}, {"upload_id": EVENTS}),
     "advise": _fixed({}, {"primary_key": "customer_id", "target": "converted_30d"}),
