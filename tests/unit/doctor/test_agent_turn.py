@@ -6,10 +6,13 @@ action is read off the turn's result."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import TypeAdapter
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.agent.tools import AgentContext
@@ -17,10 +20,11 @@ from engine.config import RunMode, load_use_case
 from engine.doctor import visit
 from engine.doctor.agent_apply import roles_of
 from engine.doctor.agent_turn import DoctorTurn, TurnResult, handle_of
-from engine.doctor.author import ApplyContext, Create, ItemDraft, Withdraw, apply_actions
+from engine.doctor.author import ApplyContext, AuthorAction, Create, ItemDraft, Withdraw, apply_actions
 from engine.doctor.case import Case, CaseChatEntry
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.protocol import DEFAULT_SETTINGS
+from engine.doctor.registry import DataToolContext, DataToolRegistry, DataToolResult
 from engine.storage import LocalStorage
 from tests.fixtures.doctor_eval.chat_model import ChatScript, Seen
 from tests.unit.agent.egress_canary import guardrails
@@ -47,7 +51,9 @@ def _said(case: Case, message: str) -> Case:
     return case.model_copy(update={"chat": (*case.chat, entry)})
 
 
-def _turn(case: Case, world: World, client: ChatScript, **extra: Any) -> DoctorTurn:
+def _turn(
+    case: Case, world: World, client: ChatScript, registry: DataToolRegistry | None = None, **extra: Any
+) -> DoctorTurn:
     def context_for(_case: Case, files: tuple[LoadedFile, ...]) -> AgentContext:
         return AgentContext(
             use_case_id=GOAL_A,
@@ -68,7 +74,7 @@ def _turn(case: Case, world: World, client: ChatScript, **extra: Any) -> DoctorT
         guardrails(),
         cs.ASHA,
         None,
-        _Cached(visit.visit_registry(), _MEMORY),
+        registry or _Cached(visit.visit_registry(), _MEMORY),
         chat_steps=8,
         **extra,
     )
@@ -293,6 +299,75 @@ def test_a_suggestion_a_fact_tool_made_is_the_only_way_to_be_sure(
     (item,) = [i for i in done.case.items if i.source is ProposalSource.AI]
     assert item.confidence is AgentConfidence.SURE, "sure, because a fact tool suggested it"
     assert item.state is ProposalState.ACCEPTED and item.decided_by is None
+
+
+class _Suggesting(_Cached):
+    """The visit's registry, where `find_test_columns` also suggests the change `draft` makes (as a fact tool does)."""
+
+    def __init__(self, draft: ItemDraft) -> None:
+        inner = _Cached(visit.visit_registry(), _MEMORY)
+        super().__init__(inner, _MEMORY)
+        self.row = {
+            "id": "s-trim",
+            "action": TypeAdapter(AuthorAction).dump_python(
+                Create(draft=draft, reason="Spaces differ.", basis="s:s-trim"), mode="json"
+            ),
+            "reason": "Spaces differ between spellings of one channel.",
+        }
+
+    def call(self, name: str, given: Mapping[str, Any], ctx: DataToolContext) -> DataToolResult:
+        made = super().call(name, given, ctx)
+        if name != "find_test_columns":
+            return made
+        return made.model_copy(update={"output": {**made.output, "suggested": [self.row]}})
+
+
+def test_a_suggestion_collected_mid_turn_is_as_sure_where_the_visit_applies_it_as_in_the_turn(
+    storage: LocalStorage, world: World
+) -> None:
+    talk = Talk(storage, world, None)
+    step = {
+        "order": 1,
+        "kind": "normalise_text",
+        "column": "channel",
+        "params": {"strip": True},
+        "reason": "r",
+    }
+    draft = ItemDraft(
+        kind="recipe_step",
+        payload={"upload_id": cs.FIRST, "path": None, "value": None, "step": step},
+        title="Trim the spaces in 'channel'",
+        upload_id=cs.FIRST,
+        confidence=AgentConfidence.SURE,
+    )
+    client = ChatScript(
+        {
+            "tidy": [
+                look("find_test_columns"),
+                {
+                    "action": "adopt_suggestion",
+                    "args": {"id": handle_of("s", "s-trim"), "reason": "It is a real difference."},
+                },
+                reply("I trimmed the channel spellings."),
+            ]
+        }
+    )
+    turn = _turn(_said(talk.case, "tidy"), world, client, _Suggesting(draft))
+    done = turn.run("tidy the channel")
+    assert done.suggested == {"s-trim"}, "the turn held it, though the event brought none"
+    (item,) = [i for i in done.case.items if i.source is ProposalSource.AI]
+    assert item.confidence is AgentConfidence.SURE and item.state is ProposalState.ACCEPTED
+    told = next(r for r in client.seen[-1].results if r.get("result") and "in the plan" in str(r["result"]))
+    assert told["result"].startswith("It is in the plan")
+    # The visit applies the same actions to the fresh case under the turn's suggestions and places it the same way.
+    again = apply_actions(talk.case, done.actions, replace(_ctx(turn, talk.case), suggested=done.suggested))
+    (placed,) = [i for i in again.case.items if i.source is ProposalSource.AI]
+    assert (placed.state, placed.confidence) == (item.state, item.confidence)
+    bare = apply_actions(talk.case, done.actions, _ctx(turn, talk.case))
+    (unsure,) = [i for i in bare.case.items if i.source is ProposalSource.AI]
+    assert (
+        unsure.confidence is AgentConfidence.CHECK
+    ), "without the turn's suggestions the same action is a guess"
 
 
 # ---------------------------------------------------------------------------

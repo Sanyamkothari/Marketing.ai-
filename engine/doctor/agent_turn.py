@@ -417,6 +417,9 @@ class TurnResult:
     finished: bool = False
     """The model ended the turn with `reply` (not a limit, a refusal or an AI service that stopped answering)."""
     state_digest: str = ""
+    suggested: frozenset[str] = frozenset()
+    """Ids of every suggestion the turn held: the event's and the ones its fact tools made on the way. The visit applies
+    `actions` under them, so a change is as sure there as the turn told the model it was."""
     ai: bool = True
     """False: the AI was not asked (no consent, no spending left, no file); `reply` and `blocked_by` say why."""
 
@@ -1360,6 +1363,7 @@ class DoctorTurn:
             answered=self.answered,
             finished=self.finished and blocked is None,
             state_digest=self.state_digest(),
+            suggested=frozenset(self.suggestions),
         )
 
     def _unsaid(self, blocked: str | None, refusal: AgentToolError | None, wanted: str) -> str:

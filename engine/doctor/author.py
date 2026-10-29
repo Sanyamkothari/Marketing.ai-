@@ -798,7 +798,7 @@ def served(
     (so a later change is told apart)."""
     kept = {f"{_SERVED}{o.reason}": o.key for o in owing if o.reason != "message"}
     settings = _settings_digest(case, brief, config_root)
-    if settings is not None:
+    if kept and settings is not None:  # a message alone did not look at the settings: a change is still owed
         kept[f"{_SERVED}setting_changed"] = settings
     return kept
 

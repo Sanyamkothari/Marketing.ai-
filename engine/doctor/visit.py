@@ -1045,9 +1045,13 @@ def _author(run: _Run, case: Case) -> _Step:
     message = case.chat[-1] if case.chat and case.chat[-1].role == "user" else None
     owing = owed(base.case, brief, deps.config_root)
     final = base
-    # The AI answers a message at once. Otherwise it looks when the default author has nothing more to add: what the
-    # facts find in the plan it just made (a question that blocks, a date, a consent column) comes first.
-    if owing and (message is not None or (not _blocking(base.case) and not _changed(case, base.case))):
+    # The AI answers a message at once. It looks at the rest when the default author has nothing more to add: what the
+    # facts find in the plan it just made (a question that blocks, a date, a consent column) comes first, so while
+    # that stands a message gets only its answer and the rest is still owed afterwards.
+    settled = not _blocking(base.case) and not _changed(case, base.case)
+    if message is not None and not settled:
+        owing = tuple(o for o in owing if o.reason == "message")
+    if owing and (message is not None or settled):
         final = _ai_turn(run, case, base, brief, owing, message, found, ctx, step, rounds)
     step.authored = tuple(rounds)
     if _changed(case, final.case):
@@ -1209,7 +1213,7 @@ def _ai_turn(
         ctx,
         "chat" if message is not None else "review",
         message.by if message is not None else None,
-        frozenset(s.id for s in suggestions),
+        result.suggested,
     )
     done = apply_actions(base.case, result.actions, ai_ctx)
     rounds.append(Round(result.actions, ai_ctx))

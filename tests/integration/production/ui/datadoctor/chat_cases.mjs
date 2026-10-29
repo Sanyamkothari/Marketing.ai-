@@ -118,7 +118,7 @@ test("a change waiting for a yes says so and can be used or skipped; an undone o
       const at = a.view.conversation.findIndex((c) => c.type === "change");
       a.view.conversation.splice(at + 1, 0, { ...a.view.conversation[at], item_id: "ai.second_change", title: "Another change" }); // (the answers are on their questions, so one fix is all the fixture has)
       const [first, second] = a.view.conversation.filter((c) => c.type === "change");
-      Object.assign(first, { state: "pending", undo: false, by: null, source: "ai" });
+      Object.assign(first, { state: "pending", undo: false, by: null, proposed_by: "ai" });
       Object.assign(second, { state: "rejected", undo: false, by: null });
       return a;
     },

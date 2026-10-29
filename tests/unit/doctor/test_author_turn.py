@@ -80,7 +80,9 @@ def test_the_ai_is_not_asked_while_a_blocking_question_is_open_and_then_once_for
     assert len(spy.events) == 1 and again.version >= case.version, "what was served is not owed again"
 
 
-def test_one_turn_answers_the_message_and_whatever_else_is_owed(storage: LocalStorage, world: World) -> None:
+def test_a_message_is_answered_at_once_and_the_rest_is_owed_until_the_facts_have_settled(
+    storage: LocalStorage, world: World
+) -> None:
     spy = _Spy()
     case = visit.resume(CLIENT, open_case(storage, world).case_id, _deps(storage, world, spy), actor=ANALYST)
     case = visit.chat(
@@ -89,14 +91,16 @@ def test_one_turn_answers_the_message_and_whatever_else_is_owed(storage: LocalSt
     )  # fmt: skip
     (event,) = spy.events
     assert event.message == "What is here?"
-    assert {o.reason for o in event.owed} == {"message", "new_file"}, "the file is looked at in the same turn"
+    assert [o.reason for o in event.owed] == ["message"], "no review of a file while its key is still a guess"
     assert [(c.role, c.text) for c in case.chat] == [("user", "What is here?"), ("agent", "Here.")]
+    assert "author.new_file" not in (case.visit.done if case.visit else {}), "the file is still owed"
     q = question(case, "KEY_AMBIGUOUS")
     visit.answer(
         CLIENT, case.case_id, q.question_id, option(q, "customer_id"), _deps(storage, world, spy),
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
-    assert len(spy.events) == 1, "answering the key does not pay for a review of a file it has seen"
+    assert [o.reason for o in spy.events[-1].owed] == ["new_file"] and len(spy.events) == 2
+    assert spy.events[-1].message is None, "the review comes once the key is answered"
 
 
 def test_the_turn_is_given_the_chosen_goals_settings_and_only_suggestions_that_are_not_in_the_plan(
@@ -113,7 +117,9 @@ def test_the_turn_is_given_the_chosen_goals_settings_and_only_suggestions_that_a
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
     event = spy.events[-1]
-    assert {o.reason for o in event.owed} >= {"message", "goal_chosen"}
+    assert [o.reason for o in event.owed] == [
+        "message"
+    ], "the goal's own question is open: the review waits for it"
     assert isinstance(event.goal_settings, GoalSettings) and event.goal_settings.goal_id == GOAL_A
     in_plan = {i.item_id for i in case.items}
     assert all(isinstance(s.action, Create) for s in event.suggestions)
