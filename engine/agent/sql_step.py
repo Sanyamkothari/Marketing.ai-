@@ -38,6 +38,7 @@ from typing import Any, Final, Literal
 import pandas as pd
 from pydantic import Field, ValidationError
 
+from engine.agent.contracts import Refusal
 from engine.config import StrictBase
 
 __all__ = [
@@ -183,10 +184,19 @@ _OUTPUT_NAME: Final[str] = r"^[A-Za-z][A-Za-z0-9_ .-]{0,63}$"
 class SqlStepError(Exception):
     """A query that cannot run. `code` is one of `SQL_CODES`; `message` is plain words and holds no cell value."""
 
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(f"{code}: {message}")
+    def __init__(
+        self,
+        code: str,
+        message: str = "",
+        *,
+        what_failed: str | None = None,
+        value: str = "",
+        how_to_fix: str = "",
+    ) -> None:
+        self.refusal = Refusal(code, message if what_failed is None else what_failed, value, how_to_fix)
+        super().__init__(f"{code}: {self.refusal.message}")
         self.code = code
-        self.message = message
+        self.message = self.refusal.message
 
 
 AS_OF_RULES: Final[tuple[str, ...]] = ("latest_date_in_file", "last_complete_month_end")
@@ -324,8 +334,10 @@ def _walk(node: Any) -> Any:
 def _clock_refusal(name: str) -> SqlStepError:
     return SqlStepError(
         "SQL_NOT_REPEATABLE",
-        f"'{name}' gives a different answer each time. Give the date as $as_of so the same files give the "
-        "same table every month.",
+        what_failed=f"'{name}' gives a different answer each time the query runs.",
+        value=name,
+        how_to_fix="Write $as_of (bound, never quoted) so the same files give the same table every month; "
+        "for a distance from it, $as_of - INTERVAL '30' DAY.",
     )
 
 
@@ -352,7 +364,7 @@ def check_sql(
     try:
         statements = duckdb.extract_statements(sql)
     except duckdb.Error as exc:
-        raise SqlStepError("SQL_NOT_VALID", f"The query is not valid SQL: {_first_line(exc)}") from exc
+        raise _syntax_refusal(exc) from exc
     if len(statements) != 1:
         raise SqlStepError("SQL_ONE_STATEMENT", "A query step runs exactly one statement.")
     if statements[0].type != duckdb.StatementType.SELECT:
@@ -364,7 +376,13 @@ def check_sql(
     if named - {"as_of"}:
         raise SqlStepError("SQL_NOT_VALID", "The only parameter a query may use is $as_of.")
     if "as_of" in named and as_of is None:
-        raise SqlStepError("SQL_NEEDS_AS_OF", "The query uses $as_of, and no as-of date was given.")
+        raise SqlStepError(
+            "SQL_NEEDS_AS_OF",
+            what_failed="The query uses $as_of, and no as-of date was given.",
+            value="$as_of",
+            how_to_fix="Pass `as_of` (a date YYYY-MM-DD) or `as_of_rule` on the step, or ask the person for the date "
+            "(question Q8) if the case has not decided one.",
+        )
     con = _connect()
     try:
         raw = con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0]
@@ -375,7 +393,7 @@ def check_sql(
             ).fetchall()
         }
     except duckdb.Error as exc:
-        raise SqlStepError("SQL_NOT_VALID", f"The query is not valid SQL: {_first_line(exc)}") from exc
+        raise _syntax_refusal(exc) from exc
     finally:
         con.close()
     tree = json.loads(raw)
@@ -487,13 +505,15 @@ def _fixed_date_refusal(shown: str, day: date | None = None, as_of: date | None 
             if gap == 0
             else f"$as_of + INTERVAL '{gap}' DAY" if gap > 0 else f"$as_of - INTERVAL '{-gap}' DAY"
         )
-        fix = f"Replace the typed date '{shown}' with {instead}"
+        fix = f"Replace '{shown}' with {instead}"
     else:
-        fix = f"Replace the typed date ({shown}) with $as_of (or $as_of plus or minus an INTERVAL)"
+        fix = f"Replace {shown} with $as_of (or $as_of plus or minus an INTERVAL)"
     return SqlStepError(
         "SQL_FIXED_DATE",
-        f"{fix}, so next month's files are not cut at this month's date. Every other date in the query must "
-        "come from $as_of too.",
+        what_failed=f"The query has the date {shown} typed into it.",
+        value=shown,
+        how_to_fix=f"{fix}, so next month's files are not cut at this month's date. $as_of is a bound parameter: "
+        "never put it in quotes. Every other date in the query must come from $as_of too.",
     )
 
 
@@ -512,6 +532,13 @@ def _check_dates(node: dict[str, Any], as_of: date | None) -> None:
         value = node.get("value") or {}
         kind = (value.get("type") or {}).get("id")
         text = value.get("value")
+        if kind == "VARCHAR" and isinstance(text, str) and text.strip() in {"$as_of", ":as_of"}:
+            raise SqlStepError(
+                "SQL_NOT_VALID",
+                what_failed=f"'{text.strip()}' is in quotes, so the query reads it as the words, not as the date.",
+                value=f"'{text.strip()}'",
+                how_to_fix="Write $as_of without quotes: it is a bound parameter.",
+            )
         typed = kind == "VARCHAR" and isinstance(text, str) and _DATE_TEXT.match(text)
         if typed and (as_of is None or _literal_date(str(text)) != as_of):
             raise _fixed_date_refusal(str(text).strip()[:19], _literal_date(str(text)), as_of)
@@ -558,8 +585,10 @@ def _check_node(node: dict[str, Any], allowed: set[str], as_of: date | None = No
         if node.get("schema_name") or node.get("catalog_name") or name.lower() not in allowed:
             raise SqlStepError(
                 "SQL_TABLE_NOT_ALLOWED",
-                f"The query reads '{name}', which is not one of the tables it was given "
-                f"({', '.join(sorted(a for a in allowed if a.startswith('t_'))) or 'none'}).",
+                what_failed=f"The query reads '{name}', which is not one of the tables it was given.",
+                value=name,
+                how_to_fix="Read only: "
+                f"{', '.join(sorted(a for a in allowed if a.startswith('t_'))) or 'none'} (t_<file name>).",
             )
     if node.get("sample"):
         raise SqlStepError(
@@ -581,32 +610,150 @@ def _first_line(exc: Exception) -> str:
     return re.sub(r"'[^']*'", "'…'", line)[:240]
 
 
-_CONVERSION_HINTS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
-    (
-        re.compile(r"invalid (date|timestamp) field format"),
-        "a text value is not written as {0} YYYY-MM-DD; read it with strptime(column, '<its format>') first",
-    ),
-    (re.compile(r"Could not convert string .* to ([A-Z0-9]{2,12})\b"), "a text value cannot be read as {0}"),
+def _syntax_refusal(exc: Exception) -> SqlStepError:
+    """`SQL_NOT_VALID` for a query DuckDB cannot read, naming the word it stopped at."""
+    near = _named(r'at or near "([^"]+)"', str(exc).strip().splitlines()[0] if str(exc).strip() else "")
+    return SqlStepError(
+        "SQL_NOT_VALID",
+        what_failed=f"The query is not valid SQL: {_first_line(exc)}",
+        value=near,
+        how_to_fix="Check the words around "
+        + (near or "where it stops")
+        + ": a missing comma, a quoted column name, or a keyword used as a name.",
+    )
+
+
+_PREVIEW: Final[str] = (
+    "Run preview_working_copy to see each column as the query reads it: a column is still text until its parse "
+    "step (parse_date, parse_number) is applied, and the query reads the file after the accepted fixes only"
 )
-"""What a conversion error was about, in our words: the type it wanted, never the cell DuckDB quotes."""
+_IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z_][\w.$ -]{0,59}")
+_SIGNATURE: Final[re.Pattern[str]] = re.compile(r"types '([^'(]{1,40})\(([A-Z_ ,()0-9]{0,120})\)'")
 
 
-def _error_kind(exc: Exception) -> str:
-    """Only the kind of a run error ("Conversion Error"): its text may repeat a cell, quoted any way or not at all.
+def _text_columns_read(sql: str, tables: Mapping[str, pd.DataFrame]) -> list[str]:
+    """The text columns of the tables the query reads whose names it uses: where a "VARCHAR" in an error may come from."""
+    words = {w.casefold() for w in re.findall(r"[A-Za-z_]\w*", _blank(sql))}
+    found: list[str] = []
+    for frame in tables.values():
+        for name, kind in frame.dtypes.items():
+            if (pd.api.types.is_object_dtype(kind) or pd.api.types.is_string_dtype(kind)) and (
+                str(name).casefold() in words and str(name) not in found
+            ):
+                found.append(str(name))
+    return found[:6]
 
-    A conversion error also says what it could not read as (a date, INT32), from a closed list of patterns, so the
-    model can fix its query; the value itself never leaves.
-    """
-    text = str(exc)
-    kind = text.split(":", 1)[0].strip()
+
+def _named(pattern: str, text: str) -> str:
+    """What `pattern`'s first group matched in `text` when it is an identifier (a name from the query), else ''."""
+    found = re.search(pattern, text)
+    return found.group(1) if found and _IDENTIFIER.fullmatch(found.group(1)) else ""
+
+
+def _run_failure(
+    exc: Exception, sql: str, tables: Mapping[str, pd.DataFrame], aliases: Collection[str]
+) -> SqlStepError:
+    """`SQL_FAILED` for a DuckDB error, as `{what_failed, value, how_to_fix}` from a closed set of patterns.
+
+    DuckDB's text may quote a cell, so only names the query itself used (a column, a table, a function), type names
+    and the target type of a conversion are read out of it; the rest is dropped."""
+    text = str(exc).strip()
+    head = text.splitlines()[0] if text else ""
+    kind = head.split(":", 1)[0].strip()
     if not re.fullmatch(r"[A-Za-z ]{1,40} Error", kind):
-        return "an error"
-    for pattern, hint in _CONVERSION_HINTS:
-        found = pattern.search(text.splitlines()[0] if text else "")
-        if found is not None:
-            word = found.group(1)
-            return f"{kind}: " + hint.format(word if word.isupper() else f"a {word}")
-    return kind
+        kind = "Error"
+    text_columns = _text_columns_read(sql, tables)
+    still_text = (
+        f" Columns this query uses that are text in the file as it stands: {', '.join(text_columns)}."
+        if text_columns
+        else ""
+    )
+    sig = _SIGNATURE.search(head)
+    column = _named(r"source column (\S+)", head)
+    wanted = re.search(r"Could not convert string .* to ([A-Z0-9]{2,12})\b", head)
+    if re.search(r"invalid (date|timestamp) field format", head):
+        what = (
+            f"A value in column {column} is not written as a date YYYY-MM-DD, so the cast failed."
+            if column
+            else "A text value is not written as a date YYYY-MM-DD, so the cast failed."
+        )
+        return SqlStepError(
+            "SQL_FAILED",
+            what_failed=what,
+            value=column,
+            how_to_fix=f"Read it with strptime(column, '<its format>') or apply its parse_date step first. {_PREVIEW}.",
+        )
+    if wanted is not None:
+        word = wanted.group(1)
+        return SqlStepError(
+            "SQL_FAILED",
+            what_failed=(
+                f"A text value of column {column} cannot be read as {word}."
+                if column
+                else f"A text value cannot be read as {word}."
+            ),
+            value=column,
+            how_to_fix=f"Use TRY_CAST so such a value is blank, or apply its parse_number step first. {_PREVIEW}.",
+        )
+    if sig is not None or "Cannot compare values of type" in head:
+        shown = (
+            f"{sig.group(1)}({sig.group(2)})" if sig is not None else head.split("Error:", 1)[-1].strip()[:80]
+        )
+        is_text = "VARCHAR" in shown
+        return SqlStepError(
+            "SQL_FAILED",
+            what_failed=(
+                f"{shown} does not fit: an argument is VARCHAR (text), where the query needs a number or a date."
+                + still_text
+                if is_text
+                else f"{shown} does not fit: no function takes these types."
+            ),
+            value=shown,
+            how_to_fix=(
+                f"The column is still text because its parse step is not applied yet. {_PREVIEW}; "
+                "then cast it in the query (strptime, TRY_CAST) or propose the parse step first."
+                if is_text
+                else "Cast an argument to the type the function takes."
+            ),
+        )
+    if "Referenced column" in head or "does not have a column named" in head:
+        name = _named(r'(?:Referenced column|column named) "([^"]+)"', head)
+        return SqlStepError(
+            "SQL_FAILED",
+            what_failed=f"The query names column {name or '(a name)'}, which none of its tables has.",
+            value=name,
+            how_to_fix=f"Use a column of the tables it reads (tables: {', '.join(sorted(aliases))}); the "
+            "profile and preview_working_copy list them, and a column a step renamed has its new name.",
+        )
+    if kind == "Catalog Error":
+        name = _named(r"with name (\S+) does not exist", head)
+        what = "table" if "Table with name" in head else "function"
+        return SqlStepError(
+            "SQL_FAILED",
+            what_failed=f"The query uses a {what} called {name or '(a name)'}, which does not exist.",
+            value=name,
+            how_to_fix=(
+                f"Read only these tables: {', '.join(sorted(aliases))}."
+                if what == "table"
+                else "Use a DuckDB function, or a typed step if one fits."
+            ),
+        )
+    if "must appear in the GROUP BY" in head:
+        name = _named(r'column "([^"]+)" must appear', head)
+        return SqlStepError(
+            "SQL_FAILED",
+            what_failed=f"Column {name or '(a name)'} is selected beside an aggregate but is not grouped.",
+            value=name,
+            how_to_fix="Add it to GROUP BY, or wrap it in an aggregate (any_value, min, max).",
+        )
+    if kind == "Parser Error":
+        return _syntax_refusal(exc)
+    return SqlStepError(
+        "SQL_FAILED",
+        what_failed=f"DuckDB could not run the query on these tables ({kind}).",
+        value=kind,
+        how_to_fix=f"{_PREVIEW}, and check the query against it." + still_text,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -696,9 +843,7 @@ def run_sql(
                 raise SqlStepError(
                     "SQL_TIMEOUT", f"The query took longer than {timeout:g} seconds and was stopped."
                 ) from exc
-            raise SqlStepError(
-                "SQL_FAILED", f"The query could not run on these tables ({_error_kind(exc)})."
-            ) from exc
+            raise _run_failure(exc, sql, tables, aliases.values()) from exc
     finally:
         timer.cancel()
         con.close()

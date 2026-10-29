@@ -446,7 +446,7 @@ def _refused(prepared: Prepared, reads: Collection[str], files: Sequence[LoadedF
     can be tried. `reads` are the uploads the query reads."""
     own = next((f for f in prepared.failures if f.item_id == CANDIDATE), None)
     if own is not None:
-        return DataToolError(own.code, own.message, status=422)
+        return DataToolError(own.code, own.message, status=422, refusal=own.refusal)
     other = next((f for f in prepared.failures if f.upload_id in reads), None)
     if other is None:
         return None
@@ -531,7 +531,7 @@ def _propose(
             params["outcome_window_days"] = given.outcome_window_days
         sql_params(params)
     except SqlStepError as exc:
-        raise DataToolError(exc.code, exc.message, status=422) from exc
+        raise DataToolError(exc.code, status=422, refusal=exc.refusal) from exc
     step = RecipeStep(
         order=1,
         kind=RecipeStepKind.SQL_QUERY,

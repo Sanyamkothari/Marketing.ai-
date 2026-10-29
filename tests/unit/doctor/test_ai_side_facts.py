@@ -18,6 +18,7 @@ import pytest
 
 from engine.agent.contracts import ProposalSource, ProposalState
 from engine.agent.grounding import grounded_numbers, ungrounded_numbers
+from engine.agent.loop import _Checker
 from engine.doctor import visit
 from engine.doctor.actions import prompt_variables
 from engine.doctor.agent_review import own_numbers
@@ -27,6 +28,7 @@ from engine.doctor.checks_time_keys import key_quality
 from engine.doctor.guards import make_receipt
 from engine.doctor.limits import limits
 from engine.doctor.visit_contracts import CaseVisit
+from engine.generative.guardrails import Guardrails, load_policy
 from engine.storage import LocalStorage
 from tests.fixtures.doctor_eval.chat_model import ChatScript
 from tests.unit.doctor import chat_support as cs
@@ -76,6 +78,38 @@ def test_the_numbers_of_an_accepted_change_are_the_ais_own_settings_but_its_quer
         "5%",
     ], "an `expect` bound is a prediction about the data, not a setting"
     assert ungrounded_numbers("It keeps 777 and 555 customers.", mine) == ["777", "555"]
+
+
+def test_a_feature_named_for_its_window_sets_that_window_and_a_failed_check_sets_nothing() -> None:
+    args = {"features": [{"name": "orders_365d", "expr": "count(*)"}], "expect": {"rows_out_min": 4_000}}
+    mine = grounded_numbers(own_numbers(args))
+    assert ungrounded_numbers("Orders in 365 days, as orders_365d.", mine) == []
+    assert ungrounded_numbers("At least 4,000 customers.", mine) == ["4,000"]
+
+
+def test_only_the_window_suffix_of_a_name_is_a_setting_never_other_digits_or_a_querys_name() -> None:
+    for args in (
+        {"features": [{"name": "buyers_8812", "expr": "count(*)"}]},
+        {"name": "step_8812", "sql": "select 1"},
+    ):
+        mine = grounded_numbers(own_numbers(args))
+        assert ungrounded_numbers("There are 8,812 buyers.", mine) == ["8,812"]
+    spend = grounded_numbers(
+        own_numbers({"features": [{"name": "spend_90_days"}, {"name": "visits_30d_total"}]})
+    )
+    assert ungrounded_numbers("Spend over 90 days and visits in 30 days.", spend) == []
+
+
+def test_a_refused_number_is_named_with_how_to_fix_it() -> None:
+    checker = _Checker(
+        grounded=grounded_numbers([{"customers": 1134}]), names=(), guardrails=Guardrails(load_policy())
+    )
+    refused = checker.refuse(
+        "AGENT_TEXT_REFUSED", "reply", "About 90% of 1,134 customers ordered.", "numbers_grounded"
+    )
+    assert refused.refusal.value == "90%" and "'90%'" in refused.refusal.what_failed
+    assert "look tool" in refused.refusal.how_to_fix and refused.person
+    assert "90%" not in refused.person, "the person is not told a number nobody checked"
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +209,8 @@ def test_a_refused_quick_question_names_the_word_and_a_question_about_rows_is_al
     talk = Talk(storage, world, client)
     case = talk.say("ask me what you need")
     refused = next(r for r in client.seen[1].results if r.get("error") == "AGENT_QUESTION_REFUSED")
-    assert "'purchase'" in refused["message"] and "question list" in refused["message"]
+    assert "'purchase'" in refused["what_failed"] and refused["value"] == "purchase"
+    assert "question list" in refused["how_to_fix"]
     asked = next(q for q in case.questions if q.code == "CHAT_ASK")
     assert [o.label for o in asked.options] == [
         "Cancellations",

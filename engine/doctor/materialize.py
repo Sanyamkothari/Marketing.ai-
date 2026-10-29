@@ -34,7 +34,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.config import AgentConfig
-from engine.agent.contracts import DataRecipe, ProposalState, RecipeStep, RecipeStepKind, recipe_hash
+from engine.agent.contracts import (
+    DataRecipe,
+    ProposalState,
+    RecipeStep,
+    RecipeStepKind,
+    Refusal,
+    recipe_hash,
+)
 from engine.agent.dataset_recipe import consistent_types
 from engine.agent.recipe import STEP_PHASE, RecipeError, RecipeRun, run_recipe
 from engine.agent.sql_step import SqlStepError, sql_params
@@ -121,6 +128,8 @@ class StepFailure:
     message: str
     order: int | None
     item_id: str | None
+    refusal: Refusal | None = None
+    """The refusal in its four fields when the engine made one (a query that could not run)."""
 
 
 Watch = Callable[[str, str, RecipeStep, "pd.DataFrame", "pd.DataFrame"], None]
@@ -270,10 +279,13 @@ def _finding(
     *,
     hard: bool = False,
     file: str | None = None,
+    named: str | None = None,
 ) -> PlanFinding:
     """A guard finding as the ledger holds it. Its subject is the step, or else the file's plan (`file`, an upload
     id): the key is the code and the subject, never the count, so a yes given to one file's stop never carries
-    to another file's. Two findings of one code about one subject are told apart by their number.
+    to another file's. Two findings of one code about one subject are told apart by their number. `named`: the file's
+    name, said first in a stop about the plan as a whole when the plan has several files, so two files' stops (each
+    with its own yes) are not two copies of one sentence.
     """
     subject = item_id or (f"plan:{file}" if file else "plan")
     place = (found.code, subject)
@@ -284,7 +296,7 @@ def _finding(
         key=sha256_hex(canonical_bytes([found.code, subject]))[:16],
         level=found.level,
         code=found.code,
-        text=found.message,
+        text=f"{named}: {found.message}" if named and item_id is None else found.message,
         item_id=item_id,
         detail=found.detail,
         count=found.count,
@@ -453,7 +465,14 @@ def materialize_plan(
                 f"{file_name}: {said}",
             )
             failures.append(
-                StepFailure(loaded.upload_id, getattr(exc, "code", type(exc).__name__), said, order, item_id)
+                StepFailure(
+                    loaded.upload_id,
+                    getattr(exc, "code", type(exc).__name__),
+                    said,
+                    order,
+                    item_id,
+                    getattr(exc, "refusal", None),
+                )
             )
             # a step that cannot run is a rule whichever sentence says why: the file is not prepared, so no yes may
             # let the plan go on as if it were
@@ -464,7 +483,12 @@ def materialize_plan(
         receipts.extend(made)
         mine_found = tuple(
             _finding(
-                f, by_order.get(f.order) if f.order is not None else None, scope, seen, file=loaded.upload_id
+                f,
+                by_order.get(f.order) if f.order is not None else None,
+                scope,
+                seen,
+                file=loaded.upload_id,
+                named=file_name if len(plans) > 1 else None,
             )
             for f in guarded.findings
         )

@@ -676,3 +676,29 @@ def test_a_step_that_cannot_run_is_hard_in_every_form_and_its_file_is_recorded_a
     prepared = materialize_plan(case_files, items, files, Full())
     assert prepared.failed == (files[0].upload_id,) and not prepared.files
     assert all(f.hard for f in prepared.findings if f.level == "stop")
+
+
+def test_two_files_that_each_lose_too_much_are_two_stops_that_name_their_file() -> None:
+    files, case_files, items = _orders_case(2_000, 0.3)
+    again = vs.loaded("up-d", "customers_late.csv", files[0].frame, load_use_case(GOAL_A))
+    step = {**items[0].payload, "upload_id": "up-d"}
+    other = items[0].model_copy(
+        update={
+            "item_id": "remove.d",
+            "upload_id": "up-d",
+            "payload": step,
+            "payload_digest": payload_digest(step),
+        }
+    )
+    both = [
+        *case_files,
+        CaseFile(upload_id="up-d", file_name="customers_late.csv", added_at=T0, added_by=ANALYST),
+    ]
+    prepared = materialize_plan(both, [*items, other], [*files, again], Full())
+    stops = [f for f in prepared.findings if f.code == "PLAN_LOSES_TOO_MUCH"]
+    assert len({f.key for f in stops}) == 2, "each file's stop has its own yes"
+    assert sorted(f.text.split(":")[0] for f in stops) == ["customers.csv", "customers_late.csv"]
+    alone = materialize_plan(case_files, items, files, Full())
+    assert [
+        f.text.startswith("customers.csv:") for f in alone.findings if f.code == "PLAN_LOSES_TOO_MUCH"
+    ] == [False]

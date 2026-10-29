@@ -30,7 +30,7 @@ from engine.access.roles import Principal, Role
 from engine.agent.contracts import Proposal, ToolResult
 from engine.agent.egress import assert_clean
 from engine.agent.proposals import rules_session
-from engine.agent.tools import TOOLS, AgentContext, ToolKind, call_tool
+from engine.agent.tools import TOOLS, AgentContext, AgentToolError, ToolKind, call_tool
 from engine.doctor import registry as registry_module
 from engine.doctor import tools as tools_module
 from engine.doctor.amount_outcome import M_AMOUNT_TOOLS
@@ -504,6 +504,47 @@ def test_a_row_level_result_is_measured_in_characters_of_json() -> None:
         with pytest.raises(DataToolError) as refused:
             registry.call("impossible_values", {}, DataToolContext())
         assert refused.value.code == "TOOL_OUTPUT_TOO_LARGE" and "5,500" in refused.value.message
+
+
+def test_every_refusal_has_the_same_four_fields_and_a_message_that_still_works() -> None:
+    old = AgentToolError("AGENT_X", "It failed.")
+    assert (old.code, old.message) == ("AGENT_X", "It failed.")
+    assert old.refusal.feedback() == {
+        "error": "AGENT_X",
+        "what_failed": "It failed.",
+        "value": "",
+        "how_to_fix": "",
+    }
+    new = DataToolError(
+        "TOOL_X", what_failed="Column a is text.", value="a", how_to_fix="Preview it.", status=409
+    )
+    assert new.status == 409 and new.message == "Column a is text. Preview it."
+    assert new.refusal.feedback() == {
+        "error": "TOOL_X",
+        "what_failed": "Column a is text.",
+        "value": "a",
+        "how_to_fix": "Preview it.",
+    }
+    assert DataToolError("TOOL_X", status=422, refusal=new.refusal).refusal == new.refusal
+
+
+class _Paged(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    offset: int = 0
+    columns: list[str] | None = None
+
+
+def test_a_result_that_is_too_large_says_which_narrower_call_to_make() -> None:
+    registry = DataToolRegistry()
+    registry.register(_tool(input_model=_Paged, run=lambda _g, _c: LookOutput({"rows": ["x" * 6_000]})))
+    with pytest.raises(DataToolError) as refused:
+        registry.call("impossible_values", {}, DataToolContext())
+    fix = refused.value.refusal.how_to_fix
+    assert "`columns`" in fix and "`offset`" in fix and "impossible_values" in fix
+    assert refused.value.refusal.value.endswith("of 5,500 characters")
+    assert "narrower question" not in refused.value.message
+    plain = registry_module._narrower_call(_tool(), 20_000, 16_384)
+    assert "goal_details" in plain and "81%" in plain
 
 
 def _many_files(agent: AgentContext, count: int) -> tuple[LoadedFile, ...]:

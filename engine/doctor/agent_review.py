@@ -255,6 +255,10 @@ def _expect_problems(exc: ValidationError) -> str:
     return f"`expect` is not valid: {'; '.join(found[:6])}. Allowed fields: {allowed}."[:600]
 
 
+_NAME_WINDOW: Final = re.compile(r"_(\d{1,4})(?:d|_?days?)(?![A-Za-z0-9])")
+"""The window a feature's name states (`orders_365d`, `spend_90_days`): only that suffix, never other digits."""
+
+
 def own_numbers(value: Any, key: str = "") -> list[Any]:
     """The numbers an accepted action's arguments set (`outcome_window_days: 90`, `as_of: "2011-09-01"`): settings
     the AI chose and the engine took, which it may repeat. The `expect` bounds are predictions about the data, not
@@ -267,7 +271,9 @@ def own_numbers(value: Any, key: str = "") -> list[Any]:
     if isinstance(value, str):
         return [value] if key in {"as_of", "training_as_of"} else []
     if isinstance(value, dict):
-        return [
+        named = value.get("name") if key == "features" else None
+        window = [int(n) for n in _NAME_WINDOW.findall(named)] if isinstance(named, str) else []
+        return window + [
             n
             for k, v in value.items()
             if k not in _ARGUMENT_TEXT and k != "expect"
@@ -673,7 +679,9 @@ class _Review:
                 strikes += 1
                 if strikes >= self.limits.turn.strikes:
                     break
-                turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
+                turn.feedback.append(
+                    self.gates[0].prepare(exc.refusal.feedback(), extra_text_keys=("value",))
+                )
             except Exception as exc:  # a model's odd input must never cost a paid review that nobody records
                 _LOG.warning("doctor review step failed: %s", type(exc).__name__)
                 break
@@ -899,6 +907,11 @@ class _Review:
         }
         # what the AI expected and did not get is its prediction, not a fact: only what our code counted is grounded
         counted = {k: v for k, v in shown["result"].items() if k != "failed_checks"}
+        counted["findings"] = [
+            f
+            for f in counted.get("findings", [])
+            if not (isinstance(f, dict) and f.get("code") == "EXPECTATION_FAILED")
+        ]
         self.checker.grounded = self.checker.grounded | grounded_numbers([counted])
         turn.feedback.append(shown)
 
@@ -917,7 +930,9 @@ class _Review:
             key, title, lines = read_guide(name, section, self.config_root, lessons=lessons)
         except AgentToolError as exc:
             self.turn.feedback.append(
-                self.gates[0].prepare({"tool": "read_guide", "error": exc.code, "message": exc.message})
+                self.gates[0].prepare(
+                    {"tool": "read_guide", **exc.refusal.feedback()}, extra_text_keys=("value",)
+                )
             )
             return
         carried = self.turn.guides.setdefault(key, set())
@@ -981,11 +996,7 @@ class _Review:
                 text, target="doctor question", max_chars=self.limits.turn.question_chars
             )
             if failure is not None:
-                raise AgentToolError(
-                    "AGENT_QUESTION_REFUSED",
-                    f"The question was refused. {self.checker.why(text, failure)}",
-                    self.checker.why(text, failure, person=True),
-                )
+                raise self.checker.refuse("AGENT_QUESTION_REFUSED", "question", text, failure)
         if ask.blocking and turn.blocking >= self.limits.asks.blocking:
             raise AgentToolError(
                 "AGENT_BLOCKING_LIMIT",
@@ -1004,11 +1015,7 @@ class _Review:
                 else None
             )
             if failure is not None:
-                raise AgentToolError(
-                    "AGENT_TEXT_REFUSED",
-                    f"The {target} was refused. {self.checker.why(text, failure)}",
-                    self.checker.why(text, failure, person=True),
-                )
+                raise self.checker.refuse("AGENT_TEXT_REFUSED", target, text, failure)
         return [self.gates[index].person_text(text) if text else "" for text in texts]
 
     def _doubt(self, action: dict[str, Any], args: dict[str, Any]) -> None:

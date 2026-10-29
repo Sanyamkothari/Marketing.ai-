@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Final, Self
 
@@ -57,6 +58,7 @@ __all__ = [
     "RecipeReceipt",
     "RecipeStep",
     "RecipeStepKind",
+    "Refusal",
     "SentItem",
     "SessionStatus",
     "StepReceipt",
@@ -182,6 +184,31 @@ class SessionStatus(StrEnum):
 class ChatRole(StrEnum):
     USER = "user"
     AGENT = "agent"
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """The one shape of every refusal, the same for the AI and the screen: what failed, the thing it was about
+    (a column, a table, a number, a word: never a cell), and the next call that would work."""
+
+    code: str
+    what_failed: str
+    value: str = ""
+    how_to_fix: str = ""
+
+    @property
+    def message(self) -> str:
+        """`what_failed` and `how_to_fix` as one text, for a log and for callers that read only a message."""
+        return " ".join(part for part in (self.what_failed, self.how_to_fix) if part)
+
+    def feedback(self) -> dict[str, str]:
+        """What the AI reads in its next prompt: all four fields."""
+        return {
+            "error": self.code,
+            "what_failed": self.what_failed,
+            "value": self.value,
+            "how_to_fix": self.how_to_fix,
+        }
 
 
 class ToolResult(StrictBase):

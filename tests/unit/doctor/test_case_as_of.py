@@ -13,7 +13,7 @@ from typing import Any, cast
 import duckdb
 
 from engine.agent.contracts import ProposalState
-from engine.agent.sql_step import _error_kind
+from engine.agent.sql_step import _run_failure
 from engine.doctor.case import Case
 from engine.doctor.decisions import decisions
 
@@ -96,6 +96,6 @@ def test_a_conversion_error_says_what_it_wanted_but_never_the_cell() -> None:
         try:
             duckdb.sql(sql).fetchall()
         except duckdb.Error as exc:
-            said = _error_kind(exc)
-        assert said.startswith("Conversion Error: ") and wanted in said
-        assert "12/1/2010" not in said and "C536379" not in said
+            said = _run_failure(exc, sql, {}, ["t_x"]).refusal
+        assert wanted in said.what_failed and "preview_working_copy" in said.how_to_fix
+        assert "12/1/2010" not in said.message and "C536379" not in said.message

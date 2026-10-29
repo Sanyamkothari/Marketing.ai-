@@ -88,8 +88,10 @@ ID_KEYS: Final[frozenset[str]] = frozenset(
 
 `name` is a column name too. A value that is not identifier-shaped (`ID_LABEL`) is a cell."""
 
-TEXT_KEYS: Final[frozenset[str]] = frozenset({"label", "message", "suggestion"})
-"""The value is a sentence our own rules wrote (a setting's label, a check's message and advice)."""
+TEXT_KEYS: Final[frozenset[str]] = frozenset({"label", "message", "suggestion", "what_failed", "how_to_fix"})
+"""The value is a sentence our own rules wrote (a setting's label, a check's message and advice, a refusal's two
+sentences). A refusal's `value` (a column, a table, a word of the AI's own query) is named by the caller that
+prepares it (`extra_text_keys`): in a look tool's result `value` is a cell."""
 
 SAFE_KEYS: Final[frozenset[str]] = COLUMN_KEYS | ID_KEYS | TEXT_KEYS
 """Keys whose string value is a label, not a cell: the whole allow-list, and nothing else.
