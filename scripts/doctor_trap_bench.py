@@ -3,8 +3,8 @@
 Each case under `tests/fixtures/doctor_traps/<case>/` is a few small CSV files and a `case.json` written by a human:
 one line saying what the trap is, the scenario ID it comes from (`SCENARIOS.md`), what a correct result looks like,
 and the checks that grade it. The runner puts the files through the unified Data Doctor visit with **no AI** (the
-rules path) and approves, then applies the approved changes to the files with the product's own replay
-(`engine.doctor.prescription_replay`). What comes out is the table the next step would train or contact on. Only
+rules path) and approves, then applies the approved changes to the files with the run paths' own parts
+(`engine.doctor.prescription_replay`, composed as the unit tests compose them). What comes out is the table the next step would train or contact on. Only
 that table (and the questions the Doctor asked) is graded; the Doctor's own wording never counts as evidence.
 
 Two drivers walk the visit:
@@ -570,9 +570,11 @@ def _apply(
     case: TrapCase, shipped: Shipped, done: Any, world: _World, uploads: dict[str, str],
     deps: Any, config: Any, stored_brief: Callable[..., Any],
 ) -> None:  # fmt: skip
-    """The approved changes on the whole files, by the product's own replay; the main file's result is `final`."""
+    """The approved changes on the whole files, by the run paths' parts (`tests.unit.doctor.prescription_support.replay`); the main file's result is `final`."""
+    from tests.unit.doctor.prescription_support import replay
+
     from engine.doctor.prescription import CasePrescriber
-    from engine.doctor.prescription_replay import ReplayFile, replay_prescription
+    from engine.doctor.prescription_replay import ReplayFile
 
     prescriber = CasePrescriber(deps.storage, load_files=deps.load_files)
     prescription = prescriber.prescription(done, stored_brief(deps.storage, done))
@@ -583,19 +585,20 @@ def _apply(
         for u in part.upload_ids
         if u in world.full
     ]
-    if prescription.build is not None:
-        shipped.notes.append("the approved build was not replayed (the bench has no builder)")
-    result = replay_prescription(prescription, files, mode="train", goal_id=goal, config=config)
+    # The one composition of the run paths' parts (file checks, each slot's recipe and contract, then the outcome,
+    # post-build recipe and contract on the final file), shared with the unit tests.
+    replayed = replay(prescription, files, mode="train", goal_id=goal, config=config)
+    frames, final = replayed.frames, replayed.frame
     slot_of = {u: part.slot for part in prescription.files for u in part.upload_ids}
-    by_upload = {u: result.frames[slot] for u, slot in slot_of.items() if slot in result.frames}
+    by_upload = {u: frames[slot] for u, slot in slot_of.items() if slot in frames}
     first = uploads[case.primary[0]]
     made = next((f for f in done.files if f.original_upload_id == first), None)
     holder = made.upload_id if made is not None else first
     shipped.final = by_upload.get(holder)
-    if shipped.final is None and result.frame is not None:
-        shipped.final = result.frame
-    if result.frame is not None and made is None and len(result.frames) == 1:
-        shipped.final = result.frame  # the outcome step may have changed the one file
+    if shipped.final is None and final is not None:
+        shipped.final = final
+    if final is not None and made is None and len(frames) == 1:
+        shipped.final = final  # the outcome step may have changed the one file
     shipped.tables = {t: by_upload[u] for t, u in uploads.items() if u in by_upload}
 
 

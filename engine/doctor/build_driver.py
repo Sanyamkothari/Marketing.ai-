@@ -1,8 +1,7 @@
-"""Data Doctor drives the onboarding builder (Plan O M237, DEC-1807; closes DEC-1550 and DEC-1578).
+"""Data Doctor plans the onboarding build and prepares its sources (Plan O M237, DEC-1807; closes DEC-1550).
 
-Until now Data Doctor said how several files fit (DEC-1550) and, for an agreed outcome, printed the onboarding
-calls a person or a screen then had to make by hand (`OutcomeAgreement.next_steps`, DEC-1578). This module
-turns those words into a plan and runs it, in two separate halves:
+Data Doctor says how several files fit (DEC-1550). This module turns that into a plan, and reads the plan's
+sources from their files:
 
 * `plan_build` is the **`build_dataset` proposal** (PROPOSE, rules): from the diagnosis (each file's role -
   `propose_role` - its ID and date columns, the stacks it found), the frames, and an outcome (`LabelSpec`, for
@@ -13,17 +12,11 @@ turns those words into a plan and runs it, in two separate halves:
   `check`, never ticked, and lists every APPROVE-class reason it carries (rows a stack removes, log IDs written
   as the list writes them, a log losing more than 2% of its rows to the join, the outcome). A file it cannot
   place is left out with a code, never guessed into the build.
-* `drive_builder` is an **executor, never a tool** (design §5.1: APPLY is never a tool). It runs only a plan
-  whose hash the person approved (`BuildApproval`), with the exact sentence for an APPROVE-class plan. It
-  stacks, applies each log's `normalise_key` step through the recipe engine (so the step's receipt is the
-  recipe's own), and writes each log's matched IDs **as the customer list writes them**: the list's own IDs are
-  never rewritten, so the built dataset, and every score joined back on `entity_key`, names the client's
-  customers as the client does (`CUST-00123`, not `123`). It then calls the builder through a `BuilderPort`:
-  add each source, suggest and save each mapping, save the onboarding recipe with the label unchanged, build,
-  and keep the approved plan beside the recipe (`BuildRecord`) so that `replay_build` runs next month's (or a
-  scoring) file through the same frozen rules. `engine.doctor.builder_api.ApiBuilderPort` is the adapter over
-  the HTTP routes the Manual setup screens use, so the dataset is built by exactly the builder a person would
-  have driven.
+* `prepare_sources` reads an approved plan's sources: it stacks, applies each log's `normalise_key` step
+  through the recipe engine (so the step's receipt is the recipe's own), and writes each log's matched IDs **as
+  the customer list writes them**: the list's own IDs are never rewritten, so the built dataset, and every
+  score joined back on `entity_key`, names the client's customers as the client does (`CUST-00123`, not
+  `123`). The table itself is built by `api.routes.case_combine` (the goal's table, through `combine_run`).
 
 The plan holds column names, roles, rules and counts; no ID and no cell.
 """
@@ -32,13 +25,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Final, Literal, Protocol
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from pydantic import AwareDatetime, Field
+from pydantic import Field
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import Question, RecipeReceipt, RecipeStep, RecipeStepKind
@@ -67,12 +59,8 @@ from engine.doctor.stack_files import (
 
 __all__ = [
     "BUILD_CODES",
-    "BuildApproval",
     "BuildDriveError",
-    "BuildDriveResult",
     "BuildPlan",
-    "BuildRecord",
-    "BuilderPort",
     "DiagnosisRoles",
     "KeyMatchReceipt",
     "LeftOutFile",
@@ -81,13 +69,8 @@ __all__ = [
     "PreparedSources",
     "RoleProposer",
     "RoleSuggestion",
-    "approval_for",
-    "build_record_key",
-    "drive_builder",
-    "mapping_columns",
     "plan_build",
     "prepare_sources",
-    "replay_build",
 ]
 
 BUILD_CODES: Final[frozenset[str]] = frozenset(
@@ -105,8 +88,6 @@ BUILD_CODES: Final[frozenset[str]] = frozenset(
 
 KEY_STEP_FAILURE_PCT: Final[float] = 5.0
 """The `normalise_key` step's limit of IDs it may fail to write (Plan G's default conversion limit)."""
-
-MappingDecision = Literal["auto", "user"]
 
 
 # ---------------------------------------------------------------------------
@@ -583,7 +564,7 @@ def _approval_sentence(
 
 
 # ---------------------------------------------------------------------------
-# Driving the builder
+# Preparing the sources
 # ---------------------------------------------------------------------------
 class BuildDriveError(Exception):
     """A plan that cannot be proposed or run. `code` is one of `BUILD_CODES` or another module's code."""
@@ -592,110 +573,6 @@ class BuildDriveError(Exception):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
-
-
-class BuildApproval(StrictBase):
-    """The person's yes to one plan: its hash, who, when, and the sentence they read."""
-
-    plan_hash: str
-    approved_by: str = Field(min_length=1, description="The user id; never an agent.")
-    approved_at: AwareDatetime
-    sentence: str = Field(description="The plan's `approval_sentence`, word for word.")
-
-
-class BuilderPort(Protocol):
-    """The builder calls Data Doctor makes - exactly the Manual setup screens' (sources, mappings, recipes,
-    datasets) - and where the approved plan is kept beside the recipe it saved. `engine.doctor.builder_api.
-    ApiBuilderPort` answers them over the HTTP routes."""
-
-    def add_source(self, *, file_name: str, data: bytes, role: str) -> str: ...
-
-    def suggest_mapping(self, *, source_id: str, use_case: str) -> Mapping[str, Any]: ...
-
-    def save_mapping(
-        self,
-        *,
-        mapping_id: str,
-        source_id: str,
-        use_case: str,
-        role: str,
-        columns: Sequence[Mapping[str, Any]],
-    ) -> str: ...
-
-    def save_spec(self, body: Mapping[str, Any]) -> str: ...
-
-    def build(self, *, spec_id: str, mode: str) -> str: ...
-
-    def save_record(self, record: BuildRecord) -> str | None:
-        """Keep `record` beside the recipe it built (`build_record_key`); the key, or None when the port keeps
-        no records."""
-        ...
-
-
-class BuildRecord(StrictBase):
-    """The approved plan, kept beside the onboarding recipe it saved: what `replay_build` runs next month's
-    files (or a scoring file) through, so the stacks and the ID rules replay exactly as approved. Rules, column
-    names and counts only: no ID, no cell."""
-
-    plan: BuildPlan
-    approval: BuildApproval
-    spec_id: str
-    source_ids: dict[str, str] = Field(description="Planned source name to builder source id.")
-    mapping_ids: tuple[str, ...]
-
-    def check(self) -> None:
-        if (
-            self.approval.plan_hash != self.plan.plan_hash
-            or self.approval.sentence != self.plan.approval_sentence
-        ):
-            raise BuildDriveError(
-                "BUILD_PLAN_NOT_APPROVED",
-                "This record's plan is not the one that was approved; nothing replays.",
-            )
-
-
-def build_record_key(client_id: str, spec_id: str) -> str:
-    """Where a `BuildRecord` is kept: beside the client's sources, so erasing the client erases it too."""
-    return f"clients/{client_id}/doctor_builds/{spec_id}.json"
-
-
-class BuildDriveResult(StrictBase):
-    plan_hash: str
-    approved_by: str
-    source_ids: dict[str, str] = Field(description="Planned source name to builder source id.")
-    mapping_ids: tuple[str, ...]
-    spec_id: str
-    dataset_id: str | None
-    stack_receipts: tuple[StackReceipt, ...]
-    key_receipts: tuple[RecipeReceipt, ...] = Field(description="Each log's `normalise_key` step, as run.")
-    match_receipts: tuple[KeyMatchReceipt, ...] = Field(
-        default=(), description="How each log's IDs met the customer list and were written as it writes them."
-    )
-    record_key: str | None = Field(default=None, description="Where the `BuildRecord` was kept, if anywhere.")
-
-
-def mapping_columns(
-    suggested: Sequence[Mapping[str, Any]], required: Mapping[str, tuple[str, str | None]]
-) -> list[dict[str, Any]]:
-    """The mapping to save: the plan's required columns (`entity_key`, `event_time`), decided by the person
-    who approved the plan, then the builder's own suggestions that name neither the same standard column nor
-    the same file column."""
-    taken_sources = {source for source, _ in required.values()}
-    columns: list[dict[str, Any]] = [
-        {
-            "source": source,
-            "standard": standard,
-            "transform": None if cast is None else {"kind": "cast", "to_type": cast},
-            "confidence": 1.0,
-            "decided_by": "user",
-        }
-        for standard, (source, cast) in required.items()
-    ]
-    for column in suggested:
-        if column.get("standard") in required or column.get("source") in taken_sources:
-            continue
-        columns.append(dict(column))
-    return columns
 
 
 def _stacked(
@@ -815,145 +692,3 @@ def prepare_sources(
             match_receipts.append(match_receipt)
         prepared.append((source, frame))
     return PreparedSources(tuple(prepared), tuple(stack_receipts), tuple(key_receipts), tuple(match_receipts))
-
-
-def _run_plan(
-    plan: BuildPlan,
-    approval: BuildApproval,
-    files: Mapping[str, Sequence[pd.DataFrame]],
-    port: BuilderPort,
-    *,
-    mode: str,
-    build: bool,
-    clock: Any,
-) -> BuildDriveResult:
-    """Prepare each planned source from `files` (by source name), then make the Manual setup calls."""
-    source_ids: dict[str, str] = {}
-    mapping_ids: list[str] = []
-    ready = prepare_sources(plan, files, clock=clock)
-    for source, frame in ready.sources:
-        data = frame.to_csv(index=False).encode("utf-8")
-        source_id = port.add_source(file_name=source.source_name, data=data, role=source.role)
-        source_ids[source.source_name] = source_id
-        suggestion = port.suggest_mapping(source_id=source_id, use_case=plan.use_case)
-        required: dict[str, tuple[str, str | None]] = {"entity_key": (source.key_column, None)}
-        if source.date_column is not None:
-            required["event_time"] = (source.date_column, "date")
-        columns = mapping_columns(list(suggestion.get("columns", ())), required)
-        mapping_ids.append(
-            port.save_mapping(
-                mapping_id=str(suggestion["mapping_id"]),
-                source_id=source_id,
-                use_case=plan.use_case,
-                role=source.role,
-                columns=columns,
-            )
-        )
-    body: dict[str, Any] = {
-        "use_case": plan.use_case,
-        "entity_source_id": source_ids[plan.entity.source_name],
-        "event_source_ids": [source_ids[source.source_name] for source in plan.events],
-        "mapping_ids": mapping_ids,
-        "feature_spec": {
-            "features": [feature.model_dump(mode="json", exclude_defaults=True) for feature in plan.features]
-        },
-        "label_spec": (
-            None
-            if plan.label_spec is None
-            else plan.label_spec.model_dump(mode="json", by_alias=True, exclude_defaults=True)
-        ),
-        "snapshot_spec": plan.snapshot_spec.model_dump(mode="json", exclude_defaults=True),
-    }
-    spec_id = port.save_spec(body)
-    record_key = port.save_record(
-        BuildRecord(
-            plan=plan,
-            approval=approval,
-            spec_id=spec_id,
-            source_ids=source_ids,
-            mapping_ids=tuple(mapping_ids),
-        )
-    )
-    dataset_id = port.build(spec_id=spec_id, mode=mode) if build else None
-    return BuildDriveResult(
-        plan_hash=plan.plan_hash,
-        approved_by=approval.approved_by,
-        source_ids=source_ids,
-        mapping_ids=tuple(mapping_ids),
-        spec_id=spec_id,
-        dataset_id=dataset_id,
-        stack_receipts=ready.stack_receipts,
-        key_receipts=ready.key_receipts,
-        match_receipts=ready.match_receipts,
-        record_key=record_key,
-    )
-
-
-def drive_builder(
-    plan: BuildPlan,
-    frames: Mapping[str, pd.DataFrame],
-    port: BuilderPort,
-    approval: BuildApproval,
-    *,
-    mode: str = "train",
-    build: bool = True,
-    clock: Any = None,
-) -> BuildDriveResult:
-    """Run an approved plan through the builder: stack, match each log's IDs to the list (written as the list
-    writes them; the list itself as written), add sources, save mappings and the recipe (the label unchanged),
-    keep the plan beside it, and build. Refuses a plan that is not the one approved."""
-    if approval.plan_hash != plan.plan_hash:
-        raise BuildDriveError(
-            "BUILD_PLAN_NOT_APPROVED",
-            "This plan is not the one that was approved; review it and approve again.",
-        )
-    if approval.sentence != plan.approval_sentence:
-        raise BuildDriveError(
-            "APPROVAL_SENTENCE_CHANGED",
-            "The plan now reads differently from what was approved; read it again before approving.",
-        )
-    if plan.blocking or plan.questions:
-        raise BuildDriveError(
-            "BUILD_PLAN_INCOMPLETE",
-            "The plan still has an open question or a missing part: "
-            + ", ".join(plan.blocking or ("question",)),
-        )
-    files = {
-        source.source_name: [frames[upload_id] for upload_id in source.upload_ids]
-        for source in (plan.entity, *plan.events)
-    }
-    return _run_plan(plan, approval, files, port, mode=mode, build=build, clock=clock)
-
-
-def replay_build(
-    record: BuildRecord,
-    files: Mapping[str, Sequence[pd.DataFrame]],
-    port: BuilderPort,
-    *,
-    mode: str = "score",
-    build: bool = True,
-    clock: Any = None,
-) -> BuildDriveResult:
-    """Next month's files (or a scoring file) through the approved plan's frozen rules: the same stacks, the
-    same ID rules (the list's IDs as written, each log's written as the list writes them), the same mappings,
-    features and outcome. `files` gives each planned source's files by its `source_name`, oldest first; a
-    stacked source may now have more or fewer exports. The person's approval is the record's: nothing new is
-    decided here, so nothing new is asked."""
-    record.check()
-    plan = record.plan
-    missing = [
-        source.source_name for source in (plan.entity, *plan.events) if not files.get(source.source_name)
-    ]
-    if missing:
-        raise BuildDriveError(
-            "BUILD_REPLAY_FILES",
-            f"Give a file for each source the plan built: {', '.join(missing)} is missing.",
-        )
-    return _run_plan(plan, record.approval, files, port, mode=mode, build=build, clock=clock)
-
-
-def approval_for(plan: BuildPlan, *, user_id: str, at: datetime) -> BuildApproval:
-    """The approval a person gives by reading `plan.approval_sentence` and saying yes (for screens and tests)."""
-    return BuildApproval(
-        plan_hash=plan.plan_hash, approved_by=user_id, approved_at=at, sentence=plan.approval_sentence
-    )

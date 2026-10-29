@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Mapping
 from typing import Any
 
 import pandas as pd
@@ -138,55 +137,3 @@ def diagnosis(loaded: Mapping[str, pd.DataFrame]) -> Diagnosis:
         summary="",
     )
     return Diagnosis(files=files, use_cases=(), links=(link,), stacks=(stack,))
-
-
-@dataclass
-class RecordingBuilder:
-    """A `BuilderPort` that keeps what it was sent."""
-
-    calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
-    data: dict[str, pd.DataFrame] = field(default_factory=dict)
-    records: dict[str, Any] = field(default_factory=dict)
-
-    def add_source(self, *, file_name: str, data: bytes, role: str) -> str:
-        import io
-
-        source_id = f"s{len(self.data) + 1}"
-        self.data[source_id] = pd.read_csv(io.BytesIO(data), dtype=str)
-        self.calls.append(("add_source", {"file_name": file_name, "role": role}))
-        return source_id
-
-    def suggest_mapping(self, *, source_id: str, use_case: str) -> Mapping[str, Any]:
-        self.calls.append(("suggest_mapping", {"source_id": source_id}))
-        return {
-            "mapping_id": f"m_{source_id}",
-            "columns": [
-                {"source": "customer_id", "standard": "entity_key", "decided_by": "auto", "confidence": 0.9},
-                {"source": "region", "standard": "region", "decided_by": "auto", "confidence": 0.9},
-            ],
-        }
-
-    def save_mapping(
-        self,
-        *,
-        mapping_id: str,
-        source_id: str,
-        use_case: str,
-        role: str,
-        columns: Sequence[Mapping[str, Any]],
-    ) -> str:
-        self.calls.append(("save_mapping", {"mapping_id": mapping_id, "columns": [dict(c) for c in columns]}))
-        return mapping_id
-
-    def save_spec(self, body: Mapping[str, Any]) -> str:
-        self.calls.append(("save_spec", dict(body)))
-        return "spec_1"
-
-    def build(self, *, spec_id: str, mode: str) -> str:
-        self.calls.append(("build", {"spec_id": spec_id, "mode": mode}))
-        return "ds_1"
-
-    def save_record(self, record: Any) -> str | None:
-        self.calls.append(("save_record", {"spec_id": record.spec_id}))
-        self.records[record.spec_id] = record
-        return f"records/{record.spec_id}"

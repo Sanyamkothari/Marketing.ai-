@@ -3,18 +3,20 @@ basis, and the prescription they make (Plan O M243, DEC-1813)."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
 from engine.agent.advisor import ordered_steps
 from engine.agent.config import AgentLevel
-from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
+from engine.agent.contracts import DataRecipe, RecipeReceipt, RecipeStep, RecipeStepKind, recipe_hash
 from engine.doctor.currency import ApprovedRate, money_basis
 from engine.doctor.locale import detect_locale
-from engine.doctor.outcome_definition import OutcomeDefinition, ValueMeaning, approval_for
+from engine.doctor.outcome_definition import OutcomeDefinition, OutcomeReceipt, ValueMeaning, approval_for
 from engine.doctor.prescription import (
     FilePart,
     GoalSection,
@@ -24,10 +26,12 @@ from engine.doctor.prescription import (
     Prescription,
     Provenance,
     SettingChoice,
+    case_tables,
     make_prescription,
 )
-from engine.doctor.prescription_contract import learn_contract
-from engine.doctor.prescription_replay import ReplayFile, run_part_recipe
+from engine.doctor.prescription_contract import DriftFinding, learn_contract
+from engine.doctor.prescription_replay import ReplayFile, check_files, replay_after_build, run_part_recipe
+from engine.doctor.prescription_runs import check_prepared
 from engine.intake.contracts import IntakeReport
 
 NOW = datetime(2026, 10, 12, 9, 0, tzinfo=UTC)
@@ -181,4 +185,93 @@ def october(**changes: Any) -> pd.DataFrame:
 def replay_file(frame: pd.DataFrame, **extra: Any) -> ReplayFile:
     return ReplayFile(
         slot=SLOT, frame=frame, intake=extra.pop("intake", intake_report()), upload_id="u_oct", **extra
+    )
+
+
+@dataclass(frozen=True)
+class Replayed:
+    """A prescription run on new files by the run paths' own parts: the prepared rows and what each part did."""
+
+    frame: pd.DataFrame | None
+    frames: dict[str, pd.DataFrame]
+    outcome: OutcomeReceipt | None
+    recipe_receipts: tuple[RecipeReceipt, ...]
+    warnings: tuple[DriftFinding, ...]
+    replayed: tuple[str, ...]
+
+    @property
+    def questions(self) -> tuple[Any, ...]:
+        return tuple(finding.question for finding in self.warnings)
+
+
+def replay(
+    approved: Prescription,
+    files: Sequence[ReplayFile],
+    *,
+    mode: Literal["train", "score"],
+    goal_id: str | None = None,
+    config: Any = None,
+) -> Replayed:
+    """The file checks (`check_files`), each slot's recipe and contract, then the outcome, post-build recipe and
+    contract on the final file (`replay_after_build`): what `prescription_runs` and the run routes do, in order.
+    """
+    warnings = list(check_files(approved, files))
+    leak: Literal["full", "narrow"] = "full" if mode == "train" else "narrow"
+    prepared: dict[str, list[pd.DataFrame]] = {}
+    receipts: list[RecipeReceipt] = []
+    ran: list[str] = []
+    for file in files:
+        part = approved.file(file.slot)
+        assert part is not None, f"no slot {file.slot}"
+        frame = file.frame
+        if part.recipe is not None:
+            run = run_part_recipe(
+                part.recipe,
+                frame,
+                config=config,
+                upload_id=file.upload_id or part.slot,
+                leak_check=leak,
+                contract=part.contract,
+                slot=part.slot,
+            )
+            receipts.append(run.receipt)
+            frame = run.frame
+            ran.append("recipe")
+        prepared.setdefault(part.slot, []).append(frame)
+    frames = {
+        slot: parts[0] if len(parts) == 1 else pd.concat(parts, ignore_index=True)
+        for slot, parts in prepared.items()
+    }
+    for part in approved.files:
+        if part.contract is not None:
+            warnings.extend(check_prepared(part, frames[part.slot], mode=mode))
+            ran.append("contract")
+    final: pd.DataFrame | None = None
+    if len(frames) == 1 or (
+        approved.post_build is not None
+        and any(step.kind is RecipeStepKind.SQL_QUERY for step in approved.post_build.steps)
+    ):
+        final = next(iter(frames.values()))  # a query reads the other files by name
+    outcome: OutcomeReceipt | None = None
+    if final is not None:
+        after = replay_after_build(
+            approved,
+            final,
+            mode=mode,
+            goal_id=goal_id,
+            config=config,
+            tables=case_tables(frames, approved.files),
+        )
+        final, outcome = after.frame, after.outcome
+        warnings.extend(after.warnings)
+        ran.extend(after.replayed)
+        if after.post_build is not None:
+            receipts.append(after.post_build)
+    return Replayed(
+        frame=final,
+        frames=frames,
+        outcome=outcome,
+        recipe_receipts=tuple(receipts),
+        warnings=tuple(warnings),
+        replayed=tuple(dict.fromkeys(ran)),
     )

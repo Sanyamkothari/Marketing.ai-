@@ -2,7 +2,7 @@
 
 `engine/doctor/materialize.py` (`replay_recipe`, beside `materialize_plan`) is the only module that runs a stored
 recipe's steps on new rows: training from a file, scoring, a scheduled firing and the prescription's replay all reach
-it through `engine.agent.dataset_recipe.run_replay` / `run_saved_recipe`, which only delegate. A module outside
+it directly or through `engine.agent.dataset_recipe.run_saved_recipe`, which only delegates. A module outside
 `engine/doctor` that calls `run_recipe`, `run_guarded` or `run_sql` is a second replay that drifts from the first, and
 fails here.
 
@@ -18,7 +18,7 @@ from tests.unit.doctor._ast_calls import function_calls, module_calls
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNNERS = frozenset({"run_recipe", "run_guarded", "run_sql"})
-REPLAYERS = frozenset({"run_replay", "run_saved_recipe"})
+REPLAYERS = frozenset({"replay_recipe", "run_saved_recipe"})
 THE_ONE = "engine/doctor/materialize.py"
 DEFINES = frozenset({"engine/agent/recipe.py", "engine/agent/sql_step.py"})
 """The modules that define the runners (and call each other)."""
@@ -64,7 +64,9 @@ def test_the_list_of_authoring_trials_only_shrinks() -> None:
 def test_the_stored_recipe_replay_is_a_thin_caller_of_materialize() -> None:
     path = ROOT / "engine/agent/dataset_recipe.py"
     assert not _called(path, RUNNERS), "dataset_recipe applies steps itself"
-    assert "replay_recipe" in function_calls(path, "run_replay"), "run_replay does not call replay_recipe"
+    assert "replay_recipe" in function_calls(
+        path, "run_saved_recipe"
+    ), "run_saved_recipe does not call replay_recipe"
     assert _called(ROOT / THE_ONE, frozenset({"run_recipe"})) and _called(
         ROOT / THE_ONE, frozenset({"run_guarded"})
     )
@@ -84,9 +86,7 @@ def test_the_other_places_that_apply_an_approved_recipe_call_replay_recipe() -> 
 def test_the_prescription_replay_applies_no_steps() -> None:
     path = ROOT / "engine/doctor/prescription_replay.py"
     assert not _called(path, RUNNERS)
-    assert _called(
-        path, REPLAYERS
-    ), "the prescription replay reaches the recipe through run_saved_recipe/run_replay"
+    assert _called(path, REPLAYERS), "the prescription replay reaches the recipe through replay_recipe"
 
 
 def test_a_new_yes_no_spelling_stops_every_stored_recipe_replay_not_only_the_prescription_one() -> None:
@@ -98,8 +98,8 @@ def test_a_new_yes_no_spelling_stops_every_stored_recipe_replay_not_only_the_pre
     import pytest
 
     from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
-    from engine.agent.dataset_recipe import run_replay
     from engine.agent.recipe import RecipeError
+    from engine.doctor.materialize import replay_recipe
 
     step = RecipeStep(
         order=1,
@@ -117,5 +117,5 @@ def test_a_new_yes_no_spelling_stops_every_stored_recipe_replay_not_only_the_pre
     )
     frame = pd.DataFrame({"active": ["yes", "no", "ha", "yes"]})
     with pytest.raises(RecipeError) as stopped:
-        run_replay(frame, recipe, levels=("safe",), max_failure_pct=5.0, upload_id="up")
+        replay_recipe(frame, recipe, levels=("safe",), max_failure_pct=5.0, upload_id="up")
     assert stopped.value.code == "RECIPE_NEW_VALUE" and stopped.value.column == "active"

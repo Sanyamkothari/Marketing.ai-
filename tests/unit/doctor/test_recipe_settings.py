@@ -10,11 +10,10 @@ import pytest
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
-from engine.agent.dataset_recipe import run_replay
 from engine.agent.recipe import RecipeError
 from engine.doctor.currency import MoneyBasis, MoneyColumn
 from engine.doctor.locale import india_defaults
-from engine.doctor.materialize import UNCHECKED_SETTINGS_NOTE
+from engine.doctor.materialize import UNCHECKED_SETTINGS_NOTE, replay_recipe
 from tests.unit.doctor._ast_calls import called_names
 
 STEP = RecipeStep(order=1, kind=RecipeStepKind.DROP_COLUMN, column="junk")
@@ -39,7 +38,7 @@ def _recipe(*, basis: bool, guarded: bool = True, profile: bool = False) -> Data
 
 
 def _replay(recipe: DataRecipe, frame: pd.DataFrame) -> object:
-    return run_replay(frame, recipe, levels=(AgentLevel.CLEAN,), max_failure_pct=5.0, upload_id="up")
+    return replay_recipe(frame, recipe, levels=(AgentLevel.CLEAN,), max_failure_pct=5.0, upload_id="up")
 
 
 def test_a_new_currency_stops_a_scoring_replay_with_a_plain_error() -> None:

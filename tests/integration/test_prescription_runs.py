@@ -56,8 +56,6 @@ from engine.contracts import RunRecord
 from engine.doctor.currency import MoneyBasis, MoneyColumn, load_money_basis
 from engine.doctor.outcome_definition import OutcomeDefinition, ValueMeaning, approval_for
 from engine.doctor.prescription import (
-    BuildPart,
-    CasePrescriber,
     FilePart,
     GoalSection,
     LocalePart,
@@ -73,10 +71,8 @@ from engine.doctor.prescription_runs import (
     PRESCRIPTION_CHECK_FILENAME,
     PRESCRIPTION_REF_FILENAME,
     PrescriptionRef,
-    bind_dataset,
     bind_upload,
     bound,
-    dataset_for_training,
 )
 from engine.jobs import CancelToken
 from engine.onboarding.datasets import DATASET_FRAME_FILENAME, dataset_key
@@ -139,11 +135,9 @@ def _prescribe(
     files: tuple[FilePart, ...] = (),
     basis: MoneyBasis | None = BASIS,
     goals: tuple[GoalSection, ...] = (),
-    build: BuildPart | None = None,
 ) -> tuple[PrescriptionRef, Prescription]:
     made = make_prescription(
         files=files,
-        build=build,
         post_build=post_build,
         contract=contract,
         goals=goals,
@@ -178,84 +172,6 @@ def _fire(root: Path, dataset_id: str, mode: RunMode, version: Any = None) -> Ru
         version=version,
         client_tag=None,
     )
-
-
-def _unbind(storage: LocalStorage, dataset_id: str) -> None:
-    key = dataset_key(dataset_id, PRESCRIPTION_REF_FILENAME)
-    if storage.exists(key):
-        storage.delete(key)
-
-
-def _assert_trained_prepared(
-    storage: LocalStorage, run_id: str, dataset_id: str, ref: PrescriptionRef
-) -> None:
-    spec = read_job_spec(storage, job_spec_key(run_id))
-    assert spec.upload_key.startswith(f"datasets/{dataset_id}/prepared_"), "it trains on the prepared rows"
-    built_rows = _frame(storage, dataset_key(dataset_id, DATASET_FRAME_FILENAME))
-    prepared = _frame(storage, spec.upload_key)
-    assert len(prepared) == len(built_rows) and "North" not in set(prepared["region"])
-    assert (prepared["region"] == "Northern").sum() == (built_rows["region"] == "North").sum()
-    record = storage.read_model(run_key(run_id, "run.json"), RunRecord)
-    assert record.dataset_id == dataset_id, "the lineage is the dataset's"
-    kept = storage.read_model(run_key(run_id, DATA_RECIPE_FILENAME), DataRecipe)
-    assert kept.recipe_hash == _recipe().recipe_hash, "the model carries the post-build recipe to scoring"
-    assert storage.read_model(run_key(run_id, RECIPE_RECEIPT_FILENAME), RecipeReceipt).rows_out == len(
-        built_rows
-    )
-    assert storage.read_model(run_key(run_id, PRESCRIPTION_REF_FILENAME), PrescriptionRef) == ref
-    assert (
-        load_money_basis(storage, run_id) == BASIS
-    ), "save_money_basis on a prepared run, with the switch on"
-
-
-# ---------------------------------------------------------------------------
-# Training from a built dataset
-# ---------------------------------------------------------------------------
-def test_a_built_dataset_trains_with_its_post_build_recipe(built: tuple[Path, str]) -> None:
-    root, dataset_id = built
-    storage = LocalStorage(root / "data")
-    ref, _ = _prescribe(storage, post_build=_recipe())
-    bind_dataset(storage, dataset_id, ref)
-    try:
-        response = _train(root, dataset_id)
-        assert response.status_code == 202, response.text
-        _assert_trained_prepared(storage, response.json()["run_id"], dataset_id, ref)
-    finally:
-        _unbind(storage, dataset_id)
-
-
-def test_a_scheduled_training_firing_trains_with_the_post_build_recipe(built: tuple[Path, str]) -> None:
-    root, dataset_id = built
-    storage = LocalStorage(root / "data")
-    ref, _ = _prescribe(storage, post_build=_recipe())
-    bind_dataset(storage, dataset_id, ref)
-    try:
-        record = _fire(root, dataset_id, RunMode.TRAIN)
-        _assert_trained_prepared(storage, record.run_id, dataset_id, ref)
-    finally:
-        _unbind(storage, dataset_id)
-
-
-def test_a_post_build_recipe_on_a_column_that_is_gone_is_prescription_drift(built: tuple[Path, str]) -> None:
-    root, dataset_id = built
-    storage = LocalStorage(root / "data")
-    approved = _frame(storage, dataset_key(dataset_id, DATASET_FRAME_FILENAME)).assign(city="Pune")
-    contract = learn_contract(approved, primary_key=KEY, target=TARGET)
-    ref, _ = _prescribe(
-        storage, post_build=_recipe(column="city", mapping={"Pune": "Poona"}), contract=contract
-    )
-    bind_dataset(storage, dataset_id, ref)
-    try:
-        response = _train(root, dataset_id)
-        assert response.status_code == 409, response.text
-        detail = response.json()["detail"]
-        assert (detail["code"], detail["path"]) == ("PRESCRIPTION_DRIFT", "city")
-        assert "called something else now?" in detail["message"], "it asks; it never re-learns"
-        with pytest.raises(FiringError) as failed:
-            _fire(root, dataset_id, RunMode.TRAIN)
-        assert failed.value.code == "PRESCRIPTION_DRIFT"
-    finally:
-        _unbind(storage, dataset_id)
 
 
 # ---------------------------------------------------------------------------
@@ -546,99 +462,9 @@ def test_an_upload_trains_on_its_approved_outcome_with_the_left_out_rows_removed
     assert storage.read_model(run_key(run_id, PRESCRIPTION_REF_FILENAME), PrescriptionRef) == ref
 
 
-def test_a_dataset_trains_on_its_approved_outcome_and_carries_only_the_post_build_recipe(
-    tmp_path: Path,
-) -> None:
-    storage = LocalStorage(tmp_path / "data")
-    dataset_id = "ds_outcome"
-    rows = _with_status(
-        pd.DataFrame(
-            {
-                KEY: [f"C{n}" for n in range(300)],
-                "region": [("North", "South", "East")[n % 3 - 1] for n in range(300)],
-                "tenure": np.arange(300) % 40,
-            }
-        )
-    )
-    with storage.open_write(dataset_key(dataset_id, DATASET_FRAME_FILENAME)) as sink:
-        rows.to_parquet(sink, index=False)
-    ref, _ = _prescribe(storage, post_build=_recipe(), goals=(_outcome_goal(),))
-    bind_dataset(storage, dataset_id, ref)
-    training = dataset_for_training(storage, load_use_case(USE_CASE), dataset_id, (KEY,))
-    assert training is not None and training.rows is not None
-    assert training.rows.source_key.startswith(f"datasets/{dataset_id}/prepared_rx_")
-    prepared = _frame(storage, training.rows.source_key)
-    assert set(prepared[TARGET]) == {0, 1} and len(prepared) == 200, "Suspended is left out"
-    assert "North" not in set(prepared["region"]), "then the post-build recipe"
-    assert training.outcome is not None and training.outcome.excluded == 100
-    assert training.recipe is not None and training.recipe.recipe_hash == _recipe().recipe_hash
-    assert training.receipt is not None, "the run carries the post-build recipe and what it did"
-    assert _frame(storage, dataset_key(dataset_id, DATASET_FRAME_FILENAME)).equals(
-        rows
-    ), "the build is untouched"
-
-
 # ---------------------------------------------------------------------------
 # Review fixes: files and datasets made after PRESCRIBE
 # ---------------------------------------------------------------------------
-def _build_record() -> Any:
-    from engine.config import LabelDefinition, LabelType
-    from engine.doctor.build_driver import approval_for as build_approval
-    from engine.doctor.build_driver import drive_builder, plan_build
-    from tests.unit.doctor.m237_support import RecordingBuilder, diagnosis, frames
-
-    label = LabelDefinition(
-        name="churn_next_60d", type=LabelType.EVENT_ABSENCE, role="bills", horizon_days=60
-    )
-    loaded = frames()
-    plan = plan_build(diagnosis(loaded), loaded, use_case="rca", label_spec=label)
-    port = RecordingBuilder()
-    drive_builder(plan, loaded, port, build_approval(plan, user_id="analyst", at=utc_now()))
-    return port.records["spec_1"]
-
-
-class _Case:
-    """What PRESCRIBE reads of a case to bind it."""
-
-    client_id = "default"
-    case_id = CASE
-
-    def upload_ids(self) -> tuple[str, ...]:
-        return ()
-
-
-def test_a_scheduled_training_firing_on_a_fresh_build_of_the_prescribed_spec_follows_the_prescription(
-    built: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root, dataset_id = built
-    storage = LocalStorage(root / "data")
-    manifest = storage.read_model(dataset_key(dataset_id, "dataset_manifest.json"), DatasetManifest)
-    made = make_prescription(
-        build=BuildPart(record=_build_record(), dataset_id=dataset_id),
-        post_build=_recipe(),
-        locale=LocalePart(money_basis=BASIS),
-        provenance=Provenance(case_id=CASE, client_id="default", created_at=utc_now()),
-    )
-    monkeypatch.setattr(CasePrescriber, "prescription", lambda self, case, brief: made)
-    written = CasePrescriber(storage)(_Case(), None)  # type: ignore[arg-type]
-    ref = PrescriptionRef(client_id="default", case_id=CASE, prescription_hash=written)
-    spec = (manifest.client_id, manifest.spec_id)
-    spec_key = f"cases/{manifest.client_id}/prescribed_specs/{manifest.spec_id}.json"
-    try:
-        assert bound(storage, spec=spec) == ref, "PRESCRIBE binds the spec that built the approved dataset"
-        # A firing's fresh build of that spec is another dataset: bound to nothing itself.
-        _unbind(storage, dataset_id)
-        record = _fire(root, dataset_id, RunMode.TRAIN)
-        _assert_trained_prepared(storage, record.run_id, dataset_id, ref)
-        response = _train(root, dataset_id)
-        assert response.status_code == 202, response.text
-        _assert_trained_prepared(storage, response.json()["run_id"], dataset_id, ref)
-    finally:
-        _unbind(storage, dataset_id)
-        if storage.exists(spec_key):
-            storage.delete(spec_key)
-
-
 def test_next_months_upload_follows_the_prescription_its_champion_was_trained_under(
     api: tuple[TestClient, Path], built: tuple[Path, str]
 ) -> None:
@@ -681,36 +507,6 @@ def test_next_months_upload_follows_the_prescription_its_champion_was_trained_un
 # ---------------------------------------------------------------------------
 # Review fixes: rows no recipe prepares are checked at training
 # ---------------------------------------------------------------------------
-def test_a_bound_dataset_with_no_post_build_recipe_is_checked_against_its_contract(
-    built: tuple[Path, str],
-) -> None:
-    root, dataset_id = built
-    storage = LocalStorage(root / "data")
-    rows = _frame(storage, dataset_key(dataset_id, DATASET_FRAME_FILENAME))
-    approved = rows[rows["region"] != "West"]  # at approval the dataset had no West
-    ref, _ = _prescribe(storage, contract=learn_contract(approved, primary_key=KEY, target=TARGET))
-    bind_dataset(storage, dataset_id, ref)
-    try:
-        response = _train(root, dataset_id)
-        assert response.status_code == 409, response.text
-        detail = response.json()["detail"]
-        assert (detail["code"], detail["path"]) == ("PRESCRIPTION_DRIFT", "region")
-        with pytest.raises(FiringError) as failed:
-            _fire(root, dataset_id, RunMode.TRAIN)
-        assert failed.value.code == "PRESCRIPTION_DRIFT"
-        # Rows that match their contract train as built, with the reference kept.
-        ref, _ = _prescribe(storage, contract=learn_contract(rows, primary_key=KEY, target=TARGET))
-        bind_dataset(storage, dataset_id, ref)
-        response = _train(root, dataset_id)
-        assert response.status_code == 202, response.text
-        run_id = response.json()["run_id"]
-        spec = read_job_spec(storage, job_spec_key(run_id))
-        assert spec.upload_key == dataset_key(dataset_id, DATASET_FRAME_FILENAME)
-        assert storage.read_model(run_key(run_id, PRESCRIPTION_REF_FILENAME), PrescriptionRef) == ref
-    finally:
-        _unbind(storage, dataset_id)
-
-
 def test_a_bound_upload_with_no_recipe_is_checked_against_its_contract(
     api: tuple[TestClient, Path], built: tuple[Path, str]
 ) -> None:
@@ -764,7 +560,7 @@ def test_a_training_upload_with_nothing_bound_is_not_read_again(
     monkeypatch.setattr(ingest, "read_upload", counted)
     config = load_use_case(USE_CASE)
     found = run_prescriptions.prescribed_training(
-        storage, config, upload=record, dataset_id=None, primary_key=KEY, target=TARGET
+        storage, config, upload=record, primary_key=KEY, target=TARGET
     )
     assert found is None
     assert reads == [], "the file is read only once a binding is confirmed"
@@ -945,7 +741,6 @@ def test_an_approved_query_on_one_upload_runs_on_the_file_as_it_was_tried(
         storage,
         load_use_case(USE_CASE),
         upload=load_upload(storage, upload_id),
-        dataset_id=None,
         primary_key=None,
         target=None,
     )

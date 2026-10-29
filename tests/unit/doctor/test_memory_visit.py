@@ -145,7 +145,6 @@ def _remember_with(
         storage, case.client_id, case.case_id, case.prescriptions[-1].prescription_hash
     )
     fake = SimpleNamespace(
-        build=None,
         recipes=stored.recipes,
         files=(SimpleNamespace(intake=SimpleNamespace(sheet=sheet, turned_off=False)),),
     )

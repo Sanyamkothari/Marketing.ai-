@@ -60,7 +60,7 @@ from engine.doctor.visit import ConversePort, DetectorPort, VisitDeps
 from engine.jobs import ThreadJobRunner
 from engine.storage import Storage
 
-__all__ = ["POLICIES", "ledger_for", "router"]
+__all__ = ["POLICIES", "ledger_for", "router", "visit_deps"]
 
 router: APIRouter = APIRouter(tags=["cases"])
 
@@ -441,7 +441,6 @@ def _prepared_verify(storage: Storage, root: Path) -> Any:
                 storage,
                 config,
                 upload=load_upload(storage, upload_id),
-                dataset_id=None,
                 primary_key=primary_key,
                 target=target,
             )
@@ -546,7 +545,7 @@ def first_rows_loader(storage: Storage) -> Callable[[Case], tuple[LoadedFile, ..
     return load_files
 
 
-def _deps(
+def visit_deps(
     storage: Storage, root: Path, request: Request, principal: Principal | None, client_id: str
 ) -> VisitDeps:
     """Every visit route carries the CONVERSE port, connected only when a chat turn runs: a visit resumed in
@@ -638,7 +637,7 @@ def resume_visit(
         case = doctor_visit.resume(
             body.client_id,
             case_id,
-            _deps(storage, root, request, principal, body.client_id),
+            visit_deps(storage, root, request, principal, body.client_id),
             actor=principal.user_id,
         )
     except CaseError as exc:
@@ -660,7 +659,7 @@ def choose_goal(
             body.client_id,
             case_id,
             body.goal_id,
-            _deps(storage, root, request, principal, body.client_id),
+            visit_deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
@@ -687,7 +686,7 @@ def answer_question(
             case_id,
             body.question_id,
             body.option_id,
-            _deps(storage, root, request, principal, body.client_id),
+            visit_deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
@@ -718,7 +717,7 @@ def decide_item(
             case_id,
             body.item_id,
             body.accept,
-            _deps(storage, root, request, principal, body.client_id),
+            visit_deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
@@ -744,7 +743,7 @@ def approve_changes(
         case = doctor_visit.approve(
             body.client_id,
             case_id,
-            _deps(storage, root, request, principal, body.client_id),
+            visit_deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
@@ -778,7 +777,7 @@ def acknowledge_stop(
             body.client_id,
             case_id,
             body.key,
-            _deps(storage, root, request, principal, body.client_id),
+            visit_deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             reason=body.reason,
@@ -809,7 +808,7 @@ def confirm_item(
             body.client_id,
             case_id,
             body.item_id,
-            _deps(storage, root, request, principal, body.client_id),
+            visit_deps(storage, root, request, principal, body.client_id),
             principal=principal,
             sentence=body.sentence,
             expected_version=body.version,
@@ -841,7 +840,7 @@ def revoke_standing_answer(
             body.client_id,
             case_id,
             answer_id,
-            _deps(storage, root, request, principal, body.client_id),
+            visit_deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
@@ -865,7 +864,7 @@ def chat_message(
             body.client_id,
             case_id,
             body.message,
-            _deps(storage, root, request, principal, body.client_id),
+            visit_deps(storage, root, request, principal, body.client_id),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,

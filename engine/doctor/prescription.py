@@ -9,11 +9,10 @@ Part               Holds
 =================  ====================================================================================================
 files              per file slot: the intake decisions (sheet, header row, intake on or off; missing words noted),
                    the `DataRecipe`, and the column contract of the prepared file
-build              the approved build plan (M237's `BuildRecord`: stacks, ID rules, mappings, features, label)
 locale             the locale profile (M241) by `profile_hash`, and the money basis (M242: every money column's unit
                    and every frozen rate) by `basis_hash`
 post_build         a recipe on the built (or single prepared) file, for training **and** scoring
-contract           the column contract of the final prepared file, when it is known at approval
+contract           the column contract of the final prepared file, when one is given (a case's own are per file slot)
 goals              one section per goal brief: the outcome definition (M239, by `definition_hash`), the roles, the
                    settings, the split and time settings from the brief, the acknowledgements
 provenance         who approved, receipts, brief hashes, item digests, engine and agent versions, when
@@ -21,7 +20,7 @@ provenance         who approved, receipts, brief hashes, item digests, engine an
 
 **One hash.** :func:`prescription_hash` covers every part except reasons, wording and provenance, as `recipe_hash` does
 today: a recipe counts by its logic (`recipe_hash` with the roles, levels and limit `DataRecipe.prepares_like`
-compares), a build by its `plan_hash`, an outcome by its `definition_hash`, the locale by `profile_hash` and
+compares), an outcome by its `definition_hash`, the locale by `profile_hash` and
 `basis_hash`. It is canonical JSON (`engine.agentic.canonical`), so it is the same in every process, and it changes
 when any replayed part changes. Who approved, the upload ids the parts were approved on, and when, are provenance: the
 same decisions on next month's files hash the same.
@@ -34,7 +33,7 @@ and nothing else, so a model trained today keeps scoring exactly as it does (the
 `run_saved_recipe`, byte for byte, which runs `materialize.replay_recipe`).
 
 **PRESCRIBE.** :class:`CasePrescriber` is M235's `VisitDeps.prescribe` port: it builds the prescription from the case's
-approved items (:func:`prescription_from_case`), writes it, binds the case's uploads and built dataset to it
+approved items (:func:`prescription_from_case`), writes it, binds the case's uploads to it
 (`engine.doctor.prescription_runs`), and returns the hash; its :meth:`CasePrescriber.digest` gives the same hash without
 writing, which M246's approval record carries as `prescription_hash`.
 
@@ -59,15 +58,12 @@ from engine.agent.contracts import DataRecipe, ProposalState, RecipeStep, Recipe
 from engine.agentic.canonical import digest
 from engine.config import StrictBase
 from engine.contracts import Artefact
-from engine.doctor.build_driver import BuildRecord
 from engine.doctor.currency import MoneyBasis
 from engine.doctor.decisions import Decided, DecisionKind, Decisions, decisions_from
 from engine.doctor.locale import LocaleProfile
 from engine.doctor.outcome_definition import (
     OutcomeApproval,
     OutcomeDefinition,
-    OutcomeError,
-    apply_outcome_values,
 )
 from engine.doctor.prescription_contract import DataContract, DriftFinding, learn_contract
 from engine.intake.contracts import IntakeReport
@@ -86,8 +82,6 @@ __all__ = [
     "PRESCRIPTION_CODES",
     "PRESCRIPTION_DRIFT",
     "PRESCRIPTION_NOT_FOUND",
-    "BuildPart",
-    "BuiltRows",
     "CasePrescriber",
     "FilePart",
     "GoalSection",
@@ -123,8 +117,6 @@ PRESCRIPTION_CODES: Final[frozenset[str]] = frozenset({PRESCRIPTION_DRIFT, PRESC
 PRESCRIPTIONS_DIRNAME: Final[str] = "prescriptions"
 AGENT_VERSION: Final[str] = "data-doctor/1"
 HASH_PATTERN: Final[str] = r"^[a-f0-9]{64}$"
-CONTRACT_ROWS: Final[int] = 100_000
-"""At most this many rows of a built dataset are read to learn its contract (shares and percentiles of a sample)."""
 POST_BUILD: Final[str] = "post_build"
 """An item payload's `stage` that puts its step in the post-build recipe."""
 
@@ -188,19 +180,14 @@ class IntakeDecision(StrictBase):
 class FilePart(StrictBase):
     """One file slot: a file, or the monthly exports stacked into one builder source."""
 
-    slot: str = Field(min_length=1, max_length=128, description="Its stable name (a build source, a role).")
+    slot: str = Field(
+        min_length=1, max_length=128, description="Its stable name (a role or the file's name)."
+    )
     upload_ids: tuple[str, ...] = Field(default=(), description="Provenance: the uploads it was approved on.")
     file_names: tuple[str, ...] = Field(default=(), description="Provenance: their names.")
     intake: IntakeDecision | None = None
     recipe: DataRecipe | None = None
     contract: DataContract | None = Field(default=None, description="The prepared file's contract.")
-
-
-class BuildPart(StrictBase):
-    """The approved build plan (M237), replayed through the same builder."""
-
-    record: BuildRecord
-    dataset_id: str | None = Field(default=None, description="Provenance: the dataset it built at approval.")
 
 
 class OutcomePart(StrictBase):
@@ -270,12 +257,19 @@ class Prescription(Artefact):
 
     prescription_hash: str = Field(pattern=HASH_PATTERN)
     files: tuple[FilePart, ...] = ()
-    build: BuildPart | None = None
     locale: LocalePart | None = None
     post_build: DataRecipe | None = None
     contract: DataContract | None = None
     goals: tuple[GoalSection, ...] = ()
     provenance: Provenance
+
+    @model_validator(mode="before")
+    @classmethod
+    def _without_build(cls, data: Any) -> Any:
+        """A stored prescription still carries `"build": null` (the part no path ever filled): it reads as before."""
+        if isinstance(data, dict) and data.get("build", ...) is None:
+            return {key: value for key, value in data.items() if key != "build"}
+        return data
 
     @model_validator(mode="after")
     def _consistent(self) -> Prescription:
@@ -333,7 +327,6 @@ def _contract(contract: DataContract | None) -> Any:
 def _parts(
     *,
     files: Sequence[FilePart],
-    build: BuildPart | None,
     locale: LocalePart | None,
     post_build: DataRecipe | None,
     contract: DataContract | None,
@@ -350,7 +343,7 @@ def _parts(
             }
             for part in files
         ],
-        "build": None if build is None else build.record.plan.plan_hash,
+        "build": None,  # the part that was never filled; kept so every stored prescription keeps its hash
         "locale": (
             None if locale is None else {"profile_hash": locale.profile_hash, "basis_hash": locale.basis_hash}
         ),
@@ -377,7 +370,6 @@ def prescription_hash(prescription: Prescription) -> str:
     return digest(
         _parts(
             files=prescription.files,
-            build=prescription.build,
             locale=prescription.locale,
             post_build=prescription.post_build,
             contract=prescription.contract,
@@ -443,20 +435,16 @@ def make_prescription(
     *,
     provenance: Provenance,
     files: Sequence[FilePart] = (),
-    build: BuildPart | None = None,
     locale: LocalePart | None = None,
     post_build: DataRecipe | None = None,
     contract: DataContract | None = None,
     goals: Sequence[GoalSection] = (),
 ) -> Prescription:
     """A prescription from its parts, with its hash."""
-    hash_ = digest(
-        _parts(files=files, build=build, locale=locale, post_build=post_build, contract=contract, goals=goals)
-    )
+    hash_ = digest(_parts(files=files, locale=locale, post_build=post_build, contract=contract, goals=goals))
     return Prescription(
         prescription_hash=hash_,
         files=tuple(files),
-        build=build,
         locale=locale,
         post_build=post_build,
         contract=contract,
@@ -699,7 +687,7 @@ def _slot_tables(
 
 
 def _off_own_table(step: RecipeStep) -> RecipeStep:
-    """A query step that runs after a build, or beside other files, reads each file by name from the prepared
+    """A query step that runs after the files are combined, or beside other files, reads each file by name from the prepared
     tables the run gives it: the one-file shortcut (`this_table`, the working frame under the file's name) no longer
     holds there, since the working frame is then the built table or another file."""
     if step.kind is not RecipeStepKind.SQL_QUERY or "this_table" not in step.params:
@@ -708,20 +696,11 @@ def _off_own_table(step: RecipeStep) -> RecipeStep:
     return step.model_copy(update={"params": params})
 
 
-def _slots(case: Case, build: BuildRecord | None) -> list[tuple[str, tuple[str, ...]]]:
-    """Each file slot and its uploads: a build's sources first (a stacked source is one slot), then the rest."""
+def _slots(case: Case) -> list[tuple[str, tuple[str, ...]]]:
+    """Each file slot and its uploads, one slot per file, named by its role or file name."""
     taken: set[str] = set()
     out: list[tuple[str, tuple[str, ...]]] = []
     placed: set[str] = set()
-    if build is not None:
-        for source in (build.plan.entity, *build.plan.events):
-            name = slot_name(source.source_name)
-            ids = tuple(u for u in source.upload_ids if u not in placed)
-            if not ids or name in taken:
-                continue
-            taken.add(name)
-            placed.update(ids)
-            out.append((name, ids))
     for file in case.files:
         if file.upload_id in placed:
             continue
@@ -833,20 +812,6 @@ def _section(
     )
 
 
-def _build(items: Sequence[CaseItem]) -> BuildPart | None:
-    for item in items:
-        raw = item.payload.get("build_record")
-        if not isinstance(raw, dict):
-            continue
-        try:
-            record = BuildRecord.model_validate(raw)
-        except ValidationError:
-            continue
-        dataset = item.payload.get("dataset_id")
-        return BuildPart(record=record, dataset_id=dataset if isinstance(dataset, str) else None)
-    return None
-
-
 def _frames(files: Sequence[LoadedFile], upload_ids: Sequence[str]) -> pd.DataFrame | None:
     found = [f.frame for f in files if f.upload_id in upload_ids]
     if not found:
@@ -902,19 +867,6 @@ def _learn(
     return prepared, learn_contract(prepared, primary_key=primary_key, target=target)
 
 
-def _with_outcome(frame: pd.DataFrame, section: GoalSection | None) -> pd.DataFrame | None:
-    """The built rows with the approved outcome from a column's values applied (M239), as a training replay applies
-    it before the post-build recipe and the contract; the rows as built for any other outcome. None when the approved
-    outcome cannot run on them (no contract is learnt from rows a replay would never see)."""
-    outcome = None if section is None else section.outcome
-    if outcome is None or outcome.definition.kind != "column_values" or outcome.approval is None:
-        return frame
-    try:
-        return apply_outcome_values(frame, outcome.definition, outcome.approval)[0]
-    except OutcomeError:
-        return None
-
-
 def _money(
     recipes: Sequence[DataRecipe],
     profile: LocaleProfile | None,
@@ -958,7 +910,6 @@ def prescription_from_case(
     briefs: Mapping[str, GoalBrief] | None = None,
     files: Sequence[LoadedFile] = (),
     config: UseCaseConfig | None = None,
-    built: BuiltRows | None = None,
     guards: list[GuardedRun] | None = None,
 ) -> Prescription:
     """The prescription a case's approved items make (the design §9.1), goal sections from `CaseItem.goal_id`.
@@ -968,12 +919,11 @@ def prescription_from_case(
 
     Item payloads read: a recipe step (`step`; `stage: post_build`, or no file, puts it in the post-build recipe), a
     role (`key`, `outcome_column`, `as_of_column`, `consent_column` items' `column`), a setting (`path`, `value`), an
-    outcome definition (`definition`, with its `approval` or the case's `outcome-<hash16>` approval), a build
-    (`build_record`, M237's `BuildRecord`, and `dataset_id`), an approved rate (`approved_rate`, M242). The base and
-    the active goal's section make the recipes; every goal on the case has its section. The contracts are learnt on
-    `files` (the rows the visit reads) after their recipes, and on `built` (the built dataset's rows) after the
-    post-build recipe, once, here. With one file and no build, the file *is* the built file: a post-build step joins
-    its recipe, so a model trained on it carries one recipe and scores exactly as a Guided-setup model does.
+    outcome definition (`definition`, with its `approval` or the case's `outcome-<hash16>` approval), an approved
+    rate (`approved_rate`, M242). The base and the active goal's section make the recipes; every goal on the case has
+    its section. Each file's contract is learnt on `files` (the rows the visit reads) after its recipe, once, here.
+    With one file, the file *is* the built file: a post-build step joins its recipe, so a model trained on it
+    carries one recipe and scores exactly as a Guided-setup model does.
     """
     from engine import __version__
     from engine.doctor.plan_check import acknowledged_codes
@@ -985,7 +935,6 @@ def prescription_from_case(
     active = next((goal for goal in case.goals if goal.active), None)
     created_at = max((a.approved_at for a in case.approvals), default=case.updated_at)
     approver = case.approvals[-1].approved_by if case.approvals else None
-    build = _build(approved)
     acked = acknowledged_codes(case.visit, approved)
     # A decision made on a file goes on the table an approved join or stack made from it (the outcome, the date).
     decided = decisions_from(approved, section_questions)
@@ -1004,14 +953,13 @@ def prescription_from_case(
         step = _bound_as_of(step, decided.as_of_iso, snapshot.isoformat() if snapshot else None)
         where = None if item.payload.get("stage") == POST_BUILD else item.upload_id
         steps_by_upload.setdefault(where, []).append(step)
-    slots = _slots(case, None if build is None else build.record)
-    if build is None and len(slots) == 1 and None in steps_by_upload:
+    slots = _slots(case)
+    if len(slots) == 1 and None in steps_by_upload:
         only = slots[0][1][0]
         steps_by_upload.setdefault(only, []).extend(steps_by_upload.pop(None))
     use_case_id = active.goal_id if active is not None else "data-doctor"
     fingerprints = {f.upload_id: f.fingerprint for f in case.files}
     parts: list[FilePart] = []
-    prepared: list[pd.DataFrame] = []
     prepared_by_slot: dict[str, pd.DataFrame] = {}
     for slot, upload_ids in slots:
         first = upload_ids[0]
@@ -1040,7 +988,6 @@ def prescription_from_case(
             part=slot,
         )
         if frame is not None:
-            prepared.append(frame)
             prepared_by_slot[slot] = frame
         parts.append(
             FilePart(
@@ -1074,19 +1021,6 @@ def prescription_from_case(
         )
         for goal in case.goals
     )
-    final: DataContract | None = None
-    if build is not None and built is not None:
-        # Learnt in the order a training replay checks it: the outcome, then the post-build recipe.
-        rows = _with_outcome(built.frame, next((g for g in goals if g.active), None))
-        _, final = _learn(
-            rows,
-            post_build,
-            primary_key=built.primary_key,
-            target=built.target,
-            tables=case_tables(prepared_by_slot, parts),
-            guards=guards,
-            part="post_build",
-        )
     profile: LocaleProfile | None = None
     if case.locale_profile is not None:
         try:
@@ -1106,10 +1040,8 @@ def prescription_from_case(
         ]
     return make_prescription(
         files=parts,
-        build=build,
         locale=locale,
         post_build=post_build,
-        contract=final,
         goals=goals,
         provenance=Provenance(
             case_id=case.case_id,
@@ -1122,15 +1054,6 @@ def prescription_from_case(
             created_at=created_at,
         ),
     )
-
-
-@dataclass(frozen=True)
-class BuiltRows:
-    """The rows of the dataset a case's build made (capped), with its ID and outcome columns."""
-
-    frame: pd.DataFrame
-    primary_key: str | None = None
-    target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1175,35 +1098,6 @@ class CasePrescriber:
         except ConfigError:
             return None
 
-    def _built(self, case: Case, config: UseCaseConfig | None) -> BuiltRows | None:
-        """The rows of the dataset the case's approved build made, when it was built and can be read."""
-        from engine.doctor.visit import active_section
-        from engine.onboarding.datasets import DATASET_FRAME_FILENAME, DATASET_MANIFEST_FILENAME, dataset_key
-        from engine.onboarding.specs import DatasetManifest
-        from engine.stages import ingest
-
-        build = _build(_accepted(active_section(case)[0]))
-        if build is None or build.dataset_id is None:
-            return None
-        try:
-            manifest = self.storage.read_model(
-                dataset_key(build.dataset_id, DATASET_MANIFEST_FILENAME), DatasetManifest
-            )
-            cap = min(CONTRACT_ROWS, ingest.profile_row_cap(config) if config is not None else CONTRACT_ROWS)
-            frame = ingest.read_upload(
-                self.storage,
-                dataset_key(build.dataset_id, DATASET_FRAME_FILENAME),
-                file_format="parquet",
-                row_cap=cap,
-            ).frame
-        except (StorageError, ValidationError, ValueError, ingest.IngestError):
-            return None
-        return BuiltRows(
-            frame=frame,
-            primary_key=str(manifest.primary_key[0]) if manifest.primary_key else None,
-            target=manifest.target,
-        )
-
     def prescription(self, case: Case, brief: GoalBrief | None) -> Prescription:
         """The case's prescription; a part that cannot be made (a conversion nobody approved) is the visit's
         `CaseError` with the part's code, so the visit answers it like any other refusal."""
@@ -1218,7 +1112,6 @@ class CasePrescriber:
                 briefs=self._briefs(case, brief),
                 files=files,
                 config=config,
-                built=self._built(case, config),
             )
         except PrescriptionError as exc:
             raise CaseError(exc.code, exc.message) from exc
@@ -1228,7 +1121,7 @@ class CasePrescriber:
         return self.prescription(case, brief).prescription_hash
 
     def __call__(self, case: Case, brief: GoalBrief | None) -> str:
-        from engine.doctor.prescription_runs import PrescriptionRef, bind_dataset, bind_spec, bind_upload
+        from engine.doctor.prescription_runs import PrescriptionRef, bind_upload
 
         prescription = self.prescription(case, brief)
         save_prescription(self.storage, case.client_id, case.case_id, prescription)
@@ -1239,23 +1132,4 @@ class CasePrescriber:
         )
         for upload_id in case.upload_ids():
             bind_upload(self.storage, upload_id, ref)
-        if prescription.build is not None and prescription.build.dataset_id is not None:
-            bind_dataset(self.storage, prescription.build.dataset_id, ref)
-            spec = self._spec_of(prescription.build.dataset_id)
-            if spec is not None:
-                # Every dataset a firing builds fresh from the same spec follows this prescription too.
-                bind_spec(self.storage, spec[0], spec[1], ref)
         return prescription.prescription_hash
-
-    def _spec_of(self, dataset_id: str) -> tuple[str, str] | None:
-        """`(client_id, spec_id)` of the onboarding spec that built `dataset_id`, when its manifest can be read."""
-        from engine.onboarding.datasets import DATASET_MANIFEST_FILENAME, dataset_key
-        from engine.onboarding.specs import DatasetManifest
-
-        try:
-            manifest = self.storage.read_model(
-                dataset_key(dataset_id, DATASET_MANIFEST_FILENAME), DatasetManifest
-            )
-        except (StorageError, ValidationError, ValueError):
-            return None
-        return manifest.client_id, manifest.spec_id
