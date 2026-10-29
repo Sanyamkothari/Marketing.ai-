@@ -6,7 +6,7 @@ What it runs, each part selectable with `--parts` (all by default):
   (pass^5: the same decision digests every run, nothing harmful), and once more on the world with an injected
   column (instructions in its header and cells) against its rotated control (the injection canary). Catalogue rows
   the registry does not hold are reported as *not built yet*, never stood in for.
-* **ai** - the Data Doctor's case chat (`visit.chat` with `doctor_converse`, as `POST /cases/{id}/chat` wires them) on
+* **ai** - the Data Doctor's case chat (`visit.chat` with `doctor_author`, as `POST /cases/{id}/chat` wires them) on
   the AI cases, k runs each: its AI-sourced items (`propose_step`; the chat has no `propose_setting`, settings reach
   the person as the training-time question), what the visit applies of them, pass^5 on proposal
   digests, harm (a pre-ticked AI step, a meaning changed), the change-share guard, personal data in any prompt, the
@@ -415,7 +415,7 @@ def proposal_of(item: Any, *, applied_by_agent: bool = False) -> Any:
 
 def ai_session(case: str, model: Model) -> AiRun:
     """The person's messages (`AI_MESSAGES`) on case `case`, one turn each, through the Data Doctor's case chat
-    (`visit.chat` with `doctor_converse`, as `POST /cases/{id}/chat` wires them); then what the visit made of the
+    (`visit.chat` with `doctor_author`, as `POST /cases/{id}/chat` wires them); then what the visit made of the
     AI's changes: the ones it applied for the person are checked as ticks, and every change the AI left pending
     is checked as the AI made it."""
     from tests.fixtures.doctor_eval.world import AI_MESSAGES, ANALYST, PERSONAL_VALUES, ai_case
@@ -423,7 +423,7 @@ def ai_session(case: str, model: Model) -> AiRun:
 
     from engine.agent.contracts import ProposalSource
     from engine.doctor.agent_apply import roles_of as case_roles
-    from engine.doctor.agent_chat import doctor_converse
+    from engine.doctor.agent_turn import doctor_author
     from engine.doctor.evals import ai_proposal_harms, ai_step_share
     from engine.doctor.protocol import AGENT
     from engine.generative.guardrails import Guardrails, load_policy
@@ -432,23 +432,25 @@ def ai_session(case: str, model: Model) -> AiRun:
     guard = _doctor_guard(meter)
     results: list[Any] = []
 
-    def converse_for(ctx: Any) -> Any:
-        port = doctor_converse(
+    def author_for(ctx: Any) -> Any:
+        port = doctor_author(
             lambda _case, _files: ctx,
             meter=guard,
             guardrails=Guardrails(load_policy(), meter=guard),
             principal=ANALYST,
         )
 
-        def counted(case_: Any, message: str, files: Any) -> Any:
-            made = port(case_, message, files)
+        def counted(case_: Any, files: Any, brief: Any, event: Any) -> Any:
+            if event.message is None:
+                return None  # the harness measures the chat: the reviews that are owed (a file, a goal) are not asked
+            made = port(case_, files, brief, event)
             results.append(made)
             return made
 
         return counted
 
     with tempfile.TemporaryDirectory() as scratch:
-        talk = ai_case(case, Path(scratch), converse_for)
+        talk = ai_case(case, Path(scratch), author_for)
         for message in AI_MESSAGES:
             talk.say(message)
         done = talk.case

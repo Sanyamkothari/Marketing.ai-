@@ -28,6 +28,7 @@ const BY = Object.freeze({
   agent: "The AI chose this.",
   earlier: "Your earlier answer, used again.",
 });
+const PROPOSED = Object.freeze({ default: "", ai: "Suggested by the AI.", person: "Your edit." });
 const INPUT_TYPE = Object.freeze({ date: "date", number: "number", text: "text" });
 
 /** The review of a screen, or null (an older server, or no files yet). */
@@ -62,7 +63,7 @@ function planHtml(review, names) {
       (l) =>
         `<li class="dds-opt" data-rv-step="${esc(l.item_id)}"><span class="dds-item-t">${userTextIn(l.text, names)}</span>${
           l.counts ? `<span class="dds-effect">${esc(l.counts)}</span>` : ""
-        }</li>`,
+        }${PROPOSED[l.proposed_by] ? `<span class="dds-why">${esc(PROPOSED[l.proposed_by])}</span>` : ""}</li>`,
     )
     .join("")}</ol>`;
 }

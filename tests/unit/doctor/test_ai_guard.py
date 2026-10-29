@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ from engine.agent.loop import UNAVAILABLE
 from engine.agent.tools import AgentContext
 from engine.config import BudgetConfig, LlmConfig, RunMode, load_use_case
 from engine.doctor import visit
-from engine.doctor.agent_chat import doctor_converse
+from engine.doctor.agent_turn import TurnResult, doctor_author
 from engine.doctor.ai_guard import (
     AI_LIMIT_REPLY,
     AI_NO_CONSENT_REPLY,
@@ -63,7 +64,9 @@ def _guard(
     )
 
 
-def _converse(guard: AiGuard) -> visit.ConversePort:
+def _converse(guard: AiGuard) -> Callable[[Case, str, tuple[LoadedFile, ...]], TurnResult]:
+    """The AI as the visit's author, asked to answer one message."""
+
     def context_for(case: Case, files: tuple[LoadedFile, ...]) -> AgentContext:
         return AgentContext(
             use_case_id=GOAL_A,
@@ -75,7 +78,12 @@ def _converse(guard: AiGuard) -> visit.ConversePort:
             frame=files[0].frame,
         )
 
-    return doctor_converse(context_for, meter=guard, guardrails=guardrails(), principal=ASHA)
+    author = doctor_author(context_for, meter=guard, guardrails=guardrails(), principal=ASHA)
+
+    def converse(case: Case, message: str, files: tuple[LoadedFile, ...]) -> TurnResult:
+        return author(case, files, None, visit.TurnEvent(message=message))
+
+    return converse
 
 
 def _files() -> tuple[LoadedFile, ...]:

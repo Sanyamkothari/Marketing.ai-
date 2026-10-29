@@ -112,6 +112,7 @@ __all__ = [
     "CaseQuestion",
     "CaseReadinessRef",
     "CaseRecheck",
+    "CaseRefusal",
     "CaseSource",
     "CaseStore",
     "ChatSuggestion",
@@ -385,6 +386,13 @@ class CaseItem(StrictBase):
         description="Why the Doctor took it back itself (left out, not by the person's choice).",
     )
 
+    @property
+    def proposed_by(self) -> Literal["default", "ai", "person"]:
+        """Who proposed it, as the screen says: the default author (no AI), the AI, or a person."""
+        if self.source is ProposalSource.RULES:
+            return "default"
+        return "ai" if self.source is ProposalSource.AI else "person"
+
 
 class CaseOption(StrictBase):
     """One answer a question offers; it maps to a checkable proposal or to leaving things as they are."""
@@ -616,6 +624,21 @@ class CaseChatEntry(StrictBase):
         "(`LLM_UNAVAILABLE`; `LLM_REFUSED` for a model that ran out of room; `BUDGET_EXCEEDED`), then the kind its "
         "client found (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...). Codes written by us, never the service's own words.",
     )
+    refused: tuple[CaseRefusal, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="What the AI tried in this turn that the engine refused, each with what to change.",
+    )
+
+
+class CaseRefusal(StrictBase):
+    """Something the AI tried that the engine refused, in the one shape of every refusal: what failed, the thing it
+    was about (a column, a name, a count: never a cell) and what to change."""
+
+    code: str
+    what_failed: str
+    value: str = ""
+    how_to_fix: str = Field(description="Never empty: the exact thing to change.")
 
 
 class CaseEvidenceRef(StrictBase):

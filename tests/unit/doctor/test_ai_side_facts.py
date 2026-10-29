@@ -285,12 +285,12 @@ def test_the_review_reads_the_receipt_of_its_plan(
     )
     case = vs.open_case(storage, world)
     files = ar._files(world)
-    first = ar._review(ar._guard(client))(case, files, None)
+    first = ar._ran(ar._guard(client), case, files)
     assert first.model_calls == 2
     # the same query now sits in the plan: the next review reads its receipt, with what it was counted on
     planned = [i.model_copy(update={"state": ProposalState.PENDING}) for i in first.items]
     case = case.model_copy(update={"items": (*case.items, *planned)})
-    again = ar._review(ar._guard(client))(case, files, None)
+    again = ar._ran(ar._guard(client), case, files)
     shown = (
         client.users[-1].split("THE CASE NOW")[1].split("\n", 1)[1].split("\n\nWhat you have looked up")[0]
     )

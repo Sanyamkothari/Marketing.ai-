@@ -84,6 +84,9 @@ class ReviewLine(StrictBase):
     text: str
     counts: str = Field(default="", description="Before -> after counts, in a sentence our code measured.")
     by: Literal["rules", "agent", "person"]
+    proposed_by: Literal["default", "ai", "person"] = Field(
+        description="Who proposed it: the default author (no AI), the AI, or a person."
+    )
     undo: bool = True
 
 
@@ -341,6 +344,7 @@ def build_review(case: Case, view: CaseScreenView) -> ApprovalReview:
             text=i.title or i.kind,
             counts=_counts(i, steps.get(i.item_id), total_rows_of(case, i), sampled),
             by=_by(i),
+            proposed_by=i.proposed_by,
         )
         for i in plan_change_items(case)
         if i.kind not in CARRIED_KINDS

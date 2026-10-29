@@ -174,6 +174,7 @@ _TURN: Final = limits().turn  # `data_doctor.limits.turn` of the engine config: 
 MAX_REPLY_CHARS: Final[int] = _TURN.guided_reply_chars
 MAX_MESSAGE_CHARS: Final[int] = 1_000
 MAX_REASON_CHARS: Final[int] = 200
+"""The most a `reason` of a proposal may be. A longer one is refused with this limit (:func:`whole_reason`), never cut."""
 MAX_PROMPT_CHARS: Final[int] = _TURN.prompt_chars
 """A rendered prompt (system and user) longer than this is not sent; the turn ends plainly."""
 NEVER_SUGGESTED_BY_CHAT: Final[frozenset[str]] = frozenset({"prepare.exclude_columns"})
@@ -833,6 +834,20 @@ def _record(
     items.append(sent_item(gate, result.tool, result.args, payload, extra_text_keys=text_keys))
 
 
+def whole_reason(args: dict[str, Any]) -> str:
+    """The AI's `reason`, whole: one that is too long is refused with the limit (it is never cut), so the model says
+    the same in fewer words. A reason it did not give is empty."""
+    reason = str(args.get("reason") or "").strip()
+    if len(reason) > MAX_REASON_CHARS:
+        raise AgentToolError(
+            "AGENT_TEXT_REFUSED",
+            f"The reason is {len(reason)} characters; the most allowed is {MAX_REASON_CHARS}.",
+            value=str(len(reason)),
+            how_to_fix=f"Say it again in at most {MAX_REASON_CHARS} characters.",
+        )
+    return reason
+
+
 def _propose(
     ctx: AgentContext,
     args: dict[str, Any],
@@ -857,7 +872,7 @@ def _propose(
         resolve_config(ctx.use_case_id, {path: value}, root=ctx.config_root)
     except ConfigError as exc:
         raise AgentToolError(exc.code, exc.message) from exc
-    reason = str(args.get("reason") or CHAT_REASON).strip()[:MAX_REASON_CHARS] or CHAT_REASON
+    reason = whole_reason(args) or CHAT_REASON
     if checker.failure(reason, target="helper suggestion", max_chars=MAX_REASON_CHARS) is not None:
         reason = CHAT_REASON  # the model's own words are shown only when they pass the reply's checks
     field = fields[path]
@@ -1080,7 +1095,7 @@ def _propose_step(
         looked_at=True,
         effect=effect,
     )
-    reason = str(args.get("reason") or CHAT_REASON).strip()[:MAX_REASON_CHARS] or CHAT_REASON
+    reason = whole_reason(args) or CHAT_REASON
     if checker.failure(reason, target="helper suggestion", max_chars=MAX_REASON_CHARS) is not None:
         reason = CHAT_REASON
     measured = (
@@ -1112,7 +1127,7 @@ def _propose_step(
             if kind is RecipeStepKind.REMOVE_ROWS
             else CHAT_STEP_TITLES[kind].format(c=display_name(column))
         ),
-        reason=(reason + measured)[: MAX_REASON_CHARS + len(measured)],
+        reason=reason + measured,
         step=step.model_copy(update={"reason": reason}),
         evidence_ids=(evidence_id, *(r.evidence_id for r in looks)),
         confidence=AgentConfidence.CHECK,

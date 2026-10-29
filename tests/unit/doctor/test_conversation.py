@@ -125,8 +125,9 @@ def test_a_fix_is_a_change_card_with_undo_and_who_made_it(storage: LocalStorage,
     changes = _of(screen, ChangeCard)
     assert changes and all(c.state == "accepted" and c.undo for c in changes)
     assert {c.by for c in changes} == {
-        "rules"
-    }, "the fixes the rules ticked; the person's answers are on their questions"
+        "default"
+    }, "the fixes the default author put in the plan; the person's answers are on their questions"
+    assert {c.proposed_by for c in changes} == {"default"}
     shown = {c.item_id for c in changes}
     inside = {a.item_id for a in screen.view.approve_class}
     assert shown.isdisjoint(inside), "a change that needs its own yes is inside the ready card, not a card"
@@ -355,7 +356,7 @@ def test_a_reply_brings_its_changes_after_it_and_a_suggestion_records_nothing(
         next(x for x in asked.questions if x.question_id == q.question_id).answer is None
     ), "nothing recorded"
     after = cards[cards.index(agent) + 1]
-    assert isinstance(after, ChangeCard) and after.item_id == item.item_id and after.source == "ai"
+    assert isinstance(after, ChangeCard) and after.item_id == item.item_id and after.proposed_by == "ai"
     # a suggestion for a question that is not there, or an answer it does not offer, is dropped
     gone = SimpleNamespace(
         **{**reply.__dict__, "suggestion": SimpleNamespace(question_id="nope", option_id="c0", label="x")}
@@ -438,7 +439,9 @@ def test_the_ai_path_fills_the_same_cards(storage: LocalStorage, world: World) -
     view = screen_view(storage, case.model_copy(update={"items": (*case.items, *items)}), config_root=None)
     cards = {c.item_id: c for c in view.conversation if isinstance(c, ChangeCard)}
     assert (
-        cards["ai.applied"].by == "agent" and cards["ai.applied"].undo and cards["ai.applied"].source == "ai"
+        cards["ai.applied"].by == "agent"
+        and cards["ai.applied"].undo
+        and cards["ai.applied"].proposed_by == "ai"
     )
     assert cards["ai.applied"].counts == "312 values → 1,200 · none unreadable"
     assert (

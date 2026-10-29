@@ -50,13 +50,14 @@ from api.schemas import ErrorResponse
 from engine.access.roles import Principal, Role
 from engine.config import ConfigError, StrictBase
 from engine.doctor import visit as doctor_visit
+from engine.doctor.agent_turn import TurnResult
 from engine.doctor.approval_model import GivenYes
 from engine.doctor.case import CLIENT_ID_PATTERN, DEFAULT_CLIENT_ID, Case, CaseError
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.full_count import FullCountRunner
 from engine.doctor.goal_brief import GOAL_ID_PATTERN, BriefMode, GoalBrief, load_goal_brief
 from engine.doctor.protocol import LedgerPort
-from engine.doctor.visit import ConversePort, DetectorPort, VisitDeps
+from engine.doctor.visit import AuthorPort, TurnEvent, VisitDeps
 from engine.jobs import ThreadJobRunner
 from engine.storage import Storage
 
@@ -371,54 +372,41 @@ def _ai_parts(
     return meter, guardrails, context_for
 
 
-def _converse(
+def _author(
     storage: Storage,
     root: Path,
     request: Request,
     principal: Principal,
     offers: Sequence[Any],
     client_id: str,
-) -> ConversePort | None:
-    """The Doctor's chat when an AI service is connected; None (the chat says it needs one) otherwise."""
-    from engine.doctor.agent_chat import doctor_converse
+) -> AuthorPort:
+    """The Doctor's AI as an author. It connects to the AI service only when a turn needs it, then keeps the
+    connection; with no AI service connected it answers None (the chat says it needs one)."""
+    from engine.doctor.agent_turn import doctor_author
 
-    parts = _ai_parts(storage, root, request, offers, client_id)
-    if parts is None:
-        return None
-    meter, guardrails, context_for = parts
-    return doctor_converse(
-        context_for,
-        meter=meter,
-        guardrails=guardrails,
-        principal=principal,
-        config_root=root,
-        storage=storage,
-    )
+    built: list[AuthorPort | None] = []
 
+    def author(
+        case: Case, files: tuple[LoadedFile, ...], brief: GoalBrief | None, event: TurnEvent
+    ) -> TurnResult | None:
+        if not built:
+            parts = _ai_parts(storage, root, request, offers, client_id)
+            built.append(
+                None
+                if parts is None
+                else doctor_author(
+                    parts[2],
+                    meter=parts[0],
+                    guardrails=parts[1],
+                    principal=principal,
+                    config_root=root,
+                    storage=storage,
+                )
+            )
+        port = built[0]
+        return None if port is None else port(case, files, brief, event)
 
-def _review(
-    storage: Storage,
-    root: Path,
-    request: Request,
-    principal: Principal,
-    offers: Sequence[Any],
-    client_id: str,
-) -> DetectorPort | None:
-    """The AI review (one more check after the rules' pass) when an AI service is connected; None otherwise."""
-    from engine.doctor.agent_review import agent_review
-
-    parts = _ai_parts(storage, root, request, offers, client_id)
-    if parts is None:
-        return None
-    meter, guardrails, context_for = parts
-    return agent_review(
-        context_for,
-        meter=meter,
-        guardrails=guardrails,
-        principal=principal,
-        config_root=root,
-        storage=storage,
-    )
+    return author
 
 
 def _prepared_verify(storage: Storage, root: Path) -> Any:
@@ -548,11 +536,11 @@ def first_rows_loader(storage: Storage) -> Callable[[Case], tuple[LoadedFile, ..
 def visit_deps(
     storage: Storage, root: Path, request: Request, principal: Principal | None, client_id: str
 ) -> VisitDeps:
-    """Every visit route carries the CONVERSE port, connected only when a chat turn runs: a visit resumed in
-    CONVERSE (the process died during the AI call) is answered by the AI service, not told there is none."""
+    """Every visit route carries the AI as an author, connected to the AI service only when a turn needs it: a visit
+    resumed in CONVERSE (the process died during the AI call) is answered by the AI service, not told there is none.
+    """
     from api.routes.case_combine import case_combiner
     from api.routes.doctor import offers as doctor_offers
-    from engine.doctor.agent_review import lazy_review
     from engine.doctor.checks_grain import grain_detector
     from engine.doctor.cleaning import cleaning_detector
     from engine.doctor.combining import combining_detector
@@ -586,20 +574,10 @@ def visit_deps(
         combine=case_combiner(storage, root),
         offers=offers,
         config_root=root,
-        converse=(
-            None
-            if principal is None
-            else doctor_visit.lazy_converse(
-                lambda: _converse(storage, root, request, principal, offers, client_id)
-            )
-        ),
-        # The AI review: one more check after the rules; it runs only with an AI service, the client's yes and
-        # spending left, otherwise it finds nothing and the rules stand alone.
-        agent=(
-            None
-            if principal is None
-            else lazy_review(lambda: _review(storage, root, request, principal, offers, client_id))
-        ),
+        # The AI: asked when something is owed to it (the person's message, a file, a goal, a setting, a build nobody
+        # proposed); it runs only with an AI service, the client's yes and spending left, otherwise the default
+        # author alone makes the plan.
+        author=None if principal is None else _author(storage, root, request, principal, offers, client_id),
         ledger=ledger_for(request, root),
         # Plan O M244 (DEC-1814): the time settings - the training budget's three choices and the data time
         # settings - asked through M246's protocol, for a goal.

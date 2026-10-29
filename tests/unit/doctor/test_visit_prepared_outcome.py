@@ -18,7 +18,7 @@ from engine.agent.contracts import AgentConfidence, ProposalState
 from engine.config import load_use_case
 from engine.doctor import visit
 from engine.doctor.case import Case
-from engine.doctor.diagnose import LoadedFile, Offer
+from engine.doctor.diagnose import Offer
 from engine.doctor.goal_brief import load_goal_brief
 from engine.doctor.visit import PrepareError, VisitDeps
 from engine.storage import LocalStorage
@@ -73,10 +73,9 @@ def storage(tmp_path: Path) -> LocalStorage:
 
 
 def _deps(storage: LocalStorage, w: World, items: tuple[Any, ...] = ()) -> VisitDeps:
-    def port(case: Case, message: str, files: tuple[LoadedFile, ...]) -> visit.ConverseResult:
-        return visit.ConverseResult(reply="I built a table.", items=items, model_calls=1)
-
-    return deps_for(storage, w, converse=port)
+    return deps_for(
+        storage, w, author=vs.author_saying(vs.turn_of("I built a table.", items=items, model_calls=1))
+    )
 
 
 def _sql_item(

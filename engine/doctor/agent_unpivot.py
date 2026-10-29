@@ -25,12 +25,11 @@ from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
 from engine.agent.contracts import ProposalKind, ProposalState, RecipeStep, RecipeStepKind
-from engine.agent.loop import STEP_SAMPLE_ROWS, _policy_gate
+from engine.agent.loop import STEP_SAMPLE_ROWS, _policy_gate, whole_reason
 from engine.agent.recipe import RecipeError, check_recipe, run_recipe
 from engine.agent.tools import AgentToolError
 from engine.agent.unpivot import MAX_YEAR, MIN_YEAR, WideGroup, parse_period, wide_column_groups
 from engine.agent.untrusted import display_name
-from engine.doctor.agent_amount import whole_reason
 from engine.doctor.decisions import decisions
 from engine.doctor.questions import QuestionError, build_ask
 from engine.doctor.reshape_guard import doctor_levels

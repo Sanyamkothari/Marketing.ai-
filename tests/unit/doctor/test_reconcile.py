@@ -17,6 +17,7 @@ from typing import Any
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.doctor import visit
+from engine.doctor.agent_turn import TurnResult
 from engine.doctor.case import Case, CaseDoubt, CaseItem, CaseOption, CaseQuestion
 from engine.doctor.reconcile import Emission, reconcile
 from engine.doctor.standing import no_longer_fits
@@ -24,7 +25,7 @@ from engine.doctor.subjects import doubt_subject, item_subject, options_digest, 
 from engine.storage import LocalStorage
 from tests.unit.doctor import test_visit_prepared_outcome as po
 from tests.unit.doctor.test_visit_prepared_outcome import GOAL, STEP
-from tests.unit.doctor.visit_support import ANALYST, CLIENT, FIRST, World, deps_for, open_case
+from tests.unit.doctor.visit_support import ANALYST, CLIENT, FIRST, World, deps_for, open_case, turn_of
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 world = po.world
@@ -477,10 +478,10 @@ def test_a_change_the_person_rejected_does_not_come_back_from_the_review_in_othe
         update={"item_id": "ai.reworded.1", "title": "The same table, said differently"}
     )
 
-    def review(_case: Case, _files: Any, _brief: Any) -> visit.Detected:
-        return visit.Detected(items=(reworded,), model_calls=1)
+    def review(_case: Case, _files: Any, _brief: Any, _event: Any) -> TurnResult:
+        return turn_of(items=(reworded,), model_calls=1)
 
-    deps = deps_for(storage, world, agent=review)
+    deps = deps_for(storage, world, author=review)
     case = visit.resume(CLIENT, case.case_id, deps, actor=ANALYST)
     case = visit.set_goal(CLIENT, case.case_id, GOAL, deps, expected_version=case.version, actor=ANALYST)
     assert "ai.reworded.1" not in {i.item_id for i in case.items}
@@ -496,11 +497,11 @@ def test_the_review_is_not_asked_again_for_a_change_in_the_plan_or_a_tick(
 ) -> None:
     calls: list[int] = []
 
-    def review(case: Case, _files: Any, _brief: Any) -> visit.Detected:
+    def review(case: Case, _files: Any, _brief: Any, _event: Any) -> TurnResult:
         calls.append(len(case.items))
-        return visit.Detected(model_calls=1)
+        return turn_of(model_calls=1)
 
-    deps = deps_for(storage, world, agent=review)
+    deps = deps_for(storage, world, author=review)
     case = visit.resume(CLIENT, open_case(storage, world).case_id, deps, actor=ANALYST)
     first = len(calls)
     assert first >= 1
@@ -603,13 +604,11 @@ def test_the_other_review_proposal_stays_when_the_person_ticks_one(
     a, b = _ai(_fix("age", "fill_nulls")), _ai(_fix("income", "fill_nulls"))
     seen: list[int] = []
 
-    def review(_case: Case, _files: Any, _brief: Any) -> visit.Detected:
+    def review(_case: Case, _files: Any, _brief: Any, _event: Any) -> TurnResult:
         seen.append(1)
-        return (
-            visit.Detected(items=(a, b), model_calls=1) if len(seen) == 1 else visit.Detected(model_calls=1)
-        )
+        return turn_of(items=(a, b), model_calls=1) if len(seen) == 1 else turn_of(model_calls=1)
 
-    deps = deps_for(storage, world, agent=review)
+    deps = deps_for(storage, world, author=review)
     case = visit.resume(CLIENT, open_case(storage, world).case_id, deps, actor=ANALYST)
     assert {a.item_id, b.item_id} <= {i.item_id for i in case.items if i.state is ProposalState.PENDING}
     case = visit.decide(

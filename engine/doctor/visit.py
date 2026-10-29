@@ -65,7 +65,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 from pydantic import JsonValue
 
-from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
+from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, Refusal
 from engine.agent.tools import AgentToolError
 from engine.config import ConfigError
 from engine.content_cache import digest_memo
@@ -74,15 +74,12 @@ from engine.doctor.author import (
     DETECTORS,
     Applied,
     ApplyContext,
-    AskPerson,
-    AuthorAction,
     Create,
     Doubt,
-    ItemDraft,
+    Gathered,
     Owed,
-    Request,
     Round,
-    Withdraw,
+    SettingsView,
     apply_actions,
     apply_round,
     default_actions,
@@ -107,6 +104,7 @@ from engine.doctor.case import (
     CasePrescriptionRef,
     CaseQuestion,
     CaseReadinessRef,
+    CaseRefusal,
     CaseStore,
     ChatGoal,
     ChatSuggestion,
@@ -171,9 +169,11 @@ from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
     from engine.access.roles import Principal
+    from engine.doctor.agent_turn import TurnResult
     from engine.doctor.current_tables import CurrentTables
     from engine.doctor.diagnose import LoadedFile, Offer
     from engine.doctor.goal_settings import GoalSettings
+    from engine.doctor.tools_facts import Suggestion
     from engine.storage import Storage
 
 __all__ = [
@@ -181,9 +181,8 @@ __all__ = [
     "CARRIED_KINDS",
     "COMBINE_KINDS",
     "VISIT_CODES",
+    "AuthorPort",
     "CombinePort",
-    "ConversePort",
-    "ConverseResult",
     "Detected",
     "DetectorPort",
     "HandOffPort",
@@ -191,6 +190,7 @@ __all__ = [
     "PrescribePort",
     "PreviewPort",
     "PreviewSummary",
+    "TurnEvent",
     "VerifyPort",
     "VerifyResult",
     "VisitDeps",
@@ -209,7 +209,6 @@ __all__ = [
     "decide",
     "is_approved",
     "item_proposers",
-    "lazy_converse",
     "mode_of",
     "open_blocking",
     "plan_change_count",
@@ -270,68 +269,29 @@ _CHAT_FROM: Final[frozenset[VisitState]] = frozenset(
 # Ports: what later milestones fill in
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
-class ConverseResult:
-    """One chat turn: the reply, what the AI proposed, what it looked at, what it cost."""
+class TurnEvent:
+    """Why the AI is asked now, and what it is given besides the case."""
 
-    reply: str
-    actions: tuple[AuthorAction, ...] = ()
-    """What the turn did to the plan, as the author's actions: applied to the case when the turn is written, which
-    decides what is in the plan and what waits for the person's tick. A port that sets none is read through the older
-    fields below (`items`, `asks`, `doubts`, `requests`, `withdrawn`)."""
-    items: tuple[CaseItem, ...] = ()
-    evidence: tuple[DataToolResult, ...] = ()
-    sent: tuple[dict[str, JsonValue], ...] = ()
-    asks: tuple[Ask, ...] = ()
-    doubts: tuple[CaseDoubt, ...] = ()
-    requests: tuple[DataRequest, ...] = ()
-    withdrawn: tuple[str, ...] = ()
-    """Ids of the changes it took out of the plan or asked the person to."""
-    suggestion: tuple[str, str] | None = None
-    """`(question_id, option_id)`: the answer it suggests to an open question; never recorded by the AI."""
-    suggestions: tuple[tuple[str, str], ...] = ()
-    """Every answer it suggests, one per open question (`suggestion` alone is the older single form)."""
-    goal: tuple[str, str] | None = None
-    """`(goal_id, reason)`: the goal it proposes while no goal is chosen; never chosen by the AI."""
-    tools: tuple[str, ...] = ()
-    """What it did to answer, in order (the looks and the actions)."""
-    model_calls: int = 0
-    cost_usd: float = 0.0
-    tokens: int = 0
-    ai: bool = True
-    """False: no AI service answered (the reply is :data:`AI_NEEDED_REPLY`); the timeline records which."""
-    blocked_by: str | None = None
-    """Why the AI's own answer is missing, when it is: `no_consent` and `budget` (the two replies that ask nothing),
-    `unavailable` (the AI service did not answer), `prompt_too_large`, the code of a refusal it met twice, or `failed`
-    (a step of the turn broke). None when it answered, and when the reply is :data:`AI_NEEDED_REPLY` (no AI service is
-    connected: `ai` says so)."""
-    error_codes: tuple[str, ...] = ()
-    """For an AI service that did not answer, the codes that say why, in order: the failure's own code (`LLM_UNAVAILABLE`;
-    `LLM_REFUSED` for a model that ran out of room; `BUDGET_EXCEEDED`), then the kind the HTTP client found
-    (`LLM_KEY_EXPIRED`, `LLM_OUT_OF_ROOM` ...); written here, never the service's own words."""
+    owed: tuple[Owed, ...] = ()
+    """What is owed to it (:func:`engine.doctor.author.owed`); the person's message is one of them."""
+    message: str | None = None
+    """What the person wrote, when the turn answers them."""
+    suggestions: tuple[Suggestion, ...] = ()
+    """What the fact functions suggest that is not in the plan yet: it may adopt one as it stands, which is what makes
+    it sure of that change."""
+    goal_settings: SettingsView | None = None
+    """What the chosen goal's configuration lets the person set (None with no goal)."""
 
 
-class ConversePort(Protocol):
-    def __call__(self, case: Case, message: str, files: tuple[LoadedFile, ...]) -> ConverseResult: ...
+class AuthorPort(Protocol):
+    """The AI as an author: one turn of the one loop on the case, for the event. It returns what the turn made
+    (:class:`~engine.doctor.agent_turn.TurnResult`), for the visit to apply through the author; None when no AI
+    service is connected. It decides for itself that it may not run (no consent, no spending left) and then says so in
+    `blocked_by` with no model call."""
 
-
-def lazy_converse(build: Callable[[], ConversePort | None]) -> ConversePort:
-    """A CONVERSE port that connects to the AI service only when a chat turn needs it, then keeps it.
-
-    Every visit call can carry it at no cost: a resume that finds a message waiting in CONVERSE (the process
-    died during the AI call) answers it with the AI service, as the chat would have. `build` returns None when
-    no AI service is connected; then the reply is :data:`AI_NEEDED_REPLY`.
-    """
-    built: list[ConversePort | None] = []
-
-    def converse(case: Case, message: str, files: tuple[LoadedFile, ...]) -> ConverseResult:
-        if not built:
-            built.append(build())
-        port = built[0]
-        if port is None:
-            return ConverseResult(reply=AI_NEEDED_REPLY, ai=False)
-        return port(case, message, files)
-
-    return converse
+    def __call__(
+        self, case: Case, files: tuple[LoadedFile, ...], brief: GoalBrief | None, event: TurnEvent
+    ) -> TurnResult | None: ...
 
 
 @dataclass(frozen=True)
@@ -395,21 +355,6 @@ class Detected:
     items: tuple[CaseItem, ...] = ()
     """Proposals the detector makes outright (the cleaning fixes): the author decides whether each is in the plan or
     waits for a tick."""
-    actions: tuple[AuthorAction, ...] = ()
-    """What an AI review did to the plan, as the author's actions (applied as `ConverseResult.actions` are); a port
-    that sets none is read through `asks`, `doubts`, `requests` and `items`."""
-    model_calls: int = 0
-    tokens: int = 0
-    """What an AI detector (the review) used; counted on the case, so the spending limit holds across visits."""
-    summary: str = ""
-    sent: tuple[dict[str, JsonValue], ...] = ()
-    """The review's plain-language summary for the chat, and what it sent to the AI service."""
-    blocked_by: str | None = None
-    error_codes: tuple[str, ...] = ()
-    reply: str = ""
-    """Set when the AI service did not answer the review's first call (`blocked_by` is `unavailable`): the codes that
-    say why (as `ConverseResult.error_codes`) and the sentence the person reads (`ConverseResult.reply`). The review
-    did not happen, so TREAT does not remember it and asks again when it runs next."""
 
 
 class DetectorPort(Protocol):
@@ -437,8 +382,11 @@ class VisitDeps:
     offers: Sequence[Offer] = ()
     """The goals a generic visit checks the files against (what the data can power); empty: none."""
     config_root: Path | None = None
-    converse: ConversePort | None = None
-    """None: no AI service; the chat answers :data:`AI_NEEDED_REPLY` and the visit goes on."""
+    author: AuthorPort | None = None
+    """The AI as an author, asked when something is owed to it (:func:`engine.doctor.author.owed`: the person's message,
+    a file, a goal, a setting, a build nobody proposed) and, but for a message, once the default author has nothing more
+    to add and no blocking question is open. None: no AI service; the chat answers :data:`AI_NEEDED_REPLY` and the
+    visit goes on."""
     preview: PreviewPort | None = None
     prescribe: PrescribePort | None = None
     verify: VerifyPort | None = None
@@ -451,11 +399,6 @@ class VisitDeps:
     # Plan O M246 (DEC-1816): the protocol's ports.
     detectors: Sequence[DetectorPort] = ()
     """The design §7.1's detectors, read by the default author in TREAT after the rules; empty: none."""
-    agent: DetectorPort | None = None
-    """The AI's look through the case, asked when something is owed to it (`engine.doctor.author.owed`: a file, a goal,
-    a setting, a build nobody proposed) and the default author has nothing more to add, and no blocking question is
-    open. It decides for itself that it may not run (no AI service, no consent, no spending left) and then finds
-    nothing."""
     ledger: LedgerPort | None = None
     """Plan K's ledger when `agentic.enabled` is on; None: the case timeline alone holds the record."""
     protocol: ProtocolSettings = DEFAULT_SETTINGS
@@ -666,7 +609,6 @@ class _Step:
     evidence: list[DataToolResult] = field(default_factory=list)
     items: list[CaseItem] = field(default_factory=list)
     model_calls: int = 0
-    cost_usd: float = 0.0
     tokens: int = 0
     authored: tuple[Round, ...] = ()
     """What the author proposes, asked, doubted and withdrew: applied to the case inside its write, under its lock
@@ -786,7 +728,6 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
                 "tool_calls": current.counters.tool_calls + run.tool_calls,
                 "model_calls": current.counters.model_calls + step.model_calls,
                 "tokens": current.counters.tokens + step.tokens,
-                "cost_usd": current.counters.cost_usd + step.cost_usd,
             }
         )
         run.tool_calls = 0
@@ -1085,9 +1026,8 @@ def _author(run: _Run, case: Case) -> _Step:
         and outcome_is_gone(case, run.files(case), decided, run.current(case)),
     )
     step = _Step(to=VisitState.PREVIEW)
-    now = deps.clock()
     ctx = ApplyContext(
-        now=now,
+        now=deps.clock(),
         author="default",
         roles=roles_of(case, deps.config_root),
         settings=deps.protocol,
@@ -1096,28 +1036,24 @@ def _author(run: _Run, case: Case) -> _Step:
         standing=StandingAnswerStore(deps.storage),
     )
     rounds: list[Round] = []
+    found: Gathered | None = None
     if visit.done.get("treat") != inputs:
-        rounds = _default_rounds(run, case, brief, step, ctx)
+        found = gather_facts(run, case, brief)
+        rounds = _default_rounds(run, case, brief, step, ctx, found)
         step.visit["done"] = {**visit.done, "treat": inputs}
     base = apply_round(case, rounds)
     message = case.chat[-1] if case.chat and case.chat[-1].role == "user" else None
     owing = owed(base.case, brief, deps.config_root)
     final = base
-    if message is not None:
-        final = _converse_turn(run, case, base, message, ctx, step, rounds)
-    elif owing and deps.agent is not None and not _blocking(base.case) and not _changed(case, base.case):
-        # The AI looks when the default author has nothing more to add: what the facts find in the plan it just made
-        # (a question that blocks, a date, a consent column) comes first.
-        final = _review_turn(run, case, base, brief, owing, ctx, step, rounds)
+    # The AI answers a message at once. Otherwise it looks when the default author has nothing more to add: what the
+    # facts find in the plan it just made (a question that blocks, a date, a consent column) comes first.
+    if owing and (message is not None or (not _blocking(base.case) and not _changed(case, base.case))):
+        final = _ai_turn(run, case, base, brief, owing, message, found, ctx, step, rounds)
     step.authored = tuple(rounds)
     if _changed(case, final.case):
         step.to = VisitState.TREAT  # the next round's facts read the plan the author just made
     if _blocking(final.case):
         step.to = VisitState.ASK
-    elif message is not None and any(o.reason != "message" for o in owing) and step.to is VisitState.PREVIEW:
-        step.to = (
-            VisitState.TREAT
-        )  # the rest of what is owed to the AI is asked now, not at the next thing they do
     return step
 
 
@@ -1146,14 +1082,13 @@ def _blocking(case: Case) -> list[CaseQuestion]:
 
 
 def _default_rounds(
-    run: _Run, case: Case, brief: GoalBrief | None, step: _Step, ctx: ApplyContext
+    run: _Run, case: Case, brief: GoalBrief | None, step: _Step, ctx: ApplyContext, found: Gathered
 ) -> list[Round]:
     """The default author's two rounds: the rules' facts (a complete set: what it stops suggesting is taken back) and
     the detectors' (their fixes change the files they read, so a fix in the plan is not taken back for being fixed).
     The evidence they cite, and what the goal check found (no goal), go into the step."""
     from engine.doctor.tools_facts import role_step_facts
 
-    found = gather_facts(run, case, brief)
     for facts in found.every:
         step.evidence.extend(facts.evidence)
     if brief is None:
@@ -1182,75 +1117,102 @@ def _default_rounds(
     ]
 
 
-def _actions_of(result: ConverseResult | Detected, *, basis: str) -> tuple[AuthorAction, ...]:
-    """What a port did to the plan, as actions: its own, else what its older fields say (`basis` is what the changes
-    rest on)."""
-    if result.actions:
-        return result.actions
-    made: list[AuthorAction] = [
-        Create(
-            draft=ItemDraft(
-                kind=item.kind,
-                payload=dict(item.payload),
-                title=item.title,
-                upload_id=item.upload_id,
-                goal_id=item.goal_id,
-                confidence=AgentConfidence.CHECK,  # the AI never makes a change sure
-                evidence_ids=item.evidence_ids,
-                assumption=item.assumption,
-            ),
-            reason=item.title,
-            replaces=item.replaces,
-            basis=basis,
-        )
-        for item in result.items
-    ]
-    made.extend(AskPerson(ask=ask) for ask in result.asks)
-    made.extend(Doubt(doubt=doubt) for doubt in result.doubts)
-    made.extend(Request(request=request) for request in result.requests)
-    if isinstance(result, ConverseResult):
-        made.extend(
-            Withdraw(item_id=item_id, reason="The AI took it back.", consequence="")
-            for item_id in result.withdrawn
-        )
-    return tuple(made)
-
-
-def _ai_ctx(ctx: ApplyContext, producer: str, requested_by: str | None) -> ApplyContext:
+def _ai_ctx(
+    ctx: ApplyContext, producer: str, requested_by: str | None, suggested: frozenset[str]
+) -> ApplyContext:
     """What the AI's actions are applied under: it adds as it goes (the default author never takes back its questions
-    or doubts, they are `chat` and `review`'s), and a person's message is their own conversation (the file's question
-    budget does not cut it short)."""
+    or doubts, they are `chat` and `review`'s), a person's message is their own conversation (the file's question
+    budget does not cut it short), and it is sure of a change only by a suggestion the fact functions made."""
     return replace(
-        ctx, author="ai", complete=False, unevaluated=(), producer=producer, requested_by=requested_by
+        ctx,
+        author="ai",
+        complete=False,
+        unevaluated=(),
+        producer=producer,
+        requested_by=requested_by,
+        suggested=suggested,
     )
 
 
-def _converse_turn(
+def _refusals_shown(refused: Sequence[Refusal]) -> tuple[CaseRefusal, ...]:
+    """What the engine refused in the AI's turn that the person should read, once each. A refusal of an id the AI got
+    wrong is its own mistake to put right, not something to show."""
+    shown: dict[tuple[str, str], CaseRefusal] = {}
+    for r in refused:
+        if r.code != "ITEM_NOT_FOUND":
+            shown.setdefault(
+                (r.code, r.value),
+                CaseRefusal(code=r.code, what_failed=r.what_failed, value=r.value, how_to_fix=r.how_to_fix),
+            )
+    return tuple(shown.values())
+
+
+def _open_suggestions(case: Case, found: Gathered) -> tuple[Suggestion, ...]:
+    """What the fact functions suggest that the default author's pass left to the AI: a change not in the plan yet.
+    The questions, doubts and requests they suggest are in the case already."""
+    have = {i.item_id for i in case.items}
+    return tuple(
+        s
+        for facts in found.every
+        for s in facts.suggested
+        if isinstance(s.action, Create)
+        and item_id_of(s.action.draft.kind, s.action.draft.payload, s.action.draft.goal_id) not in have
+    )
+
+
+def _ai_turn(
     run: _Run,
     case: Case,
     base: Applied,
-    message: CaseChatEntry,
+    brief: GoalBrief | None,
+    owing: Sequence[Owed],
+    message: CaseChatEntry | None,
+    found: Gathered | None,
     ctx: ApplyContext,
     step: _Step,
     rounds: list[Round],
 ) -> Applied:
-    """The chat's turn on the person's last message: the reply, what the AI proposed, asked and took back, as one more
-    round of the author; no AI service: a fixed reply. The reply says what became of each change."""
-    now = run.deps.clock()
-    port = run.deps.converse
-    result = (
-        ConverseResult(reply=AI_NEEDED_REPLY, ai=False)
-        if port is None
-        else port(base.case, message.text, run.files(case))
-    )
+    """One turn of the AI on what is owed to it: the person's message, a file, a goal, a setting, a build nobody
+    proposed. What it proposes, asks, doubts and takes back is one more round of the author, and its reply says what
+    became of each change. No AI service: the message is answered with a fixed reply and a review is skipped. A turn
+    whose first call the AI service did not answer did not happen: what was owed is owed again the next time, and the
+    chat and the timeline say why."""
+    from engine.doctor.agent_turn import TurnResult
+
+    deps = run.deps
+    suggestions: tuple[Suggestion, ...] = ()
+    result: TurnResult | None = None
+    if deps.author is not None:
+        if (
+            found is None
+        ):  # the facts were not read this round (nothing they read changed): the AI is given them
+            found = gather_facts(run, base.case, brief)
+            for facts in found.every:
+                step.evidence.extend(facts.evidence)
+        suggestions = _open_suggestions(base.case, found)
+        event = TurnEvent(
+            owed=tuple(owing),
+            message=message.text if message is not None else None,
+            suggestions=suggestions,
+            goal_settings=ctx.goal,
+        )
+        result = deps.author(base.case, run.files(case), brief, event)
+    if result is None and message is not None:
+        result = TurnResult(reply=AI_NEEDED_REPLY, ai=False)
+    if result is None or (message is None and not result.ai):
+        return base  # no AI service, no consent or no spending left: the screen says so, and it is asked next time
+    didnt_happen = result.blocked_by == "unavailable" and result.answered == 0
     step.evidence.extend(result.evidence)
     step.model_calls += result.model_calls
-    step.cost_usd += result.cost_usd
     step.tokens += result.tokens
-    actions = _actions_of(result, basis=f"msg:{len(case.chat) - 1}")
-    ai_ctx = _ai_ctx(ctx, "chat", message.by)
-    done = apply_actions(base.case, actions, ai_ctx)
-    rounds.append(Round(actions, ai_ctx))
+    ai_ctx = _ai_ctx(
+        ctx,
+        "chat" if message is not None else "review",
+        message.by if message is not None else None,
+        frozenset(s.id for s in suggestions),
+    )
+    done = apply_actions(base.case, result.actions, ai_ctx)
+    rounds.append(Round(result.actions, ai_ctx))
     before = {i.item_id: i for i in base.case.items}
     after = {i.item_id: i for i in done.case.items}
     landed = [i for i in dict.fromkeys(done.made) if i in after and i not in before]
@@ -1262,35 +1224,56 @@ def _converse_turn(
         and after[i].state is ProposalState.REJECTED
     ]
     kept = [
-        item_id_of(a.draft.kind, a.draft.payload, a.draft.goal_id) for a in actions if isinstance(a, Create)
+        item_id_of(a.draft.kind, a.draft.payload, a.draft.goal_id)
+        for a in result.actions
+        if isinstance(a, Create)
     ]
     twins = [i for i in dict.fromkeys(kept) if i in before and before[i].state is not ProposalState.REJECTED]
+    # What it put forward again after the person had left it out stays out (the turn did not put it back).
     left_out = [
-        before[r.value] for _n, r in done.refused if r.code == "LEFT_OUT_BY_PERSON" and r.value in before
+        before[i]
+        for i in dict.fromkeys(
+            [item.item_id for item in result.items]
+            + [r.value for _n, r in done.refused if r.code == "LEFT_OUT_BY_PERSON"]
+        )
+        if i in before and before[i].state is ProposalState.REJECTED and before[i].withdrawn_because is None
     ]
-    text = result.reply
-    if left_out:  # an earlier "no" stands: the reply says so instead of claiming work that was not done
+    # A review that stopped short has no words of the AI's own to show (what it made stands in the plan).
+    text = result.reply if message is not None or result.finished or didnt_happen else ""
+    if (
+        text and left_out
+    ):  # an earlier "no" stands: the reply says so instead of claiming work that was not done
         text += f" I did not put back “{left_out[0].title}”: it was left out earlier; tick it again if you want it."
-    given = result.suggestions or ((result.suggestion,) if result.suggestion is not None else ())
-    shown = [found for found in (_suggested(done.case.questions, g) for g in given) if found is not None]
-    if len(shown) < len(given):  # a question was settled meanwhile: no button for it
+    given = result.suggestions
+    shown = [s for s in (_suggested(done.case.questions, g) for g in given) if s is not None]
+    if text and len(shown) < len(given):  # a question was settled meanwhile: no button for it
         text += " (The answer I pointed at is no longer open, so there is nothing to click for it.)"
-    entry = CaseChatEntry(
-        role="agent",
-        text=text,
-        at=now,
-        sent=result.sent,
-        item_ids=tuple(dict.fromkeys([*landed, *twins])),
-        withdrawn=tuple(back),
-        tools=result.tools,
-        suggestion=shown[0] if shown else None,
-        suggestions=tuple(shown),
-        goal=_proposed_goal(case, result.goal),
-        blocked_by=result.blocked_by,
-        error_codes=result.error_codes,
+    last = case.chat[-1] if case.chat else None
+    said_already = (  # said once: a turn that just failed the same way has told the person already
+        message is None
+        and didnt_happen
+        and last is not None
+        and last.role == "agent"
+        and last.error_codes == result.error_codes
     )
-    step.updates["chat"] = (*case.chat, entry)
-    event = EventDraft(
+    if text and not said_already:
+        entry = CaseChatEntry(
+            role="agent",
+            text=text,
+            at=deps.clock(),
+            sent=result.sent,
+            item_ids=tuple(dict.fromkeys([*landed, *twins])),
+            withdrawn=tuple(back),
+            tools=result.tools,
+            suggestion=shown[0] if shown else None,
+            suggestions=tuple(shown),
+            goal=_proposed_goal(case, result.goal),
+            blocked_by=result.blocked_by,
+            error_codes=result.error_codes,
+            refused=_refusals_shown(result.refused),
+        )
+        step.updates["chat"] = (*case.chat, entry)
+    event_draft = EventDraft(
         kind=TimelineKind.CHAT,
         details={
             "role": "agent",
@@ -1298,76 +1281,16 @@ def _converse_turn(
             "proposals": len(landed),
             "applied": sum(1 for i in landed if after[i].state is ProposalState.ACCEPTED),
             "withdrawn": len(back),
+            **({} if message is not None else {"review": True}),
         },
     )
-    _say_why(event, result.blocked_by, result.error_codes)
-    step.events.append(event)
-    return done
-
-
-def _review_turn(
-    run: _Run,
-    case: Case,
-    base: Applied,
-    brief: GoalBrief | None,
-    owing: Sequence[Owed],
-    ctx: ApplyContext,
-    step: _Step,
-    rounds: list[Round],
-) -> Applied:
-    """The AI's look through the case, which something is owed to (a file, a goal, a setting, a build nobody
-    proposed): what it proposes, asks and doubts is one more round of the author. A review whose first call the AI
-    service did not answer did not happen: it is owed again the next time, and the chat and the timeline say why.
-    """
-    agent = run.deps.agent
-    assert agent is not None
-    found = agent(base.case, run.files(case), brief)
-    step.evidence.extend(found.evidence)
-    step.model_calls += found.model_calls
-    step.tokens += found.tokens
-    actions = _actions_of(found, basis="event")
-    ai_ctx = _ai_ctx(ctx, "review", None)
-    done = apply_actions(base.case, actions, ai_ctx)
-    rounds.append(Round(actions, ai_ctx))
-    if found.blocked_by:
-        last = case.chat[-1] if case.chat else None
-        if last is None or last.role != "agent" or last.error_codes != found.error_codes:
-            # Said once: a chat turn that just failed the same way (the review follows it when the person has only
-            # now said yes to the AI) has told the person already, and the timeline still records the review.
-            entry = CaseChatEntry(
-                role="agent",
-                text=found.reply,
-                at=run.deps.clock(),
-                blocked_by=found.blocked_by,
-                error_codes=found.error_codes,
-            )
-            step.updates["chat"] = (*case.chat, entry)
-        event = EventDraft(
-            kind=TimelineKind.CHAT,
-            details={"role": "agent", "ai": True, "proposals": 0, "review": True},
-        )
-        _say_why(event, found.blocked_by, found.error_codes)
-        step.events.append(event)
-        return done
-    if found.model_calls:
+    _say_why(event_draft, result.blocked_by, result.error_codes)
+    step.events.append(event_draft)
+    if result.model_calls and not didnt_happen:
         step.visit["done"] = {
             **step.visit.get("done", (case.visit or CaseVisit()).done),
-            **served(done.case, owing, run.deps.config_root, brief),
+            **served(done.case, owing, deps.config_root, brief),
         }
-        if found.summary:
-            entry = CaseChatEntry(role="agent", text=found.summary, at=run.deps.clock(), sent=found.sent)
-            step.updates["chat"] = (*case.chat, entry)
-            step.events.append(
-                EventDraft(
-                    kind=TimelineKind.CHAT,
-                    details={
-                        "role": "agent",
-                        "ai": True,
-                        "proposals": sum(1 for a in actions if isinstance(a, Create)),
-                        "review": True,
-                    },
-                )
-            )
     return done
 
 

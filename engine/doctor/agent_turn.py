@@ -104,6 +104,7 @@ from engine.doctor.author import (
     Withdraw,
     apply_actions,
     item_id_of,
+    owed_words,
 )
 from engine.doctor.build_facts import build_facts, decided_numbers, goal_line, to_do_now
 from engine.doctor.case import Case, CaseDoubt, CaseItem, payload_digest
@@ -142,7 +143,7 @@ from engine.doctor.tools_preview import M_PREVIEW_TOOLS
 from engine.doctor.tools_sql import SqlStepProposal
 from engine.doctor.visit_contracts import OptionEffect
 from engine.generative.contracts import GenerativePurpose
-from engine.generative.errors import GenerativeError
+from engine.generative.errors import BUDGET_EXCEEDED, GenerativeError
 from engine.generative.guardrails import Guardrails
 from engine.generative.prompts import Prompt, load_prompt, render
 from engine.llm import LLMError
@@ -155,6 +156,7 @@ if TYPE_CHECKING:
     from engine.doctor.ai_guard import AiGuard
     from engine.doctor.diagnose import LoadedFile
     from engine.doctor.goal_brief import GoalBrief
+    from engine.doctor.visit import AuthorPort, TurnEvent
     from engine.storage import Storage
 
 __all__ = [
@@ -165,6 +167,7 @@ __all__ = [
     "SQL_ARGS",
     "DoctorTurn",
     "TurnResult",
+    "doctor_author",
     "handle_of",
     "own_numbers",
 ]
@@ -414,6 +417,8 @@ class TurnResult:
     finished: bool = False
     """The model ended the turn with `reply` (not a limit, a refusal or an AI service that stopped answering)."""
     state_digest: str = ""
+    ai: bool = True
+    """False: the AI was not asked (no consent, no spending left, no file); `reply` and `blocked_by` say why."""
 
     @property
     def asks(self) -> tuple[Ask, ...]:
@@ -2684,3 +2689,72 @@ class DoctorTurn:
             items.extend(i for i in new if i not in items)
         items.extend(i for i in self.left_out if i not in items)
         return items, list(dict.fromkeys(withdrawn))
+
+
+def doctor_author(
+    context_for: Callable[[Case, tuple[LoadedFile, ...]], AgentContext],
+    *,
+    meter: AiGuard,
+    guardrails: Guardrails,
+    principal: Principal,
+    config_root: Path | None = None,
+    registry: Any = None,
+    storage: Storage | None = None,
+) -> AuthorPort:
+    """The AI as the visit's author: one :class:`DoctorTurn` for the event.
+
+    The AI is asked only when the client has allowed it and the case has spending left (`AiGuard.ask`); otherwise the
+    result says so (`ai` False, `blocked_by` `no_consent` or `budget`, the reply for the person) and the visit goes on
+    with its default author. A turn is `data_doctor.ai_limits.max_chat_steps` actions at most for a message.
+
+    The result says why the AI did not answer, when it did not (`TurnResult.blocked_by`, `error_codes`): for a turn the
+    AI service failed, `unavailable` with the codes of the failure (`LLM_UNAVAILABLE`, `LLM_KEY_EXPIRED` ...), or
+    `budget` with `BUDGET_EXCEEDED` when the case's spending ran out between two calls of a message. The reply then
+    also tells the person the cause when the HTTP client has a fixed sentence for it.
+    """
+
+    def author(
+        case: Case, files: tuple[LoadedFile, ...], brief: GoalBrief | None, event: TurnEvent
+    ) -> TurnResult:
+        from engine.doctor.ai_guard import AI_LIMIT_REPLY, AI_NO_CONSENT_REPLY
+        from engine.doctor.visit import visit_registry
+
+        allowed = meter.ask(case)
+        if allowed != "ok":
+            return TurnResult(
+                reply=AI_NO_CONSENT_REPLY if allowed == "no_consent" else AI_LIMIT_REPLY,
+                ai=False,
+                blocked_by="no_consent" if allowed == "no_consent" else "budget",
+            )
+        if not files:
+            return TurnResult(reply="Add a file first, and I will look at it with you.", ai=False)
+        turn = DoctorTurn(
+            case,
+            files,
+            brief,
+            context_for,
+            meter,
+            guardrails,
+            principal,
+            config_root,
+            registry or visit_registry(),
+            chat_steps=meter.chat_steps,
+            storage=storage,
+            owed=owed_words(event.owed),
+            suggestions=event.suggestions,
+            goal_settings=event.goal_settings,
+        )
+        done = turn.run(event.message)
+        # The case's limit speaks only when it is what stopped a message's turn (`BUDGET_EXCEEDED`: a call refused
+        # before it was made). A call that failed and was billed anyway (the model ran out of room) can take the case
+        # to its limit too, but then the reason is the failure's, and the limit is told on the next turn (`ask`).
+        if (
+            event.message is not None
+            and done.blocked_by == "unavailable"
+            and BUDGET_EXCEEDED in done.error_codes
+            and meter.spent()
+        ):
+            return replace(done, reply=AI_LIMIT_REPLY, blocked_by="budget")
+        return done
+
+    return author

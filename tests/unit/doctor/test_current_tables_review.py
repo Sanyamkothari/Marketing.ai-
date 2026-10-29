@@ -192,7 +192,7 @@ def test_a_built_outcome_found_by_the_steps_own_words(storage: LocalStorage) -> 
 
 
 def test_the_ai_can_look_at_the_upload_as_it_came_in(storage: LocalStorage) -> None:
-    from tests.unit.doctor.test_agent_review import Script, _guard, _review
+    from tests.unit.doctor.test_agent_review import Script, _guard, _ran
 
     config = load_use_case(vs.GOAL_A)
     frame = pd.DataFrame(
@@ -216,7 +216,7 @@ def test_the_ai_can_look_at_the_upload_as_it_came_in(storage: LocalStorage) -> N
             {"action": "finish", "text": "done"},
         ]
     )
-    result = _review(_guard(client))(case, tuple(world.files.values()), None)
+    result = _ran(_guard(client), case, tuple(world.files.values()))
     profiles = [r for r in result.evidence if r.tool == "get_profile"]
     assert len(profiles) == 2
     assert profiles[0].output != profiles[1].output, "the raw upload still has the text money"

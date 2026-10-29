@@ -142,7 +142,7 @@ AI_UPLOAD: Final[str] = "up-eval-ai"
 class AiCase:
     """One AI case as a Data Doctor case: the file, the case at its first rest, and the person's way to write to it.
 
-    `say` is the case chat (`visit.chat`, which hands the message to the AI through the `converse` port, as
+    `say` is the case chat (`visit.chat`, which hands the message to the AI through the `author` port, as
     `POST /cases/{id}/chat` does): the AI's changes come back as pending items with `source=ai` and the receipt our
     code counted, and the visit applies the clean ones for the person, undoably.
     """
@@ -151,13 +151,13 @@ class AiCase:
     storage: Any
     world: Any
     case: Any
-    converse: Any
+    author: Any
 
     def deps(self) -> Any:
         from engine.doctor.visit import visit_registry
         from tests.unit.doctor.visit_support import deps_for
 
-        return deps_for(self.storage, self.world, registry=visit_registry(), converse=self.converse)
+        return deps_for(self.storage, self.world, registry=visit_registry(), author=self.author)
 
     def say(self, message: str) -> Any:
         from engine.doctor import visit
@@ -173,12 +173,12 @@ class AiCase:
         return self.case
 
 
-def ai_case(name: str, root: Path, converse_for: Callable[[AgentContext], Any]) -> AiCase:
+def ai_case(name: str, root: Path, author_for: Callable[[AgentContext], Any]) -> AiCase:
     """The AI case `name` as a Data Doctor case under `root`, with its goal chosen and every blocking question
     answered by its recommended option (else its first), so the chat starts where a person's would.
 
-    `converse_for` builds the chat port from the case's context (the port needs the same context the case chat
-    gives it: `api.routes.case_visit._converse`).
+    `author_for` builds the AI's author port from the case's context (the port needs the same context the case chat
+    gives it: `api.routes.case_visit._author`).
     """
     from engine.doctor import visit
     from engine.doctor.case import CaseStore
@@ -193,7 +193,7 @@ def ai_case(name: str, root: Path, converse_for: Callable[[AgentContext], Any]) 
     opened = CaseStore(storage, clock=world.clock).create(
         client_id="default", created_by=ANALYST.user_id, files=[vs.case_file(AI_UPLOAD, world)]
     )
-    made = AiCase(ctx, storage, world, opened, converse_for(ctx))
+    made = AiCase(ctx, storage, world, opened, author_for(ctx))
     made.case = visit.resume("default", opened.case_id, made.deps(), actor=ANALYST.user_id)
     made.case = visit.set_goal(
         "default",

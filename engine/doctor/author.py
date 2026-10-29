@@ -89,6 +89,7 @@ __all__ = [
     "default_actions",
     "gather_facts",
     "owed",
+    "owed_words",
     "served",
 ]
 
@@ -769,6 +770,25 @@ def owed(case: Case, brief: GoalBrief | None, config_root: Path | None = None) -
         if stale is not None and done.get(f"{_SERVED}build_stale") != f"{stale}:{settings}":
             found.append(Owed("build_stale", f"{stale}:{settings}"))
     return tuple(found)
+
+
+_OWED_LEAD: Final[str] = (
+    "The checks have made their pass. Look through every table, propose what the plan is missing and ask only what "
+    "the data cannot say."
+)
+_OWED_WORDS: Final[dict[str, str]] = {
+    "new_file": "A file arrived.",
+    "goal_chosen": "The person chose the goal just now: see that the plan fits it.",
+    "setting_changed": "A setting of the goal changed: see that the plan still fits it.",
+    "build_missing": "The goal needs its training table and nobody has proposed it: propose the build.",
+    "build_stale": "The training table was made for other settings: propose it again.",
+}
+
+
+def owed_words(owing: Sequence[Owed]) -> tuple[str, ...]:
+    """What is owed, in words for the AI, apart from the person's message (the turn shows that on its own)."""
+    reasons = [_OWED_WORDS[o.reason] for o in owing if o.reason in _OWED_WORDS]
+    return (_OWED_LEAD, *reasons) if reasons else ()
 
 
 def served(

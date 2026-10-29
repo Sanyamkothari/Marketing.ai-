@@ -29,9 +29,9 @@ from engine.agent.loop import UNAVAILABLE
 from engine.agent.tools import AgentContext
 from engine.config import BudgetConfig, LlmConfig, RunMode, load_use_case
 from engine.doctor import visit
-from engine.doctor.agent_review import agent_review, lazy_review
-from engine.doctor.agent_turn import DoctorTurn
-from engine.doctor.ai_guard import AiGuard
+from engine.doctor.agent_turn import DoctorTurn, TurnResult, doctor_author
+from engine.doctor.ai_guard import AI_NO_CONSENT_REPLY, AiGuard
+from engine.doctor.author import owed
 from engine.doctor.case import Case, CaseStore, TimelineKind, VisitState
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.diagnose import LoadedFile
@@ -104,7 +104,7 @@ def _guard(client: Script, *, consent: bool = True, calls: int = 60) -> AiGuard:
     )
 
 
-def _review(guard: AiGuard) -> visit.DetectorPort:
+def _review(guard: AiGuard) -> visit.AuthorPort:
     def context_for(case: Case, files: tuple[LoadedFile, ...]) -> AgentContext:
         config = load_use_case(GOAL_A)
         return AgentContext(
@@ -117,13 +117,20 @@ def _review(guard: AiGuard) -> visit.DetectorPort:
             frame=files[0].frame,
         )
 
-    return agent_review(
+    return doctor_author(
         context_for,
         meter=guard,
         guardrails=guardrails(),
         principal=ASHA,
         registry=_Cached(visit.visit_registry(), _MEMORY),
     )
+
+
+def _ran(guard: AiGuard, case: Case, files: tuple[LoadedFile, ...]) -> TurnResult:
+    """One turn of the AI on a case that owes it a look (a new file), as the visit asks for it."""
+    result = _review(guard)(case, files, None, visit.TurnEvent(owed=owed(case, None)))
+    assert result is not None
+    return result
 
 
 def _sql(expect: dict[str, Any], name: str = "customer_totals") -> dict[str, Any]:
@@ -154,7 +161,7 @@ def _ask(column: str) -> dict[str, Any]:
 
 def _run(world: World, storage: LocalStorage, client: Script, **kwargs: Any) -> tuple[Any, Script]:
     case = vs.open_case(storage, world)
-    return _review(_guard(client, **kwargs))(case, _files(world), None), client
+    return _ran(_guard(client, **kwargs), case, _files(world)), client
 
 
 def test_the_ai_proposes_a_join_and_it_is_a_pending_item_with_our_receipt(
@@ -181,7 +188,7 @@ def test_the_ai_proposes_a_join_and_it_is_a_pending_item_with_our_receipt(
     assert not any(f["level"] == "stop" for f in item.payload["findings"])
     assert any(r.tool == "propose_sql_step" for r in found.evidence), "the evidence the item rests on is kept"
     assert found.model_calls == 3 == client.asked and found.tokens > 0
-    assert found.summary == "I added up the orders for each customer."
+    assert found.reply == "I added up the orders for each customer."
     assert found.sent, "what was sent to the AI is recorded for the screen"
 
 
@@ -220,7 +227,7 @@ def test_the_ai_can_look_at_its_working_copy_and_what_it_reads_has_no_personal_v
             {"action": "finish", "text": "I looked at the working copy."},
         ]
     )
-    found = _review(_guard(client))(case, _files(world), None)
+    found = _ran(_guard(client), case, _files(world))
     looked = [r for r in found.evidence if r.tool == "preview_working_copy"]
     assert looked and looked[0].kind.value == "read", "the look is evidence like any other"
     (shown,) = looked[0].output["files"]
@@ -293,20 +300,23 @@ def test_no_consent_means_no_call_to_the_ai(world: World, storage: LocalStorage)
     client = Script([])
     found, _ = _run(world, storage, client, consent=False)
     assert client.asked == 0 and not client.calls
-    assert found.items == () and found.model_calls == 0 and found.summary == ""
+    assert (
+        found.items == () and found.model_calls == 0 and found.reply == AI_NO_CONSENT_REPLY and not found.ai
+    )
 
 
 def test_a_case_with_no_spending_left_makes_no_call(world: World, storage: LocalStorage) -> None:
     client = Script([])
     case = vs.open_case(storage, world)
     spent = case.model_copy(update={"counters": case.counters.model_copy(update={"model_calls": 5})})
-    found = _review(_guard(client, calls=5))(spent, _files(world), None)
+    found = _ran(_guard(client, calls=5), spent, _files(world))
     assert client.asked == 0 and found.items == ()
 
 
 def test_no_ai_service_means_the_review_finds_nothing(world: World, storage: LocalStorage) -> None:
-    found = lazy_review(lambda: None)(vs.open_case(storage, world), _files(world), None)
-    assert found.items == () and found.asks == () and found.model_calls == 0
+    case = _opened(storage, world, vs.author_saying(None))
+    assert case.state is VisitState.ASK and not case.chat
+    assert not any(i.source is ProposalSource.AI for i in case.items) and case.counters.model_calls == 0
 
 
 def test_two_bad_replies_end_the_review_and_keep_what_was_made(world: World, storage: LocalStorage) -> None:
@@ -316,18 +326,18 @@ def test_two_bad_replies_end_the_review_and_keep_what_was_made(world: World, sto
 
 
 # -- inside the visit ----------------------------------------------------------------------------------------
-def _deps(storage: LocalStorage, world: World, port: visit.DetectorPort) -> visit.VisitDeps:
-    return vs.deps_for(storage, world, registry=_Cached(visit.visit_registry(), _MEMORY), agent=port)
+def _deps(storage: LocalStorage, world: World, port: visit.AuthorPort) -> visit.VisitDeps:
+    return vs.deps_for(storage, world, registry=_Cached(visit.visit_registry(), _MEMORY), author=port)
 
 
-def _opened(storage: LocalStorage, world: World, port: visit.DetectorPort) -> Case:
+def _opened(storage: LocalStorage, world: World, port: visit.AuthorPort) -> Case:
     created = CaseStore(storage, clock=world.clock).create(
         client_id=CLIENT, created_by=ANALYST, files=[vs.case_file(FIRST, world)]
     )
     return visit.resume(CLIENT, created.case_id, _deps(storage, world, port), actor=ANALYST)
 
 
-def _answer_key(storage: LocalStorage, world: World, case: Case, port: visit.DetectorPort) -> Case:
+def _answer_key(storage: LocalStorage, world: World, case: Case, port: visit.AuthorPort) -> Case:
     q = question(case, "KEY_AMBIGUOUS")
     return visit.answer(
         CLIENT, case.case_id, q.question_id, option(q, "customer_id"), _deps(storage, world, port),
@@ -676,7 +686,7 @@ def test_the_goal_brief_is_callable_for_the_active_goal_only(world: World, stora
             {"action": "finish", "text": "I read the goal."},
         ]
     )
-    found = _review(_guard(client))(case, _files(world), None)
+    found = _ran(_guard(client), case, _files(world))
     briefs = [r for r in found.evidence if r.tool == "load_goal_brief"]
     assert len(briefs) == 1 and briefs[0].output["goal_id"] == "retail-win-back"
     assert briefs[0].output["brief_hash"], "the brief comes back through the registry"
@@ -778,7 +788,7 @@ def test_the_plan_view_lists_the_ais_own_waiting_query(world: World, storage: Lo
     )
     case = vs.open_case(storage, world).model_copy(update={"items": (item,)})
     client = Script([{"action": "finish", "text": "Looked."}])
-    _review(_guard(client))(case, _files(world), None)
+    _ran(_guard(client), case, _files(world))
     shown = next(c for c in client.calls if c.kind == "complete").prompt
     assert '"by": "you"' in shown and '"state": "waiting"' in shown and "all files" in shown
 
@@ -804,7 +814,7 @@ def test_the_ai_proposes_behaviour_features_and_they_are_a_pending_never_ticked_
     }
     client = Script([action, {"action": "finish", "text": "I added behaviour features."}])
     case = vs.open_case(storage, world)
-    found = _review(_guard(client))(case, files, None)
+    found = _ran(_guard(client), case, files)
     assert len(found.items) == 1
     item = found.items[0]
     assert item.source is ProposalSource.AI and item.state is ProposalState.PENDING
@@ -829,7 +839,7 @@ def test_read_guide_carries_the_rules_and_the_section_once_and_the_system_text_s
             {"action": "finish", "text": "Looked."},
         ]
     )
-    _review(_guard(client))(vs.open_case(storage, world), _files(world), None)
+    _ran(_guard(client), vs.open_case(storage, world), _files(world))
     calls = [c for c in client.calls if c.kind == "complete"]
     assert len(calls) == 4
     assert len({c.system for c in calls}) == 1  # the stable part is byte-identical whatever the results are
@@ -866,7 +876,7 @@ def test_a_refused_read_guide_is_not_a_strike_and_a_guide_part_is_carried_once(
             {"action": "finish", "text": "Looked."},
         ]
     )
-    _review(_guard(client))(vs.open_case(storage, world), _files(world), None)
+    _ran(_guard(client), vs.open_case(storage, world), _files(world))
     calls = [c for c in client.calls if c.kind == "complete"]
     assert len(calls) == 9  # three refusals did not end the review
     assert calls[4].prompt.count("Never target-encode") == 1

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, RecipeStepKind
-from engine.agent.loop import chat_turn
+from engine.agent.loop import MAX_REASON_CHARS, chat_turn
 from engine.agent.proposals import rules_session
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.unit.agent.analyst import ANALYST
@@ -23,7 +23,13 @@ def reply(text: str = "Done.") -> str:
     return json.dumps({"action": "reply", "text": text, "evidence_ids": []})
 
 
-def step(kind: str, column: str = "city", evidence: tuple[str, ...] = ("c1-e1",), **params: Any) -> str:
+def step(
+    kind: str,
+    column: str = "city",
+    evidence: tuple[str, ...] = ("c1-e1",),
+    reason: str = "Bombay and Mumbai are the same city.",
+    **params: Any,
+) -> str:
     return json.dumps(
         {
             "action": "propose_step",
@@ -31,7 +37,7 @@ def step(kind: str, column: str = "city", evidence: tuple[str, ...] = ("c1-e1",)
                 "kind": kind,
                 "column": column,
                 "params": params,
-                "reason": "Bombay and Mumbai are the same city.",
+                "reason": reason,
                 "evidence_ids": list(evidence),
             },
         }
@@ -74,6 +80,27 @@ def test_a_grounded_fix_becomes_a_pending_ai_suggestion_with_its_measured_effect
     assert "c1-e1" in proposal.evidence_ids
     measured = next(r for r in result.tool_results if r.tool == "propose_step")
     assert measured.result["changed"] == 334
+
+
+def test_a_reason_over_the_limit_is_refused_with_the_limit_and_never_cut(started: tuple[Any, Any]) -> None:
+    long = "Bombay and Mumbai are the same city, so they are merged. " * 5
+    assert len(long) > MAX_REASON_CHARS
+    ctx, session = started
+    meter = ScriptedMeter(
+        [
+            LOOK,
+            step("map_values", reason=long, mapping={"Bombay": "Mumbai"}),
+            step("map_values", reason=long[:MAX_REASON_CHARS], mapping={"Bombay": "Mumbai"}),
+            reply(),
+        ]
+    )
+    result = chat_turn(
+        ctx, session, "Bombay is Mumbai", meter=meter, guardrails=_guardrails(), principal=ANALYST
+    )
+    (proposal,) = result.proposals
+    assert proposal.step is not None and proposal.step.reason == long[:MAX_REASON_CHARS], "its words, whole"
+    told = str(meter.rendered[2])  # the call after the refusal
+    assert "AGENT_TEXT_REFUSED" in told and f"at most {MAX_REASON_CHARS} characters" in told
 
 
 def test_a_fix_with_no_look_at_the_column_is_refused(started: tuple[Any, Any]) -> None:

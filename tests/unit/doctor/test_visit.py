@@ -29,6 +29,7 @@ import pytest
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.config import load_use_case
 from engine.doctor import visit
+from engine.doctor.agent_turn import TurnResult
 from engine.doctor.case import (
     Case,
     CaseError,
@@ -493,35 +494,31 @@ def test_a_visit_resumed_in_converse_is_answered_by_the_ai_service(
     storage: LocalStorage, world: World
 ) -> None:
     """The process dies during the AI call (the case rests in CONVERSE with the message unanswered); the next
-    call that resumes the visit carries a lazy CONVERSE port and the AI service answers the message."""
+    call that resumes the visit carries the author and the AI service answers the message."""
     case = _generic(storage, world)
-    asked: list[str] = []
+    asked: list[str | None] = []
 
-    def dying(case: Case, message: str, files: tuple[LoadedFile, ...]) -> visit.ConverseResult:
+    def dying(
+        case: Case, files: tuple[LoadedFile, ...], brief: Any, event: visit.TurnEvent
+    ) -> TurnResult | None:
         raise _Killed
 
-    def answering(case: Case, message: str, files: tuple[LoadedFile, ...]) -> visit.ConverseResult:
-        asked.append(message)
-        return visit.ConverseResult(reply="Here is what I found.", model_calls=1)
+    def answering(
+        case: Case, files: tuple[LoadedFile, ...], brief: Any, event: visit.TurnEvent
+    ) -> TurnResult | None:
+        asked.append(event.message)
+        return vs.turn_of("Here is what I found.", model_calls=1)
 
     with pytest.raises(_Killed):
         visit.chat(
-            CLIENT, case.case_id, "What is in this file?", _deps(storage, world, converse=dying),
+            CLIENT, case.case_id, "What is in this file?", _deps(storage, world, author=dying),
             expected_version=case.version, actor=ANALYST, op_id="chat-1",
         )  # fmt: skip
     died = _reload(storage, case)
     assert died.state is VisitState.CONVERSE and died.chat[-1].role == "user"
 
-    built: list[int] = []
-
-    def build() -> visit.ConversePort:
-        built.append(1)
-        return answering
-
-    resumed = visit.resume(
-        CLIENT, case.case_id, _deps(storage, world, converse=visit.lazy_converse(build)), actor=ANALYST
-    )
-    assert asked == ["What is in this file?"] and built == [1]
+    resumed = visit.resume(CLIENT, case.case_id, _deps(storage, world, author=answering), actor=ANALYST)
+    assert asked == ["What is in this file?"]
     assert [(c.role, c.text) for c in resumed.chat[-2:]] == [
         ("user", "What is in this file?"),
         ("agent", "Here is what I found."),
@@ -535,16 +532,15 @@ def test_why_the_ai_did_not_answer_is_kept_in_the_reply_and_the_timeline(
     storage: LocalStorage, world: World
 ) -> None:
     case = _generic(storage, world)
-
-    def down(case: Case, message: str, files: tuple[LoadedFile, ...]) -> visit.ConverseResult:
-        return visit.ConverseResult(
-            reply="The AI service is not answering right now.",
+    down = vs.author_saying(
+        vs.turn_of(
+            "The AI service is not answering right now.",
             blocked_by="unavailable",
             error_codes=("LLM_UNAVAILABLE", "LLM_KEY_EXPIRED"),
         )
-
+    )
     asked = visit.chat(
-        CLIENT, case.case_id, "What is in this file?", _deps(storage, world, converse=down),
+        CLIENT, case.case_id, "What is in this file?", _deps(storage, world, author=down),
         expected_version=case.version, actor=ANALYST, op_id="chat-1",
     )  # fmt: skip
     entry = asked.chat[-1]
@@ -555,25 +551,18 @@ def test_why_the_ai_did_not_answer_is_kept_in_the_reply_and_the_timeline(
     assert chats[-1].details["ai"] is True
 
 
-def test_a_lazy_converse_port_connects_only_when_a_chat_turn_runs(
+def test_a_chat_with_no_ai_service_connected_says_so_and_the_timeline_records_it(
     storage: LocalStorage, world: World
 ) -> None:
-    built: list[int] = []
-
-    def build() -> visit.ConversePort | None:
-        built.append(1)
-        return None  # no AI service connected
-
     case = visit.resume(
-        CLIENT, open_case(storage, world).case_id,
-        _deps(storage, world, converse=visit.lazy_converse(build)), actor=ANALYST,
+        CLIENT, open_case(storage, world).case_id, _deps(storage, world, author=vs.author_saying(None)),
+        actor=ANALYST,
     )  # fmt: skip
-    assert built == [], "a visit that does not chat never connects"
     case = visit.chat(
-        CLIENT, case.case_id, "Hello", _deps(storage, world, converse=visit.lazy_converse(build)),
+        CLIENT, case.case_id, "Hello", _deps(storage, world, author=vs.author_saying(None)),
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
-    assert built == [1] and case.chat[-1].text == AI_NEEDED_REPLY
+    assert case.chat[-1].text == AI_NEEDED_REPLY
     chats = [e for e in CaseStore(storage).timeline(CLIENT, case.case_id) if e.kind is TimelineKind.CHAT]
     assert chats[-1].details["ai"] is False, "the timeline says no AI service answered"
 
@@ -683,11 +672,9 @@ def test_a_port_that_returns_items_gets_them_pending_and_never_ticked_by_the_mod
         ticked=True,
     )
 
-    def port(case: Case, message: str, files: tuple[LoadedFile, ...]) -> visit.ConverseResult:
-        return visit.ConverseResult(reply="Here you are.", items=(ticked,), model_calls=1)
-
+    port = vs.author_saying(vs.turn_of("Here you are.", items=(ticked,), model_calls=1))
     case = visit.chat(
-        CLIENT, case.case_id, "Anything to fix?", _deps(storage, world, converse=port),
+        CLIENT, case.case_id, "Anything to fix?", _deps(storage, world, author=port),
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
     (item,) = (i for i in case.items if i.title == ticked.title)

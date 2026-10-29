@@ -33,7 +33,7 @@ from engine.doctor.patterns import candidate_rules, record_approved
 from engine.doctor.protocol import Ask, AskOption, DataRequest, express_doubt, ledger_port
 from engine.doctor.registry import DataToolKind, DataToolResult, Exposure
 from engine.doctor.standing import StandingAnswerStore
-from engine.doctor.visit import ConverseResult, Detected, VisitDeps
+from engine.doctor.visit import Detected, VisitDeps
 from engine.doctor.visit_contracts import OptionEffect
 from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
 from engine.storage import LocalStorage
@@ -475,8 +475,8 @@ def test_approving_an_ai_fix_in_a_case_counts_its_pattern(storage: LocalStorage,
     }
     payload: dict[str, JsonValue] = {"upload_id": FIRST, "path": None, "value": None, "step": step}
 
-    def converse(case: Case, message: str, files: tuple[LoadedFile, ...]) -> ConverseResult:
-        del message, files
+    def author(case: Case, files: tuple[LoadedFile, ...], brief: Any, event: visit.TurnEvent) -> Any:
+        del files, brief, event
         item = CaseItem(
             item_id="recipe_step.base.ai1",
             kind="recipe_step",
@@ -488,9 +488,9 @@ def test_approving_an_ai_fix_in_a_case_counts_its_pattern(storage: LocalStorage,
             payload_digest=payload_digest(payload),
             proposed_at=vs.T0,
         )
-        return ConverseResult(reply="Here is a fix.", items=(item,))
+        return vs.turn_of("Here is a fix.", items=(item,))
 
-    deps = _deps(storage, world, converse=converse)
+    deps = _deps(storage, world, author=author)
     case = visit.resume(CLIENT, open_case(storage, world).case_id, deps, actor=ANALYST)
     case = _answer_key(storage, world, case)
     case = visit.chat(

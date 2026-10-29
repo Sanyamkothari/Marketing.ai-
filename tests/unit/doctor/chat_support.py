@@ -12,11 +12,12 @@ from engine.access.roles import Principal, Role
 from engine.agent.tools import AgentContext
 from engine.config import BudgetConfig, LlmConfig, RunMode, load_use_case
 from engine.doctor import visit
-from engine.doctor.agent_chat import doctor_converse
+from engine.doctor.agent_turn import TurnResult, doctor_author
 from engine.doctor.ai_guard import AiGuard
 from engine.doctor.case import Case, CaseStore
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.diagnose import LoadedFile, Offer
+from engine.doctor.goal_brief import GoalBrief
 from engine.storage import LocalStorage
 from tests.fixtures.doctor_eval.chat_model import ChatScript
 from tests.unit.agent.egress_canary import guardrails
@@ -113,7 +114,7 @@ def chat_port(
     consent: bool = True,
     limits: AiLimitsConfig | None = None,
     config_id: str = GOAL_A,
-) -> visit.ConversePort:
+) -> visit.AuthorPort:
     def context_for(case: Case, files: tuple[LoadedFile, ...]) -> AgentContext:
         return AgentContext(
             use_case_id=config_id,
@@ -125,7 +126,7 @@ def chat_port(
             frame=files[0].frame,
         )
 
-    return doctor_converse(
+    author = doctor_author(
         context_for,
         meter=guard_for(client, consent=consent, limits=limits),
         guardrails=guardrails(),
@@ -133,6 +134,15 @@ def chat_port(
         registry=_Cached(visit.visit_registry(), _MEMORY),
         storage=storage,
     )
+
+    def when_the_person_writes(
+        case: Case, files: tuple[LoadedFile, ...], brief: GoalBrief | None, event: visit.TurnEvent
+    ) -> TurnResult | None:
+        # These tests are about the chat: the AI answers a message, and the reviews that are owed (a file, a goal)
+        # are not asked for, so each message is one turn of the script.
+        return author(case, files, brief, event) if event.message is not None else None
+
+    return when_the_person_writes
 
 
 class Talk:
@@ -149,7 +159,7 @@ class Talk:
         **port: Any,
     ) -> None:
         self.storage, self.world, self.client = storage, world, client
-        self.converse = None if client is None else chat_port(client, storage, **port)
+        self.author = None if client is None else chat_port(client, storage, **port)
         opened = CaseStore(storage, clock=world.clock).create(
             client_id=CLIENT, created_by=ANALYST, files=[vs.case_file(f, world) for f in files]
         )
@@ -172,7 +182,7 @@ class Talk:
             self.storage,
             self.world,
             registry=_Cached(visit.visit_registry(), _MEMORY),
-            converse=self.converse,
+            author=self.author,
         )
 
     def say(self, text: str) -> Case:

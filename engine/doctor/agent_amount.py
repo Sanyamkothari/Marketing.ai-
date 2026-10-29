@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.agent.grounding import grounded_numbers
+from engine.agent.loop import whole_reason
 from engine.agent.tools import AgentToolError
 from engine.agent.untrusted import display_name
 from engine.doctor.actions import ProposeAmountOutcomeArgs
@@ -26,22 +27,9 @@ from engine.doctor.case import CaseItem, payload_digest
 if TYPE_CHECKING:
     from engine.doctor.agent_turn import DoctorTurn
 
-__all__ = ["AMOUNT_ARGS", "REASON_CHARS", "run_amount_outcome", "run_test_column", "whole_reason"]
+__all__ = ["AMOUNT_ARGS", "run_amount_outcome", "run_test_column"]
 
 AMOUNT_ARGS: Final[frozenset[str]] = frozenset(ProposeAmountOutcomeArgs.model_fields) - {"replaces"}
-REASON_CHARS: Final[int] = 200
-
-
-def whole_reason(args: dict[str, Any]) -> str:
-    """The AI's `reason`, whole: one that is too long is refused with the limit (it is never cut), so the model says
-    the same in fewer words."""
-    reason = str(args.get("reason") or "").strip()
-    if len(reason) > REASON_CHARS:
-        raise AgentToolError(
-            "AGENT_TEXT_REFUSED",
-            f"The reason is {len(reason)} characters; the most allowed is {REASON_CHARS}. Say it in fewer words.",
-        )
-    return reason
 
 
 def run_amount_outcome(chat: DoctorTurn, index: int, args: dict[str, Any]) -> None:

@@ -236,14 +236,12 @@ def test_a_chat_the_ai_service_could_not_answer_says_why_in_the_response_and_the
         assert reply["error_codes"] == ["LLM_UNAVAILABLE", "LLM_KEY_EXPIRED"]
         events = client.get(f"/cases/{case_id}/timeline").json()["events"]
         agent = [e for e in events if e["kind"] == "chat.message" and e["details"].get("role") == "agent"]
-        (event,) = [e for e in agent if not e["details"].get("review")]
+        # One turn answers the message and everything else that is owed (the files); it failed, so the timeline records
+        # it once, with why, and the chat tells the person once.
+        (event,) = agent
         assert event["details"]["blocked_by"] == "unavailable"
         assert event["details"]["error_codes"] == "LLM_UNAVAILABLE,LLM_KEY_EXPIRED"
-        assert event["details"]["ai"] is True
-        # The review that followed the person's yes failed the same way: the timeline records it, and the chat,
-        # which had told the person already, does not say it twice.
-        (review,) = [e for e in agent if e["details"].get("review")]
-        assert review["details"]["error_codes"] == "LLM_UNAVAILABLE,LLM_KEY_EXPIRED"
+        assert event["details"]["ai"] is True and "review" not in event["details"]
         assert [m["role"] for m in chatted.json()["chat"]] == ["user", "agent"]
 
 
@@ -292,7 +290,6 @@ def test_the_chat_through_the_api_applies_a_filter_for_the_person_who_can_undo_i
         )
         assert chatted.status_code == 200, chatted.text
         case = chatted.json()
-        # the AI review that follows the chat ends with the scripted model's "nothing more to add": its own entry
         reply = next(c for c in case["chat"] if c["role"] == "agent" and c.get("item_ids"))
         (item,) = [i for i in case["items"] if i["source"] == "ai"]
         assert reply["item_ids"] == [item["item_id"]] and reply["tools"] == ["find_values", "propose_step"]
@@ -300,7 +297,7 @@ def test_the_chat_through_the_api_applies_a_filter_for_the_person_who_can_undo_i
         # in the plan and nobody's decision: the person's untick (or the approval) is what decides it
         assert item["state"] == "accepted" and item["decided_by"] is None
         assert item["payload"]["tried"]["changed"] > 0 and item["payload"]["tried"]["rows"] == 1_000
-        assert case["counters"]["model_calls"] >= 3, "the chat's three calls are counted on the case"
+        assert case["counters"]["model_calls"] == 3, "the turn's three calls are counted on the case"
 
         undone = client.post(
             f"/cases/{case_id}/decisions",
@@ -318,10 +315,30 @@ def test_the_chat_through_the_api_applies_a_filter_for_the_person_who_can_undo_i
         assert seen.state["earlier_looks"] == [
             {"id": "e1", "tool": "find_values", "file": "F1", "column": "customer_id"}
         ], "the look of the earlier turn is back from the case's evidence"
-        # the reply, then the summary of the review the chat left owed (the files it had not looked through); the
-        # person's untick owes the AI nothing
-        assert [h["who"] for h in seen.history] == ["person", "you", "you"]
+        # the one turn answered the message and what else was owed (the files); the person's untick owes the AI nothing
+        assert [h["who"] for h in seen.history] == ["person", "you"]
         assert later["chat"][-1]["text"] == "I looked at the customer ids."
+
+
+def test_the_author_connects_to_the_ai_service_only_when_a_turn_needs_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every visit route carries the author; one that does not need the AI never connects, and with no AI service
+    connected the author answers None (the chat says it needs one)."""
+    from api.routes import case_visit
+    from engine.doctor.visit import TurnEvent
+
+    built: list[int] = []
+
+    def no_service(*_args: Any) -> None:
+        built.append(1)
+
+    monkeypatch.setattr(case_visit, "_ai_parts", no_service)
+    port = case_visit._author(None, Path(), None, None, (), "default")  # type: ignore[arg-type]
+    assert built == [], "a visit that does not ask the AI never connects"
+    assert port(None, (), None, TurnEvent(message="Hello")) is None  # type: ignore[arg-type]
+    assert port(None, (), None, TurnEvent(message="Again")) is None  # type: ignore[arg-type]
+    assert built == [1], "connected once, on the first turn"
 
 
 def test_refusals_answer_their_codes(client: TestClient) -> None:

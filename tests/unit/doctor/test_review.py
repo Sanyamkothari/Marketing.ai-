@@ -79,6 +79,9 @@ def test_the_plan_is_one_line_per_change(storage: LocalStorage, world: World) ->
     assert [line.item_id for line in review.plan] == changes
     assert set(changes) <= {i.item_id for i in accepted}
     assert all(line.text for line in review.plan)
+    by_id = {i.item_id: i for i in screen.case.items}
+    assert all(line.proposed_by == by_id[line.item_id].proposed_by for line in review.plan)
+    assert {line.proposed_by for line in review.plan} <= {"default", "ai", "person"}
 
 
 def test_a_change_needing_its_own_yes_is_an_agreement_with_who_may_give_it(

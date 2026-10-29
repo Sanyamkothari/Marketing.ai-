@@ -347,13 +347,13 @@
   },
   "xfail": {
     "invariant:screen_matches_ai": "AI-first Stage 2: one state view. The AI is shown the counts of the working copy (11,714 rows after the date fix) while the screen shows the file's 12,008; both read the same plan state. AI-first Stage 4: one guard layer counts the whole file, so a stop never states a sample's counts that the screen does not mark as a sample.",
-    "window_60": "AI-first Stage 2: the AI may change any plan item, so '60 days' becomes a proposal that re-derives the build.",
-    "window_60_yes": "AI-first Stage 2/3: after the person's yes the build uses the new window (the goal's window is a setting that re-derives the build).",
-    "uk_only": "AI-first Stage 2: the AI may refine the rules' training table, so 'UK only' becomes a proposal.",
-    "uk_only_yes": "AI-first Stage 2: after the person's yes the training table keeps only the United Kingdom.",
-    "what_changed": "AI-first Stage 2: the one AI turn reads the plan and lists every change; the hand-written baseline reply does not do this and an AI player records the real one.",
-    "undo_date": "AI-first Stage 2: the AI proposes the withdrawal of a change the person decided, explains the consequence, and the change stands until the person's yes; the hand-written baseline reply does not do this and an AI player records the real one.",
-    "undo_date_yes": "AI-first Stage 2: after the person's yes the withdrawn date fix is gone.",
-    "approved#changes_applied": "AI-first Stage 2: the single approval covers the 60-day window, the United Kingdom filter, the kept duplicates and the withdrawn date fix."
+    "window_60": "AI-first Stage 2: '60 days' becomes a proposal (`propose_setting`) that re-derives the build. Waits for the AI player's recorded reply (P6c): the replayed one is prose with no action.",
+    "window_60_yes": "AI-first Stage 2/3: after the person's yes the build uses the new window. Waits for the recorded reply of window_60 (P6c).",
+    "uk_only": "AI-first Stage 2: 'UK only' becomes a proposal that refines the training table (`propose_sql` with `replaces`). Waits for the AI player's recorded reply (P6c): the replayed one is prose with no action.",
+    "uk_only_yes": "AI-first Stage 2: after the person's yes the training table keeps only the United Kingdom. Waits for the recorded reply of uk_only (P6c).",
+    "what_changed": "AI-first Stage 2: the one AI turn reads the plan and lists every change. Waits for the AI player's recorded reply (P6c): the replayed one is hand-written prose that names nothing from the plan.",
+    "undo_date": "AI-first Stage 2: the AI proposes the withdrawal of a change the person decided (`withdraw`), explains the consequence, and the change stands until the person's yes. Waits for the AI player's recorded reply (P6c): the replayed one is prose with no action.",
+    "undo_date_yes": "AI-first Stage 2: after the person's yes the withdrawn date fix is gone. Waits for the recorded reply of undo_date (P6c).",
+    "approved#changes_applied": "AI-first Stage 2: the single approval covers the 60-day window, the United Kingdom filter, the kept duplicates and the withdrawn date fix. Waits for the recorded replies above (P6c)."
   }
 }

@@ -488,7 +488,7 @@ def test_a_suggestion_for_a_question_that_is_not_open_is_refused(
             ]
         }
     )
-    talk.converse = cs.chat_port(client, storage)
+    talk.author = cs.chat_port(client, storage)
     talk.say("suggest something")
     assert talk.reply.suggestion is None and talk.reply.text == "Nothing to suggest."
     assert [r["error"] for r in client.seen[-1].results if "error" in r] == ["ITEM_NOT_FOUND"]
@@ -776,12 +776,8 @@ def test_a_quick_question_is_not_about_consent_the_outcome_the_id_or_the_date(
 def test_a_suggestion_whose_question_was_settled_meanwhile_is_said_in_the_reply(
     storage: LocalStorage, world: World
 ) -> None:
-    from engine.doctor.visit import ConverseResult
-
     talk = Talk(storage, world, None)
-    talk.converse = lambda _case, _message, _files: ConverseResult(
-        reply="Use this?", suggestion=("q.gone", "c0")
-    )
+    talk.author = vs.author_saying(vs.turn_of("Use this?", suggestions=(("q.gone", "c0"),)))
     talk.say("anything")
     assert talk.reply.suggestion is None
     assert "no longer open" in talk.reply.text

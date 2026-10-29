@@ -1184,10 +1184,12 @@ PRESCRIBE, VERIFY, HAND_OFF, FOLLOW_UP. ASK, APPROVE and FOLLOW_UP are the inter
   (`active_section`); other sections are set aside, never deleted.
 - **The brief is configuration.** `load_goal_brief` (tool #35, READ, rules) reads the use case's configuration and
   `configs/outcomes.yaml`; `brief_hash` is the SHA-256 of its canonical JSON. The AI never writes one.
-- **The AI only adds pending items.** Whatever a CONVERSE port returns lands `ai`, `pending`, `check`. Without an AI
-  service the chat answers `AI_NEEDED_REPLY` and the visit goes on; every other state is rules only.
-- **Every visit call carries the CONVERSE port** (`lazy_converse`: it connects to the AI service only when a chat
-  turn runs). A process killed during the AI call leaves the case in CONVERSE; whichever call resumes it next must
+- **The AI only proposes.** Whatever `VisitDeps.author` returns goes through `apply_actions` as the AI's own (`ai`,
+  `check`), and code decides whether it is in the plan (undecided) or waits for the person's tick; nothing it makes is
+  decided by it. Without an AI service the chat answers `AI_NEEDED_REPLY` and the visit goes on; every other state is
+  the default author only.
+- **Every visit call carries the author port** (`api.routes.case_visit._author`: it connects to the AI service only
+  when a turn runs). A process killed during the AI call leaves the case in CONVERSE; whichever call resumes it next must
   answer with the AI service, never with `AI_NEEDED_REPLY` while one is connected.
 - **Person actions** (`set_goal`, `answer`, `decide`, `approve`, `chat`, `add_files`) carry the version they were
   made against and an optional `op_id`; a retried action whose first attempt was written changes nothing, and still
@@ -1382,7 +1384,7 @@ deterministic rules by a reviewed change. Nothing changes a rule by itself.
 ### 19.9 Limits
 
 - The four ASK tools of the catalogue (#70 `request_data`, #74 `ask_question`, #75 `express_doubt`, #76
-  `request_approval`) are these functions. The AI review (`engine/doctor/agent_review.py`) may return the actions
+  `request_approval`) are these functions. The AI (`engine/doctor/agent_turn.py`) may return the actions
   `ask_question`, `express_doubt` and `request_data`: a doubt is kept only with its three parts and every number in a
   look it cites (else `AGENT_DOUBT_REFUSED`), a request needs a kind, what and why; at most 5 doubts and 3 requests
   a review, all words through the guardrails. Neither changes data. They reach the plan screen as `case.doubts`

@@ -676,7 +676,7 @@ With an AI service connected, the chat feels like any assistant that just does t
 conversation (the last twelve messages), sees the whole case - every file, what the rules decided, its own earlier
 changes, the questions and your answers - and uses its tools: it looks at the data, makes changes on the working
 copy, asks, suggests an answer, says when it is unsure, asks for a missing file, takes back its own earlier change and
-replies in plain words. Its instructions are one short prompt, `configs/prompts/data_doctor_chat.v2.md`.
+replies in plain words. Its instructions are the one Data Doctor prompt, `configs/prompts/data_doctor.v3.md`, the same for a message, a new file or a goal just chosen.
 
 - **It does the safe work itself.** A fix the guards pass (nothing new that stops or flags the plan) is *applied for
   you*: ticked by the agent, one **Undo**, on the timeline with the counts of its trial on your first 1,000 rows.
@@ -712,7 +712,7 @@ replies in plain words. Its instructions are one short prompt, `configs/prompts/
 
 `engine/doctor/goal_brief.py` (`GoalBrief`, `load_goal_brief`, `brief_hash`; tool #35 `load_goal_brief`),
 `engine/doctor/visit.py` (the state machine: `resume`, `set_goal`, `answer`, `decide`, `approve`, `chat`,
-`add_files`; the ports `VisitDeps`; CONVERSE applies the clean changes, `_converse`), `engine/doctor/visit_contracts.py`
+`add_files`; the ports `VisitDeps`; TREAT and CONVERSE are one step, `_author`: the default author, then the AI through `VisitDeps.author` when something is owed to it), `engine/doctor/visit_contracts.py`
 (`CaseVisit`, kept in `case.visit`) and `api/routes/case_visit.py` (`POST /cases/{id}/visit`, `/goal`, `/answers`, `/decisions`, `/approval`, `/chat`;
 `GET /goal-briefs/{goal_id}`). The brief is frozen into the case at `cases/<client>/<case>/briefs/<goal>_<hash>.json`.
 Each transition is one write of `case.json`; items and questions of a goal carry its `goal_id`. Refusals:
@@ -720,11 +720,13 @@ Each transition is one write of `case.json`; items and questions of a goal carry
 Tests: `tests/unit/doctor/test_goal_brief.py`, `tests/unit/doctor/test_visit.py`,
 `tests/integration/test_api_case_visit.py`.
 
-The chat: `engine/doctor/agent_chat.py` (`doctor_converse`: the review's loop with the conversation in front of it and
-a `reply` at the end), `engine/doctor/agent_apply.py` (`AGENT_APPLIED_STEPS`, `agent_applies`: what the agent applies for
-the person), `configs/prompts/data_doctor_chat.v2.md`. A reply in `case.chat` (`CaseChatEntry`) names what it did:
-`item_ids` (its changes in `case.items`: `accepted` with `decided_by: agent:data-doctor` is applied for the person,
-`pending` waits for their tick), `withdrawn` (its own earlier changes it took back), `tools` (what it did, in order) and
+The chat: `engine/doctor/agent_turn.py` (`doctor_author`: one `DoctorTurn` for the event, with the conversation in
+front of it and a `reply` at the end), `engine/doctor/author.py` (`apply_actions`: the one function that writes the
+plan; `owed`: when the AI is asked), `engine/doctor/agent_apply.py` (`waits_because`: whether a change is in the plan or
+waits for the person's tick), `configs/prompts/data_doctor.v3.md`. A reply in `case.chat` (`CaseChatEntry`) names what
+it did: `item_ids` (its changes in `case.items`: `accepted` and `decided_by: null` is in the plan until the person's
+untick or the approval decides it, `pending` waits for their tick), `refused` (what the engine refused in the turn:
+`code`, `what_failed`, `value`, `how_to_fix`), `withdrawn` (its own earlier changes it took back), `tools` (what it did, in order) and
 `suggestion` (`question_id`, `option_id`, `label`: an answer for the person to click); each is left out of the JSON
 while empty. When the AI did not write the reply, `blocked_by` says why (`no_consent`, `budget`, `unavailable`,
 `prompt_too_large`, a refusal's code it met twice, or `failed` for a step of the turn that broke) and, for an AI service that did not answer, `error_codes` says what failed (the failure's own code: `LLM_UNAVAILABLE`, `LLM_REFUSED` for a model that

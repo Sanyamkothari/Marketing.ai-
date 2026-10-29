@@ -388,8 +388,8 @@ def test_a_chat_request_records_who_asked_on_the_item(tmp_path: Path) -> None:
         "step": {"kind": "remove_rows", "column": "age", "params": {"operator": "equals", "values": [18]}},
     }
 
-    def converse(case: Case, message: str, files: Any) -> visit.ConverseResult:
-        del case, message, files
+    def author(case: Case, files: Any, brief: Any, event: visit.TurnEvent) -> Any:
+        del case, files, brief, event
         item = CaseItem(
             item_id="recipe_step.base.ai1",
             kind="recipe_step",
@@ -401,10 +401,10 @@ def test_a_chat_request_records_who_asked_on_the_item(tmp_path: Path) -> None:
             payload_digest=digest_of(payload),
             proposed_at=T0,
         )
-        return visit.ConverseResult(reply="Here.", items=(item,))
+        return vs.turn_of("Here.", items=(item,))
 
     storage, deps, case = _at_approve(tmp_path)
-    deps = dataclasses.replace(deps, converse=converse)
+    deps = dataclasses.replace(deps, author=author)
     case = visit.chat(
         CLIENT,
         case.case_id,

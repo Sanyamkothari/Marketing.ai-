@@ -18,7 +18,7 @@ from engine.doctor import visit
 from engine.doctor.case import Case, CaseStore
 from engine.doctor.cleaning import cleaning_detector
 from engine.doctor.current_tables import BUILT_PREFIX, current_tables, is_built
-from engine.doctor.diagnose import LoadedFile, Offer
+from engine.doctor.diagnose import Offer
 from engine.doctor.visit import active_section
 from engine.storage import LocalStorage
 from tests.unit.doctor import visit_support as vs
@@ -148,14 +148,11 @@ def test_a_query_the_person_left_out_builds_no_table(storage: LocalStorage, worl
 def test_the_goal_check_sees_a_built_outcome_without_the_columns_a_step_recorded(
     storage: LocalStorage, world: World
 ) -> None:
-    from engine.doctor.visit import ConverseResult
-
-    def port(case: Case, message: str, files: tuple[LoadedFile, ...]) -> ConverseResult:
-        return ConverseResult(reply="I built a table.", items=(_query_item(world),), model_calls=1)
+    port = vs.author_saying(vs.turn_of("I built a table.", items=(_query_item(world),), model_calls=1))
 
     case = visit.resume(CLIENT, open_case(storage, world).case_id, deps_for(storage, world), actor=ANALYST)
     case = visit.chat(
-        CLIENT, case.case_id, "Build me a training table.", deps_for(storage, world, converse=port),
+        CLIENT, case.case_id, "Build me a training table.", deps_for(storage, world, author=port),
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
     case = visit.set_goal(
@@ -211,7 +208,7 @@ def test_a_detector_on_the_current_table_does_not_find_again_what_an_accepted_fi
 def test_the_ai_sees_a_built_table_next_to_the_files_looks_at_it_and_cannot_change_it(
     storage: LocalStorage, world: World
 ) -> None:
-    from tests.unit.doctor.test_agent_review import Script, _guard, _review
+    from tests.unit.doctor.test_agent_review import Script, _guard, _ran
 
     client = Script(
         [
@@ -227,7 +224,7 @@ def test_the_ai_sees_a_built_table_next_to_the_files_looks_at_it_and_cannot_chan
     )
     case = open_case(storage, world)
     case = case.model_copy(update={"items": (_query_item(world, state=ProposalState.ACCEPTED),)})
-    found = _review(_guard(client))(case, tuple(world.files.values()), None)
+    found = _ran(_guard(client), case, tuple(world.files.values()))
     seen = [c for c in client.calls if c.kind == "complete"]
     assert any('"file": "T1"' in c.prompt for c in seen), "the AI state lists the built table next to F1"
     tools = {r.tool: r for r in found.evidence}

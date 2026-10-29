@@ -110,6 +110,6 @@
     "verdict": "ready"
   },
   "xfail": {
-    "audience#build_is_a_proposal": "AI-first Stage 2: the training table is proposed through the one author and waits for the person's yes; the rules do not pre-accept it."
+    "audience#build_is_a_proposal": "AI-first Stage 2: the training table is proposed through the one author and waits for the person's yes; the rules do not pre-accept it. Open question for the owner: design 1.2 puts a build that needs its yes in the plan, undecided, until Approve stamps the person's decision (scenario 08 accepts either state); this expectation or the placement has to change."
   }
 }

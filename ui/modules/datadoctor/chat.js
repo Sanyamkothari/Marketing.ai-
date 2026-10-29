@@ -214,7 +214,7 @@ const DID = Object.freeze({
   preview_working_copy: "Looked at the result",
 });
 
-const WHO = Object.freeze({ rules: "Done by the rules", agent: "Done by Data Doctor", you: "Your choice", someone: "Chosen by a teammate" });
+const WHO = Object.freeze({ default: "Done by Data Doctor's checks", agent: "Done by Data Doctor", you: "Your choice", someone: "Chosen by a teammate" });
 
 function changeHtml(card, names, busy, { clicked: clickedKey = "", column = "" } = {}) {
   const accepted = card.state === "accepted";
@@ -223,7 +223,7 @@ function changeHtml(card, names, busy, { clicked: clickedKey = "", column = "" }
     card.counts ? userTextIn(card.counts, names) : "",
     columnNote([column]),
     accepted && card.by ? esc(WHO[card.by] || "") : "",
-    waiting ? esc(card.source === "ai" ? "Suggested by the AI. Waiting for your yes." : "Waiting for your yes.") : "",
+    waiting ? esc(card.proposed_by === "ai" ? "Suggested by the AI. Waiting for your yes." : "Waiting for your yes.") : "",
     card.state === "rejected" ? esc(card.parked_for ? "Waiting for someone who would know. Left out." : "Undone. Not in the plan.") : "",
   ]
     .filter(Boolean)
@@ -370,6 +370,9 @@ function messageHtml(m, names, { busy, openSent, index, clicked = "" }) {
   const back = (m.withdrawn || []).length
     ? `<p class="dds-why" data-dds-withdrawn>${esc("I took back: ")}${m.withdrawn.map((t) => userTextIn(t, names)).join("; ")}</p>`
     : "";
+  const refused = (m.refused || []).length
+    ? `<ul class="dds-reasons" data-dds-refused>${m.refused.map((r) => `<li>${esc(plain(r.what_failed))} ${esc(plain(r.how_to_fix))}</li>`).join("")}</ul>`
+    : "";
   const s = m.suggestion;
   // The suggested answer is offered once, in the reply that made it (the reply already says what was understood): the
   // button records it, "Other answers" holds the question's other chips, and the question's own card waits.
@@ -395,7 +398,7 @@ function messageHtml(m, names, { busy, openSent, index, clicked = "" }) {
       }</div>`
     : "";
   return agentRow(
-    `<div class="ddc-bubble" data-dds-msg="agent">${esc(plain(m.text))}${sentHtml(m.sent, { id: index, open: openSent.has(String(index)) })}</div>${back}${trace}${suggestion}${goal}`,
+    `<div class="ddc-bubble" data-dds-msg="agent">${esc(plain(m.text))}${sentHtml(m.sent, { id: index, open: openSent.has(String(index)) })}</div>${back}${refused}${trace}${suggestion}${goal}`,
   );
 }
 

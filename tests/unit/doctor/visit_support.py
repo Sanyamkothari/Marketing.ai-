@@ -26,9 +26,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from engine.agent.contracts import AgentConfidence
 from engine.config import UseCaseConfig, load_use_case
 from engine.doctor import visit
-from engine.doctor.case import Case, CaseFile, CaseReadinessRef, CaseStore
+from engine.doctor.agent_turn import TurnResult
+from engine.doctor.author import AskPerson, Create, Doubt, ItemDraft, Request, Withdraw
+from engine.doctor.case import Case, CaseFile, CaseItem, CaseReadinessRef, CaseStore
 from engine.doctor.diagnose import LoadedFile, Offer
 from engine.doctor.goal_brief import GoalBrief
 from engine.doctor.visit import VerifyResult, VisitDeps
@@ -132,6 +135,56 @@ def deps_for(storage: LocalStorage, w: World, **extra: Any) -> VisitDeps:
         store=CaseStore(storage, clock=w.clock, lock_stale_seconds=extra.pop("stale", 30.0)),
         **extra,
     )
+
+
+def turn_of(
+    reply: str = "",
+    *,
+    items: Sequence[CaseItem] = (),
+    asks: Sequence[Any] = (),
+    doubts: Sequence[Any] = (),
+    requests: Sequence[Any] = (),
+    withdrawn: Sequence[str] = (),
+    basis: str = "msg:0",
+    **fields: Any,
+) -> TurnResult:
+    """What one turn of the AI made, as a scripted author hands it to the visit: the changes it puts forward, its
+    questions, doubts and requests, and the ids it takes back, as the author's actions (the visit applies them).
+    """
+    actions: list[Any] = [
+        Create(
+            draft=ItemDraft(
+                kind=item.kind,
+                payload=dict(item.payload),
+                title=item.title,
+                upload_id=item.upload_id,
+                goal_id=item.goal_id,
+                confidence=AgentConfidence.CHECK,  # the AI never makes a change sure
+                evidence_ids=item.evidence_ids,
+                assumption=item.assumption,
+            ),
+            reason=item.title,
+            replaces=item.replaces,
+            basis=basis,
+        )
+        for item in items
+    ]
+    actions += [AskPerson(ask=ask) for ask in asks]
+    actions += [Doubt(doubt=doubt) for doubt in doubts]
+    actions += [Request(request=request) for request in requests]
+    actions += [Withdraw(item_id=i, reason="The AI took it back.", consequence="") for i in withdrawn]
+    return TurnResult(reply=reply, actions=tuple(actions), **fields)
+
+
+def author_saying(result: TurnResult | None) -> visit.AuthorPort:
+    """A scripted author: whatever the event, it answers with `result` (None: no AI service is connected)."""
+
+    def author(
+        case: Case, files: tuple[LoadedFile, ...], brief: GoalBrief | None, event: visit.TurnEvent
+    ) -> TurnResult | None:
+        return result
+
+    return author
 
 
 def case_file(upload_id: str, w: World) -> CaseFile:

@@ -44,7 +44,7 @@ from pydantic import Field, JsonValue
 from engine.access.roles import Principal
 from engine.agent.contracts import ProposalSource, ProposalState
 from engine.config import ConfigError, StrictBase, load_engine_config
-from engine.doctor.case import Case, CaseItem, CaseQuestion, TimelineEvent, TimelineKind
+from engine.doctor.case import Case, CaseItem, CaseQuestion, CaseRefusal, TimelineEvent, TimelineKind
 from engine.doctor.goal_names import goal_display_name
 from engine.doctor.ledger import blocking
 from engine.doctor.plan_check import plan_digest
@@ -138,11 +138,13 @@ class ChangeCard(StrictBase):
     counts: str = Field(
         default="", description="Before -> after counts, in a sentence our code measured; may be empty."
     )
-    source: Literal["rules", "ai", "person"]
+    proposed_by: Literal["default", "ai", "person"] = Field(
+        description="Who proposed it: the default author (no AI), the AI, or a person."
+    )
     state: Literal["accepted", "pending", "rejected"] = Field(
         description="accepted: in the plan (Undo); pending: waiting for a yes (Use this); rejected: undone (Do it again)."
     )
-    by: Literal["rules", "agent", "you", "someone"] | None = Field(
+    by: Literal["default", "agent", "you", "someone"] | None = Field(
         default=None,
         description="Who put it in the plan, when it is in it; `someone` is another person on the team.",
     )
@@ -266,6 +268,9 @@ class MessageCard(StrictBase):
     error_codes: tuple[str, ...] = Field(
         default=(),
         description="For an AI service that did not answer, the codes that say why (`CaseChatEntry.error_codes`).",
+    )
+    refused: tuple[CaseRefusal, ...] = Field(
+        default=(), description="What the AI tried that the engine refused, each with what to change."
     )
 
 
@@ -449,13 +454,13 @@ def _change(
     state = item.state.value
     if state == "rejected" and (item.decided_by is None or _is_agent(item.decided_by)):
         return None  # never in the plan, or taken back by the agent itself (its message says so)
-    by: Literal["rules", "agent", "you", "someone"] | None = None
+    by: Literal["default", "agent", "you", "someone"] | None = None
     if item.state is ProposalState.ACCEPTED:
         if _is_agent(item.decided_by):
             by = "agent"
         elif not item.decided_by:
             by = (
-                "agent" if item.source is ProposalSource.AI else "rules"
+                "agent" if item.source is ProposalSource.AI else "default"
             )  # in the plan, nobody's decision yet
         else:  # a person: the reader, or (when we know who reads) a teammate
             by = "you" if principal is None or item.decided_by == principal.user_id else "someone"
@@ -463,7 +468,7 @@ def _change(
         item_id=item.item_id,
         title=item.title or item.kind,
         counts=_counts(item, steps.get(item.item_id), total_rows, sampled_from),
-        source=item.source.value,
+        proposed_by=item.proposed_by,
         state=state,  # type: ignore[arg-type]
         by=by,
         undo=item.state is ProposalState.ACCEPTED,
@@ -844,6 +849,7 @@ def _message(
         sent=tuple(entry.sent),
         blocked_by=getattr(entry, "blocked_by", None),
         error_codes=tuple(getattr(entry, "error_codes", ()) or ()),
+        refused=tuple(getattr(entry, "refused", ()) or ()),
     )
 
 
