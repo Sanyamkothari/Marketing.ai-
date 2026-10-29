@@ -16,7 +16,7 @@ from engine.doctor.actions import ProposeCombineRowsArgs
 from engine.doctor.decisions import decisions
 
 if TYPE_CHECKING:
-    from engine.doctor.agent_review import _Review
+    from engine.doctor.agent_turn import DoctorTurn
 
 __all__ = ["COMBINE_ARGS", "run_combine_rows"]
 
@@ -37,7 +37,7 @@ _SHOWN: Final[tuple[str, ...]] = (
 )
 
 
-def run_combine_rows(review: _Review, index: int, args: dict[str, Any]) -> None:
+def run_combine_rows(review: DoctorTurn, index: int, args: dict[str, Any]) -> None:
     ctx = review.ctxs[index]
     given = {k: v for k, v in args.items() if k in COMBINE_ARGS and v is not None}
     key = decisions(review.case).key(ctx.upload_id)

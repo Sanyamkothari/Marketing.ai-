@@ -200,8 +200,7 @@ def test_a_doctor_turn_asks_the_model_with_the_data_agents_allowance(storage: Lo
 @pytest.mark.parametrize(
     ("purpose", "allowance"),
     [
-        (GenerativePurpose.DOCTOR_CHAT, 3000),
-        (GenerativePurpose.DOCTOR_AGENT, 3000),
+        (GenerativePurpose.DOCTOR, 3000),
         (GenerativePurpose.DATA_AGENT, 3000),
         (GenerativePurpose.DATA_AGENT_ASSIST, 3000),
         (GenerativePurpose.DATA_EXPLAIN, 3000),

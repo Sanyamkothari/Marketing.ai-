@@ -1,6 +1,6 @@
 """The reference model: a scripted, careful stand-in for a real model on the chat's AI path (Plan O M248).
 
-It answers the Data Doctor's chat prompt (`data_doctor_chat`) the way a careful model would, from what the prompt
+It answers the Data Doctor's prompt (`data_doctor`) when a person has spoken, the way a careful model would, from what the prompt
 shows and nothing else: it looks at the file's format problems first (`find_format_issues`), suggests one fix from
 the fixed list for the first problem it can fix, citing that look, and then replies. Asked for anything else (a
 faster search: the chat has no setting to suggest, that is the training-time question's) it replies in words. It

@@ -292,7 +292,8 @@ def test_the_chat_through_the_api_applies_a_filter_for_the_person_who_can_undo_i
         )
         assert chatted.status_code == 200, chatted.text
         case = chatted.json()
-        reply = case["chat"][-1]
+        # the AI review that follows the chat ends with the scripted model's "nothing more to add": its own entry
+        reply = next(c for c in case["chat"] if c["role"] == "agent" and c.get("item_ids"))
         (item,) = [i for i in case["items"] if i["source"] == "ai"]
         assert reply["item_ids"] == [item["item_id"]] and reply["tools"] == ["find_values", "propose_step"]
         assert "withdrawn" not in reply and "suggestion" not in reply, "left out of the JSON while empty"
@@ -316,7 +317,8 @@ def test_the_chat_through_the_api_applies_a_filter_for_the_person_who_can_undo_i
         assert seen.state["earlier_looks"] == [
             {"id": "e1", "tool": "find_values", "file": "F1", "column": "customer_id"}
         ], "the look of the earlier turn is back from the case's evidence"
-        assert [h["who"] for h in seen.history] == ["person", "you"]
+        # the reply, then the summary the review gave after the chat and after the person's untick
+        assert [h["who"] for h in seen.history] == ["person", "you", "you", "you"]
         assert later["chat"][-1]["text"] == "I looked at the customer ids."
 
 

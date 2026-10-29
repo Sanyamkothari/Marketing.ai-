@@ -92,8 +92,7 @@ DATA_AGENT_PURPOSES: Final[frozenset[GenerativePurpose]] = frozenset(
     {
         GenerativePurpose.DATA_AGENT,
         GenerativePurpose.DATA_AGENT_ASSIST,
-        GenerativePurpose.DOCTOR_AGENT,
-        GenerativePurpose.DOCTOR_CHAT,
+        GenerativePurpose.DOCTOR,
         GenerativePurpose.DATA_EXPLAIN,
         GenerativePurpose.AGENT_PLANNER,
         GenerativePurpose.AGENT_NARRATIVE,
@@ -101,8 +100,8 @@ DATA_AGENT_PURPOSES: Final[frozenset[GenerativePurpose]] = frozenset(
 )
 """The purposes that run on the Product AI slot, and so are given `data_agent_max_output_tokens`.
 
-Guided setup calls with `DATA_AGENT` and `DATA_AGENT_ASSIST`; the Data Doctor's review, chat and
-explain narrator call with `DOCTOR_AGENT`, `DOCTOR_CHAT` and `DATA_EXPLAIN`; the campaign planner reads a
+Guided setup calls with `DATA_AGENT` and `DATA_AGENT_ASSIST`; the Data Doctor's turn and
+explain narrator call with `DOCTOR` and `DATA_EXPLAIN`; the campaign planner reads a
 goal with `AGENT_PLANNER` and writes its narrative with `AGENT_NARRATIVE`. The narrator and the planner
 write a short structured text, but they run on the same model as the rest of the slot: a model that reasons
 spends the ordinary allowance on thinking there too, and they quietly fall back (to the rules' narrative,

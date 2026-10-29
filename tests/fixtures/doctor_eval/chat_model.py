@@ -1,4 +1,4 @@
-"""A turn-keyed scripted model for the Data Doctor's chat (`data_doctor_chat`).
+"""A turn-keyed scripted model for the Data Doctor's turn (`data_doctor`).
 
 `ToolingClient` plays one list of actions for a whole session. A conversation needs each message to get its own
 answer, so this fake is **keyed by what the person said**: `ChatScript({"drop test accounts": [step, step, ...]})`
@@ -23,10 +23,10 @@ from engine.llm import FakeLLMClient, FakeLLMMode
 
 __all__ = ["ChatScript", "Seen", "Step"]
 
-_MESSAGE: Final = re.compile(
-    r"THE PERSON SAYS:\n(?P<said>.*?)\n\nWhat you have looked up this turn:", re.DOTALL
+_MESSAGE: Final = re.compile(r"THE PERSON SAYS:\n(?P<said>.*?)\n\nTHE CONVERSATION SO FAR", re.DOTALL)
+_STATE: Final = re.compile(
+    r"THE CASE NOW \([^)]*\):\n(?P<state>.*?)\n\nWhat you have looked up this turn:", re.DOTALL
 )
-_STATE: Final = re.compile(r"THE CASE NOW \([^)]*\):\n(?P<state>.*?)\n\nTHE PERSON SAYS:", re.DOTALL)
 _HISTORY: Final = re.compile(
     r"THE CONVERSATION SO FAR \([^)]*\):\n(?P<history>.*?)\n\nTHE CASE NOW", re.DOTALL
 )

@@ -18,6 +18,10 @@ from engine.doctor.tools_features import NAMED
 
 GUIDES = Path(__file__).resolve().parents[3] / "configs" / "doctor" / "guides"
 MAX_WORDS = 400
+MAX_RULES_WORDS = 1450
+"""The guide `rules` holds the data rules R1 to R29 that used to fill the prompt on every call. It is read a section at
+a time (`read_guide rules <section>`), so the cap that counts is the section's; the whole is bounded so it cannot grow
+unseen."""
 MAX_INDEX_WORDS = 150
 MAX_SECTION_WORDS = 150
 NAMES = sorted(p.stem for p in GUIDES.glob("*.md"))
@@ -52,7 +56,8 @@ def test_a_guide_opens_with_its_rules_and_stays_short(name: str) -> None:
     assert text.startswith("# Guide: ")
     sections = _sections(text)
     assert next(iter(sections), None) == "Rules", "the rules come first: they are what the model reads"
-    assert len(text.split()) <= MAX_WORDS, f"{name}.md has {len(text.split())} words"
+    cap = MAX_RULES_WORDS if name == "rules" else MAX_WORDS
+    assert len(text.split()) <= cap, f"{name}.md has {len(text.split())} words"
     for title, body in sections.items():
         assert len(body.split()) <= MAX_SECTION_WORDS, f"{name}.md section {title!r} is too long"
 
@@ -95,7 +100,7 @@ def test_every_tool_a_guide_names_in_backticks_exists(name: str) -> None:
     prompts = GUIDES.parents[1] / "prompts"
     known |= {
         word
-        for prompt in ("data_doctor_agent.v2.md", "data_doctor_chat.v2.md")
+        for prompt in ("data_doctor.v3.md",)
         for word in re.findall(r"[a-z_]{3,}", (prompts / prompt).read_text(encoding="utf-8"))
     }
     from engine.doctor.actions import action_names, argument_names

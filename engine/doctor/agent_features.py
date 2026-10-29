@@ -16,7 +16,7 @@ from engine.doctor.actions import ProposeFeaturesArgs
 from engine.doctor.decisions import decisions
 
 if TYPE_CHECKING:
-    from engine.doctor.agent_review import _Review
+    from engine.doctor.agent_turn import DoctorTurn
 
 __all__ = ["FEATURE_ARGS", "run_features"]
 
@@ -24,8 +24,8 @@ FEATURE_ARGS: Final[frozenset[str]] = frozenset(ProposeFeaturesArgs.model_fields
 """What the model may pass to the tool: the action's arguments (`engine.doctor.actions`), less the chat's swap."""
 
 
-def run_features(review: _Review, index: int, args: dict[str, Any]) -> None:
-    from engine.doctor.agent_review import _Sql
+def run_features(review: DoctorTurn, index: int, args: dict[str, Any]) -> None:
+    from engine.doctor.agent_turn import _Sql
     from engine.doctor.tools_features import parse_query_output
 
     turn = review.turn

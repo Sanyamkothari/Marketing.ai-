@@ -20,27 +20,39 @@ from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalStat
 from engine.agent.grounding import grounded_numbers
 from engine.agent.tools import AgentToolError
 from engine.agent.untrusted import display_name
-from engine.doctor.actions import ProposeAmountOutcomeChatArgs
+from engine.doctor.actions import ProposeAmountOutcomeArgs
 from engine.doctor.case import CaseItem, payload_digest
 
 if TYPE_CHECKING:
-    from engine.doctor.agent_chat import _Chat
+    from engine.doctor.agent_turn import DoctorTurn
 
-__all__ = ["AMOUNT_ARGS", "run_amount_outcome", "run_test_column"]
+__all__ = ["AMOUNT_ARGS", "REASON_CHARS", "run_amount_outcome", "run_test_column", "whole_reason"]
 
-AMOUNT_ARGS: Final[frozenset[str]] = frozenset(ProposeAmountOutcomeChatArgs.model_fields) - {"replaces"}
+AMOUNT_ARGS: Final[frozenset[str]] = frozenset(ProposeAmountOutcomeArgs.model_fields) - {"replaces"}
 REASON_CHARS: Final[int] = 200
 
 
-def run_amount_outcome(chat: _Chat, index: int, args: dict[str, Any]) -> None:
-    from engine.doctor.agent_review import _Sql
+def whole_reason(args: dict[str, Any]) -> str:
+    """The AI's `reason`, whole: one that is too long is refused with the limit (it is never cut), so the model says
+    the same in fewer words."""
+    reason = str(args.get("reason") or "").strip()
+    if len(reason) > REASON_CHARS:
+        raise AgentToolError(
+            "AGENT_TEXT_REFUSED",
+            f"The reason is {len(reason)} characters; the most allowed is {REASON_CHARS}. Say it in fewer words.",
+        )
+    return reason
+
+
+def run_amount_outcome(chat: DoctorTurn, index: int, args: dict[str, Any]) -> None:
+    from engine.doctor.agent_turn import _Sql
     from engine.doctor.tools_features import parse_query_output
 
     chat._file_only(index)
     ctx = chat.ctxs[index]
     given: dict[str, Any] = {k: v for k, v in args.items() if k in AMOUNT_ARGS and v is not None}
     given["upload_id"] = ctx.upload_id
-    reason = str(given.get("reason") or "").strip()[:REASON_CHARS]
+    reason = whole_reason(given)
     if not reason:
         raise AgentToolError(
             "AGENT_REASON_MISSING", "Say why this is the amount and the window, in a sentence."
@@ -76,7 +88,7 @@ def run_amount_outcome(chat: _Chat, index: int, args: dict[str, Any]) -> None:
     chat.turn.feedback.append(shown)
 
 
-def run_test_column(chat: _Chat, index: int, args: dict[str, Any]) -> None:
+def run_test_column(chat: DoctorTurn, index: int, args: dict[str, Any]) -> None:
     from engine.doctor.tools import TEST_COLUMN_KIND
     from engine.doctor.tools_facts import level_labels
 
@@ -96,7 +108,7 @@ def run_test_column(chat: _Chat, index: int, args: dict[str, Any]) -> None:
         raise AgentToolError(
             "AGENT_TEST_COLUMN_INVALID", f"Name the control group by its id, L1 to L{len(labels)}."
         )
-    reason = str(args.get("reason") or "").strip()[:REASON_CHARS]
+    reason = whole_reason(args)
     if not reason:
         raise AgentToolError(
             "AGENT_REASON_MISSING", "Say why this column is the test and this group the control."
