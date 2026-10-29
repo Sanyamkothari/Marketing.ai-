@@ -27,7 +27,7 @@ author, the AI or the default one, applies the suggestions it takes.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol
@@ -51,6 +51,7 @@ from engine.doctor.registry import (
     DataToolRegistry,
     DataToolResult,
     Exposure,
+    Need,
 )
 from engine.doctor.tools import FileArgs, _config, _file_or_files, _loaded
 from engine.doctor.visit_contracts import OptionEffect
@@ -61,6 +62,7 @@ if TYPE_CHECKING:
     from engine.doctor.goal_brief import GoalBrief
 
 __all__ = [
+    "M_CASE_FACT_TOOLS",
     "M_FACT_TOOLS",
     "AskPerson",
     "CampaignColumn",
@@ -71,6 +73,7 @@ __all__ = [
     "FactDeps",
     "FactRun",
     "Facts",
+    "FactsPage",
     "Found",
     "ItemDraft",
     "OrderColumn",
@@ -84,12 +87,22 @@ __all__ = [
     "key_facts",
     "level_labels",
     "order_file_facts",
+    "register_case_fact_tools",
     "register_fact_tools",
     "role_step_facts",
     "suggestion",
 ]
 
 M_FACT_TOOLS: Final[tuple[str, ...]] = ("describe_order_file", "find_test_columns")
+M_CASE_FACT_TOOLS: Final[tuple[str, ...]] = (
+    "key_facts",
+    "goal_fit_facts",
+    "goal_facts",
+    "suggest_build",
+    "detector_facts",
+    "role_step_facts",
+)
+"""The visit's rules as tools (#93 to #98): they read the stored case, so they exist only where a context names one."""
 
 AMOUNT_HINT: Final[re.Pattern[str]] = re.compile(
     r"amount|spend|revenue|sales|total|price|paid|payment|value", re.IGNORECASE
@@ -331,6 +344,7 @@ def register_fact_tools(registry: DataToolRegistry) -> tuple[str, ...]:
             wraps="engine/doctor/uplift_scope.py treatment_column_of, control_level (their names as hints)",
         )
     )
+    register_case_fact_tools(registry)
     return M_FACT_TOOLS
 
 
@@ -955,3 +969,254 @@ def role_step_facts(case: Case) -> Facts:
             )
         )
     return found.facts({})
+
+
+# ---------------------------------------------------------------------------
+# The fact functions as registry tools (the design §1.3): the AI reaches them here, paged
+# ---------------------------------------------------------------------------
+class FactsArgs(StrictBase):
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="Suggestions to skip, to read the rest when `left_out` says some did not fit.",
+    )
+
+
+class FactsPage(StrictBase):
+    """`Facts` as a tool returns it: what the function read, the suggestions that fit from `offset` on, and how many
+    more there are (`left_out`). The tool results the suggestions cite are the registry's own evidence."""
+
+    facts: dict[str, Any]
+    suggested: tuple[Suggestion, ...]
+    left_out: int = Field(
+        description="Suggestions (or verdicts) not shown: ask again with a larger `offset`."
+    )
+
+
+class _ToolRun:
+    """A `FactRun` over one tool call's context: the same files, tables and inner tool calls a visit gives the rules,
+    so the AI and the visit read the same facts. The inner calls are the engine's own rules (`caller="rules"`, as in
+    the visit), inside a call whose role the registry has already checked."""
+
+    def __init__(self, ctx: DataToolContext) -> None:
+        self._ctx = ctx
+        self.config_root = ctx.config_root
+        self.offers = ctx.offers
+        self.detectors = ctx.detectors
+        self.clock = ctx.clock
+
+    @property
+    def deps(self) -> FactDeps:
+        return self
+
+    def files(self, case: Case) -> tuple[LoadedFile, ...]:  # noqa: ARG002 - `FactRun`'s shape
+        return self._ctx.files
+
+    def current(self, case: Case) -> CurrentTables:
+        from engine.doctor.current_tables import current_tables
+        from engine.doctor.visit import active_section
+
+        return current_tables(
+            case,
+            active_section(case)[0],
+            self._ctx.files,
+            config=self.offers[0].config if self.offers else None,
+        )
+
+    def context(self, case: Case, **extra: Any) -> DataToolContext:  # noqa: ARG002 - `FactRun`'s shape
+        files = extra.pop("files") if "files" in extra else self._ctx.files
+        return DataToolContext(
+            caller="rules",
+            storage=self._ctx.storage,
+            ledger=self._ctx.ledger,
+            files=files,
+            offers=self.offers,
+            config_root=self.config_root,
+            clock=self.clock,
+            actor=self._ctx.actor,
+            **extra,
+        )
+
+    def call(self, name: str, given: Mapping[str, Any], ctx: DataToolContext) -> DataToolResult:
+        from engine.doctor.registry import data_registry
+
+        return data_registry().call(name, given, ctx)
+
+
+def _stored_case(ctx: DataToolContext) -> Case:
+    """The case as stored (what the visit reads), never a copy the caller holds."""
+    from engine.doctor.case import CaseError, CaseStore
+
+    if (
+        ctx.case is None or ctx.storage is None
+    ):  # unreachable through the registry: `needs` makes it unavailable
+        raise DataToolError("TOOL_UNKNOWN", "This tool needs a case.", status=404)
+    try:
+        return CaseStore(ctx.storage, clock=ctx.clock).get(ctx.case.client_id, ctx.case.case_id)
+    except CaseError as exc:
+        raise DataToolError("TOOL_INPUT_INVALID", "The case cannot be read.", status=422) from exc
+
+
+def _goal_brief(ctx: DataToolContext, case: Case) -> GoalBrief | None:
+    """The active goal's brief as the visit froze it, else as the configuration has it; None with no active goal."""
+    from engine.config import ConfigError
+    from engine.doctor.goal_brief import load_goal_brief
+    from engine.doctor.visit import active_goal, stored_brief
+
+    goal = active_goal(case)
+    if goal is None or ctx.storage is None:
+        return None
+    frozen = stored_brief(ctx.storage, case)
+    if frozen is not None:
+        return frozen
+    try:
+        return load_goal_brief(goal.goal_id, root=ctx.root())
+    except ConfigError as exc:
+        raise DataToolError(exc.code, "There is no goal with that name here.", status=404) from exc
+
+
+def _needed_brief(ctx: DataToolContext, case: Case) -> GoalBrief:
+    brief = _goal_brief(ctx, case)
+    if brief is None:
+        raise DataToolError("TOOL_INPUT_INVALID", "The case has no goal yet; set one first.", status=422)
+    return brief
+
+
+def _paged(parts: Sequence[tuple[str | None, Facts]], offset: int) -> FactsPage:
+    """The parts' facts (under the part's name when there are several) and their suggestions from `offset` on, as
+    many as fit the tool's budget: the rest are counted in `left_out`."""
+    from engine.doctor.tools import _fitted
+
+    facts: dict[str, Any] = {}
+    for name, part in parts:
+        if name is None:
+            facts = dict(part.facts)
+        else:
+            facts[name] = part.facts
+    every = [s for _, part in parts for s in part.suggested]
+    page = _fitted(FactsPage(facts=facts, suggested=tuple(every[offset:]), left_out=0), ("suggested",))
+    shown = len(page.suggested)
+    return page.model_copy(
+        update={"left_out": max(0, len(every) - offset - shown) + sum(part.left_out for _, part in parts)}
+    )
+
+
+def _key_facts(given: FactsArgs, ctx: DataToolContext) -> FactsPage:
+    case = _stored_case(ctx)
+    return _paged([(None, key_facts(_ToolRun(ctx), case))], given.offset)
+
+
+def _goal_fit_facts(given: FactsArgs, ctx: DataToolContext) -> FactsPage:
+    from engine.doctor.facts_goal import goal_fit_facts
+
+    case = _stored_case(ctx)
+    return _paged([(None, goal_fit_facts(_ToolRun(ctx), case))], given.offset)
+
+
+def _goal_facts(given: FactsArgs, ctx: DataToolContext) -> FactsPage:
+    from engine.doctor.facts_goal import goal_facts
+
+    case = _stored_case(ctx)
+    parts = goal_facts(_ToolRun(ctx), case, _needed_brief(ctx, case))
+    return _paged(list(zip(("outcome", "time", "consent"), parts, strict=False)), given.offset)
+
+
+def _suggest_build(given: FactsArgs, ctx: DataToolContext) -> FactsPage:
+    from engine.doctor.facts_goal import suggest_build
+
+    case = _stored_case(ctx)
+    return _paged([(None, suggest_build(_ToolRun(ctx), case, _needed_brief(ctx, case)))], given.offset)
+
+
+def _detector_facts(given: FactsArgs, ctx: DataToolContext) -> FactsPage:
+    case = _stored_case(ctx)
+    return _paged([(None, detector_facts(_ToolRun(ctx), case, _goal_brief(ctx, case)))], given.offset)
+
+
+def _role_step_facts(given: FactsArgs, ctx: DataToolContext) -> FactsPage:
+    return _paged([(None, role_step_facts(_stored_case(ctx)))], given.offset)
+
+
+_CaseFactRow = tuple[int, str, str, Callable[[FactsArgs, DataToolContext], FactsPage], tuple[Need, ...], str]
+_CASE_FACT_ROWS: Final[tuple[_CaseFactRow, ...]] = (
+    (
+        93,
+        "key_facts",
+        "Which column names each row of each file whose ID nobody decided: the ID to confirm, the columns that "
+        "could name the customers, or a row number. Suggestions only; changes nothing.",
+        _key_facts,
+        ("case", "storage", "files"),
+        "engine/doctor/tools_facts.py key_facts (visit.py _base_rules)",
+    ),
+    (
+        94,
+        "goal_fit_facts",
+        "With no goal yet: what the data can power and what is missing for the other goals (verdicts paged by "
+        "`left_out`; `goal_details` gives one in full). Suggestions only; changes nothing.",
+        _goal_fit_facts,
+        ("case", "storage", "files"),
+        "engine/doctor/facts_goal.py goal_fit_facts (visit.py _generic_rules)",
+    ),
+    (
+        95,
+        "goal_facts",
+        "For the active goal: the outcome column (or the build that makes it), the date each row describes and "
+        "consent, as facts under `outcome`, `time` and `consent`, with the changes and questions the rules would "
+        "make. Suggestions only; changes nothing.",
+        _goal_facts,
+        ("case", "storage", "files"),
+        "engine/doctor/facts_goal.py goal_facts (visit.py _goal_rules)",
+    ),
+    (
+        96,
+        "suggest_build",
+        "For the active goal when no file has its outcome: the query that builds it from an event table, with the "
+        "receipt of its trial on the first rows. Suggestions only; changes nothing.",
+        _suggest_build,
+        ("case", "storage", "files"),
+        "engine/doctor/facts_goal.py suggest_build (visit.py _offer_build)",
+    ),
+    (
+        97,
+        "detector_facts",
+        "What the detectors found in the files as the plan leaves them: fixes, doubts, requests for data and "
+        "questions. Suggestions only; changes nothing.",
+        _detector_facts,
+        ("case", "storage", "files"),
+        "engine/doctor/tools_facts.py detector_facts (visit.py _detect)",
+    ),
+    (
+        98,
+        "role_step_facts",
+        "Steps in the plan that change the column settled as the ID or the outcome, which can never run: each as "
+        "a withdrawal to suggest, with its reason. Changes nothing.",
+        _role_step_facts,
+        ("case", "storage"),
+        "engine/doctor/tools_facts.py role_step_facts (visit.py _standing)",
+    ),
+)
+
+
+def register_case_fact_tools(registry: DataToolRegistry) -> tuple[str, ...]:
+    """Register the visit's fact functions (#93 to #98) as READ tools for the rules and the AI. Each reads the stored
+    case and the files in the context, changes nothing, and returns its suggestions paged."""
+    for number, name, description, run, needs, wraps in _CASE_FACT_ROWS:
+        registry.register(
+            DataTool(
+                number=number,
+                name=name,
+                kind=DataToolKind.READ,
+                description=description,
+                input_model=FactsArgs,
+                output_model=FactsPage,
+                route_policy=RoutePolicy(
+                    role=Role.ANALYST, action=f"doctor.{name}", purpose="read what the rules find in a case"
+                ),
+                exposure=Exposure.SESSION_ONLY,
+                run=run,
+                callers=frozenset({"rules", "ai"}),
+                needs=needs,
+                wraps=wraps,
+            )
+        )
+    return M_CASE_FACT_TOOLS

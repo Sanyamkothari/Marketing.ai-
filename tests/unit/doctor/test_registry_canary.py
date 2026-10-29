@@ -33,13 +33,14 @@ from engine.agent.tools import TOOLS, AgentContext, AgentToolError
 from engine.agent.untrusted import for_prompt
 from engine.ai_consent import AiConsentStore
 from engine.contracts import RunMode
-from engine.doctor.case import CaseFile, CaseStore
+from engine.doctor.case import CaseFile, CaseGoal, CaseStore
 from engine.doctor.case_files import CaseFiles
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.memory import remember
 from engine.doctor.prescription import slot_name
 from engine.doctor.readiness import CheckReadinessArgs, ReadinessInputs
 from engine.doctor.registry import DataToolContext, data_registry
+from engine.doctor.tools_facts import M_CASE_FACT_TOOLS
 from engine.stages import ingest
 from engine.storage import LocalStorage, upload_key
 from engine.utils.time import utc_now
@@ -210,6 +211,13 @@ SPECS: dict[str, Calls | None] = {
     "check_history": lambda columns: [{"column": c, "outcome_window_days": 30} for c in columns],
     "describe_order_file": _fixed({}),
     "find_test_columns": _fixed({}),
+    # The visit's rules as fact tools (#93 to #98): they read the stored case, two goal tools with a goal set.
+    "key_facts": _fixed({}),
+    "goal_fit_facts": _fixed({}),
+    "goal_facts": _fixed({}),
+    "suggest_build": _fixed({}),
+    "detector_facts": _fixed({}),
+    "role_step_facts": _fixed({}),
     # Plan O M244 (DEC-1814): the time-settings tools, with every column named as the date each row describes
     # (a column that is not a date is refused, and the refusal must be clean too) and as the outcome.
     "estimate_training_time": _fixed({}, {"minutes": 5}, {"minutes": 240}),
@@ -346,6 +354,21 @@ def _stored_case(storage: LocalStorage, ctx: AgentContext, file_name: str) -> Ca
         ],
     )
     return CaseFiles(store=store, client_id="default", case_id=case.case_id, actor=ANALYST.user_id)
+
+
+def _goal_case(case_files: CaseFiles, goal_id: str) -> CaseFiles:
+    """A second case over the same files with `goal_id` active: what the goal's fact tools read."""
+    stored = case_files.store.get(case_files.client_id, case_files.case_id)
+    made = case_files.store.create(client_id="default", created_by=ANALYST.user_id, files=stored.files)
+    goal = CaseGoal(goal_id=goal_id, active=True, set_at=utc_now(), set_by=ANALYST.user_id)
+    case_files.store.update(
+        "default",
+        made.case_id,
+        expected_version=made.version,
+        actor=ANALYST.user_id,
+        change=lambda current: (current.model_copy(update={"goals": (goal,)}), ()),
+    )
+    return CaseFiles(store=case_files.store, client_id="default", case_id=made.case_id, actor=ANALYST.user_id)
 
 
 def _readiness(ctx: AgentContext) -> Callable[[CheckReadinessArgs], ReadinessInputs]:
@@ -548,8 +571,11 @@ def test_every_registered_tool_passes_the_canary(mode: str, tmp_path: Path) -> N
                 caller = case if case.caller in tool.callers else replace(case, caller="rules")
                 if tool.name == "propose_combine_rows":  # an ID repeats only in the event file
                     caller = replace(caller, agent=_repeating(ctx), primary_key="customer_id")
-                if tool.name == "second_opinion":  # it works from the case (its stored decisions)
-                    caller = replace(caller, case=cast(CaseFiles, case.case_files))
+                if tool.name == "second_opinion" or tool.name in M_CASE_FACT_TOOLS:  # they work from the case
+                    stored = cast(CaseFiles, case.case_files)
+                    if tool.name in ("goal_facts", "suggest_build"):  # ... and these from its goal
+                        stored = _goal_case(stored, ctx.use_case_id)
+                    caller = replace(caller, case=stored)
                 result: dict[str, Any] = data_registry().call(tool.name, given, caller).output
                 answered[tool.name] = answered.get(tool.name, 0) + 1
             except AgentToolError as exc:  # a refusal is fed back to the model; it must be clean too

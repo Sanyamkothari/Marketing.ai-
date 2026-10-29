@@ -484,6 +484,14 @@ CALLS: Final[dict[str, Calls | None]] = {
     "check_history": _fixed({"column": "bill_date", "outcome_window_days": 30}),
     "describe_order_file": _fixed({}),
     "find_test_columns": _fixed({}),
+    # The visit's rules as fact tools (#93 to #98) read a stored case; the world names none, so they are evaluated on
+    # their refusal (they are not available without one).
+    "key_facts": _fixed({}),
+    "goal_fit_facts": _fixed({}),
+    "goal_facts": _fixed({}),
+    "suggest_build": _fixed({}),
+    "detector_facts": _fixed({}),
+    "role_step_facts": _fixed({}),
     # Plan O M244 (DEC-1814): the time-settings tools, with every column named as the date each row describes
     # (a column that is not a date is refused, and the refusal must be clean too) and as the outcome.
     "estimate_training_time": _fixed({}, {"minutes": 5}, {"minutes": 240}),

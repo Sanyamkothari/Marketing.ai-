@@ -157,6 +157,13 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     _R(90, "describe_order_file", "read", "rules + ai", "new"),
     _R(91, "find_test_columns", "read", "rules + ai", "new"),
     _R(92, "goal_details", "read", "rules + ai", "wrapper", exposure="aggregate"),
+    # U. The visit's rules as fact tools: what the data says and what the rules would do about it (nothing is written)
+    _R(93, "key_facts", "read", "rules + ai", "new"),
+    _R(94, "goal_fit_facts", "read", "rules + ai", "new"),
+    _R(95, "goal_facts", "read", "rules + ai", "new"),
+    _R(96, "suggest_build", "read", "rules + ai", "new"),
+    _R(97, "detector_facts", "read", "rules + ai", "new"),
+    _R(98, "role_step_facts", "read", "rules + ai", "new"),
 )
 """The design §5.5, row by row."""
 
