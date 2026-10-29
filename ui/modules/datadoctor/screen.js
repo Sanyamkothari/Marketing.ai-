@@ -44,6 +44,7 @@ import {
   dataRequestUrl,
   decideItem,
   getCases,
+  getRunOfCase,
   getScreen,
   resumeVisit,
   revokeStanding,
@@ -286,6 +287,8 @@ function startParts(entry) {
   const { state: s, host } = entry;
   const view = s.screen && s.screen.view;
   if (!view || !["ready", "ready_with_warnings"].includes(view.verdict.key) || !view.start) return null;
+  const going = runParts(entry);
+  if (going) return going;
   // Here the campaign starts (the wizard's Start, which also offers last month's model or learning again, or the Data page's); else the goal's setup or the wizard goes on.
   const starts =
     host.place !== "setup" && (host.approved ? true : view.start.target === "runs" && canAccess("POST", "/campaign-runs"));
@@ -401,6 +404,7 @@ function chatMainHtml(entry) {
     confirms: s.confirms,
     speed: s.speed,
     startHtml: parts ? `${parts.sentence}${parts.action}` : "",
+    startTitle: parts && parts.running ? "Approved" : "",
     starts,
     approveHtml: ready && ready.stage === "approve" && starts ? approveSentence(entry) : "",
     alertHtml: alertInCard ? `${notice}${err}` : "",
@@ -509,12 +513,44 @@ async function refresh(entry) {
     s.screen = null;
     return;
   }
+  entry.refreshedAt = Date.now();
   s.screen = await getScreen(s.caseId);
   s.use = await getAiStatus(s.caseId).catch(() => null);
   if (s.ai === null) await readAi(entry); // not known yet: ask again (the answer is shared for a few seconds)
   await readStartInfo(entry);
   await readOffer(entry);
+  await readRun(entry);
   watchFullCheck(entry);
+}
+
+/** A campaign run still being prepared from this case: the Data page says so, and does not offer to start again. A finished run says nothing here (the record does not say which approval it came from), and the wizard never reads it. */
+async function readRun(entry) {
+  const s = entry.state;
+  const start = s.screen && s.screen.view && s.screen.view.start;
+  s.run = null;
+  if (!start || entry.host.place !== "data" || !canAccess("GET", "/campaign-runs")) return;
+  try {
+    s.run = await getRunOfCase(s.caseId);
+  } catch {
+    // nothing is said of a run: the Start button stays
+  }
+}
+
+const RUN_SAYS = "The campaign is being prepared now. You can close this page.";
+
+/** The run's line and link while one is going from the approved plan: there is no second Start. */
+function runParts(entry) {
+  const run = entry.state.run;
+  const record = run && run.record;
+  if (entry.host.place !== "data" || !record || record.state !== "running") return null;
+  const pct = Number.isFinite(run.pct) ? ` ${run.pct}% done.` : "";
+  const link = `<div class="dds-actions">${button({
+    label: "See how it is going",
+    kind: "primary",
+    href: runHref(record.campaign_run_id),
+    attrs: "data-dds-run-link",
+  })}</div>`;
+  return { sentence: `<p class="dds-why" data-dds-run-says>${esc(RUN_SAYS)}${esc(pct)}</p>`, action: link, running: true };
 }
 
 /** Next month: can last month's model score this file? Not in a goal's setup; only once the file is ready to start. */
@@ -1279,6 +1315,14 @@ export function mountDataDoctor(slots, host) {
     readAi(entry).then(() => draw(entry), () => null);
     upload(entry, full.files);
   } else if (isNew || reopen) open(entry);
+  else if (entry.state.caseId && !entry.state.busy && Date.now() - (entry.refreshedAt || 0) > 4000) {
+    // Coming back to a screen drawn before: what it holds may be older than the case (an approval, a run that
+    // started, a teammate's answer). The server's view is read again; nothing already answered is asked again.
+    refresh(entry).then(
+      () => draw(entry),
+      () => null,
+    );
+  }
   if (full.pick) pickFromConnection(entry);
   return entry;
 }

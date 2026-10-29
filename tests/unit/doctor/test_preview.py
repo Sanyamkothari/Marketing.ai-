@@ -486,7 +486,7 @@ def test_the_screen_serves_the_preview_and_fills_the_steps_samples(tmp_path: Pat
     assert all(row[opted] == "1" for row in shown.after)
     served = view.model_dump(mode="json")
     assert set(served["preview"]["files"][0]) == {
-        "upload_id", "file_name", "total_rows", "columns", "before", "after", "left_out_columns", "note", "after_table", "after_rows"
+        "upload_id", "file_name", "total_rows", "columns", "before_columns", "before", "after", "left_out_columns", "note", "after_table", "after_rows"
     }  # fmt: skip
     assert set(served["preview"]["files"][0]["columns"][0]) == {"name", "changed", "personal"}
 
@@ -546,3 +546,18 @@ def test_a_plan_that_builds_a_table_says_which_table_the_after_rows_are() -> Non
     assert shown.after_table == "out"
     plain = preview_rows([first], [_item(STRIP, "i-strip")])
     assert plain.files[0].after_table is None
+
+
+def test_a_built_table_is_previewed_with_its_own_columns_only() -> None:
+    """The after side lists the built table's columns and none of the file's (they would be empty cells); the file as
+    it is keeps its own columns, in `before_columns`."""
+    first, _ = _people_case()
+    per_customer = "SELECT customer_id, count(*) AS n FROM t_this GROUP BY customer_id"
+    (shown,) = preview_rows([first], [_item(_sql(per_customer, inputs=("this",)), "i-build")]).files
+    assert [c.name for c in shown.columns] == ["customer_id", "n"]
+    assert all(len(row) == 2 for row in shown.after)
+    assert shown.before_columns is not None and len(shown.before_columns) > 2
+    assert all(len(row) == len(shown.before_columns) for row in shown.before)
+    assert shown.left_out_columns == 0
+    (plain,) = preview_rows([first], [_item(STRIP, "i-strip")]).files
+    assert plain.before_columns is None, "an unbuilt file keeps one list of columns for both sides"

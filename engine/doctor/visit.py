@@ -1574,7 +1574,7 @@ def _suggested(case: Case, step: _Step, given: tuple[str, str] | None) -> ChatSu
     if question is None or question.answer is not None:
         return None
     option = next((o for o in question.options if o.option_id == option_id), None)
-    if option is None or option.safe or option.label == DONT_KNOW or option.value_kind is not None:
+    if option is None or option.label == DONT_KNOW or option.value_kind is not None:
         return None  # a suggestion carries no value, so it cannot point at an answer that needs one
     return ChatSuggestion(question_id=question_id, option_id=option_id, label=option.label)
 
@@ -2116,7 +2116,8 @@ def _question(
     The rules recommend no column on a guess of their own (which column is which is the person's to say). A
     `recommended` option is only ever one that a step the person already approved, or the build the goal
     offers, uses as a fact; `why` says so in plain words. The person still answers. `safe` is the option "I don't know"
-    stands for (the one that decides nothing for them)."""
+    stands for: the one that is safe to take for them (often the one that decides nothing, but it can also be a real
+    option, such as the widest audience). It is still a real answer the agent may point at."""
     question_id = f"q.{code.lower()}.{goal_id or 'base'}.{_short(dict(subject))}"[:128]
     options = tuple(
         CaseOption(
@@ -2879,10 +2880,13 @@ def _audience_question(
 ) -> tuple[CaseQuestion, tuple[OptionEffect, ...]]:
     """BUILD_AUDIENCE: which customers the built table is about, with both readings' counts (every customer active
     on or before the snapshot, or the narrower audience the goal's configuration names). A reading too small to
-    learn from says so; "Neither" asks for the outcome column instead and is the safe choice ("I don't know"). The
-    goal's description decides the recommendation, with its reason: a goal about customers who have stopped buying
-    fits the narrower reading (when it is large enough), and a description that says nothing of the sort recommends
-    nothing."""
+    learn from says so; "Neither" asks for the outcome column instead. The goal's description decides the
+    recommendation, with its reason: a goal about customers who have stopped buying fits the narrower reading (when
+    it is large enough), and a description that says nothing of the sort recommends nothing.
+
+    "I don't know" takes the safe choice, which is never "Neither" (that hands the work back to the person): it is
+    the recommended audience when there is one, else the widest reading that is large enough (every customer known
+    by the snapshot: it leaves out nobody the data knew), else "Neither". The question says which and why."""
     noun = config.entity or "customer"
     plural = noun if noun.endswith("s") else f"{noun}s"
     assert built.snapshot is not None
@@ -2901,6 +2905,18 @@ def _audience_question(
     description = config.description.rstrip(".")
     narrower = next((a for a in built.audiences if a.audience_id == "quiet" and a.enough), None)
     lapsed = narrower is not None and _LAPSED_WORDS.search(description) is not None
+    widest = next((a for a in built.audiences if a.audience_id == "active" and a.enough), None)
+    safe = "quiet" if lapsed else widest.audience_id if widest is not None else "none"
+    safe_why = (
+        "Not sure? Data Doctor takes that reading, the one that fits the goal."
+        if lapsed
+        else (
+            f"Not sure? Data Doctor takes all {widest.customers:,} {plural} known by then: it leaves out nobody "
+            "the data knew, and you can change the answer later."
+            if widest is not None
+            else ""
+        )
+    )
     return _question(
         "BUILD_AUDIENCE",
         {"upload_id": built.upload_id, "snapshot": built.snapshot.isoformat()},
@@ -2911,11 +2927,11 @@ def _audience_question(
         recommended="quiet" if lapsed else None,
         why=(
             f"The goal is described as: “{description}”. That is about {plural} who have stopped buying, so the "
-            "table is built from the ones who have gone quiet."
+            f"table is built from the ones who have gone quiet. {safe_why}"
             if lapsed
-            else ""
+            else safe_why
         ),
-        safe="none",
+        safe=safe,
     )
 
 

@@ -97,7 +97,8 @@ function checklistHtml(screen) {
 export const previewFiles = (view) => (view && view.preview && Array.isArray(view.preview.files) ? view.preview.files : []);
 
 function previewTable(file, side) {
-  const columns = file.columns || [];
+  // After a build the file as it is has its own columns (`before_columns`); the new table has only its own.
+  const columns = (side === "before" && file.before_columns) || file.columns || [];
   const rows = (side === "before" ? file.before : file.after) || [];
   // After a build the table is a new one: its columns are not the file's columns fixed.
   const built = side === "after" && file.after_table ? file.after_table : "";
@@ -121,7 +122,7 @@ function previewTable(file, side) {
     : `${side === "before" ? "First rows of your file, as they are" : "First rows after the fixes"}${
         file.total_rows ? ` (of ${count(file.total_rows)} rows)` : ""
       }${side === "after" && changed ? `, ${plural(changed, "column", "columns")} fixed` : ""}. Personal details are hidden.`;
-  return `<div class="ddc-table-wrap"><table class="ddc-table" data-dds-preview-table="${side}"><caption class="sr">${esc(caption)}</caption><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div><p class="dds-why">${esc(caption)}</p>${
+  return `<div class="ddc-table-wrap"><table class="ddc-table" data-dds-preview-table="${side}" aria-describedby="ddc-cap-${side}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div><p class="dds-why" id="ddc-cap-${side}">${esc(caption)}</p>${
     file.note ? `<p class="dds-why">${esc(file.note)}</p>` : ""
   }`;
 }
@@ -417,7 +418,7 @@ export function readyHtml(r, ctx) {
       ? `<p class="dds-why" data-dds-left-out>${esc("Left out, because nobody agreed:")} ${r.left_out.map((s) => nameIn(s, names)).join("; ")}</p>`
       : "";
     return indented(
-      `<section class="ddc-ready" data-dds-ready="start"><h3 class="dds-group-t">Ready to start</h3><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p>${
+      `<section class="ddc-ready" data-dds-ready="start"><h3 class="dds-group-t">${esc(ctx.startTitle || "Ready to start")}</h3><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p>${
         r.sentence ? `<blockquote class="dds-sentence" data-dds-approved-sentence>${userTextIn(r.sentence, names)}</blockquote>` : ""
       }${left}${ctx.alertHtml || ""}${ctx.startHtml || ""}</section>`,
     );
@@ -533,7 +534,7 @@ export function approveAllowed(r, ctx) {
 
 /** 2-3 prompts to try: what was done, what to ask next. */
 export function promptsOf(screen) {
-  const open = cards(screen).some((c) => c.type === "question" && (c.answer === null || c.answer === undefined));
+  const open = cards(screen).some((c) => c.type === "question" && (!c.answer || c.answer === undefined));
   const fixed = cards(screen).some((c) => c.type === "change");
   return [
     fixed ? "What did you change?" : "What did you find?",
@@ -585,7 +586,10 @@ export function composerHtml(screen, { ai = null, use = null, draft = "", busy =
     .map((p) => button({ label: p, kind: "tertiary", size: "sm", attrs: `data-dds-prompt="${esc(p)}"`, disabled: off || Boolean(busy) }))
     .join("");
   const working = busy && busy !== "chat" ? `<p class="ddc-progress" role="status" data-dds-progress><span class="ddc-spin" aria-hidden="true"></span><span>${esc(progressText(busy))}</span></p>` : "";
-  return `<div class="ddc-composer${off ? " is-off" : ""}" data-dds-composer>${working}${note}<div class="ddc-prompts" role="group" aria-label="Things to ask">${prompts}</div><form id="dds-chat-form" class="ddc-form"><label class="sr" for="dds-chat-input">Message Data Doctor</label><input type="text" id="dds-chat-input" class="input" autocomplete="off" maxlength="1000" placeholder="${
+  // While a question waits for its answer the box rests at the end of the conversation instead of floating over the
+  // cards (it would cover the question's choices when the page opens at the top).
+  const asking = cards(screen).some((c) => c.type === "question" && !c.answer);
+  return `<div class="ddc-composer${off ? " is-off" : ""}${asking ? " is-asking" : ""}" data-dds-composer>${working}${note}<div class="ddc-prompts" role="group" aria-label="Things to ask">${prompts}</div><form id="dds-chat-form" class="ddc-form"><label class="sr" for="dds-chat-input">Message Data Doctor</label><input type="text" id="dds-chat-input" class="input" autocomplete="off" maxlength="1000" placeholder="${
     off ? "Chat is not available" : "Ask anything, or tell me what to change…"
   }" value="${esc(draft)}"${off || busy === "chat" ? " disabled" : ""}>${button({ label: "Send", kind: "primary", type: "submit", attrs: "data-dds-send", disabled: off || Boolean(busy) })}</form></div>`;
 }

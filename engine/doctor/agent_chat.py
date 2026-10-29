@@ -883,15 +883,15 @@ class _Chat(_Review):
         oid = str(args.get("option_id", ""))
         labels: dict[str, str] = {}
         if qid in self.chosen.asked:
-            labels = {o.effect.option_id: o.label for o in self.chosen.asked[qid].options if not o.safe}
+            labels = {
+                o.effect.option_id: o.label for o in self.chosen.asked[qid].options if o.label != DONT_KNOW
+            }
         else:
             question = next(
                 (q for q in self.case.questions if q.question_id == qid and q.answer is None), None
             )
             if question is not None:
-                labels = {
-                    o.option_id: o.label for o in question.options if not o.safe and o.label != DONT_KNOW
-                }
+                labels = {o.option_id: o.label for o in question.options if o.label != DONT_KNOW}
         if oid not in labels:
             raise AgentToolError(
                 "AGENT_SUGGESTION_UNKNOWN", "Suggest an answer of a question that is open, by its ids."

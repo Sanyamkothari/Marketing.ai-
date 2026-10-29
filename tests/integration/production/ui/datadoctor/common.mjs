@@ -71,6 +71,7 @@ export function serverFor(world) {
     if (method === "GET" && p === "/campaign-runs/model-offer") {
       return world.offer ? ok(world.offer) : { status: 404, body: { detail: { code: "NOT_FOUND", message: "No offer." } } };
     }
+    if (method === "GET" && p === "/campaign-runs") return ok({ campaign_runs: world.runOfCase ? [world.runOfCase] : [] });
     if (method === "POST" && p === "/campaign-runs") {
       world.posted.push({ path: p, body: request.body });
       if (world.refuseRun) return world.refuseRun;

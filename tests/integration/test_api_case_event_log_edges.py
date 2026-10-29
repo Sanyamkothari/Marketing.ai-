@@ -97,7 +97,9 @@ def test_an_order_log_with_blank_ids_asks_which_column_names_the_customer_and_go
     audience = next(c for c in cards("question") if c["code"] == "BUILD_AUDIENCE")
     assert audience["dont_know"] is not None, "the audience question offers I don't know"
     safe = next(o for o in case["questions"] if o["code"] == "BUILD_AUDIENCE")["options"]
-    assert [o["label"] for o in safe if o.get("safe")] == ["Neither: I will bring the outcome column"]
+    # I don't know never hands the work back ("Neither"): with nothing recommended it takes the widest reading
+    (chosen,) = [o["label"] for o in safe if o.get("safe")]
+    assert chosen.startswith("All ") and "active on or before" in chosen
     case = answer(client, case_id, case, "BUILD_AUDIENCE", "active")
     (proposal,) = [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
     sentence = proposal["payload"]["sentence"]

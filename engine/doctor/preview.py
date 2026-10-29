@@ -112,8 +112,14 @@ class PreviewFile(ExactModel):
     )
     columns: tuple[PreviewColumn, ...] = Field(
         description="The columns after the plan, then the ones it removes (the changed ones first when the file has "
-        "more than 60); `before` and `after` follow this order (an empty cell where a column does not exist on "
-        "that side)."
+        "more than 60); `after` follows this order, and `before` too unless the plan builds a new table (then these "
+        "are the new table's columns only and `before_columns` are the file's). An empty cell where a column "
+        "does not exist on that side."
+    )
+    before_columns: tuple[PreviewColumn, ...] | None = Field(
+        default=None,
+        description="The columns `before` shows when the plan builds a new table (the file's own columns); null: "
+        "`before` follows `columns`.",
     )
     before: Table
     after: Table
@@ -453,16 +459,29 @@ def _one_file(
     after = after.loc[:, ~after.columns.duplicated()]
     made = _made_table(done, items) if reshaped and done is not None else None
     changed = _changed_columns(base, after, reshaped=reshaped, key=key)
-    names = [str(c) for c in after.columns] + [str(c) for c in base.columns if c not in after.columns]
+    # A table the plan builds is shown with its own columns only (the file's columns are not part of it); the file as
+    # it is keeps the file's columns. Otherwise the two sides share the columns after the plan, then the ones it removes.
+    names = [str(c) for c in after.columns]
+    if not reshaped:
+        names += [str(c) for c in base.columns if c not in after.columns]
     served = _served_columns(names, changed)
-    shown_before = base.reindex(columns=served)
     shown_after = after.reindex(columns=served)
+    side_columns: tuple[PreviewColumn, ...] | None = None
+    if reshaped:
+        was = _served_columns([str(c) for c in base.columns], ())
+        side_columns = tuple(PreviewColumn(name=n, changed=False, personal=n in personal) for n in was)
+        shown_before = base.reindex(columns=was)
+        before_rows = masked_rows(shown_before, tuple(was), personal, rows)
+    else:
+        shown_before = base.reindex(columns=served)
+        before_rows = masked_rows(shown_before, tuple(served), personal, rows)
     return PreviewFile(
         upload_id=loaded.upload_id,
         file_name=loaded.file_name,
         total_rows=int(loaded.file_rows or loaded.profile.row_count or len(loaded.frame)),
         columns=tuple(PreviewColumn(name=n, changed=n in changed, personal=n in personal) for n in served),
-        before=masked_rows(shown_before, tuple(served), personal, rows),
+        before_columns=side_columns,
+        before=before_rows,
         after=masked_rows(shown_after, tuple(served), personal, rows),
         left_out_columns=len(names) - len(served),
         after_table=made[0] if made is not None else None,
