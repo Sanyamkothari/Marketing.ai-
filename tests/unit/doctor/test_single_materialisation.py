@@ -28,7 +28,6 @@ STILL_OWN_RUN = {
     "engine/doctor/build_driver.py": "tries a build, not the plan's steps",
     "engine/doctor/change_share.py": "TODO Step 4: measures a step on rows that are not the materialised tables",
     "engine/doctor/evals.py": "the eval harness replays a recipe (a test tool, not a customer path)",
-    "api/routes/agent.py": "the Guided-setup agent's own recipe route",
     "engine/doctor/agent_unpivot.py": "TODO Step 4: the AI unpivot question tries its one step on the first rows of"
     " the agent's file, before any case plan exists",
 }

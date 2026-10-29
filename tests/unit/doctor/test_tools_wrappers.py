@@ -28,7 +28,7 @@ import pytest
 from engine.access.roles import Principal, Role
 from engine.agent.advisor import advise
 from engine.agent.assist import assist_session
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from engine.agent.tools import AgentContext
 from engine.connections import limits
 from engine.connections import registry as connectors
@@ -573,11 +573,11 @@ def _assist_case(config_root: Path | None) -> tuple[DataToolContext, AssistClien
 
 def test_second_opinion_works_from_the_case_and_ticks_nothing() -> None:
     ctx, _client, agent = _assist_case(header_help_root())
-    assert ctx.session is None and ctx.save_session is None, "no Guided-setup session is given or kept"
+    assert ctx.session is None, "no session is given or kept"
     out = _call("second_opinion", {}, ctx)
     direct = assist_session(
         agent,
-        start_session(agent, session_id="case-second-opinion", clock=lambda: NOW),
+        rules_session(agent, session_id="case-second-opinion", clock=lambda: NOW),
         meter=meter_for(
             AssistClient(
                 columns=[{"column": "final_status", "why": "It may be set when the customer leaves."}]

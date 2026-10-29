@@ -27,9 +27,9 @@ from pydantic import BaseModel, ConfigDict
 
 from api.access_policy import RoutePolicy
 from engine.access.roles import Principal, Role
-from engine.agent.contracts import Proposal, ProposalSource, ProposalState, ToolResult
+from engine.agent.contracts import Proposal, ToolResult
 from engine.agent.egress import assert_clean
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from engine.agent.tools import TOOLS, AgentContext, ToolKind, call_tool
 from engine.doctor import registry as registry_module
 from engine.doctor import tools as tools_module
@@ -127,7 +127,6 @@ def test_the_registry_holds_the_22_existing_tools_and_the_first_wrappers() -> No
     assert names == {
         *LOOK_TOOLS,
         *CHAT_PROPOSE,
-        "edit_by_hand",
         *FIRST_WRAPPERS.values(),
         *WAVE_ONE_TOOLS,
         *M236_TOOLS,  # Plan O M236 (DEC-1806): the remaining wrappers and `explain`
@@ -183,18 +182,18 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
 def test_the_catalogue_is_the_designs_eighty_tools() -> None:
     """The design's 80 tools in 81 rows, and since Plan O M236 (DEC-1806) M240's two READ tools as #82, #83."""
     counted = [entry for entry in CATALOGUE if entry.counted_with is None]
-    assert len(CATALOGUE) == 90
-    assert [e.number for e in CATALOGUE] == [n for n in range(1, 92) if n != 30]  # #30 was dropped
-    assert len(counted) == 89
-    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 28, "new": 39}
+    assert len(CATALOGUE) == 89
+    assert [e.number for e in CATALOGUE] == [n for n in range(1, 92) if n not in (30, 49)]  # #30, #49 dropped
+    assert len(counted) == 88
+    assert Counter(e.status for e in counted) == {"existing": 21, "wrapper": 28, "new": 39}
     kinds = Counter(e.kind for e in counted)
-    assert kinds["propose"] == 28 and kinds["ask"] == 4
+    assert kinds["propose"] == 27 and kinds["ask"] == 4
     assert {e.name for e in CATALOGUE if e.exposure == "aggregate"} == {
         "what_can_this_power",
         "check_readiness",
     }
-    assert len({e.name for e in CATALOGUE}) == 90
-    assert [(e.number, e.name, e.kind) for e in CATALOGUE[80:]] == [
+    assert len({e.name for e in CATALOGUE}) == 89
+    assert [(e.number, e.name, e.kind) for e in CATALOGUE[79:]] == [
         (82, "read_workbook_sheets", "read"),
         (83, "find_excel_serial_dates", "read"),
         (84, "propose_sql_step", "propose"),
@@ -352,7 +351,7 @@ class _Handle:
 def _full_context(
     agent: AgentContext, principal: Principal, caller: str = "person", **more: Any
 ) -> DataToolContext:
-    session = start_session(agent, session_id="s-1")
+    session = rules_session(agent, session_id="s-1")
     return DataToolContext(
         case=_Handle(),
         agent=agent,
@@ -360,7 +359,6 @@ def _full_context(
         caller=caller,  # type: ignore[arg-type]
         files=(_loaded(agent),),
         session=session,
-        save_session=lambda _session: None,
         turn=_Turn(),
         **more,
     )
@@ -401,17 +399,6 @@ def test_every_propose_tool_needs_at_least_an_analyst() -> None:
             assert tool.route_policy.role in {Role.ANALYST, Role.APPROVER, Role.ADMIN}, tool.name
 
 
-def test_an_analyst_may_edit_by_hand_through_the_registry(agent: AgentContext) -> None:
-    ctx = _full_context(agent, ANALYST)
-    column = next(
-        str(c) for c in agent.frame.columns if agent.frame[c].dtype == object and c != "customer_id"
-    )
-    result = data_registry().call("edit_by_hand", {"kind": "drop_column", "column": column}, ctx)
-    proposal = Proposal.model_validate(result.output["proposal"])
-    assert proposal.source is ProposalSource.PERSON and proposal.state is ProposalState.ACCEPTED
-    assert result.kind is DataToolKind.PROPOSE and result.exposure is Exposure.SESSION_ONLY
-
-
 def test_a_viewer_may_call_an_aggregate_read_tool_and_not_a_row_level_one(agent: AgentContext) -> None:
     ctx = DataToolContext(agent=agent, principal=VIEWER, caller="person", files=(_loaded(agent),))
     verdicts = data_registry().call("what_can_this_power", {}, ctx)
@@ -423,12 +410,8 @@ def test_a_viewer_may_call_an_aggregate_read_tool_and_not_a_row_level_one(agent:
 
 def test_the_ai_never_sees_a_person_only_tool_or_a_wrapper_in_m232(agent: AgentContext) -> None:
     ctx = _full_context(agent, ANALYST, "ai")
-    assert data_registry().find("edit_by_hand", ctx) is None
     for name in FIRST_WRAPPERS.values():
         assert data_registry().find(name, ctx) is None, name
-    with pytest.raises(DataToolError) as refused:
-        data_registry().call("edit_by_hand", {"kind": "drop_column", "column": "x"}, ctx)
-    assert refused.value.code == "TOOL_UNKNOWN"
     listed = [t.name for t in data_registry().listed_for(ctx, DataToolKind.READ)]
     assert listed == [*LOOK_TOOLS, *M_HISTORY_TOOLS, *M_FACT_TOOLS]
 
@@ -471,7 +454,7 @@ def test_a_result_over_its_budget_is_refused() -> None:
     assert refused.value.code == "TOOL_OUTPUT_TOO_LARGE" and refused.value.status == 413
 
 
-PLAN_G_SUGGESTIONS = {"propose_setting", "propose_step", "edit_by_hand"}
+PLAN_G_SUGGESTIONS = {"propose_setting", "propose_step"}
 """PROPOSE tools that run Plan G's own handler, which bounds the suggestion (`check_recipe`, the settings list)."""
 NO_CLIENT_DATA = {"data_request"}
 """Session-only by the catalogue, but built from configuration alone: not a row-level result."""
@@ -611,24 +594,6 @@ def test_the_longest_data_requests_fit_its_budget() -> None:
     ctx = DataToolContext(principal=VIEWER, caller="person")
     args = {"use_case_ids": list(widest), "messages": attached}
     assert data_registry().call("data_request", args, ctx).output
-
-
-def test_an_edit_made_through_the_registry_is_saved(agent: AgentContext) -> None:
-    saved: list[Any] = []
-    ctx = dataclasses.replace(_full_context(agent, ANALYST), save_session=saved.append)
-    column = next(
-        str(c) for c in agent.frame.columns if agent.frame[c].dtype == object and c != "customer_id"
-    )
-    result = data_registry().call("edit_by_hand", {"kind": "drop_column", "column": column}, ctx)
-    assert len(saved) == 1
-    stored = [p.proposal_id for p in saved[0].proposals]
-    assert result.output["proposal"]["proposal_id"] in stored
-    assert ctx.session is not None and result.output["proposal"]["proposal_id"] not in [
-        p.proposal_id for p in ctx.session.proposals
-    ], "the edit is in the saved session, not the one the call was given"
-    # Without somewhere to save it, the tool is not there: an edit is never made and dropped.
-    unsaved = dataclasses.replace(ctx, save_session=None)
-    assert data_registry().find("edit_by_hand", unsaved) is None
 
 
 # ---------------------------------------------------------------------------

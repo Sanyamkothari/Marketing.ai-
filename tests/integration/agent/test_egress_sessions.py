@@ -1,6 +1,6 @@
 """The canary through the real API (Plan G §7.6): upload a file full of fake personal data, chat with
-the helper until every tool has been called on every column, and search everything that was sent to
-the model, returned to the person and written to the session file.
+the helper (Ask your data) until every tool has been called on every column, and search everything that was
+sent to the model, returned to the person and written to the session file.
 
 `tests/unit/agent/test_egress_canary.py` runs the same file through `chat_turn` directly; this one
 adds the routes, the stored session file and the response models (`sent`, `data_access`, `third_party`).
@@ -91,14 +91,12 @@ def _chat_everything(
     )
     assert uploaded.status_code == 201, uploaded.text
     upload_id = str(uploaded.json()["upload_id"])
-    started = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-    assert started.status_code == 201, started.text
     responses: list[dict[str, Any]] = []
     for _ in range(100):
         if not fake.queue:
             break
         reply = client.post(
-            f"/uploads/{upload_id}/agent-session/messages", json={"text": "Please look at every column."}
+            f"/uploads/{upload_id}/ask/messages", json={"text": "Please look at every column."}
         )
         assert reply.status_code == 200, reply.text
         responses.append(reply.json())
@@ -130,7 +128,7 @@ def test_nothing_planted_reaches_a_prompt_a_response_or_the_session_file(
     assert leaks(transcript, HARD_SECRETS) == []
     # What is written to the session file on disk.
     storage = LocalStorage(data_dir)
-    key = f"uploads/{upload_id}/agent/agent_session.json"
+    key = f"uploads/{upload_id}/agent/explore_session.json"
     stored = json.loads(storage.read_bytes(key))
     assert leaks(json.dumps(stored["transcript"]), HARD_SECRETS) == []
     if mode == "summaries_only" or always_hide:
@@ -161,7 +159,7 @@ def test_the_response_says_what_was_sent_and_how(client: TestClient, monkeypatch
         )
     user_messages = [m for m in body["session"]["transcript"] if m["role"] == "user"]
     assert all(m["sent"] == [] for m in user_messages)
-    everything = client.get(f"/uploads/{upload_id}/agent-session").json()
+    everything = client.get(f"/uploads/{upload_id}/ask").json()
     kept = [
         i["preview"]
         for m in everything["session"]["transcript"]
@@ -177,12 +175,12 @@ def test_a_session_saved_before_this_change_still_loads(
 ) -> None:
     upload_id, _, _ = _chat_everything(client, monkeypatch, "masked_data", ())
     storage = LocalStorage(data_dir)
-    key = f"uploads/{upload_id}/agent/agent_session.json"
+    key = f"uploads/{upload_id}/agent/explore_session.json"
     stored = json.loads(storage.read_bytes(key))
     for message in stored["transcript"]:
         message.pop("sent", None)
     storage.write_bytes(key, json.dumps(stored).encode())
-    old = client.get(f"/uploads/{upload_id}/agent-session")
+    old = client.get(f"/uploads/{upload_id}/ask")
     assert old.status_code == 200, old.text
     assert all(m["sent"] == [] for m in old.json()["session"]["transcript"])
 

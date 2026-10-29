@@ -20,7 +20,7 @@ import pytest
 
 from engine.agent import egress
 from engine.agent.egress import EGRESS_LATE_MASK
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from tests.unit.agent.egress_canary import ToolingClient, canary_context, run_session
 from tests.unit.agent.helpers import synthetic
 
@@ -30,7 +30,7 @@ def test_a_large_row_count_reaches_the_model_intact_and_raises_no_alarm(rows: in
     ctx = canary_context(mode="masked_data", frame=synthetic("clean", rows=300))
     ctx = ctx.__class__(**{**ctx.__dict__, "profile": ctx.profile.model_copy(update={"row_count": rows})})
     client = ToolingClient([{"action": "get_profile", "args": {}}], per_turn=1)
-    _, turns = run_session(ctx, client, started=start_session(ctx, session_id="review-15"))
+    _, turns = run_session(ctx, client, started=rules_session(ctx, session_id="review-15"))
     prompt = client.sent_text[-1]
     assert re.search(rf'"rows": {rows}\b', prompt), "the row count the tool returned is not in the prompt"
     assert EGRESS_LATE_MASK not in turns[0].reply.turn.error_codes

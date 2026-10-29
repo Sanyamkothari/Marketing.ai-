@@ -24,9 +24,7 @@ DEFINES = frozenset({"engine/agent/recipe.py", "engine/agent/sql_step.py"})
 """The modules that define the runners (and call each other)."""
 AUTHORING = {
     "engine/agent/advisor.py": "the advisor tries a proposed step on the first rows",
-    "engine/agent/edits.py": "a person's edit of a step is tried on the first rows",
     "engine/agent/loop.py": "the Guided-setup agent tries the step it proposes",
-    "api/routes/agent.py": "the Guided-setup agent's own recipe route",
 }
 
 

@@ -80,31 +80,24 @@ def _wait(client: TestClient, index_id: str) -> dict[str, Any]:
     raise AssertionError("index build did not finish")
 
 
-# --- Product AI: the Guided-setup chat -------------------------------------------------------------
-def test_guided_setup_still_suggests_without_an_ai_service_but_the_chat_says_it_is_off(
-    client: TestClient,
-) -> None:
+# --- Product AI: the Ask-your-data chat -------------------------------------------------------------
+def test_the_chat_says_it_is_off_without_an_ai_service(client: TestClient) -> None:
     upload_id = _upload(client)
-    started = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-    assert started.status_code == 201, started.text
+    started = client.get(f"/uploads/{upload_id}/ask")
+    assert started.status_code == 200, started.text
     body = started.json()
-    assert body["session"]["proposals"] is not None and body["session"]["questions"] is not None
+    assert body["session"] is None
     assert body["chat"]["available"] is False and body["chat"]["reason"] == "AI_NOT_CONNECTED"
     assert (body["chat"]["backend"], body["chat"]["third_party"], body["chat"]["generation_model_id"]) == (
         "none",
         False,
         None,
     )
-    assert client.get(f"/uploads/{upload_id}/agent-session").json()["chat"]["available"] is False
 
 
 def test_the_chat_turn_is_409_not_connected_and_changes_nothing(client: TestClient) -> None:
     upload_id = _upload(client)
-    client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-    before = client.get(f"/uploads/{upload_id}/agent-session").json()["session"]
-    response = client.post(
-        f"/uploads/{upload_id}/agent-session/messages", json={"text": "what should I hide?"}
-    )
+    response = client.post(f"/uploads/{upload_id}/ask/messages", json={"text": "how many rows?"})
     detail = response.json()["detail"]
     assert (
         response.status_code == 409 and detail["code"] == "AI_NOT_CONNECTED" and detail["slot"] == "product"
@@ -112,16 +105,16 @@ def test_the_chat_turn_is_409_not_connected_and_changes_nothing(client: TestClie
     assert (
         detail["message"] == "No AI service is connected for Product AI." and "Connections" in detail["fix"]
     )
-    assert client.get(f"/uploads/{upload_id}/agent-session").json()["session"] == before
+    assert client.get(f"/uploads/{upload_id}/ask").json()["session"] is None
 
 
 def test_a_deliverable_service_does_not_switch_the_product_chat_on(client: TestClient) -> None:
     with serve(lambda _: chat_reply()) as server:
         _save(client, "deliverable", **_local(server))
         upload_id = _upload(client)
-        chat = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE}).json()["chat"]
+        chat = client.get(f"/uploads/{upload_id}/ask").json()["chat"]
         assert chat["available"] is False
-        response = client.post(f"/uploads/{upload_id}/agent-session/messages", json={"text": "hello"})
+        response = client.post(f"/uploads/{upload_id}/ask/messages", json={"text": "hello"})
         assert response.status_code == 409
     assert server.requests == []
 
@@ -132,7 +125,7 @@ def test_with_a_product_service_the_chat_calls_it_and_reports_who_sees_the_promp
     with serve(lambda _: chat_reply("Hide the id column.")) as server:
         _save(client, "product", **_local(server, api_key=KEY))
         upload_id = _upload(client)
-        started = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE}).json()
+        started = client.get(f"/uploads/{upload_id}/ask").json()
         assert started["chat"] == {
             "available": True,
             "reason": None,
@@ -142,9 +135,7 @@ def test_with_a_product_service_the_chat_calls_it_and_reports_who_sees_the_promp
             "data_access": started["chat"]["data_access"],
             "third_party": True,
         }
-        response = client.post(
-            f"/uploads/{upload_id}/agent-session/messages", json={"text": "what should I hide?"}
-        )
+        response = client.post(f"/uploads/{upload_id}/ask/messages", json={"text": "how many rows?"})
     assert response.status_code == 200, response.text
     assert server.requests and server.requests[0].body["model"] == "local-m"
     assert server.requests[0].headers["authorization"] == f"Bearer {KEY}"
@@ -154,14 +145,14 @@ def test_with_a_product_service_the_chat_calls_it_and_reports_who_sees_the_promp
 def test_a_saved_bedrock_is_not_third_party(client: TestClient) -> None:
     _save(client, "product", provider="bedrock", model="b-model", region="us-east-1")
     upload_id = _upload(client)
-    chat = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE}).json()["chat"]
+    chat = client.get(f"/uploads/{upload_id}/ask").json()["chat"]
     assert (chat["available"], chat["backend"], chat["third_party"]) == (True, "bedrock", False)
 
 
 def test_the_test_model_answers_only_when_a_test_allows_it(config_root: Path, tmp_path: Path) -> None:
     with _client(config_root, tmp_path / "d", allow_fake=True) as client:
         upload_id = _upload(client)
-        chat = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE}).json()["chat"]
+        chat = client.get(f"/uploads/{upload_id}/ask").json()["chat"]
         assert (chat["available"], chat["backend"], chat["third_party"]) == (True, "fake", False)
         product = client.get("/ai-service").json()["slots"]["product"]  # the screens agree with the chat box
         assert (product["connected"], product["source"], product["provider"]) == (True, "config", "fake")

@@ -13,7 +13,7 @@ import pandas as pd
 
 from engine.agent import egress
 from engine.agent.config import DataAccess
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from engine.agent.untrusted import quoted
 from tests.unit.agent.egress_canary import ToolingClient, canary_context, run_session
 from tests.unit.agent.helpers import synthetic
@@ -32,7 +32,7 @@ def test_summaries_only_prompt_has_no_cell_of_a_column_the_advisor_quotes() -> N
     frame["shop_type"] = ["Men's Wear", "MEN'S WEAR", "Kids", "kids"] * 100
     ctx = canary_context(mode="summaries_only", frame=frame)
     client = ToolingClient([{"action": "get_profile", "args": {}}], per_turn=1)
-    session = start_session(ctx, session_id="review-2")
+    session = rules_session(ctx, session_id="review-2")
     assert any(
         "Men's Wear" in p.reason for p in session.proposals
     ), "the advisor is expected to quote the cells"

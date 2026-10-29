@@ -28,7 +28,7 @@ import pytest
 from engine.access.roles import Principal, Role
 from engine.agent.egress import Egress, assert_clean
 from engine.agent.loop import chat_turn
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from engine.agent.tools import TOOLS, AgentContext, AgentToolError
 from engine.agent.untrusted import for_prompt
 from engine.ai_consent import AiConsentStore
@@ -95,14 +95,6 @@ def _each(argument: str) -> Calls:
     return lambda columns: [{argument: column} for column in columns]
 
 
-def _edits(columns: Sequence[str]) -> list[dict[str, Any]]:
-    """Hide each column by hand, and a merge of spellings that names planted values (what a person may type)."""
-    return [{"kind": "drop_column", "column": column} for column in columns] + [
-        {"kind": "map_values", "column": "notes", "params": {"mapping": {f"{NAME} {EMAIL}": PHONE}}},
-        {"kind": "map_values", "column": "region_contact", "params": {"mapping": {"North": "N"}}},
-    ]
-
-
 CHAT_ONLY = frozenset({"propose_setting", "propose_step"})
 """Made inside a chat turn: their canary is a whole chat session (`test_the_chat_suggestions_pass_the_canary`)."""
 
@@ -114,7 +106,6 @@ SPECS: dict[str, Calls | None] = {
     **{name: _look(name) for name in TOOLS},
     "propose_setting": None,
     "propose_step": None,
-    "edit_by_hand": _edits,
     "diagnose_files": _fixed({}, {"upload_ids": [CUSTOMERS]}, {"upload_ids": [EVENTS, CUSTOMERS]}),
     "find_file_role": _fixed({}, {"upload_id": CUSTOMERS}, {"upload_id": EVENTS}),
     "advise": _fixed({}, {"primary_key": "customer_id", "target": "converted_30d"}),
@@ -420,8 +411,7 @@ def _case(ctx: AgentContext, root: Path) -> DataToolContext:
         caller="person",
         storage=storage,
         files=files,
-        session=start_session(ctx, session_id="canary"),
-        save_session=lambda _session: None,
+        session=rules_session(ctx, session_id="canary"),
         config_root=ctx.config_root,
         primary_key="customer_id",
         case_files=case_files,
@@ -632,7 +622,7 @@ def _suggestions(frame: pd.DataFrame) -> list[dict[str, Any]]:
 def test_the_chat_suggestions_pass_the_canary(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = canary_context(mode=mode, rows=600)
     client = ToolingClient(_suggestions(ctx.frame), per_turn=2)
-    session = start_session(ctx, session_id="canary")
+    session = rules_session(ctx, session_id="canary")
     meter = meter_for(client)
     message = "Please fix every column."
     for _ in range(200):  # a turn that is refused twice ends early; the rest of its calls go to the next

@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from engine.agent.advisor import NEVER_TICKED_STEPS, advise
+from engine.agent.advisor import advise
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind
 from engine.agent.placeholders import find_placeholder_values, placeholder_impact, set_missing
 from engine.agent.recipe import RecipeError, check_recipe, run_recipe
-from engine.agent.session import accept_recommended, start_session
 from engine.agent.tools import AgentContext, call_tool
 from engine.stages import validate
 from tests.unit.agent.helpers import context_for, synthetic
@@ -353,24 +351,6 @@ def test_the_advisor_proposes_set_missing_to_check_with_its_measured_impact() ->
     assert {r.tool for r in cited.values()} == {"find_format_issues", "describe_placeholder_values"}
     impact = next(r for r in cited.values() if r.tool == "describe_placeholder_values").result
     assert impact["affected_rows"] == 120 and impact["auc_before"] is not None  # the outcome was known
-
-
-def test_a_set_missing_suggestion_is_never_ticked_for_the_person() -> None:
-    ctx = _ctx(_placeholder_frame())
-    eager = dataclasses.replace(
-        ctx,
-        config=ctx.config.model_copy(
-            update={"agent": ctx.config.agent.model_copy(update={"tick_uncertain": True})}
-        ),
-    )
-    assert RecipeStepKind.SET_MISSING in NEVER_TICKED_STEPS
-    session = accept_recommended(start_session(eager, session_id="s1"), eager)
-    (proposal,) = [
-        p for p in session.proposals if p.step is not None and p.step.kind is RecipeStepKind.SET_MISSING
-    ]
-    assert proposal.state is ProposalState.PENDING, "even with tick_uncertain, only the person decides"
-    others = [p for p in session.proposals if p is not proposal]
-    assert all(p.state is ProposalState.ACCEPTED for p in others)
 
 
 def test_a_target_holding_a_code_still_stops_as_not_binary_and_gets_no_set_missing() -> None:

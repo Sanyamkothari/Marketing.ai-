@@ -26,7 +26,7 @@ from engine.agent.loop import (
     _state,
     chat_turn,
 )
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from engine.agent.tools import AgentToolError, call_tool
 from engine.agent.untrusted import quoted
 from tests.unit.agent.analyst import ANALYST
@@ -115,7 +115,7 @@ def _spelling_frame() -> pd.DataFrame:
 
 def test_the_advisor_records_the_cells_it_quotes_and_the_screen_keeps_them() -> None:
     ctx = canary_context(mode="summaries_only", frame=_spelling_frame())
-    session = start_session(ctx, session_id="fix-1")
+    session = rules_session(ctx, session_id="fix-1")
     merge = next(p for p in session.proposals if "shop_type" in p.title and p.step is not None)
     assert "Men's Wear" in merge.reason, "the person's own screen shows the full examples"
     assert {"Men's Wear", "MEN'S WEAR"} <= set(merge.examples)
@@ -129,7 +129,7 @@ def test_a_question_quotes_its_examples_and_they_are_masked_for_the_model() -> N
     frame = synthetic("clean", rows=300)
     frame["joined"] = ["03/04/1985", "12/05/1990", "01/02/1980", "05/06/1979"] * 75
     ctx = canary_context(mode="masked_data", frame=frame, always_hide=["joined"])
-    session = start_session(ctx, session_id="fix-q")
+    session = rules_session(ctx, session_id="fix-q")
     question = next(q for q in session.questions if "joined" in q.text)
     assert question.examples and "03/04/1985" in question.text
     state = _state(session, Egress.build(list(frame.columns), always_hide=["joined"]))
@@ -153,7 +153,7 @@ def test_format_issues_list_their_merge_as_pairs_and_the_step_keeps_a_dict() -> 
     assert merge_from_pairs(merge) == {"zelda": "Zelda", "quill roe": "Quill Roe"}
     issue = find_format_issues(_variants_frame())[0]
     assert issue.params["merge"] == {"zelda": "Zelda", "quill roe": "Quill Roe"}
-    session = start_session(ctx, session_id="fix-c")
+    session = rules_session(ctx, session_id="fix-c")
     step = next(p.step for p in session.proposals if p.step is not None)
     assert step is not None and step.params["merge"] == {"zelda": "Zelda", "quill roe": "Quill Roe"}
 
@@ -286,7 +286,7 @@ def test_find_values_is_capped_per_column() -> None:
         {"action": "find_values", "args": {"column": "monthly_spend", "contains": str(i)}} for i in range(9)
     ]
     client = ToolingClient(turn, per_turn=20)
-    session = start_session(ctx, session_id="fix-cap")
+    session = rules_session(ctx, session_id="fix-cap")
 
     result = chat_turn(
         ctx, session, "look", meter=meter_for(client), guardrails=guardrails(), principal=ANALYST
@@ -301,7 +301,7 @@ def test_a_session_cap_counts_the_searches_of_earlier_turns() -> None:
     from engine.agent.loop import _limit_searches
 
     ctx = canary_context(rows=300)
-    session = start_session(ctx, session_id="fix-cap2")
+    session = rules_session(ctx, session_id="fix-cap2")
     earlier = [
         call_tool(ctx, "find_values", {"column": "monthly_spend", "contains": str(i)}, evidence_id=f"e{i}")
         for i in range(MAX_FIND_VALUES_PER_COLUMN_SESSION)
@@ -315,7 +315,7 @@ def test_a_session_cap_counts_the_searches_of_earlier_turns() -> None:
 
 def test_a_typo_in_always_hide_columns_is_a_warning_in_the_assumptions() -> None:
     ctx = canary_context(always_hide=["notes", "custmer_notes"])
-    session: AgentSession = start_session(ctx, session_id="fix-typo")
+    session: AgentSession = rules_session(ctx, session_id="fix-typo")
     warned = [a for a in session.assumptions if "custmer_notes" in a]
     assert len(warned) == 1 and warned[0].startswith("Warning:")
     assert not any("'notes'" in a and "not a column" in a for a in session.assumptions)

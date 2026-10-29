@@ -410,15 +410,6 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/pilot/demo/raw/{variant}",
         "/pilot/feedback",
         "/pilot/feedback/export",
-        # Plan G (use-case agents): the dry-run data checks (M71, DEC-1011)
-        "/uploads/{upload_id}/checks",
-        # Plan G M74: the Guided-setup session, one per upload (DEC-1018)
-        "/uploads/{upload_id}/agent-session",
-        "/uploads/{upload_id}/agent-session/decisions",
-        "/uploads/{upload_id}/agent-session/answers",
-        "/uploads/{upload_id}/agent-session/messages",
-        "/uploads/{upload_id}/agent-session/preview",
-        "/uploads/{upload_id}/agent-session/apply",
         # Plan I: Ask your data, the helper's read-only chat on an upload (DEC-1253)
         "/uploads/{upload_id}/ask",
         "/uploads/{upload_id}/ask/messages",
@@ -534,18 +525,11 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/doctor/handoff",
         # Plan L M157: the outcome from events, agreed as a sentence (DEC-1573)
         "/doctor/outcome",
-        # Plan L M154: editing by hand in Guided setup, and the table view (DEC-1541)
-        "/uploads/{upload_id}/agent-session/edits",
-        "/uploads/{upload_id}/agent-session/rows",
-        # Plan L M159: use the same treatment as a file of the same shape last time (DEC-1594)
-        "/uploads/{upload_id}/agent-session/same-treatment",
         # Plan L follow-up (DEC-1599): things a training run checked, and the too-good-to-be-true alarm
         "/runs/{run_id}/checks",
         # Plan L #16: a copy of next month's file with a renamed column given its old name (DEC-1597)
         "/uploads/{upload_id}/renamed-copy",
         "/privacy/consent/imports/from-connection",
-        # Plan K M142: the optional second opinion in Guided setup, 404 AGENTIC_DISABLED with Plan K off (DEC-1409)
-        "/uploads/{upload_id}/agent-session/assist",
         # Plan M M175: the Overview page's four parts in one call, Viewer, from existing sources only (DEC-1605)
         "/overview",
         # Plan O (Data Doctor): the case and its visit (M231, M235), next month's recheck, the protocol's routes
@@ -568,8 +552,6 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/cases/{case_id}/standing-answers/{answer_id}/revoke",
         "/goal-briefs/{goal_id}",
         "/cases/{case_id}/recheck",
-        "/uploads/{upload_id}/agent-session/approval",
-        "/uploads/{upload_id}/agent-session/approve",
         "/clients/{client_id}/standing-answers",
         "/clients/{client_id}/standing-answers/{answer_id}/revoke",
         "/clients/{client_id}/facts",

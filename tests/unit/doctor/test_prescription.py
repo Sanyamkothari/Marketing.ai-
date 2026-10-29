@@ -516,11 +516,3 @@ def test_the_intake_decision_is_what_a_different_read_would_break() -> None:
         "header_rows": 1,
         "turned_off": False,
     }
-
-
-def test_guided_setups_record_names_its_recipe_as_a_one_part_prescription() -> None:
-    from api.routes.agent import _one_part_hash
-
-    recipe = ps.recipe()
-    assert _one_part_hash(recipe) == one_part(recipe).prescription_hash
-    assert _one_part_hash(None) is None

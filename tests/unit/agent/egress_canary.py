@@ -21,7 +21,7 @@ from engine.agent.config import DataAccess
 from engine.agent.contracts import AgentSession, ChatMessage, ChatRole
 from engine.agent.egress import RESULT_KEYS, SAFE_KEYS, cap_sent
 from engine.agent.loop import TurnResult, chat_turn
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from engine.agent.tools import TOOLS, AgentContext, Tool, ToolKind
 from engine.config import BudgetConfig, LlmConfig
 from engine.doctor.registry import data_registry
@@ -308,7 +308,7 @@ def run_session(
     on_turn: Callable[[TurnResult], None] | None = None,
 ) -> tuple[AgentSession, list[TurnResult]]:
     """Whole chat turns through the real `chat_turn` until the client has made every call."""
-    session = started if started is not None else start_session(ctx, session_id="canary")
+    session = started if started is not None else rules_session(ctx, session_id="canary")
     meter = meter_for(client)
     turns: list[TurnResult] = []
     for _ in range(max_turns):

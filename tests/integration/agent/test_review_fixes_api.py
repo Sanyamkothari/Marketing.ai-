@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,7 @@ from api.routes import runs
 from api.routes.agent_recipes import replay_for_scoring, write_derived_upload
 from api.routes.uploads import load_upload
 from engine.agent.config import AgentLevel
-from engine.agent.contracts import DATA_RECIPE_FILENAME, DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
+from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
 from engine.agent.recipe import RecipeError
 from engine.config import ColumnType, Metric, ProblemType, load_use_case
 from engine.contracts import (
@@ -149,57 +148,10 @@ def test_a_model_without_a_recipe_scores_the_file_as_sent_not_a_prepared_copy(
 # --- Guided setup on a prepared training upload would save only its own steps ---------------------
 
 
-def test_guided_setup_on_a_prepared_training_upload_is_refused(client: TestClient, data_dir: Path) -> None:
-    storage = LocalStorage(data_dir)
-    frame = _messy()
-    original = load_upload(storage, _upload(client, frame))
-    derived = write_derived_upload(storage, load_use_case(USE_CASE), original, _recipe(frame))
-    response = client.post(f"/uploads/{derived.record.upload_id}/agent-session", json={"use_case": USE_CASE})
-    assert response.status_code == 409, response.text
-    assert response.json()["detail"]["code"] == "AGENT_UPLOAD_PREPARED"
-
-
 # --- the dry run prepares a scoring file exactly as Run does (DEC-1011) ---------------------------
 
 
-def test_the_dry_run_prepares_a_scoring_file_with_the_models_recipe(
-    client: TestClient, data_dir: Path
-) -> None:
-    _seed_model(data_dir, _recipe(_messy(), target=None))
-    storage = LocalStorage(data_dir)
-    fits = _upload(client, _messy("scoring", rows=600), mode="score")
-    broken = _upload(
-        client, _messy("scoring", rows=600).rename(columns={"ad_ctr_90d": "ctr_90d"}), mode="score"
-    )
-    before = sorted(storage.list_keys("uploads/"))
-    body = {"use_case": USE_CASE, "primary_key": KEY}
-    dry_fits = client.post(f"/uploads/{fits}/checks", json=body)
-    dry_broken = client.post(f"/uploads/{broken}/checks", json=body)
-    assert sorted(storage.list_keys("uploads/")) == before  # the dry run writes nothing
-    assert dry_fits.status_code == dry_broken.status_code == 200
-    assert dry_fits.json()["passed"] is True, _checks(dry_fits.json())
-    assert _checks(dry_broken.json()) == [("RECIPE_COLUMN_MISSING", "ad_ctr_90d")]
-    assert _score(client, fits).status_code == 202
-    run_broken = _score(client, broken)
-    assert run_broken.status_code == 409
-    assert _checks(run_broken.json()["validation"]) == _checks(dry_broken.json())
-
-
 # --- a session on a file the model's recipe already prepared uses it as it is ---------------------
-
-
-def test_a_session_on_a_scoring_file_the_models_recipe_prepared_is_not_prepared_twice(
-    client: TestClient, data_dir: Path
-) -> None:
-    hide = RecipeStep(order=3, kind=RecipeStepKind.DROP_COLUMN, column="last_contacted_at")
-    _seed_model(data_dir, _with_steps(_recipe(_messy(), target=None), hide))
-    prepared = _run_upload(
-        data_dir, _score(client, _upload(client, _messy("scoring", rows=600), mode="score"))
-    )
-    assert _score(client, prepared).status_code == 202
-    session = client.post(f"/uploads/{prepared}/agent-session", json={"use_case": USE_CASE})
-    assert session.status_code == 201, session.text
-    assert session.json()["session"]["status"] != "stopped", session.json()["session"]["stop_reason"]
 
 
 # --- a column whose type changes between read chunks is written, not a 500 -----------------------
@@ -312,93 +264,6 @@ def test_training_on_a_prepared_upload_with_other_roles_is_refused(
     assert client.post("/runs", json={**body, "primary_key": KEY, "target": TARGET}).status_code == 202
 
 
-def test_the_dry_run_refuses_other_training_roles_as_run_does(client: TestClient, data_dir: Path) -> None:
-    """DEC-1011: the dry run and Run give the same answer about the same file and roles."""
-    storage = LocalStorage(data_dir)
-    frame = _messy()
-    original = load_upload(storage, _upload(client, frame))
-    derived = write_derived_upload(storage, load_use_case(USE_CASE), original, _recipe(frame))
-    upload_id = derived.record.upload_id
-    for roles in (
-        {"primary_key": KEY, "target": "marketing_opt_in"},
-        {"primary_key": "snapshot_date", "target": TARGET},
-    ):
-        dry = client.post(f"/uploads/{upload_id}/checks", json={"use_case": USE_CASE, **roles})
-        run = client.post(
-            "/runs", json={"use_case": USE_CASE, "mode": "train", "upload_id": upload_id, **roles}
-        )
-        assert dry.status_code == run.status_code == 409, (dry.text, run.text)
-        assert dry.json()["detail"]["code"] == run.json()["detail"]["code"] == "RECIPE_ROLES_MISMATCH"
-    same = client.post(
-        f"/uploads/{upload_id}/checks", json={"use_case": USE_CASE, "primary_key": KEY, "target": TARGET}
-    )
-    assert same.status_code == 200, same.text
-    assert same.json()["passed"] is True, _checks(same.json())
-
-
-def test_scoring_with_another_id_column_than_the_models_recipe_is_refused_before_anything_is_prepared(
-    client: TestClient, data_dir: Path
-) -> None:
-    _seed_model(data_dir, _recipe(_messy(), target=None))  # the model's recipe names KEY
-    storage = LocalStorage(data_dir)
-    upload_id = _upload(client, _messy("scoring", rows=600), mode="score")
-    before = sorted(storage.list_keys("uploads/"))
-    body = {"use_case": USE_CASE, "primary_key": "snapshot_date"}
-    dry = client.post(f"/uploads/{upload_id}/checks", json=body)
-    run = client.post("/runs", json={**body, "mode": "score", "upload_id": upload_id})
-    assert dry.status_code == run.status_code == 409, (dry.text, run.text)
-    assert dry.json()["detail"]["code"] == run.json()["detail"]["code"] == "RECIPE_ROLES_MISMATCH"
-    assert sorted(storage.list_keys("uploads/")) == before  # no orphan prepared upload
-    assert _score(client, upload_id).status_code == 202  # with the recipe's own ID column it runs
-
-
-def test_a_model_without_a_recipe_takes_any_id_column(client: TestClient, data_dir: Path) -> None:
-    _seed_model(data_dir, None)
-    upload_id = _upload(client, _messy("scoring", rows=600), mode="score")
-    dry = client.post(
-        f"/uploads/{upload_id}/checks", json={"use_case": USE_CASE, "primary_key": "snapshot_date"}
-    )
-    assert dry.status_code == 200, dry.text
-
-
-def test_approving_a_scoring_session_with_another_id_column_is_refused_before_anything_is_prepared(
-    client: TestClient, data_dir: Path
-) -> None:
-    from engine.agent.contracts import AgentSession, ProposalKind
-
-    _seed_model(data_dir, _recipe(_messy(), target=None))
-    storage = LocalStorage(data_dir)
-    upload_id = _upload(client, _messy("scoring", rows=600), mode="score")
-    started = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-    assert started.status_code == 201, started.text
-    key = f"uploads/{upload_id}/agent/agent_session.json"
-    session = storage.read_model(key, AgentSession)
-    other = tuple(
-        (
-            p.model_copy(update={"value": "snapshot_date", "suggested_value": "snapshot_date"})
-            if p.kind is ProposalKind.ROLE and p.path == "primary_key"
-            else p
-        )
-        for p in session.proposals
-    )
-    assert other != session.proposals, "the session proposes an ID column"
-    storage.write_model(key, session.model_copy(update={"proposals": other}))
-    client.post(f"/uploads/{upload_id}/agent-session/decisions", json={"accept_recommended": True})
-    decided = storage.read_model(key, AgentSession)
-    pending = [p.proposal_id for p in decided.proposals if p.state.value == "pending"]
-    client.post(
-        f"/uploads/{upload_id}/agent-session/decisions",
-        json={"decisions": [{"proposal_id": pid, "state": "accepted"} for pid in pending]},
-    )
-    before = sorted(storage.list_keys("uploads/"))
-    applied = client.post(f"/uploads/{upload_id}/agent-session/apply")
-    assert applied.status_code == 409, applied.text
-    assert applied.json()["detail"]["code"] == "RECIPE_ROLES_MISMATCH"
-    assert [k for k in storage.list_keys("uploads/") if not k.startswith(f"uploads/{upload_id}/")] == [
-        k for k in before if not k.startswith(f"uploads/{upload_id}/")
-    ]
-
-
 # --- a replay runs under the levels and limit the recipe was approved with ------------------------
 
 
@@ -432,52 +297,3 @@ def test_scoring_replays_with_the_levels_the_recipe_was_approved_with(
     upload = load_upload(storage, _upload(client, scoring, mode="score"))
     replayed = replay_for_scoring(storage, clean_only, upload, version)
     assert not isinstance(replayed, ValidationReport), replayed
-
-
-def test_approve_records_the_levels_and_limit_on_the_recipe(client: TestClient, data_dir: Path) -> None:
-    from tests.fixtures.agent_bench.make_messy import messy_frame
-
-    upload_id = _upload(client, messy_frame())
-    client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
-    session = client.post(
-        f"/uploads/{upload_id}/agent-session/decisions", json={"accept_recommended": True}
-    ).json()["session"]
-    for question in session["questions"]:
-        if question["answer"] is None:
-            session = client.post(
-                f"/uploads/{upload_id}/agent-session/answers",
-                json={
-                    "question_id": question["question_id"],
-                    "option_id": question["options"][0]["option_id"],
-                },
-            ).json()["session"]
-    pending = [p["proposal_id"] for p in session["proposals"] if p["state"] == "pending"]
-    client.post(
-        f"/uploads/{upload_id}/agent-session/decisions",
-        json={"decisions": [{"proposal_id": pid, "state": "accepted"} for pid in pending]},
-    )
-    applied = client.post(f"/uploads/{upload_id}/agent-session/apply")
-    assert applied.status_code == 200, applied.text
-    saved = LocalStorage(data_dir).read_model(
-        f"uploads/{applied.json()['upload_id']}/{DATA_RECIPE_FILENAME}", DataRecipe
-    )
-    agent = load_use_case(USE_CASE).agent
-    assert saved.levels == agent.levels
-    assert saved.max_failure_pct == agent.max_conversion_failure_pct
-
-
-def test_a_model_without_a_recipe_is_not_said_to_prepare_its_data_in_saved_steps(
-    client: TestClient, data_dir: Path
-) -> None:
-    _seed_model(data_dir, _recipe(_messy(), target=None))
-    _seed_plain_version(data_dir)
-    original = _upload(client, _messy("scoring", rows=600), mode="score")
-    prepared = _run_upload(data_dir, _score(client, original))
-    shutil.rmtree(data_dir / "uploads" / original)  # the file it was prepared from is gone
-    response = client.post(
-        f"/uploads/{prepared}/agent-session", json={"use_case": USE_CASE, "model_version_id": "m_2"}
-    )
-    assert response.status_code == 201, response.text
-    session = response.json()["session"]
-    assert session["status"] == "stopped"
-    assert "gone" in session["stop_reason"] and "saved steps" not in session["stop_reason"]

@@ -9,11 +9,12 @@ import pytest
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, RecipeStepKind
 from engine.agent.loop import chat_turn
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.unit.agent.analyst import ANALYST
 from tests.unit.agent.helpers import context_for
-from tests.unit.agent.test_session_and_loop import ScriptedMeter, _guardrails
+from tests.unit.agent.scripted_meter import ScriptedMeter
+from tests.unit.agent.scripted_meter import guardrails as _guardrails
 
 LOOK = json.dumps({"action": "value_counts", "args": {"column": "city"}})
 
@@ -44,7 +45,7 @@ def started() -> tuple[Any, Any]:
         "Bombay" if index % 3 == 0 else "Mumbai" if index % 3 == 1 else "Pune" for index in range(len(frame))
     ]
     ctx = context_for(frame)
-    return ctx, start_session(ctx, session_id="s1")
+    return ctx, rules_session(ctx, session_id="s1")
 
 
 def turn(started: tuple[Any, Any], *script: str) -> Any:

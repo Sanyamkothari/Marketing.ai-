@@ -30,7 +30,7 @@ from engine.agent.egress import (
     unalias,
 )
 from engine.agent.loop import TurnResult, chat_turn
-from engine.agent.session import start_session
+from engine.agent.proposals import rules_session
 from engine.agent.tools import TOOLS, AgentContext, NoArgs, Tool, ToolKind, call_tool
 from engine.llm import FakeLLMClient, FakeLLMMode
 from engine.pii import REDACTION_MARKER_PATTERN
@@ -414,7 +414,7 @@ def test_the_last_check_masks_what_a_broken_gate_lets_through(monkeypatch: pytes
 def test_the_persons_message_is_masked_with_every_scanner_before_it_is_sent() -> None:
     ctx = canary_context(rows=1_200)
     client = ToolingClient([])
-    session = start_session(ctx, session_id="s1")
+    session = rules_session(ctx, session_id="s1")
     message = f"My card is {CARD} and my server is {IP}, see {HEADER_EMAIL}"
     turn = chat_turn(
         ctx, session, message, meter=meter_for(client), guardrails=guardrails(), principal=ANALYST
@@ -456,7 +456,7 @@ def test_the_model_can_use_an_alias_as_an_argument_and_the_tool_gets_the_real_na
     ctx = canary_context(rows=1_200)
     alias = alias_table([str(c) for c in ctx.frame.columns])[HEADER_NUMBER]
     client = _AliasReplyClient(alias)
-    session = start_session(ctx, session_id="s1")
+    session = rules_session(ctx, session_id="s1")
     turn = chat_turn(
         ctx,
         session,
@@ -481,7 +481,7 @@ def test_the_model_can_use_an_alias_as_an_argument_and_the_tool_gets_the_real_na
 def test_the_ordinary_fake_asking_about_each_column_leaks_nothing(mode: str) -> None:
     ctx = canary_context(mode=mode)
     client = FakeLLMClient(mode=FakeLLMMode.GROUNDED)
-    session = start_session(ctx, session_id="s1")
+    session = rules_session(ctx, session_id="s1")
     meter = meter_for(client)
     asked = 0
     for column in ctx.frame.columns:
