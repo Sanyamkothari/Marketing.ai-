@@ -721,15 +721,19 @@ def test_a_file_added_while_the_visit_waits_for_approval_is_read_before_anything
 
 
 def test_an_id_named_column_narrows_the_key_candidates() -> None:
+    from engine.doctor.tools_facts import id_named
+
     unique = [{"column": "spend"}, {"column": "customer_id"}, {"column": "score"}]
-    assert visit._id_named(unique) == [{"column": "customer_id"}]
+    assert id_named(unique) == [{"column": "customer_id"}]
 
 
 def test_two_id_named_columns_still_compete_and_none_leaves_all() -> None:
+    from engine.doctor.tools_facts import id_named
+
     two = [{"column": "customer_id"}, {"column": "account_no"}, {"column": "spend"}]
-    assert [k["column"] for k in visit._id_named(two)] == ["customer_id", "account_no"]
+    assert [k["column"] for k in id_named(two)] == ["customer_id", "account_no"]
     plain = [{"column": "spend"}, {"column": "score"}]
-    assert visit._id_named(plain) == plain
+    assert id_named(plain) == plain
 
 
 # ---------------------------------------------------------------------------

@@ -367,6 +367,20 @@ def test_withdrawing_a_change_in_the_plan_or_the_persons_is_a_proposal_that_wait
     assert left[old.item_id].state is ProposalState.REJECTED
 
 
+def test_the_default_author_takes_back_at_once_what_it_put_in_the_plan_itself_but_not_what_is_the_persons() -> (
+    None
+):
+    old = in_plan("spend")
+    out = apply_actions(make_case([old]), [Withdraw(item_id=old.item_id, reason="r", consequence="c")], ctx())
+    gone = by_id(out.case, old.item_id)
+    assert gone.state is ProposalState.REJECTED and gone.withdrawn_because == "r"
+    mine = persons("spend")
+    kept = apply_actions(
+        make_case([mine]), [Withdraw(item_id=mine.item_id, reason="r", consequence="c")], ctx()
+    )
+    assert by_id(kept.case, mine.item_id) == mine and made_by(kept.case, mine)[0].kind == "withdraw"
+
+
 def test_a_withdraw_proposal_is_not_a_recipe_step() -> None:
     old = in_plan("spend")
     out = apply_actions(make_case([old]), [Withdraw(item_id=old.item_id, reason="r", consequence="c")], ai())
@@ -453,16 +467,25 @@ def test_the_default_author_keeps_what_it_says_again_and_never_takes_back_the_ai
     assert out.case == case, "said again: kept; the AI's: only by name"
 
 
-def test_items_stored_by_the_old_rules_and_detectors_are_taken_back_by_the_default_author() -> None:
+def test_items_stored_by_the_old_rules_are_taken_back_by_the_default_author_and_the_detectors_by_their_round() -> (
+    None
+):
     old_rules = waiting("date").model_copy(update={"producer": "rules"})
-    old_detector = in_plan("spend").model_copy(update={"producer": "detectors"})
+    old_detector = waiting("stock").model_copy(update={"producer": "detectors"})
+    fixed = in_plan("spend").model_copy(update={"producer": "detectors"})
     reviewed = stored("parse_date", "ship", source=ProposalSource.AI, producer="review")
     chatted = stored("parse_date", "bill", source=ProposalSource.AI, producer="chat")
-    case = make_case([old_rules, old_detector, reviewed, chatted])
+    case = make_case([old_rules, old_detector, fixed, reviewed, chatted])
     out = apply_actions(case, [], ctx(complete=True))
     assert by_id(out.case, old_rules.item_id).state is ProposalState.REJECTED
-    assert by_id(out.case, old_detector.item_id).state is ProposalState.REJECTED
+    assert by_id(out.case, old_detector.item_id) == old_detector, "the detectors' round is not the rules'"
     assert by_id(out.case, reviewed.item_id) == reviewed and by_id(out.case, chatted.item_id) == chatted
+    # Their own round takes back what they no longer find, but a fix of theirs that is in the plan stays: the files
+    # they read already have it, so they cannot find it again.
+    theirs = apply_actions(case, [], ctx(complete=True, producer=author.DETECTORS))
+    assert by_id(theirs.case, old_detector.item_id).state is ProposalState.REJECTED
+    assert by_id(theirs.case, old_rules.item_id) == old_rules
+    assert by_id(theirs.case, fixed.item_id) == fixed
     # The AI's own turn takes back nothing it does not name.
     assert apply_actions(case, [], ai()).case == case
 
@@ -766,3 +789,35 @@ def test_a_withdraw_and_a_setting_mean_what_they_take_out_and_the_value() -> Non
     s60 = apply_actions(make_case(goal="g"), [setting("60")], ai(goal=Window())).case.items[0]
     s90 = apply_actions(make_case(goal="g"), [setting("90")], ai(goal=Window())).case.items[0]
     assert meaning_key(s60) != meaning_key(s90)
+
+
+def test_a_question_a_fact_function_asks_settles_with_exactly_one_i_dont_know() -> None:
+    from engine.doctor.tools_facts import Found
+
+    found = Found()
+    found.ask(
+        "KEY_AMBIGUOUS",
+        {"upload_id": FILE},
+        text="Which column names each row?",
+        choices=[
+            (
+                "a",
+                OptionEffect(
+                    option_id="c0", kind="key", title="a", payload={"upload_id": FILE, "column": "a"}
+                ),
+            ),
+            (
+                "b",
+                OptionEffect(
+                    option_id="c1", kind="key", title="b", payload={"upload_id": FILE, "column": "b"}
+                ),
+            ),
+            ("I don't know", OptionEffect(option_id="none")),
+        ],
+        upload_id=FILE,
+        reason="two columns are different on every row",
+    )
+    out = apply_actions(make_case(), [found.suggested[0].action], ctx(complete=True))
+    [question] = out.case.questions
+    assert [o.label for o in question.options].count("I don't know") == 1
+    assert question.answer is None, "the person is asked"

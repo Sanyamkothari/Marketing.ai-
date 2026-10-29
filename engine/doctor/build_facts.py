@@ -151,13 +151,23 @@ def _parameters(
     assert template is not None  # a build exists only for a goal with an outcome sentence
     decided = decisions(case)
     chosen = decided.setting(settings.goal_id, "audience")
+    # An older case's "neither" (the person brings the outcome column): both readings were declined, and the AI is
+    # told so, with no readings to pick from.
+    declined = chosen is None and any(
+        q.code == "BUILD_AUDIENCE" and q.goal_id == settings.goal_id and q.answer == "none"
+        for q in case.questions
+    )
     audience = (
         next((a.label for a in built.audiences if a.audience_id == chosen.value), "the person's choice")
         if chosen is not None
         else (
-            "not chosen yet: the person picks between the readings below"
-            if built.audiences
-            else f"every {entity or 'customer'} active on or before the snapshot"
+            "the person's choice"
+            if declined
+            else (
+                "not chosen yet: the person picks between the readings below"
+                if built.audiences
+                else f"every {entity or 'customer'} active on or before the snapshot"
+            )
         )
     )
     facts: dict[str, Any] = {
@@ -180,7 +190,7 @@ def _parameters(
         )
     if built.snapshot is not None:
         facts["snapshot_now"] = built.snapshot.isoformat()
-    if built.audiences and chosen is None:
+    if built.audiences and chosen is None and not declined:
         facts["readings"] = [
             {"audience": a.audience_id, "customers": a.customers, "yes_count": a.yes} for a in built.audiences
         ]
@@ -195,4 +205,5 @@ def decided_numbers(case: Case) -> list[str]:
         str(record.value)
         for record in decisions(case).records
         if record.kind in {"as_of", "training_as_of", "window"}
+        or (record.kind == "setting" and record.name == "window_days")
     ]

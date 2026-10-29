@@ -7,7 +7,7 @@ after each, resumable, idempotent**. INTERRUPT means "waiting for the person".
 INTAKE -> UNDERSTAND -> RECALL -> GOAL_BRIEF (a goal is chosen) -> TREAT
                                \-> TREAT (no goal yet)
 TREAT -> ASK (a blocking question is open; INTERRUPT)      ASK -> TREAT (answered)
-TREAT -> CONVERSE (the person chats) -> TREAT (proposals land pending)
+TREAT -> CONVERSE (the person chats) -> TREAT (what the author proposes lands in the plan or waits for a tick)
 TREAT -> GOAL_BRIEF (the person picks or changes a goal)
 TREAT -> PREVIEW (nothing blocking open) -> APPROVE (INTERRUPT)   PREVIEW/APPROVE -> TREAT (an untick or edit)
 APPROVE -> PRESCRIBE (the person approves) -> VERIFY -> HAND_OFF (ready) -> FOLLOW_UP (INTERRUPT)
@@ -35,12 +35,15 @@ and answered question stays. Items and questions of a goal carry its `goal_id`: 
 Switching to another goal sets the first goal's section aside, it is not deleted; switching back makes it active
 again exactly as it was.
 
-**Rules first, and no AI needed.** Every state completes with no AI service connected. CONVERSE is Plan G's
-chat (`engine.doctor.agent_chat`): the AI review's loop with the conversation in front of it. Without an AI service
-the person's message is kept and the reply says the chat needs one, and the visit goes back to TREAT. The AI makes
-pending items; the ones whose guard run shows no stop and no flag, in the kinds listed in
-:data:`AGENT_APPLIED_STEPS`, are applied for the person (decided by the agent, one Undo each, on the timeline).
-Nothing about meaning is ever applied or answered by the AI: it may suggest an answer, and only a click records it.
+**One author, and no AI needed.** Every state completes with no AI service connected. TREAT and CONVERSE are the
+same state of mind, :func:`_author`: the fact functions read the case (`engine.doctor.author.gather_facts`), the
+default author turns what they suggest into actions, and the one function that writes the plan applies them inside
+the case's write, under its lock (`engine.doctor.author.apply_actions`). The AI is asked on top of that only when
+something is owed to it (:func:`engine.doctor.author.owed`: the person's message, a new file, a goal chosen, a setting
+changed, a build nobody proposed); what it proposes goes through the same function, which decides by rule whether a
+change is in the plan or waits for the person's tick. Nothing in the plan is the person's until they decide it: the
+approval records the decision of everything in the plan nobody decided. Nothing about meaning is ever answered by the
+AI: it may suggest an answer, and only a click records it.
 
 **What later milestones fill in.** PREVIEW, PRESCRIBE, VERIFY and HAND_OFF call ports (:class:`VisitDeps`). The
 defaults are the honest minimum when no port is given: PREVIEW counts what would change; PRESCRIBE hashes the
@@ -54,27 +57,41 @@ from __future__ import annotations
 
 import functools
 import math
-import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 from pydantic import JsonValue
 
-from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, RecipeStepKind
+from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.agent.tools import AgentToolError
 from engine.config import ConfigError
 from engine.content_cache import digest_memo
-from engine.doctor.agent_apply import (
-    AGENT_APPLIED_STEPS,
-    agent_applies,
-    person_owns,
-    required_by_goal,
-    roles_of,
-    twin_of,
+from engine.doctor.agent_apply import roles_of
+from engine.doctor.author import (
+    DETECTORS,
+    Applied,
+    ApplyContext,
+    AskPerson,
+    AuthorAction,
+    Create,
+    Doubt,
+    ItemDraft,
+    Owed,
+    Request,
+    Round,
+    Withdraw,
+    apply_actions,
+    apply_round,
+    default_actions,
+    gather_facts,
+    item_id_of,
+    owed,
+    served,
 )
+from engine.doctor.buildable import audience_left_out
 from engine.doctor.carry import approved_marks, carries_on, last_month, plain_fix
 from engine.doctor.case import (
     PARK_ROLES,
@@ -87,7 +104,6 @@ from engine.doctor.case import (
     CaseFile,
     CaseGoal,
     CaseItem,
-    CaseOption,
     CasePrescriptionRef,
     CaseQuestion,
     CaseReadinessRef,
@@ -101,7 +117,8 @@ from engine.doctor.case import (
     evidence_key,
     payload_digest,
 )
-from engine.doctor.decisions import decisions, sets_of_effect
+from engine.doctor.decisions import decisions
+from engine.doctor.facts_goal import outcome_is_gone
 from engine.doctor.full_count import FullCountRunner
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL, GoalBrief, load_goal_brief, register_goal_brief_tool
 from engine.doctor.history import HistoryReading, plan_findings_of, read_history
@@ -131,17 +148,13 @@ from engine.doctor.protocol import (
     approve_class_of,
     confirmation_refusal,
     decision_body,
-    question_budget,
-    question_id_of,
-    request_data,
-    settle,
 )
-from engine.doctor.reconcile import Emission, Reconciled, reconcile
 from engine.doctor.registry import (
     DataToolContext,
     DataToolRegistry,
     DataToolResult,
 )
+from engine.doctor.standing import StandingAnswerStore
 from engine.doctor.swaps import leave_out_for, leave_out_of_answer
 from engine.doctor.visit_contracts import (
     Acknowledgement,
@@ -158,14 +171,12 @@ from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
     from engine.access.roles import Principal
-    from engine.config import UseCaseConfig
-    from engine.doctor.buildable import BuildableOutcome, BuildAudience
     from engine.doctor.current_tables import CurrentTables
     from engine.doctor.diagnose import LoadedFile, Offer
+    from engine.doctor.goal_settings import GoalSettings
     from engine.storage import Storage
 
 __all__ = [
-    "AGENT_APPLIED_STEPS",
     "AI_NEEDED_REPLY",
     "CARRIED_KINDS",
     "COMBINE_KINDS",
@@ -229,8 +240,6 @@ MAX_STEPS: Final[int] = 40
 MAX_OPS: Final[int] = 64
 PREVIEW_ROWS: Final[int] = 1_000
 """Rows a preview tries a change on, per file (the design §3.4 PREVIEW)."""
-_UNIQUE: Final[float] = 1.05
-"""Rows per value at most for a column to name each row (as the key rules read a customer list)."""
 AGENT: Final[str] = "agent:data-doctor"
 
 _REST: Final[dict[VisitState, WaitingFor]] = {
@@ -262,9 +271,13 @@ _CHAT_FROM: Final[frozenset[VisitState]] = frozenset(
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ConverseResult:
-    """One chat turn: the reply, the pending items it proposed, what the AI looked at, what it cost."""
+    """One chat turn: the reply, what the AI proposed, what it looked at, what it cost."""
 
     reply: str
+    actions: tuple[AuthorAction, ...] = ()
+    """What the turn did to the plan, as the author's actions: applied to the case when the turn is written, which
+    decides what is in the plan and what waits for the person's tick. A port that sets none is read through the older
+    fields below (`items`, `asks`, `doubts`, `requests`, `withdrawn`)."""
     items: tuple[CaseItem, ...] = ()
     evidence: tuple[DataToolResult, ...] = ()
     sent: tuple[dict[str, JsonValue], ...] = ()
@@ -272,7 +285,7 @@ class ConverseResult:
     doubts: tuple[CaseDoubt, ...] = ()
     requests: tuple[DataRequest, ...] = ()
     withdrawn: tuple[str, ...] = ()
-    """Ids of the agent's own earlier changes it took back (waiting, or applied by the agent itself)."""
+    """Ids of the changes it took out of the plan or asked the person to."""
     suggestion: tuple[str, str] | None = None
     """`(question_id, option_id)`: the answer it suggests to an open question; never recorded by the AI."""
     suggestions: tuple[tuple[str, str], ...] = ()
@@ -380,7 +393,11 @@ class Detected:
     requests: tuple[DataRequest, ...] = ()
     evidence: tuple[DataToolResult, ...] = ()
     items: tuple[CaseItem, ...] = ()
-    """Proposals the detector makes outright (the cleaning fixes): pending, or ticked when the values prove them."""
+    """Proposals the detector makes outright (the cleaning fixes): the author decides whether each is in the plan or
+    waits for a tick."""
+    actions: tuple[AuthorAction, ...] = ()
+    """What an AI review did to the plan, as the author's actions (applied as `ConverseResult.actions` are); a port
+    that sets none is read through `asks`, `doubts`, `requests` and `items`."""
     model_calls: int = 0
     tokens: int = 0
     """What an AI detector (the review) used; counted on the case, so the spending limit holds across visits."""
@@ -389,11 +406,6 @@ class Detected:
     """The review's plain-language summary for the chat, and what it sent to the AI service."""
     blocked_by: str | None = None
     error_codes: tuple[str, ...] = ()
-    state_digest: str = ""
-    """The digest of the state the review read, when it finished on it (`agent_review._Review.state_digest`): TREAT
-    keeps it, and a review whose state has not changed since is not asked again."""
-    unchanged: bool = False
-    """The review did not run: the state it reads is the one it last finished on."""
     reply: str = ""
     """Set when the AI service did not answer the review's first call (`blocked_by` is `unavailable`): the codes that
     say why (as `ConverseResult.error_codes`) and the sentence the person reads (`ConverseResult.reply`). The review
@@ -438,10 +450,12 @@ class VisitDeps:
     """None: a `CaseStore` over `storage` with `clock`."""
     # Plan O M246 (DEC-1816): the protocol's ports.
     detectors: Sequence[DetectorPort] = ()
-    """The design §7.1's detectors, run in TREAT after the rules; empty: none (M245 adds them)."""
+    """The design §7.1's detectors, read by the default author in TREAT after the rules; empty: none."""
     agent: DetectorPort | None = None
-    """The AI review: one more check, run once after the rules' pass, when nothing blocking is open. It decides
-    for itself that it may not run (no AI service, no consent, no spending left) and then finds nothing."""
+    """The AI's look through the case, asked when something is owed to it (`engine.doctor.author.owed`: a file, a goal,
+    a setting, a build nobody proposed) and the default author has nothing more to add, and no blocking question is
+    open. It decides for itself that it may not run (no AI service, no consent, no spending left) and then finds
+    nothing."""
     ledger: LedgerPort | None = None
     """Plan K's ledger when `agentic.enabled` is on; None: the case timeline alone holds the record."""
     protocol: ProtocolSettings = DEFAULT_SETTINGS
@@ -651,22 +665,15 @@ class _Step:
     events: list[EventDraft] = field(default_factory=list)
     evidence: list[DataToolResult] = field(default_factory=list)
     items: list[CaseItem] = field(default_factory=list)
-    questions: list[tuple[CaseQuestion, tuple[OptionEffect, ...]]] = field(default_factory=list)
-    doubts: list[CaseDoubt] = field(default_factory=list)
     model_calls: int = 0
     cost_usd: float = 0.0
     tokens: int = 0
+    authored: tuple[Round, ...] = ()
+    """What the author proposes, asked, doubted and withdrew: applied to the case inside its write, under its lock
+    (`engine.doctor.author.apply_round`), so the plan is only ever written by the one function."""
     after: list[Callable[[Case], None]] = field(default_factory=list)
     """Plan O M246: side effects once the step is written (a standing answer's use or memory); each is
     idempotent, and none may fail the step."""
-    unevaluated: tuple[str, ...] = ()
-    """What the rules did not look at this round (they stop early while the outcome is not decided): kinds, codes
-    and doubt-id prefixes the store does not take back for want of being said."""
-    reasked: set[str] = field(default_factory=set)
-    """Ids of unanswered questions that are asked again with other options (`engine.doctor.reconcile`): their
-    options' effects are replaced."""
-    agent_state: str = ""
-    """The digest of the state the AI review finished on (`Detected.state_digest`), kept with the visit."""
     carried: bool = False
     """An approval the visit made by itself (`engine.doctor.carry`): if its record cannot be made, the visit
     waits for the person instead of failing whatever they just did."""
@@ -727,6 +734,11 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
                     details={"tool": result.tool},
                 )
             )
+        if step.authored:
+            applied = apply_round(current, step.authored)
+            current = applied.case
+            drafts.extend(applied.events)
+            step.after = [*step.after, *applied.after]
         items = list(current.items)
         have_items = {item.item_id for item in items}
         for item in step.items:
@@ -742,64 +754,8 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
                     details={"source": item.source.value, "goal": item.goal_id},
                 )
             )
-        questions = list(current.questions)
-        have_questions = {question.question_id for question in questions}
         visit = current.visit or CaseVisit()
         offers = dict(visit.offers)
-        asked_per_file = dict(current.counters.questions_per_file)
-        for question, effects in step.questions:
-            if question.question_id in have_questions:
-                # Asked again with other options: the new options' effects answer it.
-                if question.question_id in step.reasked:
-                    offers[question.question_id] = effects
-                    drafts.append(
-                        EventDraft(
-                            kind=_asked_kind(question),
-                            upload_id=question.upload_id,
-                            item_id=question.question_id,
-                            details={"code": question.code, "blocking": question.blocking, "reasked": True},
-                        )
-                    )
-                continue  # asked once: an answered question is never asked again, in any mode
-            have_questions.add(question.question_id)
-            questions.append(question)
-            offers[question.question_id] = effects
-            # Plan O M246: a question the rules settled (an assumption) or a standing answer applied is not one
-            # the person was asked, so it is not counted in the file's question budget.
-            settled = question.assumed or question.standing_answer_id is not None
-            if question.upload_id is not None and not settled and question.question_id not in visit.offers:
-                asked_per_file[question.upload_id] = asked_per_file.get(question.upload_id, 0) + 1
-            drafts.append(
-                EventDraft(
-                    kind=_asked_kind(question),
-                    upload_id=question.upload_id,
-                    item_id=question.question_id,
-                    details={
-                        "code": question.code,
-                        "blocking": question.blocking,
-                        "goal": question.goal_id,
-                        **(
-                            {"option": question.answer, "standing": question.standing_answer_id}
-                            if settled
-                            else {}
-                        ),
-                    },
-                )
-            )
-        doubts = list(current.doubts)
-        have_doubts = {doubt.doubt_id for doubt in doubts}
-        for doubt in step.doubts:
-            if doubt.doubt_id not in have_doubts:
-                have_doubts.add(doubt.doubt_id)
-                doubts.append(doubt)
-                drafts.append(  # Plan O M246: a doubt raised is on the timeline
-                    EventDraft(
-                        kind=TimelineKind.DOUBT,
-                        upload_id=doubt.upload_id,
-                        item_id=doubt.doubt_id,
-                        details={"attached_to": doubt.item_id, "evidence": len(doubt.evidence_ids)},
-                    )
-                )
         drafts.extend(step.events)
         ops = visit.ops
         if op_id is not None:
@@ -831,7 +787,6 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
                 "model_calls": current.counters.model_calls + step.model_calls,
                 "tokens": current.counters.tokens + step.tokens,
                 "cost_usd": current.counters.cost_usd + step.cost_usd,
-                "questions_per_file": asked_per_file,
             }
         )
         run.tool_calls = 0
@@ -841,8 +796,8 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
                 "state": step.to,
                 "evidence": tuple(refs),
                 "items": tuple(updates.get("items", items)),
-                "questions": tuple(updates.get("questions", questions)),
-                "doubts": tuple(updates.get("doubts", doubts)),
+                "questions": tuple(updates.get("questions", current.questions)),
+                "doubts": tuple(updates.get("doubts", current.doubts)),
                 "visit": new_visit,
                 "counters": counters,
             }
@@ -852,19 +807,6 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
     return run.store.update(
         case.client_id, case.case_id, expected_version=case.version, actor=run.actor, change=change
     )
-
-
-def _asked_kind(question: CaseQuestion) -> TimelineKind:
-    """How a new question enters the timeline: asked, settled by an assumption, a standing answer, a request."""
-    from engine.doctor.protocol import REQUEST_CODES
-
-    if question.standing_answer_id is not None:
-        return TimelineKind.STANDING_APPLIED
-    if question.assumed:
-        return TimelineKind.ASSUMED
-    if question.code in REQUEST_CODES.values():
-        return TimelineKind.DATA_REQUESTED
-    return TimelineKind.QUESTION_ASKED
 
 
 def _json_bytes(document: Mapping[str, Any]) -> bytes:
@@ -1110,214 +1052,323 @@ def _goal_brief(run: _Run, case: Case) -> _Step:
     )
 
 
-def _treat(run: _Run, case: Case) -> _Step:
-    """TREAT: the rules' proposals, questions and doubts for the base and, with a goal, the goal's section."""
+def _author(run: _Run, case: Case) -> _Step:
+    """TREAT and CONVERSE: one turn of the author on the case as it stands.
+
+    The fact functions read the case (names and counts only), the default author turns what they suggest into actions,
+    and the AI is asked on top of that only when something is owed to it (:func:`engine.doctor.author.owed`): the
+    person's message first. The actions are applied by the one function that writes the plan, inside this step's write,
+    under the case's lock. A question that blocks the plan rests the visit in ASK; a plan the author just changed is
+    read again (the facts of the next round see it); otherwise the visit goes on to PREVIEW."""
     if _pending_files(case):
         return _Step(to=VisitState.INTAKE)
     goal = active_goal(case)
     brief = stored_brief(run.deps.storage, case) if goal is not None else None
     if goal is not None and brief is None:
         return _Step(to=VisitState.GOAL_BRIEF)
-    answers = sorted((q.question_id, q.answer or "") for q in case.questions)
+    deps = run.deps
+    visit = case.visit or CaseVisit()
     inputs = _digest(
         [(f.upload_id, f.fingerprint) for f in case.files],
         goal.goal_id if goal is not None else None,
         brief.brief_hash if brief is not None else None,
-        answers,
-        bool(open_blocking(case)),  # the AI review waits for these: when they are gone it is owed
-        plan_part(case),  # the plan and the decisions (`decisions(case).digest`): the rules read its tables
-        # A declined build is read by the rules (the column is asked for instead), and a "no" is in no plan digest.
+        sorted((q.question_id, q.answer or "") for q in case.questions),
+        bool(open_blocking(case)),  # the AI waits for these: when they are gone what was owed is asked
+        plan_part(case),  # the plan and the decisions (`decisions(case).digest`): the facts read its tables
+        # A declined build is read by the facts (the column is asked for instead), and a "no" is in no plan digest.
         sorted(
             i.item_id for i in case.items if i.state is ProposalState.REJECTED and "buildable" in i.payload
         ),
-        # A decided outcome whose query the person left out is asked about again (the rules run once more).
+        # A decided outcome whose query the person left out is asked about again (the facts run once more).
         goal is not None
         and (decided := decisions(case).pair("outcome", goal.goal_id)) is not None
-        and _outcome_is_gone(case, run.files(case), decided, run.current(case)),
+        and outcome_is_gone(case, run.files(case), decided, run.current(case)),
     )
-    visit = case.visit or CaseVisit()
     step = _Step(to=VisitState.PREVIEW)
+    now = deps.clock()
+    ctx = ApplyContext(
+        now=now,
+        author="default",
+        roles=roles_of(case, deps.config_root),
+        settings=deps.protocol,
+        goal=_goal_settings(goal, deps.config_root),
+        complete=True,
+        standing=StandingAnswerStore(deps.storage),
+    )
+    rounds: list[Round] = []
     if visit.done.get("treat") != inputs:
-        _base_rules(run, case, step)
-        if brief is None:
-            _generic_rules(run, case, step)
-        else:
-            _goal_rules(run, case, brief, step)
-        _recommend_customer_column(case, step)
-        by_rules = _mark(step)
-        review = _digest(
-            [(f.upload_id, f.fingerprint) for f in case.files],
-            goal.goal_id if goal is not None else None,
-            brief.brief_hash if brief is not None else None,
-            plan_part(case),
-        )  # the AI review's inputs: the plan as it stands too, so a tick or a new table is a new review
-        base = _digest(
-            [(f.upload_id, f.fingerprint) for f in case.files],
-            goal.goal_id if goal is not None else None,
-            brief.brief_hash if brief is not None else None,
-        )
-        _detect(run, case, brief, step)
-        _standing(run, case, step)
-        by_detectors = _mark(step)
-        waiting = run.deps.agent is not None and visit.done.get("agent") != review
-        held_back = waiting and (
-            bool(open_blocking(case))
-            or any(
-                q.blocking and q.answer is None and _in_section(q.goal_id, case) for q, _e in step.questions
-            )
-        )  # a blocking question stopped the review, which is owed once those questions are gone
-        reviewed = waiting and _review(run, case, brief, step)
-        step.visit["done"] = {
-            **visit.done,
-            "treat": inputs,
-            **({"agent": review, "agent_base": base, "agent_state": step.agent_state} if reviewed else {}),
-        }
-        # The review sees its own waiting proposals and need not say them again, so a tick (a new plan) only adds
-        # to what it proposed; it takes back what it no longer proposes only when the files or the brief changed.
-        settled = _reconciled(
-            run,
-            case,
-            step,
-            (by_rules, by_detectors),
-            reviewed=bool(reviewed) and visit.done.get("agent_base") != base,
-        )
-        _withdraw_role_steps(case, step, run.deps.clock())
-        blocking = [
-            q for q in settled.questions if q.blocking and q.answer is None and _in_section(q.goal_id, case)
-        ]
-        if blocking:
-            step.to = VisitState.ASK
-        elif held_back:
-            # The questions that held the review back were taken back, so nothing waits for the person: the review
-            # (which proposes a missing build) runs now, not at the next thing the person does.
-            step.to = VisitState.TREAT
-        return step
-    if open_blocking(case):
+        rounds = _default_rounds(run, case, brief, step, ctx)
+        step.visit["done"] = {**visit.done, "treat": inputs}
+    base = apply_round(case, rounds)
+    message = case.chat[-1] if case.chat and case.chat[-1].role == "user" else None
+    owing = owed(base.case, brief, deps.config_root)
+    final = base
+    if message is not None:
+        final = _converse_turn(run, case, base, message, ctx, step, rounds)
+    elif owing and deps.agent is not None and not _blocking(base.case) and not _changed(case, base.case):
+        # The AI looks when the default author has nothing more to add: what the facts find in the plan it just made
+        # (a question that blocks, a date, a consent column) comes first.
+        final = _review_turn(run, case, base, brief, owing, ctx, step, rounds)
+    step.authored = tuple(rounds)
+    if _changed(case, final.case):
+        step.to = VisitState.TREAT  # the next round's facts read the plan the author just made
+    if _blocking(final.case):
         step.to = VisitState.ASK
+    elif message is not None and any(o.reason != "message" for o in owing) and step.to is VisitState.PREVIEW:
+        step.to = (
+            VisitState.TREAT
+        )  # the rest of what is owed to the AI is asked now, not at the next thing they do
     return step
 
 
-_ROLE_STEP_KINDS: Final[frozenset[str]] = frozenset(
-    kind.value
-    for kind in (
-        RecipeStepKind.DERIVE,
-        RecipeStepKind.SQL_QUERY,
-        RecipeStepKind.KEEP_LATEST_PER_ID,
-        RecipeStepKind.COMBINE_ROWS,
-        RecipeStepKind.UNPIVOT,
+def _goal_settings(goal: CaseGoal | None, root: Path | None) -> GoalSettings | None:
+    """What the active goal's configuration lets the person set (None with no goal, or one that cannot be read)."""
+    from engine.doctor.goal_settings import load_goal_settings
+
+    if goal is None:
+        return None
+    try:
+        return load_goal_settings(goal.goal_id, root)
+    except (ConfigError, OSError, ValueError):
+        return None
+
+
+def _changed(before: Case, after: Case) -> bool:
+    """Whether the author changed the plan, the questions or the doubts."""
+    return after is not before and any(
+        getattr(after, name) != getattr(before, name) for name in ("items", "questions", "doubts")
     )
-)
-"""Steps that name the ID column without changing it (the recipe's own check lets them through): a derived column,
-a query, and the steps that reshape the rows per ID."""
 
 
-def _withdraw_role_steps(case: Case, step: _Step, now: datetime) -> None:
-    """A recipe step on the column settled as the file's ID or outcome can never run (the recipe never changes them:
-    `PLAN_STEP_CANNOT_RUN`), so the Doctor takes it back itself, with the reason, whoever ticked it: a yes/no outcome
-    is read through the goal's positive value, never recoded by a step. Rows left out by their ID (test accounts)
-    and a derived column that only reads them are not changes to them, so they stay."""
-    items: list[CaseItem] = list(step.updates.get("items", case.items))
-    decided = decisions(case.model_copy(update={"items": tuple(items)}))
-    one = case.files[0].upload_id if len(case.files) == 1 else None
-    changed = False
-    for index, item in enumerate(items):
-        raw = item.payload.get("step")
-        if item.state not in (ProposalState.PENDING, ProposalState.ACCEPTED) or not isinstance(raw, dict):
-            continue
-        upload_id = item.upload_id or _str(item.payload.get("upload_id")) or one
-        column, kind = raw.get("column"), raw.get("kind")
-        if upload_id is None or not isinstance(column, str):
-            continue
-        key, outcome = decided.key(upload_id), decided.outcome_of_upload(upload_id)
-        if kind in _ROLE_STEP_KINDS or column not in {key, outcome} - {None}:
-            continue
-        if kind == RecipeStepKind.REMOVE_ROWS.value and column == key != outcome:
-            continue
-        role = "ID" if column == key else "outcome"
-        items[index] = item.model_copy(
-            update={
-                "state": ProposalState.REJECTED,
-                "decided_by": AGENT,
-                "decided_at": now,
-                "parked_for": None,
-                "withdrawn_because": (
-                    f"'{column}' is the {role} column, which no step changes"
-                    + ("; its yes and no are read as they are" if role == "outcome" else "")
-                    + "."
-                ),
+def _blocking(case: Case) -> list[CaseQuestion]:
+    """The questions of the active section that stop the plan until they are answered."""
+    return [q for q in case.questions if q.blocking and q.answer is None and _in_section(q.goal_id, case)]
+
+
+def _default_rounds(
+    run: _Run, case: Case, brief: GoalBrief | None, step: _Step, ctx: ApplyContext
+) -> list[Round]:
+    """The default author's two rounds: the rules' facts (a complete set: what it stops suggesting is taken back) and
+    the detectors' (their fixes change the files they read, so a fix in the plan is not taken back for being fixed).
+    The evidence they cite, and what the goal check found (no goal), go into the step."""
+    from engine.doctor.tools_facts import role_step_facts
+
+    found = gather_facts(run, case, brief)
+    for facts in found.every:
+        step.evidence.extend(facts.evidence)
+    if brief is None:
+        fit = found.rules[1].facts
+        if "use_cases" in fit:
+            step.updates["diagnosis"] = {
+                **(case.diagnosis or {"files": [], "links": [], "stacks": []}),
+                "use_cases": fit["use_cases"],
             }
+            step.visit["missing_for"] = tuple(fit["missing_for"])
+            if fit["data_request"] is not None:
+                step.visit["data_request"] = fit["data_request"]
+    if run.deps.detectors:
+        names = sorted(
+            {str(c) for loaded in (*run.files(case), *run.current(case).files) for c in loaded.frame.columns}
         )
-        changed = True
-    if changed:
-        step.updates["items"] = items
+        outputs = {result.evidence_id: result.output for result in found.detectors.evidence}
+        for suggestion in found.detectors.suggested:
+            if isinstance(suggestion.action, Doubt):
+                _ground(case, suggestion.action.doubt, outputs, names)
+    unevaluated = tuple(found.rules[1].facts.get("unevaluated", ())) if brief is not None else ()
+    withdraw = [s.action for s in role_step_facts(case).suggested]
+    return [
+        Round((*withdraw, *default_actions(found.rules)), replace(ctx, unevaluated=unevaluated)),
+        Round(tuple(default_actions([found.detectors])), replace(ctx, producer=DETECTORS)),
+    ]
 
 
-def _mark(step: _Step) -> tuple[int, int, int]:
-    """How much each list of the step holds now: where one producer's emission ends and the next one's begins."""
-    return len(step.items), len(step.questions), len(step.doubts)
+def _actions_of(result: ConverseResult | Detected, *, basis: str) -> tuple[AuthorAction, ...]:
+    """What a port did to the plan, as actions: its own, else what its older fields say (`basis` is what the changes
+    rest on)."""
+    if result.actions:
+        return result.actions
+    made: list[AuthorAction] = [
+        Create(
+            draft=ItemDraft(
+                kind=item.kind,
+                payload=dict(item.payload),
+                title=item.title,
+                upload_id=item.upload_id,
+                goal_id=item.goal_id,
+                confidence=AgentConfidence.CHECK,  # the AI never makes a change sure
+                evidence_ids=item.evidence_ids,
+                assumption=item.assumption,
+            ),
+            reason=item.title,
+            replaces=item.replaces,
+            basis=basis,
+        )
+        for item in result.items
+    ]
+    made.extend(AskPerson(ask=ask) for ask in result.asks)
+    made.extend(Doubt(doubt=doubt) for doubt in result.doubts)
+    made.extend(Request(request=request) for request in result.requests)
+    if isinstance(result, ConverseResult):
+        made.extend(
+            Withdraw(item_id=item_id, reason="The AI took it back.", consequence="")
+            for item_id in result.withdrawn
+        )
+    return tuple(made)
 
 
-def _reconciled(
+def _ai_ctx(ctx: ApplyContext, producer: str, requested_by: str | None) -> ApplyContext:
+    """What the AI's actions are applied under: it adds as it goes (the default author never takes back its questions
+    or doubts, they are `chat` and `review`'s), and a person's message is their own conversation (the file's question
+    budget does not cut it short)."""
+    return replace(
+        ctx, author="ai", complete=False, unevaluated=(), producer=producer, requested_by=requested_by
+    )
+
+
+def _converse_turn(
     run: _Run,
     case: Case,
+    base: Applied,
+    message: CaseChatEntry,
+    ctx: ApplyContext,
     step: _Step,
-    ends: tuple[tuple[int, int, int], tuple[int, int, int]],
-    *,
-    reviewed: bool,
-) -> Reconciled:
-    """TREAT's emissions through the reconcile store, one producer at a time, and the step rewritten to what the
-    store made of them: new proposals, questions asked again, proposals and questions and doubts taken back.
-    """
+    rounds: list[Round],
+) -> Applied:
+    """The chat's turn on the person's last message: the reply, what the AI proposed, asked and took back, as one more
+    round of the author; no AI service: a fixed reply. The reply says what became of each change."""
     now = run.deps.clock()
-    rules, detectors = ends
-    items, questions, doubts = list(step.items), list(step.questions), list(step.doubts)
+    port = run.deps.converse
+    result = (
+        ConverseResult(reply=AI_NEEDED_REPLY, ai=False)
+        if port is None
+        else port(base.case, message.text, run.files(case))
+    )
+    step.evidence.extend(result.evidence)
+    step.model_calls += result.model_calls
+    step.cost_usd += result.cost_usd
+    step.tokens += result.tokens
+    actions = _actions_of(result, basis=f"msg:{len(case.chat) - 1}")
+    ai_ctx = _ai_ctx(ctx, "chat", message.by)
+    done = apply_actions(base.case, actions, ai_ctx)
+    rounds.append(Round(actions, ai_ctx))
+    before = {i.item_id: i for i in base.case.items}
+    after = {i.item_id: i for i in done.case.items}
+    landed = [i for i in dict.fromkeys(done.made) if i in after and i not in before]
+    back = [
+        i
+        for i in dict.fromkeys(done.made)
+        if i in before
+        and before[i].state is not ProposalState.REJECTED
+        and after[i].state is ProposalState.REJECTED
+    ]
+    kept = [
+        item_id_of(a.draft.kind, a.draft.payload, a.draft.goal_id) for a in actions if isinstance(a, Create)
+    ]
+    twins = [i for i in dict.fromkeys(kept) if i in before and before[i].state is not ProposalState.REJECTED]
+    left_out = [
+        before[r.value] for _n, r in done.refused if r.code == "LEFT_OUT_BY_PERSON" and r.value in before
+    ]
+    text = result.reply
+    if left_out:  # an earlier "no" stands: the reply says so instead of claiming work that was not done
+        text += f" I did not put back “{left_out[0].title}”: it was left out earlier; tick it again if you want it."
+    given = result.suggestions or ((result.suggestion,) if result.suggestion is not None else ())
+    shown = [found for found in (_suggested(done.case.questions, g) for g in given) if found is not None]
+    if len(shown) < len(given):  # a question was settled meanwhile: no button for it
+        text += " (The answer I pointed at is no longer open, so there is nothing to click for it.)"
+    entry = CaseChatEntry(
+        role="agent",
+        text=text,
+        at=now,
+        sent=result.sent,
+        item_ids=tuple(dict.fromkeys([*landed, *twins])),
+        withdrawn=tuple(back),
+        tools=result.tools,
+        suggestion=shown[0] if shown else None,
+        suggestions=tuple(shown),
+        goal=_proposed_goal(case, result.goal),
+        blocked_by=result.blocked_by,
+        error_codes=result.error_codes,
+    )
+    step.updates["chat"] = (*case.chat, entry)
+    event = EventDraft(
+        kind=TimelineKind.CHAT,
+        details={
+            "role": "agent",
+            "ai": result.ai,
+            "proposals": len(landed),
+            "applied": sum(1 for i in landed if after[i].state is ProposalState.ACCEPTED),
+            "withdrawn": len(back),
+        },
+    )
+    _say_why(event, result.blocked_by, result.error_codes)
+    step.events.append(event)
+    return done
 
-    def section(goal_id: str | None) -> bool:
-        return _in_section(goal_id, case)
 
-    work: Reconciled | None = None
-    for producer, lo, hi, complete in (
-        # The detectors' sets depend on what is already on the page, so they add and supersede; they do not take back.
-        ("rules", (0, 0, 0), rules, True),
-        ("detectors", rules, detectors, False),
-        ("review", detectors, (len(items), len(questions), len(doubts)), reviewed),
-    ):
-        work = reconcile(
-            case,
-            Emission(
-                producer=producer,
-                items=items[lo[0] : hi[0]],
-                questions=questions[lo[1] : hi[1]],
-                doubts=doubts[lo[2] : hi[2]],
-                complete=complete,
-                in_scope=section,
-                unevaluated=step.unevaluated if producer == "rules" else (),
-            ),
-            now=now,
-            refit=_refit_answered,
-            before=work,
+def _review_turn(
+    run: _Run,
+    case: Case,
+    base: Applied,
+    brief: GoalBrief | None,
+    owing: Sequence[Owed],
+    ctx: ApplyContext,
+    step: _Step,
+    rounds: list[Round],
+) -> Applied:
+    """The AI's look through the case, which something is owed to (a file, a goal, a setting, a build nobody
+    proposed): what it proposes, asks and doubts is one more round of the author. A review whose first call the AI
+    service did not answer did not happen: it is owed again the next time, and the chat and the timeline say why.
+    """
+    agent = run.deps.agent
+    assert agent is not None
+    found = agent(base.case, run.files(case), brief)
+    step.evidence.extend(found.evidence)
+    step.model_calls += found.model_calls
+    step.tokens += found.tokens
+    actions = _actions_of(found, basis="event")
+    ai_ctx = _ai_ctx(ctx, "review", None)
+    done = apply_actions(base.case, actions, ai_ctx)
+    rounds.append(Round(actions, ai_ctx))
+    if found.blocked_by:
+        last = case.chat[-1] if case.chat else None
+        if last is None or last.role != "agent" or last.error_codes != found.error_codes:
+            # Said once: a chat turn that just failed the same way (the review follows it when the person has only
+            # now said yes to the AI) has told the person already, and the timeline still records the review.
+            entry = CaseChatEntry(
+                role="agent",
+                text=found.reply,
+                at=run.deps.clock(),
+                blocked_by=found.blocked_by,
+                error_codes=found.error_codes,
+            )
+            step.updates["chat"] = (*case.chat, entry)
+        event = EventDraft(
+            kind=TimelineKind.CHAT,
+            details={"role": "agent", "ai": True, "proposals": 0, "review": True},
         )
-    assert work is not None
-    step.items = list(work.added)
-    step.questions = list(work.asked)
-    step.doubts = [d for d in work.doubts if d.doubt_id not in {c.doubt_id for c in case.doubts}]
-    step.reasked |= work.reasked
-    step.updates["items"] = list(work.items)
-    step.updates["questions"] = list(work.questions)
-    step.updates["doubts"] = list(work.doubts)
-    step.events.extend(work.events)
-    return work
-
-
-def _twin_of_person(case: Case, item: CaseItem) -> CaseItem | None:
-    """The change already there that `item` is, unless the Doctor took it back itself: the store may bring that one
-    back, and it is not the person's no."""
-    twin = twin_of(case.items, item)
-    return None if twin is not None and twin.withdrawn_because is not None else twin
-
-
-def _refit_answered(question: CaseQuestion, answer: Any) -> CaseQuestion:
-    return _no_longer_fits(question, answer)
+        _say_why(event, found.blocked_by, found.error_codes)
+        step.events.append(event)
+        return done
+    if found.model_calls:
+        step.visit["done"] = {
+            **step.visit.get("done", (case.visit or CaseVisit()).done),
+            **served(done.case, owing, run.deps.config_root, brief),
+        }
+        if found.summary:
+            entry = CaseChatEntry(role="agent", text=found.summary, at=run.deps.clock(), sent=found.sent)
+            step.updates["chat"] = (*case.chat, entry)
+            step.events.append(
+                EventDraft(
+                    kind=TimelineKind.CHAT,
+                    details={
+                        "role": "agent",
+                        "ai": True,
+                        "proposals": sum(1 for a in actions if isinstance(a, Create)),
+                        "review": True,
+                    },
+                )
+            )
+    return done
 
 
 def _ask(_run: _Run, case: Case) -> _Step | None:
@@ -1330,183 +1381,6 @@ def _ask(_run: _Run, case: Case) -> _Step | None:
     return _Step(to=VisitState.TREAT)
 
 
-def _converse(run: _Run, case: Case) -> _Step:
-    """CONVERSE: the chat's turn on the person's last message. What the AI makes lands pending; the clean changes
-    are applied for the person to undo; its own earlier changes it took back are rejected. No AI: a fixed reply.
-    """
-    message = case.chat[-1] if case.chat and case.chat[-1].role == "user" else None
-    if message is None:
-        return _Step(to=VisitState.TREAT)
-    now = run.deps.clock()
-    port = run.deps.converse
-    result = (
-        ConverseResult(reply=AI_NEEDED_REPLY, ai=False)
-        if port is None
-        else port(case, message.text, run.files(case))
-    )
-    step = _Step(
-        to=VisitState.TREAT,
-        evidence=list(result.evidence),
-        model_calls=result.model_calls,
-        cost_usd=result.cost_usd,
-        tokens=result.tokens,
-    )
-    made = [
-        item.model_copy(
-            update={
-                "source": ProposalSource.AI,
-                "state": ProposalState.PENDING,
-                "confidence": AgentConfidence.CHECK,
-            }
-        )
-        for item in result.items  # the AI never ticks: whatever a port returns lands pending, `check`
-    ]
-    # The same change in other words (the id hashes the model's wording) is the change already there: a person's
-    # "no" stands, and an applied one is not applied twice.
-    twins = {item.item_id: _twin_of_person(case, item) for item in made}
-    fresh = [item for item in made if twins[item.item_id] is None]
-    kept_ids = {t.item_id for t in twins.values() if t is not None}
-    back = _taken_back(
-        case, [i for i in result.withdrawn if i not in kept_ids], {item.item_id for item in fresh}
-    )
-    plan = [_decided_as(i, ProposalState.REJECTED, now) if i.item_id in back else i for i in case.items]
-    # The store adds what is new, leaves out a change a newer one supersedes, and sets a swap for one of the
-    # person's own (waiting for their yes, never applied for them) instead of putting both in the plan.
-    settled = reconcile(
-        case,
-        Emission(
-            producer="chat",
-            items=fresh,
-            in_scope=lambda goal_id: _in_section(goal_id, case),
-            replaces=[i for i in result.withdrawn if i not in back],
-        ),
-        now=now,
-        refit=_refit_answered,
-        before=Reconciled.of(case, plan),
-    )
-    swaps = {i.item_id for i in settled.added if i.replaces is not None}
-    fresh = [i for i in settled.added if i.item_id not in swaps]
-    active = [
-        i
-        for i in settled.items
-        if _in_section(i.goal_id, case) and i.item_id not in {f.item_id for f in fresh}
-    ]
-    placed = (
-        [
-            item.model_copy(update={"requested_by": message.by})  # who asked, recorded (separation of duties)
-            for item, _waits in agent_applies(
-                run.files(case),
-                case.files,
-                active,
-                fresh,
-                now,
-                roles_of(case, run.deps.config_root),
-                decisions(case).as_of_date,
-                decisions(case).training_as_of_date,
-            )
-        ]
-        if fresh
-        else []
-    )
-    landed = {i.item_id: i for i in [*(i for i in settled.added if i.item_id in swaps), *placed]}
-    final = [landed.get(i.item_id, i) for i in settled.items]
-    step.items.extend(landed.values())
-    if back or final != list(case.items):
-        # `_write` adds new items itself; a change to an existing one is written whole
-        step.updates["items"] = final
-    step.events.extend(settled.events)
-    step.events.extend(
-        EventDraft(
-            kind=TimelineKind.ITEM_DECIDED,
-            upload_id=next((i.upload_id for i in case.items if i.item_id == item_id), None),
-            item_id=item_id,
-            details={"state": "rejected", "by": "agent", "withdrawn": True},
-        )
-        for item_id in back
-    )
-    step.events.extend(
-        EventDraft(
-            kind=TimelineKind.ITEM_DECIDED,
-            upload_id=item.upload_id,
-            item_id=item.item_id,
-            details={"state": "accepted", "by": "agent"},
-        )
-        for item in placed
-        if item.state is ProposalState.ACCEPTED
-    )
-    step.doubts.extend(result.doubts)
-    for request in result.requests:
-        _add_request(step, request)
-    _settle_asks(run, case, step, result.asks, counted=False)
-    asked = reconcile(  # the chat's questions and doubts: asked again when their options changed, never twice
-        case,
-        Emission(
-            producer="chat",
-            questions=tuple(step.questions),
-            doubts=tuple(step.doubts),
-            in_scope=lambda goal_id: _in_section(goal_id, case),
-        ),
-        now=now,
-        refit=_refit_answered,
-        before=Reconciled.of(case, settled.items),
-    )
-    step.questions = list(asked.asked)
-    step.reasked |= asked.reasked
-    known_doubts = {d.doubt_id for d in case.doubts}
-    step.doubts = [d for d in asked.doubts if d.doubt_id not in known_doubts]
-    if asked.questions != list(case.questions):
-        step.updates["questions"] = list(asked.questions)
-    if asked.doubts != list(case.doubts):
-        step.updates["doubts"] = list(asked.doubts)
-    text = result.reply
-    again = list(
-        {t.item_id: t for t in twins.values() if t is not None and t.state is ProposalState.REJECTED}.values()
-    )
-    if again:  # an earlier "no" stands: the reply says so instead of claiming work that was not done
-        text += (
-            f" I did not put back “{again[0].title}”: it was left out earlier; tick it again if you want it."
-        )
-    left_out = {i.item_id for i in again}
-    given = result.suggestions or ((result.suggestion,) if result.suggestion is not None else ())
-    shown = [found for found in (_suggested(case, step, g) for g in given) if found is not None]
-    suggestion = shown[0] if shown else None
-    if len(shown) < len(given):  # a question was settled meanwhile: no button for it
-        text += " (The answer I pointed at is no longer open, so there is nothing to click for it.)"
-    entry = CaseChatEntry(
-        role="agent",
-        text=text,
-        at=now,
-        sent=result.sent,
-        item_ids=tuple(
-            dict.fromkeys(
-                [i.item_id for i in landed.values()]
-                + [t.item_id for t in twins.values() if t is not None and t.item_id not in left_out]
-            )
-        ),
-        withdrawn=tuple(back),
-        tools=result.tools,
-        suggestion=suggestion,
-        suggestions=tuple(shown),
-        goal=_proposed_goal(case, result.goal),
-        blocked_by=result.blocked_by,
-        error_codes=result.error_codes,
-    )
-    step.updates["chat"] = (*case.chat, entry)
-    chat_event = EventDraft(
-        kind=TimelineKind.CHAT,
-        details={
-            "role": "agent",
-            "ai": result.ai,
-            "proposals": len(fresh),
-            "applied": sum(1 for i in placed if i.state is ProposalState.ACCEPTED),
-            "withdrawn": len(back),
-        },
-    )
-    _say_why(chat_event, result.blocked_by, result.error_codes)
-    step.events.append(chat_event)
-    return step
-
-
 def _say_why(event: EventDraft, blocked_by: str | None, error_codes: Sequence[str]) -> None:
     """Add to a `chat.message` event why the AI did not answer, when it did not, so the timeline tells an expired key
     from a spent case. A detail is one value, so the codes are joined by commas; both are left out while empty, as in
@@ -1515,34 +1389,6 @@ def _say_why(event: EventDraft, blocked_by: str | None, error_codes: Sequence[st
         event.details["blocked_by"] = blocked_by
     if error_codes:
         event.details["error_codes"] = ",".join(error_codes)
-
-
-def _decided_as(item: CaseItem, state: ProposalState, now: datetime) -> CaseItem:
-    return item.model_copy(
-        update={"state": state, "decided_by": AGENT, "decided_at": now, "parked_for": None}
-    )
-
-
-def _taken_back(case: Case, ids: Sequence[str], made: set[str]) -> list[str]:
-    """The agent's own changes it may take back: waiting for the person, or applied by the agent itself. A change the
-    person ticked, unticked or gave their own yes to is theirs, and one made in this very turn is not an earlier one.
-    """
-    mine = {i.item_id: i for i in case.items}
-    found: list[str] = []
-    for item_id in dict.fromkeys(ids):
-        item = mine.get(item_id)
-        if (
-            item is not None
-            and item_id not in made
-            and item.source is ProposalSource.AI
-            and not person_owns(case, item)
-            and (
-                item.state is ProposalState.PENDING
-                or (item.state is ProposalState.ACCEPTED and item.decided_by == AGENT)
-            )
-        ):
-            found.append(item_id)
-    return found
 
 
 def fitting_goals(case: Case) -> list[dict[str, Any]]:
@@ -1564,14 +1410,13 @@ def _proposed_goal(case: Case, given: tuple[str, str] | None) -> ChatGoal | None
     return ChatGoal(goal_id=given[0], reason=given[1]) if given[0] in fits else None
 
 
-def _suggested(case: Case, step: _Step, given: tuple[str, str] | None) -> ChatSuggestion | None:
+def _suggested(questions: Sequence[CaseQuestion], given: tuple[str, str] | None) -> ChatSuggestion | None:
     """The answer the agent points at, if that question is open and the answer is a real one. The person's click
     records it; nothing here does."""
     if given is None:
         return None
     question_id, option_id = given
-    asked = [q for q, _effects in step.questions]
-    question = next((q for q in (*asked, *case.questions) if q.question_id == question_id), None)
+    question = next((q for q in questions if q.question_id == question_id), None)
     if question is None or question.answer is not None:
         return None
     option = next((o for o in question.options if o.option_id == option_id), None)
@@ -2045,9 +1890,9 @@ _HANDLERS: Final[dict[VisitState, Callable[[_Run, Case], _Step | None]]] = {
     VisitState.UNDERSTAND: _understand,
     VisitState.RECALL: _recall,
     VisitState.GOAL_BRIEF: _goal_brief,
-    VisitState.TREAT: _treat,
+    VisitState.TREAT: _author,
     VisitState.ASK: _ask,
-    VisitState.CONVERSE: _converse,
+    VisitState.CONVERSE: _author,
     VisitState.PREVIEW: _preview,
     VisitState.APPROVE: _approve_wait,
     VisitState.PRESCRIBE: _prescribe,
@@ -2095,1166 +1940,6 @@ def _item(
         proposed_at=now,
         goal_id=goal_id,
     )
-
-
-def _question(
-    code: str,
-    subject: Mapping[str, JsonValue],
-    *,
-    text: str,
-    choices: Sequence[tuple[str, OptionEffect]],
-    upload_id: str | None,
-    column: str | None = None,
-    goal_id: str | None = None,
-    blocking: bool = True,
-    recommended: str | None = None,
-    why: str = "",
-    safe: str | None = None,
-) -> tuple[CaseQuestion, tuple[OptionEffect, ...]]:
-    """A question whose id is its code, its goal (none for the base) and its subject - never the mode it is asked
-    in - so a question answered once is found, not asked again, whenever the rules need the same answer.
-
-    The rules recommend no column on a guess of their own (which column is which is the person's to say). A
-    `recommended` option is only ever one that a step the person already approved, or the build the goal
-    offers, uses as a fact; `why` says so in plain words. The person still answers. `safe` is the option "I don't know"
-    stands for: the one that is safe to take for them (often the one that decides nothing, but it can also be a real
-    option, such as the widest audience). It is still a real answer the agent may point at."""
-    question_id = f"q.{code.lower()}.{goal_id or 'base'}.{_short(dict(subject))}"[:128]
-    options = tuple(
-        CaseOption(
-            option_id=effect.option_id,
-            label=label,
-            effect_digest=payload_digest(effect.payload) if effect.kind is not None else None,
-            sets=sets_of_effect(effect.kind),
-            safe=effect.option_id == safe,
-        )
-        for label, effect in choices
-    )
-    question = CaseQuestion(
-        question_id=question_id,
-        code=code,
-        upload_id=upload_id,
-        column=column,
-        text=text,
-        options=options,
-        blocking=blocking,
-        recommended=recommended if recommended in {effect.option_id for _l, effect in choices} else None,
-        why=why,
-        goal_id=goal_id,
-    )
-    return question, tuple(effect for _label, effect in choices)
-
-
-_DONT_KNOW: Final[str] = "I don't know"
-
-
-_ID_NAMED: Final[re.Pattern[str]] = re.compile(
-    r"(^|[_\s-])id$|^id[_\s-]|_key$|(customer|cust|client|member|account)[_\s-]?(id|no|num|number|code|ref)$",
-    re.I,
-)
-"""A column named like the ID of a person or an account: `customer_id`, `Customer ID`, `account_no`, `member_code`."""
-
-
-def _id_named(unique: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Of the columns with a different value on every row, the ID-named ones when there are any: a spend or a
-    score that happens to be unique does not compete with `customer_id`. Two ID-named columns still compete.
-    """
-    named = [key for key in unique if _ID_NAMED.search(str(key["column"]).strip())]
-    return named or unique
-
-
-def _base_rules(run: _Run, case: Case, step: _Step) -> None:
-    """What does not depend on a goal: which column names each row of each file (the key)."""
-    now = run.deps.clock()
-    current = run.current(case)
-    ctx = run.context(case, files=current.files)
-    for loaded in current.files:
-        upload_id = loaded.upload_id
-        if decisions(case).key(upload_id) is not None or _approved_build_key(case, upload_id) is not None:
-            continue
-        result = run.call("find_file_role", {"upload_id": upload_id}, ctx)
-        step.evidence.append(result)
-        unique = [
-            key
-            for key in result.output.get("keys", [])
-            if isinstance(key, dict)
-            and float(key.get("rows_per_key") or 99.0) <= _UNIQUE
-            and float(key.get("null_rate") or 0.0) < 0.05
-        ]
-        unique = _id_named(unique)
-        name = loaded.file_name or "this file"
-        if len(unique) == 1:
-            column = str(unique[0]["column"])
-            step.items.append(
-                _item(
-                    "key",
-                    {"upload_id": upload_id, "column": column},
-                    title=f"“{column}” names each row of {name}.",
-                    upload_id=upload_id,
-                    confidence=AgentConfidence.SURE,
-                    evidence=(result.evidence_id,),
-                    now=now,
-                    ticked=True,  # AUTO: the values prove it; shown, and the person may untick it
-                )
-            )
-        elif len(unique) > 1:
-            choices = [
-                (
-                    str(key["column"]),
-                    OptionEffect(
-                        option_id=f"c{index}",
-                        kind="key",
-                        title=f"“{key['column']}” names each row of {name}.",
-                        payload={"upload_id": upload_id, "column": str(key["column"])},
-                    ),
-                )
-                for index, key in enumerate(unique[:5])
-            ]
-            choices.append((_DONT_KNOW, OptionEffect(option_id="none")))
-            step.questions.append(
-                _question(
-                    "KEY_AMBIGUOUS",
-                    {"upload_id": upload_id},
-                    text=f"Which column names each row of {name}? Several hold a different value on every row.",
-                    choices=choices,
-                    upload_id=upload_id,
-                )
-            )
-        elif len(loaded.frame) > 0:
-            # No column is unique and complete. The near-candidates are facts (how often a value repeats, how many
-            # blanks); a name like `customer_id` only ranks them. With any, the person says which one names the
-            # customers; for a file of events (many rows per customer) that is the question, with the blank share of
-            # each column shown and the column the goal's build counts customers by recommended, and a row number
-            # is never offered (it would name a row, not a customer). A file that is not events can take a row
-            # number; with no near-candidate (and not events) the row number is proposed.
-            events = _event_file(result.output, _event_roles(run))
-            near = _near_keys(loaded)
-            made = (
-                _row_id_item(run, step, loaded, ctx, now, evidence=result.evidence_id) if not events else None
-            )
-            if near:
-                choices = [
-                    (
-                        _near_key_label(key, events=events),
-                        OptionEffect(
-                            option_id=f"c{index}",
-                            kind="key",
-                            title=f"“{key['column']}” names the customers of {name}.",
-                            payload={"upload_id": upload_id, "column": str(key["column"])},
-                        ),
-                    )
-                    for index, key in enumerate(near[:5])
-                ]
-                if made is not None:
-                    choices.append(
-                        (
-                            "None of these: add a row number",
-                            OptionEffect(
-                                option_id="rownum", kind="key", title=made.title, payload=made.payload
-                            ),
-                        )
-                    )
-                choices.append((_DONT_KNOW, OptionEffect(option_id="none")))
-                step.questions.append(
-                    _question(
-                        "KEY_NOT_UNIQUE",
-                        {"upload_id": upload_id},
-                        text=(
-                            f"{name} has many rows for each customer, so no column is different on every row. "
-                            "Which column names the customer on each row?"
-                            if events
-                            else f"No column of {name} holds a different value on every row with no blanks. "
-                            "Which column names the customers in it?"
-                        ),
-                        choices=choices,
-                        upload_id=upload_id,
-                    )
-                )
-            elif made is not None:
-                step.items.append(made)
-
-
-def _near_key_label(key: dict[str, Any], *, events: bool) -> str:
-    """One offered customer column with its facts: how often a value repeats and the share of blank rows (rows
-    with a blank there cannot be tied to a person)."""
-    blank = float(key.get("null_rate") or 0.0)
-    label = f"{key['column']} (a value repeats about {float(key.get('rows_per_key') or 1):.1f} times"
-    if blank >= 0.005:
-        label += f"; {blank:.0%} blank" + (", those rows cannot be tied to a person" if events else "")
-    return label + ")"
-
-
-def _approved_build_key(case: Case, upload_id: str) -> str | None:
-    """The customer column of an approved build that reads this file: the build counts customers by it, so the
-    question which column names the customer is answered by the step the person approved."""
-    for item in active_section(case)[0]:
-        built = item.payload.get("buildable")
-        if (
-            item.kind == "recipe_step"
-            and item.state is ProposalState.ACCEPTED
-            and isinstance(built, dict)
-            and built.get("upload_id") == upload_id
-            and isinstance(built.get("entity_key"), str)
-        ):
-            return str(built["entity_key"])
-    return None
-
-
-def _offered_build_key(diagnosis: Mapping[str, Any] | None, upload_id: str) -> str | None:
-    """The one customer column the goals that can be built from this file count customers by (the diagnosis'
-    `buildable` facts), or None when there is none or they disagree."""
-    found = {
-        str(built["entity_key"])
-        for use_case in (diagnosis or {}).get("use_cases", [])
-        if isinstance(use_case, dict)
-        and isinstance(built := use_case.get("buildable"), dict)
-        and built.get("upload_id") == upload_id
-        and isinstance(built.get("entity_key"), str)
-    }
-    return next(iter(found)) if len(found) == 1 else None
-
-
-def _recommend_customer_column(case: Case, step: _Step) -> None:
-    """The customer question of a file of events recommends the column the goals' build counts customers by (a fact
-    of the build, said with its reason); the person still answers. It runs after the goals were judged, which is
-    when those facts are known."""
-    diagnosis = step.updates.get("diagnosis", case.diagnosis)
-    for index, (question, effects) in enumerate(step.questions):
-        if (
-            question.code != "KEY_NOT_UNIQUE"
-            or question.upload_id is None
-            or question.recommended is not None
-        ):
-            continue
-        offered = _offered_build_key(diagnosis, question.upload_id)
-        pick = next(
-            (e.option_id for e in effects if offered is not None and e.payload.get("column") == offered), None
-        )
-        if offered is not None and pick is not None:
-            why = f"The build for your goal counts each customer by “{offered}”."
-            step.questions[index] = (question.model_copy(update={"recommended": pick, "why": why}), effects)
-
-
-ROW_ID_WARNING: Final[str] = (
-    "This file has no column that names each row, so this adds a row number. A row number only counts the rows "
-    "of this file: predictions cannot be joined back to your CRM or customer list without a real ID. Say no and "
-    "send a file with an ID column to get that."
-)
-"""What the person is told with the proposed row number (never silently invented: it waits for their yes)."""
-
-
-_NEAR_ROWS_PER_KEY: Final[float] = 50.0
-"""A text column whose values repeat at most this often may name customers who appear on several rows."""
-
-
-def _near_keys(loaded: LoadedFile) -> list[dict[str, Any]]:
-    """The columns that could name the customers though none is unique and complete: a text column whose values
-    repeat a few times (an events file) or that has some blanks, and any column named like an ID, over every column
-    of the file (not the five the role tool lists first, which rank the fewest blanks first and so leave out a
-    customer column with blanks). A column of dates never names a customer. Ranked: named like an ID first (a hint,
-    not a decision), then the fewest repeats."""
-    import pandas as pd
-
-    from engine.onboarding.sources import key_candidates
-
-    found: list[dict[str, Any]] = []
-    for candidate in key_candidates(loaded.profile):
-        key = candidate.model_dump(mode="json")
-        column = str(key["column"])
-        if column not in loaded.frame.columns:
-            continue
-        named = bool(_ID_NAMED.search(column.strip()))
-        series = loaded.frame[column]
-        text = not (pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series))
-        repeats = float(key.get("rows_per_key") or 99.0)
-        blanks = float(key.get("null_rate") or 0.0)
-        if named or (
-            text
-            and repeats <= _NEAR_ROWS_PER_KEY
-            and blanks < 0.5
-            and series.nunique() > 1
-            and not _dates(series)
-        ):
-            found.append(key)
-    found.sort(
-        key=lambda k: (not _ID_NAMED.search(str(k["column"]).strip()), float(k.get("rows_per_key") or 99.0))
-    )
-    return found
-
-
-_DATE_SAMPLE: Final[int] = 500
-
-
-def _dates(series: Any) -> bool:
-    """A text column that reads as dates on nearly every value (digits joined by a date or time separator)."""
-    import pandas as pd
-
-    from engine.onboarding.sources import MIN_TIME_PARSE_RATE
-
-    seen = series.dropna().astype(str).head(_DATE_SAMPLE)
-    if seen.empty or seen.str.contains(r"\d[-/:.]\d", regex=True).mean() < MIN_TIME_PARSE_RATE:
-        return False
-    return bool(pd.to_datetime(seen, errors="coerce", format="mixed").notna().mean() >= MIN_TIME_PARSE_RATE)
-
-
-def _event_roles(run: _Run) -> frozenset[str]:
-    """The roles the catalogue calls events (many rows per customer): bills, payments, orders, any other log."""
-    from engine.config import get_roles
-
-    return frozenset(get_roles(run.deps.config_root).event_roles)
-
-
-def _event_file(roles: dict[str, Any], event_roles: frozenset[str]) -> bool:
-    """The file reads as events or transactions: an event role of the catalogue outscores every other role, so a
-    row number would not be its ID. A tie is no evidence (a file with no date and nothing that names a role ties
-    its event roles at the same low score), so it does not count as events."""
-    ranked = [r for r in roles.get("roles", []) if isinstance(r, dict)]
-    if not ranked or ranked[0].get("role") not in event_roles:
-        return False
-    top = ranked[0].get("confidence")
-    second = ranked[1].get("confidence") if len(ranked) > 1 else None
-    if not isinstance(top, (int, float)):
-        return False
-    return not isinstance(second, (int, float)) or top > second
-
-
-_OUTPUT_NAME_CHARS: Final[int] = 64
-
-
-def _row_id_item(
-    run: _Run, step: _Step, loaded: LoadedFile, ctx: DataToolContext, now: datetime, *, evidence: str
-) -> CaseItem | None:
-    """A file with no ID column (one row per call, say): a pending ID decision whose yes adds a row number, with
-    the plain warning. The row number is made by the ordinary `sql_query` step (the trial and the checks are the
-    usual ones) and is recorded as the file's key with it. A query the trial refuses is skipped: the visit goes on.
-    """
-    from engine.agent.sql_step import table_alias
-    from engine.doctor.guards import Finding
-    from engine.doctor.materialize import table_names
-    from engine.doctor.registry import DataToolError
-    from engine.doctor.tools_sql import SqlStepProposal
-
-    taken = {str(c).casefold() for c in loaded.frame.columns}
-    column = next(name for name in ("row_id", *(f"row_id_{n}" for n in range(2, 100))) if name not in taken)
-    table = table_names(ctx.files)[loaded.upload_id]
-    safe = re.sub(r"[^A-Za-z0-9_]", "_", table)
-    try:
-        result = run.call(
-            "propose_sql_step",
-            {
-                "description": f"Add a row number “{column}” to each row, in the order of the file.",
-                "sql": f"SELECT row_number() OVER () AS {column}, * FROM {table_alias(table)}",
-                "output_name": f"with_row_id_{safe}"[:_OUTPUT_NAME_CHARS],
-                "upload_ids": [loaded.upload_id],
-            },
-            ctx,
-        )
-    except DataToolError:
-        return None
-    step.evidence.append(result)
-    made = SqlStepProposal.model_validate(result.output)
-    findings = [*made.findings, Finding(level="flag", code="ROW_ID_INVENTED", message=ROW_ID_WARNING)]
-    payload = made.payload()
-    payload["findings"] = [f.model_dump(mode="json") for f in findings]
-    payload["needs_yes"] = True
-    payload["column"] = column  # the yes also records it as the file's ID (the key decision)
-    payload["upload_id"] = loaded.upload_id
-    return _item(
-        "key",
-        payload,
-        title=f"Add a row number “{column}” to {loaded.file_name or 'this file'}: it has no ID column.",
-        upload_id=loaded.upload_id,
-        confidence=AgentConfidence.CHECK,
-        evidence=(evidence, result.evidence_id),
-        now=now,
-    )
-
-
-def _generic_rules(run: _Run, case: Case, step: _Step) -> None:
-    """No goal: what the data can power, and what is missing for the other goals (the design §3.1)."""
-    if not run.deps.offers:
-        return
-    # the case's items: a campaign test the person confirmed (`treatment_column`) is read as they said. The tables are
-    # the files as the plan leaves them and the tables its queries build (as the goal's own rules read them), so a
-    # built table that holds the outcome is what the fit and the floors (rows, 'yes' examples) are counted on.
-    ctx = run.context(case, files=run.current(case).tables, case_items=active_section(case)[0])
-    power = run.call("what_can_this_power", {}, ctx)
-    verdicts = list(power.output["use_cases"])
-    missing = tuple(
-        str(v["use_case_id"])
-        for v in verdicts
-        if isinstance(v, dict) and v.get("status") in {"missing", "too_small"}
-    )
-    step.updates["diagnosis"] = {
-        **(case.diagnosis or {"files": [], "links": [], "stacks": []}),
-        "use_cases": verdicts,
-    }
-    step.visit["missing_for"] = missing
-    if missing:
-        request = run.call("data_request", {"use_case_ids": list(missing[:4])}, ctx)
-        step.evidence.append(request)
-        step.visit["data_request"] = request.evidence_id
-
-
-def _norm(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
-
-
-def _named(columns: Sequence[str], names: Sequence[str], *, parts: bool) -> list[str]:
-    """Columns whose name is one of `names` (case and punctuation aside); with `parts`, also a `_`-part of it."""
-    wanted = {_norm(name) for name in names if name}
-    found: list[str] = []
-    for column in columns:
-        norm = _norm(column)
-        if norm in wanted or (parts and wanted & set(norm.split("_"))):
-            found.append(column)
-    return found
-
-
-_AFTER_OUTCOME: Final[tuple[str, ...]] = (
-    "as_of_column",
-    "AS_OF_COLUMN",
-    "d.time_missing.",
-    "consent_column",
-    "d.consent_missing.",
-)
-"""What the goal's rules look at only once the outcome is decided (its table is where they look)."""
-
-
-def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
-    """The goal's own checks and questions: the outcome column, the date each row describes, consent."""
-    now = run.deps.clock()
-    goal = brief.goal_id
-    current = run.current(
-        case
-    )  # the tables as the plan leaves them: the files, and the tables its queries build
-    files = current.files
-    # The outcome: the configured column where it is; otherwise one question over the current tables' likely columns.
-    if any(
-        i.goal_id == goal
-        and i.kind == "recipe_step"
-        and i.state is not ProposalState.REJECTED
-        and isinstance(i.payload.get("buildable"), dict)
-        for i in active_section(case)[0]
-    ):
-        # The build this plan carries makes the outcome column (it is among the tables the rules read below), so it is
-        # proposed again every time, else the store takes it back: "no longer proposed".
-        _offer_build(run, case, brief, step, files, now)
-    outcome = decisions(case).pair("outcome", goal)
-    if outcome is not None and _outcome_is_gone(case, files, outcome, current):
-        step.doubts.append(
-            CaseDoubt(
-                doubt_id=f"d.outcome_gone.{goal}"[:128],
-                because=f"the outcome “{outcome[1]}” is in no file and in no table the plan still makes",
-                would_do="ask again which column says it once the plan makes a table that has one",
-                if_not=f"{brief.goal_name} cannot be checked",
-            )
-        )
-        step.unevaluated = _AFTER_OUTCOME
-        return
-    if outcome is None:
-        exact = [
-            (loaded, column)
-            for loaded in files
-            for column in _named(
-                [str(c) for c in loaded.frame.columns], [brief.outcome.column or ""], parts=False
-            )
-        ]
-        if len(exact) == 1:
-            loaded, column = exact[0]
-            step.items.append(
-                _item(
-                    "outcome_column",
-                    {"upload_id": loaded.upload_id, "column": column},
-                    title=f"“{column}” in {loaded.file_name or 'this file'} is the outcome: {brief.outcome.definition}",
-                    upload_id=loaded.upload_id,
-                    confidence=AgentConfidence.SURE,
-                    evidence=(),
-                    now=now,
-                    goal_id=goal,
-                    ticked=True,
-                )
-            )
-            outcome = (loaded.upload_id, column)
-        else:
-            likely = exact or [
-                (loaded, column)
-                for loaded in files
-                for column in _named(
-                    [str(c) for c in loaded.frame.columns], brief.outcome.synonyms, parts=True
-                )
-            ]
-            built_likely: list[tuple[LoadedFile, str]] = []
-            planned = _planned_build_outcomes(case, step, brief, files)
-            offered = False
-            if not likely:
-                built_likely = _built_outcomes(current, brief, case)
-                likely = built_likely + [
-                    pair
-                    for pair in _prepared_outcomes(case, brief, files, current)
-                    if pair not in built_likely
-                ]
-            if not likely:
-                if (
-                    not planned
-                ):  # no build in the plan yet: the goal's build is proposed, and the outcome is its column
-                    offered = _offer_build(run, case, brief, step, files, now)
-                    planned = _planned_build_outcomes(case, step, brief, files) if offered else []
-                likely = planned  # the build makes it, whether or not its table can be read yet
-            if likely:
-                choices = [
-                    (
-                        f"{column} ({loaded.file_name})" if len(files) > 1 else column,
-                        OptionEffect(
-                            option_id=f"c{index}",
-                            kind="outcome_column",
-                            title=f"“{column}” is the outcome: {brief.outcome.definition}",
-                            payload={"upload_id": loaded.upload_id, "column": column},
-                        ),
-                    )
-                    for index, (loaded, column) in enumerate(likely[:5])
-                ]
-                choices.append(("None of these", OptionEffect(option_id="none")))
-                what = brief.outcome.definition.rstrip(".") or f"the outcome of {brief.goal_name}"
-                # A column the plan's build makes (a step the person approved, or the one the goal needs, whose yes is
-                # the approval's) is a fact, not a guess: it is the one recommended.
-                made = {(lf.upload_id, c) for lf, c in planned} | {
-                    (b.upload_id, c) for b, c in built_likely if _built_by_approved(case, current, c)
-                }
-                approved = next(
-                    (
-                        f"c{index}"
-                        for index, (lf, column) in enumerate(likely[:5])
-                        if (lf.upload_id, column) in made
-                    ),
-                    None,
-                )
-                step.questions.append(
-                    _question(
-                        "OUTCOME_COLUMN",
-                        {"files": [f.upload_id for f in files]},
-                        text=f"Which column says whether: {what}?",
-                        choices=choices,
-                        upload_id=(
-                            likely[0][0].upload_id if len({lf.upload_id for lf, _c in likely}) == 1 else None
-                        ),
-                        goal_id=goal,
-                        recommended=approved,
-                        why=(
-                            "The training table in this plan builds it, and your yes to the plan covers that."
-                            if approved is not None
-                            else ""
-                        ),
-                        safe="none",
-                    )
-                )
-            elif not offered:
-                step.doubts.append(
-                    CaseDoubt(
-                        doubt_id=f"d.outcome_missing.{goal}"[:128],
-                        because=f"none of the files has a column saying whether: {brief.outcome.definition}",
-                        would_do="ask the team that has it for that column, one row per customer (the data request)",
-                        if_not=f"{brief.goal_name} cannot be trained on these files",
-                    )
-                )
-                # Plan O M246 (DEC-1816; the design §6.8): ask for the data, not just stop.
-                _add_request(
-                    step,
-                    DataRequest(
-                        kind="more_data",
-                        what=f"a column saying whether: {brief.outcome.definition.rstrip('.')}",
-                        why=f"{brief.goal_name} learns from it.",
-                        columns=tuple(c for c in (brief.outcome.column,) if c),
-                        goal_id=goal,
-                    ),
-                )
-    if outcome is None:
-        step.unevaluated = (
-            _AFTER_OUTCOME  # the date and consent are looked for in the outcome's table: not yet
-        )
-    if outcome is not None:
-        from engine.doctor.combine_run import current_upload
-
-        # The table an approved join made from the outcome's file is where the date and consent are looked for now.
-        table = current_upload(case, outcome[0])
-        # ... and a table a query built is where they are looked for first, when it holds the outcome.
-        built = current.built_with(outcome[1])
-        look = built.loaded if built is not None and built.origin.upload_id == table else None
-        _time_rule(run, case, brief, table, step, now, look=look, current=current)
-        _consent_rule(case, brief, table, step, files, now, look=look)
-
-
-def _offer_build(
-    run: _Run, case: Case, brief: GoalBrief, step: _Step, files: Sequence[LoadedFile], now: datetime
-) -> bool:
-    """No file has the goal's outcome, but an event table can define it (`engine.doctor.buildable`): propose the build
-    - one row per customer at a snapshot, behaviour measured on or before it and the outcome read from the window
-    after it, through the ordinary point-in-time `sql_query` step - instead of asking for a column. The goal needs it,
-    so it is in the plan (ticked; the person can Undo it, and it is not proposed again then) and it needs the
-    person's own yes, which the one Approve gives (never silently left out); its own date is the training snapshot, and
-    the case's as-of date (the scoring date) is checked against it as for any query. True when a proposal was made; False leaves the request to ask for
-    the column (the goal does not allow building, the table is too small, the trial refused the query, or the person
-    already declined this goal's build: it is not proposed again, and the column is asked for instead)."""
-    from engine.agent.sql_step import table_alias
-    from engine.config import load_use_case
-    from engine.doctor.buildable import buildable_outcome, compile_build
-    from engine.doctor.materialize import table_names
-    from engine.doctor.registry import DataToolError
-    from engine.doctor.tools_sql import SqlStepProposal
-
-    try:
-        config = load_use_case(brief.goal_id, run.deps.config_root)
-    except Exception:  # a goal whose configuration cannot be read is asked for the column, as before
-        return False
-    declined = any(
-        i.kind == "recipe_step"
-        and i.goal_id == brief.goal_id
-        and i.state is ProposalState.REJECTED
-        and "buildable" in i.payload
-        for i in active_section(case)[0]
-    )
-    if declined:
-        return False
-    built = buildable_outcome(files, config, run.deps.config_root)
-    if built is None or not built.enough or built.snapshot is None:
-        return False
-    loaded = next((f for f in files if f.upload_id == built.upload_id), None)
-    if loaded is None:
-        return False
-    audience = None
-    if built.audiences:
-        # The goal names a narrower audience (`configs/outcomes.yaml`): who the table is about is a meaning, so the
-        # person picks it from both readings' counts (the AI may point at one in the chat, with its reason).
-        asked = _audience_question(config, built)
-        held = next((q for q in case.questions if q.question_id == asked[0].question_id), None)
-        if held is None or held.answer is None:
-            # asked again on every pass while it is open: a question the rules stop emitting is taken back, and the
-            # plan would go to Approve (and back) as other answers come in
-            step.questions.append(asked)
-            return True
-        audience = next((a for a in built.audiences if a.audience_id == held.answer and a.enough), None)
-        if audience is None:  # neither, or a reading too small to learn from: the column is asked for instead
-            return False
-    # The plan already carries this build (it is proposed again every time): it is tried as if it were not there, else
-    # its own table is among the ones it reads from.
-    others = [
-        i
-        for i in active_section(case)[0]
-        if not (i.kind == "recipe_step" and i.goal_id == brief.goal_id and "buildable" in i.payload)
-    ]
-    ctx = run.context(case, files=files, case_items=others)
-    table = table_names(ctx.files)[loaded.upload_id]
-    try:
-        sql, description = compile_build(built, config, table_alias(table), audience)
-        result = run.call(
-            "propose_sql_step",
-            {
-                "description": description,
-                "sql": sql,
-                "output_name": f"training_{_norm(brief.goal_id)}"[:_OUTPUT_NAME_CHARS],
-                "upload_ids": [loaded.upload_id],
-                "as_of": built.snapshot.isoformat(),
-                "reads_future": True,
-                "outcome_window_days": built.window_days,
-            },
-            ctx,
-        )
-    except DataToolError as exc:
-        _LOG.info("doctor.build_offer_refused goal=%s code=%s", brief.goal_id, exc.code)
-        return False
-    step.evidence.append(result)
-    made = SqlStepProposal.model_validate(result.output)
-    payload = made.payload()
-    payload["needs_yes"] = True
-    payload["buildable"] = built.model_dump(mode="json")
-    if audience is not None:
-        payload["audience"] = audience.model_dump(mode="json")
-    _say_build_counts(
-        payload, built, config.entity or "customer", audience, decisions(case).training_as_of_date
-    )
-    build = _item(
-        "recipe_step",
-        payload,
-        title=made.title,
-        upload_id=loaded.upload_id,
-        confidence=AgentConfidence.CHECK,
-        evidence=(result.evidence_id,),
-        now=now,
-        goal_id=brief.goal_id,
-        ticked=True,
-    )
-    # The goal needs it, so it is in the plan, ticked: but nobody has decided it yet. The person's yes to its sentence
-    # (the customers the audience leaves out are said in it, by group and reason) comes with Approve, and that yes is
-    # what records who decided it and the count they agreed to (`confirm`).
-    step.items.append(build)
-    return True
-
-
-def _audience_left_out(payload: Mapping[str, Any]) -> int:
-    """Customers in the file that the build's audience leaves out (no activity on or before the snapshot): the count
-    the person's yes agrees to, from the counts of the audience question (0 for a step that is not a build).
-    """
-    built = payload.get("buildable")
-    if not isinstance(built, dict):
-        return 0
-    chosen = payload.get("audience")
-    kept = chosen.get("customers") if isinstance(chosen, dict) else built.get("active_before")
-    ids = built.get("ids")
-    if (
-        isinstance(kept, bool)
-        or isinstance(ids, bool)
-        or not isinstance(kept, int)
-        or not isinstance(ids, int)
-    ):
-        return 0
-    return max(0, ids - kept)
-
-
-def _say_build_counts(
-    payload: dict[str, Any],
-    built: BuildableOutcome,
-    entity: str,
-    audience: BuildAudience | None,
-    decided: date | None,
-) -> None:
-    """The build's sentence says what the sample could only estimate (the table has one row per customer in the
-    audience, counted on every row of the file) and, in plain words, who the audience leaves out."""
-    from engine.doctor.plan_check import replace_estimate
-
-    sentence = str(payload.get("sentence") or "")
-    rows = audience.customers if audience is not None else built.active_before
-    estimate = payload.get("sentence_estimate")
-    if built.exact and isinstance(estimate, dict):
-        # The customers clause is a sample's too; the sentence below says who the audience leaves out.
-        sentence = replace_estimate(sentence, estimate, rows)
-        payload.pop("sentence_estimate")
-    if built.snapshot is not None:
-        plural = entity if entity.endswith("s") else f"{entity}s"
-        # Each group left out has its own reason: not known yet at the snapshot (no activity on or before it), and, for
-        # the gone-quiet audience, still active in the days before it.
-        not_yet = max(0, built.ids - built.active_before)
-        quiet = audience if audience is not None and audience.audience_id == "quiet" else None
-        not_quiet = max(0, built.active_before - quiet.customers) if quiet is not None else 0
-        reasons = []
-        if not_yet:
-            reasons.append(
-                f"{not_yet:,} have no activity on or before {built.snapshot:%d %b %Y}, so they were not "
-                "known by then"
-            )
-        if quiet is not None and not_quiet:
-            reasons.append(
-                f"{not_quiet:,} were active in the {quiet.quiet_days} days before "
-                f"{built.snapshot:%d %b %Y}, so they have not gone quiet"
-            )
-        if reasons:
-            sentence += (
-                f" Left out, of the file's {built.ids:,} {plural}: "
-                + "; ".join(reasons)
-                + (
-                    ". Who is kept is the audience you chose."
-                    if audience is not None
-                    else ". The table is about those active by then."
-                )
-            )
-    if (
-        decided is not None
-        and built.snapshot is not None
-        and built.snapshot != decided
-        and built.snapshot + timedelta(days=built.window_days) <= decided
-    ):
-        # The two dates of a training table: said here, so the difference is not a stop to say yes to.
-        sentence += (
-            f" It is cut at {built.snapshot:%d %b %Y}: the {built.window_days} days after it give the outcome, "
-            f"and {decided:%d %b %Y} is the date your case is read at."
-        )
-    payload["sentence"] = sentence
-
-
-_LAPSED_WORDS: Final[re.Pattern[str]] = re.compile(
-    r"\b(stopped|stop|lapsed|quiet|inactive|dormant|churned|churn|win-?back|no longer|gone|left|lost)\b", re.I
-)
-"""A goal described as being about customers who have stopped (buying, ordering, paying)."""
-
-
-def _audience_question(
-    config: UseCaseConfig, built: BuildableOutcome
-) -> tuple[CaseQuestion, tuple[OptionEffect, ...]]:
-    """BUILD_AUDIENCE: which customers the built table is about, with both readings' counts (every customer active
-    on or before the snapshot, or the narrower audience the goal's configuration names). A reading too small to
-    learn from says so; "Neither" asks for the outcome column instead. The goal's description decides the
-    recommendation, with its reason: a goal about customers who have stopped buying fits the narrower reading (when
-    it is large enough), and a description that says nothing of the sort recommends nothing.
-
-    "I don't know" takes the safe choice, which is never "Neither" (that hands the work back to the person): it is
-    the recommended audience when there is one, else the widest reading that is large enough (every customer known
-    by the snapshot: it leaves out nobody the data knew), else "Neither". The question says which and why."""
-    noun = config.entity or "customer"
-    plural = noun if noun.endswith("s") else f"{noun}s"
-    assert built.snapshot is not None
-    choices: list[tuple[str, OptionEffect]] = []
-    for audience in built.audiences:
-        who = (
-            f"All {audience.customers:,} {plural} active on or before {built.snapshot:%d %b %Y}"
-            if audience.audience_id == "active"
-            else f"Only the {audience.customers:,} {audience.label}"
-        )
-        short = "" if audience.enough else ": too few to learn from"
-        choices.append(
-            (f"{who} ({audience.yes:,} of them a yes){short}", OptionEffect(option_id=audience.audience_id))
-        )
-    choices.append(("Neither: I will bring the outcome column", OptionEffect(option_id="none")))
-    description = config.description.rstrip(".")
-    narrower = next((a for a in built.audiences if a.audience_id == "quiet" and a.enough), None)
-    lapsed = narrower is not None and _LAPSED_WORDS.search(description) is not None
-    widest = next((a for a in built.audiences if a.audience_id == "active" and a.enough), None)
-    safe = "quiet" if lapsed else widest.audience_id if widest is not None else "none"
-    safe_why = (
-        "Not sure? Data Doctor takes that reading, the one that fits the goal."
-        if lapsed
-        else (
-            f"Not sure? Data Doctor takes all {widest.customers:,} {plural} known by then: it leaves out nobody "
-            "the data knew, and you can change the answer later."
-            if widest is not None
-            else ""
-        )
-    )
-    return _question(
-        "BUILD_AUDIENCE",
-        {"upload_id": built.upload_id, "snapshot": built.snapshot.isoformat()},
-        text=f"{description}. Which {plural} should the training table be built from?",
-        choices=choices,
-        upload_id=built.upload_id,
-        goal_id=config.id,
-        recommended="quiet" if lapsed else None,
-        why=(
-            f"The goal is described as: “{description}”. That is about {plural} who have stopped buying, so the "
-            f"table is built from the ones who have gone quiet. {safe_why}"
-            if lapsed
-            else safe_why
-        ),
-        safe=safe,
-    )
-
-
-_STEM: Final[int] = 5
-_STOP_WORDS: Final[frozenset[str]] = frozenset(
-    {
-        "the",
-        "and",
-        "that",
-        "after",
-        "before",
-        "with",
-        "from",
-        "this",
-        "day",
-        "days",
-        "date",
-        "snapshot",
-        "placed",
-    }
-)
-"""Words that say nothing about which column is the outcome (every window is in days, after a snapshot)."""
-
-
-def _stems(text: str) -> set[str]:
-    """The word-starts of a name or a sentence (`ordered_again_90d` and "placed another order in the 90 days" share
-    `order` and `90`): letters cut to five, numbers whole."""
-    words = re.findall(r"[a-z]+|\d+", text.lower())
-    return {w[:_STEM] for w in words if w not in _STOP_WORDS and (len(w) >= 3 or w.isdigit())}
-
-
-def _query_tables(
-    case: Case, files: Sequence[LoadedFile]
-) -> list[tuple[CaseItem, LoadedFile, dict[str, Any], list[str]]]:
-    """The query steps of the active goal's section that make a table (accepted, or proposed by the AI and not yet
-    answered): `(item, the file the query reads, the step, the names of the columns it makes)`. A step that runs
-    after the build, with no file of its own, is left out when there are several files: the prescription carries it
-    only for a single file."""
-    from engine.doctor.prescription import slot_name
-
-    found: list[tuple[CaseItem, LoadedFile, dict[str, Any], list[str]]] = []
-    for item in active_section(case)[0]:
-        step = item.payload.get("step")
-        columns = item.payload.get("columns")
-        if (
-            not isinstance(step, dict)
-            or step.get("kind") != "sql_query"
-            or not isinstance(columns, list)
-            or not (item.state is ProposalState.ACCEPTED or item.source is ProposalSource.AI)
-            or item.state is ProposalState.REJECTED
-            or (item.upload_id is None and len(files) > 1 and item.payload.get("stage") == "post_build")
-        ):
-            continue
-        given = step.get("params")
-        params: dict[str, Any] = given if isinstance(given, dict) else {}
-        inputs = params.get("inputs")
-        reads = [t for t in (inputs if isinstance(inputs, list) else []) if isinstance(t, str)]
-        origin = next(
-            (
-                lf
-                for lf in files
-                if (item.upload_id is not None and lf.upload_id == item.upload_id)
-                or (item.upload_id is None and slot_name(Path(lf.file_name or "").stem) in reads)
-            ),
-            files[0] if files and item.upload_id is None else None,
-        )
-        if origin is not None:
-            found.append((item, origin, step, [str(c) for c in columns]))
-    return found
-
-
-def _built_outcomes(
-    current: CurrentTables, brief: GoalBrief, case: Case | None = None
-) -> list[tuple[LoadedFile, str]]:
-    """The columns of the tables the case's queries really build that read as the goal's outcome, best first: the
-    same ranking as :func:`_prepared_outcomes` (a name like the outcome's or a synonym, then a name sharing two of its
-    words), but on the built tables' own columns, and each must be two-valued on the rows built (a yes/no), so an order
-    count or a date is never offered. Candidates for the person's question only. Each is a `(file, column)` pair, the
-    file being the upload the query reads."""
-    named = {_norm(n) for n in (brief.outcome.column, *brief.outcome.synonyms) if n}
-    words = _stems(f"{brief.outcome.definition} {brief.outcome.column or ''}")
-    ranked: list[tuple[int, int, LoadedFile, str]] = []
-    for table in current.built:
-        maker = (
-            next((i for i in case.items if i.item_id == table.made_by), None) if case is not None else None
-        )
-        step = maker.payload.get("step") if maker is not None else None
-        given = step.get("params") if isinstance(step, dict) else None
-        said = _stems(
-            f"{step.get('reason') or '' if isinstance(step, dict) else ''} "
-            f"{given.get('description') or '' if isinstance(given, dict) else ''}"
-        )
-        for column in table.columns:
-            mine = _stems(column)
-            if _norm(column) in named or set(_named([column], [*named], parts=True)):
-                tier = 0
-            elif len(mine & words) >= 2:
-                tier = 1
-            elif len(mine & words) >= 1 and len(said & words) >= 2:
-                tier = 2  # the AI names its columns freely: the step's own words say what it is
-            else:
-                continue
-            if tier and column not in table.two_valued:
-                continue
-            ranked.append((tier, len(ranked), table.origin, column))
-    ranked.sort(key=lambda r: (r[0], r[1]))
-    return [(origin, column) for _t, _i, origin, column in ranked]
-
-
-def _planned_build_outcomes(
-    case: Case, step: _Step, brief: GoalBrief, files: Sequence[LoadedFile]
-) -> list[tuple[LoadedFile, str]]:
-    """The outcome column of the goal's build that is in the plan (or was just proposed in this pass): the columns the
-    build declares that are named like the goal's outcome, with the file it reads. The build makes the column, so it is
-    known before its table can be read (the rules read the plan's tables on the rows sampled)."""
-    found: list[tuple[LoadedFile, str]] = []
-    for item in (*active_section(case)[0], *step.items):
-        built = item.payload.get("buildable")
-        columns = item.payload.get("columns")
-        if (
-            item.kind != "recipe_step"
-            or item.goal_id != brief.goal_id
-            or item.state is ProposalState.REJECTED
-            or not isinstance(built, dict)
-            or not isinstance(columns, list)
-        ):
-            continue
-        origin = next((f for f in files if f.upload_id == built.get("upload_id")), None)
-        if origin is None:
-            continue
-        names = _named(
-            [str(c) for c in columns],
-            [c for c in (brief.outcome.column, *brief.outcome.synonyms) if c],
-            parts=False,
-        )
-        found += [(origin, column) for column in names if (origin, column) not in found]
-    return found
-
-
-def _built_by_approved(case: Case, current: CurrentTables, column: str) -> bool:
-    """The table that holds `column` is made by a query step the person approved (not one only proposed)."""
-    table = current.built_with(column)
-    maker = next((i for i in case.items if table is not None and i.item_id == table.made_by), None)
-    return maker is not None and maker.state is ProposalState.ACCEPTED
-
-
-def _prepared_outcomes(
-    case: Case, brief: GoalBrief, files: Sequence[LoadedFile], current: CurrentTables | None = None
-) -> list[tuple[LoadedFile, str]]:
-    """The columns the case's own query steps make that read as the goal's outcome, best first: a column named like
-    it or a synonym, then one whose name shares two of the outcome's words, then one sharing one word while the
-    step's description shares two (the AI names its columns freely). Except for the first kind, the column must be
-    two-valued on the rows the step was tried on (a yes/no), so an order count or a date is never offered. Only
-    candidates for the person's question, never a decision. Each is a `(file, column)` pair.
-
-    This reads a step's recorded column names, so it is the fallback for a query that built no table (one that could
-    not run on the rows read): a table that was built is read by :func:`_built_outcomes`."""
-    named = {_norm(n) for n in (brief.outcome.column, *brief.outcome.synonyms) if n}
-    words = _stems(f"{brief.outcome.definition} {brief.outcome.column or ''}")
-    ranked: list[tuple[int, int, LoadedFile, str]] = []
-    built = {t.made_by for t in current.built} if current is not None else set()
-    for item, origin, step, columns in _query_tables(case, files):
-        if item.item_id in built:
-            continue
-        given = step.get("params")
-        params: dict[str, Any] = given if isinstance(given, dict) else {}
-        said = _stems(f"{step.get('reason') or ''} {params.get('description') or ''}")
-        binary = item.payload.get("two_valued")
-        for column in columns:
-            mine = _stems(column)
-            if _norm(column) in named or set(_named([column], [*named], parts=True)):
-                tier = 0
-            elif len(mine & words) >= 2:
-                tier = 1
-            elif len(mine & words) >= 1 and len(said & words) >= 2:
-                tier = 2
-            else:
-                continue
-            if tier and isinstance(binary, list) and column not in binary:
-                continue
-            ranked.append((tier, len(ranked), origin, column))
-    ranked.sort(key=lambda r: (r[0], r[1]))
-    return [(origin, column) for _t, _i, origin, column in ranked]
-
-
-def _outcome_is_gone(
-    case: Case, files: Sequence[LoadedFile], decided: tuple[str, str], current: CurrentTables | None = None
-) -> bool:
-    """True when the decided outcome column is in no file, in no table the plan builds and in no query step still in
-    the plan (the person left the step out, or the AI proposed it again with other names)."""
-    upload_id, column = decided
-    raw = next((lf for lf in files if lf.upload_id == upload_id), None)
-    if raw is None or column in {str(c) for c in raw.frame.columns}:
-        return False
-    if current is not None and current.built_with(column) is not None:
-        return False
-    return not any(column in made for _i, _o, _s, made in _query_tables(case, files))
-
-
-def _time_rule(
-    run: _Run,
-    case: Case,
-    brief: GoalBrief,
-    upload_id: str,
-    step: _Step,
-    now: datetime,
-    *,
-    look: LoadedFile | None = None,
-    current: CurrentTables | None = None,
-) -> None:
-    """The date each row describes, for a goal whose split or outcome window needs one.
-
-    `look` is the table the date is looked for in when it is not the file itself (the table a query built, which holds
-    the outcome); the item is still recorded against `upload_id`, the file it is made from."""
-    need = brief.column("time")
-    if need is None or decisions(case).pair("as_of_column", brief.goal_id) is not None:
-        return
-    pool = current.files if current is not None else run.files(case)
-    loaded = look or next((lf for lf in pool if lf.upload_id == upload_id), None)
-    if loaded is None:
-        return
-    named = _named([str(c) for c in loaded.frame.columns], need.names, parts=False)
-    if named:
-        step.items.append(
-            _item(
-                "as_of_column",
-                {"upload_id": upload_id, "column": named[0]},
-                title=f"“{named[0]}” is the date each row describes.",
-                upload_id=upload_id,
-                confidence=AgentConfidence.SURE,
-                evidence=(),
-                now=now,
-                goal_id=brief.goal_id,
-                ticked=True,
-            )
-        )
-        return
-    if not need.required:
-        return
-    result = run.call(
-        "find_time_columns",
-        {"upload_id": loaded.upload_id},
-        run.context(case, files=(*pool, loaded) if look is not None else pool),
-    )
-    step.evidence.append(result)
-    candidates = [str(c["column"]) for c in result.output.get("columns", []) if isinstance(c, dict)]
-    if not candidates:
-        step.doubts.append(
-            CaseDoubt(
-                doubt_id=f"d.time_missing.{brief.goal_id}"[:128],
-                because="no column of the file reads as a date",
-                would_do="ask for the date each row describes",
-                if_not=f"{brief.goal_name} splits by date and cannot be tested without one",
-            )
-        )
-        return
-    choices = [
-        (
-            column,
-            OptionEffect(
-                option_id=f"c{index}",
-                kind="as_of_column",
-                title=f"“{column}” is the date each row describes.",
-                payload={"upload_id": upload_id, "column": column},
-            ),
-        )
-        for index, column in enumerate(candidates[:5])
-    ]
-    choices.append((_DONT_KNOW, OptionEffect(option_id="none")))
-    step.questions.append(
-        _question(
-            "AS_OF_COLUMN",
-            {"upload_id": upload_id},
-            text="Which date does each row describe? Testing uses the newest dates.",
-            choices=choices,
-            upload_id=upload_id,
-            goal_id=brief.goal_id,
-        )
-    )
-
-
-def _consent_rule(
-    case: Case,
-    brief: GoalBrief,
-    upload_id: str,
-    step: _Step,
-    files: Sequence[LoadedFile],
-    now: datetime,
-    *,
-    look: LoadedFile | None = None,
-) -> None:
-    """A contacting goal's consent column: proposed, never ticked (it decides who may be contacted). `look` is the
-    table a query built that holds the outcome, when the column is looked for there."""
-    need = brief.column("consent")
-    if need is None or decisions(case).pair("consent", brief.goal_id) is not None:
-        return
-    loaded = look or next((lf for lf in files if lf.upload_id == upload_id), None)
-    if loaded is None:
-        return
-    named = _named([str(c) for c in loaded.frame.columns], need.names, parts=False)
-    if named:
-        step.items.append(
-            _item(
-                "consent_column",
-                {"upload_id": upload_id, "column": named[0]},
-                title=f"“{named[0]}” says who agreed to be contacted.",
-                upload_id=upload_id,
-                confidence=AgentConfidence.CHECK,
-                evidence=(),
-                now=now,
-                goal_id=brief.goal_id,
-            )
-        )
-    elif need.required:
-        step.doubts.append(
-            CaseDoubt(
-                doubt_id=f"d.consent_missing.{brief.goal_id}"[:128],
-                because="no column says who agreed to be contacted",
-                would_do="leave everyone without a recorded agreement off the list",
-                if_not="people who did not agree could be contacted",
-            )
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -3402,7 +2087,7 @@ def readiness_verify(
             return VerifyResult(
                 verdict="not_ready", reason="VISIT_NO_OUTCOME: no file has the goal's outcome yet."
             )
-        if _outcome_is_gone(case, files, outcome):
+        if outcome_is_gone(case, files, outcome):
             return VerifyResult(
                 verdict="not_ready",
                 reason=f"Not ready: the outcome “{outcome[1]}” is in no file and in no table the plan makes.",
@@ -3541,258 +2226,6 @@ def _ground(case: Case, doubt: CaseDoubt, outputs: Mapping[str, Any], names: Seq
         )
 
 
-def _add_request(step: _Step, request: DataRequest) -> None:
-    step.questions.append(request_data(request))
-
-
-def _detect(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> None:
-    """The detectors' findings (M245 fills the port): asks settled by the protocol, grounded doubts, requests."""
-    if not run.deps.detectors:
-        return
-    raw = run.files(case)
-    # The detectors that propose fixes (`reads_current`) read the files as the accepted changes leave them, so a fix
-    # already in the plan is not found again (a date already parsed, a placeholder already blanked); the others
-    # (what the file is: its identity, its personal data, how files relate) read the upload as it came in.
-    current = run.current(case).files
-    names = sorted({str(c) for loaded in (*raw, *current) for c in loaded.frame.columns})
-    asks: list[Ask] = []
-    for detector in run.deps.detectors:
-        found = detector(case, current if getattr(detector, "reads_current", False) else raw, brief)
-        step.evidence.extend(found.evidence)
-        step.items.extend(found.items)
-        outputs = {result.evidence_id: result.output for result in found.evidence}
-        for doubt in found.doubts:
-            _ground(case, doubt, outputs, names)
-            step.doubts.append(doubt)
-        for request in found.requests:
-            _add_request(step, request)
-        asks.extend(found.asks)
-    _settle_asks(run, case, step, asks)
-
-
-def _review(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> bool:
-    """The AI review (`deps.agent`), after the rules, the detectors and the standing answers, and only when
-    nothing blocking is open or has just been asked. Its questions go through the same protocol; its items land
-    pending, `check`, whatever the port returns. True when it made a call that was answered, so TREAT remembers it:
-    a review whose first call the AI service did not answer (an expired key, a model that ran out of room) did not
-    happen, and is tried again the next time TREAT runs. What it spent still counts, and the chat and the timeline
-    say why it did not happen."""
-    agent = run.deps.agent
-    if agent is None or open_blocking(case):
-        return False
-    if any(q.blocking and q.answer is None and _in_section(q.goal_id, case) for q, _e in step.questions):
-        return False
-    # The review reads the plan with what the rules proposed in this very pass (a build they offered, say), so it
-    # neither proposes the same thing again nor is told to.
-    known = {i.item_id for i in case.items}
-    fresh = [i for i in step.items if i.item_id not in known]
-    found = agent(
-        case.model_copy(update={"items": (*case.items, *fresh)}) if fresh else case, run.files(case), brief
-    )
-    if found.unchanged:
-        step.agent_state = found.state_digest
-        return True  # it finished on exactly this state: nothing new to ask or to say
-    step.agent_state = found.state_digest
-    step.evidence.extend(found.evidence)
-    step.items.extend(
-        item.model_copy(
-            update={
-                "source": ProposalSource.AI,
-                "state": ProposalState.PENDING,
-                "confidence": AgentConfidence.CHECK,
-            }
-        )
-        for item in found.items
-    )
-    step.model_calls += found.model_calls
-    step.tokens += found.tokens
-    step.doubts.extend(found.doubts)  # grounded when the review made them (`express_doubt`)
-    for request in found.requests:
-        _add_request(step, request)
-    _settle_asks(run, case, step, found.asks)
-    if found.blocked_by:
-        last = case.chat[-1] if case.chat else None
-        if last is None or last.role != "agent" or last.error_codes != found.error_codes:
-            # Said once: a chat turn that just failed the same way (the review follows it when the person has only
-            # now said yes to the AI) has told the person already, and the timeline still records the review.
-            entry = CaseChatEntry(
-                role="agent",
-                text=found.reply,
-                at=run.deps.clock(),
-                blocked_by=found.blocked_by,
-                error_codes=found.error_codes,
-            )
-            step.updates["chat"] = (*case.chat, entry)
-        event = EventDraft(
-            kind=TimelineKind.CHAT,
-            details={"role": "agent", "ai": True, "proposals": 0, "review": True},
-        )
-        _say_why(event, found.blocked_by, found.error_codes)
-        step.events.append(event)
-        return False
-    if found.model_calls and found.summary:
-        entry = CaseChatEntry(role="agent", text=found.summary, at=run.deps.clock(), sent=found.sent)
-        step.updates["chat"] = (*case.chat, entry)
-        step.events.append(
-            EventDraft(
-                kind=TimelineKind.CHAT,
-                details={"role": "agent", "ai": True, "proposals": len(found.items), "review": True},
-            )
-        )
-    return found.model_calls > 0
-
-
-def _settle_asks(run: _Run, case: Case, step: _Step, asks: Sequence[Ask], *, counted: bool = True) -> None:
-    """AUTO, a stated assumption or one question per ambiguity, within the file's question budget (§6.3).
-
-    `counted` False: the questions are the person's own conversation (the chat's), which the budget does not cut
-    short; they still count towards the file's total."""
-    now = run.deps.clock()
-    settings = run.deps.protocol
-    # Asked already (a question the store took back and the rules ask again is not a new one): still asked now.
-    known = {q.question_id for q in case.questions} | set((case.visit or CaseVisit()).offers)
-    have = {q.question_id for q, _e in step.questions}
-    asked = dict(case.counters.questions_per_file)
-    for pending, _effects in step.questions:  # the rules' own questions of this step count too
-        if pending.upload_id is not None and pending.answer is None and pending.question_id not in known:
-            asked[pending.upload_id] = asked.get(pending.upload_id, 0) + 1
-    ambiguities: dict[str, int] = {}
-    for ask in asks:
-        ambiguities[ask.upload_id or ""] = ambiguities.get(ask.upload_id or "", 0) + 1
-    for ask in asks:
-        key = ask.upload_id or ""
-        budget = question_budget(asked.get(key, 0) + ambiguities[key], settings)
-        over = (
-            counted
-            and asked.get(key, 0) >= budget
-            and question_id_of(ask.code, ask.subject, ask.goal_id) not in known
-        )
-        settled = settle(ask, now=now, settings=settings, over_budget=over)
-        if settled.question is not None:
-            if settled.question.question_id in have:
-                continue  # one question once per step
-            have.add(settled.question.question_id)
-            step.questions.append((settled.question, settled.effects))
-            if settled.how == "ask" and settled.question.question_id not in known:
-                asked[key] = asked.get(key, 0) + 1
-        if settled.item is not None:
-            step.items.append(settled.item)
-
-
-def _standing(run: _Run, case: Case, step: _Step) -> None:
-    """Apply this client's standing answers to the questions TREAT would ask now: pre-ticked, visible, revocable."""
-    from engine.doctor.case import StandingAnswerUse
-    from engine.doctor.standing import STANDING_CODES, StandingAnswerStore, describe, may_stand, meaning_of
-
-    candidates = {
-        q.question_id
-        for q, _e in step.questions
-        if q.code in STANDING_CODES and q.answer is None and _in_section(q.goal_id, case)
-    }
-    if not candidates:
-        return
-    store = StandingAnswerStore(run.deps.storage)
-    now = run.deps.clock()
-    have = {q.question_id for q in case.questions}
-    uses = list(case.standing_answers_used)
-    kept: list[tuple[CaseQuestion, tuple[OptionEffect, ...]]] = []
-    for question, effects in step.questions:
-        answer = None
-        if question.question_id not in have and question.question_id in candidates:
-            answer = store.find(case.client_id, question)
-        option = (
-            None
-            if answer is None
-            else next((o for o in question.options if o.label == answer.option_label), None)
-        )
-        effect = None if option is None else {e.option_id: e for e in effects}.get(option.option_id)
-        if answer is not None and (
-            option is None or effect is None or answer.meaning != meaning_of(effect.kind, effect.payload)
-        ):
-            # The same question, but the choice behind the earlier answer now does something else (or is gone):
-            # it is asked again, and says why, never applied to a change the person did not choose.
-            kept.append((_no_longer_fits(question, answer), effects))
-            step.events.append(
-                EventDraft(
-                    kind=TimelineKind.STANDING_UNFIT,
-                    upload_id=question.upload_id,
-                    item_id=answer.answer_id,
-                    details={"code": question.code, "question": question.question_id},
-                )
-            )
-            continue
-        if (
-            answer is None
-            or option is None
-            or effect is None
-            or not may_stand(question, effect.kind, effect.payload)
-        ):
-            kept.append((question, effects))
-            continue
-        kept.append(
-            (
-                question.model_copy(
-                    update={
-                        "answer": option.option_id,
-                        "answered_by": answer.answered_by,
-                        "answered_at": now,
-                        "standing_answer_id": answer.answer_id,
-                    }
-                ),
-                effects,
-            )
-        )
-        if effect.kind is not None:
-            step.items.append(
-                CaseItem(
-                    item_id=f"{question.question_id}:{option.option_id}"[:128],
-                    kind=effect.kind,
-                    title=f"{describe(answer)}. {effect.title}".strip(),
-                    source=ProposalSource.RULES,
-                    confidence=AgentConfidence.SURE,
-                    state=ProposalState.ACCEPTED,
-                    upload_id=question.upload_id or _str(effect.payload.get("upload_id")),
-                    payload=dict(effect.payload),
-                    payload_digest=payload_digest(effect.payload),
-                    proposed_at=now,
-                    decided_by=answer.answered_by,
-                    decided_at=now,
-                    goal_id=question.goal_id,
-                    standing_answer_id=answer.answer_id,
-                )
-            )
-        uses.append(
-            StandingAnswerUse(
-                answer_id=answer.answer_id,
-                detector=question.code,
-                upload_id=question.upload_id,
-                column=question.column,
-                value_signature=answer.value_signature,
-                option_id=option.option_id,
-                effect_digest=option.effect_digest,
-                applied_at=now,
-            )
-        )
-        step.after.append(functools.partial(_used, store, answer.answer_id))
-    step.questions = kept
-    if len(uses) != len(case.standing_answers_used):
-        step.updates["standing_answers_used"] = tuple(uses)
-
-
-def _no_longer_fits(question: CaseQuestion, answer: Any) -> CaseQuestion:
-    """The question, saying that the client's earlier answer was not applied because it no longer fits."""
-    when = answer.answered_at.strftime("%d %b").lstrip("0")
-    note = (
-        f"Your answer from {when} (“{answer.option_label}”) was not used: that choice now makes a different "
-        "change, so please answer again."
-    )
-    return question.model_copy(update={"why": f"{note} {question.why}".strip()})
-
-
-def _used(store: Any, answer_id: str, written: Case) -> None:
-    store.used(written.client_id, answer_id, written.case_id)
-
-
 # ---------------------------------------------------------------------------
 # What the person does
 # ---------------------------------------------------------------------------
@@ -3809,7 +2242,7 @@ def _agreed_update(case: Case, item: CaseItem, accept: bool) -> dict[str, int]:
     rows = check.ledger.get("steps") if check is not None else None
     # A build's audience leaves out the customers with no activity before its snapshot: the yes agrees to up to the
     # count the audience question showed, however many the sample counted when it was said.
-    left_out = _audience_left_out(item.payload)
+    left_out = audience_left_out(item.payload)
     for row in rows if isinstance(rows, list) else []:
         if isinstance(row, dict) and row.get("item_id") == item.item_id:
             lost = row.get("customers_lost")
@@ -4332,6 +2765,13 @@ def _approval(
     text = shown if carried_from is None else f"{lead} {shown}"
     goal = active_goal(case)
     accepted = [i for i in items if i.state is ProposalState.ACCEPTED]
+    # The approval is the decision of everything in the plan that nobody decided: the author put it there, and the
+    # person's yes covers it (an item the agent applied before the author took over is undecided in the same way).
+    stamped = {
+        i.item_id: i.model_copy(update={"decided_by": actor, "decided_at": now})
+        for i in accepted
+        if i.decided_by in (None, AGENT)
+    }
     brief = stored_brief(run.deps.storage, case)
     approval_id = f"approval.{len(case.approvals) + 1}"
     body = decision_body(
@@ -4370,6 +2810,7 @@ def _approval(
         after.append(count_patterns)
     return _Step(
         to=VisitState.PRESCRIBE,
+        updates={"items": [stamped.get(i.item_id, i) for i in case.items]} if stamped else {},
         visit={
             "plan_check": check,
             "acknowledged": said,
@@ -4638,10 +3079,8 @@ def confirm(
         )
         ticked = (
             item
-            if item.state is ProposalState.ACCEPTED
-            and item.decided_by != AGENT
-            and not required_by_goal(item)
-            else item.model_copy(  # a change the agent applied, or the goal's build, becomes the person's own with their yes
+            if item.state is ProposalState.ACCEPTED and item.decided_by not in (None, AGENT)
+            else item.model_copy(  # a change nobody decided, or the goal's build, becomes the person's own with their yes
                 update={
                     "state": ProposalState.ACCEPTED,
                     "decided_by": principal.user_id,

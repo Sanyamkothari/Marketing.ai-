@@ -6,9 +6,9 @@ review added its items blindly, the chat checked for twins. So a proposal outliv
 column has the outcome" beside "which column is the outcome?"), a rejected change came back in other words, and a
 replaced query stayed beside its replacement.
 
-The one producer is `author` (`engine.doctor.author`); a case stored before it has items made by `rules`, `detectors`,
-`review` and `chat`, which the author's complete emission treats as its own (`rules`, `detectors`) or as the AI's
-(`review`, `chat`). A producer hands over an :class:`Emission`: what it proposes, asks and doubts for its scope. For
+The producer of the plan is `author` (`engine.doctor.author`), and `detectors` for the detectors' round; a case stored
+before it has items made by `rules`, `detectors`, `review` and `chat`, which the author's complete emission treats as
+its own (`rules`) or leaves to the detectors' round, or as the AI's (`review`, `chat`). A producer hands over an :class:`Emission`: what it proposes, asks and doubts for its scope. For
 that emission the store, by *subject* (`engine.doctor.subjects`):
 
 * **adds** a proposal whose subject is new;
@@ -67,9 +67,10 @@ AI_PRODUCERS: Final[frozenset[str]] = frozenset({"review", "chat"})
 """The AI's proposals are taken back only by an explicit withdraw/replace or by the person, never by omission: a
 later review or another turn is not the pass that made them, so what it does not mention says nothing. (The author's
 own AI items are told apart by `CaseItem.source`.)"""
-RULE_PRODUCERS: Final[frozenset[str]] = frozenset({"rules", "detectors"})
-"""The producers of a case stored before the one author: aliases of the author, so its complete emission takes back
-what they made and it no longer suggests."""
+RULE_PRODUCERS: Final[frozenset[str]] = frozenset({"rules"})
+"""The producer of a case stored before the one author that is an alias of it, so its complete emission takes back
+what the rules made and it no longer suggests. The detectors' round has its own producer (`detectors`): a fix of
+theirs in the plan changes the files they read, so it is not taken back for being fixed."""
 REPLACED: Final[str] = "a newer proposal about the same thing took its place"
 
 

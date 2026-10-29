@@ -132,9 +132,8 @@ def test_a_suggestion_never_points_at_an_answer_that_needs_a_value(
 ) -> None:
     case = _with_q8(storage, world)
     typed = next(o for o in case.questions[-1].options if o.value_kind == "date")
-    step = visit._Step(to=case.state)
-    assert visit._suggested(case, step, ("q8", typed.option_id)) is None
-    assert visit._suggested(case, step, ("q8", "c0")) is not None
+    assert visit._suggested(case.questions, ("q8", typed.option_id)) is None
+    assert visit._suggested(case.questions, ("q8", "c0")) is not None
 
 
 def test_a_suggestion_may_point_at_the_safe_option_when_it_is_a_real_answer() -> None:
@@ -150,8 +149,6 @@ def test_a_suggestion_may_point_at_the_safe_option_when_it_is_a_real_answer() ->
             ],
         }
     )
-    case = Case.model_construct(questions=(question,))
-    step = visit._Step(to=None)
-    suggested = visit._suggested(case, step, ("qa", "quiet"))
+    suggested = visit._suggested((question,), ("qa", "quiet"))
     assert suggested is not None and suggested.option_id == "quiet"
-    assert visit._suggested(case, step, ("qa", "dk")) is None
+    assert visit._suggested((question,), ("qa", "dk")) is None

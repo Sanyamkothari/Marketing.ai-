@@ -413,7 +413,7 @@ def test_a_chat_request_records_who_asked_on_the_item(tmp_path: Path) -> None:
         expected_version=case.version,
         actor=ASHA.user_id,
     )
-    (made,) = [i for i in case.items if i.item_id == "recipe_step.base.ai1"]
+    (made,) = [i for i in case.items if i.title == "Leave out the youngest"]  # its id is its content now
     assert made.requested_by == ASHA.user_id
     assert made.source is ProposalSource.AI
     del storage

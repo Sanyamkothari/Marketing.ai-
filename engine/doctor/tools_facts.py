@@ -30,7 +30,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import pandas as pd
 from pydantic import Field, JsonValue
@@ -41,6 +41,16 @@ from engine.agent.contracts import AgentConfidence, ProposalState, RecipeStepKin
 from engine.agent.formats import to_datetime_mixed
 from engine.config import ProblemType, StrictBase, UseCaseConfig
 from engine.content_cache import ContentCache, frame_digest
+from engine.doctor.author import (
+    AskPerson,
+    AuthorAction,
+    Create,
+    Doubt,
+    ItemDraft,
+    Request,
+    Withdraw,
+    item_id_of,
+)
 from engine.doctor.case import Case, CaseDoubt, CaseItem, payload_digest
 from engine.doctor.protocol import Ask, AskOption, DataRequest
 from engine.doctor.registry import (
@@ -351,51 +361,8 @@ def register_fact_tools(registry: DataToolRegistry) -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 # Rules as facts: what one fact function read and what it would do about it. Nothing here writes the case.
 # ---------------------------------------------------------------------------
-class ItemDraft(StrictBase):
-    """What a fact tool or an AI tool call produced, receipt included. Where it goes (in the plan, or waiting for a
-    tick) is decided by code when the author's actions are applied, never by the draft."""
-
-    kind: str
-    payload: dict[str, JsonValue]
-    title: str
-    upload_id: str | None = None
-    goal_id: str | None = None
-    confidence: AgentConfidence
-    evidence_ids: tuple[str, ...] = ()
-
-
-class Create(StrictBase):
-    op: Literal["create"] = "create"
-    draft: ItemDraft
-    reason: str
-    replaces: str | None = None
-    basis: str = Field(default="", description='"s:<suggestion id>", "r<n>" evidence or "msg:<n>".')
-
-
-class Withdraw(StrictBase):
-    op: Literal["withdraw"] = "withdraw"
-    item_id: str
-    reason: str
-    consequence: str
-
-
-class AskPerson(StrictBase):
-    op: Literal["ask"] = "ask"
-    ask: Ask
-
-
-class Doubt(StrictBase):
-    op: Literal["doubt"] = "doubt"
-    doubt: CaseDoubt
-
-
-class Request(StrictBase):
-    op: Literal["request"] = "request"
-    request: DataRequest
-
-
-FactAction = Annotated[Create | Withdraw | AskPerson | Doubt | Request, Field(discriminator="op")]
-"""What a fact function suggests: the author's actions, without `SetSetting` (Stage 3 adds the settings)."""
+FactAction = AuthorAction
+"""What a fact function suggests: the author's actions (`engine.doctor.author`)."""
 
 
 class Suggestion(StrictBase):
@@ -424,11 +391,8 @@ def suggestion(action: Create | Withdraw | AskPerson | Doubt | Request, reason: 
 
 
 def draft_item_id(draft: ItemDraft) -> str:
-    """The id of the item a draft becomes: its content, so proposing it again finds it. What a trial on the first
-    rows counted (`tried`) is not part of what the change is: the rules' and the chat's version of one step are one.
-    """
-    payload = {k: v for k, v in draft.payload.items() if k != "tried"}
-    return f"{draft.kind}.{draft.goal_id or 'base'}.{payload_digest({'v': payload})[:12]}"[:128]
+    """The id of the item a draft becomes (`engine.doctor.author.item_id_of`)."""
+    return item_id_of(draft.kind, draft.payload, draft.goal_id)
 
 
 class FactDeps(Protocol):
@@ -472,7 +436,7 @@ class Found:
 
     def add(self, draft: ItemDraft, reason: str) -> ItemDraft:
         self.drafts.append(draft)
-        self.suggested.append(suggestion(Create(draft=draft, reason=reason), reason))
+        self.suggested.append(suggestion(Create(draft=draft, reason=reason, basis=""), reason))
         return draft
 
     def create(
@@ -529,7 +493,13 @@ class Found:
             text=text,
             why=why,
             options=tuple(
-                AskOption(label=label, effect=effect, safe=effect.option_id == safe)
+                # "I don't know" decides nothing, so it is the safe choice unless the question names another: the
+                # protocol adds its own only to a question that has none (`protocol.settle`)
+                AskOption(
+                    label=label,
+                    effect=effect,
+                    safe=effect.option_id == safe or (safe is None and label == DONT_KNOW),
+                )
                 for label, effect in choices
             ),
             rows=0,
@@ -540,6 +510,10 @@ class Found:
             recommended=recommended if recommended in {effect.option_id for _l, effect in choices} else None,
         )
         self.suggested.append(suggestion(AskPerson(ask=ask), reason))
+
+    def put(self, ask: Ask) -> None:
+        """A question that is already made (a goal's setting, `engine.doctor.goal_settings`)."""
+        self.suggested.append(suggestion(AskPerson(ask=ask), ask.why or ask.text))
 
     def doubt(self, doubt: CaseDoubt, reason: str) -> None:
         self.suggested.append(suggestion(Doubt(doubt=doubt), reason))
@@ -568,7 +542,7 @@ ROW_ID_WARNING: Final[str] = (
 )
 """What the person is told with the proposed row number (never silently invented: it waits for their yes)."""
 
-_ID_NAMED: Final[re.Pattern[str]] = re.compile(
+ID_NAMED: Final[re.Pattern[str]] = re.compile(
     r"(^|[_\s-])id$|^id[_\s-]|_key$|(customer|cust|client|member|account)[_\s-]?(id|no|num|number|code|ref)$",
     re.I,
 )
@@ -579,7 +553,7 @@ def id_named(unique: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Of the columns with a different value on every row, the ID-named ones when there are any: a spend or a
     score that happens to be unique does not compete with `customer_id`. Two ID-named columns still compete.
     """
-    named = [key for key in unique if _ID_NAMED.search(str(key["column"]).strip())]
+    named = [key for key in unique if ID_NAMED.search(str(key["column"]).strip())]
     return named or unique
 
 
@@ -607,7 +581,7 @@ def near_keys(loaded: LoadedFile) -> list[dict[str, Any]]:
         column = str(key["column"])
         if column not in loaded.frame.columns:
             continue
-        named = bool(_ID_NAMED.search(column.strip()))
+        named = bool(ID_NAMED.search(column.strip()))
         series = loaded.frame[column]
         text = not (pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series))
         repeats = float(key.get("rows_per_key") or 99.0)
@@ -621,7 +595,7 @@ def near_keys(loaded: LoadedFile) -> list[dict[str, Any]]:
         ):
             found.append(key)
     found.sort(
-        key=lambda k: (not _ID_NAMED.search(str(k["column"]).strip()), float(k.get("rows_per_key") or 99.0))
+        key=lambda k: (not ID_NAMED.search(str(k["column"]).strip()), float(k.get("rows_per_key") or 99.0))
     )
     return found
 
@@ -701,7 +675,10 @@ def key_facts(run: FactRun, case: Case, diagnosis: Mapping[str, Any] | None = No
     reading: list[dict[str, Any]] = []
     for loaded in current.files:
         upload_id = loaded.upload_id
-        if decisions(case).key(upload_id) is not None or approved_build_key(case, upload_id) is not None:
+        if (
+            decisions(case).by_person("key", upload_id=upload_id)
+            or approved_build_key(case, upload_id) is not None
+        ):
             continue
         result = run.call("find_file_role", {"upload_id": upload_id}, ctx)
         found.evidence.append(result)
@@ -877,13 +854,15 @@ def row_id_draft(
 
 
 def _draft_of(item: CaseItem) -> ItemDraft:
+    """A detector's proposal as a draft. A detector ticks only what the values prove (or what an earlier approval of
+    the same shape proves), so a ticked one is a sure one; where it goes is then the author's rule."""
     return ItemDraft(
         kind=item.kind,
         payload=dict(item.payload),
         title=item.title,
         upload_id=item.upload_id,
         goal_id=item.goal_id,
-        confidence=item.confidence,
+        confidence=AgentConfidence.SURE if item.state is ProposalState.ACCEPTED else item.confidence,
         evidence_ids=item.evidence_ids,
     )
 
@@ -910,7 +889,8 @@ def detector_facts(run: FactRun, case: Case, brief: GoalBrief | None) -> Facts:
         for request in detected.requests:
             found.request(request, request.why)
         asks.extend(detected.asks)
-    found.suggested.extend(suggestion(AskPerson(ask=ask), ask.why or ask.text) for ask in asks)
+    for ask in asks:
+        found.put(ask)
     return found.facts({"detectors": len(run.deps.detectors)})
 
 

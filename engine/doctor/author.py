@@ -13,9 +13,10 @@ Who decides what:
 
 * The author only *proposes*. Whether a proposal is in the plan at once or waits for the person's tick is decided by
   code (:func:`engine.doctor.agent_apply.waits_because`), never by the author.
-* Nothing in the plan is changed here, decided or not. Replacing or withdrawing it is a new proposal that waits for
-  the person's yes (a swap); their yes then leaves the old one out (`engine.doctor.swaps`). Only a change that is
-  still waiting (in no plan, nobody's decision) is the author's own to swap or take back at once.
+* Nothing the person decided is changed here, and nothing the AI put in the plan is taken out of it. Replacing or
+  withdrawing it is a new proposal that waits for the person's yes (a swap); their yes then leaves the old one out
+  (`engine.doctor.swaps`). Only a change that is still waiting (in no plan, nobody's decision) is the author's own to
+  swap or take back at once, and the default author takes back at once what it put in the plan itself.
 * `decided_by` is never set here. A change in the plan that nobody decided is "in the plan, undecided"; the approval
   stamps it.
 
@@ -27,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Annotated, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol
 
 from pydantic import Field, JsonValue
 
@@ -58,7 +59,14 @@ from engine.doctor.standing import StandingAnswerStore, apply_standing, no_longe
 from engine.doctor.subjects import SETTING_KIND, WITHDRAW_KIND
 from engine.doctor.visit_contracts import CaseVisit, OptionEffect
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from engine.doctor.goal_brief import GoalBrief
+    from engine.doctor.tools_facts import FactRun, Facts
+
 __all__ = [
+    "DETECTORS",
     "PRODUCER",
     "Applied",
     "ApplyContext",
@@ -66,18 +74,28 @@ __all__ = [
     "AuthorAction",
     "Create",
     "Doubt",
+    "Gathered",
     "ItemDraft",
+    "Owed",
     "Refusal",
     "Request",
+    "Round",
     "SetSetting",
     "SettingsView",
     "Withdraw",
     "apply_actions",
+    "apply_round",
     "check_action",
+    "default_actions",
+    "gather_facts",
+    "owed",
+    "served",
 ]
 
 PRODUCER: Final[str] = AUTHOR
 """The producer every item, question and doubt of the author carries (`CaseItem.producer`)."""
+DETECTORS: Final[str] = "detectors"
+"""The producer of the detectors' round of the default author (`ApplyContext.producer`)."""
 Effects = tuple[OptionEffect, ...]
 
 
@@ -93,6 +111,11 @@ class ItemDraft(StrictBase):
     )
     confidence: AgentConfidence = Field(description="`sure` only when the values prove it.")
     evidence_ids: tuple[str, ...] = Field(default=(), description="Evidence it rests on.")
+    assumption: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="What it assumes, when the author decided a small ambiguity; the person may change it.",
+    )
 
 
 class Create(StrictBase):
@@ -184,6 +207,9 @@ class ApplyContext:
     """The client's remembered answers, applied to the questions asked now (`engine.doctor.standing`)."""
     suggested: frozenset[str] = frozenset()
     """The ids of the suggestions the fact tools made this turn: the only `s:<id>` basis the AI may be sure by."""
+    producer: str = PRODUCER
+    """Who emitted what is applied (`CaseItem.producer`). The detectors' round names itself: what it finds depends on
+    the files as the plan leaves them, so a fix of theirs that is in the plan is not taken back for being fixed."""
 
 
 @dataclass
@@ -311,8 +337,9 @@ class _Run:
             payload_digest=payload_digest(draft.payload),
             proposed_at=ctx.now,
             goal_id=draft.goal_id,
+            assumption=draft.assumption,
             requested_by=ctx.requested_by,
-            producer=PRODUCER,
+            producer=ctx.producer,
             replaces=replaces,
         )
 
@@ -375,10 +402,14 @@ class _Run:
                 value=old.item_id,
                 how_to_fix="Nothing to withdraw; check the plan for what is still in it.",
             )
-        if old.state is ProposalState.PENDING and not person_owns(self.case, old):
+        # What is waiting is the author's own to take back, and so is what the default author put in the plan itself
+        # (it takes back the same by omission when it stops suggesting it); the AI's withdrawal of a change in the
+        # plan is a change for the person to say yes to, as is anything of theirs.
+        if not person_owns(self.case, old) and (
+            old.state is ProposalState.PENDING or self.ctx.author == "default"
+        ):
             self._take_out(old, action.reason, by=None, why="withdrawn")
             return None
-        # In the plan, or the person's: taking it out is a change for them to say yes to.
         payload: dict[str, JsonValue] = {
             "item_id": old.item_id,
             "consequence": action.consequence,
@@ -506,7 +537,7 @@ class _Run:
         work = reconcile(
             case,
             Emission(
-                producer=PRODUCER,
+                producer=ctx.producer,
                 items=items,
                 questions=questions,
                 doubts=self.doubts,
@@ -618,3 +649,172 @@ class _Run:
                 )
             )
         return offers, asked
+
+
+# ---------------------------------------------------------------------------
+# The default author: what the fact functions suggest, applied as it is
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Gathered:
+    """What the fact functions read of a case in one round. The rules' and the detectors' facts stay apart because
+    they are applied apart: a detector's finding depends on the files as the plan leaves them, so the plan's fixes
+    that nobody decided are not taken back for being fixed (the detectors' producer, `DETECTORS`)."""
+
+    rules: tuple[Facts, ...]
+    detectors: Facts
+
+    @property
+    def every(self) -> tuple[Facts, ...]:
+        return (*self.rules, self.detectors)
+
+
+def gather_facts(run: FactRun, case: Case, brief: GoalBrief | None) -> Gathered:
+    """Call the fact functions on `case` as it stands: which column names each row, what the data can power (no
+    goal) or the goal's outcome, date and consent, and what the detectors found. Nothing is written."""
+    from engine.doctor.facts_goal import goal_facts, goal_fit_facts
+    from engine.doctor.tools_facts import detector_facts, key_facts
+
+    rules: tuple[Facts, ...]
+    if brief is None:
+        fit = goal_fit_facts(run, case)
+        diagnosis = (
+            {
+                **(case.diagnosis or {"files": [], "links": [], "stacks": []}),
+                "use_cases": fit.facts["use_cases"],
+            }
+            if "use_cases" in fit.facts
+            else case.diagnosis
+        )
+        rules = (key_facts(run, case, diagnosis), fit)
+    else:
+        rules = (key_facts(run, case), *goal_facts(run, case, brief))
+    return Gathered(rules=rules, detectors=detector_facts(run, case, brief))
+
+
+def default_actions(facts: Sequence[Facts]) -> list[AuthorAction]:
+    """The default author's actions: every suggestion of the fact functions, in the order they made them. A setting
+    the person is asked for comes up as a question among them (`engine.doctor.goal_settings.open_setting_questions`);
+    one that is not asked for takes its configured default without an item (`GoalSettings.value`)."""
+    return [s.action for f in facts for s in f.suggested]
+
+
+@dataclass(frozen=True)
+class Round:
+    """One set of actions for the visit to apply under the case's lock, and what it is applied under."""
+
+    actions: tuple[AuthorAction, ...]
+    ctx: ApplyContext
+
+
+def apply_round(case: Case, rounds: Sequence[Round]) -> Applied:
+    """`rounds` applied one after the other to `case`, as one result: the case after them all, every event, and what
+    was made. Pure, like :func:`apply_actions`."""
+    out = Applied(case=case)
+    for each in rounds:
+        done = apply_actions(out.case, each.actions, each.ctx)
+        out = Applied(
+            case=done.case,
+            events=[*out.events, *done.events],
+            refused=[*out.refused, *done.refused],
+            made=list(dict.fromkeys([*out.made, *done.made])),
+            after=[*out.after, *done.after],
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# What is owed to the AI
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Owed:
+    """Something the AI has not yet had its turn on."""
+
+    reason: str
+    """`message`, `new_file`, `goal_chosen`, `setting_changed`, `build_missing` or `build_stale`."""
+    key: str
+    """What it is owed for: the turn that answers it is remembered by this (`served`), so the same event is not
+    owed twice."""
+
+
+_SERVED: Final[str] = "author."
+
+
+def owed(case: Case, brief: GoalBrief | None, config_root: Path | None = None) -> tuple[Owed, ...]:
+    """What the AI is owed a turn on, in this order: the person's message, a new file, a goal just chosen, a setting
+    just changed, a build the goal needs and nobody has proposed, and a build the settings have outgrown. A tick or
+    an untick is none of these: they re-run the facts and the default author, and ask the AI nothing.
+
+    The visit holds the AI back while a blocking question is open; what was owed then still is when it is answered.
+    """
+    from engine.doctor.build_facts import build_is_owed
+
+    found: list[Owed] = []
+    done = (case.visit or CaseVisit()).done
+    last = case.chat[-1] if case.chat else None
+    if last is not None and last.role == "user":
+        found.append(Owed("message", str(len(case.chat))))
+    files = payload_digest({"files": [(f.upload_id, f.fingerprint) for f in case.files]})[:16]
+    if case.files and done.get(f"{_SERVED}new_file") != files:
+        found.append(Owed("new_file", files))
+    if brief is not None and done.get(f"{_SERVED}goal_chosen") != brief.brief_hash:
+        found.append(Owed("goal_chosen", brief.brief_hash))
+    settings = _settings_digest(case, brief, config_root)
+    if settings is not None:
+        before = done.get(f"{_SERVED}setting_changed")
+        if before is not None and before != settings:
+            found.append(Owed("setting_changed", settings))
+        if build_is_owed(case) and done.get(f"{_SERVED}build_missing") != f"{files}:{settings}":
+            found.append(Owed("build_missing", f"{files}:{settings}"))
+        stale = _stale_build(case, settings)
+        if stale is not None and done.get(f"{_SERVED}build_stale") != f"{stale}:{settings}":
+            found.append(Owed("build_stale", f"{stale}:{settings}"))
+    return tuple(found)
+
+
+def served(
+    case: Case, owing: Sequence[Owed], config_root: Path | None = None, brief: GoalBrief | None = None
+) -> dict[str, str]:
+    """What `visit.done` remembers once the AI answered `owing`: each reason's key, and the settings the AI has seen
+    (so a later change is told apart)."""
+    kept = {f"{_SERVED}{o.reason}": o.key for o in owing if o.reason != "message"}
+    settings = _settings_digest(case, brief, config_root)
+    if settings is not None:
+        kept[f"{_SERVED}setting_changed"] = settings
+    return kept
+
+
+def _settings_digest(case: Case, brief: GoalBrief | None, config_root: Path | None) -> str | None:
+    """What the chosen goal's settings are now (None for no goal, or a goal with no settings)."""
+    from engine.config import ConfigError
+    from engine.doctor.decisions import decisions
+    from engine.doctor.goal_settings import load_goal_settings
+
+    if brief is None:
+        return None
+    try:
+        goal = load_goal_settings(brief.goal_id, config_root)
+    except (ConfigError, OSError, ValueError):
+        return None
+    return goal.digest(decisions(case)) if goal.names else None
+
+
+def _stale_build(case: Case, settings: str) -> str | None:
+    """The id of the goal's build in the plan that was made for other settings, when no newer build waits to replace
+    it; None when there is none."""
+    builds = [
+        i
+        for i in case.items
+        if i.kind == "recipe_step"
+        and isinstance(i.payload.get("buildable"), dict)
+        and i.state is not ProposalState.REJECTED
+        and _in_section(i.goal_id, case)
+    ]
+    for build in builds:
+        made = build.payload.get("settings_digest")
+        if (
+            isinstance(made, str)
+            and made != settings
+            and not any(b.replaces == build.item_id for b in builds)
+        ):
+            return build.item_id
+    return None

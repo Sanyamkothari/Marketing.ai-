@@ -1,0 +1,380 @@
+{
+ "bank_marketing": {
+  "goal": {
+   "doubts": [],
+   "items": [
+    [
+     "key.base.0d995cb1d410",
+     "key",
+     "sure"
+    ],
+    [
+     "outcome_column.bank-term-deposit.c78689f459b2",
+     "outcome_column",
+     "sure"
+    ]
+   ],
+   "questions": []
+  },
+  "no_goal": {
+   "doubts": [],
+   "items": [
+    [
+     "key.base.0d995cb1d410",
+     "key",
+     "sure"
+    ]
+   ],
+   "questions": []
+  }
+ },
+ "churn_list": {
+  "goal": {
+   "doubts": [],
+   "items": [
+    [
+     "key.base.40d0627d3863",
+     "key",
+     "sure"
+    ],
+    [
+     "outcome_column.telco-churn.3c26f321fbaa",
+     "outcome_column",
+     "sure"
+    ]
+   ],
+   "questions": []
+  },
+  "no_goal": {
+   "doubts": [],
+   "items": [
+    [
+     "key.base.40d0627d3863",
+     "key",
+     "sure"
+    ]
+   ],
+   "questions": []
+  }
+ },
+ "customers": {
+  "goal": {
+   "doubts": [],
+   "items": [],
+   "questions": [
+    [
+     "q.key_ambiguous.base.780a5c4c2731",
+     "KEY_AMBIGUOUS",
+     null,
+     [
+      "c0",
+      "c1",
+      "none"
+     ]
+    ],
+    [
+     "q.outcome_column.targeted-advertisement.77ff02582402",
+     "OUTCOME_COLUMN",
+     null,
+     [
+      "c0",
+      "none"
+     ]
+    ]
+   ]
+  },
+  "no_goal": {
+   "doubts": [],
+   "items": [],
+   "questions": [
+    [
+     "q.key_ambiguous.base.780a5c4c2731",
+     "KEY_AMBIGUOUS",
+     null,
+     [
+      "c0",
+      "c1",
+      "none"
+     ]
+    ]
+   ]
+  }
+ },
+ "customers_and_orders": {
+  "goal": {
+   "doubts": [
+    "d.outcome_missing.retail-win-back"
+   ],
+   "items": [
+    [
+     "key.base.0556a1a5d53e",
+     "key",
+     "sure"
+    ],
+    [
+     "key.base.b70532b06116",
+     "key",
+     "sure"
+    ]
+   ],
+   "questions": [
+    [
+     "q.data_requested.retail-win-back.b443c37cc153",
+     "DATA_REQUESTED",
+     null,
+     [
+      "will_add",
+      "cannot"
+     ]
+    ]
+   ]
+  },
+  "no_goal": {
+   "doubts": [],
+   "items": [
+    [
+     "key.base.0556a1a5d53e",
+     "key",
+     "sure"
+    ],
+    [
+     "key.base.b70532b06116",
+     "key",
+     "sure"
+    ]
+   ],
+   "questions": []
+  }
+ },
+ "customers_no_dates": {
+  "goal": {
+   "doubts": [],
+   "items": [],
+   "questions": [
+    [
+     "q.key_ambiguous.base.ebeb25661c1f",
+     "KEY_AMBIGUOUS",
+     null,
+     [
+      "c0",
+      "c1",
+      "none"
+     ]
+    ],
+    [
+     "q.outcome_column.rca.3d06c4c7a59c",
+     "OUTCOME_COLUMN",
+     null,
+     [
+      "c0",
+      "none"
+     ]
+    ]
+   ]
+  },
+  "no_goal": {
+   "doubts": [],
+   "items": [],
+   "questions": [
+    [
+     "q.key_ambiguous.base.ebeb25661c1f",
+     "KEY_AMBIGUOUS",
+     null,
+     [
+      "c0",
+      "c1",
+      "none"
+     ]
+    ]
+   ]
+  }
+ },
+ "customers_unnamed": {
+  "goal": {
+   "doubts": [],
+   "items": [],
+   "questions": [
+    [
+     "q.key_ambiguous.base.413df00850d4",
+     "KEY_AMBIGUOUS",
+     null,
+     [
+      "c0",
+      "c1",
+      "none"
+     ]
+    ],
+    [
+     "q.outcome_column.rca.938bea61fc7e",
+     "OUTCOME_COLUMN",
+     null,
+     [
+      "c0",
+      "none"
+     ]
+    ]
+   ]
+  },
+  "no_goal": {
+   "doubts": [],
+   "items": [],
+   "questions": [
+    [
+     "q.key_ambiguous.base.413df00850d4",
+     "KEY_AMBIGUOUS",
+     null,
+     [
+      "c0",
+      "c1",
+      "none"
+     ]
+    ]
+   ]
+  }
+ },
+ "hillstrom": {
+  "goal": {
+   "doubts": [],
+   "items": [
+    [
+     "key.base.646fd3768dfe",
+     "key",
+     "sure"
+    ],
+    [
+     "outcome_column.hillstrom-email.f09467cd1b36",
+     "outcome_column",
+     "sure"
+    ]
+   ],
+   "questions": []
+  },
+  "no_goal": {
+   "doubts": [],
+   "items": [
+    [
+     "key.base.646fd3768dfe",
+     "key",
+     "sure"
+    ]
+   ],
+   "questions": []
+  }
+ },
+ "order_log": {
+  "goal": {
+   "doubts": [],
+   "items": [],
+   "questions": [
+    [
+     "q.key_not_unique.base.cf1b00c16e94",
+     "KEY_NOT_UNIQUE",
+     null,
+     [
+      "c0",
+      "c1",
+      "none"
+     ]
+    ],
+    [
+     "q.build_audience.retail-win-back.8430684aa304",
+     "BUILD_AUDIENCE",
+     null,
+     [
+      "active",
+      "quiet",
+      "none"
+     ]
+    ]
+   ]
+  },
+  "no_goal": {
+   "doubts": [],
+   "items": [],
+   "questions": [
+    [
+     "q.key_not_unique.base.cf1b00c16e94",
+     "KEY_NOT_UNIQUE",
+     "c0",
+     [
+      "c0",
+      "c1",
+      "none"
+     ]
+    ]
+   ]
+  }
+ },
+ "two_currencies": {
+  "goal": {
+   "doubts": [
+    "d.outcome_missing.customer-spend"
+   ],
+   "items": [
+    [
+     "key.base.08dfdfeb275d",
+     "key",
+     "sure"
+    ]
+   ],
+   "questions": [
+    [
+     "q.data_requested.customer-spend.44f4d408fb56",
+     "DATA_REQUESTED",
+     null,
+     [
+      "will_add",
+      "cannot"
+     ]
+    ]
+   ]
+  },
+  "no_goal": {
+   "doubts": [],
+   "items": [
+    [
+     "key.base.08dfdfeb275d",
+     "key",
+     "sure"
+    ]
+   ],
+   "questions": []
+  }
+ },
+ "wide_monthly": {
+  "goal": {
+   "doubts": [
+    "d.outcome_missing.customer-spend"
+   ],
+   "items": [
+    [
+     "key.base.16cd8c31d78a",
+     "key",
+     "sure"
+    ]
+   ],
+   "questions": [
+    [
+     "q.data_requested.customer-spend.44f4d408fb56",
+     "DATA_REQUESTED",
+     null,
+     [
+      "will_add",
+      "cannot"
+     ]
+    ]
+   ]
+  },
+  "no_goal": {
+   "doubts": [],
+   "items": [
+    [
+     "key.base.16cd8c31d78a",
+     "key",
+     "sure"
+    ]
+   ],
+   "questions": []
+  }
+ }
+}

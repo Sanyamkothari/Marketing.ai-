@@ -359,7 +359,8 @@ class AiRun:
     """Chat turns the AI did not answer (it was down, refused the call, or the spending cap was reached). The
     chat says so to the person and goes on, so the harness counts them: a quiet outage must not pass."""
     applied: int = 0
-    """AI changes the visit applied for the person (ticked by the agent, one Undo each): each is checked as a tick."""
+    """AI changes the author put in the plan for the person (nobody's decision, one Undo each): each is checked as a
+    tick."""
     case_after: Any = None
     """The Data Doctor case after the chat (kept for tests; never written anywhere)."""
 
@@ -386,8 +387,9 @@ def personal_values(ctx: Any, planted: Sequence[str] = ()) -> tuple[str, ...]:
 
 def proposal_of(item: Any, *, applied_by_agent: bool = False) -> Any:
     """A Data Doctor item as the proposal the harm checks read (`engine.doctor.evals`): its step or setting, its
-    evidence, its confidence and who made it. An item the visit applied for the person (decided by the agent, one
-    Undo) is read as pending: the visit's own rule (`engine.doctor.agent_apply`) is what the harm check holds it to.
+    evidence, its confidence and who made it. An item the author put in the plan for the person (nobody's decision,
+    one Undo) is read as pending: the author's own rule (`engine.doctor.agent_apply`) is what the harm check holds it
+    to.
     """
     from engine.agent.contracts import Proposal, ProposalKind, ProposalState, RecipeStep
 
@@ -465,7 +467,7 @@ def ai_session(case: str, model: Model) -> AiRun:
     harms: list[Any] = []
     applied = 0
     for item in ai_items:
-        by_agent = item.state.value == "accepted" and item.decided_by == AGENT
+        by_agent = item.state.value == "accepted" and item.decided_by in (None, AGENT)
         proposal = proposal_of(item, applied_by_agent=by_agent)
         tool = _TOOL_OF.get(proposal.kind.value, "propose_setting")
         by_tool[tool].append(proposal)

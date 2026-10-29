@@ -90,7 +90,7 @@ from engine.agent.loop import (
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import clean_text, for_prompt
 from engine.doctor.actions import ALIASES, prompt_variables
-from engine.doctor.agent_apply import Roles, agent_applies, person_owns, roles_of, twin_of
+from engine.doctor.agent_apply import Roles, person_owns, roles_of, twin_of, waits_because
 from engine.doctor.author import (
     ApplyContext,
     AskPerson,
@@ -330,8 +330,6 @@ class _Chosen:
     """`(goal_id, reason)` of the goal the model proposes; a second proposal replaces the first."""
     used: list[str] = field(default_factory=list)
     reported: set[str] = field(default_factory=set)
-    applied: list[CaseItem] = field(default_factory=list)
-    """The changes this turn the visit will apply, so the next is judged with them in place."""
 
 
 @dataclass(frozen=True)
@@ -2433,6 +2431,7 @@ class DoctorTurn:
             payload_digest=payload_digest(draft.payload),
             proposed_at=self.now,
             goal_id=draft.goal_id,
+            assumption=draft.assumption,
         )
 
     def _evidence(self) -> tuple[dict[str, DataToolResult], dict[str, str]]:
@@ -2550,6 +2549,7 @@ class DoctorTurn:
                         goal_id=item.goal_id,
                         confidence=AgentConfidence.CHECK,
                         evidence_ids=item.evidence_ids,
+                        assumption=item.assumption,
                     ),
                     None,
                 )
@@ -2634,57 +2634,31 @@ class DoctorTurn:
 
     def _tell(self, landed: Sequence[CaseItem]) -> None:
         """Tell the model, before it writes its reply, which of its new changes the person's approval will find in the
-        plan and which wait for their tick (and why): what it says it did is what happens. Each change is judged
-        once, with the ones already put in the plan in this turn in place."""
-        from engine.doctor.visit import active_section
-
-        gone = {i.item_id for i in self._taken_out()}
-        plan = [
-            i.model_copy(update={"state": ProposalState.REJECTED}) if i.item_id in gone else i
-            for i in active_section(self.case)[0]
-        ]
-        fresh = [
-            i.model_copy(update={"state": ProposalState.PENDING, "decided_by": None, "decided_at": None})
-            for i in landed
-            if i.item_id not in self.chosen.reported
-        ]
-        swaps = {i.item_id: i for i in fresh if i.replaces is not None}
-        fresh = [i for i in fresh if i.item_id not in swaps]
-        for (
-            item
-        ) in (
-            swaps.values()
-        ):  # a swap of what is in the plan or the person's: only their yes takes the old out
-            self.chosen.reported.add(item.item_id)
-            self.turn.feedback.append(
-                {
-                    "id": self._name("c", item.item_id),
-                    "change": self._text(item.upload_id, clean_text(item.title, TITLE_CHARS)),
-                    "result": "It takes the place of a change that is in the plan or the person's, so it waits for "
-                    "the person's yes; the old one stays until then.",
-                }
-            )
-        decided = agent_applies(
-            self.files,
-            self.case.files,
-            [*plan, *self.chosen.applied],
-            fresh,
-            self.now,
-            roles_of(self.case, self.config_root),
-            decisions(self.case).as_of_date,
-            decisions(self.case).training_as_of_date,
-        )
-        for item, waits in decided:
+        plan and which wait for their tick (and why): what it says it did is what happens. The author has placed each
+        one already (`waits_because`); this only says so."""
+        roles = roles_of(self.case, self.config_root)
+        for item in landed:
+            if item.item_id in self.chosen.reported:
+                continue
             self.chosen.reported.add(item.item_id)
             said = {
                 "id": self._name("c", item.item_id),
                 "change": self._text(item.upload_id, clean_text(item.title, TITLE_CHARS)),
             }
-            if waits is None:
-                self.chosen.applied.append(item)
+            if item.replaces is not None:
+                # a swap of what is in the plan or the person's: only their yes takes the old out
+                said["result"] = (
+                    "It takes the place of a change that is in the plan or the person's, so it waits for "
+                    "the person's yes; the old one stays until then."
+                )
+            elif item.state is ProposalState.ACCEPTED:
                 said["result"] = "It is in the plan; the person can untick it with one click."
             else:
-                why = self._text(item.upload_id, clean_text(waits, self.limits.turn.short_chars))
+                waits = waits_because(item.model_copy(update={"state": ProposalState.PENDING}), roles)
+                why = self._text(
+                    item.upload_id,
+                    clean_text(waits or "it needs the person's tick", self.limits.turn.short_chars),
+                )
                 self.checker.grounded = self.checker.grounded | grounded_numbers([why])
                 said["result"] = f"It waits for the person's tick, because {why}"
             self.turn.feedback.append(said)
@@ -2709,11 +2683,4 @@ class DoctorTurn:
                 new = [] if twin is None else [twin]
             items.extend(i for i in new if i not in items)
         items.extend(i for i in self.left_out if i not in items)
-        # The reason a tool gave for a change (a test column's) is not part of an `ItemDraft`: it goes back on the
-        # item the author made from the same payload.
-        said = {i.payload_digest: i.assumption for i in self.chosen.combined if i.assumption}
-        items = [
-            i.model_copy(update={"assumption": said[i.payload_digest]}) if i.payload_digest in said else i
-            for i in items
-        ]
         return items, list(dict.fromkeys(withdrawn))

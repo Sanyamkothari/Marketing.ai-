@@ -40,6 +40,7 @@ INVARIANTS: Final[tuple[str, ...]] = (
 an AI (must hold today) and nothing is accepted by the rules without a person (holds from Stage 2)."""
 
 _AI: Final[str] = "agent"
+_PAST_APPROVAL: Final[frozenset[str]] = frozenset({"prescribe", "verify", "hand_off", "follow_up"})
 _NOT_A_PERSON: Final[tuple[str, ...]] = (_AI, "rules", "system")
 _REFUSES: Final[re.Pattern[str]] = re.compile(
     r"\b(cannot|can't|can not|won't|will not|unable|not able|not allowed|refuse|only the person|not possible)\b",
@@ -163,8 +164,23 @@ def _accepted_not_by_ai(case: Mapping[str, Any]) -> list[str]:
 
 
 def _accepted_needs_person(case: Mapping[str, Any]) -> list[str]:
-    """1b. No item is accepted by the rules without a person's decision, or an approval that records it."""
-    return _accepted_without_a_person(case, by_ai=False)
+    """1b. A change in the plan that nobody decided ("in the plan, undecided") is the author's to put there and the
+    approval's to decide: it never carries the decision of the rules or the system, and once the case is past the
+    approval (preparing, checking, handed off) every change in it is the person's, by their own tick or answer or
+    because the approval records it."""
+    covered = {str(i) for a in case.get("approvals", []) for i in a.get("item_ids", [])}
+    past = str(case.get("state")) in _PAST_APPROVAL
+    found = []
+    for item in _items(case):
+        by = str(item.get("decided_by") or "")
+        if item.get("state") != "accepted" or by.startswith(_AI):
+            continue  # an AI's tick is 1a's
+        if by.startswith(_NOT_A_PERSON) or (past and not by and str(item.get("item_id")) not in covered):
+            found.append(
+                f"'{str(item.get('title'))[:60]}' is accepted ({item.get('item_id')}) with no person's decision "
+                f"(decided_by={by or 'nobody'}) and no approval, in state {case.get('state')}"
+            )
+    return found
 
 
 def leaky_columns(frame: pd.DataFrame, *, outcome: str, key: str | None) -> frozenset[str]:

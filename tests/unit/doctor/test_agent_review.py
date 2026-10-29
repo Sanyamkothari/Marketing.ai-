@@ -388,9 +388,9 @@ def test_a_review_the_ai_service_did_not_answer_says_why_and_is_tried_again(
     case = _answer_key(storage, world, _opened(storage, world, port), port)
     assert client.asked == 1, "the review's first call was made and not answered"
     assert case.counters.model_calls == calls, "a call the provider billed counts, one it did not does not"
-    assert "agent" not in (
+    assert "author.new_file" not in (
         case.visit.done if case.visit else {}
-    ), "the review did not happen: it is not remembered"
+    ), "the review did not happen: it is not remembered, and the files are owed to it again"
     [entry] = case.chat
     sentence, fix = PROBLEMS[kind]
     assert entry.role == "agent" and entry.text == f"{UNAVAILABLE} {sentence} {fix}"
@@ -409,7 +409,7 @@ def test_a_review_the_ai_service_did_not_answer_says_why_and_is_tried_again(
         CLIENT, case.case_id, q.question_id, option(q, "account_no"), _deps(storage, world, port),
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
-    assert client.asked == 2 and "agent" in (again.visit.done if again.visit else {})
+    assert client.asked == 2 and "author.new_file" in (again.visit.done if again.visit else {})
     assert [(c.text, c.blocked_by) for c in again.chat[-1:]] == [
         ("I am done.", None)
     ], "its own words this time"
@@ -452,7 +452,9 @@ def test_a_review_that_got_some_answers_before_the_service_failed_stays_done(
     port = _review(_guard(client))
     case = _answer_key(storage, world, _opened(storage, world, port), port)
     assert client.replied == 1 and client.asked == 1, "the second call failed"
-    assert "agent" in (case.visit.done if case.visit else {}), "one reply was enough for it to have happened"
+    assert "author.new_file" in (
+        case.visit.done if case.visit else {}
+    ), "one reply was enough for it to have happened"
     assert not case.chat, "and it found nothing to say"
 
 

@@ -271,34 +271,3 @@ def test_the_build_description_is_told_to_its_end_even_with_many_features(config
     assert len(description) <= _DESCRIPTION_ROOM
     assert description.endswith("days after the snapshot, else 0.")
     assert "reactivated: 1 when the" in description
-
-
-def test_the_audience_question_recommends_by_the_goals_description_and_has_a_safe_choice(
-    config_root: Path,
-) -> None:
-    from engine.doctor.visit import _audience_question
-
-    frame = log(1_500)
-    config = load_use_case(GOAL, config_root)
-    found = buildable_outcome([loaded(frame, config_root)], config, config_root)
-    assert found is not None
-    active, quiet = found.audiences
-    found = found.model_copy(update={"audiences": (active, quiet.model_copy(update={"enough": True}))})
-    question, _effects = _audience_question(config, found)
-    # "customers who have stopped buying": the gone-quiet reading, with the goal's own words as the reason
-    assert question.recommended == "quiet"
-    assert "stopped buying" in question.why and "gone quiet" in question.why
-    # "I don't know" takes the recommended audience (never "Neither", which hands the work back), and says so
-    assert [o.option_id for o in question.options if o.safe] == ["quiet"]
-    assert "Not sure? Data Doctor takes that reading" in question.why
-    plain = config.model_copy(update={"description": "Ranks customers by how likely they are to order."})
-    asked, _ = _audience_question(plain, found)
-    assert asked.recommended is None, "a description that says nothing of the sort"
-    # nothing recommended: the safe choice is the widest reading, which leaves out nobody the data knew, with the reason
-    assert [o.option_id for o in asked.options if o.safe] == ["active"]
-    assert "Not sure? Data Doctor takes all" in asked.why and "leaves out nobody" in asked.why
-    thin = found.model_copy(update={"audiences": (active.model_copy(update={"enough": False}), quiet)})
-    nothing, _ = _audience_question(plain, thin)
-    assert [o.option_id for o in nothing.options if o.safe] == [
-        "none"
-    ], "no reading is large enough: the outcome column"

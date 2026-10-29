@@ -19,6 +19,7 @@ from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalStat
 from engine.doctor import visit
 from engine.doctor.case import Case, CaseDoubt, CaseItem, CaseOption, CaseQuestion
 from engine.doctor.reconcile import Emission, reconcile
+from engine.doctor.standing import no_longer_fits
 from engine.doctor.subjects import doubt_subject, item_subject, options_digest, question_subject
 from engine.storage import LocalStorage
 from tests.unit.doctor import test_visit_prepared_outcome as po
@@ -256,7 +257,7 @@ def test_an_answered_question_stays_unless_the_option_chosen_is_gone(
         case,
         Emission(producer="rules", questions=[(_q("OUTCOME_COLUMN", ["a", "z"]), ())]),
         now=NOW,
-        refit=visit._no_longer_fits,
+        refit=no_longer_fits,
     )
     assert gone.questions[0].answer is None and "was not used" in gone.questions[0].why
 
@@ -490,7 +491,9 @@ def test_a_change_the_person_rejected_does_not_come_back_from_the_review_in_othe
     ]
 
 
-def test_the_review_runs_again_when_the_plan_changes(storage: LocalStorage, world: World) -> None:
+def test_the_review_is_not_asked_again_for_a_change_in_the_plan_or_a_tick(
+    storage: LocalStorage, world: World
+) -> None:
     calls: list[int] = []
 
     def review(case: Case, _files: Any, _brief: Any) -> visit.Detected:
@@ -511,7 +514,7 @@ def test_the_review_runs_again_when_the_plan_changes(storage: LocalStorage, worl
     )
     item = next(i for i in case.items if item_subject(i) == "sql@customer_training")
     visit.decide(CLIENT, case.case_id, item.item_id, True, deps, expected_version=case.version, actor=ANALYST)
-    assert len(calls) > first, "an accepted change is a new plan for the review"
+    assert len(calls) == first, "the AI is asked for a file, a goal, a setting or a message, not for a change"
 
 
 # -- review, memo, producers, answers, swaps (the fixer's round on F5) -----------------------------------------
@@ -612,7 +615,7 @@ def test_the_other_review_proposal_stays_when_the_person_ticks_one(
     case = visit.decide(
         CLIENT, case.case_id, a.item_id, True, deps, expected_version=case.version, actor=ANALYST
     )
-    assert len(seen) >= 2, "a tick is a new plan for the review"
+    assert len(seen) == 1, "a tick re-runs the facts and the default author; it owes the AI nothing"
     by_id = {i.item_id: i for i in case.items}
     assert by_id[a.item_id].state is ProposalState.ACCEPTED
     assert by_id[b.item_id].state is ProposalState.PENDING and not by_id[b.item_id].withdrawn_because
@@ -684,24 +687,26 @@ def test_the_chat_does_not_blame_the_person_for_a_change_the_doctor_withdrew(
     assert "left out earlier" not in case.chat[-1].text
 
 
-def test_the_rules_run_again_when_the_plan_changes(
+def test_the_facts_run_again_when_the_plan_changes(
     storage: LocalStorage, world: World, monkeypatch: Any
 ) -> None:
+    from engine.doctor import facts_goal
+
     runs: list[int] = []
-    real = visit._goal_rules
+    real = facts_goal.goal_facts
 
-    def spy(run: Any, case: Case, brief: Any, step: Any) -> None:
+    def spy(run: Any, case: Case, brief: Any) -> Any:
         runs.append(len(case.items))
-        real(run, case, brief, step)
+        return real(run, case, brief)
 
-    monkeypatch.setattr(visit, "_goal_rules", spy)
+    monkeypatch.setattr(facts_goal, "goal_facts", spy)
     case = _goal_first(storage, world)
     before = len(runs)
     case = _chat(storage, world, case, _ai(_query("SELECT 1")))
     after_chat = len(runs)
     item = next(i for i in case.items if item_subject(i) == "sql@customer_training")
     _decide(storage, world, case, item.item_id)
-    assert after_chat > before and len(runs) > after_chat, "a tick that changes what the rules see runs them"
+    assert after_chat > before and len(runs) > after_chat, "a tick that changes what the facts see runs them"
 
 
 def test_emissions_from_different_producers_give_the_same_plan_in_any_order(

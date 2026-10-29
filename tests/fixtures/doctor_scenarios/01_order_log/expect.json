@@ -20,7 +20,7 @@
         "ask"
       ],
       "open_blocking": [
-        "BUILD_AUDIENCE",
+        "GOAL_SETTING",
         "KEY_NOT_UNIQUE"
       ],
       "can_approve": false,
@@ -28,9 +28,7 @@
       "approvals": "unchanged"
     },
     "audience": {
-      "open_blocking": [
-        "OUTCOME_COLUMN"
-      ],
+      "open_blocking": [],
       "item_state": [
         {
           "title_has": "Training table: one row per shopper",
@@ -68,8 +66,8 @@
         },
         {
           "has": [
-            "is the outcome",
-            "reactivated"
+            "training table",
+            "one row per shopper"
           ]
         }
       ],
@@ -112,8 +110,6 @@
     "verdict": "ready"
   },
   "xfail": {
-    "audience#build_is_a_proposal": "AI-first Stage 2: the training table is proposed through the one author and waits for the person's yes; the rules do not pre-accept it.",
-    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision.",
-    "invariant:screen_matches_ai": "AI-first Stage 4: one guard layer counts the whole file, so a stop never states a sample's counts that the screen does not mark as a sample."
+    "audience#build_is_a_proposal": "AI-first Stage 2: the training table is proposed through the one author and waits for the person's yes; the rules do not pre-accept it."
   }
 }

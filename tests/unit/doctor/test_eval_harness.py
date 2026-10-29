@@ -239,31 +239,17 @@ def test_the_committed_cassette_is_what_the_reference_model_answers_today() -> N
 def test_an_ai_session_checks_what_the_visit_applies_of_the_ais_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The visit applies the AI's clean changes for the person (one Undo). If it applied one on a column that holds a
-    meaning (its own rule, `agent_apply.Roles`), the harness reads that as a meaning changed without approval.
+    """The author puts the AI's clean changes in the plan for the person (one Undo). If it put one on a column that
+    holds a meaning (its own rule, `agent_apply.Roles`), the harness reads that as a meaning changed without
+    approval.
     """
-    from engine.agent.contracts import ProposalState
-    from engine.doctor import agent_apply, visit
-    from engine.doctor.protocol import AGENT
+    from engine.doctor import agent_apply, author
 
-    def applies_everything(
-        _files: Any, _case_files: Any, _plan: Any, fresh: Any, now: Any, *_a: Any, **_k: Any
-    ) -> Any:
-        return [
-            (
-                item.model_copy(
-                    update={"state": ProposalState.ACCEPTED, "decided_by": AGENT, "decided_at": now}
-                ),
-                None,
-            )
-            for item in fresh
-        ]
-
-    monkeypatch.setattr(visit, "agent_applies", applies_everything)
+    monkeypatch.setattr(author, "waits_because", lambda *_a, **_k: None)  # a rule that puts everything in
     clean = bench.ai_session("messy", _live(ReferenceModel()))
     assert (
         clean.applied == 1 and clean.harms == []
-    ), "a change on an ordinary column, applied: undoable, no harm"
+    ), "a change on an ordinary column, in the plan: undoable, no harm"
     monkeypatch.setattr(
         agent_apply,
         "roles_of",

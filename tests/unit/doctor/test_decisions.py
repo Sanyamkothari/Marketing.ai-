@@ -104,6 +104,33 @@ def test_the_first_accepted_key_of_a_file_wins_and_the_rest_are_counted() -> Non
     assert found.keys["up-1"].source == "item:k1" and found.keys["up-1"].by == "person"
 
 
+def test_a_build_declares_its_outcome_but_the_persons_own_choice_for_the_same_goal_and_file_wins() -> None:
+    build = item(
+        "b1",
+        "recipe_step",
+        {"upload_id": "up-1", "buildable": {"outcome_column": "reactivated"}},
+        goal_id="g1",
+        decided_by=None,
+    )
+    chosen = item("o1", "outcome_column", {"upload_id": "up-1", "column": "bought"}, goal_id="g1")
+    assert decisions_from([build]).pair("outcome", "g1") == ("up-1", "reactivated")
+    for order in ([build, chosen], [chosen, build]):
+        found = decisions_from(order)
+        assert found.pair("outcome", "g1") == ("up-1", "bought"), "the build is read after the explicit items"
+        assert [r.column for r in found.shadowed] == ["reactivated"]
+
+
+def test_a_decision_is_the_persons_only_when_they_gave_it_not_when_the_author_put_it_in_the_plan() -> None:
+    undecided = item("k1", "key", {"upload_id": "up-1", "column": "CustomerID"}, decided_by=None)
+    found = decisions_from([undecided])
+    assert found.key("up-1") == "CustomerID" and not found.by_person("key", upload_id="up-1")
+    agent = undecided.model_copy(update={"decided_by": "agent:data-doctor"})
+    assert not decisions_from([agent]).by_person("key", upload_id="up-1")
+    said = undecided.model_copy(update={"decided_by": "u-asha"})
+    assert decisions_from([said]).by_person("key", upload_id="up-1")
+    assert not decisions_from([said]).by_person("key", upload_id="up-2")
+
+
 def test_the_outcome_the_as_of_column_and_the_consent_are_per_goal() -> None:
     found = decisions_from(
         [

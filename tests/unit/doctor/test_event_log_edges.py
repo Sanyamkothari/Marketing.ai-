@@ -11,10 +11,11 @@ import pytest
 from pydantic import JsonValue
 
 from engine.agent.contracts import ProposalState
+from engine.doctor.buildable import audience_left_out
 from engine.doctor.case import Case, CaseItem
 from engine.doctor.guards import make_receipt
 from engine.doctor.plan_check import _step_row, item_sentence_now
-from engine.doctor.visit import _agreed_update, _audience_left_out
+from engine.doctor.visit import _agreed_update
 from engine.doctor.visit_contracts import CaseVisit, PlanCheck
 from tests.unit.doctor.test_sql_trial_state import (
     _dry_run_rows,
@@ -94,10 +95,10 @@ def build_item(*, ids: int, kept: int, audience: bool) -> CaseItem:
 
 
 def test_the_customers_an_audience_leaves_out_are_agreed_up_to_the_count_it_showed() -> None:
-    assert _audience_left_out(build_item(ids=4_372, kept=3_360, audience=True).payload) == 1_012
-    assert _audience_left_out(build_item(ids=4_372, kept=3_360, audience=False).payload) == 1_012
-    assert _audience_left_out({"sentence": "a plain step"}) == 0
-    assert _audience_left_out({"buildable": {"ids": 10, "active_before": 12}}) == 0
+    assert audience_left_out(build_item(ids=4_372, kept=3_360, audience=True).payload) == 1_012
+    assert audience_left_out(build_item(ids=4_372, kept=3_360, audience=False).payload) == 1_012
+    assert audience_left_out({"sentence": "a plain step"}) == 0
+    assert audience_left_out({"buildable": {"ids": 10, "active_before": 12}}) == 0
     case = Case.model_construct(visit=CaseVisit())
     # no count made yet (or a sample's smaller one): the yes still agrees to what the audience showed, no more
     assert _agreed_update(case, build_item(ids=4_372, kept=3_360, audience=True), True) == {
@@ -136,7 +137,7 @@ def test_a_build_says_its_two_dates_and_who_its_audience_leaves_out() -> None:
     from datetime import date
 
     from engine.doctor.buildable import BuildableOutcome
-    from engine.doctor.visit import _say_build_counts
+    from engine.doctor.facts_goal import _say_build_counts
 
     built = BuildableOutcome(
         upload_id="u",
@@ -178,7 +179,7 @@ def test_the_gone_quiet_audience_says_each_group_it_leaves_out_and_why() -> None
     from datetime import date
 
     from engine.doctor.buildable import BuildableOutcome, BuildAudience
-    from engine.doctor.visit import _say_build_counts
+    from engine.doctor.facts_goal import _say_build_counts
 
     quiet = BuildAudience(
         audience_id="quiet",

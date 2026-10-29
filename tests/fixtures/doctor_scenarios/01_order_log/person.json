@@ -24,14 +24,12 @@
   },
   {
     "action": "answer",
-    "match": "ranks",
+    "match": "training table be built from",
     "option": "active",
     "name": "audience"
   },
   {
-    "action": "answer",
-    "match": "column",
-    "option": "recommended",
+    "action": "visit",
     "name": "outcome"
   },
   {

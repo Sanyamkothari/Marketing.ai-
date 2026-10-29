@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 from engine.agent.tools import AgentContext
 from engine.doctor.agent_review import pending
 from engine.doctor.agent_turn import DoctorTurn
-from engine.doctor.subjects import WITHDRAW_KIND
 from engine.generative.errors import BUDGET_EXCEEDED
 
 if TYPE_CHECKING:
@@ -89,7 +88,8 @@ def doctor_converse(
             reply=AI_LIMIT_REPLY if spent else done.reply,
             blocked_by="budget" if spent else done.blocked_by,
             error_codes=done.error_codes,
-            items=_items(case, done.items, done.withdrawn),
+            actions=done.actions,
+            items=_items(done.items),
             evidence=done.evidence,
             sent=done.sent,
             asks=done.asks,
@@ -107,15 +107,9 @@ def doctor_converse(
     return converse
 
 
-def _items(case: Case, items: tuple[Any, ...], withdrawn: tuple[str, ...]) -> tuple[Any, ...]:
-    """The changes for the visit to place. A request to take an item out is dropped when the visit takes that item
-    back itself (its own earlier change, waiting or applied by the agent): it asks the person only for an item that is
-    theirs or that they have approved."""
-    from engine.doctor.visit import _taken_back
-
-    made = {i.item_id for i in items}
-    back = set(_taken_back(case, list(withdrawn), made))
-    return tuple(pending(i) for i in items if not (i.kind == WITHDRAW_KIND and i.replaces in back))
+def _items(items: tuple[Any, ...]) -> tuple[Any, ...]:
+    """The changes the turn put forward, for a reader of the older fields; the visit applies `actions`."""
+    return tuple(pending(i) for i in items)
 
 
 def _withdrawn(items: tuple[Any, ...], withdrawn: tuple[str, ...]) -> tuple[str, ...]:

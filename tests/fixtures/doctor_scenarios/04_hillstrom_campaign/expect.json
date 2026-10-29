@@ -32,7 +32,7 @@
     "goal": {
       "item_state": [
         {
-          "title_has": "“conversion” in hillstrom.csv is the outcome",
+          "title_has": "\u201cconversion\u201d in hillstrom.csv is the outcome",
           "state": [
             "pending",
             "accepted"
@@ -75,7 +75,5 @@
     ],
     "verdict": "ready"
   },
-  "xfail": {
-    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision."
-  }
+  "xfail": {}
 }

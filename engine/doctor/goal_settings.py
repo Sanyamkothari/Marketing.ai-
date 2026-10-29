@@ -156,8 +156,12 @@ class GoalSettings:
         """The setting as the case has it: what the plan or the person decided (when it is still allowed), else the
         default. None for a setting that asks and has no allowed decision yet: the person has not said."""
         found = decided.setting(self.goal_id, name)
-        if found is not None and found.value in self.allowed(name):
-            return found.value
+        # a value is allowed by what it says: a window the AI wrote as "60" is the 60 the configuration allows
+        allowed = next(
+            (v for v in self.allowed(name) if found is not None and str(v) == str(found.value)), None
+        )
+        if allowed is not None:
+            return allowed
         return None if self.asks(name) else self.default(name)
 
     def values(self, decided: Decisions) -> dict[str, SettingValue | None]:
@@ -273,7 +277,7 @@ def _audience_question(goal: GoalSettings, facts: BuildableOutcome) -> Ask | Non
             else OptionEffect(option_id="dont_know")
         ),
         safe=True,
-        says=f"Takes {fallback}." if fallback is not None else "",
+        says=f"Takes the {chosen.phrase(_plural(goal.entity))}." if chosen is not None else "",
     )
     why = " ".join(part for part in (audience.because if recommended is not None else "", safe_why) if part)
     return Ask(

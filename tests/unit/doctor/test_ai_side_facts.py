@@ -27,7 +27,6 @@ from engine.doctor.case import Case, CaseStore
 from engine.doctor.checks_time_keys import key_quality
 from engine.doctor.guards import make_receipt
 from engine.doctor.limits import limits
-from engine.doctor.visit_contracts import CaseVisit
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.storage import LocalStorage
 from tests.fixtures.doctor_eval.chat_model import ChatScript
@@ -260,7 +259,7 @@ def test_the_key_report_reads_in_plain_words() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The review: receipts in the state, and no second call on a state it finished on
+# The review: receipts in the state
 # ---------------------------------------------------------------------------
 class Spy(ar.Script):
     """The scripted review model that keeps the prompts it was sent."""
@@ -274,7 +273,7 @@ class Spy(ar.Script):
         return super()._body(system, user)
 
 
-def test_the_review_reads_the_receipt_of_its_plan_and_is_not_asked_again_on_a_state_it_finished_on(
+def test_the_review_reads_the_receipt_of_its_plan(
     storage: LocalStorage,
 ) -> None:
     world = vs.world()
@@ -287,7 +286,7 @@ def test_the_review_reads_the_receipt_of_its_plan_and_is_not_asked_again_on_a_st
     case = vs.open_case(storage, world)
     files = ar._files(world)
     first = ar._review(ar._guard(client))(case, files, None)
-    assert first.state_digest and first.model_calls == 2
+    assert first.model_calls == 2
     # the same query now sits in the plan: the next review reads its receipt, with what it was counted on
     planned = [i.model_copy(update={"state": ProposalState.PENDING}) for i in first.items]
     case = case.model_copy(update={"items": (*case.items, *planned)})
@@ -297,12 +296,7 @@ def test_the_review_reads_the_receipt_of_its_plan_and_is_not_asked_again_on_a_st
     )
     receipt = next(p["receipt"] for p in json.loads(shown)["plan"] if "receipt" in p)
     assert receipt["rows_made"] == 1_200 and receipt["customers_lost"] == 0
-    assert receipt["counted_on"] == "the whole file" and again.state_digest != first.state_digest
-    # a tick that changes nothing it reads: same state, same digest, no call
-    ticked = case.model_copy(update={"visit": CaseVisit(done={"agent_state": again.state_digest})})
-    calls = len(client.users)
-    quiet = ar._review(ar._guard(client))(ticked, files, None)
-    assert quiet.unchanged and quiet.model_calls == 0 and len(client.users) == calls
+    assert receipt["counted_on"] == "the whole file" and again.model_calls
 
 
 def test_a_result_without_the_id_still_counts_the_rows_it_drops() -> None:

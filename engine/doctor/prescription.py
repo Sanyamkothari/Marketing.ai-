@@ -418,7 +418,7 @@ def prepared_key(
     table, the last table a query of those files makes, since the file is that table when the steps have run. One
     rule for an accepted query (a run) and a query being tried (`also`): a trial and the run agree.
     """
-    from engine.doctor.visit import _ID_NAMED
+    from engine.doctor.tools_facts import ID_NAMED
 
     tables = _query_tables(items, also, uploads)
     chosen = next((m for m in tables if target is not None and target in m), None)
@@ -428,7 +428,7 @@ def prepared_key(
         return key
     if key in chosen:
         return key
-    return next((str(c) for c in chosen if _ID_NAMED.search(str(c).strip())), key)
+    return next((str(c) for c in chosen if ID_NAMED.search(str(c).strip())), key)
 
 
 def make_prescription(

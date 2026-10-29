@@ -24,7 +24,7 @@ from engine.doctor.agent_turn import handle_of
 from engine.doctor.case import Case, CaseChatEntry, TimelineKind, VisitState
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.limits import limits
-from engine.doctor.visit import AGENT, AI_NEEDED_REPLY
+from engine.doctor.visit import AI_NEEDED_REPLY
 from engine.generative.errors import BUDGET_EXCEEDED
 from engine.llm import AwsSignInExpiredError, LLMError
 from engine.llm_http import PROBLEMS, LLMHttpError
@@ -145,36 +145,35 @@ def test_the_owners_conversation_suggests_an_answer_applies_a_filter_and_revises
         "describe_numbers",
     } <= sent, "the screen can say what the AI was shown"
 
-    # (2) Test accounts: a typed filter the guards pass is applied for the person, with its counts.
+    # (2) Test accounts: a typed filter the guards pass is put in the plan for the person, with its counts.
     case = talk.say(TEST_ACCOUNTS)
     (first,) = ai_items(case)
-    assert first.state is ProposalState.ACCEPTED and first.decided_by == AGENT, "applied by the agent"
+    assert (
+        first.state is ProposalState.ACCEPTED and first.decided_by is None
+    ), "in the plan, nobody's decision yet"
     assert (
         first.source is ProposalSource.AI
         and first.title == "Leave out rows where 'customer_id' starts with 999"
     )
     assert talk.reply.item_ids == (first.item_id,) and talk.reply.tools == ("find_values", "propose_step")
     assert first.payload["tried"] == {"rows": 1000, "changed": 31, "failed": 0}, "the card has its counts"
-    decided = [
-        e for e in talk.timeline() if e.kind is TimelineKind.ITEM_DECIDED and e.item_id == first.item_id
+    proposed = [
+        e for e in talk.timeline() if e.kind is TimelineKind.ITEM_PROPOSED and e.item_id == first.item_id
     ]
-    assert decided and decided[-1].details == {"state": "accepted", "by": "agent"}
+    assert proposed and proposed[-1].details["in_plan"] is True
 
-    # (3) The person changes their mind: the agent withdraws its own filter and applies the new one.
+    # (3) The person changes their mind: the agent asks to swap its filter for the new one. The old one is in the
+    # plan, so it stays until the person says yes to the swap.
     case = talk.say(THIS_YEAR)
     by_id = {i.item_id: i for i in ai_items(case)}
     old, new = by_id[first.item_id], next(i for i in by_id.values() if i.item_id != first.item_id)
-    assert old.state is ProposalState.REJECTED and old.decided_by == AGENT, "withdrawn"
-    assert new.state is ProposalState.ACCEPTED and new.decided_by == AGENT, "applied"
-    assert talk.reply.withdrawn == (old.item_id,) and talk.reply.item_ids == (new.item_id,)
-    withdrawn = [
-        e for e in talk.timeline() if e.kind is TimelineKind.ITEM_DECIDED and e.item_id == old.item_id
-    ]
-    assert withdrawn[-1].details == {"state": "rejected", "by": "agent", "withdrawn": True}
+    assert old.state is ProposalState.ACCEPTED and old.decided_by is None, "still in the plan"
+    assert new.state is ProposalState.PENDING and new.replaces == old.item_id, "the swap waits for their yes"
+    assert talk.reply.withdrawn == () and talk.reply.item_ids == (new.item_id,)
 
     # Whatever the agent did, the approval still asks the person: leaving rows out needs their own yes.
     assert case.state in (VisitState.ASK, VisitState.APPROVE)
-    assert visit.unconfirmed(case) == (new,)
+    assert visit.unconfirmed(case) == (old,)
     assert client.asked == 4 + 3 + 3
 
 
@@ -274,7 +273,7 @@ def told(client: ChatScript, key: str = "change") -> dict[str, str]:
     return next(r for r in client.seen[-1].results if key in r)
 
 
-def test_a_filter_that_would_stop_the_plan_waits_for_the_persons_tick_and_the_model_is_told_why(
+def test_a_filter_that_leaves_out_many_rows_is_in_the_plan_where_the_approval_stops_at_it(
     storage: LocalStorage, world: World
 ) -> None:
     client = ChatScript(
@@ -289,10 +288,9 @@ def test_a_filter_that_would_stop_the_plan_waits_for_the_persons_tick_and_the_mo
     talk = Talk(storage, world, client)
     case = talk.say("only recent orders please")
     (item,) = ai_items(case)
-    assert item.state is ProposalState.PENDING and item.decided_by is None
+    assert item.state is ProposalState.ACCEPTED and item.decided_by is None
     assert item.payload["tried"]["changed"] > 100
-    assert "more than 5%" in told(client)["result"], "the stop's own sentence, with our count"
-    assert told(client)["result"].startswith("It waits for the person's tick, because ")
+    assert told(client)["result"].startswith("It is in the plan; the person can untick it")
     assert talk.reply.item_ids == (item.item_id,)
 
 
@@ -347,7 +345,7 @@ def test_a_change_of_meaning_waits_for_the_persons_tick_and_a_tidy_one_does_not(
     by_kind = {i.payload["step"]["kind"]: i for i in ai_items(case)}
     assert by_kind["map_values"].state is ProposalState.PENDING, "a merge is the person's to tick"
     assert by_kind["normalise_text"].state is ProposalState.ACCEPTED, "trimming is applied for them"
-    assert by_kind["normalise_text"].decided_by == AGENT
+    assert by_kind["normalise_text"].decided_by is None
 
 
 def test_the_outcome_never_chooses_which_rows_are_kept(storage: LocalStorage, world: World) -> None:
@@ -689,7 +687,7 @@ def test_taking_out_a_change_the_person_gave_their_own_yes_waits_for_their_yes_a
     )
     talk = Talk(storage, world, client)
     (item,) = ai_items(talk.say(TEST_ACCOUNTS))
-    assert item.decided_by == AGENT
+    assert item.decided_by is None
     talk.case = visit.confirm(
         vs.CLIENT, talk.case.case_id, item.item_id, talk.deps(), principal=ASHA,
         sentence=item_sentence(item.title, item.payload), expected_version=talk.case.version,
@@ -747,7 +745,7 @@ def test_whoever_asked_for_a_change_in_the_chat_counts_as_its_proposer(
     """With separation of duties on, the person who typed "drop test accounts" cannot also give its own yes."""
     talk = Talk(storage, world, ChatScript(SCRIPT))
     (item,) = ai_items(talk.say(TEST_ACCOUNTS))
-    assert item.decided_by == AGENT
+    assert item.decided_by is None
     assert visit.item_proposers(talk.case, item) == (ANALYST,)
 
 
@@ -833,7 +831,7 @@ def test_the_next_turn_reads_the_conversation_the_case_and_its_earlier_looks(
     second = [
         i for i in ai_items(talk.case) if i.title == "Leave out rows where 'customer_id' starts with 10000"
     ]
-    assert len(second) == 1 and second[0].state is ProposalState.ACCEPTED and second[0].decided_by == AGENT
+    assert len(second) == 1 and second[0].state is ProposalState.ACCEPTED and second[0].decided_by is None
     assert (
         len(talk.case.evidence) == 5
     ), "the reloaded look hashes back to its stored id; only the new step is added"
@@ -1046,7 +1044,7 @@ def test_a_stack_of_two_files_goes_through_the_chat_with_the_rules_counts(storag
     (item,) = ai_items(case)
     assert item.kind == "stack_files" and item.source is ProposalSource.AI
     assert (item.payload["rows_in"], item.payload["rows_out"]) == (1_200, 1_200), "counted by our code"
-    assert item.state is ProposalState.ACCEPTED and item.decided_by == AGENT, "nobody lost, no yes needed"
+    assert item.state is ProposalState.PENDING, "the values do not prove it: the person's tick"
     assert talk.reply.tools == ("stack_files",) and talk.reply.item_ids == (item.item_id,)
 
 

@@ -22,7 +22,7 @@ is `too_small` rather than `buildable` when the table the goal would train on co
 from __future__ import annotations
 
 import calendar
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -41,7 +41,14 @@ if TYPE_CHECKING:
     from engine.config import UseCaseConfig
     from engine.doctor.diagnose import LoadedFile
 
-__all__ = ["BuildAudience", "BuildableOutcome", "buildable_outcome", "compile_build", "snapshot_for"]
+__all__ = [
+    "BuildAudience",
+    "BuildableOutcome",
+    "audience_left_out",
+    "buildable_outcome",
+    "compile_build",
+    "snapshot_for",
+]
 
 _LOG = get_logger(__name__)
 
@@ -437,6 +444,25 @@ def buildable_outcome(
             sentence=sentence,
         )
     return None
+
+
+def audience_left_out(payload: Mapping[str, Any]) -> int:
+    """Customers in the file that a build's audience leaves out (no activity on or before the snapshot): the count the
+    person's yes agrees to, from the counts of the audience question (0 for a step that is not a build)."""
+    built = payload.get("buildable")
+    if not isinstance(built, dict):
+        return 0
+    chosen = payload.get("audience")
+    kept = chosen.get("customers") if isinstance(chosen, dict) else built.get("active_before")
+    ids = built.get("ids")
+    if (
+        isinstance(kept, bool)
+        or isinstance(ids, bool)
+        or not isinstance(kept, int)
+        or not isinstance(ids, int)
+    ):
+        return 0
+    return max(0, ids - kept)
 
 
 def _reaches(customers: int, yes: int, floors: tuple[int, int]) -> bool:

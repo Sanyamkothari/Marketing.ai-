@@ -297,7 +297,8 @@ def test_the_chat_through_the_api_applies_a_filter_for_the_person_who_can_undo_i
         (item,) = [i for i in case["items"] if i["source"] == "ai"]
         assert reply["item_ids"] == [item["item_id"]] and reply["tools"] == ["find_values", "propose_step"]
         assert "withdrawn" not in reply and "suggestion" not in reply, "left out of the JSON while empty"
-        assert item["state"] == "accepted" and item["decided_by"] == "agent:data-doctor"
+        # in the plan and nobody's decision: the person's untick (or the approval) is what decides it
+        assert item["state"] == "accepted" and item["decided_by"] is None
         assert item["payload"]["tried"]["changed"] > 0 and item["payload"]["tried"]["rows"] == 1_000
         assert case["counters"]["model_calls"] >= 3, "the chat's three calls are counted on the case"
 
@@ -317,8 +318,9 @@ def test_the_chat_through_the_api_applies_a_filter_for_the_person_who_can_undo_i
         assert seen.state["earlier_looks"] == [
             {"id": "e1", "tool": "find_values", "file": "F1", "column": "customer_id"}
         ], "the look of the earlier turn is back from the case's evidence"
-        # the reply, then the summary the review gave after the chat and after the person's untick
-        assert [h["who"] for h in seen.history] == ["person", "you", "you", "you"]
+        # the reply, then the summary of the review the chat left owed (the files it had not looked through); the
+        # person's untick owes the AI nothing
+        assert [h["who"] for h in seen.history] == ["person", "you", "you"]
         assert later["chat"][-1]["text"] == "I looked at the customer ids."
 
 

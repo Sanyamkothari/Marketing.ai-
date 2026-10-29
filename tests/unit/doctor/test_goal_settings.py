@@ -19,7 +19,7 @@ from engine.agent.sql_step import MAX_COMPILED_SQL_CHARS, run_sql
 from engine.config import config_root as root_of
 from engine.config import load_use_case
 from engine.doctor.buildable import BuildableOutcome, buildable_outcome, compile_build
-from engine.doctor.case import CaseOption, CaseQuestion
+from engine.doctor.case import CaseGoal, CaseOption, CaseQuestion
 from engine.doctor.decisions import decisions, decisions_from
 from engine.doctor.goal_settings import GOAL_SETTING, GoalSettings, load_goal_settings, open_setting_questions
 from engine.doctor.outcomes import OutcomeTemplate, load_outcome_catalogue, sentence_for
@@ -363,6 +363,60 @@ def test_the_value_is_what_was_decided_else_the_default_and_the_digest_follows_i
     assert settings.digest(sixty) == settings.digest(
         decisions(case_of([answered_setting("window_days", 60)], active=GOAL))
     )
+
+
+def test_a_value_the_ai_wrote_as_text_is_the_value_the_goal_allows(config_root: Path) -> None:
+    settings = load_goal_settings(GOAL, config_root)
+    said = decisions(case_of([answered_setting("window_days", "60")], active=GOAL))
+    assert settings.value("window_days", said) == 60, "the AI's '60' is the 60 days the configuration allows"
+    assert (
+        settings.value(
+            "window_days", decisions(case_of([answered_setting("window_days", "45")], active=GOAL))
+        )
+        == 90
+    )
+
+
+def test_i_dont_know_says_which_reading_it_takes_in_the_goals_words(config_root: Path) -> None:
+    settings = load_goal_settings(GOAL, config_root)
+    [ask] = open_setting_questions(settings, case_of(active=GOAL), facts(config_root))  # type: ignore[arg-type]
+    safe = next(o for o in ask.options if o.safe)
+    assert safe.says.startswith("Takes the ") and safe.says != "Takes the quiet.", safe.says
+
+
+def test_a_window_the_person_chose_is_read_by_the_older_readers_too(config_root: Path) -> None:
+    from engine.doctor.build_facts import decided_numbers
+
+    case = case_of([answered_setting("window_days", "60")], active=GOAL)
+    assert decisions(case).window_days(GOAL) == 60, "the history check reads the window the person chose"
+    assert "60" in decided_numbers(case), "and the AI may repeat it"  # type: ignore[arg-type]
+
+
+def test_an_older_neither_leaves_the_ai_no_readings_to_pick_between(config_root: Path) -> None:
+    """The person already declined both readings (the older audience question answered 'neither'): the AI is told the
+    choice is theirs, as before, and is shown no readings to pick from."""
+    from engine.doctor.build_facts import build_facts
+    from engine.doctor.case import Case
+    from engine.doctor.goal_brief import load_goal_brief
+
+    def case(answer: str | None) -> Case:
+        return Case(
+            case_id="case_0123456789abcdef",
+            client_id="default",
+            created_by="u",
+            created_at=NOW,
+            updated_at=NOW,
+            version=1,
+            goals=(CaseGoal(goal_id=GOAL, active=True, set_at=NOW, set_by="u"),),
+            questions=(old_audience_answer(answer),) if answer else (),
+        )
+
+    brief = load_goal_brief(GOAL, root=config_root)
+    files = [loaded(log(1_500), config_root)]
+    asked = build_facts(case(None), brief, files, config_root, lambda _u, name: name)["goal_build"]
+    assert "not chosen yet" in asked["audience"] and asked["readings"]
+    declined = build_facts(case("none"), brief, files, config_root, lambda _u, name: name)["goal_build"]
+    assert declined["audience"] == "the person's choice" and "readings" not in declined
 
 
 # -- the build declares its outcome -----------------------------------------------------------------------------

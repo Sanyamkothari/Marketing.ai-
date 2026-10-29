@@ -174,8 +174,8 @@ def test_a_pending_step_does_not_change_a_built_table(storage: LocalStorage) -> 
 
 
 def test_a_built_outcome_found_by_the_steps_own_words(storage: LocalStorage) -> None:
+    from engine.doctor.facts_goal import _built_outcomes
     from engine.doctor.goal_brief import load_goal_brief
-    from engine.doctor.visit import _built_outcomes
 
     world = _world(_orders())
     case = open_case(storage, world)

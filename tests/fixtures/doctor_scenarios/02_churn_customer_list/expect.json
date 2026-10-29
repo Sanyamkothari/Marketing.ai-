@@ -23,7 +23,7 @@
       "approvals": "unchanged",
       "item_state": [
         {
-          "title_has": "“Churn” in churn_list.csv is the outcome",
+          "title_has": "\u201cChurn\u201d in churn_list.csv is the outcome",
           "state": [
             "pending",
             "accepted"
@@ -60,7 +60,5 @@
     ],
     "verdict": "ready"
   },
-  "xfail": {
-    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision."
-  }
+  "xfail": {}
 }

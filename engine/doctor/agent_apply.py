@@ -5,27 +5,23 @@ None for goes into the plan ("in the plan, undecided": nobody has decided it, an
 as a proposal. What the values prove (`sure`) and the goal's own build go in as well. The author never ticks anything
 itself, and `decided_by` is not written for it.
 
-Until the visit is rebuilt around the one author (`engine.doctor.author`), the chat's AI still goes through
-:func:`agent_applies`: what it proposes is pending, `check`; the **visit** then applies the ones that are safe - the
-agent's own tick, `decided_by` the agent, one Undo, on the timeline - and the chat asks the same question before it
-writes its reply, so what it says it did is what the visit does.
+A change goes into the plan only when all of these hold:
 
-A change is applied for the person only when all of these hold:
-
-* it is a kind in :data:`AGENT_APPLIED_STEPS` with only the parameters listed there (a typed step), or a join or stack
-  that loses nobody and needs no yes of its own (`protocol.approve_class_of`). Everything that gives a value a new
-  meaning (yes/no words, merged spellings, units, filled blanks, ranges), decides how dates or numbers are read, hides
-  a column, or builds a table by a query waits for the tick. So do the outcome, consent, the ID and the date: the AI
-  may suggest an answer, only a click records it;
+* it is a kind in :data:`AGENT_APPLIED_STEPS` with only the parameters listed there (a typed step), or the values prove
+  it (`sure`), or a join or stack that the values prove (`sure`) and the checks found no stop in (one that loses rows
+  past the protocol's limit has its own yes at the approval, `visit.confirm`). A step of a kind only the person ticks (`advisor.NEVER_TICKED_STEPS`) waits whatever
+  proves it.
+  Everything that gives a value a new meaning (yes/no words, merged spellings, units, filled blanks, ranges), decides
+  how dates or numbers are read, hides a column, or builds a table by a query waits for the tick (the goal's own
+  build is the exception: it is in the plan and has its yes at Approve). So do the outcome, consent, the ID and the
+  date: the AI may suggest an answer, only a click records it;
 * it touches no column that holds a meaning: the outcome, the ID (but for leaving out rows by it), the date a row
   describes, who agreed to be contacted or opted out (:class:`Roles`). A rename, a split or a reading of one of
   those is the person's to tick;
-* it carries no warning from the change-share rule and needs no yes of its own;
-* the plan as it would stand with it, run once on the sample under the guards (`plan_check.check_plan`), shows
-  nothing new that **stops or flags**, on this step or any other. One flag on the step itself is expected and does
-  not count: leaving rows out loses customers, which is its purpose; it is APPROVE-class, so the approval still asks
-  the person for their own yes, and a loss over the guards' limit is a stop. A rule that would leave out more than
-  that limit of the whole file, or that reads dates whose day/month order nobody settled, waits as well.
+* it carries no warning from the change-share rule and needs no yes of its own.
+
+What the plan as a whole then shows (a loss of rows, a step that cannot run) is the guards' to stop at the approval
+(`engine.doctor.plan_check`), not a reason for the change to wait.
 
 Nothing here reads a cell or calls the AI.
 """
@@ -36,28 +32,23 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Final
 
+from engine.agent.advisor import NEVER_TICKED_STEPS
 from engine.agent.contracts import AgentConfidence, ProposalState
 from engine.doctor.decisions import role_columns
-from engine.doctor.limits import limits
-from engine.doctor.plan_check import check_plan
-from engine.doctor.protocol import AGENT, approve_class_of
+from engine.doctor.protocol import AGENT
 from engine.doctor.subjects import SETTING_KIND, WITHDRAW_KIND
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from engine.doctor.case import Case, CaseFile, CaseItem
-    from engine.doctor.diagnose import LoadedFile
+    from engine.doctor.case import Case, CaseItem
 
 __all__ = [
     "AGENT_APPLIED_STEPS",
     "NO_ROLES",
-    "Applied",
     "Roles",
-    "agent_applies",
     "meaning_key",
     "person_owns",
     "required_by_goal",
@@ -73,19 +64,12 @@ AGENT_APPLIED_STEPS: Final[dict[str, frozenset[str]]] = {
     "rename_column": frozenset(),
     "remove_rows": frozenset({"operator", "values"}),
 }
-"""The recipe steps the chat's AI may apply for the person (they undo it with one click) once its guard run shows
-no stop and no flag, and the parameters each may carry. A step that decides how to read something - the order of day
-and month, a decimal comma, lakh words, which spellings are one - or that gives a value a new meaning (yes/no words,
-units, filled blanks, ranges, "no value" words) or hides a column waits for the person's tick. Leaving rows out is
-APPROVE-class: the plan still carries it as an own-yes at the approval."""
+"""The recipe steps the author may put into the plan without a tick (the person undoes them with one click, and the
+approval decides them), and the parameters each may carry. A step that decides how to read something - the order of
+day and month, a decimal comma, lakh words, which spellings are one - or that gives a value a new meaning (yes/no
+words, units, filled blanks, ranges, "no value" words) or hides a column waits for the person's tick. Leaving rows out
+is APPROVE-class: the plan still carries it as an own-yes at the approval."""
 _DEFAULT_PARAMS: Final[dict[str, str]] = {"decimal": "."}
-EXPECTED_FLAGS: Final[dict[str, frozenset[str]]] = {"remove_rows": frozenset({"STEP_LOSES_CUSTOMERS"})}
-"""A flag a step is expected to raise by its nature, by step kind: it is shown on the change, not a reason to wait."""
-
-Applied = tuple["CaseItem", str | None]
-"""A change as the visit will write it, and why it waits for the person's tick (None: applied for them)."""
-
-
 _CONSENT_WORDS: Final = re.compile(
     r"(consent|opt[\W_]*(in|out)|optin|optout|unsubscri|suppress|do[\W_]*not[\W_]*(call|contact|disturb)|dnd|gdpr|permission)",
     re.IGNORECASE,
@@ -235,6 +219,8 @@ def waits_because(item: CaseItem, roles: Roles = NO_ROLES) -> str | None:
     sure = item.confidence is AgentConfidence.SURE
     if item.kind == "recipe_step":
         raw = payload.get("step")
+        if isinstance(raw, dict) and raw.get("kind") in {kind.value for kind in NEVER_TICKED_STEPS}:
+            return "this kind of change is yours to tick"  # emptying a value, a range, a reshape, a query
         if sure:  # proof does not lift the protection of a column that holds a meaning
             return _TOUCHES_MEANING if isinstance(raw, dict) and roles.touches(raw) else None
         allowed = AGENT_APPLIED_STEPS.get(str(raw.get("kind"))) if isinstance(raw, dict) else None
@@ -252,103 +238,12 @@ def waits_because(item: CaseItem, roles: Roles = NO_ROLES) -> str | None:
             return _TOUCHES_MEANING
         return None
     if item.kind in (JOIN_KIND, STACK_KIND):
+        if not sure:
+            return "it combines files: that is yours to tick"
         found = payload.get("findings")
         if payload.get("receipt") is None or not isinstance(found, list):
             return "its effect could not be counted"
-        if any(isinstance(f, dict) and f.get("level") in {"stop", "flag"} for f in found):
+        if any(isinstance(f, dict) and f.get("level") == "stop" for f in found):
             return "the checks found something to look at"
-        if approve_class_of(item.kind, payload) is not None:
-            return "it needs your own yes"
-        return None
+        return None  # one that loses rows past the protocol's limit is in the plan, and has its own yes at the approval
     return None if sure else "this kind of change is yours to tick"
-
-
-def _filter_waits(files: Sequence[LoadedFile], item: CaseItem) -> str | None:
-    """Leaving rows out by a rule, judged on the whole file (the guard run sees only its first rows): a rule that
-    would leave out more than the guards' limit waits, and so does a date rule over day/month dates nobody has
-    settled the order of (the rows left out would depend on a guess)."""
-    from engine.agent.formats import order_unsettled
-    from engine.agent.value_steps import remove_rows
-
-    raw = item.payload.get("step")
-    if not isinstance(raw, dict) or raw.get("kind") != "remove_rows":
-        return None
-    loaded = next((f for f in files if f.upload_id == item.upload_id), None)
-    column, params = raw.get("column"), raw.get("params")
-    if loaded is None or not isinstance(column, str) or column not in loaded.frame.columns:
-        return None
-    if not isinstance(params, dict) or not len(loaded.frame):
-        return None
-    operator = str(params.get("operator") or "")
-    cells = loaded.frame[column]
-    if operator in {"before", "after"} and order_unsettled(cells):
-        return "the dates in that column could be day first or month first; which one is yours to say"
-    values = params.get("values")
-    try:
-        kept = remove_rows(cells, operator=operator, values=values if isinstance(values, list) else [])
-    except (ValueError, TypeError, KeyError):
-        return None  # the guard run says what is wrong with it
-    share = 100.0 * float((~kept).mean())
-    stop = limits().gates.loss_stop_pct
-    if share > stop:
-        return f"it would leave out {share:.0f}% of the rows of the whole file, more than {stop:g}%"
-    return None
-
-
-def agent_applies(
-    files: Sequence[LoadedFile],
-    case_files: Sequence[CaseFile],
-    plan: Sequence[CaseItem],
-    fresh: Sequence[CaseItem],
-    now: datetime,
-    roles: Roles = NO_ROLES,
-    as_of: date | None = None,
-    training_as_of: date | None = None,
-) -> list[Applied]:
-    """`fresh`, each with the agent's tick when it may apply and `None` for why it waits when it may not.
-
-    `plan` is the active items as they stand (with the agent's withdrawals); it grows with each change applied, so
-    the second change is judged with the first in place. `as_of` is the case's decided as-of date, so the check binds
-    `$as_of` as the materialiser does."""
-    active = list(plan)
-    out: list[Applied] = []
-    counted = None
-    for item in fresh:
-        reason = waits_because(item, roles) or _filter_waits(files, item)
-        if reason is not None:
-            out.append((item, reason))
-            continue
-        trial = item.model_copy(
-            update={"state": ProposalState.ACCEPTED, "decided_by": AGENT, "decided_at": now}
-        )
-        if item.kind == "recipe_step":
-            step = item.payload.get("step")
-            expected = EXPECTED_FLAGS.get(
-                str(step.get("kind")) if isinstance(step, dict) else "", frozenset()
-            )
-            counted = counted or check_plan(
-                files, case_files, active, as_of=as_of, training_as_of=training_as_of
-            )
-            after = check_plan(
-                files, case_files, [*active, trial], as_of=as_of, training_as_of=training_as_of
-            )
-            seen_keys = {f.key for f in counted.findings}
-            seen_codes = {(f.code, f.item_id) for f in counted.findings}
-            found = [
-                f
-                for f in after.findings
-                if f.level in {"stop", "flag"}
-                and not (f.code in expected and f.item_id == item.item_id)  # what the step is for
-                and (
-                    f.key not in seen_keys
-                    if f.item_id in (item.item_id, None)  # its own, or the whole plan's
-                    else (f.code, f.item_id) not in seen_codes  # another step's: only what is new there
-                )
-            ]
-            if found:
-                out.append((item, found[0].text))
-                continue
-            counted = after
-        active.append(trial)
-        out.append((trial, None))
-    return out

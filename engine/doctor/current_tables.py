@@ -326,9 +326,9 @@ def _built_key(columns: Sequence[str], given: str | None) -> str | None:
     """A built table's key: the one its query names when the table has it, else an ID-named column (not a decision)."""
     if given is not None and given in columns:
         return given
-    from engine.doctor.visit import _ID_NAMED
+    from engine.doctor.tools_facts import ID_NAMED
 
-    return next((c for c in columns if _ID_NAMED.search(c.strip())), None)
+    return next((c for c in columns if ID_NAMED.search(c.strip())), None)
 
 
 def _time_of(frame: pd.DataFrame, named: str | None) -> str | None:

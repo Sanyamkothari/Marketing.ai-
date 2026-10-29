@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 from pydantic import Field, JsonValue
 
 from engine.access.roles import Principal
-from engine.agent.contracts import ProposalState
+from engine.agent.contracts import ProposalSource, ProposalState
 from engine.config import ConfigError, StrictBase, load_engine_config
 from engine.doctor.case import Case, CaseItem, CaseQuestion, TimelineEvent, TimelineKind
 from engine.doctor.goal_names import goal_display_name
@@ -454,7 +454,9 @@ def _change(
         if _is_agent(item.decided_by):
             by = "agent"
         elif not item.decided_by:
-            by = "rules"
+            by = (
+                "agent" if item.source is ProposalSource.AI else "rules"
+            )  # in the plan, nobody's decision yet
         else:  # a person: the reader, or (when we know who reads) a teammate
             by = "you" if principal is None or item.decided_by == principal.user_id else "someone"
     return ChangeCard(

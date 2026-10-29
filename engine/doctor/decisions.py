@@ -177,6 +177,22 @@ class Decisions:
             None,
         )
 
+    def by_person(
+        self, kind: DecisionKind, *, upload_id: str | None = None, goal_id: str | None = None
+    ) -> bool:
+        """Whether a person decided `kind` for this file or goal (an answer they gave, or a change they ticked or
+        approved). What the author put in the plan and nobody has decided yet is in :meth:`column` and the others,
+        but it is not theirs: the author says it again each time it still holds."""
+        from engine.doctor.protocol import AGENT
+
+        return any(
+            r.kind == kind
+            and r.by not in (None, AGENT)
+            and (upload_id is None or r.upload_id in (upload_id, None))
+            and (goal_id is None or r.goal_id in (None, goal_id))
+            for r in self.records
+        )
+
     def declared(self, kind: DecisionKind, upload_id: str) -> str | None:
         """The column decided for `kind` for this file, whatever the file holds (it may be built by a query)."""
         return self.column(kind, upload_id)
@@ -286,7 +302,15 @@ class Decisions:
         return date.fromisoformat(str(found.value)) if found is not None else self.as_of_date
 
     def window_days(self, goal_id: str | None = None) -> int | None:
-        """The outcome window in days: the goal's, else one decided for no goal in particular."""
+        """The outcome window in days: the goal's setting (what the person or the plan decided), else its older
+        `setting` item's, else one decided for no goal in particular."""
+        if goal_id is not None:
+            chosen = self.setting(goal_id, "window_days")
+            if chosen is not None:
+                try:
+                    return int(chosen.value)
+                except ValueError:
+                    pass
         found = self.of("window")
         for r in found:
             if goal_id is not None and r.goal_id == goal_id and isinstance(r.value, int):
@@ -340,33 +364,45 @@ def decisions_from(items: Iterable[CaseItem], questions: Sequence[CaseQuestion] 
         seen.add(place)
         records.append(record)
 
+    builds: list[tuple[CaseItem, str]] = []
     for item in accepted:
         kind = _ITEM_KINDS.get(item.kind)
         column = item.payload.get("column")
-        if kind is None and item.kind == "recipe_step" and isinstance(item.payload.get("buildable"), dict):
-            kind, column = "outcome", item.payload.get("outcome_column")  # the build declares its outcome
+        built = item.payload.get("buildable")
+        if kind is None and item.kind == "recipe_step" and isinstance(built, dict):
+            # the build declares its outcome: after every explicit outcome item, so the person's own choice for the
+            # same goal and file is never the one that is shadowed
+            declared = item.payload.get("outcome_column") or built.get("outcome_column")
+            if isinstance(declared, str):
+                builds.append((item, declared))
+            continue
         if kind is None or not isinstance(column, str):
             continue
-        named = item.payload.get("upload_id")
-        in_upload = named if isinstance(named, str) else item.upload_id
-        add(
-            Decided(
-                kind=kind,
-                value=column,
-                by=item.decided_by,
-                at=item.decided_at,
-                source=f"item:{item.item_id}",
-                upload_id=item.upload_id,
-                in_upload=in_upload,
-                goal_id=item.goal_id,
-            ),
-            (kind, item.upload_id, item.goal_id, in_upload),
-        )
+        add(*_record_of(item, kind, column))
+    for item, column in builds:
+        add(*_record_of(item, "outcome", column))
     _as_of(accepted, questions, add)
     _as_of(accepted, questions, add, "training_as_of")
     _window(accepted, add)
     _settings(accepted, questions, add)
     return Decisions(records=tuple(records), ignored=ignored, shadowed=tuple(shadowed))
+
+
+def _record_of(item: CaseItem, kind: DecisionKind, column: str) -> tuple[Decided, tuple[Any, ...]]:
+    """What an accepted item decides, and the place it decides it for."""
+    named = item.payload.get("upload_id")
+    in_upload = named if isinstance(named, str) else item.upload_id
+    record = Decided(
+        kind=kind,
+        value=column,
+        by=item.decided_by,
+        at=item.decided_at,
+        source=f"item:{item.item_id}",
+        upload_id=item.upload_id,
+        in_upload=in_upload,
+        goal_id=item.goal_id,
+    )
+    return record, (kind, item.upload_id, item.goal_id, in_upload)
 
 
 def _option_of(question: CaseQuestion) -> CaseOption | None:

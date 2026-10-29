@@ -71,7 +71,6 @@
     ]
   },
   "xfail": {
-    "invariant:accepted_needs_person": "AI-first Stage 2: one author. Nothing is pre-accepted by the rules; the person's yes or the single approval records every decision.",
     "euros_only#spend_outcome": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows",
     "approved#spend_outcome": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows",
     "final": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows"

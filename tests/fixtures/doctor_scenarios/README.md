@@ -10,7 +10,7 @@ Each folder is one scenario that `scripts/doctor_scenarios.py` plays against the
 | `baseline_replies.jsonl` | Hand-written prose that stands in for the AI until then, with no tool use. It is the baseline of today's behaviour and nothing else. It is used only while there is no `replies.jsonl`. |
 
 `xfail` keys are checkpoint names, or `invariant:<name>` for the seven invariants of the brief (Stage 0, item 5; the first
-is two checks, `accepted_not_by_ai`, which holds today, and `accepted_needs_person`, which holds from Stage 2). What must hold
+is two checks: `accepted_not_by_ai`, and `accepted_needs_person`: a change the author put in the plan is "in the plan, undecided" until the approval, it never carries the decision of the rules or the system, and past the approval every change in the plan is the person's). What must hold
 whatever the AI does (`approvals`, `none_accepted_by_ai`) goes in its own `"step#safety"` group, never in a group that is
 marked `xfail` (the "#safety" group does not fail for a step that did nothing). `approvals` is an exact count. The
 test marks each one `xfail(strict=True)`: the day a check passes, the suite fails until its entry is removed.

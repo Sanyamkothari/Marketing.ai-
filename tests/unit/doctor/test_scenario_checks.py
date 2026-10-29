@@ -53,12 +53,21 @@ def found(name: str, *args: Any, **kwargs: Any) -> list[str]:
 # -- 1: nothing is accepted without a person -------------------------------------------------------------------------
 
 
-def test_an_item_the_rules_accepted_is_found_until_an_approval_records_it() -> None:
-    rules = item("k1", "accepted", title="A key")
-    assert found("accepted_needs_person", case(rules)) != []
-    assert found("accepted_not_by_ai", case(rules)) == [], "the rules' part is the other check"
-    approved = case(rules, approvals=[{"item_ids": ["k1"]}])
+def test_a_change_in_the_plan_that_nobody_decided_is_the_approvals_to_decide() -> None:
+    undecided = item("k1", "accepted", title="A key")
+    assert (
+        found("accepted_needs_person", case(undecided)) == []
+    ), "before the approval it is in the plan, undecided"
+    past = case(undecided, state="prescribe")
+    assert found("accepted_needs_person", past) != [], "once past the approval it must be the person's"
+    assert found("accepted_not_by_ai", past) == [], "the rules' part is the other check"
+    approved = case(undecided, state="prescribe", approvals=[{"item_ids": ["k1"]}])
     assert found("accepted_needs_person", approved) == []
+
+
+def test_a_change_the_rules_or_the_system_decided_is_found_at_any_time() -> None:
+    assert found("accepted_needs_person", case(item("k1", "accepted", by="rules"))) != []
+    assert found("accepted_needs_person", case(item("k1", "accepted", by="system"))) != []
 
 
 def test_an_item_an_ai_accepted_is_found_whatever_the_rules_do() -> None:
