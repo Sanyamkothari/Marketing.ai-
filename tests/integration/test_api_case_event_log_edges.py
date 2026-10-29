@@ -116,7 +116,7 @@ def test_an_order_log_with_blank_ids_asks_which_column_names_the_customer_and_go
     outcome = open_question(case, "OUTCOME_COLUMN")
     assert outcome is not None and outcome["recommended"] is not None
     chosen = next(o for o in outcome["options"] if o["option_id"] == outcome["recommended"])
-    assert chosen["label"] == "reactivated_90d" and "training table in this plan" in outcome["why"]
+    assert chosen["label"] == "reactivated" and "training table in this plan" in outcome["why"]
     assert next(c for c in cards("question") if c["code"] == "OUTCOME_COLUMN")["dont_know"] is not None
     assert not cards("ready"), "still a question open"
     case = answer(client, case_id, case, "OUTCOME_COLUMN", outcome["recommended"])
