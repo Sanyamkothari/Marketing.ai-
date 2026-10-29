@@ -16,57 +16,77 @@ approves it.
   own names are cell text, so the model gets their ids; the person sees them in the question.
 
 Neither tool changes anything, and neither returns a cell value.
+
+The rules of the visit are facts too (Stage 2, the design §1.3). `key_facts`, `detector_facts` and
+`role_step_facts` here, and the goal's own in `engine.doctor.facts_goal`, each return `Facts`: what the data says
+(names and counts only), the `Suggestion`s the rules would make (an item, a question, a doubt, a request, a
+withdrawal) with their reasons, and the tool results the suggestions cite. Nothing in them writes the case: the
+author, the AI or the default one, applies the suggestions it takes.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
-from datetime import date
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol
 
 import pandas as pd
-from pydantic import Field
+from pydantic import Field, JsonValue
 
 from api.access_policy import RoutePolicy
 from engine.access.roles import Role
+from engine.agent.contracts import AgentConfidence, ProposalState, RecipeStepKind
 from engine.agent.formats import to_datetime_mixed
 from engine.config import ProblemType, StrictBase, UseCaseConfig
 from engine.content_cache import ContentCache, frame_digest
+from engine.doctor.case import Case, CaseDoubt, CaseItem, payload_digest
+from engine.doctor.protocol import Ask, AskOption, DataRequest
 from engine.doctor.registry import (
     DataTool,
     DataToolContext,
     DataToolError,
     DataToolKind,
     DataToolRegistry,
+    DataToolResult,
     Exposure,
 )
 from engine.doctor.tools import FileArgs, _config, _file_or_files, _loaded
+from engine.doctor.visit_contracts import OptionEffect
 
 if TYPE_CHECKING:
+    from engine.doctor.current_tables import CurrentTables
     from engine.doctor.diagnose import LoadedFile
+    from engine.doctor.goal_brief import GoalBrief
 
 __all__ = [
     "M_FACT_TOOLS",
+    "AskPerson",
     "CampaignColumn",
     "CampaignColumns",
-    "ConsentFacts",
-    "FactQuestion",
-    "FactSuggestion",
-    "GoalBuildFacts",
-    "KeyFacts",
+    "Create",
+    "Doubt",
+    "FactAction",
+    "FactDeps",
+    "FactRun",
+    "Facts",
+    "Found",
+    "ItemDraft",
     "OrderColumn",
     "OrderFileFacts",
-    "TimeFacts",
+    "Request",
+    "Suggestion",
+    "Withdraw",
     "campaign_columns",
-    "extract_consent_facts",
-    "extract_goal_build_facts",
-    "extract_key_facts",
-    "extract_time_facts",
+    "detector_facts",
+    "draft_item_id",
+    "key_facts",
     "level_labels",
     "order_file_facts",
     "register_fact_tools",
+    "role_step_facts",
+    "suggestion",
 ]
 
 M_FACT_TOOLS: Final[tuple[str, ...]] = ("describe_order_file", "find_test_columns")
@@ -315,88 +335,242 @@ def register_fact_tools(registry: DataToolRegistry) -> tuple[str, ...]:
 
 
 # ---------------------------------------------------------------------------
-# Fact Models & Extractors (converting rule writers to read-only fact tools)
+# Rules as facts: what one fact function read and what it would do about it. Nothing here writes the case.
 # ---------------------------------------------------------------------------
+class ItemDraft(StrictBase):
+    """What a fact tool or an AI tool call produced, receipt included. Where it goes (in the plan, or waiting for a
+    tick) is decided by code when the author's actions are applied, never by the draft."""
 
-
-class FactSuggestion(StrictBase):
     kind: str
-    payload: dict[str, Any]
+    payload: dict[str, JsonValue]
     title: str
+    upload_id: str | None = None
+    goal_id: str | None = None
+    confidence: AgentConfidence
+    evidence_ids: tuple[str, ...] = ()
+
+
+class Create(StrictBase):
+    op: Literal["create"] = "create"
+    draft: ItemDraft
     reason: str
-    confidence: str = "sure"
-    ticked: bool = False
-    needs_yes: bool = False
-    upload_id: str | None = None
-    goal_id: str | None = None
+    replaces: str | None = None
+    basis: str = Field(default="", description='"s:<suggestion id>", "r<n>" evidence or "msg:<n>".')
 
 
-class FactQuestion(StrictBase):
-    code: str
-    text: str
-    choices: tuple[tuple[str, dict[str, Any]], ...]
-    upload_id: str | None = None
-    column: str | None = None
-    goal_id: str | None = None
-    blocking: bool = True
-    recommended: str | None = None
-    why: str = ""
-    safe: str | None = None
+class Withdraw(StrictBase):
+    op: Literal["withdraw"] = "withdraw"
+    item_id: str
+    reason: str
+    consequence: str
 
 
-class KeyFacts(StrictBase):
-    upload_id: str
-    unique_keys: tuple[dict[str, Any], ...] = ()
-    near_keys: tuple[dict[str, Any], ...] = ()
-    is_event_file: bool = False
-    candidate_key: str | None = None
-    candidate_customer_column: str | None = None
-    suggestions: tuple[FactSuggestion, ...] = ()
-    questions: tuple[FactQuestion, ...] = ()
+class AskPerson(StrictBase):
+    op: Literal["ask"] = "ask"
+    ask: Ask
 
 
-class GoalBuildFacts(StrictBase):
-    goal_id: str
-    buildable_outcome: Any | None = None
-    enough: bool = False
-    snapshot: date | None = None
-    window_days: int = 0
-    audiences: tuple[Any, ...] = ()
-    suggested_build: FactSuggestion | None = None
-    audience_question: FactQuestion | None = None
+class Doubt(StrictBase):
+    op: Literal["doubt"] = "doubt"
+    doubt: CaseDoubt
 
 
-class TimeFacts(StrictBase):
-    upload_id: str
-    time_columns: tuple[str, ...] = ()
-    partial_month: bool = False
-    partial_rows: int = 0
-    last_month_end: str | None = None
-    suggested_as_of: str | None = None
-    missing: bool = False
-    suggestions: tuple[FactSuggestion, ...] = ()
-    questions: tuple[FactQuestion, ...] = ()
+class Request(StrictBase):
+    op: Literal["request"] = "request"
+    request: DataRequest
 
 
-class ConsentFacts(StrictBase):
-    upload_id: str
-    consent_columns: tuple[str, ...] = ()
-    missing: bool = False
-    suggestions: tuple[FactSuggestion, ...] = ()
+FactAction = Annotated[Create | Withdraw | AskPerson | Doubt | Request, Field(discriminator="op")]
+"""What a fact function suggests: the author's actions, without `SetSetting` (Stage 3 adds the settings)."""
 
+
+class Suggestion(StrictBase):
+    id: str = Field(description="A stable hash of the action.")
+    action: FactAction
+    reason: str
+
+
+class Facts(StrictBase):
+    """What a fact function read (names and counts only), what it would do about it, and how much it left out."""
+
+    facts: dict[str, Any] = Field(default_factory=dict)
+    suggested: tuple[Suggestion, ...] = ()
+    left_out: int = 0
+    evidence: tuple[DataToolResult, ...] = Field(
+        default=(), description="The tool results the suggestions cite, for the case's evidence."
+    )
+
+
+def suggestion(action: Create | Withdraw | AskPerson | Doubt | Request, reason: str) -> Suggestion:
+    """`action` as a suggestion; its id is a hash of it, and a `Create` cites that id as its basis."""
+    key = "s" + payload_digest(action.model_dump(mode="json"))[:16]
+    if isinstance(action, Create):
+        action = action.model_copy(update={"basis": f"s:{key}"})
+    return Suggestion(id=key, action=action, reason=reason)
+
+
+def draft_item_id(draft: ItemDraft) -> str:
+    """The id of the item a draft becomes: its content, so proposing it again finds it. What a trial on the first
+    rows counted (`tried`) is not part of what the change is: the rules' and the chat's version of one step are one.
+    """
+    payload = {k: v for k, v in draft.payload.items() if k != "tried"}
+    return f"{draft.kind}.{draft.goal_id or 'base'}.{payload_digest({'v': payload})[:12]}"[:128]
+
+
+class FactDeps(Protocol):
+    """The part of the visit's deps the fact functions read."""
+
+    @property
+    def config_root(self) -> Path | None: ...
+
+    @property
+    def offers(self) -> Sequence[Any]: ...
+
+    @property
+    def detectors(self) -> Sequence[Any]: ...
+
+    def clock(self) -> datetime: ...
+
+
+class FactRun(Protocol):
+    """What the fact functions need of a visit's run (`engine.doctor.visit._Run` is one): the files, the current
+    tables, a tool context and a way to call a tool (which keeps the count of calls)."""
+
+    @property
+    def deps(self) -> FactDeps: ...
+
+    def files(self, case: Case) -> tuple[LoadedFile, ...]: ...
+
+    def current(self, case: Case) -> CurrentTables: ...
+
+    def context(self, case: Case, **extra: Any) -> DataToolContext: ...
+
+    def call(self, name: str, given: Mapping[str, Any], ctx: DataToolContext) -> DataToolResult: ...
+
+
+class Found:
+    """The suggestions one fact function makes, in the order it makes them, and the results they cite."""
+
+    def __init__(self) -> None:
+        self.suggested: list[Suggestion] = []
+        self.evidence: list[DataToolResult] = []
+        self.drafts: list[ItemDraft] = []
+
+    def add(self, draft: ItemDraft, reason: str) -> ItemDraft:
+        self.drafts.append(draft)
+        self.suggested.append(suggestion(Create(draft=draft, reason=reason), reason))
+        return draft
+
+    def create(
+        self,
+        kind: str,
+        payload: dict[str, JsonValue],
+        *,
+        title: str,
+        upload_id: str | None,
+        confidence: AgentConfidence,
+        evidence: tuple[str, ...],
+        reason: str,
+        goal_id: str | None = None,
+    ) -> ItemDraft:
+        draft = ItemDraft(
+            kind=kind,
+            payload=payload,
+            title=title,
+            upload_id=upload_id,
+            goal_id=goal_id,
+            confidence=confidence,
+            evidence_ids=evidence,
+        )
+        return self.add(draft, reason)
+
+    def ask(
+        self,
+        code: str,
+        subject: Mapping[str, JsonValue],
+        *,
+        text: str,
+        choices: Sequence[tuple[str, OptionEffect]],
+        upload_id: str | None,
+        reason: str,
+        column: str | None = None,
+        goal_id: str | None = None,
+        blocking: bool = True,
+        recommended: str | None = None,
+        why: str = "",
+        safe: str | None = None,
+    ) -> None:
+        """A question whose id is its code, its goal (none for the base) and its subject - never the mode it is
+        asked in - so a question answered once is found, not asked again, whenever the rules need the same answer.
+
+        The rules recommend no column on a guess of their own (which column is which is the person's to say). A
+        `recommended` option is only ever one that a step the person already approved, or the build the goal
+        offers, uses as a fact; `why` says so in plain words. The person still answers. `safe` is the option "I
+        don't know" stands for: the one that is safe to take for them (often the one that decides nothing, but it
+        can also be a real option, such as the widest audience). It is still a real answer the agent may point at.
+        """
+        ask = Ask(
+            code=code,
+            subject=subject,
+            text=text,
+            why=why,
+            options=tuple(
+                AskOption(label=label, effect=effect, safe=effect.option_id == safe)
+                for label, effect in choices
+            ),
+            rows=0,
+            upload_id=upload_id,
+            column=column,
+            goal_id=goal_id,
+            blocking=blocking,
+            recommended=recommended if recommended in {effect.option_id for _l, effect in choices} else None,
+        )
+        self.suggested.append(suggestion(AskPerson(ask=ask), reason))
+
+    def doubt(self, doubt: CaseDoubt, reason: str) -> None:
+        self.suggested.append(suggestion(Doubt(doubt=doubt), reason))
+
+    def request(self, request: DataRequest, reason: str) -> None:
+        self.suggested.append(suggestion(Request(request=request), reason))
+
+    def facts(self, facts: dict[str, Any], *, left_out: int = 0) -> Facts:
+        return Facts(
+            facts=facts, suggested=tuple(self.suggested), left_out=left_out, evidence=tuple(self.evidence)
+        )
+
+
+DONT_KNOW: Final[str] = "I don't know"
+UNIQUE: Final[float] = 1.05
+"""A column with at most this many rows for each value names each row."""
+NEAR_ROWS_PER_KEY: Final[float] = 50.0
+"""A text column whose values repeat at most this often may name customers who appear on several rows."""
+OUTPUT_NAME_CHARS: Final[int] = 64
+MAX_OFFERED: Final[int] = 5
+"""Columns offered in one question."""
+ROW_ID_WARNING: Final[str] = (
+    "This file has no column that names each row, so this adds a row number. A row number only counts the rows "
+    "of this file: predictions cannot be joined back to your CRM or customer list without a real ID. Say no and "
+    "send a file with an ID column to get that."
+)
+"""What the person is told with the proposed row number (never silently invented: it waits for their yes)."""
 
 _ID_NAMED: Final[re.Pattern[str]] = re.compile(
     r"(^|[_\s-])id$|^id[_\s-]|_key$|(customer|cust|client|member|account)[_\s-]?(id|no|num|number|code|ref)$",
     re.I,
 )
+"""A column named like the ID of a person or an account: `customer_id`, `Customer ID`, `account_no`, `member_code`."""
 
 
-def id_named(unique: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    named = [key for key in unique if _ID_NAMED.search(str(key.get("column", "")).strip())]
-    return named or list(unique)
+def id_named(unique: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Of the columns with a different value on every row, the ID-named ones when there are any: a spend or a
+    score that happens to be unique does not compete with `customer_id`. Two ID-named columns still compete.
+    """
+    named = [key for key in unique if _ID_NAMED.search(str(key["column"]).strip())]
+    return named or unique
 
 
 def dates_column(series: pd.Series) -> bool:
+    """A text column that reads as dates on nearly every value (digits joined by a date or time separator)."""
     from engine.onboarding.sources import MIN_TIME_PARSE_RATE
 
     seen = series.dropna().astype(str).head(500)
@@ -405,22 +579,31 @@ def dates_column(series: pd.Series) -> bool:
     return bool(pd.to_datetime(seen, errors="coerce", format="mixed").notna().mean() >= MIN_TIME_PARSE_RATE)
 
 
-def near_keys(frame: pd.DataFrame, profile: Any) -> list[dict[str, Any]]:
+def near_keys(loaded: LoadedFile) -> list[dict[str, Any]]:
+    """The columns that could name the customers though none is unique and complete: a text column whose values
+    repeat a few times (an events file) or that has some blanks, and any column named like an ID, over every column
+    of the file (not the five the role tool lists first, which rank the fewest blanks first and so leave out a
+    customer column with blanks). A column of dates never names a customer. Ranked: named like an ID first (a hint,
+    not a decision), then the fewest repeats."""
     from engine.onboarding.sources import key_candidates
 
     found: list[dict[str, Any]] = []
-    for candidate in key_candidates(profile):
+    for candidate in key_candidates(loaded.profile):
         key = candidate.model_dump(mode="json")
-        col = str(key["column"])
-        if col not in frame.columns:
+        column = str(key["column"])
+        if column not in loaded.frame.columns:
             continue
-        named = bool(_ID_NAMED.search(col.strip()))
-        series = frame[col]
+        named = bool(_ID_NAMED.search(column.strip()))
+        series = loaded.frame[column]
         text = not (pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series))
         repeats = float(key.get("rows_per_key") or 99.0)
         blanks = float(key.get("null_rate") or 0.0)
         if named or (
-            text and repeats <= 50.0 and blanks < 0.5 and series.nunique() > 1 and not dates_column(series)
+            text
+            and repeats <= NEAR_ROWS_PER_KEY
+            and blanks < 0.5
+            and series.nunique() > 1
+            and not dates_column(series)
         ):
             found.append(key)
     found.sort(
@@ -430,6 +613,9 @@ def near_keys(frame: pd.DataFrame, profile: Any) -> list[dict[str, Any]]:
 
 
 def event_file(roles: dict[str, Any], event_roles: frozenset[str]) -> bool:
+    """The file reads as events or transactions: an event role of the catalogue outscores every other role, so a
+    row number would not be its ID. A tie is no evidence (a file with no date and nothing that names a role ties
+    its event roles at the same low score), so it does not count as events."""
     ranked = [r for r in roles.get("roles", []) if isinstance(r, dict)]
     if not ranked or ranked[0].get("role") not in event_roles:
         return False
@@ -440,265 +626,332 @@ def event_file(roles: dict[str, Any], event_roles: frozenset[str]) -> bool:
     return not isinstance(second, (int, float)) or top > second
 
 
-def extract_key_facts(
-    loaded: LoadedFile,
-    event_roles: frozenset[str] = frozenset(),
-    roles_output: dict[str, Any] | None = None,
-) -> KeyFacts:
-    from engine.onboarding.sources import key_candidates
+def near_key_label(key: dict[str, Any], *, events: bool) -> str:
+    """One offered customer column with its facts: how often a value repeats and the share of blank rows (rows
+    with a blank there cannot be tied to a person)."""
+    blank = float(key.get("null_rate") or 0.0)
+    label = f"{key['column']} (a value repeats about {float(key.get('rows_per_key') or 1):.1f} times"
+    if blank >= 0.005:
+        label += f"; {blank:.0%} blank" + (", those rows cannot be tied to a person" if events else "")
+    return label + ")"
 
-    raw_candidates = [c.model_dump(mode="json") for c in key_candidates(loaded.profile)]
-    unique = [
-        k
-        for k in raw_candidates
-        if float(k.get("rows_per_key") or 99.0) <= 1.0 and float(k.get("null_rate") or 0.0) < 0.05
-    ]
-    unique = id_named(unique)
-    near = near_keys(loaded.frame, loaded.profile)
-    is_events = event_file(roles_output or {}, event_roles) if event_roles else False
 
-    suggestions: list[FactSuggestion] = []
-    questions: list[FactQuestion] = []
-    candidate_key: str | None = None
+def approved_build_key(case: Case, upload_id: str) -> str | None:
+    """The customer column of an approved build that reads this file: the build counts customers by it, so the
+    question which column names the customer is answered by the step the person approved."""
+    from engine.doctor.visit import active_section
 
-    name = loaded.file_name or "this file"
-    if len(unique) == 1:
-        col = str(unique[0]["column"])
-        candidate_key = col
-        suggestions.append(
-            FactSuggestion(
-                kind="key",
-                payload={"upload_id": loaded.upload_id, "column": col},
-                title=f"“{col}” names each row of {name}.",
-                reason=f"“{col}” has a unique value on every row and no missing values.",
-                confidence="sure",
-                ticked=True,
-                upload_id=loaded.upload_id,
+    for item in active_section(case)[0]:
+        built = item.payload.get("buildable")
+        if (
+            item.kind == "recipe_step"
+            and item.state is ProposalState.ACCEPTED
+            and isinstance(built, dict)
+            and built.get("upload_id") == upload_id
+            and isinstance(built.get("entity_key"), str)
+        ):
+            return str(built["entity_key"])
+    return None
+
+
+def offered_build_key(diagnosis: Mapping[str, Any] | None, upload_id: str) -> str | None:
+    """The one customer column the goals that can be built from this file count customers by (the diagnosis'
+    `buildable` facts), or None when there is none or they disagree."""
+    found = {
+        str(built["entity_key"])
+        for use_case in (diagnosis or {}).get("use_cases", [])
+        if isinstance(use_case, dict)
+        and isinstance(built := use_case.get("buildable"), dict)
+        and built.get("upload_id") == upload_id
+        and isinstance(built.get("entity_key"), str)
+    }
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def key_facts(run: FactRun, case: Case, diagnosis: Mapping[str, Any] | None = None) -> Facts:
+    """What does not depend on a goal: which column names each row of each file whose key nobody decided.
+
+    One column that is different on every row is a `Create key`; several are the question which one; none are the
+    columns that could name the customers (with how often a value repeats and how many are blank) or, for a file
+    that is not events, a row number. For a file of events the customer question recommends the column the goals'
+    build counts customers by: `diagnosis` holds those builds as the goal check left them (the case's, when not
+    given). The person still answers."""
+    from engine.config import get_roles
+    from engine.doctor.decisions import decisions
+
+    found = Found()
+    diagnosis = case.diagnosis if diagnosis is None else diagnosis
+    event_roles = frozenset(get_roles(run.deps.config_root).event_roles)
+    current = run.current(case)
+    ctx = run.context(case, files=current.files)
+    reading: list[dict[str, Any]] = []
+    for loaded in current.files:
+        upload_id = loaded.upload_id
+        if decisions(case).key(upload_id) is not None or approved_build_key(case, upload_id) is not None:
+            continue
+        result = run.call("find_file_role", {"upload_id": upload_id}, ctx)
+        found.evidence.append(result)
+        unique = id_named(
+            [
+                key
+                for key in result.output.get("keys", [])
+                if isinstance(key, dict)
+                and float(key.get("rows_per_key") or 99.0) <= UNIQUE
+                and float(key.get("null_rate") or 0.0) < 0.05
+            ]
+        )
+        name = loaded.file_name or "this file"
+        events = False
+        near: list[dict[str, Any]] = []
+        if len(unique) == 1:
+            column = str(unique[0]["column"])
+            found.create(
+                "key",
+                {"upload_id": upload_id, "column": column},
+                title=f"“{column}” names each row of {name}.",
+                upload_id=upload_id,
+                confidence=AgentConfidence.SURE,
+                evidence=(result.evidence_id,),
+                reason=f"“{column}” holds a different value on every row and none is blank.",
             )
-        )
-    elif len(unique) > 1:
-        choices: tuple[tuple[str, dict[str, Any]], ...] = (
-            *(
+        elif len(unique) > 1:
+            choices = [
                 (
-                    str(k["column"]),
-                    {
-                        "option_id": f"c{i}",
-                        "kind": "key",
-                        "payload": {"upload_id": loaded.upload_id, "column": str(k["column"])},
-                        "title": f"“{k['column']}” names each row of {name}.",
-                    },
+                    str(key["column"]),
+                    OptionEffect(
+                        option_id=f"c{index}",
+                        kind="key",
+                        title=f"“{key['column']}” names each row of {name}.",
+                        payload={"upload_id": upload_id, "column": str(key["column"])},
+                    ),
                 )
-                for i, k in enumerate(unique[:5])
-            ),
-            ("I don't know", {"option_id": "none"}),
-        )
-        questions.append(
-            FactQuestion(
-                code="KEY_AMBIGUOUS",
+                for index, key in enumerate(unique[:MAX_OFFERED])
+            ]
+            choices.append((DONT_KNOW, OptionEffect(option_id="none")))
+            found.ask(
+                "KEY_AMBIGUOUS",
+                {"upload_id": upload_id},
                 text=f"Which column names each row of {name}? Several hold a different value on every row.",
                 choices=choices,
-                upload_id=loaded.upload_id,
+                upload_id=upload_id,
+                reason=f"{len(unique)} columns of {name} hold a different value on every row.",
             )
-        )
-    elif len(loaded.frame) > 0:
-        if near:
-            near_choices: tuple[tuple[str, dict[str, Any]], ...] = (
-                *(
+        elif len(loaded.frame) > 0:
+            # No column is unique and complete. The near-candidates are facts (how often a value repeats, how many
+            # blanks); a name like `customer_id` only ranks them. With any, the person says which one names the
+            # customers; for a file of events (many rows per customer) that is the question, with the blank share
+            # of each column shown and the column the goal's build counts customers by recommended, and a row
+            # number is never offered (it would name a row, not a customer). A file that is not events can take a
+            # row number; with no near-candidate (and not events) the row number is proposed.
+            events = event_file(result.output, event_roles)
+            near = near_keys(loaded)
+            made = row_id_draft(run, found, loaded, ctx, evidence=result.evidence_id) if not events else None
+            if near:
+                choices = [
                     (
-                        f"{k['column']} (repeats ~{float(k.get('rows_per_key') or 1):.1f} times"
-                        + (
-                            f"; {float(k.get('null_rate') or 0.0):.0%} blank"
-                            if float(k.get("null_rate") or 0.0) >= 0.005
-                            else ""
-                        )
-                        + ")",
-                        {
-                            "option_id": f"c{i}",
-                            "kind": "key",
-                            "payload": {"upload_id": loaded.upload_id, "column": str(k["column"])},
-                            "title": f"“{k['column']}” names the customers of {name}.",
-                        },
+                        near_key_label(key, events=events),
+                        OptionEffect(
+                            option_id=f"c{index}",
+                            kind="key",
+                            title=f"“{key['column']}” names the customers of {name}.",
+                            payload={"upload_id": upload_id, "column": str(key["column"])},
+                        ),
                     )
-                    for i, k in enumerate(near[:5])
-                ),
-                ("I don't know", {"option_id": "none"}),
-            )
-            questions.append(
-                FactQuestion(
-                    code="KEY_NOT_UNIQUE",
+                    for index, key in enumerate(near[:MAX_OFFERED])
+                ]
+                if made is not None:
+                    choices.append(
+                        (
+                            "None of these: add a row number",
+                            OptionEffect(
+                                option_id="rownum", kind="key", title=made.title, payload=made.payload
+                            ),
+                        )
+                    )
+                choices.append((DONT_KNOW, OptionEffect(option_id="none")))
+                offered = offered_build_key(diagnosis, upload_id)
+                pick = next(
+                    (
+                        effect.option_id
+                        for _label, effect in choices
+                        if offered is not None and effect.payload.get("column") == offered
+                    ),
+                    None,
+                )
+                found.ask(
+                    "KEY_NOT_UNIQUE",
+                    {"upload_id": upload_id},
                     text=(
                         f"{name} has many rows for each customer, so no column is different on every row. "
                         "Which column names the customer on each row?"
-                        if is_events
+                        if events
                         else f"No column of {name} holds a different value on every row with no blanks. "
                         "Which column names the customers in it?"
                     ),
-                    choices=near_choices,
-                    upload_id=loaded.upload_id,
+                    choices=choices,
+                    upload_id=upload_id,
+                    recommended=pick,
+                    why=f"The build for your goal counts each customer by “{offered}”." if pick else "",
+                    reason=f"No column of {name} is different on every row; {len(near)} could name the customers.",
                 )
-            )
+            elif made is not None:
+                found.add(made, "No column could name each row, so a row number would.")
+        reading.append(
+            {
+                "upload_id": upload_id,
+                "unique_keys": [_key_view(key) for key in unique[:MAX_OFFERED]],
+                "near_keys": [_key_view(key) for key in near[:MAX_OFFERED]],
+                "events": events,
+            }
+        )
+    return found.facts({"files": reading})
 
-    return KeyFacts(
-        upload_id=loaded.upload_id,
-        unique_keys=tuple(unique),
-        near_keys=tuple(near),
-        is_event_file=is_events,
-        candidate_key=candidate_key,
-        suggestions=tuple(suggestions),
-        questions=tuple(questions),
-    )
+
+def _key_view(key: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "column": str(key["column"]),
+        "rows_per_key": float(key.get("rows_per_key") or 0.0),
+        "null_rate": float(key.get("null_rate") or 0.0),
+    }
 
 
-def extract_goal_build_facts(
-    files: Sequence[LoadedFile],
-    config: UseCaseConfig,
-    config_root: Path | None = None,
-) -> GoalBuildFacts:
+def row_id_draft(
+    run: FactRun, found: Found, loaded: LoadedFile, ctx: DataToolContext, *, evidence: str
+) -> ItemDraft | None:
+    """A file with no ID column (one row per call, say): a pending ID decision whose yes adds a row number, with
+    the plain warning. The row number is made by the ordinary `sql_query` step (the trial and the checks are the
+    usual ones) and is recorded as the file's key with it. A query the trial refuses is skipped: the visit goes on.
+    """
     from engine.agent.sql_step import table_alias
-    from engine.doctor.buildable import buildable_outcome, compile_build
+    from engine.doctor.guards import Finding
     from engine.doctor.materialize import table_names
+    from engine.doctor.tools_sql import SqlStepProposal
 
-    built = buildable_outcome(files, config, config_root)
-    if built is None or not built.enough or built.snapshot is None:
-        return GoalBuildFacts(goal_id=config.id, enough=False)
-
-    loaded = next((f for f in files if f.upload_id == built.upload_id), None)
-    if loaded is None:
-        return GoalBuildFacts(goal_id=config.id, enough=False)
-
-    suggested_build: FactSuggestion | None = None
-    audience_question: FactQuestion | None = None
-
-    table = table_names(files)[loaded.upload_id]
+    taken = {str(c).casefold() for c in loaded.frame.columns}
+    column = next(name for name in ("row_id", *(f"row_id_{n}" for n in range(2, 100))) if name not in taken)
+    table = table_names(ctx.files)[loaded.upload_id]
+    safe = re.sub(r"[^A-Za-z0-9_]", "_", table)
     try:
-        sql, description = compile_build(built, config, table_alias(table), None)
-        suggested_build = FactSuggestion(
-            kind="recipe_step",
-            payload={
-                "description": description,
-                "sql": sql,
+        result = run.call(
+            "propose_sql_step",
+            {
+                "description": f"Add a row number “{column}” to each row, in the order of the file.",
+                "sql": f"SELECT row_number() OVER () AS {column}, * FROM {table_alias(table)}",
+                "output_name": f"with_row_id_{safe}"[:OUTPUT_NAME_CHARS],
                 "upload_ids": [loaded.upload_id],
-                "as_of": built.snapshot.isoformat(),
-                "reads_future": True,
-                "outcome_window_days": built.window_days,
-                "buildable": built.model_dump(mode="json"),
-                "needs_yes": True,
             },
-            title=f"Build training table for {config.name}",
-            reason=f"Builds one row per customer with the outcome from the event log around {built.snapshot}.",
-            confidence="check",
-            ticked=True,
-            needs_yes=True,
-            upload_id=loaded.upload_id,
-            goal_id=config.id,
+            ctx,
         )
-    except Exception:
-        suggested_build = None
-
-    return GoalBuildFacts(
-        goal_id=config.id,
-        buildable_outcome=built,
-        enough=True,
-        snapshot=built.snapshot,
-        window_days=built.window_days,
-        audiences=tuple(built.audiences),
-        suggested_build=suggested_build,
-        audience_question=audience_question,
+    except DataToolError:
+        return None
+    found.evidence.append(result)
+    made = SqlStepProposal.model_validate(result.output)
+    findings = [*made.findings, Finding(level="flag", code="ROW_ID_INVENTED", message=ROW_ID_WARNING)]
+    payload = made.payload()
+    payload["findings"] = [f.model_dump(mode="json") for f in findings]
+    payload["needs_yes"] = True
+    payload["column"] = column  # the yes also records it as the file's ID (the key decision)
+    payload["upload_id"] = loaded.upload_id
+    return ItemDraft(
+        kind="key",
+        payload=payload,
+        title=f"Add a row number “{column}” to {loaded.file_name or 'this file'}: it has no ID column.",
+        upload_id=loaded.upload_id,
+        confidence=AgentConfidence.CHECK,
+        evidence_ids=(evidence, result.evidence_id),
     )
 
 
-def extract_time_facts(
-    loaded: LoadedFile,
-    brief_time_names: Sequence[str] = (),
-    required: bool = False,
-    goal_id: str | None = None,
-) -> TimeFacts:
-    time_cols: list[str] = []
-    partial_month = False
-    partial_rows = 0
-    last_month_end_str: str | None = None
+def _draft_of(item: CaseItem) -> ItemDraft:
+    return ItemDraft(
+        kind=item.kind,
+        payload=dict(item.payload),
+        title=item.title,
+        upload_id=item.upload_id,
+        goal_id=item.goal_id,
+        confidence=item.confidence,
+        evidence_ids=item.evidence_ids,
+    )
 
-    for col in loaded.frame.columns:
-        series = loaded.frame[col]
-        if dates_column(series):
-            time_cols.append(str(col))
-            # Check partial month on the primary date column
-            if not partial_month:
-                parsed_dates = pd.to_datetime(series.dropna(), errors="coerce", format="mixed")
-                if not parsed_dates.empty:
-                    max_dt = parsed_dates.max()
-                    # Month end for max_dt
-                    period = pd.Period(max_dt, freq="M")
-                    m_end = period.end_time.date()
-                    if max_dt.date() < m_end:
-                        # Partial month
-                        prev_m_end = (period.start_time - pd.Timedelta(days=1)).date()
-                        p_rows = int((parsed_dates > pd.Timestamp(prev_m_end)).sum())
-                        if p_rows > 0:
-                            partial_month = True
-                            partial_rows = p_rows
-                            last_month_end_str = prev_m_end.isoformat()
 
-    suggestions: list[FactSuggestion] = []
-    if time_cols:
-        target_col = next((c for c in time_cols if c in brief_time_names), time_cols[0])
-        suggestions.append(
-            FactSuggestion(
-                kind="as_of_column",
-                payload={"upload_id": loaded.upload_id, "column": target_col},
-                title=f"“{target_col}” is the date each row describes.",
-                reason="Testing splits by date and uses the newest dates.",
-                confidence="sure",
-                ticked=True,
-                upload_id=loaded.upload_id,
-                goal_id=goal_id,
+def detector_facts(run: FactRun, case: Case, brief: GoalBrief | None) -> Facts:
+    """The detectors' findings (`VisitDeps.detectors`, the design §7.1): their fixes as `Create`, their doubts, their
+    requests for more data and the ambiguities they would ask about as `AskPerson`. The detectors that propose fixes
+    (`reads_current`) read the files as the accepted changes leave them, so a fix already in the plan is not found
+    again (a date already parsed, a placeholder already blanked); the others (what the file is: its identity, its
+    personal data, how files relate) read the upload as it came in."""
+    found = Found()
+    if not run.deps.detectors:
+        return found.facts({})
+    raw = run.files(case)
+    current = run.current(case).files
+    asks: list[Ask] = []
+    for detector in run.deps.detectors:
+        detected = detector(case, current if getattr(detector, "reads_current", False) else raw, brief)
+        found.evidence.extend(detected.evidence)
+        for item in detected.items:
+            found.add(_draft_of(item), item.title)
+        for doubt in detected.doubts:
+            found.doubt(doubt, doubt.because)
+        for request in detected.requests:
+            found.request(request, request.why)
+        asks.extend(detected.asks)
+    found.suggested.extend(suggestion(AskPerson(ask=ask), ask.why or ask.text) for ask in asks)
+    return found.facts({"detectors": len(run.deps.detectors)})
+
+
+_ROLE_STEP_KINDS: Final[frozenset[str]] = frozenset(
+    kind.value
+    for kind in (
+        RecipeStepKind.DERIVE,
+        RecipeStepKind.SQL_QUERY,
+        RecipeStepKind.KEEP_LATEST_PER_ID,
+        RecipeStepKind.COMBINE_ROWS,
+        RecipeStepKind.UNPIVOT,
+    )
+)
+"""Steps that name the ID column without changing it (the recipe's own check lets them through): a derived column,
+a query, and the steps that reshape the rows per ID."""
+
+
+def role_step_facts(case: Case) -> Facts:
+    """A recipe step on the column settled as the file's ID or outcome can never run (the recipe never changes them:
+    `PLAN_STEP_CANNOT_RUN`), so each is a suggested `Withdraw` with the reason, whoever ticked it: a yes/no outcome
+    is read through the goal's positive value, never recoded by a step. Rows left out by their ID (test accounts)
+    and a derived column that only reads them are not changes to them, so they stay."""
+    from engine.doctor.decisions import decisions
+
+    found = Found()
+    decided = decisions(case)
+    one = case.files[0].upload_id if len(case.files) == 1 else None
+    for item in case.items:
+        raw = item.payload.get("step")
+        if item.state not in (ProposalState.PENDING, ProposalState.ACCEPTED) or not isinstance(raw, dict):
+            continue
+        named = item.payload.get("upload_id")
+        upload_id = item.upload_id or (named if isinstance(named, str) else None) or one
+        column, kind = raw.get("column"), raw.get("kind")
+        if upload_id is None or not isinstance(column, str):
+            continue
+        key, outcome = decided.key(upload_id), decided.outcome_of_upload(upload_id)
+        if kind in _ROLE_STEP_KINDS or column not in {key, outcome} - {None}:
+            continue
+        if kind == RecipeStepKind.REMOVE_ROWS.value and column == key != outcome:
+            continue
+        role = "ID" if column == key else "outcome"
+        reason = (
+            f"'{column}' is the {role} column, which no step changes"
+            + ("; its yes and no are read as they are" if role == "outcome" else "")
+            + "."
+        )
+        found.suggested.append(
+            suggestion(
+                Withdraw(
+                    item_id=item.item_id,
+                    reason=reason,
+                    consequence=f"The step is taken out of the plan and '{column}' stays as it is.",
+                ),
+                reason,
             )
         )
-
-    return TimeFacts(
-        upload_id=loaded.upload_id,
-        time_columns=tuple(time_cols),
-        partial_month=partial_month,
-        partial_rows=partial_rows,
-        last_month_end=last_month_end_str,
-        suggested_as_of=last_month_end_str,
-        missing=required and not time_cols,
-        suggestions=tuple(suggestions),
-    )
-
-
-def extract_consent_facts(
-    loaded: LoadedFile,
-    brief_consent_names: Sequence[str] = (),
-    required: bool = False,
-    goal_id: str | None = None,
-) -> ConsentFacts:
-    consent_cols: list[str] = []
-    for col in loaded.frame.columns:
-        c_name = str(col).lower()
-        if c_name in brief_consent_names or any(
-            k in c_name for k in ("consent", "opt_in", "opt_out", "marketing_permission")
-        ):
-            consent_cols.append(str(col))
-
-    suggestions: list[FactSuggestion] = []
-    if consent_cols:
-        suggestions.append(
-            FactSuggestion(
-                kind="consent_column",
-                payload={"upload_id": loaded.upload_id, "column": consent_cols[0]},
-                title=f"“{consent_cols[0]}” says who agreed to be contacted.",
-                reason="Only contacted people who agreed to be contacted are included.",
-                confidence="check",
-                ticked=False,
-                upload_id=loaded.upload_id,
-                goal_id=goal_id,
-            )
-        )
-
-    return ConsentFacts(
-        upload_id=loaded.upload_id,
-        consent_columns=tuple(consent_cols),
-        missing=required and not consent_cols,
-        suggestions=tuple(suggestions),
-    )
+    return found.facts({})
