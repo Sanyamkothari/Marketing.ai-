@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -754,13 +755,19 @@ def test_a_reply_with_a_number_nobody_looked_up_is_refused_and_the_next_one_is_u
     assert any(r.get("error") == "AGENT_TEXT_REFUSED" for r in client.seen[1].results)
 
 
+def _told(refusal: dict[str, Any]) -> str:
+    """What a refusal tells the AI: its four fields read as one text."""
+    assert set(refusal) >= {"error", "what_failed", "value", "how_to_fix"}
+    return f"{refusal['what_failed']} {refusal['how_to_fix']}"
+
+
 def test_a_refused_number_is_named_to_the_ai_and_a_turn_that_still_fails_tells_the_person_why(
     storage: LocalStorage, world: World
 ) -> None:
     client = ChatScript({"how many": [reply("There are 7,777 test accounts.")] * 6})
     talk = Talk(storage, world, client)
     talk.say("how many test accounts are there")
-    told = [r.get("message", "") for seen in client.seen for r in seen.results if r.get("error")]
+    told = [_told(r) for seen in client.seen for r in seen.results if r.get("error")]
     assert told and all("'7,777'" in m and "no tool result" in m for m in told), "the AI learns which number"
     assert "a number that I have not looked up" in talk.reply.text and "7,777" not in talk.reply.text
     assert "Ask me again" in talk.reply.text
@@ -1138,9 +1145,7 @@ def test_the_last_word_is_told_what_the_second_refusal_said(storage: LocalStorag
     talk.say("numbers")
     assert talk.reply.text == "I could not state that number."
     errors = [r for r in last_word_seen(client).results if r.get("error")]
-    assert len(errors) == 2 and all(
-        "message" in r for r in errors
-    ), "the second refusal's message is there too"
+    assert len(errors) == 2 and all(_told(r) for r in errors), "the second refusal's message is there too"
 
 
 def test_no_last_word_when_the_ai_service_is_the_reason(storage: LocalStorage, world: World) -> None:
@@ -1207,7 +1212,7 @@ def test_a_reply_over_the_doctor_ceiling_is_refused_and_the_model_is_told_the_li
     talk.say("explain the plan")
     assert talk.reply.text == "Short version."
     told = [r for r in client.seen[1].results if r.get("error") == "AGENT_TEXT_REFUSED"]
-    assert told and str(limits().turn.chat_reply_chars) in str(told[0]["message"])
+    assert told and str(limits().turn.chat_reply_chars) in _told(told[0])
 
 
 def test_an_over_long_reply_that_also_has_a_wrong_number_is_told_both(
@@ -1218,7 +1223,7 @@ def test_an_over_long_reply_that_also_has_a_wrong_number_is_told_both(
     talk = Talk(storage, world, client)
     talk.say("explain the plan")
     told = [r for r in client.seen[1].results if r.get("error") == "AGENT_TEXT_REFUSED"]
-    assert told and "2000" in str(told[0]["message"]) and "numbers_grounded" in str(told[0]["message"])
+    assert told and "2000" in _told(told[0]) and "numbers_grounded" in _told(told[0])
 
 
 def test_the_last_word_is_told_the_limit_when_a_reply_is_refused_only_for_length(
@@ -1231,7 +1236,7 @@ def test_the_last_word_is_told_the_limit_when_a_reply_is_refused_only_for_length
     talk.say("explain the plan")
     assert talk.reply.text == "Short version."
     told = [r for r in last_word_seen(client).results if r.get("error") == "AGENT_TEXT_REFUSED"]
-    assert told and all("2000" in str(r["message"]) for r in told)
+    assert told and all("2000" in _told(r) for r in told)
 
 
 def test_a_long_earlier_reply_is_shown_whole_to_the_model_on_the_next_turn(

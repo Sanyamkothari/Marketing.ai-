@@ -34,7 +34,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
-from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, ToolResult
+from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, Refusal, ToolResult
 from engine.agent.grounding import evidence_numbers, grounded_numbers
 from engine.agent.loop import MAX_MESSAGE_CHARS, UNAVAILABLE, _parse, person_reason, refused_sentence
 from engine.agent.tools import AgentContext, AgentToolError
@@ -72,7 +72,7 @@ _LOG = get_logger(__name__)
 
 CHAT_PROMPT: Final[str] = "data_doctor_chat"
 QUICK_CODE: Final[str] = "CHAT_ASK"
-_DIGIT: Final = re.compile(r"\d")
+_NUMBER_WORD: Final = re.compile(r"\d[\d,.]*\S*")
 _MEANING_TOPICS: Final = re.compile(
     r"(consent|opt[\W_]*(in|out)|opted|agree|contact|unsubscri|outcome|counts? as|a yes"
     r"|churn|convert|identif|customer[\W_]*id|\bids?\b|\bdates?\b|day first|month first)",
@@ -445,7 +445,9 @@ class _Chat(_Review):
                 refusal = exc
                 # The message goes into the feedback even when this is the last strike: the last word reads it, so
                 # a reply refused for its number is not written again with the same number.
-                turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
+                turn.feedback.append(
+                    self.gates[0].prepare(exc.refusal.feedback(), extra_text_keys=("value",))
+                )
                 if strikes >= self.limits.turn.strikes:
                     blocked = exc.code
                     break
@@ -556,14 +558,12 @@ class _Chat(_Review):
                 )
                 raise AgentToolError(
                     "AGENT_TEXT_REFUSED",
-                    f"The reply is {len(said)} characters; the most allowed is {self.limits.turn.chat_reply_chars}. Say the same "
-                    f"in fewer words, with the result first.{also}",
+                    what_failed=f"The reply is {len(said)} characters; the most allowed is "
+                    f"{self.limits.turn.chat_reply_chars}.",
+                    value=f"{len(said)} characters",
+                    how_to_fix=f"Say the same in fewer words, with the result first.{also}",
                 )
-            raise AgentToolError(
-                "AGENT_TEXT_REFUSED",
-                f"The reply was refused. {self.checker.why(said, failure)}",
-                self.checker.why(said, failure, person=True),
-            )
+            raise self.checker.refuse("AGENT_TEXT_REFUSED", "reply", said, failure)
         return self.gates[0].person_text(said)
 
     # -- the actions -------------------------------------------------------------------------------
@@ -702,7 +702,9 @@ class _Chat(_Review):
                 args.get("text"), self.case.case_id, self._case_words()
             )
         except LessonError as exc:
-            self.turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
+            self.turn.feedback.append(
+                self.gates[0].prepare(Refusal(exc.code, exc.message).feedback(), extra_text_keys=("value",))
+            )
             return
         self.turn.feedback.append({"lesson": "proposed: waits for the owner", "status": lesson.status})
 
@@ -829,17 +831,22 @@ class _Chat(_Review):
             about_rows = bool(_ABOUT_ROWS.search(text))
             tripped = _MEANING_TOPICS.search(part) or (None if about_rows else _SALE_WORDS.search(part))
             if tripped:
+                word = _whole_word(part, tripped)
                 raise AgentToolError(
                     "AGENT_QUESTION_REFUSED",
-                    f"The word '{_whole_word(part, tripped)}' in {_where(part, text, why)} is about consent, the "
-                    "outcome, the ID or the date, which only the question list asks. Say it without that word "
-                    "(a quick question about what some rows are, such as negative or cancelled ones, is fine), "
-                    "or use the question list.",
+                    what_failed=f"The word '{word}' in {_where(part, text, why)} is about consent, the outcome, "
+                    "the ID or the date, which only the question list asks.",
+                    value=word,
+                    how_to_fix="Say it without that word (a quick question about what some rows are, such as "
+                    "negative or cancelled ones, is fine), or use the question list.",
                 )
-            if _DIGIT.search(part):
+            if number := _NUMBER_WORD.search(part):
                 raise AgentToolError(
                     "AGENT_QUESTION_REFUSED",
-                    "A quick question states no numbers. For what counts as a yes use the question list.",
+                    what_failed=f"The number '{number.group(0)}' in {_where(part, text, why)}: a quick question "
+                    "states no numbers.",
+                    value=number.group(0),
+                    how_to_fix="Take the number out; for what counts as a yes use the question list.",
                 )
             failure = (
                 self.checker.failure(
@@ -849,11 +856,7 @@ class _Chat(_Review):
                 else None
             )
             if failure is not None:
-                raise AgentToolError(
-                    "AGENT_QUESTION_REFUSED",
-                    f"The question was refused. {self.checker.why(part, failure)}",
-                    self.checker.why(part, failure, person=True),
-                )
+                raise self.checker.refuse("AGENT_QUESTION_REFUSED", "question", part, failure)
         gate = self.gates[index]
         shown = [gate.person_text(o) for o in options]
         ask = Ask(

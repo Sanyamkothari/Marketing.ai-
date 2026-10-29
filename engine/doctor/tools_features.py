@@ -757,7 +757,7 @@ def _input_findings(given: ProposeFeaturesArgs, table: str, frame: pd.DataFrame)
     try:
         n, no_key, no_time, unread = date_read_counts(frame, table, key, when)
     except SqlStepError as exc:
-        raise DataToolError(exc.code, exc.message, status=422) from exc
+        raise DataToolError(exc.code, status=422, refusal=exc.refusal) from exc
     with_time = n - no_time
     if (with_time and unread * 2 > with_time) or (with_time == 0 and n):
         raise _refuse(
@@ -861,7 +861,7 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
             },
         )
     except SqlStepError as exc:
-        raise DataToolError(exc.code, exc.message, status=422) from exc
+        raise DataToolError(exc.code, status=422, refusal=exc.refusal) from exc
     # The same step, once more on every row, through the one materialisation (its future-rows check is the leak
     # probe: a feature that moves when the rows after the as-of date are taken out fails here, whoever wrote it).
     own_date = base.step["params"].get("as_of")

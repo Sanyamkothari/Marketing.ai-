@@ -51,7 +51,7 @@ from pydantic import (
 
 from engine.agent.checks import check_plan
 from engine.agent.config import DataAccess
-from engine.agent.contracts import ToolResult
+from engine.agent.contracts import Refusal, ToolResult
 from engine.agent.egress import mask_value
 from engine.agent.formats import (
     _NUMERIC_DAY_MONTH,
@@ -124,12 +124,27 @@ MAX_PROFILE_COLUMNS: Final[int] = MAX_PROMPT_LIST
 
 
 class AgentToolError(Exception):
-    """A tool call the engine refused; `code` is machine-readable, `message` is for the model and logs."""
+    """A tool call the engine refused; `code` is machine-readable, `message` is for logs, and `refusal` is the one
+    shape `{code, what_failed, value, how_to_fix}` the model reads."""
 
-    def __init__(self, code: str, message: str, person: str = "") -> None:
-        super().__init__(f"{code}: {message}")
-        self.code = code
-        self.message = message
+    def __init__(
+        self,
+        code: str,
+        message: str = "",
+        person: str = "",
+        *,
+        what_failed: str | None = None,
+        value: str = "",
+        how_to_fix: str = "",
+        refusal: Refusal | None = None,
+    ) -> None:
+        self.refusal = refusal or Refusal(
+            code, message if what_failed is None else what_failed, value, how_to_fix
+        )
+        super().__init__(f"{self.refusal.code}: {self.refusal.message}")
+        self.code = self.refusal.code
+        self.message = self.refusal.message
+        """`what_failed` and `how_to_fix` together; `refusal` holds the four fields the AI reads."""
         self.person = person
         """A fixed sentence for the person saying why (no text of the model's, no number); empty: the code's own."""
 

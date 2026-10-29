@@ -276,6 +276,62 @@ def test_a_failing_query_does_not_repeat_a_cell_value(sql: str) -> None:
     assert caught.value.code == "SQL_FAILED" and "Asha" not in str(caught.value)
 
 
+def _failure(sql: str, frame: pd.DataFrame, **kwargs: Any) -> SqlStepError:
+    with pytest.raises(SqlStepError) as caught:
+        run_sql(sql, {"orders": frame}, output_name="x", **kwargs)
+    return caught.value
+
+
+ORDERS = pd.DataFrame({"InvoiceDate": ["12/01/2010 08:26", "x"], "Qty": ["3", "a"], "id": [1, 2]})
+
+
+def test_a_binder_error_names_the_column_and_says_it_is_still_text() -> None:
+    gone = _failure("SELECT nope FROM t_orders", ORDERS)
+    assert (
+        gone.code == "SQL_FAILED" and gone.refusal.value == "nope" and "t_orders" in gone.refusal.how_to_fix
+    )
+    text = _failure("SELECT year(InvoiceDate) FROM t_orders", ORDERS)
+    assert text.refusal.value == "year(VARCHAR)"
+    assert "InvoiceDate" in text.refusal.what_failed, "the text columns the query uses are named"
+    assert "still text" in text.refusal.how_to_fix and "preview_working_copy" in text.refusal.how_to_fix
+    assert "12/01/2010" not in str(text) and "Candidate" not in str(text)
+    compare = _failure("SELECT 1 FROM t_orders WHERE InvoiceDate <= $as_of", ORDERS, as_of=date(2011, 1, 1))
+    assert "VARCHAR" in compare.refusal.value and "preview_working_copy" in compare.refusal.how_to_fix
+
+
+def test_a_conversion_error_names_the_column_and_the_type_but_not_the_cell() -> None:
+    number = _failure("SELECT CAST(Qty AS INTEGER) FROM t_orders", ORDERS)
+    assert number.refusal.value == "Qty" and "INT32" in number.refusal.what_failed
+    day = _failure("SELECT CAST(InvoiceDate AS DATE) FROM t_orders", ORDERS)
+    assert day.refusal.value == "InvoiceDate" and "preview_working_copy" in day.refusal.how_to_fix
+    assert "12/01/2010" not in str(day) and "'a'" not in str(number)
+
+
+def test_a_missing_table_and_a_syntax_error_name_what_they_were_about() -> None:
+    table = _failure("SELECT * FROM t_missing", ORDERS)
+    assert table.refusal.value == "t_missing" and "t_orders" in table.refusal.how_to_fix
+    syntax = _failure("SELECT * FORM t_orders", ORDERS)
+    assert syntax.code == "SQL_NOT_VALID" and syntax.refusal.value == "t_orders"
+    assert "not valid SQL" in syntax.refusal.what_failed
+
+
+def test_a_typed_date_names_the_literal_and_what_replaces_it() -> None:
+    caught = _failure(
+        "SELECT 1 FROM t_orders WHERE InvoiceDate <= '2011-01-31'", ORDERS, as_of=date(2011, 1, 1)
+    )
+    refusal = caught.refusal
+    assert caught.code == "SQL_FIXED_DATE" and refusal.value == "2011-01-31"
+    assert (
+        "$as_of + INTERVAL '30' DAY" in refusal.how_to_fix and "never put it in quotes" in refusal.how_to_fix
+    )
+    assert caught.message == f"{refusal.what_failed} {refusal.how_to_fix}"
+
+
+def test_a_quoted_as_of_is_refused_as_the_words() -> None:
+    caught = _failure("SELECT 1 FROM t_orders WHERE id > '$as_of'", ORDERS, as_of=date(2011, 1, 1))
+    assert caught.refusal.value == "'$as_of'" and "without quotes" in caught.refusal.how_to_fix
+
+
 def test_table_names_are_safe_aliases() -> None:
     assert table_alias("Customers 2026.csv") == "t_customers_2026_csv"
 

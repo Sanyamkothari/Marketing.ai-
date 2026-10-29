@@ -34,7 +34,14 @@ from typing import Any, Final
 import pandas as pd
 
 from engine.agent.config import AgentLevel
-from engine.agent.contracts import RecipeReceipt, RecipeStep, RecipeStepKind, StepReceipt, recipe_hash
+from engine.agent.contracts import (
+    RecipeReceipt,
+    RecipeStep,
+    RecipeStepKind,
+    Refusal,
+    StepReceipt,
+    recipe_hash,
+)
 from engine.agent.currency_steps import (
     CURRENCY_MIXED,
     CurrencyStepError,
@@ -158,11 +165,18 @@ class RecipeError(Exception):
     """A recipe that cannot run on this file. `code` is a validation code or a RECIPE_* code."""
 
     def __init__(
-        self, code: str, message: str, *, column: str | None = None, order: int | None = None
+        self,
+        code: str,
+        message: str,
+        *,
+        column: str | None = None,
+        order: int | None = None,
+        refusal: Refusal | None = None,
     ) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+        self.refusal = refusal or Refusal(code, message)
         self.column = column
         self.order = order
 
@@ -387,7 +401,7 @@ def _check_sql_step(step: RecipeStep) -> None:
             max_chars=MAX_COMPILED_SQL_CHARS if params.compiled else MAX_SQL_CHARS,
         )
     except SqlStepError as exc:
-        raise RecipeError(exc.code, exc.message, order=step.order) from exc
+        raise RecipeError(exc.code, exc.message, order=step.order, refusal=exc.refusal) from exc
 
 
 def _rows_column(step: RecipeStep) -> str | None:
@@ -978,7 +992,7 @@ def _run_sql_step(
             else None
         )
     except SqlStepError as exc:
-        raise RecipeError(exc.code, exc.message, order=step.order) from exc
+        raise RecipeError(exc.code, exc.message, order=step.order, refusal=exc.refusal) from exc
     if moved:
         raise RecipeError(
             "FUTURE_EVENTS_LEAKED",

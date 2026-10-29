@@ -55,7 +55,7 @@ from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Protocol, TypeVa
 from pydantic import AwareDatetime, BaseModel, Field, ValidationError
 
 from engine.access.roles import ROLE_DESCRIPTIONS, Principal, Role
-from engine.agent.contracts import RecipeStepKind
+from engine.agent.contracts import RecipeStepKind, Refusal
 from engine.agent.tools import AgentContext, AgentToolError, call_tool
 from engine.agentic.canonical import canonical_bytes, canonical_json, digest, sha256_hex
 from engine.agentic.registry import DEFAULT_OUTPUT_BUDGET
@@ -169,9 +169,44 @@ class Exposure(StrEnum):
 class DataToolError(AgentToolError):
     """A call the registry refused. A Plan G `AgentToolError` (the chat feeds it back), with an HTTP status."""
 
-    def __init__(self, code: str, message: str, *, status: int = 422) -> None:
-        super().__init__(code, message)
+    def __init__(
+        self,
+        code: str,
+        message: str = "",
+        *,
+        status: int = 422,
+        what_failed: str | None = None,
+        value: str = "",
+        how_to_fix: str = "",
+        refusal: Refusal | None = None,
+    ) -> None:
+        super().__init__(
+            code, message, what_failed=what_failed, value=value, how_to_fix=how_to_fix, refusal=refusal
+        )
         self.status = status
+
+
+_NARROWING: Final[tuple[tuple[str, str], ...]] = (
+    ("columns", "name only the columns you need in `columns`"),
+    ("offset", "page with `offset` (the next call starts where this one stops)"),
+    ("top", "lower `top`"),
+    ("limit", "lower `limit`"),
+)
+"""The arguments that narrow a result, and the sentence that says how to use each."""
+
+
+def _narrower_call(tool: DataTool[Any, Any], size: int, budget: int) -> str:
+    """The narrower call that fits `tool`'s budget: its own paging arguments, else `goal_details` for one goal."""
+    fields = tool.input_model.model_fields
+    ways = [how for field, how in _NARROWING if field in fields]
+    share = max(1, budget * 100 // size)
+    lead = f"Call {tool.name} again asking for about {share}% of that or less"
+    if ways:
+        return f"{lead}: {'; '.join(ways)}."
+    return (
+        f"{lead}. It has no paging argument: use goal_details to read one goal, or a look tool with `columns` "
+        "for the one column you need."
+    )
 
 
 class CaseHandle(Protocol):
@@ -520,8 +555,9 @@ class DataToolRegistry:
                 unit = "characters" if tool.exposure is Exposure.SESSION_ONLY else "bytes"
                 raise DataToolError(
                     "TOOL_OUTPUT_TOO_LARGE",
-                    f"{name} would return {size:,} {unit} of JSON, more than its {budget:,}; "
-                    "ask a narrower question.",
+                    what_failed=f"{name} would return {size:,} {unit} of JSON, more than its {budget:,}.",
+                    value=f"{size:,} of {budget:,} {unit}",
+                    how_to_fix=_narrower_call(tool, size, budget),
                     status=413,
                 )
         if kind is not None:

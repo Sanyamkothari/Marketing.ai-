@@ -34,7 +34,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.config import AgentConfig
-from engine.agent.contracts import DataRecipe, ProposalState, RecipeStep, RecipeStepKind, recipe_hash
+from engine.agent.contracts import (
+    DataRecipe,
+    ProposalState,
+    RecipeStep,
+    RecipeStepKind,
+    Refusal,
+    recipe_hash,
+)
 from engine.agent.dataset_recipe import consistent_types
 from engine.agent.recipe import STEP_PHASE, RecipeError, RecipeRun, run_recipe
 from engine.agent.sql_step import SqlStepError, sql_params
@@ -121,6 +128,8 @@ class StepFailure:
     message: str
     order: int | None
     item_id: str | None
+    refusal: Refusal | None = None
+    """The refusal in its four fields when the engine made one (a query that could not run)."""
 
 
 Watch = Callable[[str, str, RecipeStep, "pd.DataFrame", "pd.DataFrame"], None]
@@ -453,7 +462,14 @@ def materialize_plan(
                 f"{file_name}: {said}",
             )
             failures.append(
-                StepFailure(loaded.upload_id, getattr(exc, "code", type(exc).__name__), said, order, item_id)
+                StepFailure(
+                    loaded.upload_id,
+                    getattr(exc, "code", type(exc).__name__),
+                    said,
+                    order,
+                    item_id,
+                    getattr(exc, "refusal", None),
+                )
             )
             # a step that cannot run is a rule whichever sentence says why: the file is not prepared, so no yes may
             # let the plan go on as if it were

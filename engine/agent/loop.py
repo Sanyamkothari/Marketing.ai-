@@ -390,18 +390,41 @@ class _Checker:
         verdict = self.guardrails.check(text, CheckContext(target=target, max_chars=max_chars))
         return None if verdict.passed else (verdict.blocked_by or "guardrails")
 
-    def why(self, text: str, failure: str, *, person: bool = False) -> str:
-        """`failure` in words the AI can act on: for ungrounded numbers, which ones and how to fix them. With
-        `person`, in words for the person instead."""
+    def fields(self, text: str, failure: str) -> tuple[str, str, str]:
+        """`failure` as `(what_failed, value, how_to_fix)` for the AI: for ungrounded numbers, which ones."""
         if failure != "numbers_grounded":
-            return "it did not pass a safety check" if person else f"The text failed a check ({failure})."
-        if person:  # the number itself is not repeated: it is the one nobody checked
-            return "my answer quoted a number that I have not looked up in this case"
+            return (
+                f"The text failed a check ({failure}).",
+                failure,
+                "Say it again in plain words, without what that check names.",
+            )
         loose = list(dict.fromkeys(ungrounded_numbers(text, self.grounded, self.names)))
         shown = ", ".join(f"'{token}'" for token in loose[:5]) or "a number"
         return (
-            f"The text states {shown}, which no tool result, earlier message or the case state shows. Remove it, "
-            "or call a look tool first and quote what it returns; a number you worked out yourself is not accepted."
+            f"The text states {shown}, which no tool result, earlier message or the case state shows.",
+            ", ".join(loose[:5]),
+            "Remove it, or call a look tool first and quote what it returns; a number you worked out yourself is "
+            "not accepted. A window or date you set in an accepted action's arguments may be repeated.",
+        )
+
+    def why(self, text: str, failure: str, *, person: bool = False) -> str:
+        """`failure` in words the AI can act on, or with `person`, in words for the person instead."""
+        if person:  # the number itself is not repeated: it is the one nobody checked
+            if failure != "numbers_grounded":
+                return "it did not pass a safety check"
+            return "my answer quoted a number that I have not looked up in this case"
+        what, _value, fix = self.fields(text, failure)
+        return f"{what} {fix}"
+
+    def refuse(self, code: str, subject: str, text: str, failure: str) -> AgentToolError:
+        """The refusal of `subject` (a reply, a question) whose `text` failed `failure`."""
+        what, value, fix = self.fields(text, failure)
+        return AgentToolError(
+            code,
+            person=self.why(text, failure, person=True),
+            what_failed=f"The {subject} was refused. {what}",
+            value=value,
+            how_to_fix=fix,
         )
 
 
@@ -649,7 +672,7 @@ def chat_turn(
             strikes += 1
             if strikes > 1:
                 return finish(f"{FALLBACK} {refused_sentence(person_reason(exc))}", blocked_by=exc.code)
-            feedback.append(gate.prepare({"error": exc.code, "message": exc.message}))
+            feedback.append(gate.prepare(exc.refusal.feedback(), extra_text_keys=("value",)))
             items.append(None)
         except Exception as exc:
             # A model's odd input must never cost a paid call that nobody records (DEC-1017, DEC-1029).

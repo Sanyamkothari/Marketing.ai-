@@ -265,6 +265,8 @@ def own_numbers(value: Any, key: str = "") -> list[Any]:
     if isinstance(value, (int, float)):
         return [value]
     if isinstance(value, str):
+        if key == "name":  # a feature called `orders_365d` sets the window 365
+            return re.findall(r"\d+", value)
         return [value] if key in {"as_of", "training_as_of"} else []
     if isinstance(value, dict):
         return [
@@ -673,7 +675,9 @@ class _Review:
                 strikes += 1
                 if strikes >= self.limits.turn.strikes:
                     break
-                turn.feedback.append(self.gates[0].prepare({"error": exc.code, "message": exc.message}))
+                turn.feedback.append(
+                    self.gates[0].prepare(exc.refusal.feedback(), extra_text_keys=("value",))
+                )
             except Exception as exc:  # a model's odd input must never cost a paid review that nobody records
                 _LOG.warning("doctor review step failed: %s", type(exc).__name__)
                 break
@@ -899,6 +903,11 @@ class _Review:
         }
         # what the AI expected and did not get is its prediction, not a fact: only what our code counted is grounded
         counted = {k: v for k, v in shown["result"].items() if k != "failed_checks"}
+        counted["findings"] = [
+            f
+            for f in counted.get("findings", [])
+            if not (isinstance(f, dict) and f.get("code") == "EXPECTATION_FAILED")
+        ]
         self.checker.grounded = self.checker.grounded | grounded_numbers([counted])
         turn.feedback.append(shown)
 
@@ -917,7 +926,9 @@ class _Review:
             key, title, lines = read_guide(name, section, self.config_root, lessons=lessons)
         except AgentToolError as exc:
             self.turn.feedback.append(
-                self.gates[0].prepare({"tool": "read_guide", "error": exc.code, "message": exc.message})
+                self.gates[0].prepare(
+                    {"tool": "read_guide", **exc.refusal.feedback()}, extra_text_keys=("value",)
+                )
             )
             return
         carried = self.turn.guides.setdefault(key, set())
@@ -981,11 +992,7 @@ class _Review:
                 text, target="doctor question", max_chars=self.limits.turn.question_chars
             )
             if failure is not None:
-                raise AgentToolError(
-                    "AGENT_QUESTION_REFUSED",
-                    f"The question was refused. {self.checker.why(text, failure)}",
-                    self.checker.why(text, failure, person=True),
-                )
+                raise self.checker.refuse("AGENT_QUESTION_REFUSED", "question", text, failure)
         if ask.blocking and turn.blocking >= self.limits.asks.blocking:
             raise AgentToolError(
                 "AGENT_BLOCKING_LIMIT",
@@ -1004,11 +1011,7 @@ class _Review:
                 else None
             )
             if failure is not None:
-                raise AgentToolError(
-                    "AGENT_TEXT_REFUSED",
-                    f"The {target} was refused. {self.checker.why(text, failure)}",
-                    self.checker.why(text, failure, person=True),
-                )
+                raise self.checker.refuse("AGENT_TEXT_REFUSED", target, text, failure)
         return [self.gates[index].person_text(text) if text else "" for text in texts]
 
     def _doubt(self, action: dict[str, Any], args: dict[str, Any]) -> None:
