@@ -11,7 +11,7 @@
 
 ## Returns
 - (R11) Look for the pairing sale (same customer, same item, equal and opposite amount): `describe_numbers` for the count, `sample_rows` with `where_column` and `equals` for examples.
-- Ask what `C` or negatives mean: quick question (cancellation, return, other) in chat, or `express_doubt` with `meaning: true` in review. Q12 is only yes/no/leave out; Q22 is for payment statuses.
+- Ask what `C` or negatives mean: quick question (cancellation, return, other) in chat, worded about the rows ("negative quantity"), never with consent, outcome, ID, date or sale words, or `express_doubt` with `meaning: true` in review. Q12 is yes/no/leave out; Q22 is payment statuses.
 - Once confirmed: keep gross spend, return amount and return count as own columns and net against spend. Return rate = returned items / items; blank when items are 0.
 
 ## Duplicates

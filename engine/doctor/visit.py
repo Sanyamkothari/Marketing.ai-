@@ -381,6 +381,11 @@ class Detected:
     """The review's plain-language summary for the chat, and what it sent to the AI service."""
     blocked_by: str | None = None
     error_codes: tuple[str, ...] = ()
+    state_digest: str = ""
+    """The digest of the state the review read, when it finished on it (`agent_review._Review.state_digest`): TREAT
+    keeps it, and a review whose state has not changed since is not asked again."""
+    unchanged: bool = False
+    """The review did not run: the state it reads is the one it last finished on."""
     reply: str = ""
     """Set when the AI service did not answer the review's first call (`blocked_by` is `unavailable`): the codes that
     say why (as `ConverseResult.error_codes`) and the sentence the person reads (`ConverseResult.reply`). The review
@@ -652,6 +657,8 @@ class _Step:
     reasked: set[str] = field(default_factory=set)
     """Ids of unanswered questions that are asked again with other options (`engine.doctor.reconcile`): their
     options' effects are replaced."""
+    agent_state: str = ""
+    """The digest of the state the AI review finished on (`Detected.state_digest`), kept with the visit."""
     carried: bool = False
     """An approval the visit made by itself (`engine.doctor.carry`): if its record cannot be made, the visit
     waits for the person instead of failing whatever they just did."""
@@ -1109,6 +1116,7 @@ def _treat(run: _Run, case: Case) -> _Step:
         goal.goal_id if goal is not None else None,
         brief.brief_hash if brief is not None else None,
         answers,
+        bool(open_blocking(case)),  # the AI review waits for these: when they are gone it is owed
         plan_part(case),  # the plan and the decisions (`decisions(case).digest`): the rules read its tables
         # A declined build is read by the rules (the column is asked for instead), and a "no" is in no plan digest.
         sorted(
@@ -1143,11 +1151,18 @@ def _treat(run: _Run, case: Case) -> _Step:
         _detect(run, case, brief, step)
         _standing(run, case, step)
         by_detectors = _mark(step)
-        reviewed = visit.done.get("agent") != review and _review(run, case, brief, step)
+        waiting = run.deps.agent is not None and visit.done.get("agent") != review
+        held_back = waiting and (
+            bool(open_blocking(case))
+            or any(
+                q.blocking and q.answer is None and _in_section(q.goal_id, case) for q, _e in step.questions
+            )
+        )  # a blocking question stopped the review, which is owed once those questions are gone
+        reviewed = waiting and _review(run, case, brief, step)
         step.visit["done"] = {
             **visit.done,
             "treat": inputs,
-            **({"agent": review, "agent_base": base} if reviewed else {}),
+            **({"agent": review, "agent_base": base, "agent_state": step.agent_state} if reviewed else {}),
         }
         # The review sees its own waiting proposals and need not say them again, so a tick (a new plan) only adds
         # to what it proposed; it takes back what it no longer proposes only when the files or the brief changed.
@@ -1164,6 +1179,10 @@ def _treat(run: _Run, case: Case) -> _Step:
         ]
         if blocking:
             step.to = VisitState.ASK
+        elif held_back:
+            # The questions that held the review back were taken back, so nothing waits for the person: the review
+            # (which proposes a missing build) runs now, not at the next thing the person does.
+            step.to = VisitState.TREAT
         return step
     if open_blocking(case):
         step.to = VisitState.ASK
@@ -3431,7 +3450,17 @@ def _review(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> bool
         return False
     if any(q.blocking and q.answer is None and _in_section(q.goal_id, case) for q, _e in step.questions):
         return False
-    found = agent(case, run.files(case), brief)
+    # The review reads the plan with what the rules proposed in this very pass (a build they offered, say), so it
+    # neither proposes the same thing again nor is told to.
+    known = {i.item_id for i in case.items}
+    fresh = [i for i in step.items if i.item_id not in known]
+    found = agent(
+        case.model_copy(update={"items": (*case.items, *fresh)}) if fresh else case, run.files(case), brief
+    )
+    if found.unchanged:
+        step.agent_state = found.state_digest
+        return True  # it finished on exactly this state: nothing new to ask or to say
+    step.agent_state = found.state_digest
     step.evidence.extend(found.evidence)
     step.items.extend(
         item.model_copy(

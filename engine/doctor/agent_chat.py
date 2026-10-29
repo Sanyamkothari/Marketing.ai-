@@ -42,6 +42,7 @@ from engine.agent.untrusted import clean_text, for_prompt
 from engine.doctor.actions import prompt_variables
 from engine.doctor.agent_apply import person_owns
 from engine.doctor.agent_review import _NoAnswerError, _Review
+from engine.doctor.build_facts import goal_line
 from engine.doctor.lessons import approved_lessons
 from engine.doctor.protocol import DONT_KNOW, Ask, AskOption, question_id_of
 from engine.doctor.questions import catalogue_lines
@@ -73,12 +74,20 @@ CHAT_PROMPT: Final[str] = "data_doctor_chat"
 QUICK_CODE: Final[str] = "CHAT_ASK"
 _DIGIT: Final = re.compile(r"\d")
 _MEANING_TOPICS: Final = re.compile(
-    r"(consent|opt[\W_]*(in|out)|opted|agree|contact|unsubscri|outcome|counts? as|a yes|a sale|purchas|bought"
+    r"(consent|opt[\W_]*(in|out)|opted|agree|contact|unsubscri|outcome|counts? as|a yes"
     r"|churn|convert|identif|customer[\W_]*id|\bids?\b|\bdates?\b|day first|month first)",
     re.IGNORECASE,
 )
 """What a quick question may not be about: who agreed to be contacted, the outcome, the ID, the date. Those are the
 catalogue's questions, which only the person answers."""
+_SALE_WORDS: Final = re.compile(r"(a sale|purchas|bought)", re.IGNORECASE)
+"""Words that define an outcome ("did they purchase?") and so are kept out of a quick question, except in a question
+about what some rows are (`_ABOUT_ROWS`): "what are the negative rows on C invoices?" is the returns guide's own."""
+_ABOUT_ROWS: Final = re.compile(
+    r"(negative|\bcredit|cancel+ation|\breturn|\brefund|duplicate|repeated rows?)", re.IGNORECASE
+)
+_NO_ANSWER: Final = re.compile(r"^\s*i\s*(do\s*not|don.?t)\s*know\.?\s*$", re.IGNORECASE)
+"""The AI's own "I do not know" option: the protocol adds its "I don't know", so a second one is dropped."""
 OUT_OF_STEPS: Final[str] = (
     "That took more steps than I may take in one message. What I did so far is above; ask me to go on if you want more."
 )
@@ -179,23 +188,13 @@ class _Chat(_Review):
             **self._chat_state(),
             "earlier_looks": self._reload_looks(storage),
             "left": self.state["left"],
+            **self._goal_state(),
         }
         self.checker.grounded = self.checker.grounded | grounded_numbers([_without_ids(self.state)])
 
     # -- what the model reads ----------------------------------------------------------------------
     def _file_gate(self, upload_id: str | None) -> Any:
-        index = next((i for i, ctx in enumerate(self.ctxs) if ctx.upload_id == upload_id), 0)
-        return self.gates[index]
-
-    def _text(self, upload_id: str | None, value: str) -> str:
-        """`value` for the prompt: through its file's gate, and for text about no one file (or the conversation)
-        through every file's gate, so a column name of any file the person typed or a title carried is aliased.
-        """
-        if upload_id is not None and any(ctx.upload_id == upload_id for ctx in self.ctxs):
-            return str(self._file_gate(upload_id).text(value))
-        for gate in self.gates[1:]:
-            value = gate.apply_aliases(value)
-        return str(self.gates[0].text(value))
+        return self._gate_of(upload_id)
 
     def _chat_state(self) -> dict[str, Any]:
         """The case as the model may read it: every change with its id, the questions with their answers."""
@@ -205,8 +204,16 @@ class _Chat(_Review):
         plan: list[dict[str, Any]] = []
         for number, item in enumerate(items[-self.limits.turn.state_items :], start=1):
             self.handles[f"c{number}"] = item.item_id
+            # Who settled it, for the AI to read: "you" only for a change that is the AI's own; the rules settle
+            # their own items too (a superseded check is left out by the visit), and that is not the AI's doing.
             decided = (
-                "you" if item.decided_by == AGENT else ("the person" if item.decided_by is not None else None)
+                None
+                if item.decided_by is None
+                else (
+                    ("you" if item.source is ProposalSource.AI else "the rules")
+                    if item.decided_by == AGENT
+                    else "the person"
+                )
             )
             shown = {
                 ProposalState.ACCEPTED: "in the plan",
@@ -224,6 +231,7 @@ class _Chat(_Review):
                     "state": shown,
                     **({"decided_by": decided} if decided else {}),
                     **({"tried_on_first_rows": tried} if isinstance(tried, dict) else {}),
+                    **({"receipt": view} if (view := self._receipt_view(item)) is not None else {}),
                     # A query's own table, so the model sees what it built (names only, through the file's gate).
                     **(
                         {
@@ -255,6 +263,13 @@ class _Chat(_Review):
                 {
                     "id": o.option_id,
                     "label": self._text(q.upload_id, clean_text(o.label, self.limits.turn.short_chars)),
+                    # What choosing it adds, when it adds a step: two choices that read alike (the same minutes)
+                    # are told apart by it. An answer that only records itself says nothing more.
+                    **(
+                        {"adds": self._text(q.upload_id, clean_text(o.effect, self.limits.turn.short_chars))}
+                        if o.effect and o.effect_digest is not None
+                        else {}
+                    ),
                 }
                 for o in q.options
             ]
@@ -310,7 +325,13 @@ class _Chat(_Review):
         if storage is None:
             return []
         shown: list[dict[str, Any]] = []
-        refs = [r for r in self.case.evidence if r.tool in TOOLS and r.upload_id is not None]
+        from engine.doctor.goal_brief import GOAL_BRIEF_TOOL
+        from engine.doctor.tools_facts import M_FACT_TOOLS
+        from engine.doctor.tools_history import M_HISTORY_TOOLS
+        from engine.doctor.tools_preview import M_PREVIEW_TOOLS
+
+        looks = {*TOOLS, *M_PREVIEW_TOOLS, *M_HISTORY_TOOLS, *M_FACT_TOOLS, GOAL_BRIEF_TOOL}
+        refs = [r for r in self.case.evidence if r.tool in looks and r.upload_id is not None]
         for ref in refs[-self.limits.turn.reloaded_looks :]:
             index = next((i for i, ctx in enumerate(self.ctxs) if ctx.upload_id == ref.upload_id), None)
             if index is None:
@@ -377,7 +398,7 @@ class _Chat(_Review):
         self.checker.grounded = self.checker.grounded | grounded_numbers([text])
         prompt = load_prompt(CHAT_PROMPT, self.config_root)
         tools = self._tools()
-        goal = self.brief.goal_name if self.brief is not None else "see what these files can be used for"
+        goal = goal_line(self.brief, "see what these files can be used for")
         history = self._history()
         self.checker.grounded = self.checker.grounded | grounded_numbers([history])  # counts it gave earlier
         # What the person is told the AI looked at: the case as the model reads it, and the conversation.
@@ -418,6 +439,7 @@ class _Chat(_Review):
                     break
                 wanted = str(action["action"])
                 self._act(action)
+                self._own_settings(action)
             except AgentToolError as exc:
                 strikes += 1
                 refusal = exc
@@ -789,7 +811,12 @@ class _Chat(_Review):
         args = dict(self.gates[index].unalias_args(args))
         text, why = str(args.get("text") or "").strip(), str(args.get("why") or "").strip()
         given = args.get("options")
-        options = [o.strip() for o in given if isinstance(o, str)] if isinstance(given, list) else []
+        # "I do not know" is added to every question by the protocol: the AI's own copy would show twice.
+        options = (
+            [o.strip() for o in given if isinstance(o, str) and not _NO_ANSWER.match(o)]
+            if isinstance(given, list)
+            else []
+        )
         if (
             not text
             or not self.limits.asks.quick_options_min <= len(options) <= self.limits.asks.quick_options_max
@@ -805,11 +832,15 @@ class _Chat(_Review):
         for part in (text, why, *options):
             if len(part) > self.limits.turn.short_chars:
                 raise AgentToolError("AGENT_QUESTION_INVALID", "Keep the question and its options short.")
-            if _MEANING_TOPICS.search(part):
+            about_rows = bool(_ABOUT_ROWS.search(text))
+            tripped = _MEANING_TOPICS.search(part) or (None if about_rows else _SALE_WORDS.search(part))
+            if tripped:
                 raise AgentToolError(
                     "AGENT_QUESTION_REFUSED",
-                    "A quick question is not about consent, the outcome, the ID or the date. "
-                    "Use the question list for those.",
+                    f"The word '{_whole_word(part, tripped)}' in {_where(part, text, why)} is about consent, the "
+                    "outcome, the ID or the date, which only the question list asks. Say it without that word "
+                    "(a quick question about what some rows are, such as negative or cancelled ones, is fine), "
+                    "or use the question list.",
                 )
             if _DIGIT.search(part):
                 raise AgentToolError(
@@ -954,6 +985,21 @@ _MAKES_CHANGES: Final[frozenset[str]] = frozenset(
 )
 
 
+def _whole_word(part: str, found: re.Match[str]) -> str:
+    """The whole word of `part` that `found` is in (`purchases` for `purchas`), for a refusal to name."""
+    start, end = found.span()
+    while start > 0 and part[start - 1].isalnum():
+        start -= 1
+    while end < len(part) and part[end].isalnum():
+        end += 1
+    return part[start:end]
+
+
+def _where(part: str, text: str, why: str) -> str:
+    """Which piece of a quick question (its text, its reason or one of its options) a refusal is about."""
+    return "the question" if part is text else ("the reason" if part is why else f"the option “{part[:60]}”")
+
+
 def _plain_or_action(answer: str) -> dict[str, Any]:
     """The model's JSON action; an answer in plain sentences (a friendly model forgets the format) is a reply, and
     goes through the same checks as one."""
@@ -1008,10 +1054,12 @@ def doctor_converse(
         if not files:
             return ConverseResult(reply="Add a file first, and I will look at it with you.", ai=False)
         calls, tokens = meter.calls_used(), meter.tokens_used()
+        from engine.doctor.visit import stored_brief
+
         chat = _Chat(
             case,
             files,
-            None,
+            stored_brief(storage, case) if storage is not None else None,
             context_for,
             meter,
             guardrails,

@@ -217,10 +217,25 @@ class Receipt(StrictBase):
         default=None,
         description="Rows a grouping query folded into groups (the rows its WHERE kept); none if not counted.",
     )
+    key_in_result: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="The result's column that holds the customers, when it names the ID differently from `key` "
+        "(`customer_id` for `CustomerID`): the customers are counted by it.",
+    )
+    key_missing: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="The ID the customers are counted by when the result has no column that holds it, under its own "
+        "name or another: the step is then counted in rows, not customers.",
+    )
 
     @property
     def counted_by(self) -> str:
-        """Which column the customers were counted by, said whenever it was the query's GROUP BY (never silent)."""
+        """Which column the customers were counted by, said whenever it was the query's GROUP BY or a column that
+        holds the ID under another name (never silent)."""
+        if self.key_in_result:
+            return f" (counted by {self.key_in_result}, which holds the values of {self.key})"
         return f" (counted by {self.grouped_by}, the column it groups by)" if self.grouped_by else ""
 
     @property
@@ -249,6 +264,8 @@ class Receipt(StrictBase):
         """What the step cost: customers lost, or rows left out when there is no ID to count by."""
         if self.keys_in is not None:
             return self.keys_lost
+        if self.key_missing:
+            return 0  # rows folded into one per customer cannot be told from rows lost: the step is flagged instead
         return max(0, next(iter(self.rows_in.values()), 0) - self.rows_out)
 
     @property
@@ -441,10 +458,18 @@ def make_receipt(
         "rate_in": _rate(first, target, positive),
         "rate_out": _rate(output, target, positive),
     }
-    if key is None or not base_frames or not _has(output, key) or not all(_has(f, key) for f in base_frames):
+    if key is None or not base_frames or not all(_has(f, key) for f in base_frames):
         return Receipt(**receipt)
     base_keys = pd.concat([_key_text(f, key) for f in base_frames], ignore_index=True)
-    out_keys = _key_text(output, key)
+    out_name = key if _has(output, key) else _key_in_result(key, set(base_keys), output)
+    if out_name is None:
+        # The result holds the ID under no name we can match: the customers cannot be counted, and a rollup of
+        # rows to one per customer must not read as a loss of rows. Said, not guessed.
+        receipt["key_missing"] = key
+        return Receipt(**receipt)
+    if out_name != key:
+        receipt["key_in_result"] = out_name
+    out_keys = _key_text(output, out_name)
     seen = set(base_keys)
     made = set(out_keys)
     counts = out_keys.value_counts()
@@ -463,10 +488,66 @@ def make_receipt(
         lost_by_outcome=_lost_by_outcome(base_frames[0], key, lost, target),
         grouped_by=grouped,
         rows_no_key_in=_rows_without(base_frames[0], key),
-        rows_no_key_out=_rows_without(output, key),
+        rows_no_key_out=_rows_without(output, out_name),
         rows_aggregated=rows_aggregated(sql, inputs, as_of=as_of) if sql else None,
     )
     return Receipt(**receipt)
+
+
+_MIN_KEY_OVERLAP: Final[float] = 0.99
+"""Share of a result column's different values that must be IDs of the input for it to be taken as the ID."""
+_MIN_KEY_VALUES: Final[int] = 2
+
+
+def _norm_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+_ID_NAME: Final[re.Pattern[str]] = re.compile(
+    r"(id|key|no|num|number|code|ref)$|customer|client|account|shopper|member|user|entity", re.I
+)
+
+
+def _named_like_an_id(name: str) -> bool:
+    """Whether a result column is called like an ID (a count that happens to repeat IDs' values is not one)."""
+    return _ID_NAME.search(re.sub(r"[^A-Za-z0-9]+", "", name)) is not None and not names_a_log_row(name)
+
+
+def _key_in_result(key: str, base_keys: set[str], output: pd.DataFrame) -> str | None:
+    """The column of `output` that holds the customers when it does not name the ID as the input does (a query that
+    writes `customer_id` for `CustomerID`). A column named like the ID up to case and separators, whose values are
+    IDs of the input, is it; failing that, a column that names each row (its values nearly all different) and whose
+    values are IDs of the input. None when no column qualifies, or two different ones do and the choice is a guess.
+    """
+
+    def ids_of(column: object) -> set[str] | None:
+        series = output[column]
+        if pdt.is_bool_dtype(series):
+            return None
+        if pdt.is_float_dtype(series) and not bool((series.dropna() == series.dropna().round()).all()):
+            return None
+        values = set(_key_values(series))
+        return values if len(values) >= _MIN_KEY_VALUES else None
+
+    def inside(values: set[str]) -> bool:
+        return len(values & base_keys) >= _MIN_KEY_OVERLAP * len(values)
+
+    named = [
+        str(c)
+        for c in output.columns
+        if _norm_name(str(c)) == _norm_name(key) and (v := ids_of(c)) is not None and inside(v)
+    ]
+    if len(named) == 1:
+        return named[0]
+    found = [
+        str(c)
+        for c in output.columns
+        if _named_like_an_id(str(c))
+        and (v := ids_of(c)) is not None
+        and len(v) >= 0.9 * max(1, len(output))
+        and inside(v)
+    ]
+    return found[0] if len(found) == 1 else None
 
 
 def _rows_without(frame: pd.DataFrame, key: str) -> int:
@@ -554,8 +635,15 @@ def receipt_findings(
                 level="flag",
                 code="STEP_NOT_COUNTED",
                 order=n,
-                message=f"Step {n} has no ID column both tables share, so the customers it keeps could not be "
-                "counted. It needs a person's yes.",
+                message=(
+                    f"Step {n} makes a result with no column that holds the customer ID {receipt.key_missing}, "
+                    "under that name or another, so the customers it keeps could not be counted; rows folded into "
+                    f"one per customer cannot be told from rows lost. Keep {receipt.key_missing} (or a column "
+                    "with the same values) in the result. It needs a person's yes."
+                    if receipt.key_missing
+                    else f"Step {n} has no ID column both tables share, so the customers it keeps could not be "
+                    "counted. It needs a person's yes."
+                ),
             )
         )
     if receipt.keys_in is not None:
@@ -928,6 +1016,11 @@ def _expectation_failures(receipt: Receipt, exp: Expectations) -> list[str]:
             f"expected every customer once, {receipt.keys_repeated:,} are repeated{receipt.counted_by}"
             if counted
             else "expected every customer once, but customers could not be counted"
+            + (
+                f": the result has no column holding {receipt.key_missing}, under that name or another"
+                if receipt.key_missing
+                else ""
+            )
         )
     if exp.max_keys_repeated is not None and counted and receipt.keys_repeated > exp.max_keys_repeated:
         out.append(

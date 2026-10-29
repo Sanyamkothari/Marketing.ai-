@@ -73,6 +73,8 @@ def prompt_limits(config: Any = None) -> dict[str, int | float]:
         "quick_options_min": found.asks.quick_options_min,
         "quick_options_max": found.asks.quick_options_max,
         "chat_reply_chars": found.turn.chat_reply_chars,
+        "effect_chars": found.turn.effect_chars,
+        "short_chars": found.turn.short_chars,
         "guided_reply_chars": found.turn.guided_reply_chars,
         "summary_chars": found.turn.summary_chars,
         "request_columns": found.asks.request_columns,

@@ -1378,7 +1378,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             if run["error"]:
                 lines.append(f"- Stopped: {run['error']}")
             routine = [
-                i for i in run["left_unticked"] if "values are different from each other" in i["title"]
+                i
+                for i in run["left_unticked"]
+                if " different value" in i["title"] and "filled row" in i["title"]
             ]
             for item in run["left_unticked"]:
                 if item not in routine:

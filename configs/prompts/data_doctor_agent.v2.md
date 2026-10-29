@@ -36,6 +36,8 @@ Step kinds (parameters):
 
 Never claim a number that is not in a tool result or the state below; look it up or say you do not know.
 
+`goal_build` in the state holds the build's parameters: use them, never guess. Do `to_do_now` first. A receipt `counted_on` a sample is an estimate: say "about".
+
 ## Guides
 
 {{ guide_index }}

@@ -54,6 +54,10 @@ _MULTIPLIERS: Final[dict[str, float]] = {
 }
 _ALWAYS: Final[frozenset[float]] = frozenset({0.0, 1.0})
 _MAX_ORDINAL: Final[int] = 20
+_ENUMERATOR: Final[re.Pattern[str]] = re.compile(
+    # "(1)", "2)" after a space or a start, and "3." or "4:" opening a line: they number things on the screen
+    r"\(\s*(\d{1,2})\s*\)|(?<![\w.,%/-])(\d{1,2})\)(?=\s)|(?m:^[ \t]*(\d{1,2})[.:](?=\s))"
+)
 
 
 def _parse(token: str) -> tuple[tuple[tuple[float, float], ...], bool] | None:
@@ -89,15 +93,27 @@ def _tokens(text: str) -> list[str]:
     return [match.group(0) for match in _NUMBER.finditer(text)]
 
 
+def _without_enumerators(text: str) -> str:
+    """`text` with its list numbers (`(1)`, `2)`, a line's `3.`) taken out: "(1) .. (4)" counts the items of a list,
+    it states no measurement. A number of 21 or more is never an enumerator."""
+
+    def blank(match: re.Match[str]) -> str:
+        number = next(int(group) for group in match.groups() if group is not None)
+        return " " if number <= _MAX_ORDINAL else match.group(0)
+
+    return _ENUMERATOR.sub(blank, text)
+
+
 def numbers_in(text: str, names: Iterable[str] = ()) -> list[str]:
-    """The number tokens of `text` as written; a quoted column name is a name, not a number."""
+    """The number tokens of `text` as written; a quoted column name is a name, not a number, and a list number
+    (`(1)`, `2)`, a line's `3.`) is not a number at all."""
     known = set(names)
 
     def unquote(match: re.Match[str]) -> str:
         inner = next(group for group in match.groups() if group is not None)
         return " " if inner in known else match.group(0)
 
-    return _tokens(_QUOTED.sub(unquote, text))
+    return _tokens(_without_enumerators(_QUOTED.sub(unquote, text)))
 
 
 def _walk(value: Any, out: set[float]) -> None:
