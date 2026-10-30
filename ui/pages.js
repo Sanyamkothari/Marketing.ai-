@@ -37,6 +37,7 @@ import {
   pageHead,
   present,
   sortNote,
+  table,
   techDetails,
   toggletip,
   typeChip,
@@ -973,6 +974,21 @@ function modelPage(uc, run, art, byPath, extra = {}) {
         </div><p class="caption">Test set, cut-off ${fmtNum(matrix.threshold, 2)}</p>`
     : "";
 
+  // The classic Model page keeps which algorithm won under its technical details (docs/ux/GLOSSARY.md: model names are
+  // hidden from a marketer); the campaign's Review page shows the model search in view (`leaderboardCard`).
+  const boardBlock = board
+    ? `<h4>Models tried (${esc(fmtInt(board.models_trained))}, by ${esc(board.metric_label)})</h4>${table(
+        ["rank", "model", "validation", "test", "fit (s)"],
+        (board.entries || []).map((e) => [
+          String(e.rank),
+          e.model_name || e.family_label,
+          fmtMetric(e.validation_score),
+          dash(e.test_score, fmtMetric),
+          fmtNum(e.fit_time_seconds, 2),
+        ]),
+      )}<p class="caption">Time limit ${esc(board.time_limit_seconds)}s · presets ${esc(board.presets)}</p>`
+    : "";
+
   const hyper = best && best.hyperparameters ? Object.entries(best.hyperparameters) : [];
   const hyperBlock = hyper.length
     ? `<h4>Hyperparameters</h4>${kvs(hyper.map(([k, v]) => [k, typeof v === "number" ? fmtNum(v, 6) : String(v)]))}`
@@ -981,7 +997,7 @@ function modelPage(uc, run, art, byPath, extra = {}) {
     ? `<h4>Importance method</h4>${kvs([["Method", dash(importance.caption || importance.method)]])}`
     : "";
 
-  const technical = `<h4>Training setup</h4>${kvs(setupRows)}${matrixBlock}${hyperBlock}${importanceNote}`;
+  const technical = `<h4>Training setup</h4>${kvs(setupRows)}${matrixBlock}${embedded ? "" : boardBlock}${hyperBlock}${importanceNote}`;
 
   const fairnessCard =
     fairness && fairness.evaluated
@@ -1013,7 +1029,7 @@ function modelPage(uc, run, art, byPath, extra = {}) {
       ${driversCard(uc, importance)}
       ${evaluation ? evaluationCard(evaluation, baseline) : ""}
     </div>
-    ${leaderboardCard(board, best)}
+    ${embedded ? leaderboardCard(board, best) : ""}
     ${detailsCard}
     ${fairnessCard}${extra.panelsHtml || ""}`;
   return shell(uc, "model", run, body, {
