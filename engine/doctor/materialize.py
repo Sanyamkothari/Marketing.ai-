@@ -442,10 +442,9 @@ def _made_key(
     candidate: tuple[str, RecipeStep] | None,
     twice: bool,
 ) -> str | None:
-    """Everything a materialisation reads: the files' cells, the accepted items that make the plan (a step, an alias,
-    the ID, the outcome or a build that names one), the scope, the dates, the step being tried and whether it runs
-    twice. An answer about a setting (the learning time, what counts as gone) is none of these, so it does not run
-    the plan again.
+    """Everything a materialisation reads: the files' cells, every item of the case as it stands (its state and
+    payload), the scope, the dates, the step being tried and whether it runs twice. The same plan asked for again in
+    one round is not run again; any change to an item is a new key, so a kept table never stands for another plan.
     """
     cells = [frame_digest(f.frame) for f in files]
     if any(c is None for c in cells):
@@ -457,15 +456,16 @@ def _made_key(
                     [
                         i.item_id,
                         i.kind,
+                        i.state.value,
                         i.upload_id,
                         i.goal_id,
-                        i.payload_digest,
+                        i.payload,  # the content itself: a stored digest is not trusted to follow it
                         i.decided_by,
                         i.agreed_rows,
                         i.standing_answer_id,
+                        i.replaces,
                     ]
                     for i in items
-                    if i.state is ProposalState.ACCEPTED and _makes_plan(i)
                 ],
                 [[f.upload_id, f.file_name, f.file_rows, c] for f, c in zip(files, cells, strict=True)],
                 repr(scope),
@@ -475,16 +475,6 @@ def _made_key(
                 twice,
             ]
         )
-    )
-
-
-def _makes_plan(item: CaseItem) -> bool:
-    """Whether a materialisation reads the item: the recipe steps, the column aliases, and what `roles_of` reads
-    (the ID and outcome items, and a build's outcome)."""
-    return (
-        item.kind in (ALIAS_KIND, "key", "outcome_column")
-        or isinstance(item.payload.get("step"), dict)
-        or isinstance(item.payload.get("buildable"), dict)
     )
 
 

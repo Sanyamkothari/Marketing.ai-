@@ -1,5 +1,5 @@
-"""The plan's tables are kept by what makes them (materialize `_made_key`): an answer about a setting does not run
-the plan over the whole file again; a step, the ID, the outcome or the file's cells do."""
+"""The plan's tables are kept by what makes them (materialize `_made_key`): the same plan asked for again in one round
+is not run again, and any change to an item, the file's cells, the scope or the dates is a new key."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ def _item(item_id: str, kind: str, payload: dict[str, Any], **changes: Any) -> A
         "decided_by": "person",
         "agreed_rows": None,
         "standing_answer_id": None,
+        "replaces": None,
     }
     return SimpleNamespace(**{**fields, **changes})
 
@@ -48,10 +49,22 @@ def _key(items: list[Any], frame: pd.DataFrame = FRAME, **changes: Any) -> str |
     return _made_key(items, [_file(frame)], **{**args, **changes})
 
 
-def test_an_answer_about_a_setting_does_not_change_what_the_plan_makes() -> None:
-    assert _key([STEP]) == _key([STEP, SETTING])
+def test_the_same_plan_asked_for_again_is_the_same_key() -> None:
+    assert _key([STEP, SETTING]) == _key([STEP, SETTING])
+    same = _item("i_setting", "setting", {"name": "time_limit_minutes", "value": 20})
+    assert _key([STEP, SETTING]) == _key([STEP, same])
+
+
+def test_any_change_to_an_item_is_a_new_key_even_with_a_stale_digest() -> None:
     other = _item("i_setting", "setting", {"name": "time_limit_minutes", "value": 45})
-    assert _key([STEP, SETTING]) == _key([STEP, other])
+    assert _key([STEP, SETTING]) != _key([STEP, other])
+    stale = _item(
+        "i_setting",
+        "setting",
+        {"name": "time_limit_minutes", "value": 45},
+        payload_digest=SETTING.payload_digest,
+    )
+    assert _key([STEP, SETTING]) != _key([STEP, stale]), "the payload, not its stored digest, makes the key"
 
 
 def test_a_step_an_alias_the_id_the_outcome_or_a_build_change_it() -> None:
@@ -67,9 +80,10 @@ def test_a_step_an_alias_the_id_the_outcome_or_a_build_change_it() -> None:
     assert base not in keys and len(keys) == len(more)
 
 
-def test_a_withdrawn_step_is_not_part_of_the_plan() -> None:
+def test_a_withdrawn_step_is_a_new_key() -> None:
+    kept = _item("i_two", "recipe_step", {"step": {"kind": "drop_columns"}})
     gone = _item("i_two", "recipe_step", {"step": {"kind": "drop_columns"}}, state=ProposalState.REJECTED)
-    assert _key([STEP, gone]) == _key([STEP])
+    assert _key([STEP, gone]) != _key([STEP, kept])
 
 
 def test_the_cells_the_scope_the_dates_and_a_step_being_tried_change_it() -> None:
