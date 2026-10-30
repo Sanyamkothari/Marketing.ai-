@@ -113,6 +113,8 @@ def test_the_ai_does_not_set_the_outcome_but_a_rules_suggestion_it_adopts_may_be
     assert own.code == "OUTCOME_IS_PERSONS" and own.value == "Country"
     suggested = Create(draft=outcome, reason="r", basis="s:abc")
     assert check_action(make_case(), suggested, ai(suggested=frozenset({"abc"}))) is None
+    made_up = refused(make_case(), Create(draft=outcome, reason="r", basis="s:made_up"), ai())
+    assert made_up.code == "OUTCOME_IS_PERSONS", "a suggestion id the turn did not hold is the AI's own word"
     assert (
         check_action(make_case(), Create(draft=outcome, reason="r", basis="r1"), ctx()) is None
     ), "a rule's own"

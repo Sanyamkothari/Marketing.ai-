@@ -73,7 +73,7 @@ def check_action(case: Case, action: AuthorAction, ctx: ApplyContext) -> Refusal
         case Create():
             return (
                 _approval(action)
-                or _target(case, action.replaces)
+                or target_refusal(case, action.replaces)
                 or _outcome(action, ctx)
                 or _feature_is_id(action, ctx)
                 or _proposal(case, action, ctx)
@@ -81,7 +81,7 @@ def check_action(case: Case, action: AuthorAction, ctx: ApplyContext) -> Refusal
         case Withdraw():
             old = find_item(case, action.item_id)
             if old is None:
-                return _target(case, action.item_id)
+                return target_refusal(case, action.item_id)
             return (
                 None
                 if old.state is ProposalState.REJECTED
@@ -101,7 +101,7 @@ def _live_handles(case: Case) -> str:
     return ", ".join(live[:_HANDLES_SHOWN])
 
 
-def _target(case: Case, item_id: str | None) -> Refusal | None:
+def target_refusal(case: Case, item_id: str | None) -> Refusal | None:
     """The change an action names must be in the plan's active section."""
     if item_id is None or find_item(case, item_id) is not None:
         return None
@@ -132,7 +132,8 @@ def _approval(action: Create) -> Refusal | None:
 
 def _outcome(action: Create, ctx: ApplyContext) -> Refusal | None:
     """The AI does not set the outcome: it is the person's answer, or a rule's suggestion that they approve."""
-    if ctx.author != "ai" or action.draft.kind != _OUTCOME_KIND or action.basis.startswith("s:"):
+    adopted = action.basis.startswith("s:") and action.basis[2:] in ctx.suggested
+    if ctx.author != "ai" or action.draft.kind != _OUTCOME_KIND or adopted:
         return None
     column = action.draft.payload.get("column")
     return _refuse(

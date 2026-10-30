@@ -249,6 +249,15 @@ def check_action(case: Case, action: AuthorAction, ctx: ApplyContext) -> Refusal
     return guard(case, action, ctx)
 
 
+def _missing(case: Case, item_id: str) -> Refusal:
+    """The guard's refusal of a target that is not in the plan, for a run whose guard was not the first word."""
+    from engine.doctor.guards_layer import target_refusal
+
+    refusal = target_refusal(case, item_id)
+    assert refusal is not None
+    return refusal
+
+
 def apply_actions(case: Case, actions: Sequence[AuthorAction], ctx: ApplyContext) -> Applied:
     """The case with `actions` applied, in order; a refused action is recorded and the next one still runs.
 
@@ -430,7 +439,8 @@ class _Run:
         placed = waits_because(item, self.ctx.roles) is None
         if action.replaces is not None:
             old = self._find(action.replaces)
-            assert old is not None, "the guard layer refuses a target that is not in the plan"
+            if old is None:
+                return _missing(self.case, action.replaces)
             if old.state is ProposalState.REJECTED:
                 return Refusal(
                     code="ITEM_ALREADY_LEFT_OUT",
@@ -457,7 +467,8 @@ class _Run:
 
     def _withdraw(self, action: Withdraw) -> Refusal | None:
         old = self._find(action.item_id)
-        assert old is not None, "the guard layer refuses a target that is not in the plan"
+        if old is None:
+            return _missing(self.case, action.item_id)
         if old.state is ProposalState.REJECTED:
             return Refusal(
                 code="ITEM_ALREADY_LEFT_OUT",
