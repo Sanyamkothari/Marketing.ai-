@@ -78,7 +78,7 @@ def test_an_order_log_with_blank_ids_asks_which_column_names_the_customer_and_go
     assert key is not None and key["blocking"]
     by_label = {o["label"]: o["option_id"] for o in key["options"]}
     customer = next(label for label in by_label if label.startswith("customer_id"))
-    assert "25% blank" in customer and "cannot be tied to a person" in customer, customer
+    assert "a quarter are blank" in customer and "cannot be tied to a person" in customer, customer
     assert not any("row number" in label for label in by_label)
     assert not any(
         label.startswith("order_date") for label in by_label
