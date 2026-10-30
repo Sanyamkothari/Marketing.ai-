@@ -99,7 +99,7 @@ const CSS = `
 .cw .cw-decide .cw-actions{margin-top:0}
 .cw .cw-decide .cw-note{margin:var(--s3, 12px) 0 0;max-width:760px}
 
-/* the Review page's plain summary, and the technical details folded under one button */
+/* the Review page's short strip, and the Data | Model | Output tabs under the approval */
 .cw .cw-sum-lead{font-size:20px;line-height:28px;font-weight:600;color:var(--ink);margin:var(--s2, 8px) 0}
 .cw .cw-sum-h{margin-top:var(--s5, 24px);font-size:16px}
 .cw .cw-sum-scroll{overflow-x:auto}
@@ -107,12 +107,11 @@ const CSS = `
 .cw .cw-more{margin:var(--s2, 8px) 0}
 .cw .cw-more>summary{cursor:pointer;color:var(--brand-blue);font-weight:600;font-size:var(--fs-body, 14px)}
 .cw .cw-more-body{margin-top:var(--s2, 8px)}
-.cw .cw-techbox{margin-top:var(--s4, 16px)}
-.cw .cw-techbox>summary{list-style:none;cursor:pointer;display:inline-flex}
-.cw .cw-techbox>summary::-webkit-details-marker{display:none}
-.cw .cw-techbox .cw-techbox-hide,.cw .cw-techbox[open] .cw-techbox-show{display:none}
-.cw .cw-techbox[open] .cw-techbox-hide{display:inline}
-.cw .cw-techbox-body{margin-top:var(--s4, 16px)}
+.cw .cw-tabs{margin-top:var(--s2, 8px)}
+.cw .cw-tabs [role="tabpanel"]{display:flex;flex-direction:column;gap:var(--s4, 16px);padding-top:var(--s4, 16px)}
+.cw .cw-tabs [role="tabpanel"][hidden]{display:none}
+.cw .cw-tabs .stack{display:flex;flex-direction:column;gap:var(--s4, 16px)}
+.cw .cw-tabs .cw-sum-h{margin:var(--s2, 8px) 0 0}
 
 /* step 5: the success state - a check, the title, the campaign's status, one sentence, the actions */
 .cw .cw-done-body{display:flex;flex-direction:column;align-items:center;text-align:center;max-width:600px;margin:0 auto;padding:40px var(--s5, 24px)}
@@ -128,6 +127,7 @@ const CSS = `
   .cw .stat-row[data-cw-summary="value"] [data-cw-tile="value"]{grid-column:1 / -1}
 }
 @media (max-width:700px){
+  .cw .cw-sum-scroll .cw-tbl th,.cw .cw-sum-scroll .cw-tbl td{padding:8px 6px;font-size:12px;line-height:16px}
   .cw .stepper{margin-bottom:var(--s5, 24px)}
   .cw .cw-card-body{padding:var(--s4, 16px)}
   .cw .cw-goals{grid-template-columns:1fr;gap:var(--s3, 12px)}

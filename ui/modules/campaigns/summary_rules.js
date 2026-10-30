@@ -120,23 +120,11 @@ export function liftRows(lift) {
   return bins
     .filter((b) => b && whole(b.rows) && typeof b.actual_rate_pct === "number" && typeof b.lift === "number")
     .map((b, i) => ({
-      group: i === 0 ? "1 (best first)" : String(i + 1),
+      group: i === 0 ? "1 (best)" : String(i + 1),
       customers: count(b.rows),
       rate: fmtPct(b.actual_rate_pct / 100, 0),
       times: `${fmtNum(b.lift, 1)} times`,
     }));
-}
-
-/**
- * What the model relied on most, from the training run's `feature_importance.json`: `[{ name, share }]` best first,
- * `share` as "48%". Columns that count for nothing are left out.
- */
-export function reasonItems(importance, limit = 8) {
-  const items = importance && Array.isArray(importance.items) ? importance.items : [];
-  return items
-    .filter((i) => i && i.feature && typeof i.share_pct === "number" && i.share_pct >= 0.5)
-    .slice(0, limit)
-    .map((i) => ({ name: columnWords(i.feature), share: fmtPct(i.share_pct / 100, 0) }));
 }
 
 /** The customers who are neither on the list nor left out (the model ranks them lower), `null` when it does not add up. */

@@ -1,8 +1,8 @@
-/* The plain results summary a person sees first when a campaign is ready, in the order a marketer asks: who to contact
-   (how many, who was left out, the first customers best first), why these customers, how good the model is (one
-   honest sentence, what is not proven yet), what was done to the data (a link to the approved plan), "See more" folds
-   for the detail, and everything else one click away behind "Show technical details". Drawn by the
-   wizard's own builders in jsdom from recorded-shape answers. Run through tests/integration/test_campaign_run_results.py. */
+/* The Review page of a ready campaign: a short strip first (how many to contact, how good the model is in one honest
+   sentence, what is not proven yet), the check and approve card, then the tabs Data | Model | Output. The Output tab holds
+   who is contacted and who is not (with reasons, the first customers best first) and the model's quality tenth by
+   tenth. Drawn by the wizard's own builders in jsdom from recorded-shape answers.
+   Run through tests/integration/test_campaign_run_results.py. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
@@ -50,11 +50,12 @@ const model = { state: "approved", canApprove: true, own: false, version };
 const review = (extra = {}) =>
   V.reviewHtml({ campaign, list, preview: null, cost: null, compliance: null, resultsOn: "2026-11-10", model, canApprove: true, summary: { top, caseId: "case_42" }, ...extra });
 
-test("the summary comes first: how many to contact, who was left out and why, in plain words", () => {
+test("the strip comes first: how many to contact; the Output tab says who was left out and why, in plain words", () => {
   draw(review());
-  assert.equal(app.firstElementChild, $("[data-cw-results]"), "the summary is the first thing on the page");
+  assert.equal(app.firstElementChild, $("[data-cw-results]"), "the strip is the first thing on the page");
   assert.equal(text($("[data-cw-sum-contact]")), "1,240 customers to contact of the 8,214 checked");
-  const left = $$("[data-cw-sum-excluded] li").map(text);
+  assert.equal($("[data-cw-results] [data-cw-sum-excluded]"), null, "the strip is short: the reasons are on the Output tab");
+  const left = $$("[data-cw-panel=output] [data-cw-sum-excluded] li").map(text);
   assert.equal(left.length, 4, "only the reasons that hold somebody: comparison group, contact rules, compliance, not picked");
   assert.match(left[0], /^600 customers: kept back on purpose as the comparison group/);
   assert.match(left[1], /^35 customers: left out by your contact rules/);
@@ -75,9 +76,8 @@ test("the first customers are a table, best first, with their likelihood, and on
   assert.deepEqual(rows[0], ["C7", "91%", "High", "Call back", "phone", "Short contract"]);
   assert.deepEqual(rows[1].slice(0, 2), ["C9", "70%"]);
   draw(
-    SV.resultsSummaryHtml({
+    SV.contactPartHtml({
       list,
-      version,
       top: { customers: [{ customer: "C1", score: 0.5, priority: null, offer: null, channel: null, reason: null }] },
     }),
   );
@@ -95,7 +95,7 @@ test("when the names cannot be shown the page says why, in words, instead of lea
   assert.equal($("[data-cw-sum-names]"), null, "a list made without a campaign run has no names to show, and no gap");
   assert.ok($("[data-cw-sum-contact]"));
   draw(review({ summary: { top: { elsewhere: true }, caseId: null } }));
-  assert.match(text($("[data-cw-sum-names]")), /on the full results page/, "a list no campaign run made says where its customers are");
+  assert.match(text($("[data-cw-sum-names]")), /not made by a campaign run/, "a list no campaign run made says where its customers are");
 });
 
 test("how well it did on customers it had not seen: the Model page's sentence; a missing record is said, not skipped", () => {
@@ -120,31 +120,34 @@ test("what is not proven yet is always said, with the day results can be added",
   assert.doesNotMatch(text($("[data-cw-sum-unproven]")), /Add the results after/);
 });
 
-test("What the Doctor did opens the case; it is not offered when the list has no case", () => {
+test("the Doctor's link is the Data tab's; the Review page itself carries none, and the progress page still does", () => {
   draw(review());
-  assert.equal($("[data-cw-sum-doctor]").getAttribute("href"), "#/data/check/case/case_42");
-  assert.equal(text($("[data-cw-sum-doctor]")), "See the approved plan");
-  draw(review({ summary: { top, caseId: null } }));
   assert.equal($("[data-cw-sum-doctor]"), null);
   assert.equal(SR.doctorHref("a b"), "#/data/check/case/a%20b");
 });
 
-test("Approve and download follows the summary; the numbers and tables are folded behind Show technical details", () => {
+test("the page is the strip, then Approve and download (the gate), then the tabs; no technical box, no detour to the full pages", () => {
   draw(review());
-  const order = $$("[data-cw-results], [data-cw-review], [data-cw-technical]").map((el) => el.getAttribute("data-cw-results") !== null ? "summary" : el.hasAttribute("data-cw-review") ? "approve" : "technical");
-  assert.deepEqual(order, ["summary", "approve", "technical"]);
-  assert.equal(text($("[data-cw-approve]")), "Approve and download");
-  const box = $("details[data-cw-technical]");
-  assert.equal(box.open, false, "closed until asked for");
-  assert.equal(text(box.querySelector("summary .cw-techbox-show")), "Show technical details");
-  assert.ok(box.querySelector("[data-cw-tile=contacted]"), "the old tiles are inside");
-  assert.ok(box.querySelector("[data-cw-audience]"), "... and the old tables");
-  assert.deepEqual(
-    [...box.querySelectorAll("[data-cw-technical-links] a")].map((a) => a.getAttribute("href")),
-    ["#/uc/win-back-campaign/output/r_score", "#/uc/win-back-campaign/model/r_train"],
-    "the way to the existing full pages",
+  const order = $$("[data-cw-results], [data-cw-review], [data-cw-tabs]").map((el) =>
+    el.hasAttribute("data-cw-results") ? "summary" : el.hasAttribute("data-cw-review") ? "approve" : "tabs",
   );
+  assert.deepEqual(order, ["summary", "approve", "tabs"]);
+  assert.equal(text($("[data-cw-approve]")), "Approve and download");
+  assert.equal($("[data-cw-technical]"), null, "the technical box is gone");
+  assert.doesNotMatch(app.textContent, /Open the full results page|Show technical details/);
+  assert.deepEqual($$("[data-cw-tab]").map(text), ["Data", "Model", "Output"]);
+  assert.equal($("[data-cw-tab=data]").getAttribute("aria-selected"), "true");
+  assert.equal($("[data-cw-panel=data]").hidden, false);
+  assert.equal($("[data-cw-panel=model]").hidden, true);
+  assert.equal($("[data-cw-panel=output]").hidden, true);
+  // the campaign's own numbers are kept, folded under the Output tab
+  const numbers = $("[data-cw-panel=output] details[data-cw-numbers]");
+  assert.equal(numbers.open, false);
+  assert.ok(numbers.querySelector("[data-cw-tile=contacted]"), "the tiles are inside");
+  assert.ok(numbers.querySelector("[data-cw-audience]"), "... and the audience tables");
+  assert.equal($$("[data-cw-tabs] a.btn.primary, [data-cw-tabs] a[download]").length, 0, "the file is downloaded through Approve only");
   assert.equal($$("[data-cw-results] .btn.primary").length, 0, "one primary button on the page: Approve");
+  assert.match(text($("[data-cw-download-note]")), /file you download when you approve above/);
 });
 
 test("a summary with nothing to go on says so rather than showing zeros", () => {
@@ -210,12 +213,9 @@ test("how good the model is: one honest sentence a marketer understands, from th
   draw(review({ summary: { top, caseId: "case_42", story: { lift, importance } } }));
   assert.match(text($("[data-cw-sum-model]")), /^The 20% of customers the model puts first are 5 times as likely as the average customer/);
   assert.match(text($("[data-cw-sum-unproven]")), /^Not yet proven:/);
-  // the groups and the model's own measure are one click away, not in the way
-  const fold = $("[data-cw-sum-groups]").closest("details");
-  assert.equal(fold.open, false);
-  assert.equal(text(fold.querySelector("summary")), "See more");
-  assert.equal($$("[data-cw-sum-groups] tbody tr").length, 5);
-  assert.match(text(fold), /the model put a customer who went on to come back above one who did not, 78% of the time/);
+  // the groups are the Output tab's table, tenth by tenth
+  assert.equal($$("[data-cw-panel=output] [data-cw-sum-groups] tbody tr").length, 5);
+  assert.equal($("[data-cw-results] [data-cw-sum-groups]"), null, "the strip holds no table");
   // a ranking no better than average is never sold as a result
   const flat = { ...lift, bins: [{ rows: 60, actual_rate_pct: 12, lift: 1.02 }, ...lift.bins.slice(1)] };
   assert.match(SR.liftSentence(flat), /not clearly more likely than the average customer .* so do not rely on this list yet/);
@@ -241,30 +241,13 @@ test("the caveat says what the numbers do not prove: without a comparison group,
   assert.equal(SR.comparisonRows(null, null), 0);
 });
 
-test("why these customers: what the model relied on most in plain words, three in view and the rest folded", () => {
-  assert.deepEqual(SR.reasonItems(importance), [
-    { name: "Plan tier", share: "48%" },
-    { name: "Visits last 7d", share: "28%" },
-    { name: "Ad ctr 90d", share: "16%" },
-    { name: "Region", share: "7%" },
-  ], "a column that counts for nothing is left out");
+test("the strip says what is shown and where the rest is: a missing lift file is said, not skipped", () => {
   draw(review({ summary: { top, caseId: "case_42", story: { lift, importance } } }));
-  assert.deepEqual($$("[data-cw-sum-reasons] li").map((li) => text(li).replace(/ \(.*$/, "")), ["Plan tier", "Visits last 7d", "Ad ctr 90d"]);
-  assert.match(text($("[data-cw-sum-reasons] li")), /Plan tier \(48% of what it relied on\)/);
-  assert.equal($$("[data-cw-results] details[data-cw-sum-more]").length, 2, "the other reason and the groups are each behind See more");
-  draw(review());
-  assert.match(text($("[data-cw-sum-why]")), /could not be read for this list/, "a missing file is said, not skipped");
-  assert.equal(SR.columnWords("visits_last_7d"), "Visits last 7d");
-});
-
-test("the card answers in order: who to contact, why these customers, how good the model is, what was done to the data", () => {
-  draw(review({ summary: { top, caseId: "case_42", story: { lift, importance } } }));
-  const heads = $$("[data-cw-results] .cw-sum-h").map(text);
-  assert.deepEqual(heads, ["Who to contact", "Why these customers", "How good the model is", "What was done to your data"]);
-  assert.match(text($("[data-cw-sum-list]")), /Send only the customers the file marks to contact/);
+  assert.deepEqual($$("[data-cw-results] p").map((el) => el.getAttribute("data-cw-sum-contact") !== null ? "contact" : el.getAttribute("data-cw-sum-model") !== null ? "model" : "unproven"), ["contact", "model", "unproven"]);
   assert.deepEqual(findNeverShown(text($("[data-cw-results]"))), {}, "plain words only");
-  draw(review({ summary: { top, caseId: null } }));
-  assert.equal($("[data-cw-sum-data]"), null, "no plan to point to when the file did not come through the Data Doctor");
+  draw(review({ model: { ...model, version: null } }));
+  assert.match(text($("[data-cw-sum-model]")), /check the Model tab/);
+  assert.equal(SR.columnWords("visits_last_7d"), "Visits last 7d");
 });
 
 test("the goal's result is named in plain words, with a safe generic fallback for a goal without one", () => {
