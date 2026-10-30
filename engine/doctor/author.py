@@ -845,15 +845,17 @@ class Gathered:
 
     rules: tuple[Facts, ...]
     detectors: Facts
+    fit: Facts | None = None
+    """What the data can power, read under a goal (no goal: it is the rules' own second set)."""
 
     @property
     def every(self) -> tuple[Facts, ...]:
-        return (*self.rules, self.detectors)
+        return (*self.rules, *((self.fit,) if self.fit is not None else ()), self.detectors)
 
 
 def gather_facts(run: FactRun, case: Case, brief: GoalBrief | None) -> Gathered:
-    """Call the fact functions on `case` as it stands: which column names each row, what the data can power (no
-    goal) or the goal's outcome, date and consent, and what the detectors found. Nothing is written."""
+    """Call the fact functions on `case` as it stands: which column names each row, what the data can power, the
+    goal's outcome, date and consent (under a goal), and what the detectors found. Nothing is written."""
     from engine.doctor.facts_goal import goal_facts, goal_fit_facts
     from engine.doctor.tools_facts import detector_facts, key_facts
 
@@ -871,7 +873,11 @@ def gather_facts(run: FactRun, case: Case, brief: GoalBrief | None) -> Gathered:
         rules = (key_facts(run, case, diagnosis), fit)
     else:
         rules = (key_facts(run, case), *goal_facts(run, case, brief))
-    return Gathered(rules=rules, detectors=detector_facts(run, case, brief))
+    return Gathered(
+        rules=rules,
+        detectors=detector_facts(run, case, brief),
+        fit=goal_fit_facts(run, case) if brief is not None else None,
+    )
 
 
 def default_actions(facts: Sequence[Facts]) -> list[AuthorAction]:

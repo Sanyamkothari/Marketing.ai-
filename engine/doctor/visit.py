@@ -1101,13 +1101,14 @@ def _default_rounds(
 
     for facts in found.every:
         step.evidence.extend(facts.evidence)
-    if brief is None:
-        fit = found.rules[1].facts
-        if "use_cases" in fit:
-            step.updates["diagnosis"] = {
-                **(case.diagnosis or {"files": [], "links": [], "stacks": []}),
-                "use_cases": fit["use_cases"],
-            }
+    # Under a goal too: the goal's fit follows the files and answers, not the first look.
+    fit = (found.rules[1] if found.fit is None else found.fit).facts
+    if "use_cases" in fit:
+        step.updates["diagnosis"] = {
+            **(case.diagnosis or {"files": [], "links": [], "stacks": []}),
+            "use_cases": fit["use_cases"],
+        }
+        if brief is None:
             step.visit["missing_for"] = tuple(fit["missing_for"])
             if fit["data_request"] is not None:
                 step.visit["data_request"] = fit["data_request"]

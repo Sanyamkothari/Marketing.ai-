@@ -15,6 +15,7 @@ TREAT with its reason; forgetting an upload forgets it in the visit.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import subprocess
@@ -39,6 +40,7 @@ from engine.doctor.case import (
     case_dir,
     forget_upload,
 )
+from engine.doctor.conversation import goal_fit
 from engine.doctor.diagnose import LoadedFile, Offer
 from engine.doctor.goal_brief import load_goal_brief
 from engine.doctor.registry import DataToolContext, DataToolRegistry, DataToolResult
@@ -612,6 +614,23 @@ def test_a_case_with_no_files_waits_for_them(storage: LocalStorage, world: World
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
     assert case.state is VisitState.ASK and case.visit is not None and case.visit.taken_in == (FIRST,)
+
+
+def test_the_fit_of_a_chosen_goal_follows_the_files_added_after_it_was_chosen(
+    storage: LocalStorage, world: World
+) -> None:
+    """The fit hold on Approve reads the goal's fit as the files stand now, not the first look before the goal."""
+    small = vs.loaded(FIRST, "customers_oct.csv", vs.customers(rows=300, seed=1), load_use_case(GOAL_A))
+    w = dataclasses.replace(world, files={**world.files, FIRST: small})
+    case = _goal(storage, w, _generic(storage, w), GOAL_A)
+    fit = goal_fit(case, GOAL_A)
+    assert fit is not None and not fit[0], "300 customers are too few for this goal"
+    case = visit.add_files(
+        CLIENT, case.case_id, [vs.case_file(vs.SECOND, w)], _deps(storage, w),
+        expected_version=case.version, actor=ANALYST,
+    )  # fmt: skip
+    fit = goal_fit(case, GOAL_A)
+    assert fit is not None and fit[0], "the added file makes it fit, so the hold clears"
 
 
 def test_verify_sends_a_not_ready_case_back_to_treat_with_its_reason(
