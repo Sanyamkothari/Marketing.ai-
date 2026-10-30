@@ -60,6 +60,10 @@ _SETTERS: Final[frozenset[str]] = frozenset(
 """Typed fixes that say how one column is read: a column is read one way, so a second reading of it competes with
 the first. Other steps (leaving rows out, correcting cells, filling) add up, so each is its own matter."""
 
+COLUMN_STEPS: Final[frozenset[str]] = _SETTERS | {"drop_column"}
+"""Steps about one column as a whole: how it is read, or that it goes. What they do does not depend on which rows are
+there, so a decision about them on one file says the same of that column of a table made from it."""
+
 
 def _digest(value: Any) -> str:
     return sha256_hex(canonical_bytes(value))[:12]

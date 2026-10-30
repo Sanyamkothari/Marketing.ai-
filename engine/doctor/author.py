@@ -426,9 +426,18 @@ class _Run:
             self._build_of(action.draft, action.replaces), action.basis, state=ProposalState.PENDING
         )
         decided = decided_before(self.case, self.work.items, item)
-        if decided is not None and decided.kind == KEEP_KIND:
-            return self._kept(decided)
         twin = twin_of([*self.work.items, *self.emit], item)
+        if twin is not None and twin.state is not ProposalState.REJECTED:
+            self.emit.append(item)  # already there: said again, so a complete emission keeps it
+            return None
+        payload = item.payload
+        if (
+            decided is not None
+            and decided.kind == KEEP_KIND
+            and payload.get("level") != "stop"
+            and not isinstance(payload.get("buildable"), dict)
+        ):  # a keep turns a note or a fix down; a stop or the goal's build is never one it answers
+            return self._kept(decided)
         if twin is not None and twin.state is ProposalState.REJECTED and twin.withdrawn_because is None:
             return Refusal(
                 code="LEFT_OUT_BY_PERSON",
@@ -437,9 +446,9 @@ class _Run:
                 how_to_fix="Ask the person to tick it again, or propose a different change.",
             )
         if twin is not None:
-            self.emit.append(item)  # already there: said again, so a complete emission keeps it
+            self.emit.append(item)  # taken back by the Doctor: said again
             return None
-        if decided is not None and action.replaces is None:
+        if decided is not None and decided.kind != KEEP_KIND and action.replaces is None:
             self._carry(item, decided)
             return None
         # Whether it is in the plan or waits for the person's tick is code's call, never the author's.
@@ -559,6 +568,25 @@ class _Run:
         if refusal is not None:
             return refusal
         subject = item_subject(old)
+        held = next(
+            (
+                i
+                for i in self.work.items
+                if i.kind != KEEP_KIND
+                and i.item_id != old.item_id
+                and i.state is not ProposalState.REJECTED
+                and item_subject(i) == subject
+                and (i.state is ProposalState.ACCEPTED or person_owns(self.case, i))
+            ),
+            None,
+        )
+        if held is not None:  # a keep stands for the whole matter, so it would turn this one down as well
+            return Refusal(
+                code="KEEP_IS_IN_THE_PLAN",
+                what_failed=f"“{held.title}” is about the same matter and is in the plan or the person's own, so keeping the matter as it was means taking it out.",
+                value=held.item_id,
+                how_to_fix="Use withdraw: taking a change out of the plan waits for the person's yes.",
+            )
         if any(
             i.kind == KEEP_KIND and i.state is ProposalState.ACCEPTED and i.payload.get("subject") == subject
             for i in self.work.items

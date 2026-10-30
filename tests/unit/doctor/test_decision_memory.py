@@ -272,6 +272,54 @@ def test_a_complete_round_of_the_default_author_leaves_the_persons_keep_alone() 
     assert keep_of(out.case) == keep_of(kept)
 
 
+def test_a_keep_cannot_take_a_fix_out_of_the_plan_through_another_reading_of_the_same_column() -> None:
+    accepted = stored("parse_number", "spend", state=ProposalState.ACCEPTED, decimal=",")
+    old = stored(
+        "parse_number",
+        "spend",
+        state=ProposalState.REJECTED,
+        decided_by=AGENT,
+        decimal=".",
+        withdrawn_because="it is no longer proposed",
+    )
+    assert item_subject(accepted) == item_subject(old) and accepted.item_id != old.item_id
+    out = apply_actions(said(accepted, old), [Keep(item_id=old.item_id, message="msg:0", reason="r")], ai())
+    assert [r.code for _i, r in out.refused] == ["KEEP_IS_IN_THE_PLAN"]
+    assert not any(i.kind == KEEP_KIND for i in out.case.items), "nothing was recorded"
+    again = apply_actions(
+        out.case, [create("parse_number", "spend", decimal=",")], ctx("default", complete=True)
+    )
+    assert by_id(again.case, accepted.item_id).state is ProposalState.ACCEPTED, "the plan keeps its fix"
+
+
+def test_a_fix_in_the_plan_said_again_is_kept_in_the_emission_even_when_its_matter_is_kept() -> None:
+    accepted = stored("parse_number", "spend", state=ProposalState.ACCEPTED, decimal=",")
+    keep = keep_of(
+        apply_actions(
+            said(stored("parse_number", "spend", decimal=".")),
+            [Keep(item_id=stored("parse_number", "spend", decimal=".").item_id, message="msg:0", reason="r")],
+            ai(),
+        ).case
+    )
+    case = said(accepted).model_copy(update={"items": (accepted, keep)})
+    out = apply_actions(case, [create("parse_number", "spend", decimal=",")], ctx("default", complete=True))
+    assert by_id(out.case, accepted.item_id).state is ProposalState.ACCEPTED
+
+
+def test_a_stop_is_never_dropped_because_its_matter_was_kept() -> None:
+    waiting = note(10)
+    kept = apply_actions(
+        said(waiting), [Keep(item_id=waiting.item_id, message="msg:0", reason="r")], ai()
+    ).case
+    stop = note_draft(12).model_copy(update={"payload": {**note_draft(12).payload, "level": "stop"}})
+    out = apply_actions(kept, [Create(draft=stop, reason="found", basis="r1")], ctx("default", complete=True))
+    assert [
+        i
+        for i in out.case.items
+        if i.payload.get("level") == "stop" and i.state is not ProposalState.REJECTED
+    ]
+
+
 def test_withdraw_still_takes_a_change_out_of_the_plan_for_the_persons_yes() -> None:
     target = stored("parse_number", state=ProposalState.ACCEPTED)
     out = apply_actions(said(target), [Withdraw(item_id=target.item_id, reason="r", consequence="c")], ai())
@@ -308,7 +356,7 @@ def joined_case(*items: CaseItem, combine: bool = True) -> Case:
     return make_case([*([join] if combine else []), *items]).model_copy(update={"files": files})
 
 
-def on_table(column: str = "signup_date", kind: str = "remove_column") -> Create:
+def on_table(column: str = "signup_date", kind: str = "drop_column") -> Create:
     """The same fix, proposed for the joined table."""
     given = create(kind, column)
     payload = {**given.draft.payload, "upload_id": JOINED}
@@ -318,7 +366,7 @@ def on_table(column: str = "signup_date", kind: str = "remove_column") -> Create
 
 
 def decided(column: str = "signup_date", *, state: ProposalState = ProposalState.ACCEPTED) -> CaseItem:
-    return stored("remove_column", column, state=state, decided_by=PERSON)
+    return stored("drop_column", column, state=state, decided_by=PERSON)
 
 
 def test_a_yes_to_removing_a_column_of_a_file_stands_for_the_same_column_of_the_table_made_of_it() -> None:
@@ -347,11 +395,9 @@ def test_a_no_to_a_change_of_a_column_of_a_file_stands_for_the_table_made_of_it_
     [
         joined_case(decided("other_column")),  # another column
         joined_case(decided(), combine=False),  # no combine made the table
-        joined_case(
-            stored("remove_column", "signup_date", state=ProposalState.ACCEPTED)
-        ),  # nobody's decision
-        joined_case(stored("remove_column", "signup_date", state=ProposalState.PENDING)),  # not decided
-        joined_case(stored("remove_column", "signup_date", state=ProposalState.REJECTED, decided_by=AGENT)),
+        joined_case(stored("drop_column", "signup_date", state=ProposalState.ACCEPTED)),  # nobody's decision
+        joined_case(stored("drop_column", "signup_date", state=ProposalState.PENDING)),  # not decided
+        joined_case(stored("drop_column", "signup_date", state=ProposalState.REJECTED, decided_by=AGENT)),
     ],
     ids=["other column", "no combine", "nobody decided", "still pending", "taken back by the Doctor"],
 )
@@ -370,6 +416,38 @@ def test_a_decision_about_the_orders_file_does_not_carry_over_to_the_customer_ta
     out = apply_actions(joined_case(other), [on_table()], ctx("default"))
     made = next(i for i in out.case.items if i.upload_id == JOINED)
     assert made.decided_by is None and made.state is not ProposalState.REJECTED
+
+
+def stacked_case(*items: CaseItem) -> Case:
+    case = joined_case(*items)
+    stack = case.items[0].model_copy(update={"kind": "stack_files", "item_id": "stack_files.base.s"})
+    return case.model_copy(update={"items": (stack, *case.items[1:])})
+
+
+def test_a_decision_does_not_carry_over_a_stacked_table_which_holds_the_rows_of_every_file() -> None:
+    out = apply_actions(stacked_case(decided()), [on_table()], ctx("default"))
+    made = next(i for i in out.case.items if i.upload_id == JOINED)
+    assert made.decided_by is None and made.state is not ProposalState.REJECTED
+
+
+def test_a_decision_about_rows_does_not_carry_over_even_a_join() -> None:
+    yes = stored("filter_rows", "signup_date", state=ProposalState.ACCEPTED, decided_by=PERSON)
+    out = apply_actions(joined_case(yes), [on_table("signup_date", "filter_rows")], ctx("default"))
+    made = next(i for i in out.case.items if i.upload_id == JOINED)
+    assert made.decided_by is None
+
+
+def test_a_yes_does_not_carry_over_to_a_change_that_waits_for_their_own_yes() -> None:
+    yes = decided()
+    given = on_table()
+    warned = given.model_copy(
+        update={
+            "draft": given.draft.model_copy(update={"payload": {**given.draft.payload, "warnings": ["many"]}})
+        }
+    )
+    out = apply_actions(joined_case(yes), [warned], ctx("default"))
+    made = next(i for i in out.case.items if i.upload_id == JOINED)
+    assert made.decided_by is None and made.state is ProposalState.PENDING
 
 
 def test_a_carried_decision_is_the_persons_even_after_the_author_says_it_again() -> None:

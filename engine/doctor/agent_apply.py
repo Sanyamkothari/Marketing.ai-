@@ -38,7 +38,7 @@ from engine.agent.advisor import NEVER_TICKED_STEPS
 from engine.agent.contracts import AgentConfidence, ProposalState
 from engine.doctor.decisions import role_columns
 from engine.doctor.protocol import AGENT
-from engine.doctor.subjects import KEEP_KIND, SETTING_KIND, WITHDRAW_KIND, item_subject
+from engine.doctor.subjects import COLUMN_STEPS, KEEP_KIND, SETTING_KIND, WITHDRAW_KIND, item_subject
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -208,9 +208,11 @@ def decided_before(case: Case, items: Sequence[CaseItem], item: CaseItem) -> Cas
 
     * A `keep` they asked for that names the matter `item` is about (its subject, so the same matter with other counts
       is the same matter), for as long as it is accepted. Untick it and the matter is proposed again.
-    * Their yes or no to this very change on the file `item`'s table was made from. A join keeps the customer list
-      and a stack keeps the shape of its files, so a column with the same name in the same source file is the same
-      column: what they said of it carries over to the table the combine made.
+    * Their yes or no to this very change of a column (how it is read, or that it goes) on the file `item`'s table
+      was made from. A join keeps the customer list, so a column with the same name in the same source file is the
+      same column: what they said of it carries over to the table the join made. Nothing carries over a stack, or a
+      change of rows, which depend on which rows are there; and a yes never carries over a change that waits for their
+      own yes (it changes many values, or needs one).
     """
     from engine.doctor.combine_run import source_upload
 
@@ -225,9 +227,12 @@ def decided_before(case: Case, items: Sequence[CaseItem], item: CaseItem) -> Cas
         ),
         None,
     )
-    source = source_upload(case, item.upload_id) if item.upload_id else None
+    step = item.payload.get("step")
+    column_step = item.kind == "recipe_step" and isinstance(step, dict) and step.get("kind") in COLUMN_STEPS
+    source = source_upload(case, item.upload_id) if item.upload_id and column_step else None
     if kept is not None or source is None:
         return kept
+    waits = bool(item.payload.get("warnings") or item.payload.get("needs_yes"))
     key = meaning_key(item.model_copy(update={"upload_id": source}))
     return next(
         (
@@ -238,6 +243,7 @@ def decided_before(case: Case, items: Sequence[CaseItem], item: CaseItem) -> Cas
             and i.state is not ProposalState.PENDING
             and i.decided_by not in (None, AGENT)
             and i.withdrawn_because is None
+            and not (waits and i.state is ProposalState.ACCEPTED)
             and meaning_key(i) == key
         ),
         None,
