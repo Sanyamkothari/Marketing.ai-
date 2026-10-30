@@ -237,11 +237,11 @@ person's that already answers this?
   sealed on other instructions.
 - **A decision about a column of an input file carries over to the table a combine made of it.** `decided_before` also
   looks for the person's yes or no to the same change (same kind, column and parameters, `meaning_key`) on the file the
-  table was made from (`combine_run.source_upload`: the first file of the accepted join or stack, whose columns the
-  table keeps by name). If there is one, the new proposal is written as that decision: same state, same person, same
+  table was made from (`combine_run.source_upload`: the first file of the accepted join, whose columns the
+  table keeps by name; only for a step about a whole column, `subjects.COLUMN_STEPS`: how it is read, or that it goes). If there is one, the new proposal is written as that decision: same state, same person, same
   time, cited as `carried:<item id>`, with a timeline line `carried_from`. A decision of the Doctor's, an undecided
   item, another column or another file carries nothing. A carried yes does not carry `agreed_rows`, so the plan's loss
-  stop asks again. A stack's other files carry nothing (only the first file's decisions do).
+  stop asks again. A stack, a step about rows, and a change that has warnings or needs its own yes carry nothing.
 - **Tests.** `tests/unit/doctor/test_decision_memory.py` (33): records with the message id, refuses change-direction
   and non-person messages, the default author and the AI do not propose a kept matter again with other counts, undo
   brings the note back, the AI action through a scripted turn, the screen, and the carry in both directions with what
