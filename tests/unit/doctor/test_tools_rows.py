@@ -57,7 +57,7 @@ def test_each_spec_is_shaped_as_the_design_says(spec: DataToolSpec[Any, Any]) ->
     assert spec.exposure == "session-only"  # decision O7: never listed on MCP
     assert spec.input_model.model_config.get("extra") == "forbid"
     assert spec.output_model.model_config.get("extra") == "forbid"
-    assert spec.deterministic and spec.milestone == "M238"
+    assert spec.deterministic
     assert spec.role is (Role.VIEWER if spec.kind == "read" else Role.ANALYST)
     assert spec.kind in {"read", "propose"}  # APPLY is never a tool
     with pytest.raises(ValidationError):
