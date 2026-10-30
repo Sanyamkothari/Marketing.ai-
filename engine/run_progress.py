@@ -5,11 +5,12 @@ train stage says nothing while it runs. Training is almost all of a training run
 at 50% for nearly the whole run and then raced to 100. `progress_pct` keeps that meaning (the API and
 its tests pin the 12, 25, 38 ... sequence); this module adds the estimate beside it:
 
-* `expected_durations` gives every stage an expected duration. The train stage takes the search's
-  wall-clock budget whenever the trainer honours one (AutoGluon's `time_limit`); only a trainer without
-  a budget (an uplift learner on LightGBM) takes the median of this deployment's finished runs of the
-  same use case and trainer; with neither there is no estimate at all. Every other stage takes the
-  median of past runs, or a small documented default (`DEFAULT_STAGE_SECONDS`).
+* `expected_durations` gives every stage an expected duration. The train stage takes the median of this
+  deployment's finished runs of the same use case, trainer and search budget (what the same settings took
+  before); with none, the search's wall-clock budget when the trainer honours one (AutoGluon's `time_limit`),
+  which is a limit and the only number the screens say "up to" about. A trainer with neither (an uplift
+  learner on LightGBM, never run here) has no estimate at all. Every other stage takes the median of past
+  runs, or a small documented default (`DEFAULT_STAGE_SECONDS`).
 * `estimate_progress` is the pure rule: the done stages' expected durations, plus the running stage's
   expected duration times the share of it that has elapsed, over the total. A running stage that has
   run past its expectation is credited at most `OVERRUN_FRACTION` of it and has no time left to give
@@ -133,7 +134,7 @@ class PastDurations:
     stages: Mapping[StageKey, tuple[float, ...]]
     """Every stage but train, from every matching run."""
     train: tuple[float, ...] = ()
-    """The train stage, from the matching runs that used the same trainer only."""
+    """The train stage, from the matching runs that used the same trainer and the same search budget only."""
 
 
 @dataclass(frozen=True)
@@ -214,12 +215,12 @@ def expected_durations(
 ) -> Expectations | None:
     """The expected duration of each stage in `keys`, or `None` when the train stage has no basis.
 
-    The train stage: the search's wall-clock budget whenever the trainer honours one; past runs are not
-    consulted then, because a past run says how long the search took under *its* budget, and a budget
-    raised since (5 minutes to 60) would leave the bar "Finishing up" for most of the run. Without a
-    budget (an uplift learner on LightGBM): the median of past train durations with the same trainer.
-    Without either: nothing, and then there is no estimate - a guess at the stage that is almost all of
-    the run would be a number that means nothing. Every other stage: the median of past runs, else
+    The train stage: the median of what the same settings took before (`past.train` holds only finished runs of
+    the same trainer and the same search budget, so a budget raised since - 5 minutes to 60 - leaves no run to go
+    by and cannot hold the bar at "Finishing up" for most of the run), never more than the budget. With no such
+    run: the search's wall-clock budget, a limit (`time_budget`, the one basis the screens say "up to" about), or
+    for a trainer with no budget nothing, and then there is no estimate - a guess at the stage that is almost all
+    of the run would be a number that means nothing. Every other stage: the median of past runs, else
     `DEFAULT_STAGE_SECONDS`.
     """
     seconds: dict[StageKey, float] = {}
@@ -227,12 +228,14 @@ def expected_durations(
     basis: EstimateBasis | None = None
     for key in keys:
         if key is StageKey.TRAIN:
-            if budget_seconds is not None:
+            if past.train:
+                value = statistics.median(past.train)
+                limited = budget_seconds is not None and value >= budget_seconds
+                value = budget_seconds if limited and budget_seconds is not None else value
+                basis = "time_budget" if limited else "past_runs"
+            elif budget_seconds is not None:
                 value = budget_seconds
                 basis = "time_budget"
-            elif past.train:
-                value = statistics.median(past.train)
-                basis = "past_runs"
             else:
                 return None
         else:
@@ -249,13 +252,20 @@ def expected_durations(
 
 
 def past_durations(
-    storage: Storage, *, use_case_id: str, mode: RunMode, trainer: str | None, exclude_run_id: str
+    storage: Storage,
+    *,
+    use_case_id: str,
+    mode: RunMode,
+    trainer: str | None,
+    exclude_run_id: str,
+    budget_seconds: float | None = None,
 ) -> PastDurations:
     """Stage durations of the newest finished runs of this use case and mode, read from their `status.json`.
 
     Run ids sort chronologically, so a reversed key listing is newest first (the same walk as `GET
     /runs`). At most `SCANNED_RECORDS` records are read and `PAST_RUNS` runs kept. A train duration is
-    kept only when the run's `run_config.json` names the same trainer (`trainer_of`).
+    kept only when the run's `run_config.json` names the same trainer (`trainer_of`) and the same search
+    budget as `budget_seconds` (a search given 60 minutes says nothing of one given 5).
     """
     from engine.pipeline import RUN_FILENAME, STATUS_FILENAME
     from engine.storage import StorageError, run_key
@@ -282,12 +292,15 @@ def past_durations(
         except (StorageError, ValueError):
             continue
         matched += 1
-        same_trainer = trainer is not None and _recorded_trainer(storage, record.run_id) == trainer
+        same_settings = trainer is not None and _recorded_settings(storage, record.run_id) == (
+            trainer,
+            budget_seconds,
+        )
         for row in status.stages:
             if row.state is not RunState.DONE or row.duration_seconds is None:
                 continue
             if row.key is StageKey.TRAIN:
-                if same_trainer:
+                if same_settings:
                     train.append(row.duration_seconds)
             else:
                 stages.setdefault(row.key, []).append(row.duration_seconds)
@@ -296,19 +309,22 @@ def past_durations(
     )
 
 
-def _recorded_trainer(storage: Storage, run_id: str) -> str | None:
-    """The trainer a past run used, read from the problem type and uplift base model in its `run_config.json`."""
+def _recorded_settings(storage: Storage, run_id: str) -> tuple[str, float | None] | None:
+    """The trainer a past run used and its search budget in seconds (None for a learner with no budget), read from
+    the problem type, the uplift base model and the time limits in its `run_config.json`; None when unreadable.
+    """
     import json
 
     from engine.runs import RUN_CONFIG_FILENAME
     from engine.storage import StorageError, run_key
 
     try:
-        resolved = json.loads(storage.read_bytes(run_key(run_id, RUN_CONFIG_FILENAME)))
-        config = resolved["config"]
+        config = json.loads(storage.read_bytes(run_key(run_id, RUN_CONFIG_FILENAME)))["config"]
         if config.get("problem_type") == ProblemType.UPLIFT.value:
-            return f"uplift:{config['uplift']['base_model']}"
-        return "automl"
+            base = config["uplift"]["base_model"]
+            limit = config["uplift"].get("time_limit_minutes") if base == "autogluon_fast" else None
+            return f"uplift:{base}", None if limit is None else float(limit) * 60
+        return "automl", float(config["model_search"]["time_limit_minutes"]) * 60
     except (StorageError, ValueError, KeyError, TypeError):
         return None
 
@@ -562,9 +578,9 @@ def _make_tracker(flow: Any) -> ProgressTracker | None:
         ctx.storage,
         use_case_id=config.id,
         mode=mode,
-        # past train durations are only used without a budget, so only then is each run's trainer read
-        trainer=trainer_of(config) if train and budget is None else None,
+        trainer=trainer_of(config) if train else None,
         exclude_run_id=ctx.run_id,
+        budget_seconds=budget,
     )
     expectations = expected_durations(keys, budget_seconds=budget, past=past)
     if expectations is None:

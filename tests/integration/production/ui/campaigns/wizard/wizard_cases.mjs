@@ -298,6 +298,7 @@ const crView = (id, state, { at = 0, error = null, campaignId = null, eta = 600,
   },
   pct: state === "done" ? 100 : 40,
   eta_seconds: state === "running" ? eta : null,
+  eta_basis: state === "running" ? "time_budget" : null,
   summary: error ? error.message : state === "done" ? "Your campaign is ready." : "Learning from your customers: about 10 min left.",
 });
 const lastGet = () => world.runReads || 0;

@@ -70,7 +70,7 @@ export function runPageHtml(view, { canRestart = true, busy = false, error = nul
       attrs: "data-run-ready",
     })}${campaign}${doctor}</div>`;
   } else if (run.state === "running") {
-    const eta = view.eta_seconds === null || view.eta_seconds === undefined ? "" : etaText(view.eta_seconds);
+    const eta = view.eta_seconds === null || view.eta_seconds === undefined ? "" : etaText(view.eta_seconds, view.eta_basis);
     const reading = { pct: view.pct, estimated: true, finishing: false, eta };
     body = `<p class="cw-p" data-run-summary role="status">${esc(view.summary)}</p>${progressMeterHtml(reading, "cw-meter")}${progressNoteHtml(
       reading,

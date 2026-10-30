@@ -1264,8 +1264,12 @@ def promised_tracker(flow: Any, keys: Sequence[StageKey]) -> ProgressTracker | N
         promised_at=utc_now(),
     )
     ctx.storage.write_model(run_key(ctx.run_id, PROMISE_FILENAME), promise)
+    # The promise follows the size of the file and what this deployment's runs took; only a search expected to run
+    # to its limit is a limit (the one thing the screens say "up to" about).
+    stopped_by_limit = promise.base.get(StageKey.TRAIN.value, 0.0) >= minutes * 60.0 - 1e-6
     expectations = Expectations(
-        seconds=MappingProxyType({key: float(stages[key.value]) for key in keys}), basis="time_budget"
+        seconds=MappingProxyType({key: float(stages[key.value]) for key in keys}),
+        basis="time_budget" if stopped_by_limit else "past_runs",
     )
     _LOGGER.info("progress estimate: run=%s promised %s (%ss)", ctx.run_id, label, promise.expected_seconds)
     return PromiseTracker(expectations, storage=ctx.storage, promise=promise)

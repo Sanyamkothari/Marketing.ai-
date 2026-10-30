@@ -102,27 +102,30 @@ def test_past_runs_path_the_median_of_past_train_durations_when_the_trainer_has_
     assert expectations.seconds[StageKey.EXPLAIN] == DEFAULT_STAGE_SECONDS[StageKey.EXPLAIN]
 
 
-def test_the_budget_wins_over_past_runs_whenever_the_trainer_honours_one() -> None:
-    for train_history in ((5000.0,), (100.0, 120.0, 400.0)):
-        past = PastDurations(stages={StageKey.INGEST: (2.0, 4.0, 9.0)}, train=train_history)
-        expectations = expected_durations(TRAIN_STAGES, budget_seconds=BUDGET, past=past)
-        assert expectations is not None
-        assert expectations.seconds[StageKey.TRAIN] == BUDGET and expectations.basis == "time_budget"
-        # the other stages still come from history
-        assert expectations.seconds[StageKey.INGEST] == 4.0
-
-
-def test_past_runs_under_a_smaller_budget_do_not_hold_back_a_larger_budget_now() -> None:
-    """Review fix: a user raises `time_limit_minutes` from 5 to 60. The past runs took ~300 s under the old
-    budget; expecting 300 s now would put the bar on "Finishing up" after five minutes, for the 55 left."""
-    past = PastDurations(stages={}, train=(300.0, 290.0, 310.0))
-    expectations = expected_durations(TRAIN_STAGES, budget_seconds=3600.0, past=past)
+def test_runs_of_the_same_settings_say_how_long_the_search_takes_and_the_budget_is_only_the_limit() -> None:
+    """A search that stops sooner than its limit is expected to take what it took: the number is an estimate (a run
+    may take longer, and then the bar says so), not a limit."""
+    past = PastDurations(stages={StageKey.INGEST: (2.0, 4.0, 9.0)}, train=(100.0, 120.0, 400.0))
+    expectations = expected_durations(TRAIN_STAGES, budget_seconds=BUDGET, past=past)
     assert expectations is not None
-    assert expectations.seconds[StageKey.TRAIN] == 3600.0
-    assert expectations.basis == "time_budget"
-    ten_minutes_in = estimate_progress(running_train(), expectations.seconds, running_elapsed=600.0)
-    assert ten_minutes_in.overrun is False and ten_minutes_in.eta_seconds is not None
-    assert ten_minutes_in.eta_seconds > 50 * 60
+    assert expectations.seconds[StageKey.TRAIN] == 120.0 and expectations.basis == "past_runs"
+    assert expectations.seconds[StageKey.INGEST] == 4.0  # the other stages come from history too
+
+
+def test_a_search_that_ran_to_its_limit_before_is_expected_to_run_to_it_again_and_that_is_a_limit() -> None:
+    past = PastDurations(stages={}, train=(5000.0,))
+    expectations = expected_durations(TRAIN_STAGES, budget_seconds=BUDGET, past=past)
+    assert expectations is not None
+    assert expectations.seconds[StageKey.TRAIN] == BUDGET and expectations.basis == "time_budget"
+
+
+def test_a_slower_run_than_the_past_ones_has_no_time_left_to_give_instead_of_a_wrong_one() -> None:
+    expectations = expected_durations(
+        TRAIN_STAGES, budget_seconds=BUDGET, past=PastDurations(stages={}, train=(420.0, 400.0, 440.0))
+    )
+    assert expectations is not None
+    slow = estimate_progress(running_train(), expectations.seconds, running_elapsed=900.0)
+    assert slow.overrun is True and slow.eta_seconds is None
 
 
 def test_no_basis_path_a_training_run_with_neither_budget_nor_history_gets_no_estimate() -> None:
@@ -249,6 +252,7 @@ def _seed_run(
     problem_type: str,
     state: RunState = RunState.DONE,
     use_case: str = USE_CASE,
+    limit_minutes: int = 30,
 ) -> None:
     started = utc_now() - timedelta(hours=1)
     storage.write_model(
@@ -291,7 +295,15 @@ def _seed_run(
     )
     storage.write_text(
         run_key(run_id, RUN_CONFIG_FILENAME),
-        json.dumps({"config": {"problem_type": problem_type, "uplift": {}}}),
+        json.dumps(
+            {
+                "config": {
+                    "problem_type": problem_type,
+                    "uplift": {},
+                    "model_search": {"time_limit_minutes": limit_minutes},
+                }
+            }
+        ),
     )
 
 
@@ -332,12 +344,48 @@ def test_past_durations_reads_finished_runs_of_the_same_use_case_and_keeps_train
         problem_type="uplift",
     )
     past = past_durations(
-        storage, use_case_id=USE_CASE, mode=RunMode.TRAIN, trainer="automl", exclude_run_id="r_now"
+        storage,
+        use_case_id=USE_CASE,
+        mode=RunMode.TRAIN,
+        trainer="automl",
+        exclude_run_id="r_now",
+        budget_seconds=BUDGET,
     )
     assert sorted(past.train) == [100.0, 140.0]
     assert sorted(past.stages[StageKey.INGEST]) == [3.0, 4.0, 5.0]
-    expectations = expected_durations(TRAIN_STAGES, budget_seconds=None, past=past)
+    expectations = expected_durations(TRAIN_STAGES, budget_seconds=BUDGET, past=past)
     assert expectations is not None and expectations.seconds[StageKey.TRAIN] == 120.0
+    assert expectations.basis == "past_runs"
+
+
+def test_past_runs_under_a_smaller_budget_do_not_hold_back_a_larger_budget_now(tmp_path: Path) -> None:
+    """A person raises the search's limit from 5 minutes to 60. The past runs took ~300 s under the old limit;
+    expecting 300 s now would put the bar on "Finishing up" after five minutes, for the 55 left. A run's time says
+    something about runs of the same limit only; with none, the limit is what the run is expected to take."""
+    storage = LocalStorage(tmp_path)
+    for n, took in enumerate((300.0, 290.0, 310.0), start=1):
+        _seed_run(
+            storage,
+            f"r_2026100{n}_0000000{n}",
+            seconds={StageKey.TRAIN: took},
+            problem_type="binary_classification",
+            limit_minutes=5,
+        )
+    past = past_durations(
+        storage,
+        use_case_id=USE_CASE,
+        mode=RunMode.TRAIN,
+        trainer="automl",
+        exclude_run_id="r_now",
+        budget_seconds=3600.0,
+    )
+    assert past.train == ()
+    expectations = expected_durations(TRAIN_STAGES, budget_seconds=3600.0, past=past)
+    assert expectations is not None
+    assert expectations.seconds[StageKey.TRAIN] == 3600.0 and expectations.basis == "time_budget"
+    ten_minutes_in = estimate_progress(running_train(), expectations.seconds, running_elapsed=600.0)
+    assert ten_minutes_in.overrun is False and ten_minutes_in.eta_seconds is not None
+    assert ten_minutes_in.eta_seconds > 50 * 60
 
 
 def test_past_durations_on_an_empty_store_is_empty(tmp_path: Path) -> None:

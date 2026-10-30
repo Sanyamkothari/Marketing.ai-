@@ -400,12 +400,13 @@ class RunStatus(Artefact):
     estimate_basis: Literal["time_budget", "past_runs", "stages"] | None = Field(
         default=None,
         description=(
-            "What the expected durations came from. A training run: `time_budget` (its train stage is "
-            "expected to take the search's wall-clock budget, whenever the trainer honours one) or "
-            "`past_runs` (a trainer with no budget, an uplift learner on LightGBM: the median train duration "
-            "of this deployment's finished runs of the same use case and trainer). A "
-            "scoring run: `past_runs` (medians of its finished runs of the same use case) or `stages` "
-            "(documented per-stage defaults, no history yet). Null when `estimated_pct` is null."
+            "What the expected durations came from. A training run: `past_runs` (the train stage is expected "
+            "to take what finished runs of this use case with the same trainer and search budget took, or what "
+            "the size of the file and the runs of this deployment or of similar public datasets say), or `time_budget` (no such run, or a search expected to "
+            "run to its limit: the train stage is expected to take the search's wall-clock budget, a limit, so "
+            "the time left is a ceiling). A scoring run: `past_runs` (medians of its finished runs of the same "
+            "use case) or `stages` (documented per-stage defaults, no history yet). Null when `estimated_pct` "
+            "is null."
         ),
     )
 

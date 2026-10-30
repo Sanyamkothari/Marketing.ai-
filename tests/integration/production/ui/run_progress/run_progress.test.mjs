@@ -20,7 +20,7 @@ const mid = fixture("status_mid"); // three quarters through the train stage's t
 const overrun = fixture("status_overrun"); // twice the train stage's time budget
 const legacy = fixture("status_legacy"); // the same moment, as a status.json written before M189
 const done = fixture("status_done");
-const midEta = etaText(mid.eta_seconds);
+const midEta = etaText(mid.eta_seconds, mid.estimate_basis);
 
 const text = (html) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 const card = (status) => runningCard({ title: "Building your model…", groups: [], progress: runProgress(status) });
@@ -30,6 +30,7 @@ const upliftRunning = (status) =>
 
 test("the fixtures are the real thing: progress_pct sits at 50 while the estimate has moved on", () => {
   assert.equal(mid.progress_pct, 50);
+  assert.equal(mid.estimate_basis, "time_budget");
   assert.match(midEta, /^Up to \d+ minutes left$/);
   assert.ok(mid.estimated_pct > 60, "three quarters through the longest stage is well past half");
   assert.equal(typeof mid.eta_seconds, "number");
@@ -41,12 +42,22 @@ test("etaText rounds sensibly", () => {
   assert.equal(etaText(null), "");
   assert.equal(etaText(12), "Less than a minute left");
   assert.equal(etaText(70), "About a minute left");
-  assert.equal(etaText(185), "Up to 3 minutes left");
-  assert.equal(etaText(9 * 60 + 20), "Up to 9 minutes left");
-  assert.equal(etaText(23 * 60), "Up to 25 minutes left");
-  assert.equal(etaText(59 * 60), "Up to 1 hour left");
-  assert.equal(etaText(80 * 60), "Up to 1 hour 20 minutes left");
-  assert.equal(etaText(2 * 3600 + 120), "Up to 2 hours left");
+  assert.equal(etaText(185), "About 3 minutes left");
+  assert.equal(etaText(9 * 60 + 20), "About 9 minutes left");
+  assert.equal(etaText(23 * 60), "About 25 minutes left");
+  assert.equal(etaText(59 * 60), "About 1 hour left");
+  assert.equal(etaText(80 * 60), "About 1 hour 20 minutes left");
+  assert.equal(etaText(2 * 3600 + 120), "About 2 hours left");
+});
+
+test("only the learning step's time limit is said as 'up to'; a time worked out from past runs is 'about'", () => {
+  assert.equal(etaText(23 * 60, "time_budget"), "Up to 25 minutes left");
+  assert.equal(etaText(80 * 60, "time_budget"), "Up to 1 hour 20 minutes left");
+  assert.equal(etaText(23 * 60, "past_runs"), "About 25 minutes left");
+  assert.equal(etaText(185, "stages"), "About 3 minutes left");
+  const past = { ...mid, estimate_basis: "past_runs" };
+  assert.match(runProgress(past).eta, /^About \d+ minutes left$/);
+  assert.match(runProgress(mid).eta, /^Up to \d+ minutes left$/);
 });
 
 test("the Running card shows the estimate, its bar and the time left", () => {
@@ -95,11 +106,12 @@ test("the uplift workbench's running screen uses the same reading", () => {
   assert.match(upliftRunning(legacy), /<span class="run-pct">50%<\/span>/);
 });
 
-const running = (pct, eta) =>
+const running = (pct, eta, basis = null) =>
   runPageHtml({
     record: { state: "running", use_case_id: "win-back-campaign", steps: [{ key: "train", title: "Learning from your customers", state: "running" }] },
     pct,
     eta_seconds: eta,
+    eta_basis: basis,
     summary: "Learning from your customers.",
   });
 
@@ -107,6 +119,8 @@ test("the campaign progress page uses the same bar and time-left line", () => {
   const html = running(75, 300);
   assert.match(html, /class="run-meter cw-meter"[^>]*aria-valuenow="75"/);
   assert.match(text(html), new RegExp(etaText(300)));
+  assert.match(text(running(75, 300, "time_budget")), /Up to 5 minutes left/);
+  assert.match(text(running(75, 300, "past_runs")), /About 5 minutes left/);
   assert.ok(!running(75, null).includes("data-run-eta"), "no time left, no line");
 });
 

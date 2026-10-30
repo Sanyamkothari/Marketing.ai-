@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from pydantic import AwareDatetime, Field
 
@@ -148,6 +148,8 @@ class CampaignRunView(Artefact):
     record: CampaignRun
     pct: int
     eta_seconds: int | None = None
+    eta_basis: Literal["time_budget", "past_runs", "stages"] | None = None
+    """What the time left rests on (`RunStatus.estimate_basis`): only `time_budget` is a limit, "up to"."""
     summary: str
 
 
@@ -513,6 +515,7 @@ class CampaignRunRunner:
         current = next((s for s in live if s.state is not StepState.DONE), None)
         gained = float(sum(_WEIGHT[s.key] for s in live if s.state is StepState.DONE))
         eta: int | None = None
+        basis = None
         if run.state is CampaignRunState.DONE:
             gained, eta = float(total), 0
         elif current is not None and current.state is StepState.RUNNING:
@@ -522,13 +525,16 @@ class CampaignRunRunner:
                 share = status.estimated_pct if status.estimated_pct is not None else status.progress_pct
                 gained += _WEIGHT[current.key] * share / 100
                 if status.eta_seconds is not None:
+                    basis = status.estimate_basis
                     later = live[live.index(current) + 1 :]
                     # said in the minutes the approval card promised (`expected_run_minutes`), counted down from them
                     eta = told_seconds(
                         round(status.eta_seconds) + sum(LATER_STEP_SECONDS.get(s.key, 0) for s in later)
                     )
         pct = 100 if run.state is CampaignRunState.DONE else min(99, round(gained * 100 / total))
-        return CampaignRunView(record=run, pct=pct, eta_seconds=eta, summary=_summary(run, current))
+        return CampaignRunView(
+            record=run, pct=pct, eta_seconds=eta, eta_basis=basis, summary=_summary(run, current)
+        )
 
     def _status(self, run_id: str) -> RunStatus | None:
         try:

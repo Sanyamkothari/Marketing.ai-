@@ -358,7 +358,9 @@ def test_the_progress_bars_first_eta_equals_the_promise_and_the_run_records_actu
     estimated = [s for s in storage.statuses() if s.estimated_pct is not None]
     first = estimated[0]
     assert first.eta_seconds == chosen.expected_seconds, (first.eta_seconds, chosen.expected_seconds)
-    assert first.estimate_basis == "time_budget"
+    # "up to" is for a search expected to run to its limit; one expected to finish sooner is an estimate
+    limited = chosen.base[StageKey.TRAIN.value] >= chosen.minutes * 60.0 - 1e-6
+    assert first.estimate_basis == ("time_budget" if limited else "past_runs")
     promise = storage.read_model(run_key(RUN_ID, ts.PROMISE_FILENAME), ts.TimePromise)
     assert promise.choice == choice and promise.label == chosen.label
     assert promise.expected_seconds == chosen.expected_seconds and promise.stages == chosen.stages
@@ -388,7 +390,8 @@ def test_a_custom_budget_not_among_the_choices_is_promised_the_estimate_from_the
     expected = ts.estimate(ts.time_inputs(storage, config, rows=40, columns=4), custom)
     pipeline_for(storage, registry).run_train(make_context(resolved, storage, registry, config=config))
     first = next(s for s in storage.statuses() if s.estimated_pct is not None)
-    assert first.eta_seconds == expected.expected_seconds and first.estimate_basis == "time_budget"
+    assert first.eta_seconds == expected.expected_seconds
+    assert first.estimate_basis == ("time_budget" if expected.capped else "past_runs")
     promise = storage.read_model(run_key(RUN_ID, ts.PROMISE_FILENAME), ts.TimePromise)
     assert promise.choice == "custom" and promise.minutes == custom
     assert promise.label == f"Your own time limit (about {expected.about_minutes} min)"
@@ -913,3 +916,43 @@ def test_the_promise_survives_a_week_old_offer(tmp_path: Path) -> None:
     )  # fmt: skip
     found = ts.read_offer(storage, "upload", "u9", config.id)
     assert found is not None and found.offered_at == offered
+
+
+def test_a_text_column_is_read_as_dates_from_its_spellings_exactly_as_cell_by_cell() -> None:
+    """`date_values` asks about the distinct spellings of a text column and counts them by the cells that hold them;
+    the answer is the one reading every cell gives."""
+    import numpy as np
+
+    from engine.agent.formats import date_order, parse_dates
+
+    def by_cell(series: pd.Series) -> pd.Series | None:
+        cells = series.dropna().astype(str)
+        cells = cells[cells.str.strip() != ""]
+        if cells.empty:
+            return None
+        order = date_order(cells)
+        if order is None and cells.str.match(r"^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}").any():
+            return None
+        parsed = parse_dates(series, dayfirst=bool(order)).values
+        return None if parsed.notna().sum() < ts.READABLE_SHARE * len(cells) else parsed
+
+    days = [f"2024-01-{n:02d}" for n in range(1, 10)]
+    columns = {
+        "dates": pd.Series(days * 30),
+        "dates with blanks": pd.Series([*days * 30, "", " ", None]),
+        "mostly dates": pd.Series([*days * 60, "n/a"]),
+        "half dates": pd.Series([*days * 10, *["n/a"] * 90]),
+        "day first": pd.Series(["13/02/2024", "01/03/2024"] * 40),
+        "unsettled order": pd.Series(["01/02/2024", "03/04/2024"] * 40),
+        "names": pd.Series(["Asha", "Ravi", "Meera"] * 50),
+        "ids": pd.Series([str(100000 + n) for n in range(200)]),
+        "mixed kinds": pd.Series(["2024-01-01", 5, 1.5] * 20, dtype=object),
+        "nothing": pd.Series([None] * 5, dtype=object),
+        "numbers": pd.Series(np.arange(50.0)),
+    }
+    for name, column in columns.items():
+        found, expected = ts.date_values(column), by_cell(column) if column.dtype == object else None
+        if expected is None:
+            assert found is None, name
+        else:
+            assert found is not None and found.equals(expected), name
