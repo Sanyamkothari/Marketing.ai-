@@ -230,6 +230,10 @@ def test_with_the_allowance_set_to_the_old_800_the_same_turn_fails_and_says_why_
         assert "LLM_OUT_OF_ROOM" in event["details"]["error_codes"].split(",")
         # One turn answers the message and what else is owed: no second call, so the chat says it once.
         assert [m["role"] for m in chatted["chat"]] == ["user", "agent"]
+        events = client.get(f"/cases/{case['case_id']}/timeline").json()["events"]
+        assert not [
+            e for e in events if e["kind"] == "chat.message" and e["details"].get("review")
+        ], "no second AI turn ran after the one that answered"
     # The fix it printed names the setting; setting it is all it takes.
     assert "generative.llm.data_agent_max_output_tokens" in fix
     roomy = _configs(tmp_path / "raised", config_root, allowance=DEFAULT_ALLOWANCE)

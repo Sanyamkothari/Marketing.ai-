@@ -4,6 +4,7 @@ and the case goes on with that upload as its one file; the two files it was made
 from __future__ import annotations
 
 import io
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -147,6 +148,7 @@ def test_a_join_then_approve_ends_ready_with_the_decisions_carried_and_nothing_d
     join = next(i for i in case["items"] if i["kind"] == "build_dataset")
     case = post("decisions", item_id=join["item_id"], accept=True, version=case["version"])
 
+    waited: list[dict[str, Any]] = []
     for _ in range(
         6
     ):  # approve until the case rests: the join is built after the first, the table is approved next
@@ -157,6 +159,7 @@ def test_a_join_then_approve_ends_ready_with_the_decisions_carried_and_nothing_d
             break
         # A change that reads the consent or the contact date as another meaning waits for the person's own tick.
         waiting = [i for i in case["items"] if i["kind"] == "recipe_step" and i["state"] == "pending"]
+        waited += waiting
         for item in waiting:
             case = post("decisions", item_id=item["item_id"], accept=True, version=case["version"])
         if waiting:
@@ -171,6 +174,10 @@ def test_a_join_then_approve_ends_ready_with_the_decisions_carried_and_nothing_d
         sentence = client.get(f"/cases/{cid}/screen").json()["view"]["approval_sentence"]
         client.post(f"/cases/{cid}/approval", json={"version": case["version"], "sentence": sentence})
 
+    assert any(
+        "marketing_opt_in" in json.dumps(i["payload"]) or "last_contacted_at" in json.dumps(i["payload"])
+        for i in waited
+    ), "a change reading the consent or the contact date waited for the person's tick, it was not put in the plan"
     screen = client.get(f"/cases/{cid}/screen").json()
     case, view = screen["case"], screen["view"]
     (table,) = case["files"]
