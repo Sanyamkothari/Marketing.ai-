@@ -94,13 +94,13 @@ def test_an_order_log_with_blank_ids_asks_which_column_names_the_customer_and_go
         screen = client.get(f"/cases/{case_id}/screen").json()
         return [c for c in screen["view"]["conversation"] if c["type"] == kind]
 
-    audience = next(c for c in cards("question") if c["code"] == "BUILD_AUDIENCE")
+    audience = next(c for c in cards("question") if c["code"] == "GOAL_SETTING")
     assert audience["dont_know"] is not None, "the audience question offers I don't know"
-    safe = next(o for o in case["questions"] if o["code"] == "BUILD_AUDIENCE")["options"]
-    # I don't know never hands the work back ("Neither"): with nothing recommended it takes the widest reading
-    (chosen,) = [o["label"] for o in safe if o.get("safe")]
-    assert chosen.startswith("All ") and "active on or before" in chosen
-    case = answer(client, case_id, case, "BUILD_AUDIENCE", "active")
+    safe = next(o for o in case["questions"] if o["code"] == "GOAL_SETTING")["options"]
+    # I don't know never hands the work back: with nothing recommended it takes the widest reading, and says so
+    (chosen,) = [o["effect"] for o in safe if o.get("safe")]
+    assert chosen.startswith("Takes the ") and "active on or before" in chosen, chosen
+    case = answer(client, case_id, case, "GOAL_SETTING", "active")
     (proposal,) = [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
     sentence = proposal["payload"]["sentence"]
     left_out = counted["ids"] - counted["active_before"]
@@ -109,17 +109,11 @@ def test_an_order_log_with_blank_ids_asks_which_column_names_the_customer_and_go
     assert f"would have {counted['active_before']:,} rows" in sentence, sentence
     assert not cards("ready"), "no approval card while a question is open"
 
-    # 3. the customer, then the outcome: asked now, before the one approval, and answered by the build in the plan
+    # 3. the customer; the outcome is asked of nobody: the build in the plan declares it, window-neutral
     key = open_question(case, "KEY_NOT_UNIQUE")
     assert key is not None
     case = answer(client, case_id, case, "KEY_NOT_UNIQUE", key["recommended"])
-    outcome = open_question(case, "OUTCOME_COLUMN")
-    assert outcome is not None and outcome["recommended"] is not None
-    chosen = next(o for o in outcome["options"] if o["option_id"] == outcome["recommended"])
-    assert chosen["label"] == "reactivated" and "training table in this plan" in outcome["why"]
-    assert next(c for c in cards("question") if c["code"] == "OUTCOME_COLUMN")["dont_know"] is not None
-    assert not cards("ready"), "still a question open"
-    case = answer(client, case_id, case, "OUTCOME_COLUMN", outcome["recommended"])
+    assert open_question(case, "OUTCOME_COLUMN") is None, "the build declares its outcome"
     (proposal,) = [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
     assert (
         proposal["state"] == "accepted"
@@ -215,7 +209,7 @@ def test_the_goals_build_is_nobodys_decision_until_approve_and_follows_the_audie
     client: TestClient,
 ) -> None:
     case_id, case = _log_case(client)
-    case = answer(client, case_id, case, "BUILD_AUDIENCE", "active")
+    case = answer(client, case_id, case, "GOAL_SETTING", "active")
     (build,) = _goal_builds(case)
     # in the plan by default, but no person has decided it: no decider, no agreed count, no card saying "your choice"
     assert build.get("decided_by") is None and build.get("agreed_rows") is None, build
@@ -229,7 +223,7 @@ def test_the_goals_build_is_nobodys_decision_until_approve_and_follows_the_audie
     assert previewed["after_rows"] < previewed["total_rows"]
 
     # the audience is answered again: the plan's build follows it, the earlier one is taken back
-    case = answer_again(client, case_id, case, "BUILD_AUDIENCE", "quiet")
+    case = answer_again(client, case_id, case, "GOAL_SETTING", "quiet")
     now = _goal_builds(case)
     assert not [b for b in now if b["payload"].get("audience", {}).get("audience_id") == "active"], now
     assert all(b["payload"]["audience"]["audience_id"] == "quiet" for b in now), now

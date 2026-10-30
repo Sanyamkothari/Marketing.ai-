@@ -78,7 +78,7 @@ def _audience(
     shoppers it is about, from both readings' counts. Nothing is built before; the person picks every shopper active
     before the snapshot here (the quiet ones are too few in this log, and the option says so)."""
     assert not [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
-    (asked,) = [q for q in case["questions"] if q["code"] == "BUILD_AUDIENCE" and q["answer"] is None]
+    (asked,) = [q for q in case["questions"] if q["code"] == "GOAL_SETTING" and q["answer"] is None]
     assert asked["blocking"] and asked["recommended"] is None, "the rules never pick the audience"
     labels = {o["option_id"]: o["label"] for o in asked["options"]}
     active, quiet = counted["audiences"]
@@ -138,16 +138,9 @@ def test_a_raw_order_log_fits_the_goal_as_buildable_then_builds(client: TestClie
 
     # 3. the build is in the plan (its yes is the one approval's): the built table is what the fit counts
     case = settled(client, case_id)
-    question = next(
-        (q for q in case["questions"] if q["code"] == "OUTCOME_COLUMN" and q["answer"] is None), None
-    )
-    if question is not None:  # the person says which column is the outcome (the built one)
-        answered = client.post(
-            f"/cases/{case_id}/answers",
-            json={"version": case["version"], "question_id": question["question_id"], "option_id": "c0"},
-        )
-        assert answered.status_code == 200, answered.text
-        case = settled(client, case_id)
+    assert not [
+        q for q in case["questions"] if q["code"] == "OUTCOME_COLUMN"
+    ], "the build declares its outcome"
     while (
         case["state"] == "ask"
     ):  # what is left is asked of the raw log (its repeating customer), as for any log
@@ -159,12 +152,8 @@ def test_a_raw_order_log_fits_the_goal_as_buildable_then_builds(client: TestClie
         assert answered.status_code == 200, answered.text
         case = answered.json()
     case = settled(client, case_id)
-    outcome = [i for i in case["items"] if i["kind"] == "outcome_column" and i["state"] == "accepted"]
-    assert outcome, (
-        [(q["code"], q["answer"]) for q in case["questions"]],
-        [(i["kind"], i["state"]) for i in case["items"]],
-    )
-    assert outcome[0]["payload"]["column"] == "reactivated"
+    (build,) = [i for i in case["items"] if i["kind"] == "recipe_step" and i.get("goal_id") == GOAL]
+    assert build["state"] == "accepted" and build["payload"]["buildable"]["outcome_column"] == "reactivated"
 
     approval = client.get(f"/cases/{case_id}/screen").json()["view"]["approval"]
     kinds = [y["kind"] for y in approval["yeses"]]

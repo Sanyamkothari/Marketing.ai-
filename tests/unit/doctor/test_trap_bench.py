@@ -211,8 +211,14 @@ def test_a_proven_leak_is_ticked_by_the_product_so_the_person_who_ticks_nothing_
 
 
 def test_a_trap_that_still_fails_for_a_driver_gets_a_failure_section_in_the_report() -> None:
-    """C09 still fails for the person who skips the optional questions: the report says which driver and why."""
-    case = next(c for c in CASES if c.case_id == "c09_already_hold_product")
+    """A trap whose check is not met for a driver gets a section in the report that says which driver and why. The
+    check here asks a question nobody asks, so the failure does not depend on what the product does with the trap.
+    """
+    base = next(c for c in CASES if c.case_id == "c09_already_hold_product")
+    case = dataclasses.replace(
+        base,
+        checks=[*base.checks, {"category": "asked", "kind": "asked", "text": ["a question nobody asks"]}],
+    )
     lazy = bench.run_bench([case], 1, driver="blocking-only")
     assert lazy["failed"] == 1 and lazy["passed"] == 0
     text = bench.render_markdown(lazy)

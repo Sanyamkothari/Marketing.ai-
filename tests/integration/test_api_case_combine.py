@@ -155,6 +155,12 @@ def test_a_join_then_approve_ends_ready_with_the_decisions_carried_and_nothing_d
         case = screen["case"]
         if case["state"] != "approve":
             break
+        # A change that reads the consent or the contact date as another meaning waits for the person's own tick.
+        waiting = [i for i in case["items"] if i["kind"] == "recipe_step" and i["state"] == "pending"]
+        for item in waiting:
+            case = post("decisions", item_id=item["item_id"], accept=True, version=case["version"])
+        if waiting:
+            continue
         ready = next(c for c in screen["view"]["conversation"] if c["type"] == "ready")
         for stop in ready["stops"]:
             case = post("acknowledgements", key=stop["key"], reason="test", version=case["version"])
