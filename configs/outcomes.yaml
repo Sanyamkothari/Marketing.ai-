@@ -103,11 +103,11 @@ templates:
         ask: true
         options:
           - id: active
-            label: "{entities} active on or before the snapshot"
+            label: "{entities} active on or before the cut-off date"
             description: "Includes shoppers still buying; ranks everyone by return chance."
           - id: quiet
             quiet_days: 90
-            label: "{entities} who have gone quiet (no order in the {quiet_days} days before the snapshot)"
+            label: "{entities} who have gone quiet (no order in the {quiet_days} days before the cut-off date)"
             description: "The shoppers who have stopped buying: who this goal is for."
         recommended: quiet            # from the goal's own meaning, stated here, never read from text
         because: "Retail Win-back is for shoppers who have stopped buying."

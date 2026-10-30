@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 import statistics
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from functools import partial
@@ -40,7 +40,14 @@ import numpy as np
 import pandas as pd
 
 from engine.agent.formats import date_order_conflict, masked_cut
-from engine.content_cache import ContentCache, cached_column, column_cache, frame_digest, map_distinct
+from engine.content_cache import (
+    ContentCache,
+    cached_column,
+    column_cache,
+    content_digest,
+    frame_digest,
+    map_distinct,
+)
 from engine.doctor.impossible import _FUTURE_ALLOWED, column_words
 
 if TYPE_CHECKING:
@@ -143,6 +150,15 @@ _MOSTLY_UNIQUE: Final[float] = 0.5
 def key_quality(
     series: pd.Series[Any], column: str, *, expect_unique: bool = False, exact: Any = None
 ) -> list[Check]:
+    """The report on one key column (read again only when the column changed: `_FRAME_CHECKS`)."""
+    digest = content_digest(series)
+    key = None if digest is None else f"key|{column}|{expect_unique}|{exact!r}|{digest}"
+    return list(
+        _FRAME_CHECKS.get_or_compute(key, lambda: tuple(_key_quality(series, column, expect_unique, exact)))
+    )
+
+
+def _key_quality(series: pd.Series[Any], column: str, expect_unique: bool, exact: Any) -> list[Check]:
     """The report on one key column: how many are unique, the most common values, placeholders, IDs Excel rounded
     (`1.23457E+11`: a stop), and IDs shorter than the usual length (zeros at the start lost).
 
@@ -353,6 +369,10 @@ def _role(name: str) -> str | None:
 
 
 def date_checks(frame: pd.DataFrame, as_of: date) -> list[Check]:
+    return _of_frame(f"dates|{as_of}", frame, lambda: _date_checks(frame, as_of))
+
+
+def _date_checks(frame: pd.DataFrame, as_of: date) -> list[Check]:
     """Placeholder-date spikes, "still open" end dates, dates after `as_of`, related dates out of order, and
     Excel day numbers that read as a calendar four years early."""
     found: list[Check] = []
@@ -488,6 +508,10 @@ def _excel_calendar(series: pd.Series[Any], column: str, as_of: date) -> list[Ch
 
 
 def date_order_checks(frame: pd.DataFrame) -> list[Check]:
+    return _of_frame("order", frame, lambda: _date_order_checks(frame))
+
+
+def _date_order_checks(frame: pd.DataFrame) -> list[Check]:
     """A stop for a date column written both day first and month first: no one order reads it, and nothing is
     guessed (a column that cannot tell is the advisor's question)."""
     found: list[Check] = []
@@ -673,6 +697,15 @@ def _repeated_headers(frame: pd.DataFrame) -> int:
 
 _FILE_CHECKS: Final[ContentCache[tuple[Check, ...]]] = ContentCache(8)
 """The checks of one file by what it holds (they read every cell, and a visit asks again at every step)."""
+_FRAME_CHECKS: Final[ContentCache[tuple[Check, ...]]] = ContentCache(64)
+"""What a check found in a table or a key column, by what it holds and what it was asked: a visit asks again at every
+step, and a step that changed one column should not read the others' cells again."""
+
+
+def _of_frame(tag: str, frame: pd.DataFrame, compute: Callable[[], Sequence[Check]]) -> list[Check]:
+    digest = frame_digest(frame)
+    key = None if digest is None else f"{tag}|{digest}"
+    return list(_FRAME_CHECKS.get_or_compute(key, lambda: tuple(compute())))
 
 
 def file_checks(files: Sequence[tuple[str, pd.DataFrame]]) -> list[Check]:
@@ -766,6 +799,11 @@ def _total_rows(series: pd.Series[Any]) -> int:
 
 
 def summary_check(frame: pd.DataFrame) -> Check | None:
+    found = _of_frame("summary", frame, lambda: [c] if (c := _summary_check(frame)) is not None else [])
+    return found[0] if found else None
+
+
+def _summary_check(frame: pd.DataFrame) -> Check | None:
     """A stop when the table is a summary, not customers: a 'Total' row, or counts per group with no ID column and
     no text column that is different on every row. Totals cannot be turned back into people."""
     if len(frame) < 2:
@@ -794,6 +832,10 @@ def summary_check(frame: pd.DataFrame) -> Check | None:
 
 
 def block_blank_checks(frame: pd.DataFrame) -> list[Check]:
+    return _of_frame("blocks", frame, lambda: _block_blank_checks(frame))
+
+
+def _block_blank_checks(frame: pd.DataFrame) -> list[Check]:
     """A text column filled once and then blank for a run of rows (a merged cell in Excel): at least a fifth of the
     rows blank, the first row filled, the blanks in runs of five or more on average, and each filled value different
     from the one before it (a sparse column such as a cancellation reason repeats its values). Dates are left out

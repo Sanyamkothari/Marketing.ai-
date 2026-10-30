@@ -724,14 +724,13 @@ def _sentence(
     as_of: date,
     rows: int,
     columns: int,
-    name: str,
     notes: tuple[str, ...],
     rows_read: int,
 ) -> str:
     listed = "; ".join(f"{f.phrase} ({f.fill_rate:.0%} filled)" for f in lines)
     text = (
         f"Add {len(lines)} behaviour features per {key}, measured at {as_of.isoformat()} from rows dated on or "
-        f"before it: {listed}. Reads {rows_read:,} rows; the new table '{name}' would have {rows:,} rows (one "
+        f"before it: {listed}. Reads {rows_read:,} rows; the table it builds would have {rows:,} rows (one "
         f"per {key}) and {columns:,} columns."
     )
     return " ".join([text, *notes])
@@ -913,9 +912,7 @@ def _propose_features(given: ProposeFeaturesArgs, ctx: DataToolContext) -> Featu
     rows_out = len(made) if made is not None else base.rows_out
     columns_out = len(made.columns) if made is not None else base.columns_out
     rows_read = len(source) if source is not None else base.rows_in
-    sentence = _sentence(
-        lines, given.entity_key, when, rows_out, columns_out, given.output_name, compiled.notes, rows_read
-    )
+    sentence = _sentence(lines, given.entity_key, when, rows_out, columns_out, compiled.notes, rows_read)
     # The sentence already says what each feature is: the answer carries the numbers, not the words twice.
     lines = [line.model_copy(update={"phrase": ""}) for line in lines]
     names_out = tuple(str(c) for c in made.columns) if made is not None else base.all_columns

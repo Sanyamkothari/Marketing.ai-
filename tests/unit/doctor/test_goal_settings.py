@@ -161,7 +161,7 @@ def test_sixty_days_changes_both_the_sql_interval_and_the_counts(config_root: Pa
     after = "<= CAST($as_of AS DATE) + INTERVAL {} DAY"  # the outcome's window (the features have their own)
     assert after.format(60) in sql60 and after.format(90) not in sql60
     assert after.format(90) in sql90 and after.format(60) not in sql90
-    assert "60 days after the snapshot" in description
+    assert "in the 60 days after " in description and "snapshot" not in description
     built = run_sql(
         sql60, {"orders": frame}, output_name="t", as_of=sixty.snapshot, max_chars=MAX_COMPILED_SQL_CHARS
     ).frame

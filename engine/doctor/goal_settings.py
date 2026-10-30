@@ -120,7 +120,7 @@ class GoalSettings:
         """The change that setting `name` to `value` is, in the words of the question that asks for it."""
         template = self._template(name)
         if name == _WINDOW:
-            return f"The outcome looks {value} days after the snapshot"
+            return f"The outcome looks {value} days after the cut-off date"
         assert template.audience is not None
         option = next(o for o in template.audience.options if o.id == value)
         return option.phrase(_plural(self.entity))
@@ -217,7 +217,7 @@ def _window_question(goal: GoalSettings) -> Ask:
         AskOption(
             label=f"{days} days",
             effect=_effect(goal, _WINDOW, days, str(days), goal.title(_WINDOW, days)),
-            says=f"The outcome is read from the {days} days after the snapshot.",
+            says=f"The outcome is read from the {days} days after the cut-off date.",
         )
         for days in window.allowed
     )
@@ -230,7 +230,7 @@ def _window_question(goal: GoalSettings) -> Ask:
     return Ask(
         code=GOAL_SETTING,
         subject={"goal": goal.goal_id, "setting": _WINDOW},
-        text="How many days after the snapshot should the outcome look?",
+        text="How many days after the cut-off date should the outcome look?",
         why=window.why,
         options=(*options, safe),
         rows=0,

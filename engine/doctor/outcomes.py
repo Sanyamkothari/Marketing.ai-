@@ -216,9 +216,9 @@ class TemplateBuild(BaseModel):
 
 
 _LEGACY_QUIET_LABEL: Final[str] = (
-    "{entities} who have gone quiet (nothing in the {quiet_days} days before the snapshot)"
+    "{entities} who have gone quiet (nothing in the {quiet_days} days before the cut-off date)"
 )
-_LEGACY_ACTIVE_LABEL: Final[str] = "{entities} active on or before the snapshot"
+_LEGACY_ACTIVE_LABEL: Final[str] = "{entities} active on or before the cut-off date"
 
 
 class OutcomeTemplate(BaseModel):

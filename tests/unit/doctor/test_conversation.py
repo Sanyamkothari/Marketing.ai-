@@ -880,10 +880,11 @@ def test_a_steps_counts_say_what_was_kept_and_left_out_and_whether_they_are_the_
     # a count of the first rows only says so
     assert (
         _counts(step, counted, sampled_from=541_909)
-        == "Sample: the first 541,909 of 541,909 rows, 516,384 kept, 25,525 left out"
+        == "Sample: the first 541,909 of 541,909 rows (a first look; the whole-file count replaces it), "
+        "516,384 kept, 25,525 left out"
     )
     tried = step.model_copy(update={"payload": {"rows_in": 1_000, "rows_out": 1_000}})
-    assert (
-        _counts(tried, None, total_rows=541_909) == "Sample: the first 1,000 of 541,909 rows, none left out"
+    assert _counts(tried, None, total_rows=541_909) == (
+        "Sample: the first 1,000 of 541,909 rows (a first look; the whole-file count replaces it), none left out"
     )
     assert "rows in" not in _counts(step, {**counted, "customers_lost": 41})

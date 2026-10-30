@@ -427,7 +427,7 @@ def _counts(
         of = sampled_from if step is not None else total_rows
         sample = of is not None and (sampled_from is not None if step is not None else rows_in < of)
         scope = (
-            f"Sample: the first {rows_in:,} of {of:,} rows"
+            f"Sample: the first {rows_in:,} of {of:,} rows (a first look; the whole-file count replaces it)"
             if sample and of is not None
             else f"Whole file: {_plural(rows_in, 'row', 'rows')}"
         )

@@ -622,7 +622,7 @@ def _propose(
         else {}
     )
     sentence = (
-        f"{given.description.rstrip('.')}. Reads {read}; the new table '{given.output_name}' would have "
+        f"{given.description.rstrip('.')}. Reads {read}; the table it builds would have "
         f"{estimate.get('rows', f'{receipt.rows_out:,} rows')} and {len(columns):,} columns"
         + (estimate["note"] if estimate else "")
         + "."

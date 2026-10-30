@@ -405,9 +405,9 @@ def buildable_outcome(
             )
         else:
             sentence = (
-                f"Fits once I build one row per {noun} with the outcome: a snapshot (for example "
-                f"{snapshot:%d %b %Y}, the latest month-end whose {days} days are over), the {days}-day window "
-                f"after it, and the {noun}s active before it. {loaded.file_name} ({span}) would give "
+                f"Fits once I build a table with one row per {noun}: how each one behaved up to a cut-off date "
+                f"(for example {snapshot:%d %b %Y}, the latest month-end whose {days} days are over) and whether "
+                f"they did it again in the {days} days after. {loaded.file_name} ({span}) would give "
                 f"{counted.active:,} {noun}s, {counted.yes:,} of them a yes."
             )
             if len(audiences) > 1:
@@ -565,14 +565,15 @@ def compile_build(
     )
     noun = config.entity or "customer"
     word = "came back" if built.label_type == "event_presence" else "had no row"
+    cut = f"{built.snapshot:%d %b %Y}" if built.snapshot is not None else "the cut-off date"
     who = (
-        f"known at the snapshot with no row in the {quiet} days up to it"
+        f"with no activity in the {quiet} days up to {cut}"
         if quiet is not None
-        else "known at the snapshot"
+        else f"active on or before {cut}"
     )
     names = [f.name for f in features.features]
-    ending = f", and {outcome}: 1 when the {noun} {word} in the {days} days after the snapshot, else 0."
-    head = f"Training table: one row per {noun} {who}, with behaviour measured on or before it"
+    ending = f", and {outcome}: 1 when the {noun} {word} in the {days} days after {cut}, else 0."
+    head = f"Training table: one row per {noun} {who}, with behaviour measured up to {cut}"
     # The description has a fixed room (`_DESCRIPTION_ROOM`): when the feature names do not fit, fewer of them are named
     # ("such as ...") so the sentence is always told to its end, never cut in the middle of the outcome.
     description = f"{head} ({', '.join(names)}){ending}"

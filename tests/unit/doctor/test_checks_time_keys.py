@@ -680,3 +680,23 @@ def test_a_sentence_a_source_file_already_carries_is_not_listed_again_for_anothe
     assert "KEY_DIGITS_ROUNDED" in [
         i.payload["code"] for i in same.items
     ], "the same file's own item is refreshed"
+
+
+def test_a_check_of_a_table_that_did_not_change_is_not_read_again() -> None:
+    """A visit asks for the same checks at every step: a table with the same cells gets the answer found before, and a
+    changed cell is read again (the answer follows the cells, never the object)."""
+    from engine.doctor import checks_time_keys as keys
+
+    block = pd.DataFrame({"region": (["North"] + [""] * 14 + ["East"] + [""] * 14), "n": range(30)})
+    keys._FRAME_CHECKS.clear()
+    first = block_blank_checks(block)
+    assert [c.column for c in first] == ["region"] and keys._FRAME_CHECKS.misses == 1
+    again = block_blank_checks(block.copy())
+    assert again == first and keys._FRAME_CHECKS.hits == 1 and keys._FRAME_CHECKS.misses == 1
+    filled = block.copy()
+    filled.loc[1, "region"] = "West"
+    block_blank_checks(filled)
+    assert keys._FRAME_CHECKS.misses == 2, "a changed cell is a new table: it is read"
+    asked = key_quality(pd.Series(["a", "b", "b"], name="id"), "id", expect_unique=True)
+    assert key_quality(pd.Series(["a", "b", "b"], name="id"), "id", expect_unique=True) == asked
+    assert keys._FRAME_CHECKS.hits == 2

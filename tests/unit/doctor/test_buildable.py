@@ -214,7 +214,7 @@ def test_the_quiet_build_keeps_only_the_quiet_customers(config_root: Path) -> No
         ).frame
         assert len(built) == want
         assert int(built["reactivated"].sum()) == (found.yes if audience is None else quiet.yes)
-    assert "no row in the 90 days" in description
+    assert "no activity in the 90 days up to " in description and "snapshot" not in description
 
 
 def test_a_goal_that_names_no_audience_is_counted_one_way(config_root: Path) -> None:
@@ -269,5 +269,5 @@ def test_the_build_description_is_told_to_its_end_even_with_many_features(config
     assert found is not None
     _sql, description = compile_build(found, config, "t_orders", found.audiences[1])
     assert len(description) <= _DESCRIPTION_ROOM
-    assert description.endswith("days after the snapshot, else 0.")
+    assert description.endswith(f"days after {found.snapshot:%d %b %Y}, else 0.")
     assert "reactivated: 1 when the" in description
