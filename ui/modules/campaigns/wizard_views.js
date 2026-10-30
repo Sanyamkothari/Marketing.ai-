@@ -39,7 +39,8 @@ import {
   valueFigure,
   valueSentence,
 } from "./wizard_rules.js";
-import { resultsSummaryHtml, technicalBoxHtml } from "./summary_views.js";
+import { resultsSummaryHtml } from "./summary_views.js";
+import { resultsTabsHtml } from "./results_tabs.js";
 
 export const TITLE = "New campaign";
 export const LEAD =
@@ -520,9 +521,11 @@ function complianceLine(checked) {
  * when the registry did not answer, which offers nothing). `busy` is the button's label while its calls are on
  * their way, else "".
  *
- * The plain summary comes first (`resultsSummaryHtml`; `summary` is `{ top, caseId, story }`: the first customers the server
- * gave, the Data Doctor case the file came from and the model's lift and importance files), then the check and approve card; the numbers and tables above
- * are folded behind "Show technical details" (`technicalBoxHtml`).
+ * The Review page is, top to bottom: a short strip (how many to contact, how good the model is: `resultsSummaryHtml`), the
+ * check and approve card (the human gate), and the tabs Data | Model | Output (`resultsTabsHtml`; `summary` is
+ * `{ top, caseId, story }`: the first customers the server gave, the Data Doctor case the file came from and the model's
+ * lift and importance files). The campaign's own numbers (the tiles, the audience tables, the ids) are folded under the
+ * Output tab.
  */
 export function reviewHtml({
   campaign,
@@ -556,19 +559,15 @@ export function reviewHtml({
     ["Why the cost is not known", cost && !(costText && costText.known) ? cost.reason : null],
   ]);
   const decision = decisionParts({ campaign, model, canApprove, busy });
-  const runId = ((campaign && campaign.run_ids) || [])[0];
   const version = model && model.version ? model.version : null;
-  const useCase = campaign && encodeURIComponent(campaign.use_case_id);
   const details = `${summaryTiles({ list, preview, value })}${audienceHtml({ scoring, list, preview })}${
     tech ? `<div class="cw-tech">${tech}</div>` : ""
   }`;
   return `${resultsSummaryHtml({
     list,
     version,
-    top: summary && summary.top,
     story: summary && summary.story,
     campaign,
-    caseId: summary && summary.caseId,
     resultsOn: resultsOn ? dayOf(resultsOn) : "",
   })}${card(
     "Check and approve",
@@ -577,10 +576,7 @@ export function reviewHtml({
       "cw-decide-actions",
     )}${p(decision.note, "data-cw-approve-note", "cw-note")}</div>`,
     "data-cw-review",
-  )}${technicalBoxHtml(details, [
-    ["Open the full results page", runId && useCase ? `#/uc/${useCase}/output/${encodeURIComponent(runId)}` : ""],
-    ["Open the model's page", version && version.run_id && useCase ? `#/uc/${useCase}/model/${encodeURIComponent(version.run_id)}` : ""],
-  ])}`;
+  )}${resultsTabsHtml({ list, campaign, top: summary && summary.top, story: summary && summary.story, numbers: details })}`;
 }
 
 // --- Step 5: Send ---------------------------------------------------------------------------------------

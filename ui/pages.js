@@ -102,6 +102,10 @@ export function pageArtefacts(kind, run) {
 }
 
 const TAB_LABEL = { data: "Data", model: "Model", output: "Output", campaign: "Campaign results" };
+
+// A page drawn inside another screen (the campaign's Review page puts Data, Model and Output under its own tabs)
+// keeps its body and drops its header, tab bar and "Next" button. `renderPage` sets it for the one synchronous draw.
+let embedded = false;
 const CRUMB_SEP = '<span class="sep" aria-hidden="true">›</span>';
 
 // The router's seams (the active top-bar goal) are reached lazily: `modules/router.js`
@@ -209,7 +213,7 @@ function lowerFirstWords(text) {
 
 /** The use case's own one-line description of a column (template, standard schema, suggested features). */
 const describedCache = new WeakMap();
-function columnDescriptions(uc) {
+export function columnDescriptions(uc) {
   if (!uc || typeof uc !== "object") return new Map();
   if (describedCache.has(uc)) return describedCache.get(uc);
   const config = uc.config || {};
@@ -256,15 +260,17 @@ const PAGE_STYLE = `<style data-pages>
 .pg-next{display:flex;justify-content:flex-end}
 .pg-sect{margin:16px 0 0;font-size:13px;font-weight:600;color:var(--ink)}
 details.pg-more>.bars{padding-left:0;padding-right:0}
-.pg-tech .card-body>details.tech,[data-pg-tech] .card-body>details.tech{border-top:0;padding-top:0}
+.pg-fold-cards{display:flex;flex-direction:column;gap:12px;margin-top:12px}
+.pg-tech .card-body>details.tech,[data-pg-tech] .card-body>details.tech,.pg-tech .card-body>details.pg-fold{border-top:0;padding-top:0}
 .kpis.pg-one{grid-template-columns:1fr}
 .kpis.pg-one .pg-kn{font-size:14px;color:var(--ink2);margin-top:8px}
 .stack>.pg-p{padding:0}
-details.tech h4{background:none;border:0;padding:12px 0 4px;color:var(--ink2)}
-details.tech .kv{padding-left:0;padding-right:0}
-details.tech .cm{padding:8px 0}
-details.tech .tbl-wrap{margin:0}
-details.tech .caption{padding:4px 0 8px}
+details.tech h4,details.pg-fold h4{background:none;border:0;padding:12px 0 4px;color:var(--ink2)}
+details.tech .kv,details.pg-fold .kv{padding-left:0;padding-right:0}
+details.tech .cm,details.pg-fold .cm{padding:8px 0}
+details.tech .tbl-wrap,details.pg-fold .tbl-wrap{margin:0}
+details.tech .caption,details.pg-fold .caption{padding:4px 0 8px}
+details.pg-fold .tech-list{margin:8px 0 0}
 details.more{padding:12px 20px 8px}
 details.more>summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink)}
 details.more .tbl-wrap{margin:8px 0 0}
@@ -359,9 +365,15 @@ function shell(uc, kind, run, body, { primary = null, secondary = [], tech = [],
     ],
     "Technical details",
   ).replace(/^<details class="tech"[^>]*><summary>[^<]*<\/summary>/, "").replace(/<\/details>$/, "");
+  // Embedded, every page's fold is "More details", in view (the Model page's hyperparameters, the calibration, the
+  // cut-off; the Data page's file details, split and ids; the Output page's sample and settings), never dropped.
+  const visibleFold = embedded;
   const details = list || techHtml
-    ? `<details class="tech" data-tech><summary>Technical details</summary>${list}${techHtml}</details>`
+    ? `<details class="${visibleFold ? "more pg-fold" : "tech"}" data-tech><summary>${visibleFold ? "More details" : "Technical details"}</summary>${visibleFold && list ? `<div data-technical>${list}</div>` : list}${techHtml}</details>`
     : "";
+  const techCard = details ? `<section class="card pg-tech"><div class="card-body">${details}</div></section>` : "";
+  // The download is the Review page's own gate (Approve, then download): an embedded page offers no file of its own.
+  if (embedded) return `${PAGE_STYLE}<div class="stack" data-pg-embedded="${esc(kind)}">${body}${techCard}</div>`;
   return `<main class="screen t-${esc(uc.marker)}">${PAGE_STYLE}
     ${pageHead(`<nav class="crumbs" aria-label="Breadcrumb">${journeyCrumb(uc)}${CRUMB_SEP}<a href="#/uc/${esc(
       uc.id,
@@ -372,7 +384,7 @@ function shell(uc, kind, run, body, { primary = null, secondary = [], tech = [],
     <div class="tabs-bar"><nav class="tabs" aria-label="Pipeline">${tabs}</nav>${
       note ? `<span class="note">${esc(note)}</span>` : ""
     }</div>
-    <div class="stack">${body}${details ? `<section class="card pg-tech"><div class="card-body">${details}</div></section>` : ""}${nextButton}</div>
+    <div class="stack">${body}${techCard}${nextButton}</div>
   </main>`;
 }
 
@@ -578,24 +590,10 @@ function dataPage(uc, run, art, byPath, extra) {
 
   const trainPart = ((split && split.parts) || []).find((p) => p.name === "train");
   const parts = (split && split.parts) || [];
-  const shareOf = (name) => {
-    const part = parts.find((p) => p.name === name);
-    return part ? fmtPct(part.share, 0) : null;
-  };
-  const splitWords = parts.length
-    ? [
-        shareOf("train") ? `${shareOf("train")} to learn` : null,
-        shareOf("validation") && parts.find((p) => p.name === "validation").share ? `${shareOf("validation")} to choose the model` : null,
-        shareOf("test") ? `${shareOf("test")} to test it` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : null;
   const leakage = scoring ? null : leakageLine(validation, config);
   const noticed = ((validation && validation.checks) || []).filter((c) => !String(c.code).startsWith("LEAKAGE"));
   const qualityRows = [
     leakage ? ["Leakage check", leakage] : null,
-    splitWords ? ["Split for testing", splitWords] : null,
     split && split.group_column ? ["Kept together", `All rows of one ${entity} stay in the same part`] : null,
   ].filter(Boolean);
   const noticedList = noticed.length
@@ -609,6 +607,25 @@ function dataPage(uc, run, art, byPath, extra) {
           }</li>`;
         })
         .join("")}</ul><div class="pg-body"></div>`
+    : "";
+
+  // The three parts the rows were split into: what each is for, how many rows, how many had the outcome, and the dates
+  // (a split by date names its dates; a random one says so).
+  const PART_WORDS = { train: "To learn from", validation: "To choose the model", test: "To test it" };
+  const splitCard = parts.length
+    ? card(
+        "How the rows were split",
+        `${dataTable(
+          [{ label: "Part" }, { label: capital(plural(entity)), num: true }, { label: "Share", num: true }, { label: "With the outcome", num: true }, { label: "Dates" }],
+          parts.map((part) => [
+            esc(PART_WORDS[part.name] || humanise(part.name)),
+            esc(fmtInt(part.rows)),
+            esc(dash(part.share, (v) => fmtPct(v, 0))),
+            esc(dash(part.positive_rate, (v) => fmtPct(v, 0))),
+            esc(present(part.start_date) && present(part.end_date) ? `${fmtDate(part.start_date)} – ${fmtDate(part.end_date)}` : "Chosen at random"),
+          ]),
+        )}`,
+      )
     : "";
 
   const steps = transformSteps(prepare);
@@ -697,13 +714,16 @@ function dataPage(uc, run, art, byPath, extra) {
 
   const body = `${glance}
     ${sourceCard(run, profile, extra)}
+    ${extra.doctorHtml || ""}
     ${targetCard}
     ${pipelineCard}
+    ${splitCard}
     ${featureCard}
     ${set("Columns not used", dropped)}${set("Columns kept, not used to predict", carried, "The date each row describes")}${removalCard}${
       extra.panelsHtml || ""
     }`;
-  return shell(uc, "data", run, body, { techHtml: techRows });
+  // Embedded, the file details and the split's own text are in the "More details" fold, marked technical like its ids.
+  return shell(uc, "data", run, body, { techHtml: embedded ? `<div data-technical>${techRows}</div>` : techRows });
 }
 
 // --- Model -------------------------------------------------------------------------------------
@@ -838,6 +858,41 @@ function evaluationCard(evaluation, baseline) {
   );
 }
 
+/**
+ * The model search made visible: the models AutoGluon tried, best first, with the one it chose marked. The first few
+ * are in view and the rest one click away; the scores are the search's own (on the customers it learned from, and on
+ * the customers it had not seen).
+ */
+const BOARD_SHOWN = 5;
+function leaderboardCard(board, best) {
+  const entries = (board && board.entries) || [];
+  if (!entries.length) return "";
+  const chosen = (best && best.model_name) || board.best_model_name;
+  const measure = board.metric_label || "Score";
+  const name = (e) => {
+    const picked = e.model_name === chosen;
+    const words = picked && best && best.display_name ? best.display_name : e.family_label || e.model_name;
+    const mark = picked ? ' <span class="badge tone-good" data-chosen>Chosen</span>' : "";
+    return `<span>${esc(words)}${mark}${words !== e.model_name ? `<span class="pg-desc">${esc(e.model_name)}</span>` : ""}</span>`;
+  };
+  const rowsOf = (list) =>
+    list.map((e) => [esc(String(e.rank)), name(e), esc(fmtMetric(e.validation_score)), esc(dash(e.test_score, fmtMetric)), esc(fmtNum(e.fit_time_seconds, 1))]);
+  const cols = [
+    { label: "Rank", num: true },
+    { label: "Model" },
+    { label: `${measure} while learning`, num: true },
+    { label: `${measure} on customers it had not seen`, num: true },
+    { label: "Time to learn (s)", num: true },
+  ];
+  const rest = entries.slice(BOARD_SHOWN);
+  return card(
+    `Models the search tried (${esc(fmtInt(board.models_trained || entries.length))}, best first by ${esc(measure)})`,
+    `<div data-leaderboard>${dataTable(cols, rowsOf(entries.slice(0, BOARD_SHOWN)))}</div>${
+      rest.length ? `<details class="more" data-leaderboard-more><summary>Show the other ${esc(fmtInt(rest.length))} models</summary>${dataTable(cols, rowsOf(rest))}</details>` : ""
+    }<p class="caption">${esc(`${board.time_limit_seconds ? `The search stopped after ${board.time_limit_seconds}s. ` : ""}The chosen model is the one with the best score while learning.`)}</p>`,
+  );
+}
+
 function modelPage(uc, run, art, byPath, extra = {}) {
   if (isScoring(run)) return scoringModelPage(uc, run, art);
   const best = art["best_model.json"];
@@ -921,6 +976,8 @@ function modelPage(uc, run, art, byPath, extra = {}) {
         </div><p class="caption">Test set, cut-off ${fmtNum(matrix.threshold, 2)}</p>`
     : "";
 
+  // The classic Model page keeps which algorithm won under its technical details (docs/ux/GLOSSARY.md: model names are
+  // hidden from a marketer); the campaign's Review page shows the model search in view (`leaderboardCard`).
   const boardBlock = board
     ? `<h4>Models tried (${esc(fmtInt(board.models_trained))}, by ${esc(board.metric_label)})</h4>${table(
         ["rank", "model", "validation", "test", "fit (s)"],
@@ -942,7 +999,7 @@ function modelPage(uc, run, art, byPath, extra = {}) {
     ? `<h4>Importance method</h4>${kvs([["Method", dash(importance.caption || importance.method)]])}`
     : "";
 
-  const technical = `<h4>Training setup</h4>${kvs(setupRows)}${matrixBlock}${boardBlock}${hyperBlock}${importanceNote}`;
+  const technical = `<h4>Training setup</h4>${kvs(setupRows)}${matrixBlock}${embedded ? "" : boardBlock}${hyperBlock}${importanceNote}`;
 
   const fairnessCard =
     fairness && fairness.evaluated
@@ -974,6 +1031,7 @@ function modelPage(uc, run, art, byPath, extra = {}) {
       ${driversCard(uc, importance)}
       ${evaluation ? evaluationCard(evaluation, baseline) : ""}
     </div>
+    ${embedded ? leaderboardCard(board, best) : ""}
     ${detailsCard}
     ${fairnessCard}${extra.panelsHtml || ""}`;
   return shell(uc, "model", run, body, {
@@ -1467,15 +1525,18 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref, extra = {}) {
 
   // Technical details: the scored list for analysts, what moved, and the modules' own sections (the contact
   // list's counts, the notes behind a change).
-  const techHtml = `${allScoresSlotHtml(run.run_id, download, scoresHref)}${driftTable(drift)}${extra.panelsHtml || ""}`;
+  // Embedded, the sample and the settings sit inside the "More details" fold; only the all-scores download stays out.
+  const techHtml = `${embedded ? "" : allScoresSlotHtml(run.run_id, download, scoresHref)}${driftTable(drift)}${extra.panelsHtml || ""}${
+    embedded ? `<div class="pg-fold-cards">${sampleCard(uc, run, summary, download)}${settingsCard(uc, run, config, byPath, summary, drift)}</div>` : ""
+  }`;
 
   const body = `${outputTiles}
     ${contactSlotHtml(run.run_id, sentence, download)}
     ${driftNotice}
     ${priorityCard}
-    ${sampleCard(uc, run, summary, download)}
+    ${embedded ? "" : sampleCard(uc, run, summary, download)}
     ${testSize}
-    ${settingsCard(uc, run, config, byPath, summary, drift)}`;
+    ${embedded ? "" : settingsCard(uc, run, config, byPath, summary, drift)}`;
   return shell(uc, "output", run, body, {
     primary: contactDownloadLink(download, { icon: true, runId: run.run_id }),
     tech: [["Training run", drift && drift.baseline_run_id]],
@@ -1527,11 +1588,12 @@ function trainingOutputPage(uc, run, art, byPath) {
       });
 
   const body = `${liftTiles}
-    <p class="pg-p muted">${esc(`How many ${plural(entity)} to contact appears after you make a contact list with this model.`)}</p>
+    ${embedded ? "" : `<p class="pg-p muted">${esc(`How many ${plural(entity)} to contact appears after you make a contact list with this model.`)}</p>`}
     ${card(esc(unit === "x" || !lift ? "Lift by tenth of the ranking" : "Actual rate by tenth of the ranking"), chart)}
-    ${settingsCard(uc, run, config, byPath, null, null)}`;
+    ${embedded ? "" : settingsCard(uc, run, config, byPath, null, null)}`;
   return shell(uc, "output", run, body, {
     primary: { label: "Make a contact list with this model", href: `#/uc/${uc.id}`, kind: "primary" },
+    techHtml: embedded ? `<div class="pg-fold-cards">${settingsCard(uc, run, config, byPath, null, null)}</div>` : "",
   });
 }
 
@@ -1688,6 +1750,7 @@ function upliftDataPage(uc, run, art, byPath, extra) {
 
   const body = `${upliftTiles}
     ${sourceCard(run, profile, extra)}
+    ${extra.doctorHtml || ""}
     <div class="row">
       ${card("Input dataset", kvs(fileRows))}
       ${card(
@@ -1697,7 +1760,7 @@ function upliftDataPage(uc, run, art, byPath, extra) {
     </div>
     ${card("Experiment checks", checksBody)}
     ${driftCard(drift, scoring)}`;
-  return shell(uc, "data", run, body, { techHtml: fileDetails(profile) });
+  return shell(uc, "data", run, body, { techHtml: embedded ? `<div data-technical>${fileDetails(profile)}</div>` : fileDetails(profile) });
 }
 
 /**
@@ -1743,10 +1806,15 @@ export function problemTypeLabel(uc, value) {
  */
 export function renderPage(kind, uc, run, art, scoresHref, extra = {}) {
   const byPath = indexSchema(uc.advanced_settings || { stages: [] });
-  if (isUplift(run)) {
-    return kind === "data" ? upliftDataPage(uc, run, art, byPath, extra) : upliftRedirect(uc, kind, run);
+  embedded = !!extra.embedded;
+  try {
+    if (isUplift(run)) {
+      return kind === "data" ? upliftDataPage(uc, run, art, byPath, extra) : upliftRedirect(uc, kind, run);
+    }
+    if (kind === "data") return dataPage(uc, run, art, byPath, extra);
+    if (kind === "model") return modelPage(uc, run, art, byPath, extra);
+    return outputPage(uc, run, art, byPath, scoresHref, extra);
+  } finally {
+    embedded = false;
   }
-  if (kind === "data") return dataPage(uc, run, art, byPath, extra);
-  if (kind === "model") return modelPage(uc, run, art, byPath, extra);
-  return outputPage(uc, run, art, byPath, scoresHref, extra);
 }

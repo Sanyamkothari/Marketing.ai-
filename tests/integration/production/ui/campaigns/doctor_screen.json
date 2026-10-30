@@ -1,0 +1,319 @@
+{
+ "case": {
+  "case_id": "case_a2ac37626565449a",
+  "items": [
+   {
+    "item_id": "data_check.base.00255c550a5e",
+    "kind": "data_check",
+    "title": "5,268 rows of online-retail-dataset.csv are exact copies of another row (1%). Nothing is removed without a yes, and spend or counts would be inflated if they stay.",
+    "state": "accepted",
+    "superseded_by": "data_check.base.52bbce672900",
+    "payload": {
+     "column": null
+    }
+   },
+   {
+    "item_id": "recipe_step.base.41b6e4c9b418",
+    "kind": "recipe_step",
+    "title": "Read 'InvoiceDate' as dates, month first. It is stored as text ('12/1/2010 8:26', '12/1/2010 8:28', '12/1/2010 8:34'). Some dates have a second part above 12, so they are written month first: 541909 of 541909 values become dates.",
+    "state": "accepted",
+    "payload": {
+     "step": {
+      "kind": "parse_date",
+      "column": "InvoiceDate"
+     }
+    }
+   },
+   {
+    "item_id": "q.key_not_unique.base.42897fb20c61:c0",
+    "kind": "key",
+    "title": "\u201cCustomerID\u201d names the customers of online-retail-dataset.csv.",
+    "state": "accepted",
+    "payload": {
+     "column": "CustomerID"
+    }
+   },
+   {
+    "item_id": "data_check.base.807eaceb3b22",
+    "kind": "data_check",
+    "title": "'CustomerID' has 4,372 different values in 406,829 filled rows; the most common value appears 7,983 times.",
+    "state": "rejected",
+    "superseded_by": "data_check.base.a34ac0ba9c42",
+    "payload": {
+     "column": "CustomerID"
+    }
+   },
+   {
+    "item_id": "q.thin_last_period.base.fa75369ceb88:leave_out",
+    "kind": "recipe_step",
+    "title": "Use 2011-11-30 as the as-of date and leave out the 25,525 rows dated after it.",
+    "state": "accepted",
+    "payload": {
+     "step": {
+      "kind": "remove_rows",
+      "column": "InvoiceDate"
+     }
+    }
+   },
+   {
+    "item_id": "data_check.base.52bbce672900",
+    "kind": "data_check",
+    "title": "4,989 rows of online-retail-dataset.csv are exact copies of another row (1%). Nothing is removed without a yes, and spend or counts would be inflated if they stay.",
+    "state": "accepted",
+    "payload": {
+     "column": null
+    }
+   },
+   {
+    "item_id": "recipe_step.retail-win-back.8f282c67ed3e",
+    "kind": "recipe_step",
+    "title": "Training table: one row per shopper known at the snapshot, with behaviour measured on or before it (days_since_last_order, orders_90d, orders_365d, spend_90d, spend_365d, avg_order_value), and reactivated: 1 when the shopper came back in the 90 days after the snapshot, else 0",
+    "state": "rejected",
+    "superseded_by": "recipe_step.retail-win-back.98440ba1208e",
+    "payload": {
+     "step": {
+      "kind": "sql_query",
+      "column": "training_retail_win_back"
+     }
+    }
+   },
+   {
+    "item_id": "q.goal_setting.retail-win-back.c763d3ab5cc3:quiet",
+    "kind": "goal_setting",
+    "title": "shoppers who have gone quiet (no order in the 90 days before the snapshot)",
+    "state": "accepted",
+    "payload": {
+     "setting": "audience",
+     "value": "quiet"
+    }
+   },
+   {
+    "item_id": "recipe_step.retail-win-back.98440ba1208e",
+    "kind": "recipe_step",
+    "title": "Training table: one row per shopper known at the snapshot with no row in the 90 days up to it, with behaviour measured on or before it (6 measures, such as days_since_last_order, orders_90d, orders_365d), and reactivated: 1 when the shopper came back in the 90 days after the snapshot, else 0",
+    "state": "accepted",
+    "payload": {
+     "step": {
+      "kind": "sql_query",
+      "column": "training_retail_win_back"
+     }
+    }
+   }
+  ],
+  "approvals": [
+   {
+    "approval_id": "approval.1",
+    "approved_by": "local-operator",
+    "approved_at": "2026-10-30T06:27:34.370834Z",
+    "text_shown": "Use 2011-11-30 as the as-of date and leave out the 25,525 rows dated after it."
+   },
+   {
+    "approval_id": "approval.2",
+    "approved_by": "local-operator",
+    "approved_at": "2026-10-30T06:27:55.620594Z",
+    "text_shown": "Training table: one row per shopper known at the snapshot with no row in the 90 days up to it, with behaviour measured on or before it (6 measures, such as days_since_last_order, orders_90d, orders_365d), and reactivated: 1 when the shopper came back in the 90 days after the snapshot, else 0. Reads online-retail-dataset.csv (516,384 rows); the new table 'training_retail_win_back' would have 1,402 rows and 8 columns. Left out, of the file's 4,331 shoppers: 971 have no activity on or before 31 Aug 2011, so they were not known by then; 1,958 were active in the 90 days before 31 Aug 2011, so they have not gone quiet. Who is kept is the audience you chose. It is cut at 31 Aug 2011: the 90 days after it give the outcome, and 30 Nov 2011 is the date your case is read at."
+   },
+   {
+    "approval_id": "approval.3",
+    "approved_by": "local-operator",
+    "approved_at": "2026-10-30T06:28:18.789835Z",
+    "text_shown": "Prepare 1 file with 5 changes for the goal \u201cRetail Win-back\u201d. Nothing else changes."
+   }
+  ]
+ },
+ "view": {
+  "ledger": {
+   "rows_in": 541909,
+   "rows_out": 1402,
+   "customers_in": 4372,
+   "customers_out": 1402,
+   "positive_rate_out": 39.37232524964337,
+   "steps": [
+    {
+     "item_id": "recipe_step.base.41b6e4c9b418",
+     "rows_in": 541909,
+     "rows_out": 541909,
+     "customers_in": 4372,
+     "customers_out": 4372
+    },
+    {
+     "item_id": "q.thin_last_period.base.fa75369ceb88:leave_out",
+     "rows_in": 541909,
+     "rows_out": 516384,
+     "customers_in": 4372,
+     "customers_out": 4331
+    },
+    {
+     "item_id": "recipe_step.retail-win-back.98440ba1208e",
+     "rows_in": 516384,
+     "rows_out": 1402,
+     "customers_in": 4331,
+     "customers_out": 1402
+    }
+   ]
+  },
+  "preview": {
+   "files": [
+    {
+     "upload_id": "u_ead54c6c5808",
+     "file_name": "online-retail-dataset.csv",
+     "total_rows": 541909,
+     "columns": [
+      {
+       "name": "CustomerID"
+      },
+      {
+       "name": "days_since_last_order"
+      },
+      {
+       "name": "orders_90d"
+      },
+      {
+       "name": "orders_365d"
+      },
+      {
+       "name": "spend_90d"
+      },
+      {
+       "name": "spend_365d"
+      },
+      {
+       "name": "avg_order_value"
+      },
+      {
+       "name": "reactivated"
+      }
+     ],
+     "before_columns": [
+      {
+       "name": "InvoiceNo"
+      },
+      {
+       "name": "StockCode"
+      },
+      {
+       "name": "Description"
+      },
+      {
+       "name": "Quantity"
+      },
+      {
+       "name": "InvoiceDate"
+      },
+      {
+       "name": "UnitPrice"
+      },
+      {
+       "name": "CustomerID"
+      },
+      {
+       "name": "Country"
+      }
+     ],
+     "after_table": "training_retail_win_back",
+     "after_rows": 1402
+    }
+   ]
+  },
+  "review": {
+   "plan": [
+    {
+     "item_id": "recipe_step.base.41b6e4c9b418",
+     "text": "Read 'InvoiceDate' as dates, month first. It is stored as text ('12/1/2010 8:26', '12/1/2010 8:28', '12/1/2010 8:34'). Some dates have a second part above 12, so they are written month first: 541909 of 541909 values become dates.",
+     "counts": "Whole file: 541,909 rows, none left out",
+     "by": "person",
+     "proposed_by": "default",
+     "undo": true
+    },
+    {
+     "item_id": "q.key_not_unique.base.42897fb20c61:c0",
+     "text": "\u201cCustomerID\u201d names the customers of online-retail-dataset.csv.",
+     "counts": "",
+     "by": "person",
+     "proposed_by": "default",
+     "undo": true
+    },
+    {
+     "item_id": "q.thin_last_period.base.fa75369ceb88:leave_out",
+     "text": "Use 2011-11-30 as the as-of date and leave out the 25,525 rows dated after it.",
+     "counts": "Whole file: 541,909 rows, 516,384 kept, 25,525 left out \u00b7 41 customers left out",
+     "by": "person",
+     "proposed_by": "default",
+     "undo": true
+    },
+    {
+     "item_id": "q.goal_setting.retail-win-back.c763d3ab5cc3:quiet",
+     "text": "shoppers who have gone quiet (no order in the 90 days before the snapshot)",
+     "counts": "",
+     "by": "person",
+     "proposed_by": "default",
+     "undo": true
+    },
+    {
+     "item_id": "recipe_step.retail-win-back.98440ba1208e",
+     "text": "Training table: one row per shopper known at the snapshot with no row in the 90 days up to it, with behaviour measured on or before it (6 measures, such as days_since_last_order, orders_90d, orders_365d), and reactivated: 1 when the shopper came back in the 90 days after the snapshot, else 0",
+     "counts": "Whole file: 516,384 rows, makes a table of 1,402 rows \u00b7 2,929 customers left out",
+     "by": "person",
+     "proposed_by": "default",
+     "undo": true
+    }
+   ],
+   "decisions": [
+    {
+     "kind": "customer_id",
+     "title": "No column of online-retail-dataset.csv holds a different value on every row with no blanks. Which column names the customers in it?",
+     "current": "CustomerID (a value repeats about 123.9 times; 25% blank)",
+     "decided_by": "person",
+     "question_id": "q.key_not_unique.base.42897fb20c61",
+     "item_id": null,
+     "answered": true
+    },
+    {
+     "kind": "outcome",
+     "title": "What counts as the outcome",
+     "current": "reactivated",
+     "decided_by": "person",
+     "question_id": null,
+     "item_id": "recipe_step.retail-win-back.98440ba1208e",
+     "answered": true
+    },
+    {
+     "kind": "date",
+     "title": "Which date the data is as of",
+     "current": "2011-11-30",
+     "decided_by": "person",
+     "question_id": null,
+     "item_id": "q.thin_last_period.base.fa75369ceb88:leave_out",
+     "answered": true
+    },
+    {
+     "kind": "other",
+     "title": "The newest rows of 'InvoiceDate' look unfinished. The newest month is only partly in the file: 9 of 31 days (up to 2011-12-09). Counting it as a full month would make everything look lower. 25,525 rows are dated after 2011-11-30. Leave them out and use 2011-11-30 as the as-of date?",
+     "current": "Leave them out",
+     "decided_by": "person",
+     "question_id": "q.thin_last_period.base.fa75369ceb88",
+     "item_id": null,
+     "answered": true
+    },
+    {
+     "kind": "other",
+     "title": "Which shoppers should the training table be built from?",
+     "current": "Only 1,402 shoppers who have gone quiet (no order in the 90 days before the snapshot) (552 of them a yes)",
+     "decided_by": "person",
+     "question_id": "q.goal_setting.retail-win-back.c763d3ab5cc3",
+     "item_id": null,
+     "answered": true
+    },
+    {
+     "kind": "other",
+     "title": "shoppers who have gone quiet (no order in the 90 days before the snapshot)",
+     "current": "quiet",
+     "decided_by": "person",
+     "question_id": null,
+     "item_id": "q.goal_setting.retail-win-back.c763d3ab5cc3:quiet",
+     "answered": true
+    }
+   ]
+  }
+ }
+}

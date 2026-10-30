@@ -175,6 +175,9 @@ def test_review_summary_and_phone_buttons(browser: Any, server: str) -> None:
     problems: list[str] = []
     page = _page(browser, server, problems, viewport=DESKTOP, mode="draft")
     _open(page, server, f"#/campaigns/new/review/{CAMPAIGN}", "[data-cw-review] [data-cw-approve]")
+    # the campaign's own numbers are folded under the Output tab (the tabs replace the old technical box)
+    page.click("[data-cw-tab=output]")
+    page.evaluate("() => { document.querySelector('details[data-cw-numbers]').open = true; }")
     tiles = page.locator(".cw .stat-row[data-cw-summary] > .stat")
     assert tiles.count() == 3
     widths = [tiles.nth(i).bounding_box()["width"] for i in range(3)]
