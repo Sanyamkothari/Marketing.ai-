@@ -618,8 +618,14 @@ def near_key_label(key: dict[str, Any], *, events: bool) -> str:
     """One offered customer column with its facts: how often a value repeats and the share of blank rows (rows
     with a blank there cannot be tied to a person)."""
     blank = float(key.get("null_rate") or 0.0)
-    rows = max(round(float(key.get("rows_per_key") or 1)), 1)
-    label = f"{key['column']} (about {rows} {'row' if rows == 1 else 'rows'} per customer"
+    per = float(key.get("rows_per_key") or 1)
+    if per < 1.05:
+        said = "about 1 row per customer"
+    elif per < 2:  # a whole number would read "1" and hide that this column repeats
+        said = f"about {per:.1f} rows per customer"
+    else:
+        said = f"about {round(per)} rows per customer"
+    label = f"{key['column']} ({said}"
     if blank >= 0.005:
         label += f"; {_blank_words(blank)} blank" + (
             ", those rows cannot be tied to a person" if events else ""

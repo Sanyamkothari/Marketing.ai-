@@ -28,3 +28,8 @@ def test_the_repeat_is_rows_per_customer_and_a_third_blank_is_said_as_a_third() 
 def test_a_share_is_in_words_when_it_is_close_to_one_and_a_percent_otherwise(blank: float, said: str) -> None:
     key = {"column": "id", "rows_per_key": 1.0, "null_rate": blank}
     assert near_key_label(key, events=False) == f"id (about 1 row per customer{said})"
+
+
+def test_a_column_that_repeats_a_little_still_says_it_repeats() -> None:
+    key = {"column": "email", "rows_per_key": 1.3, "null_rate": 0.0}
+    assert near_key_label(key, events=False) == "email (about 1.3 rows per customer)"
