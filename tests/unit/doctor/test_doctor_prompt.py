@@ -13,7 +13,7 @@ import pytest
 
 from engine.agent import egress
 from engine.agent.loop import DOCTOR_STEP_KINDS
-from engine.doctor.actions import ACTIONS, prompt_variables
+from engine.doctor.actions import ACTIONS, prompt_variables, tool_line
 from engine.doctor.guides import read_guide
 from engine.doctor.questions import CATALOGUE, catalogue_lines
 from engine.generative.contracts import GenerativePurpose
@@ -39,11 +39,11 @@ GUIDES = Path(__file__).resolve().parents[3] / "configs" / "doctor" / "guides"
 
 def _parts(tool_count: int = 24) -> tuple[str, str]:
     tools = [
-        {
-            "name": f"tool_{n}",
-            "description": "Shows what a column holds, with counts.",
-            "args": '{"column": "str"}',
-        }
+        tool_line(
+            f"tool_{n}",
+            "Shows what a column holds, with counts.",
+            {"properties": {"column": {"type": "string"}}, "required": ["column"]},
+        )
         for n in range(tool_count)
     ]
     done = render(

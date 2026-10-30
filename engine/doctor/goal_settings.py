@@ -116,6 +116,15 @@ class GoalSettings:
         assert template.audience is not None
         return template.audience.dont_know or template.audience.options[0].id
 
+    def title(self, name: str, value: SettingValue) -> str:
+        """The change that setting `name` to `value` is, in the words of the question that asks for it."""
+        template = self._template(name)
+        if name == _WINDOW:
+            return f"The outcome looks {value} days after the snapshot"
+        assert template.audience is not None
+        option = next(o for o in template.audience.options if o.id == value)
+        return option.phrase(_plural(self.entity))
+
     def options(self, name: str) -> tuple[SettingOption, ...]:
         template = self._template(name)
         if name == _WINDOW:
@@ -207,22 +216,14 @@ def _window_question(goal: GoalSettings) -> Ask:
     options = tuple(
         AskOption(
             label=f"{days} days",
-            effect=_effect(
-                goal, _WINDOW, days, str(days), f"The outcome looks {days} days after the snapshot"
-            ),
+            effect=_effect(goal, _WINDOW, days, str(days), goal.title(_WINDOW, days)),
             says=f"The outcome is read from the {days} days after the snapshot.",
         )
         for days in window.allowed
     )
     safe = AskOption(
         label=DONT_KNOW,
-        effect=_effect(
-            goal,
-            _WINDOW,
-            window.default,
-            "dont_know",
-            f"The outcome looks {window.default} days after the snapshot",
-        ),
+        effect=_effect(goal, _WINDOW, window.default, "dont_know", goal.title(_WINDOW, window.default)),
         safe=True,
         says=f"Takes {window.default} days.",
     )
@@ -255,7 +256,7 @@ def _audience_question(goal: GoalSettings, facts: BuildableOutcome) -> Ask | Non
     options = tuple(
         AskOption(
             label=_audience_label(option, counted[option.id], goal.entity),
-            effect=_effect(goal, _AUDIENCE, option.id, option.id, option.phrase(_plural(goal.entity))),
+            effect=_effect(goal, _AUDIENCE, option.id, option.id, goal.title(_AUDIENCE, option.id)),
             says=option.description,
         )
         for option in audience.options
@@ -272,7 +273,7 @@ def _audience_question(goal: GoalSettings, facts: BuildableOutcome) -> Ask | Non
     safe = AskOption(
         label=DONT_KNOW,
         effect=(
-            _effect(goal, _AUDIENCE, fallback, "dont_know", chosen.phrase(_plural(goal.entity)))
+            _effect(goal, _AUDIENCE, fallback, "dont_know", goal.title(_AUDIENCE, fallback))
             if fallback is not None and chosen is not None
             else OptionEffect(option_id="dont_know")
         ),

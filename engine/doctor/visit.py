@@ -1042,6 +1042,10 @@ def _author(run: _Run, case: Case) -> _Step:
         rounds = _default_rounds(run, case, brief, step, ctx, found)
         step.visit["done"] = {**visit.done, "treat": inputs}
     base = apply_round(case, rounds)
+    if (
+        "diagnosis" in step.updates
+    ):  # what the goal check just found: the AI reads it in this round, not the next
+        base = replace(base, case=base.case.model_copy(update={"diagnosis": step.updates["diagnosis"]}))
     message = case.chat[-1] if case.chat and case.chat[-1].role == "user" else None
     owing = owed(base.case, brief, deps.config_root)
     final = base
@@ -1293,7 +1297,7 @@ def _ai_turn(
     if result.model_calls and not didnt_happen:
         step.visit["done"] = {
             **step.visit.get("done", (case.visit or CaseVisit()).done),
-            **served(done.case, owing, deps.config_root, brief),
+            **served(owing),
         }
     return done
 

@@ -739,6 +739,11 @@ def evaluate(
                     found.append(
                         f"changes titled '{r['title_has']}' are {[i.get('state') for i in hit]}, expected {r['state']}"
                     )
+                if r.get("undecided") and any(i.get("decided_by") for i in hit):
+                    found.append(
+                        f"changes titled '{r['title_has']}' are decided by {[i.get('decided_by') for i in hit]}, "
+                        "expected nobody yet: the author's proposal waits for the person's yes"
+                    )
         elif key == "swap_pending_for":
             # The person's change stands until they say yes to its replacement (or its withdrawal).
             for r in rule:

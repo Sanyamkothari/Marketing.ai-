@@ -355,7 +355,15 @@ def _row(found: Finding) -> dict[str, Any]:
         "kind": "readiness" if found.source == "readiness" else "guard",
         "key": found.key,
         "text": " ".join(
-            filter(None, [found.text, found.detail, "(confirmed by a person)" if found.acknowledged else ""])
+            filter(
+                None,
+                [
+                    found.text,
+                    found.detail,
+                    "(counted on a sample of the file)" if found.scope == "sample" else "",
+                    "(confirmed by a person)" if found.acknowledged else "",
+                ],
+            )
         ),
         "acknowledged": found.acknowledged,
         "item_id": found.item_id,

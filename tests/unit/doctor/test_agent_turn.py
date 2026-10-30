@@ -224,6 +224,34 @@ def test_withdraw_takes_out_what_waits_at_once_and_asks_for_a_yes_for_the_rest(
         assert ask.payload["consequence"] == "The test accounts stay."
 
 
+def test_an_action_that_carries_the_reply_ends_the_turn_without_another_call(
+    storage: LocalStorage, world: World
+) -> None:
+    talk = Talk(storage, world, None)
+    case, first = _applied_filter(talk, world)
+    (mine,) = [i for i in first.case.items if i.source is ProposalSource.AI]
+    case = _with(case, items=(*case.items, mine))
+    client = ChatScript(
+        {
+            "take it out": [
+                {
+                    "action": "withdraw",
+                    "args": {
+                        "item": handle_of("c", mine.item_id),
+                        "reason": "You asked.",
+                        "consequence": "The test accounts stay.",
+                    },
+                    "reply": "I proposed taking it out; it waits for your yes.",
+                },
+            ]
+        }
+    )
+    done = _turn(case, world, client).run("take it out")
+    assert len(client.seen) == 1, "one call: the action and the words for the person"
+    assert done.reply == "I proposed taking it out; it waits for your yes." and done.finished
+    assert done.withdrawn == (mine.item_id,)
+
+
 def test_a_refusal_goes_back_to_the_model_with_what_to_do_and_a_second_try_works(
     storage: LocalStorage, world: World
 ) -> None:

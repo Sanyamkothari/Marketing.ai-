@@ -15,8 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import JsonValue
 
-from engine.agent.config import AgentConfig, AgentLevel
-from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind
+from engine.agent.contracts import ProposalState, RecipeStep
 from engine.agent.recipe import STEP_PHASE
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.doctor.case import CaseFile, CaseItem
@@ -32,7 +31,6 @@ if TYPE_CHECKING:
 __all__ = [
     "acknowledged_codes",
     "check_plan",
-    "guard_levels",
     "item_sentence_now",
     "ledger_view",
     "open_stops",
@@ -76,14 +74,6 @@ def recipe_steps_of(
     return [
         (step.model_copy(update={"order": n}), item_id) for n, (step, item_id) in enumerate(found, start=1)
     ]
-
-
-def guard_levels(steps: Sequence[RecipeStep]) -> tuple[AgentLevel, ...]:
-    """The levels a plan's steps may run at: the default ones, and reshaping when a step is a query."""
-    levels = tuple(AgentConfig().levels)
-    if any(s.kind is RecipeStepKind.SQL_QUERY for s in steps) and AgentLevel.RESHAPE not in levels:
-        levels = (*levels, AgentLevel.RESHAPE)
-    return levels
 
 
 def item_sentence_now(item: CaseItem, check: PlanCheck | None) -> str:

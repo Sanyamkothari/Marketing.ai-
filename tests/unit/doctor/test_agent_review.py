@@ -710,8 +710,8 @@ def test_a_brief_of_another_goal_is_refused_as_unknown_and_the_mode_is_the_visit
     assert review.turn.looks[-1].result["mode"] == "train", "the model cannot change the visit's mode"
 
 
-def _named(tools: list[dict[str, str]]) -> list[str]:
-    return [t["name"] for t in tools]
+def _named(tools: list[str]) -> list[str]:
+    return [t.split("(")[0].strip("`") for t in tools]
 
 
 @pytest.mark.parametrize("with_goal", [False, True])

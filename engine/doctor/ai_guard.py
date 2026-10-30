@@ -16,7 +16,7 @@ masked look at every file of the case.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from engine.ai_consent import AiConsent, AiConsentStore, consent_key
@@ -119,6 +119,17 @@ class AiGuard(Meter):
         super()._check_budget()
 
 
+def _column_overview(column: Mapping[str, Any]) -> dict[str, Any]:
+    """A column's name and type, and what is worth saying of it: blanks, an ID look, personal data. What is the
+    common case (no blanks, not an ID, no personal data) is left out, so a wide file's overview stays short.
+    """
+    return {
+        key: column[key]
+        for key in _OVERVIEW_COLUMN_KEYS
+        if key in ("name", "type") or column[key]  # 0.0, False and [] say nothing
+    }
+
+
 def file_overviews(
     contexts: Sequence[AgentContext], labels: Sequence[str] | None = None
 ) -> list[tuple[dict[str, Any], SentItem]]:
@@ -153,7 +164,7 @@ def file_overviews(
         )
         short = {
             **{key: profile[key] for key in ("file_name", "rows", "columns_total", "primary_key_candidates")},
-            "columns": [{key: c[key] for key in _OVERVIEW_COLUMN_KEYS} for c in profile["columns"]],
+            "columns": [_column_overview(c) for c in profile["columns"]],
         }
         names = {column: gate.label(column) for column in columns}
         overview = for_prompt(gate.prepare(short), names)

@@ -5,7 +5,9 @@ they wrote, recorded once from them in `tests/fixtures/doctor_facts_golden.json`
 harness (`scripts/doctor_scenario_data.py`), with no goal and with the goal chosen before any rule has run, the item
 ids, the question ids with their codes, recommendations and options, and the doubts. Keep the id formulas byte for
 byte: a stored case re-proposes everything when one changes. The one replaced question is the audience's:
-`BUILD_AUDIENCE` is now the goal's setting question (`GOAL_SETTING`, `engine.doctor.goal_settings`).
+`BUILD_AUDIENCE` is now the goal's setting question (`GOAL_SETTING`, `engine.doctor.goal_settings`). The other
+difference is on purpose: a column with fractions (a bank balance) is a measurement, not an ID, so the file with no ID
+column (`bank_marketing`) has no key in the golden any more, where the rules proposed `balance`.
 """
 
 from __future__ import annotations

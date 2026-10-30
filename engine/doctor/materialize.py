@@ -843,7 +843,8 @@ def _guarded(
     approved: Mapping[int, int] | None = None,
 ) -> GuardedRun:
     """One file's steps under the guards, with the tables the plan has made so far."""
-    from engine.doctor.plan_check import guard_levels
+    from engine.agent.config import AgentConfig
+    from engine.doctor.reshape_guard import doctor_levels
 
     return run_guarded(
         frame,
@@ -853,7 +854,9 @@ def _guarded(
         tables=tables,
         upload_id=loaded.upload_id,
         source_name=loaded.file_name or None,
-        levels=guard_levels(steps),
+        levels=doctor_levels(
+            AgentConfig().levels
+        ),  # what the Doctor offers is what it runs: reshaping for every goal
         max_failure_pct=max_failure_pct,
         twice=twice,
         as_of=as_of,

@@ -39,7 +39,7 @@ from api.access_policy import RoutePolicy
 from engine.access.roles import Role
 from engine.agent.contracts import AgentConfidence, ProposalState, RecipeStepKind
 from engine.agent.formats import to_datetime_mixed
-from engine.config import ProblemType, StrictBase, UseCaseConfig
+from engine.config import ColumnType, ProblemType, StrictBase, UseCaseConfig
 from engine.content_cache import ContentCache, frame_digest
 from engine.doctor.author import (
     AskPerson,
@@ -682,6 +682,7 @@ def key_facts(run: FactRun, case: Case, diagnosis: Mapping[str, Any] | None = No
             continue
         result = run.call("find_file_role", {"upload_id": upload_id}, ctx)
         found.evidence.append(result)
+        fractions = {c.name for c in loaded.profile.columns if c.inferred_type is ColumnType.FLOAT}
         unique = id_named(
             [
                 key
@@ -689,6 +690,8 @@ def key_facts(run: FactRun, case: Case, diagnosis: Mapping[str, Any] | None = No
                 if isinstance(key, dict)
                 and float(key.get("rows_per_key") or 99.0) <= UNIQUE
                 and float(key.get("null_rate") or 0.0) < 0.05
+                and key.get("column")
+                not in fractions  # a measurement with fractions names no row, however unique
             ]
         )
         name = loaded.file_name or "this file"

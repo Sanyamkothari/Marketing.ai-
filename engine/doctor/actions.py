@@ -31,12 +31,14 @@ from engine.doctor.guards import Expectations
 __all__ = [
     "ACTIONS",
     "ALIASES",
+    "ENDS_TURN",
     "ActionSpec",
     "action_lines",
     "action_names",
     "argument_names",
     "prompt_variables",
     "step_kind_lines",
+    "tool_line",
 ]
 
 
@@ -44,7 +46,9 @@ class _Args(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-_REPLACES: Final[str] = "id of the change this replaces"
+TOOL_HEAD_CHARS: Final[int] = 25
+"""A tool's line in the prompt is its first sentence, cut where it begins to list what the tool returns (at a colon
+or a parenthesis) when at least this many characters come before."""
 
 
 class ProposeStepArgs(_Args):
@@ -53,16 +57,14 @@ class ProposeStepArgs(_Args):
     params: dict[str, Any] = Field(default_factory=dict, description="below")
     reason: str = Field(description="cite a rule id (R4) when one asks")
     evidence_ids: list[str] = Field(default_factory=list)
-    replaces: str | None = Field(default=None, description=_REPLACES)
+    replaces: str | None = Field(default=None)
 
 
 class ProposeSqlArgs(_Args):
     description: str = Field(description="what the query does, in plain words")
     sql: str = Field(description="one SELECT over `t_<file name>`; `$as_of` is the date")
     output_name: str = Field()
-    files: list[str] = Field(
-        default_factory=list, description="the tables it reads: F1.., or a query's table (T1..)"
-    )
+    files: list[str] = Field(default_factory=list, description="the tables it reads: F1.. or T1..")
     expect: Expectations | None = Field(default=None)
     as_of: str | None = Field(default=None, description="YYYY-MM-DD the person said")
     as_of_rule: Literal["latest_date_in_file", "last_complete_month_end"] | None = Field(
@@ -76,9 +78,9 @@ class ProposeSqlArgs(_Args):
     )
     outcome_window_days: int | None = Field(
         default=None,
-        description="days the outcome looks past `$as_of`; the data must run that far",
+        description="days the outcome looks past `$as_of`",
     )
-    replaces: str | None = Field(default=None, description=_REPLACES)
+    replaces: str | None = Field(default=None)
 
 
 class ProposeFeaturesArgs(_Args):
@@ -99,7 +101,7 @@ class ProposeFeaturesArgs(_Args):
     output_name: str | None = Field(default=None)
     as_of: str | None = Field(default=None)
     as_of_rule: Literal["latest_date_in_file", "last_complete_month_end"] | None = Field(default=None)
-    replaces: str | None = Field(default=None, description=_REPLACES)
+    replaces: str | None = Field(default=None)
 
 
 class ProposeCombineRowsArgs(_Args):
@@ -113,7 +115,7 @@ class ProposeCombineRowsArgs(_Args):
     columns: list[dict[str, Any]] = Field(
         default_factory=list, description="edits: column, functions, reason"
     )
-    replaces: str | None = Field(default=None, description=_REPLACES)
+    replaces: str | None = Field(default=None)
 
 
 class ProposeUnpivotArgs(_Args):
@@ -139,7 +141,7 @@ class ProposeAmountOutcomeArgs(_Args):
         default=None, description="only when the case has no as-of date and the person agreed"
     )
     reason: str = Field()
-    replaces: str | None = Field(default=None, description=_REPLACES)
+    replaces: str | None = Field(default=None)
 
 
 class ProposeTestColumnArgs(_Args):
@@ -149,7 +151,7 @@ class ProposeTestColumnArgs(_Args):
     column: str = Field()
     control: str = Field(description="the control group's level id, such as L2")
     reason: str = Field()
-    replaces: str | None = Field(default=None, description=_REPLACES)
+    replaces: str | None = Field(default=None)
 
 
 class ProposeGoalArgs(_Args):
@@ -235,7 +237,7 @@ class RequestDataArgs(_Args):
 
 class CombineArgs(_Args):
     files: list[str] = Field(description="two or more, such as F1, F2")
-    replaces: str | None = Field(default=None, description=_REPLACES)
+    replaces: str | None = Field(default=None)
 
 
 class WithdrawArgs(_Args):
@@ -341,6 +343,16 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
         top_level=("text",),
     ),
 )
+ENDS_TURN: Final[tuple[str, ...]] = (
+    "ask",
+    "express_doubt",
+    "propose_goal",
+    "propose_setting",
+    "suggest_answer",
+    "withdraw",
+)
+"""Actions whose result the model need not read before it speaks: they may carry `reply`, the words for the person,
+and an accepted one ends the turn there (no call only to say what was done)."""
 ALIASES: Final[dict[str, str]] = {"ask_question": "ask", "finish": "reply"}
 """Names a stored turn or an older prompt used: the review's `ask_question` is `ask`, its `finish` is `reply`."""
 
@@ -422,6 +434,31 @@ def action_lines(
     return lines
 
 
+def _json_type(prop: Mapping[str, Any]) -> str:
+    """The kind of an argument in a tool's JSON schema, as the action lines say it; plain text is left unsaid."""
+    options = [o for o in prop.get("anyOf", [prop]) if o.get("type") != "null"]
+    kind = str(options[0].get("type", "string")) if options else "string"
+    if kind == "array":
+        return "[" + _json_type(options[0].get("items", {})) + "]"
+    return {"string": "text", "integer": "int", "boolean": "true|false", "object": "{...}"}.get(kind, kind)
+
+
+def tool_line(name: str, description: str, schema: Mapping[str, Any]) -> str:
+    """One look tool for the prompt: its name, its arguments (`?` marks an optional one, a kind is given for what is
+    not text) and the first sentence of what it does. A wrong argument is refused naming the field and the problem,
+    and the tool's whole description is not sent every turn: this is what keeps the prompt short."""
+    required = set(schema.get("required", ()))
+    shown = []
+    for key, prop in schema.get("properties", {}).items():
+        kind = _json_type(prop)
+        shown.append(key + ("" if key in required else "?") + ("" if kind == "text" else f":{kind}"))
+    first = description.split(". ")[0]
+    cuts = [at for mark in (": ", " (") if (at := first.find(mark)) >= TOOL_HEAD_CHARS]
+    if cuts:  # what it looks at; the detail it returns is not needed to choose it
+        first = first[: min(cuts)]
+    return f"`{name}({', '.join(shown)})`: {first.rstrip('.')}."
+
+
 def step_kind_lines() -> list[str]:
     """The step kinds the turn may propose, each with the parameters it takes; `remove_rows` also its operators."""
     lines = []
@@ -441,7 +478,8 @@ def prompt_variables(
     config_root: Any = None,
     lessons: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """The generated variables of the Doctor prompt: `actions`, `step_kinds`, `doctor_limits` and `guide_index`.
+    """The generated variables of the Doctor prompt: `actions`, `inline_reply`, `step_kinds`, `doctor_limits` and
+    `guide_index`.
 
     `lessons` (the owner-approved lessons, `engine.doctor.lessons.approved_lessons`) follow the guide index, so an
     approved lesson reaches every prompt whether or not the AI reads the `lessons` guide.
@@ -452,8 +490,12 @@ def prompt_variables(
 
     index = index_text(config_root)
     learned = lessons_text(lessons)
+    offered = [
+        n for n in ENDS_TURN if callable_ is None or callable_(next(a for a in ACTIONS if a.name == n))
+    ]
     return {
         "actions": action_lines(callable_=callable_, numbers=prompt_limits(config)),
+        "inline_reply": ", ".join(f"`{n}`" for n in offered),
         "step_kinds": step_kind_lines(),
         "doctor_limits": prompt_limits(config),
         "guide_index": f"{index}\n\n{learned}" if learned else index,

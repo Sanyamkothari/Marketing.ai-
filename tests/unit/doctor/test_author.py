@@ -675,6 +675,9 @@ class Window:
     def allowed(self, setting: str) -> list[int]:
         return [30, 60, 90] if setting == "window_days" else []
 
+    def title(self, setting: str, value: str | int) -> str:
+        return f"The outcome looks {value} days after the snapshot"
+
 
 def setting(value: str, setting: str = "window_days") -> SetSetting:
     return SetSetting(goal_id="g", setting=setting, value=value, reason="the person asked")
@@ -719,6 +722,40 @@ def test_a_setting_said_again_is_one_item_whatever_the_reason() -> None:
     once = apply_actions(make_case(goal="g"), [setting("60")], ai(goal=Window())).case
     twice = apply_actions(once, [setting("60").model_copy(update={"reason": "again"})], ai(goal=Window()))
     assert twice.case == once
+
+
+def test_a_query_that_takes_the_place_of_the_goals_build_is_the_goals_build() -> None:
+    """The training table with a filter in it (UK only) is the build: it keeps what the build declared, so the goal's
+    outcome stays decided, and it still needs the person's own yes."""
+    built = {"outcome_column": "reactivated", "window_days": 60}
+    old = stored("sql_query", "training", state=ProposalState.ACCEPTED, source=ProposalSource.RULES)
+    old = old.model_copy(
+        update={"payload": {**old.payload, "buildable": built, "needs_yes": True}, "goal_id": "g"}
+    )
+    mine = Create(
+        draft=ItemDraft(
+            kind="recipe_step",
+            payload=step("sql_query", "training_uk", sql="select 1"),
+            title="Training table, UK only",
+            upload_id=FILE,
+            confidence=AgentConfidence.CHECK,
+        ),
+        reason="You asked for the United Kingdom only.",
+        replaces=old.item_id,
+        basis="msg:1",
+    )
+    out = apply_actions(make_case([old], goal="g"), [mine], ai())
+    [new] = made_by(out.case, old)
+    assert new.goal_id == "g" and new.payload["buildable"] == built and new.payload["needs_yes"] is True
+    assert (
+        new.state is ProposalState.PENDING and new.replaces == old.item_id
+    ), "the person says yes to the swap"
+    plain = apply_actions(
+        make_case([in_plan()], goal="g"), [create("parse_date", "d", replaces=in_plan().item_id)], ai()
+    )
+    assert all(
+        "buildable" not in i.payload for i in plain.case.items
+    ), "only a build passes its declaration on"
 
 
 # -- the guard layer's hook ---------------------------------------------------------------------------------------

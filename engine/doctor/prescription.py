@@ -609,16 +609,17 @@ def _recipe(
     acknowledged_stops: tuple[str, ...] | None = None,
 ) -> DataRecipe | None:
     from engine.agent.advisor import ordered_steps
-    from engine.agent.config import AgentConfig, AgentLevel
+    from engine.agent.config import AgentConfig
+    from engine.doctor.reshape_guard import doctor_levels
 
     ordered = ordered_steps(_unique_steps(steps))
     if not ordered:
         return None
     hash_ = recipe_hash(ordered)
     agent = AgentConfig() if config is None else config.agent
-    levels = tuple(agent.levels)
-    if any(s.kind is RecipeStepKind.SQL_QUERY for s in ordered) and AgentLevel.RESHAPE not in levels:
-        levels = (*levels, AgentLevel.RESHAPE)  # a query makes a new table: the reshape level
+    levels = doctor_levels(
+        tuple(agent.levels)
+    )  # what the Doctor offers is what it runs: reshaping for every goal
     return DataRecipe(
         recipe_id=f"rc-{hashlib.sha256(hash_.encode()).hexdigest()[:16]}",
         use_case_id=use_case_id,

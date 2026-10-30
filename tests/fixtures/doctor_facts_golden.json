@@ -4,11 +4,6 @@
    "doubts": [],
    "items": [
     [
-     "key.base.0d995cb1d410",
-     "key",
-     "sure"
-    ],
-    [
      "outcome_column.bank-term-deposit.c78689f459b2",
      "outcome_column",
      "sure"
@@ -18,13 +13,7 @@
   },
   "no_goal": {
    "doubts": [],
-   "items": [
-    [
-     "key.base.0d995cb1d410",
-     "key",
-     "sure"
-    ]
-   ],
+   "items": [],
    "questions": []
   }
  },

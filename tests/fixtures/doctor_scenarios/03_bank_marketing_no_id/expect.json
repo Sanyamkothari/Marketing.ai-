@@ -18,7 +18,7 @@
       "open_blocking": [],
       "item_state": [
         {
-          "title_has": "\u201cy\u201d in bank_marketing.csv is the outcome",
+          "title_has": "“y” in bank_marketing.csv is the outcome",
           "state": [
             "pending",
             "accepted"
@@ -57,8 +57,5 @@
     ],
     "verdict": "ready"
   },
-  "xfail": {
-    "first_look#no_invented_key": "AI-first Stage 1: the key fact tool reports that no column names the rows and the author asks, instead of the rules proposing a measurement ('balance') as the ID.",
-    "approved#no_invented_key": "AI-first Stage 1: the key fact tool reports that no column names the rows and the author asks, instead of the rules proposing a measurement ('balance') as the ID."
-  }
+  "xfail": {}
 }

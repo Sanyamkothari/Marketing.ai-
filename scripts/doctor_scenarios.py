@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -18,10 +19,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
+from unittest import mock
 
 import pandas as pd
 from fastapi.testclient import TestClient
 
+import api.routes.case_combine as case_combine
+import api.routes.uploads as upload_routes
 import engine.ai_service as ai_service
 from api.main import create_app
 from engine.llm import APPROX_CHARS_PER_TOKEN, FakeLLMClient, FakeLLMMode, LLMCall, LLMCompletion
@@ -338,6 +342,7 @@ class _Person:
             self.notes.append(f"the app refused the person's decision on {match}: {res.text[:200]}")
             return
         self.case = res.json()
+        self._wait_for_full_check()  # the screen's poll does: the person reads the count of the whole file
 
     def chat(self, action: dict[str, Any]) -> None:
         res = self.client.post(
@@ -441,6 +446,17 @@ def run_scenario(
     os.environ["MARKETING_AI_ALLOW_FAKE_AI"] = "true" if with_ai else "false"
     old_build_client = ai_service.build_client
     ai_service.build_client = lambda *_args, **_kwargs: replay_client  # type: ignore[assignment]
+    # An upload's id is part of the id of every change made from it, and so of the name the AI reads for it: with
+    # the ids drawn at random a recorded reply that names a change would not replay. A counter makes them the same
+    # in every run of the scenario.
+    drawn = iter(range(1, 10_000))
+
+    def next_upload_id() -> str:
+        return "u_" + hashlib.sha256(f"{name}:{next(drawn)}".encode()).hexdigest()[:12]
+
+    patches = contextlib.ExitStack()
+    for module in (upload_routes, case_combine):
+        patches.enter_context(mock.patch.object(module, "new_upload_id", next_upload_id))
 
     invariants: dict[str, list[str]] = {n: [] for n in INVARIANTS}
     steps: dict[str, _Step] = {}
@@ -499,6 +515,7 @@ def run_scenario(
             with contextlib.suppress(Exception):
                 jobs_runner.shutdown(wait=True)
         ai_service.build_client = old_build_client
+        patches.close()
         if old_fake_env is None:
             os.environ.pop("MARKETING_AI_ALLOW_FAKE_AI", None)
         else:

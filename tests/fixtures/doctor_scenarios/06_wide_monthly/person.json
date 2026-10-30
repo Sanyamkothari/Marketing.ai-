@@ -19,7 +19,14 @@
   {
     "action": "answer",
     "match": "unpivot",
-    "option": "recommended",
+    "option": "another year",
+    "name": "unpivot_year",
+    "value": "2023"
+  },
+  {
+    "action": "answer",
+    "match": "names the customer",
+    "option": "customer_id",
     "name": "unpivot"
   },
   {

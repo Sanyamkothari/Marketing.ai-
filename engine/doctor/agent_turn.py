@@ -89,7 +89,7 @@ from engine.agent.loop import (
 )
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import clean_text, for_prompt
-from engine.doctor.actions import ALIASES, prompt_variables
+from engine.doctor.actions import ALIASES, ENDS_TURN, ActionSpec, prompt_variables, tool_line
 from engine.doctor.agent_apply import Roles, person_owns, roles_of, twin_of, waits_because
 from engine.doctor.author import (
     ApplyContext,
@@ -107,7 +107,7 @@ from engine.doctor.author import (
     owed_words,
 )
 from engine.doctor.build_facts import build_facts, decided_numbers, goal_line, to_do_now
-from engine.doctor.case import Case, CaseDoubt, CaseItem, payload_digest
+from engine.doctor.case import Case, CaseDoubt, CaseItem, VisitState, payload_digest
 from engine.doctor.decisions import decisions
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL
 from engine.doctor.guards import ExpectationBook, Expectations, Finding
@@ -255,6 +255,8 @@ _SHOWN: Final = {
 }
 _BY: Final = {"rules": "default", "ai": "you", "person": "person"}
 _ACTION: Final[TypeAdapter[AuthorAction]] = TypeAdapter(AuthorAction)
+_COUNTED_ABOVE: Final = frozenset({"STEP_LOSES_CUSTOMERS", "STEP_COMBINES_ROWS"})
+"""Findings that only repeat the receipt's counts (customers lost, rows combined): not shown beside them."""
 
 
 def handle_of(prefix: str, ident: str, width: int = HANDLE_CHARS) -> str:
@@ -652,6 +654,12 @@ class DoctorTurn:
         self.turn = _Turn()
         self.turn.sent.extend(sent for _overview, sent in overviews)
         self.overviews = [overview for overview, _sent in overviews]
+        for loaded, overview in zip(self.files, self.overviews, strict=False):
+            if (
+                overview["rows"] != loaded.profile.row_count
+            ):  # F1 is the file as the plan leaves it: say both counts
+                overview["rows_after_the_plan"] = overview["rows"]
+                overview["rows"] = loaded.profile.row_count
         for built, overview in zip(self.built, self.overviews[self.nfiles :], strict=False):
             gate = self.gates[self.nfiles + self.built.index(built)]
             overview["built_by_your_query"] = True
@@ -889,12 +897,10 @@ class DoctorTurn:
                 {
                     "id": o.option_id,
                     "label": self._text(q.upload_id, clean_text(o.label, self.limits.turn.short_chars)),
-                    # What choosing it adds, when it adds a step: two choices that read alike (the same minutes)
-                    # are told apart by it. An answer that only records itself says nothing more.
-                    **(
-                        {"adds": self._text(q.upload_id, clean_text(o.effect, self.limits.turn.short_chars))}
+                    "_adds": (
+                        self._text(q.upload_id, clean_text(o.effect, self.limits.turn.short_chars))
                         if o.effect and o.effect_digest is not None
-                        else {}
+                        else ""
                     ),
                 }
                 for o in q.options
@@ -902,11 +908,31 @@ class DoctorTurn:
             chosen = next((o["label"] for o in options if o["id"] == q.answer), None)
             if chosen is not None and q.answer_value is not None:
                 chosen = f"{chosen}: {self._text(q.upload_id, clean_text(q.answer_value, self.limits.turn.short_chars))}"
+            labels = [o["label"] for o in options]
             asked.append(
                 {
                     "id": self._name("q", q.question_id),
                     "text": self._text(q.upload_id, clean_text(q.text, self.limits.turn.short_chars)),
-                    "options": options,
+                    # An answered question is its answer. What choosing an option adds is said only where two
+                    # options read alike (the same label) and it tells them apart.
+                    **(
+                        {}
+                        if q.answer is not None
+                        else {
+                            "options": [
+                                {
+                                    "id": o["id"],
+                                    "label": o["label"],
+                                    **(
+                                        {"adds": o["_adds"]}
+                                        if o["_adds"] and labels.count(o["label"]) > 1
+                                        else {}
+                                    ),
+                                }
+                                for o in options
+                            ]
+                        }
+                    ),
                     "answer": chosen,
                 }
             )
@@ -944,7 +970,7 @@ class DoctorTurn:
             if any(item.item_id in a.item_ids for a in self.case.approvals)
             else ("person" if item.decided_by not in (None, AGENT) else "none")
         )
-        return {
+        row: dict[str, Any] = {
             "id": self._name("c", item.item_id),
             "what": self._text(item.upload_id, clean_text(item.title, TITLE_CHARS)),
             "kind": str(step.get("kind")) if isinstance(step, dict) else item.kind,
@@ -952,6 +978,11 @@ class DoctorTurn:
             "state": _SHOWN[item.state],
             "by": _BY[item.source.value],
             "decided_by": decided,
+        }
+        if item.state is ProposalState.REJECTED:  # a change that is out says what it was, not what it counted
+            return row
+        return {
+            **row,
             **({"replaces": self._name("c", item.replaces)} if item.replaces else {}),
             **({"tried_on_first_rows": tried} if isinstance(tried, dict) else {}),
             **({"receipt": view} if (view := self._receipt_view(item)) is not None else {}),
@@ -1029,6 +1060,8 @@ class DoctorTurn:
                 customers_lost=receipt.get("keys_lost"),
                 customers_repeated=receipt.get("keys_repeated"),
             )
+            if receipt.get("rows_no_key_in"):
+                view["rows_without_customer_id"] = receipt.get("rows_no_key_in")
         sampled = bool(item.payload.get("sampled")) or "sentence_estimate" in item.payload
         whole = self._whole_file_step(item)
         if whole is not None:  # the plan check counted every row: those are the numbers
@@ -1060,7 +1093,9 @@ class DoctorTurn:
                 "says": self._text(item.upload_id, clean_text(str(f.get("message", "")), 240)),
             }
             for f in (findings if isinstance(findings, list) else [])
-            if isinstance(f, dict) and f.get("level") in {"stop", "flag"}
+            if isinstance(f, dict)
+            and f.get("level") in {"stop", "flag"}
+            and f.get("code") not in _COUNTED_ABOVE  # said by the counts above
         ]
         if found:
             view["findings"] = found[:4]
@@ -1199,22 +1234,33 @@ class DoctorTurn:
         )
 
     # -- the loop ----------------------------------------------------------------------------------
-    def _tools(self) -> list[dict[str, str]]:
+    def _tools(self) -> list[str]:
         """Each look tool with its arguments, for the prompt; a tool is read on a file named `F1` .. `Fn`."""
         return [
-            {
-                "name": t.name,
-                "description": t.description,
-                "args": json.dumps(
-                    {
-                        "properties": t.input_model.model_json_schema().get("properties", {}),
-                        "file": "/".join(self.labels),
-                    }
-                ),
-            }
+            tool_line(t.name, t.description, t.input_model.model_json_schema())
             for t in self.registry.listed_for(self._context(0), DataToolKind.READ)
             if self._callable(t)
         ]
+
+    def _offered(self, spec: ActionSpec) -> bool:
+        """Whether the prompt lists this action now: only those that can do something, which keeps it short. Every
+        action is dispatched whether or not it is listed."""
+        from engine.doctor.visit import active_section
+
+        match spec.name:
+            case "propose_goal":
+                return _active_goal(self.case) is None
+            case "propose_setting":
+                return self.goal_settings is not None
+            case "adopt_suggestion":
+                return bool(self.suggestions)
+            case "join_files" | "stack_files":
+                return self.nfiles > 1
+            case "suggest_answer":
+                return any(q.answer is None for q in active_section(self.case)[1])
+            case "propose_lesson":
+                return self.case.state in (VisitState.HAND_OFF, VisitState.FOLLOW_UP)
+        return True
 
     def _callable(self, tool: Any) -> bool:
         """Whether `_act` dispatches this READ tool: the prompt lists exactly these, no more (a listed tool that
@@ -1284,7 +1330,12 @@ class DoctorTurn:
             return {
                 "goal": goal,
                 "tools": tools,
-                **prompt_variables(self.ctxs[0].config, config_root=self.config_root, lessons=lessons),
+                **prompt_variables(
+                    self.ctxs[0].config,
+                    callable_=self._offered,
+                    config_root=self.config_root,
+                    lessons=lessons,
+                ),
                 "questions": catalogue_lines(chat=True),
                 "event": event,
                 "conversation": history,
@@ -1311,6 +1362,10 @@ class DoctorTurn:
                     break
                 wanted = name
                 self._take(name, action)
+                if name in ENDS_TURN and isinstance(action.get("reply"), str):
+                    reply = self._reply({"text": action["reply"]}, required=answering)
+                    self.finished = True
+                    break
             except AgentToolError as exc:
                 strikes += 1
                 refusal = exc

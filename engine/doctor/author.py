@@ -186,6 +186,10 @@ class SettingsView(Protocol):
         """The values the goal's config allows for `setting`; none for an unknown setting."""
         ...
 
+    def title(self, setting: str, value: str | int) -> str:
+        """The change setting `setting` to `value` is, as the person reads it in the plan."""
+        ...
+
 
 @dataclass(frozen=True)
 class ApplyContext:
@@ -349,8 +353,23 @@ class _Run:
             (i for i in self.work.items if i.item_id == item_id and _in_section(i.goal_id, self.case)), None
         )
 
+    def _build_of(self, draft: ItemDraft, replaces: str | None) -> ItemDraft:
+        """A query that takes the place of the goal's build is the goal's build (the training table with the person's
+        change in it, a filter say): it keeps what the build declared (the outcome it makes, the counts of its
+        audience) and still needs the person's own yes, so the plan has one build and the goal's outcome stays decided.
+        """
+        old = self._find(replaces) if replaces is not None else None
+        if old is None or draft.kind != old.kind or not isinstance(old.payload.get("buildable"), dict):
+            return draft
+        carried = {k: old.payload[k] for k in ("buildable", "audience") if k in old.payload}
+        return draft.model_copy(
+            update={"payload": {**draft.payload, **carried, "needs_yes": True}, "goal_id": old.goal_id}
+        )
+
     def _create(self, action: Create) -> Refusal | None:
-        item = self._item(action.draft, action.basis, state=ProposalState.PENDING)
+        item = self._item(
+            self._build_of(action.draft, action.replaces), action.basis, state=ProposalState.PENDING
+        )
         twin = twin_of([*self.work.items, *self.emit], item)
         if twin is not None and twin.state is ProposalState.REJECTED and twin.withdrawn_because is None:
             return Refusal(
@@ -460,7 +479,7 @@ class _Run:
         draft = ItemDraft(
             kind=SETTING_KIND,
             payload={"goal_id": action.goal_id, "setting": action.setting, "value": action.value},
-            title=f"Use {action.value} for {action.setting.replace('_', ' ')}.",
+            title=self.ctx.goal.title(action.setting, action.value) if self.ctx.goal is not None else "",
             goal_id=action.goal_id,
             confidence=AgentConfidence.CHECK,
         )
@@ -731,7 +750,7 @@ class Owed:
     """Something the AI has not yet had its turn on."""
 
     reason: str
-    """`message`, `new_file`, `goal_chosen`, `setting_changed`, `build_missing` or `build_stale`."""
+    """`message`, `new_file`, `goal_chosen`, `unblocked`, `build_missing` or `build_stale`."""
     key: str
     """What it is owed for: the turn that answers it is remembered by this (`served`), so the same event is not
     owed twice."""
@@ -741,9 +760,10 @@ _SERVED: Final[str] = "author."
 
 
 def owed(case: Case, brief: GoalBrief | None, config_root: Path | None = None) -> tuple[Owed, ...]:
-    """What the AI is owed a turn on, in this order: the person's message, a new file, a goal just chosen, a setting
-    just changed, a build the goal needs and nobody has proposed, and a build the settings have outgrown. A tick or
-    an untick is none of these: they re-run the facts and the default author, and ask the AI nothing.
+    """What the AI is owed a turn on, in this order: the person's message, a new file, a goal just chosen, an answer
+    that held the plan back, a build the goal needs and nobody has proposed, and a build the settings have outgrown
+    (a setting the person just changed is re-derived by the default author; the AI is asked only when it cannot be). A tick or an untick is none of these: they re-run the facts and the default author, and
+    ask the AI nothing.
 
     The visit holds the AI back while a blocking question is open; what was owed then still is when it is answered.
     """
@@ -755,15 +775,23 @@ def owed(case: Case, brief: GoalBrief | None, config_root: Path | None = None) -
     if last is not None and last.role == "user":
         found.append(Owed("message", str(len(case.chat))))
     files = payload_digest({"files": [(f.upload_id, f.fingerprint) for f in case.files]})[:16]
-    if case.files and done.get(f"{_SERVED}new_file") != files:
-        found.append(Owed("new_file", files))
+    # A file the plan made itself (the files joined, say) comes from files the AI has had its turn on: it is not new.
+    roots = sorted({f.original_upload_id or f.upload_id for f in case.files})
+    if roots and not set(roots) <= set(str(done.get(f"{_SERVED}new_file", "")).split(",")):
+        found.append(Owed("new_file", ",".join(roots)))
     if brief is not None and done.get(f"{_SERVED}goal_chosen") != brief.brief_hash:
         found.append(Owed("goal_chosen", brief.brief_hash))
+    answered = sorted(
+        q.question_id
+        for q in case.questions
+        if q.blocking and q.answer is not None and _in_section(q.goal_id, case)
+    )
+    if answered and done.get(f"{_SERVED}unblocked") != (key := payload_digest({"answered": answered})[:16]):
+        found.append(
+            Owed("unblocked", key)
+        )  # an answer can add a step (the unpivot, a build): what it left is owed
     settings = _settings_digest(case, brief, config_root)
     if settings is not None:
-        before = done.get(f"{_SERVED}setting_changed")
-        if before is not None and before != settings:
-            found.append(Owed("setting_changed", settings))
         if build_is_owed(case) and done.get(f"{_SERVED}build_missing") != f"{files}:{settings}":
             found.append(Owed("build_missing", f"{files}:{settings}"))
         stale = _stale_build(case, settings)
@@ -779,7 +807,7 @@ _OWED_LEAD: Final[str] = (
 _OWED_WORDS: Final[dict[str, str]] = {
     "new_file": "A file arrived.",
     "goal_chosen": "The person chose the goal just now: see that the plan fits it.",
-    "setting_changed": "A setting of the goal changed: see that the plan still fits it.",
+    "unblocked": "The person answered what held the plan back: see what the answers changed and what is still missing.",
     "build_missing": "The goal needs its training table and nobody has proposed it: propose the build.",
     "build_stale": "The training table was made for other settings: propose it again.",
 }
@@ -791,16 +819,10 @@ def owed_words(owing: Sequence[Owed]) -> tuple[str, ...]:
     return (_OWED_LEAD, *reasons) if reasons else ()
 
 
-def served(
-    case: Case, owing: Sequence[Owed], config_root: Path | None = None, brief: GoalBrief | None = None
-) -> dict[str, str]:
-    """What `visit.done` remembers once the AI answered `owing`: each reason's key, and the settings the AI has seen
-    (so a later change is told apart)."""
-    kept = {f"{_SERVED}{o.reason}": o.key for o in owing if o.reason != "message"}
-    settings = _settings_digest(case, brief, config_root)
-    if kept and settings is not None:  # a message alone did not look at the settings: a change is still owed
-        kept[f"{_SERVED}setting_changed"] = settings
-    return kept
+def served(owing: Sequence[Owed]) -> dict[str, str]:
+    """What `visit.done` remembers once the AI answered `owing`: each reason's key, so the same event is not owed
+    twice."""
+    return {f"{_SERVED}{o.reason}": o.key for o in owing if o.reason != "message"}
 
 
 def _settings_digest(case: Case, brief: GoalBrief | None, config_root: Path | None) -> str | None:

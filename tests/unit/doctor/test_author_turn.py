@@ -74,7 +74,7 @@ def test_the_ai_is_not_asked_while_a_blocking_question_is_open_and_then_once_for
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
     (event,) = spy.events
-    assert [o.reason for o in event.owed] == ["new_file"] and event.message is None
+    assert [o.reason for o in event.owed] == ["new_file", "unblocked"] and event.message is None
     assert case.chat[-1].text == "Here." and case.counters.model_calls == 1
     again = visit.resume(CLIENT, case.case_id, _deps(storage, world, spy), actor=ANALYST)
     assert len(spy.events) == 1 and again.version >= case.version, "what was served is not owed again"
@@ -99,7 +99,7 @@ def test_a_message_is_answered_at_once_and_the_rest_is_owed_until_the_facts_have
         CLIENT, case.case_id, q.question_id, option(q, "customer_id"), _deps(storage, world, spy),
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
-    assert [o.reason for o in spy.events[-1].owed] == ["new_file"] and len(spy.events) == 2
+    assert [o.reason for o in spy.events[-1].owed] == ["new_file", "unblocked"] and len(spy.events) == 2
     assert spy.events[-1].message is None, "the review comes once the key is answered"
 
 

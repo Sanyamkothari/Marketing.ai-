@@ -463,6 +463,7 @@ def offer_build(
     build: it is not suggested again, and the column is asked for instead)."""
     from engine.agent.sql_step import table_alias
     from engine.config import load_use_case
+    from engine.doctor.agent_apply import person_owns
     from engine.doctor.buildable import buildable_outcome, compile_build
     from engine.doctor.materialize import table_names
     from engine.doctor.tools_sql import SqlStepProposal
@@ -471,11 +472,12 @@ def offer_build(
         config = load_use_case(brief.goal_id, run.deps.config_root)
     except Exception:  # a goal whose configuration cannot be read is asked for the column, as before
         return False
-    declined = any(
+    declined = any(  # the person's no; a build the author swapped out for a newer one is not a decline
         i.kind == "recipe_step"
         and i.goal_id == brief.goal_id
         and i.state is ProposalState.REJECTED
         and "buildable" in i.payload
+        and person_owns(case, i)
         for i in _section(case)
     )
     if declined:
