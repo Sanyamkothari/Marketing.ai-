@@ -1029,8 +1029,10 @@ A few things keep you from agreeing to something by accident, and let you take a
 - **Something is always said while it works.** While a request or the whole-file check runs, a line at the foot of
   the window says what is happening ("Applying your answer to 541,909 rows…", "Checking every row of the file (step
   2 of 4)…"). The counts of the first rows are called a first look; the whole file's count replaces them, and once it
-  is in only that is shown. The learning times are ceilings ("up to 20 minutes"): the search stops sooner when it has
-  tried what it can on a small table.
+  is in only that is shown. The learning times offered before a run are ceilings ("up to 20 minutes"): the search
+  stops sooner when it has tried what it can on a small table. Once the run is going, the time left is "about" when
+  it rests on what earlier runs of the same settings (or the size of the file) took, and the bar says "Finishing up"
+  when the run outlasts it; only a search with no such run to go by, expected to take its whole limit, is "up to".
 - **Every change left out until someone agrees is listed** beside Approve and beside the verdict. Approve never
   starts the list while one is left out; you choose to continue without it.
 - **"Ready, with notes" always shows a note** in plain words, even when the details are technical.
