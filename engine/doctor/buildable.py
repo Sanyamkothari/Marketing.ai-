@@ -400,7 +400,7 @@ def buildable_outcome(
         span = f"{start:%d %b %Y} to {end:%d %b %Y}"
         if snapshot is None:
             sentence = (
-                f"{loaded.file_name} has a row per event ({span}), but that is not longer than the {days} days "
+                f"{loaded.file_name} has one row per purchase or action ({span}), but that is not longer than the {days} days "
                 f"the outcome looks ahead, so no {noun} could be followed."
             )
         else:

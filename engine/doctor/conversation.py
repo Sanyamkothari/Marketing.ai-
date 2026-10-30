@@ -206,12 +206,17 @@ class GoalChoice(StrictBase):
     customers: int | None = None
     best: bool = False
     status: str = ""
+    fits: bool = Field(default=True, description="The data fits this goal (ready, to check, or buildable).")
 
 
 class GoalsCard(StrictBase):
     type: Literal["goals"] = "goals"
     cards: tuple[GoalChoice, ...]
-    more_count: int = Field(default=0, description="Goals that fit (ready or to check) but are not drawn.")
+    more_count: int = Field(
+        default=0,
+        description="Goals of the same kind as those drawn (the ones that fit; when none fits, the ones that come "
+        "closest) that are not drawn.",
+    )
 
 
 class FitCard(StrictBase):
@@ -318,6 +323,16 @@ class ReadyCard(StrictBase):
     type: Literal["ready"] = "ready"
     stage: Literal["approve", "start", "blocked"] = Field(
         description="approve: one click chains the yeses and Approve; start: approved, ready to start; blocked: not ready."
+    )
+    headline: str = Field(
+        default="Ready to start",
+        description="The card's title, from the same state as `ready`: it says 'Ready to start' only when approval "
+        "can go, else what is in the way (choose the goal, the goal does not fit, not ready, waiting for someone).",
+    )
+    ready: bool = Field(
+        default=True,
+        description="Approval can go (a stage that is ready to start, or an approve stage with no hold, no change "
+        "waiting for someone else's yes and no rule the data does not meet). The progress line reads it too.",
     )
     sentence: str = Field(
         default="", description="What is approved, word for word (approve), or what was approved."
@@ -549,41 +564,55 @@ def _goals(case: Case) -> GoalsCard | None:
     found = sorted(_use_cases(case), key=lambda u: _GOAL_STATUS_ORDER.get(str(u.get("status")), 9))
     if not found:
         return None
-    fitting = [u for u in found if u.get("status") in _FITTING]
-    shown = fitting[:GOALS_SHOWN]
+    # The goals that fit; when none does, the ones that come closest, each with what it still needs: the person
+    # always has a goal to choose, and the card says plainly that none fits yet.
+    listed = [u for u in found if u.get("status") in _FITTING] or found
+    shown = listed[:GOALS_SHOWN]
     cards = tuple(
         GoalChoice(
             goal_id=str(u["use_case_id"]),
             name=goal_display_name(str(u["use_case_id"]), str(u.get("name") or "")),
             why=str(u.get("why") or u.get("summary") or ""),
             customers=_n(u.get("customers")),
-            best=index == 0,
+            best=index == 0 and u.get("status") in _FITTING,
             status=str(u.get("status") or ""),
+            fits=u.get("status") in _FITTING,
         )
         for index, u in enumerate(shown)
     )
-    return GoalsCard(cards=cards, more_count=len(fitting) - len(cards))
+    return GoalsCard(cards=cards, more_count=len(listed) - len(cards))
+
+
+def goal_fit(case: Case, goal_id: str) -> tuple[bool, str] | None:
+    """Whether the data fits the chosen goal and what the diagnosis says of it (the sentence is the goal's own
+    reason); None when the diagnosis does not know the goal. The one reading the fit card, the ready card and both
+    Approve buttons share."""
+    found = next((u for u in _use_cases(case) if u.get("use_case_id") == goal_id), None)
+    if found is None:
+        return None
+    ok = found.get("status") in _FITTING
+    sentence = str(found.get("why") or found.get("summary") or "")
+    if found.get("status") == "buildable" and any(
+        i.kind == "recipe_step"
+        and i.goal_id == goal_id
+        and i.state is ProposalState.REJECTED
+        and "buildable" in i.payload
+        for i in case.items
+    ):  # the build was declined: it fits only once the column comes some other way
+        return (
+            False,
+            "You declined building the outcome from the order history, so it needs a column saying it.",
+        )
+    return ok, sentence
 
 
 def _fit(case: Case, goal_id: str, goal_name: str | None, verdict_key: str, verdict_next: str) -> FitCard:
-    found = next((u for u in _use_cases(case) if u.get("use_case_id") == goal_id), None)
-    if found is not None:
-        ok = found.get("status") in _FITTING
-        sentence = str(found.get("why") or found.get("summary") or verdict_next)
-        if found.get("status") == "buildable" and any(
-            i.kind == "recipe_step"
-            and i.goal_id == goal_id
-            and i.state is ProposalState.REJECTED
-            and "buildable" in i.payload
-            for i in case.items
-        ):  # the build was declined: it fits only once the column comes some other way
-            ok = False
-            sentence = (
-                "You declined building the outcome from the order history, so it needs a column saying it."
-            )
+    known = goal_fit(case, goal_id)
+    if known is not None:
+        ok, sentence = known
+        sentence = sentence or verdict_next
     else:
-        ok = verdict_key != "not_ready"
-        sentence = verdict_next
+        ok, sentence = verdict_key != "not_ready", verdict_next
     return FitCard(goal_id=goal_id, name=goal_display_name(goal_id, goal_name), ok=ok, sentence=sentence)
 
 
@@ -616,9 +645,17 @@ def _chosen_speed(case: Case, config_root: Path | None) -> str | None:
 
 APPROVAL_HOLDS: Final[dict[str, str]] = {
     "goal": "Choose what the campaign is for first.",
+    "fit": "Choose another goal, or add the data this one needs.",
     "questions": "Answer the questions above first.",
     "not_ready": "Fix what the last check found first.",
 }
+
+
+_HEADLINES: Final[dict[str, str]] = {
+    "goal": "Choose the goal first",
+    "fit": "This data does not fit this goal yet",
+}
+"""The ready card's title for the hold that decides it (`approval_holds`); any other hold is "Not ready yet"."""
 
 
 def approval_holds(case: Case, view: CaseScreenView) -> tuple[str, ...]:
@@ -632,6 +669,8 @@ def approval_holds(case: Case, view: CaseScreenView) -> tuple[str, ...]:
     holds: list[str] = []
     if view.goal_id is None:
         holds.append("goal")
+    elif (fit := goal_fit(case, view.goal_id)) is not None and not fit[0]:
+        holds.append("fit")  # the check that finds this would only refuse it
     if open_blocking(case):
         holds.append("questions")
     if view.verdict.key == "not_ready" and not (case.visit is not None and case.visit.stopped is not None):
@@ -691,12 +730,24 @@ def _ready(
                 )
                 for f in blocking(case)
             )
+        holds = approval_holds(case, view)
+        blocked = any(c.required and not c.can_agree for c in confirmations)
+        unmet = any(not s.acknowledgeable for s in stops)
+        headline = "Ready to start"
+        if holds:
+            headline = _HEADLINES.get(holds[0], "Not ready yet")
+        elif blocked:
+            headline = "Waiting for someone else's yes"
+        elif unmet:
+            headline = "Not ready yet"
         return ReadyCard(
             stage="approve",
+            headline=headline,
+            ready=not (holds or blocked or unmet),
             sentence=view.approval_sentence,
             stops=stops,
             confirmations=confirmations,
-            blocked=any(c.required and not c.can_agree for c in confirmations),
+            blocked=blocked,
             notes=notes,
             speeds=_speeds(config_root),
             speed=_chosen_speed(case, config_root),
@@ -712,7 +763,9 @@ def _ready(
             speed=_chosen_speed(case, config_root),
         )
     if verdict.key == "not_ready":
-        return ReadyCard(stage="blocked", sentence=verdict.next, notes=notes)
+        return ReadyCard(
+            stage="blocked", headline="Not ready yet", ready=False, sentence=verdict.next, notes=notes
+        )
     return None
 
 

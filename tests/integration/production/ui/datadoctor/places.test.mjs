@@ -41,8 +41,10 @@ if (!process.env.DDS_FIXTURES) {
   test("answer on the Data page, then choose a goal: the wizard continues on the same case", async () => {
     world.next.answers = "approve";
     $(`[data-dds-question="${keyQuestion.question_id}"] [data-dds-answer="c0"]`).click();
-    await until(() => $("[data-dds-approve-sentence]"), 3000, "the answer taken");
+    await until(() => $("[data-dds-ready]"), 3000, "the answer taken");
     assert.equal(answersTo(keyQuestion.question_id).length, 1);
+    assert.equal($("[data-dds-ready] h3").textContent.trim(), "Choose the goal first", "the one next step, not 'Ready to start'");
+    assert.match($("[data-dds-ready] [data-dds-goal-moves]").textContent, /takes you on to setting up the campaign/, "said before the click: the hand-off to the wizard");
     world.next.goal = "approve_class";
     $(`[data-dds-goal="${GOAL}"]`).click();
     await until(() => window.location.hash === `#/campaigns/new/customers/${GOAL}`, 3000, "the wizard");

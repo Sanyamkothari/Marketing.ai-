@@ -414,6 +414,8 @@ def build_review(case: Case, view: CaseScreenView) -> ApprovalReview:
         waiting.append(f"{len(unmet)} {'rule is' if len(unmet) == 1 else 'rules are'} not met.")
     if any(a.required and not a.can_agree for a in agreements):
         waiting.append("A change needs someone else's own yes.")
+    if "fit" in holds:
+        waiting.append("This data does not fit the goal yet.")
     if "not_ready" in holds:
         waiting.append("Fix what the last check found.")
     stage: Literal["approve", "start", "blocked", "waiting"]

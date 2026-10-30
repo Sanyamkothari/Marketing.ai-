@@ -710,7 +710,8 @@ def _file_checks(name: str, frame: pd.DataFrame) -> tuple[Check, ...]:
                 "DUPLICATE_ROWS",
                 "flag",
                 f"{copies:,} rows of {name} are exact copies of another row ({_pct(copies, len(frame))}). "
-                "Nothing is removed without a yes, and spend or counts would be inflated if they stay.",
+                "Ticking this keeps them as they are: nothing is removed without your yes, and spend or counts "
+                "would be inflated while they stay.",
                 None,
                 {"rows": copies, "file": name, "file_rows": len(frame)},
             )

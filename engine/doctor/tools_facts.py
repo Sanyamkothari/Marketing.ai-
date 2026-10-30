@@ -618,10 +618,29 @@ def near_key_label(key: dict[str, Any], *, events: bool) -> str:
     """One offered customer column with its facts: how often a value repeats and the share of blank rows (rows
     with a blank there cannot be tied to a person)."""
     blank = float(key.get("null_rate") or 0.0)
-    label = f"{key['column']} (a value repeats about {float(key.get('rows_per_key') or 1):.1f} times"
+    rows = max(round(float(key.get("rows_per_key") or 1)), 1)
+    label = f"{key['column']} (about {rows} {'row' if rows == 1 else 'rows'} per customer"
     if blank >= 0.005:
-        label += f"; {blank:.0%} blank" + (", those rows cannot be tied to a person" if events else "")
+        label += f"; {_blank_words(blank)} blank" + (
+            ", those rows cannot be tied to a person" if events else ""
+        )
     return label + ")"
+
+
+_SHARES: Final[tuple[tuple[float, str], ...]] = (
+    (1 / 2, "half are"),
+    (1 / 3, "a third are"),
+    (2 / 3, "two thirds are"),
+    (1 / 4, "a quarter are"),
+    (3 / 4, "three quarters are"),
+    (1 / 5, "a fifth are"),
+)
+
+
+def _blank_words(rate: float) -> str:
+    """A share in plain words: "a third are" when it is close to one, else "12% are"."""
+    near = next((words for exact, words in _SHARES if abs(rate - exact) < 0.02), None)
+    return near or f"{rate:.0%} are"
 
 
 def approved_build_key(case: Case, upload_id: str) -> str | None:

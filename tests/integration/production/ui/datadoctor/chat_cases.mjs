@@ -668,28 +668,61 @@ test("the learning times are the card's own, in one place and one set of numbers
   }
 });
 
-test("Approve waits until a goal is chosen: the card says so and the button is off", async () => {
+test("with no goal the card's headline, its progress line and Approve agree: choose the goal, no speeds, no Approve", async () => {
   const s = await show("approve");
-  assert.equal(card(s, "ready").hold, "Choose what the campaign is for first.");
-  const go = $("[data-dds-approve-start]");
-  assert.equal(go.disabled, true);
+  const ready = card(s, "ready");
+  assert.equal(ready.hold, "Choose what the campaign is for first.");
+  assert.equal(ready.headline, "Choose the goal first");
+  assert.equal($("[data-dds-ready] h3").textContent.trim(), "Choose the goal first", "not 'Ready to start'");
   assert.match($("[data-dds-approve-hold]").textContent, /Choose what the campaign is for first\./);
-  go.click();
-  await settle(2);
+  assert.ok($('[data-dds-ready="hold"] [data-dds-goals] [data-dds-goal]'), "the goals to choose from are in the card itself");
+  assert.equal($$('[data-dds-goals]').length, 1, "and drawn once");
+  assert.ok(!$("[data-dds-approve-start]"), "no Approve while it cannot go");
+  assert.ok(!$("[data-dds-speeds]"), "no learning times before approval is possible");
+  assert.equal($('[data-dds-check-item="ready"]').textContent.trim(), "Not ready to start yet");
+  assert.match($("[data-dds-next]").textContent, /Choose what the campaign is for first/, "the header says the same");
   assert.deepEqual(order(), [], "nothing is approved before there is a goal");
 });
 
-test("while the last check found something to fix, Approve is off and the card says to fix it first", async () => {
+test("while the last check found something to fix, the card says so: no Approve, no learning times", async () => {
   const patch = (a) => {
     const ready = a.view.conversation.find((c) => c.type === "ready");
-    ready.hold = "Fix what the last check found first.";
+    Object.assign(ready, { hold: "Fix what the last check found first.", headline: "Not ready yet", ready: false });
     ready.notes = ["Say which values of 'marketing_opt_in' mean yes."];
     return a;
   };
   await show("approve_class", { patch });
-  assert.equal($("[data-dds-approve-start]").disabled, true);
+  assert.equal($("[data-dds-ready] h3").textContent.trim(), "Not ready yet");
+  assert.ok(!$("[data-dds-approve-start]") && !$("[data-dds-speeds]"));
   assert.match($("[data-dds-approve-hold]").textContent, /Fix what the last check found first\./);
   assert.match($("[data-dds-ready-notes]").textContent, /Say which values/, "the reasons stay in the card");
+});
+
+test("a goal that does not fit says so as the headline, with what to do, and offers no Approve", async () => {
+  const patch = (a) => {
+    const ready = a.view.conversation.find((c) => c.type === "ready");
+    Object.assign(ready, { hold: "Choose another goal, or add the data this one needs.", headline: "This data does not fit this goal yet", ready: false });
+    return a;
+  };
+  await show("approve_class", { patch });
+  assert.equal($("[data-dds-ready] h3").textContent.trim(), "This data does not fit this goal yet");
+  assert.match($("[data-dds-approve-hold]").textContent, /Choose another goal, or add the data this one needs\./);
+  assert.ok(!$("[data-dds-approve-start]"));
+  assert.equal($('[data-dds-check-item="ready"]').textContent.trim(), "Not ready to start yet");
+});
+
+test("when no goal fits the list says so and the closest goals are there to choose, with what each still needs", async () => {
+  const patch = (a) => {
+    const goals = a.view.conversation.find((c) => c.type === "goals");
+    goals.cards = goals.cards.map((c) => ({ ...c, fits: false, best: false, why: "Needs a column that says it." }));
+    goals.more_count = 2;
+    return a;
+  };
+  await show("approve", { patch });
+  assert.match($("[data-dds-ready] [data-dds-goals]").parentElement.textContent, /None of the goals fits this data yet/);
+  assert.ok(!$("[data-dds-goal-best]"), "none is the best fit");
+  assert.match($("[data-dds-goal-row]").textContent, /Needs a column that says it\./);
+  assert.match($("[data-dds-ready]").textContent, /2 more goals need more data\./);
 });
 
 test("a change that needs its own yes is said once in the card, as agreed (an answer) or shown above with Undo; never a box", async () => {

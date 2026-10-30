@@ -130,7 +130,7 @@ export function funnelHtml(items, ledger, { level = 3 } = {}) {
   // The counts are from the trial run on the first rows; say so, so 1,000 next to a 4,000-row file is not a puzzle.
   const sample =
     finite(f.sampledFrom) && finite(f.rowsIn) && f.sampledFrom > f.rowsIn
-      ? `<p class="dds-why" data-dds-sampled>Counted on a trial of the first ${esc(count(f.rowsIn))} of ${esc(count(f.sampledFrom))} rows. Approving prepares all of them.</p>`
+      ? `<p class="dds-why" data-dds-sampled>Checked on the first ${esc(count(f.rowsIn))} of ${esc(count(f.sampledFrom))} rows; the whole file is being checked. Approving prepares all ${esc(count(f.sampledFrom))} rows.</p>`
       : "";
   const losses = f.losses.length
     ? `<div class="dds-funnel-losses" data-dds-losses><span class="dds-label">Biggest losses:</span> ${f.losses
@@ -447,7 +447,7 @@ function sectionHtml(sec, screen, ctx, level) {
   const check = needsCheck
     ? `<label class="dds-tick dds-sec-check"><input type="checkbox" data-dds-sec-ok="${sec.id}" data-dds-sec-sig="${esc(signatureOf(sec))}"${isChecked(sec, ctx.checked) ? " checked" : ""}${
         ctx.busy ? " disabled" : ""
-      }><span class="dds-item-body"><span class="dds-item-t">I have checked this section</span></span></label>`
+      }><span class="dds-item-body"><span class="dds-item-t">I have read this section</span></span></label>`
     : "";
   return `<section class="dds-card dds-plan-sec" data-dds-plan-section="${sec.id}" data-dds-open-count="${sec.open.length}" aria-labelledby="dds-ps-${sec.id}"><h${level} id="dds-ps-${sec.id}" class="dds-group-t">${esc(
     sec.title,
@@ -521,7 +521,7 @@ export function planHtml(screen, model, ctx, { level = 3 } = {}) {
   const full = { ...ctx, ledger: model.ledger };
   const approved = approvedHtml(screen, model, full);
   if (!model.plan.length && !approved) return notes;
-  return `<section class="dds-plan" data-dds-plan aria-labelledby="dds-plan-t"><h${level} id="dds-plan-t" class="dds-section-t">The plan, section by section</h${level}><p class="dds-why">Only changes that need your yes are open. Sure fixes are folded away and can still be unticked. Check each section, then give one final yes.</p>${model.plan
+  return `<section class="dds-plan" data-dds-plan aria-labelledby="dds-plan-t"><h${level} id="dds-plan-t" class="dds-section-t">The plan, section by section</h${level}><p class="dds-why">Only changes that need your yes are open. Sure fixes are folded away and can still be unticked. Read each section, then give one final yes.</p>${model.plan
     .map((s) => sectionHtml(s, screen, full, level + 1))
     .join("")}${approved}</section>${notes}`;
 }

@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import JsonValue
@@ -581,6 +581,54 @@ def test_approve_is_held_until_a_goal_is_chosen_and_while_the_last_check_found_s
     blocked = failed.view.conversation[-1]
     assert isinstance(blocked, ReadyCard) and blocked.stage == "approve"
     assert blocked.hold == "Fix what the last check found first."
+
+
+def _with_goal_status(case: Case, goal_id: str, status: str) -> Case:
+    """The diagnosis as it says `goal_id` is `status` (the others as they were)."""
+    diagnosis = dict(case.diagnosis or {})
+    found = [dict(u) for u in cast(list[dict[str, Any]], diagnosis["use_cases"])]
+    for u in found:
+        if u.get("use_case_id") == goal_id:
+            u["status"], u["why"] = status, "Only 14 days of data, and the outcome looks 90 days ahead."
+    return case.model_copy(update={"diagnosis": {**diagnosis, "use_cases": found}})
+
+
+def test_one_readiness_state_headline_progress_and_approve_agree(
+    storage: LocalStorage, world: World, tmp_path: Path
+) -> None:
+    ok = scenario("approve_class", storage, world)
+    card = ok.view.conversation[-1]
+    assert isinstance(card, ReadyCard) and card.ready and card.headline == "Ready to start" and not card.hold
+    no_goal = scenario("approve", LocalStorage(tmp_path / "none"), vs.world())
+    card = no_goal.view.conversation[-1]
+    assert isinstance(card, ReadyCard) and not card.ready and card.headline == "Choose the goal first"
+    goal = ok.view.goal_id
+    assert goal
+    doesnt_fit = screen_view(storage, _with_goal_status(ok.case, goal, "missing"), config_root=None)
+    card = doesnt_fit.conversation[-1]
+    assert isinstance(card, ReadyCard) and card.stage == "approve"
+    assert not card.ready and card.headline == "This data does not fit this goal yet"
+    assert card.hold == "Choose another goal, or add the data this one needs."
+    (fit,) = [c for c in doesnt_fit.conversation if isinstance(c, FitCard)]
+    assert not fit.ok and "14 days" in fit.sentence, "the card above says why; the hold says what to do"
+
+
+def test_when_no_goal_fits_the_closest_are_listed_with_what_they_need(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("question", storage, world)
+    diagnosis = dict(screen.case.diagnosis or {})
+    listed = [
+        {**u, "status": "missing", "why": f"Needs a column for {u['use_case_id']}."}
+        for u in cast(list[dict[str, Any]], diagnosis["use_cases"])
+    ]
+    case = screen.case.model_copy(update={"diagnosis": {**diagnosis, "use_cases": listed}})
+    (goals,) = [
+        c for c in screen_view(storage, case, config_root=None).conversation if isinstance(c, GoalsCard)
+    ]
+    assert goals.cards and not any(c.fits or c.best for c in goals.cards)
+    assert all(c.why.startswith("Needs a column") for c in goals.cards)
+    assert goals.more_count == len(listed) - len(goals.cards)
 
 
 def test_what_was_said_before_a_join_is_not_drawn_beside_the_table_it_made(

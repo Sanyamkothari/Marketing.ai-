@@ -98,4 +98,4 @@ def test_a_step_title_with_a_full_stop_does_not_double_it() -> None:
         label="Leave them out",
         effect=OptionEffect(option_id="x", kind="remove_rows", title="Use 2011-11-30 and leave them out."),
     )
-    assert _stated(option) == "Adds the step “Use 2011-11-30 and leave them out”."
+    assert _stated(option) == "Adds the step: Use 2011-11-30 and leave them out."

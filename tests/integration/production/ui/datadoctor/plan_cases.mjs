@@ -195,7 +195,7 @@ test("the plan: sections with one sentence and one count, only what needs a yes 
   assert.ok(read.querySelectorAll("details[data-dds-sure] input[data-dds-tick]").length === 2, "folded, and still untickable");
   const approve = $("[data-dds-approve-button]");
   assert.ok(approve.disabled);
-  assert.match($("[data-dds-approve-hold]").textContent, /Check each section above first: Exclusions\./);
+  assert.match($("[data-dds-approve-hold]").textContent, /Read each section above first: Exclusions\./);
 });
 
 test("the top says what to do: sections to check, then Approve, from the counts the screen has", async () => {

@@ -456,7 +456,7 @@ export function approveHtml(screen, { busy = false, level = 3, gate = null } = {
   const names = namesOf(screen.case);
   const hold = [
     unchecked.length
-      ? `Check each section above first: ${unchecked.map((s) => s.title).join(", ")}.`
+      ? `Read each section above first: ${unchecked.map((s) => s.title).join(", ")}.`
       : "",
     stops.some((f) => f.items.length) ? "A step stops the plan. Untick it, park it or fix it first." : "",
     stops.some((f) => !f.items.length) ? "A safety check stops the whole plan. It cannot be approved as it is." : "",

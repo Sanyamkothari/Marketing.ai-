@@ -109,7 +109,7 @@ function fresh() {
     startInfo: null, // { uploadId, rows } of the file the campaign starts from, for the sentence above Start
     changing: new Set(), // answered questions whose answers are shown again ("Change answer")
     read: new Set(), // changes needing their own yes whose "I have read this sentence" is ticked
-    checked: new Map(), // plan sections the person has checked ("I have checked this section") -> what they held then
+    checked: new Map(), // plan sections the person has checked ("I have read this section") -> what they held then
     knowing: new Map(), // "I don't know" panels open: "q:<question>" / "i:<item>" -> who would know (or null)
     stops: new Set(), // the chat's approval card: stops the person ticked "go on anyway" for (by key)
     confirms: new Set(), // ... and the changes they ticked "I agree" for (by item id)
@@ -400,6 +400,7 @@ function chatMainHtml(entry) {
   const conversation = conversationHtml(screen, {
     busy: s.busy,
     pending: s.pending,
+    moves: host.place === "data", // a goal chosen here moves on to the campaign wizard (`pickGoal`): the list says so first
     stops: s.stops,
     confirms: s.confirms,
     speed: s.speed,

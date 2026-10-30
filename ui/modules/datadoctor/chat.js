@@ -56,6 +56,9 @@ function goalLabel(screen) {
   return known && known !== id ? known : id.replace(/[-_]+/g, " ").replace(/^./, (c) => c.toUpperCase());
 }
 
+/** Whether the ready card says approval can go: the one word the headline, the progress line and the Approve button share. */
+export const readyOf = (card) => Boolean(card) && card.ready !== false && !card.hold && !card.blocked;
+
 /**
  * The short live checklist beside the chat: looked at / changes / questions left / goal / ready. Every number is one the
  * server counted (`first_look`: the same count of changes the approval sentence says).
@@ -67,10 +70,9 @@ export function checklistOf(screen) {
   // answer's fix is told on its question and a suggested answer waits in its reply, but each still counts once.
   const changes = first ? first.fixes_count : 0;
   const open = first ? first.questions_count : 0;
-  // The ready line is the ready card's own word (one source of truth): the card says "Ready to start" in the approve stage
-  // and the start stage alike, and nothing while a question is open or something blocks it.
-  const card = cardOf(screen, "ready");
-  const ready = Boolean(card) && (card.stage === "start" || (card.stage === "approve" && !card.blocked && !card.hold));
+  // The ready line is the ready card's own state (one source of truth): the headline, this line and the Approve button
+  // all read `ready`, which the server sets from the same holds.
+  const ready = readyOf(cardOf(screen, "ready"));
   const goal = view.goal_id ? goalLabel(screen) : "";
   return [
     { id: "looked", done: Boolean(first), text: first ? `Looked at ${plural(first.files.length, "file", "files")}` : "Looking at your data" },
@@ -320,17 +322,13 @@ function requestHtml(r, names, { busy, kitHref }) {
   );
 }
 
-function goalsHtml(g, names, busy, clicked = "") {
-  if (!g.cards.length) {
-    return agentRow(
-      `<div class="ddc-bubble" data-dds-goals>Nothing in this data fits one of the goals yet. ${button({
-        label: "See details",
-        kind: "tertiary",
-        size: "sm",
-        attrs: "data-dds-see-details",
-      })}</div>`,
-    );
-  }
+/** What the list says about itself: the goals that fit, or (none does) the ones that come closest. */
+const goalsLead = (g) =>
+  g.cards.some((c) => c.fits !== false)
+    ? "Here is what your data is good for. Pick one, or tell me what you have in mind."
+    : "None of the goals fits this data yet. These come closest: pick one to see what it still needs.";
+
+function goalsListHtml(g, names, busy, clicked, moves) {
   const items = g.cards
     .map(
       (c) =>
@@ -345,12 +343,29 @@ function goalsHtml(g, names, busy, clicked = "") {
         })}</li>`,
     )
     .join("");
+  const fits = g.cards.some((c) => c.fits !== false);
   const more = g.more_count
-    ? `<p class="dds-why">${esc(`${plural(g.more_count, "more goal fits", "more goals fit")} less well.`)} ${button({ label: "See details", kind: "tertiary", size: "sm", attrs: "data-dds-see-details" })}</p>`
+    ? `<p class="dds-why">${esc(
+        fits ? `${plural(g.more_count, "more goal fits", "more goals fit")} less well.` : `${plural(g.more_count, "more goal needs", "more goals need")} more data.`,
+      )} ${button({ label: "See details", kind: "tertiary", size: "sm", attrs: "data-dds-see-details" })}</p>`
     : "";
-  return `${agentRow(`<div class="ddc-bubble">Here is what your data is good for. Pick one, or tell me what you have in mind.</div>`)}${indented(
-    `<ul class="ddc-goals" data-dds-goals>${items}</ul>${more}`,
-  )}`;
+  // On the Data page a goal moves on to the campaign wizard (the same check, in its Customers step): said before the click.
+  const next = moves ? `<p class="dds-why" data-dds-goal-moves>Choosing a goal takes you on to setting up the campaign for it. Nothing you answered is asked again.</p>` : "";
+  return `<ul class="ddc-goals" data-dds-goals>${items}</ul>${more}${next}`;
+}
+
+function goalsHtml(g, names, busy, clicked = "", moves = false) {
+  if (!g.cards.length) {
+    return agentRow(
+      `<div class="ddc-bubble" data-dds-goals>Nothing in this data fits one of the goals yet. ${button({
+        label: "See details",
+        kind: "tertiary",
+        size: "sm",
+        attrs: "data-dds-see-details",
+      })}</div>`,
+    );
+  }
+  return `${agentRow(`<div class="ddc-bubble">${esc(goalsLead(g))}</div>`)}${indented(goalsListHtml(g, names, busy, clicked, moves))}`;
 }
 
 function fitHtml(f, names) {
@@ -421,9 +436,18 @@ export function readyHtml(r, ctx) {
       ? `<p class="dds-why" data-dds-left-out>${esc("Left out, because nobody agreed:")} ${r.left_out.map((s) => nameIn(s, names)).join("; ")}</p>`
       : "";
     return indented(
-      `<section class="ddc-ready" data-dds-ready="start"><h3 class="dds-group-t">${esc(ctx.startTitle || "Ready to start")}</h3><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p>${
+      `<section class="ddc-ready" data-dds-ready="start"><h3 class="dds-group-t">${esc(ctx.startTitle || r.headline)}</h3><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p>${
         r.sentence ? `<blockquote class="dds-sentence" data-dds-approved-sentence>${userTextIn(r.sentence, names)}</blockquote>` : ""
       }${left}${ctx.alertHtml || ""}${ctx.startHtml || ""}</section>`,
+    );
+  }
+  // Something is in the way (no goal, the goal does not fit, the last check found something): the card says what and what to
+  // do, and offers neither the learning times nor Approve - they come back when approval can go.
+  if (r.hold) {
+    return indented(
+      `<section class="ddc-ready is-blocked" data-dds-ready="hold" aria-labelledby="ddc-ready-t"><h3 class="dds-group-t" id="ddc-ready-t">${esc(
+        r.headline,
+      )}</h3><p class="dds-why" data-dds-approve-hold>${esc(r.hold)}</p>${notesHtml}${ctx.goalsHtml || ""}${ctx.alertHtml || ""}</section>`,
     );
   }
   const stops = (r.stops || [])
@@ -468,7 +492,7 @@ export function readyHtml(r, ctx) {
       )}${nameIn(c.sentence, names)}</span><span class="dds-item-sub">${esc(`Left out unless you tick it. Why it needs your yes: ${plain(c.why)}${c.separate ? ", from someone other than whoever suggested it" : ""}.`)}</span></span></label>`;
     })
     .join("");
-  const speeds = (r.speeds || []).length
+  const speeds = (r.speeds || []).length && r.ready
     ? `<div class="dds-actions" role="group" aria-label="How long to learn" data-dds-speeds>${r.speeds
         .map((sp) =>
           button({
@@ -482,13 +506,9 @@ export function readyHtml(r, ctx) {
     : "";
   const ok = approveAllowed(r, ctx);
   const label = approveLabel(ctx);
-  const hold = r.blocked
-    ? `<p class="dds-why" data-dds-approve-hold>${esc("A change in the plan needs someone else's own yes first.")}</p>`
-    : r.hold
-      ? `<p class="dds-why" data-dds-approve-hold>${esc(r.hold)}</p>`
-      : "";
+  const hold = r.blocked ? `<p class="dds-why" data-dds-approve-hold>${esc("A change in the plan needs someone else's own yes first.")}</p>` : "";
   return indented(
-    `<section class="ddc-ready" data-dds-ready="approve" aria-labelledby="ddc-ready-t"><h3 class="dds-group-t" id="ddc-ready-t">Ready to start</h3><blockquote class="dds-sentence" id="dds-approve-sentence" data-dds-approve-sentence>${esc(
+    `<section class="ddc-ready" data-dds-ready="approve" aria-labelledby="ddc-ready-t"><h3 class="dds-group-t" id="ddc-ready-t">${esc(r.headline)}</h3><blockquote class="dds-sentence" id="dds-approve-sentence" data-dds-approve-sentence>${esc(
       r.sentence,
     )}</blockquote>${notesHtml}${stops}${yes}${hold}${speeds}${ctx.approveHtml || ""}${ctx.alertHtml || ""}<div data-dds-approve-note>${leavesOutHtml(r, ctx)}</div><div class="dds-actions">${button({
       label,
@@ -528,7 +548,7 @@ export function leavesOutHtml(r, ctx) {
 
 /** Whether the one click may go: every stop is ticked, and nobody else must agree first (the own yeses are the click's). */
 export function approveAllowed(r, ctx) {
-  if (!r || r.stage !== "approve" || r.blocked || r.hold) return false;
+  if (!readyOf(r) || r.stage !== "approve") return false;
   if ((r.stops || []).some((s) => s.acknowledgeable === false || !ctx.stops.has(s.key))) return false;
   return true; // a change that needs its own yes and is in the plan is agreed by this very click
 }
@@ -611,6 +631,10 @@ export function conversationHtml(screen, ctx) {
     ...(c.questions || []).map((q) => [`question:${q.question_id}`, q.column]),
   ]);
   let index = 0;
+  // With no goal chosen the goal list is the one next step: it is drawn in the ready card (which holds Approve), not above it.
+  const ready = cardOf(screen, "ready");
+  const goals = cardOf(screen, "goals");
+  const choosing = Boolean(goals && goals.cards.length && ready && ready.stage === "approve" && !screen.view.goal_id);
   const body = cards(screen)
     .map((card) => {
       switch (card.type) {
@@ -625,13 +649,13 @@ export function conversationHtml(screen, ctx) {
         case "request":
           return requestHtml(card, names, { busy, kitHref: ctx.kitHref ? ctx.kitHref(card.goal_ids || []) : "" });
         case "goals":
-          return goalsHtml(card, names, busy, clicked);
+          return choosing ? "" : goalsHtml(card, names, busy, clicked, ctx.moves);
         case "fit":
           return fitHtml(card, names);
         case "message":
           return messageHtml(card, names, { busy, clicked, openSent: ctx.openSent || new Set(), index: (index += 1) });
         case "ready":
-          return readyHtml(card, { ...ctx, names });
+          return readyHtml(card, { ...ctx, names, goalsHtml: choosing ? `<p class="dds-why">${esc(goalsLead(goals))}</p>${goalsListHtml(goals, names, busy, clicked, ctx.moves)}` : "" });
         default:
           return ""; // a card this screen does not know yet (the server may send newer ones): left out, never broken
       }
@@ -657,9 +681,10 @@ export function headHtml(screen, { level = 2, titled = true } = {}) {
   const title = view.goal_id ? `Your data for "${goalName(view.goal_id)}"` : "Your data";
   // The click on "Approve and start" gives the own yeses itself, so the header does not send the person to look for them.
   const ready = cardOf(screen, "ready");
-  const next = view.verdict.key === "needs_approval" && ready && ready.stage === "approve" && !ready.blocked ? "Read the sentence, then click Approve and start." : view.verdict.next;
+  const waits = Boolean(ready && ready.stage === "approve" && !readyOf(ready)); // the card's own state, so the header never says "approve" while the card says it cannot
+  const next = waits ? ready.hold || ready.headline : view.verdict.key === "needs_approval" && ready && ready.stage === "approve" ? "Read the sentence, then click Approve and start." : view.verdict.next;
   const line = view.carried && view.carried.line ? `<p class="dds-why" data-dds-new-line role="status">${esc(view.carried.line)}</p>` : "";
-  return `<div class="ddc-head" data-dds-verdict="${esc(view.verdict.key)}">${titled ? `<h${level} class="dds-title">${esc(title)}</h${level}>` : ""}${statusChip("health", v.status, { word: v.word })}<p class="dds-next" data-dds-next>${esc(
+  return `<div class="ddc-head" data-dds-verdict="${esc(view.verdict.key)}">${titled ? `<h${level} class="dds-title">${esc(title)}</h${level}>` : ""}${statusChip("health", v.status, { word: waits ? "Not ready yet" : v.word })}<p class="dds-next" data-dds-next>${esc(
     next,
   )}</p>${line}${reviewButtonHtml(screen)}</div>`;
 }

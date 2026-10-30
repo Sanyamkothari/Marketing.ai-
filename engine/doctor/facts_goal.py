@@ -418,7 +418,7 @@ def outcome_facts(run: FactRun, case: Case, brief: GoalBrief) -> Facts:
                     CaseDoubt(
                         doubt_id=f"d.outcome_missing.{goal}"[:128],
                         because=f"none of the files has a column saying whether: {brief.outcome.definition}",
-                        would_do="ask the team that has it for that column, one row per customer (the data request)",
+                        would_do="ask the team that has it for that column, one row per customer",
                         if_not=f"{brief.goal_name} cannot be trained on these files",
                     ),
                     "No file has a column for the outcome and no table can define it.",
@@ -429,7 +429,6 @@ def outcome_facts(run: FactRun, case: Case, brief: GoalBrief) -> Facts:
                         kind="more_data",
                         what=f"a column saying whether: {brief.outcome.definition.rstrip('.')}",
                         why=f"{brief.goal_name} learns from it.",
-                        columns=tuple(c for c in (brief.outcome.column,) if c),
                         goal_id=goal,
                     ),
                     f"{brief.goal_name} learns from a column saying whether: {brief.outcome.definition}",

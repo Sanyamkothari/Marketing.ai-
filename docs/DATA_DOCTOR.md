@@ -997,7 +997,11 @@ Data Doctor is one screen, and it is where you already are. It opens on one piec
 places, and it is the same check in all three:
 
 - **Data › Check my data.** Choose your files. Data Doctor reads it, asks only what it cannot tell, and says what the
-  data can be used for. "Choose this goal" takes you straight into the "New campaign" wizard on the same check.
+  data can be used for. With no goal chosen the one next step is to choose one: the goals are listed on the main card (when
+  none fits yet, the ones that come closest, each with what it still needs), and the card says before the click that
+  "Choose this goal" takes you on into the "New campaign" wizard on the same check. The card says "Ready to start", shows
+  the learning times and offers Approve only when approval can go: with no goal, a goal the data does not fit, or a last
+  check that found something, its headline says what is in the way instead, and so do the progress line and the header.
 - **The wizard's Customers step.** The check for that goal, inside the step. What you answered on the Data page
   stands: nothing is asked twice. When the data is approved and ready, the list starts, as before - unless a change
   that needs its own yes (such as the column that says who agreed to be contacted) is still waiting: then the

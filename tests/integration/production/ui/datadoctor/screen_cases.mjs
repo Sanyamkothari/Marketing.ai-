@@ -40,7 +40,7 @@ function readIt(itemId) {
   box.checked = true;
   box.dispatchEvent(new window.Event("change", { bubbles: true }));
 }
-/** Tick "I have checked this section" in every section that asks for it. */
+/** Tick "I have read this section" in every section that asks for it. */
 function checkSections() {
   const next = () => $$("input[data-dds-sec-ok]").find((b) => !b.checked);
   for (let box = next(); box; box = next()) {
@@ -263,7 +263,7 @@ test("Approve lists every change left out until someone agrees, in plain words",
   assert.ok(row.textContent.includes("says who agreed to be contacted"));
   assert.match($("[data-dds-left-out-choice]").textContent, /After you approve, you choose whether to continue without it\./);
   assert.equal($("[data-dds-approve-button]").disabled, true, "the final yes waits for each section to be checked");
-  assert.match($("[data-dds-approve-hold]").textContent, /Check each section above first/);
+  assert.match($("[data-dds-approve-hold]").textContent, /Read each section above first/);
   checkSections();
   assert.equal($("[data-dds-approve-button]").disabled, false, "a change left out does not block Approve once the sections are checked");
 });
