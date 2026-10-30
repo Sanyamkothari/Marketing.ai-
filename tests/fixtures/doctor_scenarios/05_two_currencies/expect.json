@@ -71,8 +71,8 @@
     ]
   },
   "xfail": {
-    "euros_only#spend_outcome": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows",
-    "approved#spend_outcome": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows",
-    "final": "AI-first Stage 3: the goal recipe builds the spend outcome from the euro rows"
+    "euros_only#spend_outcome": "AI-first Stage 3: Customer Spend has no recipe that builds its outcome, and this file has no date to count 'spend in the 90 days after the snapshot' from. The AI says so and the plan keeps asking for the column; reading `amount` as that spend is the person's meaning, not a guess to make.",
+    "approved#spend_outcome": "AI-first Stage 3: Customer Spend has no recipe that builds its outcome, and this file has no date to count 'spend in the 90 days after the snapshot' from. The AI says so and the plan keeps asking for the column; reading `amount` as that spend is the person's meaning, not a guess to make.",
+    "final": "AI-first Stage 3: Customer Spend has no recipe that builds its outcome, and this file has no date to count 'spend in the 90 days after the snapshot' from. The AI says so and the plan keeps asking for the column; reading `amount` as that spend is the person's meaning, not a guess to make."
   }
 }

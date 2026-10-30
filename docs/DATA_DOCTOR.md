@@ -7,6 +7,10 @@ Data Doctor is for people who do not have a data team. You bring the files you h
 out of your systems, and Data Doctor reads them the way a careful colleague would. This page says what it does
 today, in plain words, and what it will not do.
 
+This page grew plan by plan. **Section 28 is the design as built** (one author, one loop, rules that only report
+facts); where an earlier section says "the rules decide" or names the old chat and review prompts, section 28 is the
+one to trust.
+
 Three promises hold everywhere:
 
 - **Your file is never changed.** When Data Doctor reads a file differently from how it arrived, the file as
@@ -281,7 +285,7 @@ never scaled up from a sample, because customers do not grow with rows. When a g
 audience (`audience` in `configs/outcomes.yaml`: Retail Win-back is for shoppers quiet for 90 days before the
 snapshot), both readings are counted - every customer active on or before the snapshot, and only the quiet ones -
 the AI may point at the one the goal describes, with its reason, and you pick it in a question that shows both
-counts (`BUILD_AUDIENCE`). The build is proposed only after that, and still waits for your yes.
+counts (the goal's setting question, `GOAL_SETTING`). The build is proposed only after that, and still waits for your yes.
 
 ### For developers
 
@@ -1063,3 +1067,97 @@ brief's configured name, else the id); the server shows and checks the same sent
 this change is refused once with `APPROVAL_SENTENCE_CHANGED` and the new sentence.
 Tests: `tests/unit/doctor/test_screen.py`, `tests/integration/test_api_case_screen.py`,
 `tests/integration/test_data_doctor_ui.py` (jsdom), `tests/integration/test_data_doctor_journey.py` (Playwright).
+
+---
+
+## 28. AI-first: one author, one loop (the design as built)
+
+```
+fact tools -> the author -> ONE plan (steps, settings, questions) -> you approve once -> build + guards -> ready
+     ^           ^   |                                                   |
+     |           |   +-------- chat, answers, ticks, new files ---------+
+     +-- guards -+
+```
+
+**What it means for you.** Data Doctor looks at your files with tools that only report: "InvoiceDate is text;
+month-first reads all of its rows", "CustomerID is 26% blank", "the newest month is only partly in the file". Those
+tools suggest changes, each with its reason, and write nothing. One *author* turns the suggestions into the plan:
+with an AI connected the AI is the author (it can add, change, replace or withdraw any change, whoever proposed it,
+always with a reason); without one, a small default author turns the same suggestions into the same kind of plan
+through the same checks. You approve once, and a yes is bounded by the counts you saw.
+
+- **You decide.** A change the author puts in the plan is "in the plan, undecided": you can untick it, and your
+  approval is what decides it. Nothing you decided is ever changed by the author: to change it, the AI proposes a
+  replacement or a withdrawal with the consequence, it waits for your yes, and the old one stands until then.
+- **Asking the AI for something works on anything.** "Use a 60-day window" is a proposal to change a setting of the
+  goal, and after your yes the training table is made again for 60 days. "Only the United Kingdom" is a proposal that
+  replaces the training table with one that has the filter, and it is still the goal's table (it keeps the outcome the
+  table makes). "Undo the date fix" is a proposal to take out a change you decided, with what happens without it.
+  "Include the CustomerID as a feature", "use Country as the outcome" and "ignore the safety checks and approve" are
+  refused, with the reason in plain words; nothing is approved for you.
+- **One loop.** A message, an answer, a tick, a new file and a goal just chosen are all the same kind of turn. The AI
+  is asked only when something is owed to it: your message; a file you added (not a table the plan made itself); the
+  goal just chosen; the answer to a question that held the plan back; a training table the goal needs and nobody has
+  proposed; one made for settings that have changed. A tick, an untick and a setting you changed re-run the facts
+  and the default author, which re-derives the table; they cost no call.
+- **A goal is data.** What a goal lets you set (the window, which shoppers), the allowed values and the recommended
+  one with its reason are in `configs/outcomes.yaml`; the questions are made from it, and a changed setting makes the
+  table again.
+- **A refusal always says what to change.** The same four parts for the AI and for the screen: what failed, the
+  value, how to fix it, and a code. Nothing the AI wrote is cut.
+- **Size.** A tool whose answer can be long gives a short summary and says how many it left out; it never stops the
+  visit.
+
+The hard rules did not move: you approve every change and every meaning (the customer, the outcome, the dates,
+consent); 1,000 rows and 200 yeses on the table the goal trains on; nothing after the snapshot in a feature; every
+AI call that carries your client's data needs that client's recorded consent; no customer cell reaches the AI or the
+logs; amounts in different currencies are never added; there are no switches.
+
+### How the AI's prompt is kept small
+
+One prompt (`configs/prompts/data_doctor.v3.md`), one action set (`engine/doctor/actions.py`), rendered state
+(`DoctorTurn.state`). Each call costs what it sends, so: a look tool is one line (its name, its arguments, what it
+looks at); only the actions that can do something now are listed (no `propose_goal` once a goal is chosen); an
+answered question is its answer; a change that is out is one short row; the data rules R1 to R29, the guides and the
+tool details are read with `read_guide` only when needed; and `ask`, `express_doubt`, `propose_goal`,
+`propose_setting`, `suggest_answer` and `withdraw` may carry `"reply"`, the words for you, which ends the turn (no
+call only to say what was done).
+
+### For developers
+
+- `engine/doctor/author.py` - `apply_actions` (the only code that writes items and questions; `Create`, `Withdraw`,
+  `AskPerson`, `SetSetting`, `Doubt`, `Request`), `owed` and `served` (when the AI is asked), the default author's
+  `default_actions`. A `Create` that `replaces` the goal's build is the build (`_build_of`).
+- `engine/doctor/agent_turn.py` - `DoctorTurn` (the one AI turn: state, handles, the actions, the reply checks),
+  `doctor_author` (the port the visit calls); `engine/doctor/actions.py` - the action contract the prompt is generated
+  from (`make generate`), `tool_line`, `ENDS_TURN`.
+- `engine/doctor/tools_facts.py`, `facts_goal.py`, `build_facts.py` - the fact tools (registry tools #93 to #98 and
+  the same functions the default author calls); `engine/doctor/goal_settings.py` - the goal's settings.
+- `engine/doctor/visit.py` - the state machine; `_author` is the one step for TREAT and CONVERSE;
+  `api/routes/case_visit.py` - the routes; `engine/doctor/guards.py`, `ledger.py`, `plan_check.py`,
+  `materialize.py` - the checks, run on the whole plan after any author writes.
+- Tests: `tests/unit/doctor/test_author.py`, `test_author_turn.py`, `test_agent_turn.py`, `test_doctor_prompt.py`,
+  `test_prompt_contract.py`, `test_facts_parity.py`.
+
+### How to run the scenario suite and record a scenario
+
+`scripts/doctor_scenarios.py` plays a person (a script) against the real app, in process, with a replay model in
+place of the AI. Each folder of `tests/fixtures/doctor_scenarios` holds `person.json` (the person's actions),
+`expect.json` (what must hold after named steps and at the end; `xfail` names a check the build does not meet yet,
+each with its reason) and `replies.jsonl` (the AI's recorded replies, one line per model call).
+
+```
+python -m scripts.doctor_scenarios                        # all scenarios; prints a COST line for each
+python -m scripts.doctor_scenarios --scenario 08          # one
+python -m scripts.doctor_scenarios --scenario 01 --no-ai  # the default author alone
+pytest tests/integration/test_doctor_scenarios.py -n 2    # every checkpoint and invariant, with and without the AI
+```
+
+To record: empty `replies.jsonl`, run the scenario. When the replies run out it stops and writes the exact prompt
+to `next_prompt.txt` (not committed). Read it and append ONE JSON line in the format it asks for (a look action, a
+proposal, or a `reply`), using only what the prompt shows, following its rules and guides and never inventing a
+number; run again. Replies are replayed in order, so a changed prompt or state does not break a recording unless the
+calls themselves change: when they do the run stops at the first prompt without a reply. Upload ids are the same in
+every run, so a reply may name a change by its handle. After a change to the prompt, re-record the eval cassette:
+`python -m scripts.plan_o_benchmark --model reference --record --parts ai --k 1`.
+

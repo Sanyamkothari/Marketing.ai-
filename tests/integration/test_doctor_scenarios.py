@@ -109,6 +109,17 @@ def test_invariant(ran: Callable[[str, bool], ScenarioResult], scenario: str, in
 
 
 @pytest.mark.parametrize("scenario", SCENARIO_PATHS, ids=lambda p: p.name)
+def test_every_recording_was_made_on_the_instructions_it_replays_on(
+    ran: Callable[[str, bool], ScenarioResult], scenario: Path
+) -> None:
+    """A recorded reply was given to the instructions the AI was shown then. When the prompt, the actions or the tools
+    change, the scenario must be recorded again (`python -m scripts.doctor_scenarios --scenario <n> --seal`).
+    """
+    stale = ran(scenario.name, True).stale
+    assert not stale, f"{scenario.name} needs re-recording: {stale}"
+
+
+@pytest.mark.parametrize("scenario", SCENARIO_PATHS, ids=lambda p: p.name)
 def test_every_xfail_names_a_real_check_and_the_stage_that_fixes_it(scenario: Path) -> None:
     """A typo in `"xfail"` would leave a failing check unmarked or a mark on nothing: both are refused."""
     expect = _expect(scenario)

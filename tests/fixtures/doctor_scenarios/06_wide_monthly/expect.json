@@ -51,9 +51,9 @@
     "verdict": "ready"
   },
   "xfail": {
-    "invariant:same_plan_without_ai": "AI-first Stage 2: the default author turns the fact tools' suggestion (turn the month columns into rows) into the same plan when no AI is connected.",
-    "unpivot#plan_runs": "AI-first Stage 4: one guard layer. The unpivot the Doctor offers must be a step the goal's helper may run (customer-spend's may not, so its own offer stops the plan).",
-    "approved": "AI-first Stage 4: one guard layer. The unpivot the Doctor offers must be a step the goal's helper may run, so the plan can be approved.",
-    "final": "AI-first Stage 4: one guard layer. The unpivot the Doctor offers must be a step the goal's helper may run, so the plan can be approved."
+    "invariant:same_plan_without_ai": "AI-first Stage 2: the unpivot is the AI's proposal; the default author has no fact that suggests turning month columns into rows, so with no AI the plan has no unpivot.",
+    "unpivot#plan_runs": "AI-first Stage 3: after the unpivot there are twelve rows for each customer and Customer Spend has no recipe that makes its outcome from them, so the plan stops at JOIN_REPEATS_CUSTOMERS until the rows are combined (the AI does not propose that yet).",
+    "approved": "AI-first Stage 3: the sheet has no Customer Spend outcome and no recipe builds one from the months; the verdict stays 'not ready'.",
+    "final": "AI-first Stage 3: the sheet has no Customer Spend outcome and no recipe builds one from the months; the verdict stays 'not ready'."
   }
 }

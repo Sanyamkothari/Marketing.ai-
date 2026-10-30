@@ -102,6 +102,8 @@ class ReplayLLMClient(FakeLLMClient):
         self.reply_index = 0
         self.prompts: list[str] = []
         """Every prompt the AI was sent, for the invariant that reads the refusals it received."""
+        self.system_hashes: list[str] = []
+        """The hash of the instructions of each call, to tell a recording made on other instructions."""
 
     def complete(
         self,
@@ -116,6 +118,7 @@ class ReplayLLMClient(FakeLLMClient):
         in_tokens = -(-len(system) // APPROX_CHARS_PER_TOKEN) + -(-len(prompt) // APPROX_CHARS_PER_TOKEN)
         self.usage_tracker.record_call(input_chars=input_chars, input_tokens=in_tokens)
         self.prompts.append(prompt)
+        self.system_hashes.append(hashlib.sha256(system.encode()).hexdigest()[:16])
 
         if self.reply_index < len(self.replies):
             text = self.replies[self.reply_index].strip()
@@ -167,6 +170,10 @@ class ScenarioResult:
     plan_kind: tuple[Any, ...] = ()
     """The kind of plan before the first chat message (or at the end), for invariant 7."""
     replies_from: str = ""
+    system_hashes: list[str] = field(default_factory=list)
+    """The hash of the instructions the AI was shown at each call."""
+    stale: list[str] = field(default_factory=list)
+    """Why the recording needs to be made again: its replies were given to other instructions (see `prompts.sha`)."""
     details: str = ""
     notes: list[str] = field(default_factory=list)
     """What the person's script could not do, by step: no such question, no such change, an approval the app refused."""
@@ -407,6 +414,28 @@ class _Person:
             return
 
 
+SEALED: Final[str] = "prompts.sha"
+
+
+def _stale(scenario_path: Path, replies: Sequence[str], seen: Sequence[str]) -> list[str]:
+    """What shows that the recorded replies were given to other instructions than the ones the AI is shown now: the
+    hash of each call's instructions was kept when the recording was sealed (`--seal`). A scenario with no seal has
+    nothing to compare."""
+    file = scenario_path / SEALED
+    if not file.exists() or not replies:
+        return []
+    sealed: list[str] = json.loads(file.read_text(encoding="utf-8"))
+    changed = [n for n, (was, now) in enumerate(zip(sealed, seen, strict=False), start=1) if was != now]
+    return [
+        *(f"call {n}: the instructions are not the ones the reply was recorded on" for n in changed),
+        *(
+            [f"{len(replies)} replies are recorded and {len(sealed)} are sealed"]
+            if len(replies) != len(sealed)
+            else []
+        ),
+    ]
+
+
 def _replies_for(scenario_path: Path) -> tuple[list[str], str]:
     """The recorded replies: `replies.jsonl` once an AI player has recorded them, else the baseline of today."""
     for name in ("replies.jsonl", "baseline_replies.jsonl"):
@@ -556,6 +585,10 @@ def run_scenario(
         chat_results=chat_results,
         plan_kind=kind_before_chat if kind_before_chat is not None else plan_kind(last.case if last else {}),
         replies_from=replies_from,
+        system_hashes=list(replay_client.system_hashes) if replay_client is not None else [],
+        stale=(
+            _stale(scenario_path, replies, replay_client.system_hashes) if replay_client is not None else []
+        ),
         notes=all_notes,
     )
 
@@ -565,6 +598,11 @@ def main() -> None:
     parser.add_argument("--scenario", default="all", help="Specific scenario folder name or 'all'")
     parser.add_argument("--no-ai", action="store_true", help="Run with default author (no AI)")
     parser.add_argument("--baseline", action="store_true", help="Generate and print baseline report")
+    parser.add_argument(
+        "--seal",
+        action="store_true",
+        help="Once a scenario is recorded, keep the hash of the instructions of each call (prompts.sha)",
+    )
     args = parser.parse_args()
 
     scenarios = sorted([p for p in SCENARIOS_DIR.iterdir() if p.is_dir()])
@@ -579,7 +617,12 @@ def main() -> None:
         try:
             res = run_scenario(sc_path, with_ai=not args.no_ai)
             results.append(res)
+            if args.seal:
+                (sc_path / SEALED).write_text(json.dumps(res.system_hashes) + "\n", encoding="utf-8")
+                print(f"Sealed {len(res.system_hashes)} calls in {sc_path / SEALED}")
             print(f"Status: {res.status}")
+            for why in res.stale:
+                print(f"NEEDS RE-RECORDING: {why}")
             print(res.cost_line, f"(replies: {res.replies_from or 'none'})")
             if res.invariant_violations:
                 print(f"Invariant violations ({len(res.invariant_violations)}):")

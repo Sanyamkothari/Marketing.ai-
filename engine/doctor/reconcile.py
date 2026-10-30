@@ -25,8 +25,7 @@ that emission the store, by *subject* (`engine.doctor.subjects`):
   (`withdrawn_because` says why; a doubt becomes `resolved`). The AI's proposals are never taken back by omission.
 
 Questions: an unanswered question whose options changed is asked again (same id, the new options); an answered one
-stays answered unless the option chosen is no longer offered, then it is asked again and says why (`refit`, the
-visit's `_no_longer_fits`). Doubts have a status: `open`, `resolved`, `superseded`.
+stays answered unless the option chosen is no longer offered, then it is asked again and says why (`refit`). Doubts have a status: `open`, `resolved`, `superseded`.
 
 Nothing here reads a cell, runs a tool or calls a model: it works on the case's records alone, so the same set of
 emissions gives the same plan whatever order the events came in.

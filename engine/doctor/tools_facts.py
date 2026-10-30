@@ -1129,7 +1129,7 @@ _CASE_FACT_ROWS: Final[tuple[_CaseFactRow, ...]] = (
         "could name the customers, or a row number. Suggestions only; changes nothing.",
         _key_facts,
         ("case", "storage", "files"),
-        "engine/doctor/tools_facts.py key_facts (visit.py _base_rules)",
+        "engine/doctor/tools_facts.py key_facts",
     ),
     (
         94,
@@ -1138,7 +1138,7 @@ _CASE_FACT_ROWS: Final[tuple[_CaseFactRow, ...]] = (
         "`left_out`; `goal_details` gives one in full). Suggestions only; changes nothing.",
         _goal_fit_facts,
         ("case", "storage", "files"),
-        "engine/doctor/facts_goal.py goal_fit_facts (visit.py _generic_rules)",
+        "engine/doctor/facts_goal.py goal_fit_facts",
     ),
     (
         95,
@@ -1148,7 +1148,7 @@ _CASE_FACT_ROWS: Final[tuple[_CaseFactRow, ...]] = (
         "make. Suggestions only; changes nothing.",
         _goal_facts,
         ("case", "storage", "files"),
-        "engine/doctor/facts_goal.py goal_facts (visit.py _goal_rules)",
+        "engine/doctor/facts_goal.py goal_facts",
     ),
     (
         96,
@@ -1157,7 +1157,7 @@ _CASE_FACT_ROWS: Final[tuple[_CaseFactRow, ...]] = (
         "receipt of its trial on the first rows. Suggestions only; changes nothing.",
         _suggest_build,
         ("case", "storage", "files"),
-        "engine/doctor/facts_goal.py suggest_build (visit.py _offer_build)",
+        "engine/doctor/facts_goal.py suggest_build",
     ),
     (
         97,
@@ -1166,7 +1166,7 @@ _CASE_FACT_ROWS: Final[tuple[_CaseFactRow, ...]] = (
         "questions. Suggestions only; changes nothing.",
         _detector_facts,
         ("case", "storage", "files"),
-        "engine/doctor/tools_facts.py detector_facts (visit.py _detect)",
+        "engine/doctor/tools_facts.py detector_facts",
     ),
     (
         98,
@@ -1175,7 +1175,7 @@ _CASE_FACT_ROWS: Final[tuple[_CaseFactRow, ...]] = (
         "a withdrawal to suggest, with its reason. Changes nothing.",
         _role_step_facts,
         ("case", "storage"),
-        "engine/doctor/tools_facts.py role_step_facts (visit.py _standing)",
+        "engine/doctor/tools_facts.py role_step_facts",
     ),
 )
 

@@ -51,7 +51,7 @@
     "verdict": "ready"
   },
   "xfail": {
-    "approved#ready": "AI-first Stage 3: the goal's recipe builds the outcome from the orders table once it is joined to the customers; today the Doctor asks the person to add an outcome column.",
-    "final": "AI-first Stage 3: the goal's recipe builds the outcome from the orders table once it is joined to the customers; today the Doctor asks the person to add an outcome column."
+    "approved#ready": "AI-first Stage 3: Retail Win-back is built from one event table; the orders joined to the customers have lost their dates, so no build is offered and the Doctor asks for an outcome column.",
+    "final": "AI-first Stage 3: Retail Win-back is built from one event table; the orders joined to the customers have lost their dates, so no build is offered and the Doctor asks for an outcome column."
   }
 }
