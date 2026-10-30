@@ -166,15 +166,15 @@ test("a chip answer says at once what is happening, the clicked chip is busy and
   const id = chip.getAttribute("data-dds-answer");
   chip.click();
   await until(() => $("[data-dds-progress]"), 1000, "the progress text");
-  assert.equal(text($("[data-dds-progress]")), "Checking that…");
+  assert.equal(text($("[data-dds-progress]")), "Applying your answer to 1,200 rows…");
   assert.equal($("[data-dds-progress]").getAttribute("role"), "status");
   const clicked = $(`[data-dds-question="${q.question_id}"] [data-dds-answer="${id}"]`);
   assert.equal(clicked.getAttribute("aria-busy"), "true", "the clicked chip shows it is working");
   assert.equal(clicked.disabled, true);
   assert.equal($$("[data-dds-answer]").filter((b) => b !== clicked && b.getAttribute("aria-busy") === "true").length, 0, "only that one");
   assert.ok($$("[data-dds-answer], [data-dds-goal], [data-dds-undo], [data-dds-use]").every((b) => b.disabled), "nothing else can be clicked while the server answers");
-  assert.equal(children(), before, "no card was added or moved: the line floats above the box");
-  assert.ok(CSS.includes(".ddc-progress{position:absolute"), "the progress line floats, so nothing below it jumps");
+  assert.equal(children(), before, "no card was added or moved: the line floats over the page");
+  assert.ok(CSS.includes(".ddc-progress{position:fixed"), "the progress line floats at the foot of the window, so it is seen wherever the click was and nothing jumps");
   release();
   await until(() => !$("[data-dds-progress]"), 3000, "the answer");
   assert.equal(posts("answers").length, 1, "one click, one answer sent");
@@ -187,7 +187,7 @@ test("choosing a goal, Undo and Approve each say what is happening and mark the 
   let release = holdPost("decisions");
   $(`[data-dds-change-card="${change.item_id}"] [data-dds-undo]`).click();
   await until(() => $("[data-dds-progress]"), 1000, "the progress text");
-  assert.equal(text($("[data-dds-progress]")), "Checking that…");
+  assert.equal(text($("[data-dds-progress]")), "Updating the plan on 1,200 rows…");
   assert.equal($(`[data-dds-change-card="${change.item_id}"] [data-dds-undo]`).getAttribute("aria-busy"), "true");
   release();
   await until(() => !$("[data-dds-progress]"), 3000, "the answer");

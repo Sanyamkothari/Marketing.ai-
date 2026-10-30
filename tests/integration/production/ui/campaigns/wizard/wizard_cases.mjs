@@ -378,7 +378,7 @@ test("the progress page: steps in plain words, the time left, and that the page 
     ["running", "pending", "pending", "pending"],
   );
   assert.match(text(), /Learning from your customers/);
-  assert.match(text(), /About 10 minutes left/);
+  assert.match(text(), /Up to 10 minutes left/);
   assert.match(text(), /You can close this page/);
   assert.ok($("[role=progressbar]"));
   assert.equal(primaries().length, 0);

@@ -36,7 +36,7 @@ import {
   withinBudget,
 } from "./plan.js";
 import { WHO, messageFor, whoOf } from "./who.js";
-import { activeSection, approvalHtml, dontKnowOf, namesOf, questionHtml, questionsOf, userTextIn } from "./view.js";
+import { activeSection, approvalHtml, dontKnowOf, namesOf, questionHtml, questionsOf, takenBack, userTextIn } from "./view.js";
 
 const plural = (n, one, many) => `${count(n)} ${n === 1 ? one : many}`;
 const domId = (prefix, id) => `${prefix}-${String(id).replace(/[^A-Za-z0-9_-]/g, "_")}`;
@@ -127,10 +127,11 @@ export function funnelHtml(items, ledger, { level = 3 } = {}) {
           `${f.rateIn.toFixed(1)}% before, ${f.rateOut.toFixed(1)}% after`,
         )}</span></li>`
       : "";
-  // The counts are from the trial run on the first rows; say so, so 1,000 next to a 4,000-row file is not a puzzle.
+  // The counts are from the trial run on the first rows: said as a first look that the whole file's count replaces
+  // (once it is in, the ledger is the whole file's and this line is gone), so 1,000 next to a 4,000-row file is not a puzzle.
   const sample =
     finite(f.sampledFrom) && finite(f.rowsIn) && f.sampledFrom > f.rowsIn
-      ? `<p class="dds-why" data-dds-sampled>Checked on the first ${esc(count(f.rowsIn))} of ${esc(count(f.sampledFrom))} rows; the whole file is being checked. Approving prepares all ${esc(count(f.sampledFrom))} rows.</p>`
+      ? `<p class="dds-why" data-dds-sampled>A first look: these numbers are from the first ${esc(count(f.rowsIn))} of ${esc(count(f.sampledFrom))} rows. The whole file is being checked, and its numbers will replace these. Approving prepares all ${esc(count(f.sampledFrom))} rows.</p>`
       : "";
   const losses = f.losses.length
     ? `<div class="dds-funnel-losses" data-dds-losses><span class="dds-label">Biggest losses:</span> ${f.losses
@@ -222,7 +223,7 @@ export function receiptHtml(item, ledger) {
       ),
     ].join("");
     box = `<div class="dds-receipt-box" data-dds-step-receipt="${esc(item.item_id)}"><p class="dds-why"><span class="dds-label">${
-      r.counted ? "We counted" : "Rows counted"
+      r.counted ? (ledger && finite(ledger.sampled_from) ? "A first look, on the first rows" : "We counted") : "Rows counted"
     }</span> ${level ? levelChip(level) : ""}</p>${lines ? `<dl class="dds-counts">${lines}</dl>` : ""}${
       r.before.length || r.after.length
         ? `<div class="dds-samples">${samplesHtml(r.before, { personal: r.personal, caption: "Before" })}${samplesHtml(r.after, { personal: r.personal, caption: "After" })}</div><p class="dds-why">Personal details are hidden.</p>`
@@ -459,7 +460,7 @@ function sectionHtml(sec, screen, ctx, level) {
 /** Everything the plan view works out of one answer, so the screen draws it and the final yes reads the same numbers. */
 export function planModel(screen, ctx) {
   const { case: c, view } = screen;
-  const all = activeSection(c).items;
+  const all = activeSection(c).items.filter((i) => !takenBack(i));
   // Once a plan was approved and comes back, what is the same stays approved (folded) and what belongs to a file that
   // was made into another table is not drawn again: only what is new or changed is open.
   const carried = view.carried || null;

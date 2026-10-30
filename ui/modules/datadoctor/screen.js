@@ -55,7 +55,7 @@ import {
 } from "./api.js";
 import { injectDataDoctorStyles } from "./styles.js";
 import { sectionOf } from "./plan.js";
-import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml, progressText, reviewButtonHtml, sentenceWithMore } from "./chat.js";
+import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml, progressText, reviewButtonHtml, sentenceWithMore, workingHtml } from "./chat.js";
 import { reviewAllowed, reviewHtml, reviewOf } from "./review.js";
 import { checksHtml, funnelHtml, newLineHtml, planHtml, planModel, queueHtml, todoHtml } from "./plan_view.js";
 import {
@@ -203,7 +203,7 @@ function mainHtml(entry) {
   )}${earlier ? `<section class="card dds-card" data-dds-checklist>${earlier}</section>` : ""}${goalsHtml(screen, {
     busy,
     level: sub,
-  })}${fullCheckHtml(screen)}${approveHtml(screen, { busy: s.busy, level: sub, gate: model.gate })}${
+  })}${fullCheckHtml(screen)}${approveHtml(screen, { busy: s.busy, level: sub, gate: model.gate })}${workingHtml(s.busy, screen)}${
     !(c.files || []).length ? intakeHtml(entry, { first: true }) : more
   }${timelineHtml(screen, { level: sub })}${technicalHtml(screen)}${expertHtml(entry)}${
     host.place === "data" ? `<div class="dds-actions">${button({ label: "Start a new check", kind: "tertiary", attrs: "data-dds-new" })}</div>` : ""
@@ -236,7 +236,7 @@ function speedsHtml(entry) {
   const chosen = entry.state.speed;
   const items = SPEEDS.map((speed) =>
     button({
-      label: `${speed.name}: about ${minutesText(speed.minutes)}${speed.recommended ? " (recommended)" : ""}`,
+      label: `${speed.name}: up to ${minutesText(speed.minutes)}${speed.recommended ? " (recommended)" : ""}`,
       kind: chosen === speed.id ? "primary" : "secondary",
       size: "sm",
       attrs: `data-dds-speed="${speed.id}" aria-pressed="${chosen === speed.id}"`,
@@ -422,10 +422,11 @@ function chatMainHtml(entry) {
     },
   });
   const intake = screen.case.read_only ? "" : intakeHtml(entry, { first: false });
+  const working = workingHtml(s.busy, screen);
   const panel = panelHtml(screen, { tab: s.tab, side: s.side, intake, busy: Boolean(s.busy), open: s.panelOpen });
   return `<div class="dds ddc" data-dds data-dds-chat-view data-dds-place="${esc(host.place)}" data-dds-case="${esc(screen.case.case_id)}">${headHtml(screen, { level, titled: host.place !== "wizard" })}${alertInCard ? "" : `${notice}${err}`}<div class="ddc-layout">${conversation}${panel}</div>${
     host.place === "data" ? `<div class="dds-actions">${button({ label: "Start a new check", kind: "tertiary", attrs: "data-dds-new" })}</div>` : ""
-  }</div>`;
+  }${working}</div>`;
 }
 
 function asideHtml(entry) {

@@ -41,8 +41,8 @@ export const speedOf = (id) => SPEEDS.find((s) => s.id === id) || SPEEDS.find((s
 /** "1 minute", "15 minutes". */
 export const minutesText = (n) => `${n} ${n === 1 ? "minute" : "minutes"}`;
 
-/** "about 15 minutes". */
-export const aboutMinutes = (speed) => `about ${minutesText(speedOf(speed).minutes)}`;
+/** "up to 15 minutes": the learning step stops at its time limit, and sooner when it has tried what it can. */
+export const aboutMinutes = (speed) => `up to ${minutesText(speedOf(speed).minutes)}`;
 
 /**
  * The sentence above the Start button, as HTML: what we learn from, how many customers, and how long it takes.

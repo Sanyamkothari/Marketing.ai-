@@ -18,12 +18,12 @@
 import { button, icon, statusChip } from "../../components.js";
 import { esc } from "../../dom.js";
 import { count } from "../../format.js";
-import { goalName, userText } from "../../labels.js";
+import { userText } from "../../labels.js";
 import { AI_SETTINGS_HREF } from "../../availability.js";
 import { minutesText } from "../campaigns/run_rules.js";
 import { sentHtml, plain, TOOL_PHRASES } from "../ask/sent.js";
 import { samplesHtml } from "./plan_view.js";
-import { AI_CONSENT_BUTTON, AI_CONSENT_DONE, AI_CONSENT_LINE, AI_CONSENT_NEVER, AI_CONSENT_SEES, AI_CONSENT_WITHOUT, AI_SPENT_LINE, VERDICTS, columnNote, namesOf, standingHtml, userTextIn as nameIn } from "./view.js";
+import { AI_CONSENT_BUTTON, AI_CONSENT_DONE, AI_CONSENT_LINE, AI_CONSENT_NEVER, AI_CONSENT_SEES, AI_CONSENT_WITHOUT, AI_SPENT_LINE, VERDICTS, columnNote, goalLabel, namesOf, standingHtml, userTextIn as nameIn } from "./view.js";
 
 /** A server sentence with the person's names in it; a column is said in words (`marketing opt in`), not as the file spells it. */
 const userTextIn = (text, names) => nameIn(text, names, { friendly: true });
@@ -37,6 +37,48 @@ export const PROGRESS = Object.freeze({
 });
 export const progressText = (busy) => PROGRESS[busy] || "Checking that…";
 
+/** The rows of the biggest file the Doctor read (what a request works through), or 0 when not known. */
+const fileRows = (screen) => Math.max(0, ...((cardOf(screen, "first_look") || { files: [] }).files || []).map((f) => (Number.isFinite(f.rows) ? f.rows : 0)));
+
+/** A file this big takes a while to go through again after every answer. */
+const BIG_FILE_ROWS = 100000;
+
+/**
+ * What is happening, in a plain line, while a request runs (`busy`: what was clicked) or the whole file is checked in
+ * the background (`view.full_check`, with the step count the server has). "" when nothing is going on.
+ */
+export function workingText(busy, screen) {
+  const rows = screen ? fileRows(screen) : 0;
+  const of = (prep) => (rows ? ` ${prep} ${count(rows)} rows` : "");
+  const long = rows >= BIG_FILE_ROWS ? " This takes a little longer on a big file." : "";
+  const check = screen && screen.view && screen.view.full_check;
+  if (!busy || busy === "chat" || busy === "upload") {
+    if (!busy && check && ["pending", "running"].includes(check.state)) {
+      const step = check.state === "running" && check.steps_total ? ` (step ${Math.min(check.steps_done + 1, check.steps_total)} of ${check.steps_total})` : "";
+      return `Checking every row of the file${step}…`;
+    }
+    return "";
+  }
+  switch (busy) {
+    case "answer":
+      return `Applying your answer${of("to")}…${long}`;
+    case "tick":
+      return `Updating the plan${of("on")}…${long}`;
+    case "goal":
+      return `Setting up your goal${of("on")}…${long}`;
+    case "approve":
+      return `${progressText("approve")}${long}`;
+    default:
+      return progressText(busy);
+  }
+}
+
+/** The one line that says something is happening: it floats at the foot of the window, so it is seen wherever the click was, and moves nothing. */
+export function workingHtml(busy, screen) {
+  const text = workingText(busy, screen);
+  return text ? `<p class="ddc-progress" role="status" aria-live="polite" data-dds-progress><span class="ddc-spin" aria-hidden="true"></span><span>${esc(text)}</span></p>` : "";
+}
+
 const plural = (n, one, many) => `${count(n)} ${n === 1 ? one : many}`;
 const cards = (screen) => (screen && screen.view && screen.view.conversation) || [];
 
@@ -44,17 +86,6 @@ const cards = (screen) => (screen && screen.view && screen.view.conversation) ||
 export const cardOf = (screen, type) => cards(screen).find((c) => c.type === type) || null;
 
 // --- the checklist ----------------------------------------------------------------------------------------------
-
-/** The goal as the screens name it: the server's own name (the goal's fit card, else its goal card), else the known display name, else the id in words. Never the raw id. */
-function goalLabel(screen) {
-  const id = screen.view.goal_id;
-  const fit = cardOf(screen, "fit");
-  const goals = cardOf(screen, "goals");
-  const named = (fit && fit.goal_id === id && fit.name) || ((goals && goals.cards) || []).find((c) => c.goal_id === id)?.name;
-  if (named) return named;
-  const known = goalName(id);
-  return known && known !== id ? known : id.replace(/[-_]+/g, " ").replace(/^./, (c) => c.toUpperCase());
-}
 
 /** Whether the ready card says approval can go: the one word the headline, the progress line and the Approve button share. */
 export const readyOf = (card) => Boolean(card) && card.ready !== false && !card.hold && !card.blocked;
@@ -472,7 +503,10 @@ export function readyHtml(r, ctx) {
     .map((c) => {
       const who = c.role === "approver" ? "an approver on your team" : "an analyst on your team";
       if (!c.can_agree) {
-        const ask = c.cannot_agree === "separation" ? `You suggested or answered this, so ask ${who.replace(/^an? /, "another ")} to agree to it.` : `Ask ${who} to agree to it.`;
+        const ask =
+          c.cannot_agree === "separation"
+            ? `You cannot give this yes: you suggested or answered it. Ask ${who.replace(/^an? /, "another ")} to agree to it.`
+            : `You cannot give this yes: your role does not allow it. Ask ${who} to agree to it.`;
         return `<div class="dds-state ddc-ask" data-dds-ask-other="${esc(c.cannot_agree || "role")}">${icon("info", { size: 14 })}<span>${nameIn(c.sentence, names)}<br>${esc(ask)} ${esc(
           c.required ? "It is in the plan, so this waits for them." : "Until then it is left out.",
         )}</span></div>`;
@@ -482,21 +516,21 @@ export function readyHtml(r, ctx) {
         // box. The one click records the yes the server needs for it (its exact sentence); when a separate yes is the
         // rule, the card says why, in one line.
         const line = c.separate
-          ? `Someone other than whoever suggested it must agree (${plain(c.why)}). Approve and start gives your yes.`
+          ? `It needs a yes from ${who}, and not from whoever suggested it (${plain(c.why)}). That is not you, so you can give it: Approve and start records your yes.`
           : "Recorded when you click Approve and start.";
-        const lead = c.separate ? "Needs your yes: " : c.answered ? "Already agreed: " : c.shown ? "Shown above, with Undo: " : "In the plan: ";
+        const lead = c.separate ? "Needs a yes: " : c.answered ? "Already agreed: " : c.shown ? "Shown above, with Undo: " : "In the plan: ";
         return `<div class="dds-state ddc-agreed" data-dds-agreed="${esc(c.item_id)}">${icon("check", { size: 14 })}<span>${esc(lead)}${nameIn(c.sentence, names)}<br>${esc(line)}</span></div>`;
       }
       return `<label class="dds-tick ddc-tick" data-dds-confirm-row="${esc(c.item_id)}"><input type="checkbox" data-dds-confirm="${esc(c.item_id)}"${ctx.confirms.has(c.item_id) ? " checked" : ""}${ctx.busy ? " disabled" : ""}><span class="dds-item-body"><span class="dds-item-t">${esc(
         "Also include: ",
-      )}${nameIn(c.sentence, names)}</span><span class="dds-item-sub">${esc(`Left out unless you tick it. Why it needs your yes: ${plain(c.why)}${c.separate ? ", from someone other than whoever suggested it" : ""}.`)}</span></span></label>`;
+      )}${nameIn(c.sentence, names)}</span><span class="dds-item-sub">${esc(`Left out unless you tick it. It needs a yes from ${who}${c.separate ? ", not from whoever suggested it" : ""} (${plain(c.why)}). You can give it: ticking is your yes.`)}</span></span></label>`;
     })
     .join("");
   const speeds = (r.speeds || []).length && r.ready
     ? `<div class="dds-actions" role="group" aria-label="How long to learn" data-dds-speeds>${r.speeds
         .map((sp) =>
           button({
-            label: `${sp.name}: about ${minutesText(sp.minutes)}${sp.recommended ? " (recommended)" : ""}`,
+            label: `${sp.name}: up to ${minutesText(sp.minutes)}${sp.recommended ? " (recommended)" : ""}`,
             kind: ctx.speed === sp.id ? "primary" : "secondary",
             size: "sm",
             attrs: `data-dds-speed="${esc(sp.id)}" aria-pressed="${ctx.speed === sp.id}"`,
@@ -608,11 +642,10 @@ export function composerHtml(screen, { ai = null, use = null, draft = "", busy =
   const prompts = promptsOf(screen)
     .map((p) => button({ label: p, kind: "tertiary", size: "sm", attrs: `data-dds-prompt="${esc(p)}"`, disabled: off || Boolean(busy) }))
     .join("");
-  const working = busy && busy !== "chat" ? `<p class="ddc-progress" role="status" data-dds-progress><span class="ddc-spin" aria-hidden="true"></span><span>${esc(progressText(busy))}</span></p>` : "";
   // While a question waits for its answer the box rests at the end of the conversation instead of floating over the
   // cards (it would cover the question's choices when the page opens at the top).
   const asking = cards(screen).some((c) => c.type === "question" && !c.answer);
-  return `<div class="ddc-composer${off ? " is-off" : ""}${asking ? " is-asking" : ""}" data-dds-composer>${working}${note}<div class="ddc-prompts" role="group" aria-label="Things to ask">${prompts}</div><form id="dds-chat-form" class="ddc-form"><label class="sr" for="dds-chat-input">Message Data Doctor</label><input type="text" id="dds-chat-input" class="input" autocomplete="off" maxlength="1000" placeholder="${
+  return `<div class="ddc-composer${off ? " is-off" : ""}${asking ? " is-asking" : ""}" data-dds-composer>${note}<div class="ddc-prompts" role="group" aria-label="Things to ask">${prompts}</div><form id="dds-chat-form" class="ddc-form"><label class="sr" for="dds-chat-input">Message Data Doctor</label><input type="text" id="dds-chat-input" class="input" autocomplete="off" maxlength="1000" placeholder="${
     off ? "Chat is not available" : "Ask anything, or tell me what to change…"
   }" value="${esc(draft)}"${off || busy === "chat" ? " disabled" : ""}>${button({ label: "Send", kind: "primary", type: "submit", attrs: "data-dds-send", disabled: off || Boolean(busy) })}</form></div>`;
 }
@@ -678,7 +711,7 @@ export const reviewButtonHtml = (screen) =>
 export function headHtml(screen, { level = 2, titled = true } = {}) {
   const { view } = screen;
   const v = VERDICTS[view.verdict.key] || VERDICTS.working;
-  const title = view.goal_id ? `Your data for "${goalName(view.goal_id)}"` : "Your data";
+  const title = view.goal_id ? `Your data for "${goalLabel(screen)}"` : "Your data";
   // The click on "Approve and start" gives the own yeses itself, so the header does not send the person to look for them.
   const ready = cardOf(screen, "ready");
   const waits = Boolean(ready && ready.stage === "approve" && !readyOf(ready)); // the card's own state, so the header never says "approve" while the card says it cannot

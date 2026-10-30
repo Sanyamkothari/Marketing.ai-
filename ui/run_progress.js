@@ -36,9 +36,10 @@ const num = (value) => (typeof value === "number" && !Number.isNaN(value) ? valu
 const clamp = (value) => Math.max(0, Math.min(100, Math.round(value)));
 
 /**
- * "Less than a minute left", "About a minute left", "About 3 minutes left", "About 25 minutes left",
- * "About 1 hour 20 minutes left": minutes under ten to the minute, under an hour to five, beyond to ten.
- * Empty for no number.
+ * "Less than a minute left", "About a minute left", "Up to 3 minutes left", "Up to 25 minutes left",
+ * "Up to 1 hour 20 minutes left": minutes under ten to the minute, under an hour to five, beyond to ten.
+ * The time left is what the learning step's time limit leaves, a ceiling: the search stops sooner when it has tried
+ * what it can on a small table, so a time over a minute is said as "up to". Empty for no number.
  */
 export function etaText(seconds) {
   const s = num(seconds);
@@ -46,13 +47,13 @@ export function etaText(seconds) {
   if (s < 60) return "Less than a minute left";
   const minutes = s / 60;
   if (minutes < 1.5) return "About a minute left";
-  if (minutes < 10) return `About ${Math.round(minutes)} minutes left`;
-  if (minutes < 57.5) return `About ${Math.max(10, Math.round(minutes / 5) * 5)} minutes left`;
+  if (minutes < 10) return `Up to ${Math.round(minutes)} minutes left`;
+  if (minutes < 57.5) return `Up to ${Math.max(10, Math.round(minutes / 5) * 5)} minutes left`;
   const rounded = Math.round(minutes / 10) * 10;
   const hours = Math.floor(rounded / 60);
   const rest = rounded % 60;
   const h = `${hours} ${hours === 1 ? "hour" : "hours"}`;
-  return rest ? `About ${h} ${rest} minutes left` : `About ${h} left`;
+  return rest ? `Up to ${h} ${rest} minutes left` : `Up to ${h} left`;
 }
 
 /**
@@ -91,7 +92,7 @@ export function progressMeterHtml(progress, extraClass = "") {
   return `<div class="run-meter${cls}" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.pct}"><div class="run-meter-fill" style="width:${progress.pct}%"></div></div>`;
 }
 
-/** The line under the bar: "About 3 minutes left", or "Finishing up…"; nothing without either. */
+/** The line under the bar: "Up to 3 minutes left", or "Finishing up…"; nothing without either. */
 export function progressNoteHtml(progress) {
   if (!progress) return "";
   const text = progress.finishing ? "Finishing up…" : progress.eta;

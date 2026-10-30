@@ -8,15 +8,15 @@ const minutes = () => SPEEDS.map((s) => s.minutes);
 
 test("before the server has answered, the minutes are 8, 20 and 45", () => {
   assert.deepEqual(minutes(), [8, 20, 45]);
-  assert.equal(aboutMinutes("balanced"), "about 20 minutes");
+  assert.equal(aboutMinutes("balanced"), "up to 20 minutes");
 });
 
 test("the server's minutes replace them everywhere the speeds are read", () => {
   applySpeedMinutes({ quick: 2, balanced: 10, thorough: 60 });
   assert.deepEqual(minutes(), [2, 10, 60]);
   assert.equal(speedOf("quick").minutes, 2);
-  assert.equal(aboutMinutes("balanced"), "about 10 minutes");
-  assert.match(startSentenceHtml({ table: "customers.csv", speed: "thorough" }), /Thorough: about 60 minutes/);
+  assert.equal(aboutMinutes("balanced"), "up to 10 minutes");
+  assert.match(startSentenceHtml({ table: "customers.csv", speed: "thorough" }), /Thorough: up to 60 minutes/);
 });
 
 test("a speed the server did not give, or gave badly, keeps its fallback", () => {

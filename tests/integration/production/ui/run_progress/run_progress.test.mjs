@@ -30,7 +30,7 @@ const upliftRunning = (status) =>
 
 test("the fixtures are the real thing: progress_pct sits at 50 while the estimate has moved on", () => {
   assert.equal(mid.progress_pct, 50);
-  assert.match(midEta, /^About \d+ minutes left$/);
+  assert.match(midEta, /^Up to \d+ minutes left$/);
   assert.ok(mid.estimated_pct > 60, "three quarters through the longest stage is well past half");
   assert.equal(typeof mid.eta_seconds, "number");
   assert.equal(overrun.eta_seconds, null);
@@ -41,12 +41,12 @@ test("etaText rounds sensibly", () => {
   assert.equal(etaText(null), "");
   assert.equal(etaText(12), "Less than a minute left");
   assert.equal(etaText(70), "About a minute left");
-  assert.equal(etaText(185), "About 3 minutes left");
-  assert.equal(etaText(9 * 60 + 20), "About 9 minutes left");
-  assert.equal(etaText(23 * 60), "About 25 minutes left");
-  assert.equal(etaText(59 * 60), "About 1 hour left");
-  assert.equal(etaText(80 * 60), "About 1 hour 20 minutes left");
-  assert.equal(etaText(2 * 3600 + 120), "About 2 hours left");
+  assert.equal(etaText(185), "Up to 3 minutes left");
+  assert.equal(etaText(9 * 60 + 20), "Up to 9 minutes left");
+  assert.equal(etaText(23 * 60), "Up to 25 minutes left");
+  assert.equal(etaText(59 * 60), "Up to 1 hour left");
+  assert.equal(etaText(80 * 60), "Up to 1 hour 20 minutes left");
+  assert.equal(etaText(2 * 3600 + 120), "Up to 2 hours left");
 });
 
 test("the Running card shows the estimate, its bar and the time left", () => {

@@ -196,7 +196,7 @@ ol.dds-list{list-style:decimal;padding-left:var(--s5);gap:var(--s2)}
 .ddc-panel-body>*{flex:none}
 .ddc-spin{flex:none;width:14px;height:14px;border:2px solid var(--brand-blue);border-right-color:transparent;border-radius:50%;animation:ds-spin .8s linear infinite}
 .ddc-bubble[data-dds-progress]{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center}
-.ddc-progress{position:absolute;left:0;right:0;bottom:100%;margin:0 0 var(--s2);display:flex;gap:var(--s2);align-items:center;padding:var(--s2) var(--s3);background:var(--brand-50);border:1px solid var(--brand-200);border-radius:var(--r-lg);font-size:var(--fs-small);color:var(--ink)}
+.ddc-progress{position:fixed;left:50%;bottom:var(--s4);transform:translateX(-50%);z-index:50;max-width:min(560px,calc(100vw - 2 * var(--s4)));margin:0;display:flex;gap:var(--s2);align-items:center;padding:var(--s2) var(--s3);background:var(--brand-50);border:1px solid var(--brand-200);border-radius:var(--r-lg);box-shadow:var(--pop-shadow);font-size:var(--fs-small);color:var(--ink)}
 .ddc-composer .dds-nochat{font-size:var(--fs-small);line-height:var(--lh-small);color:var(--ink2)}
 .ddc-stop{display:flex;flex-direction:column;gap:var(--s1)}
 .ddc-detail{font-size:var(--fs-small);color:var(--ink2)}

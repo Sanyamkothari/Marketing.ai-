@@ -268,6 +268,59 @@ test("in the New campaign wizard the card around the chat names the customers: t
   assert.match($("[data-dds-chat-view] .ddc-head .dds-title").textContent, /^Your data for/, "on the Data page the chat names itself");
 });
 
+test("the heading names the goal as the screens do, never its id", () => {
+  const screen = {
+    case: { diagnosis: { use_cases: [{ use_case_id: "retail-win-back", name: "Retail Win-back" }] } },
+    view: { goal_id: "retail-win-back", verdict: { key: "needs_answers", next: "Answer the questions." }, conversation: [] },
+  };
+  assert.match(chat.headHtml(screen), /Your data for &quot;Retail Win-back&quot;/);
+  screen.view.conversation = [{ type: "fit", goal_id: "retail-win-back", name: "Retail Win-back (fit)", ok: true, sentence: "" }];
+  assert.match(chat.headHtml(screen), /Your data for &quot;Retail Win-back \(fit\)&quot;/, "the server's own name first");
+  screen.case.diagnosis = null;
+  screen.view.conversation = [];
+  assert.match(chat.headHtml(screen), /Your data for &quot;Retail win back&quot;/, "the id in words when nothing names it");
+});
+
+test("what is happening is said in a line, with the rows and the step count the server has", () => {
+  const screen = {
+    view: {
+      conversation: [{ type: "first_look", files: [{ upload_id: "u1", name: "orders.csv", rows: 541909 }], sentence: "" }],
+      full_check: { state: "running", steps_done: 1, steps_total: 4 },
+    },
+  };
+  assert.equal(chat.workingText("answer", screen), "Applying your answer to 541,909 rows… This takes a little longer on a big file.");
+  assert.equal(chat.workingText("tick", screen), "Updating the plan on 541,909 rows… This takes a little longer on a big file.");
+  assert.equal(chat.workingText("goal", screen), "Setting up your goal on 541,909 rows… This takes a little longer on a big file.");
+  assert.equal(chat.workingText("", screen), "Checking every row of the file (step 2 of 4)…", "the background check says where it is");
+  screen.view.full_check = { state: "done", steps_done: 4, steps_total: 4 };
+  assert.equal(chat.workingText("", screen), "", "nothing is going on once the check is done");
+  screen.view.conversation[0].files[0].rows = 1200;
+  assert.equal(chat.workingText("answer", screen), "Applying your answer to 1,200 rows…");
+  assert.match(chat.workingHtml("answer", screen), /data-dds-progress/);
+  assert.equal(chat.workingHtml("", screen), "");
+});
+
+test("a yes that needs someone else says who may give it, and whether you can", async () => {
+  const yes = (extra) =>
+    chat.readyHtml(
+      {
+        type: "ready",
+        stage: "approve",
+        sentence: "Prepare 1 file with 3 changes.",
+        stops: [],
+        speeds: [],
+        confirmations: [{ item_id: "build", sentence: "Leave out 25,525 rows.", why: "it leaves rows out", role: "analyst", required: true, can_agree: true, separate: true, shown: true, answered: false, ...extra }],
+      },
+      { stops: new Set(), confirms: new Set(), names: [] },
+    );
+  const mine = yes({});
+  assert.match(mine, /It needs a yes from an analyst on your team, and not from whoever suggested it \(it leaves rows out\)\. That is not you, so you can give it: Approve and start records your yes\./);
+  const suggested = yes({ can_agree: false, cannot_agree: "separation" });
+  assert.match(suggested, /You cannot give this yes: you suggested or answered it\. Ask another analyst on your team to agree to it\./);
+  const role = yes({ can_agree: false, cannot_agree: "role", role: "approver" });
+  assert.match(role, /You cannot give this yes: your role does not allow it\. Ask an approver on your team to agree to it\./);
+});
+
 test("one count of changes: the checklist, the first look and the Ready sentence say the same number", async () => {
   const s = await show("approve_class");
   const first = card(s, "first_look");
@@ -364,11 +417,11 @@ test("Approve and start: the own yes, Approve with the sentence read, then the s
   assert.equal($("[data-dds-approve-sentence]").textContent, ready.sentence, "the sentence, word for word");
   assert.equal(go.disabled, false, "the change that needs its own yes is agreed above: nothing to tick before the click");
   assert.ok(!$(`input[data-dds-confirm="${rows.item_id}"]`), "an answer already given is not asked again as a box");
-  assert.match($(`[data-dds-agreed="${rows.item_id}"]`).textContent, /Needs your yes: .*Approve and start gives your yes\./, "this goal asks for a separate yes: said in a line, given by the click");
+  assert.match($(`[data-dds-agreed="${rows.item_id}"]`).textContent, /Needs a yes: .*That is not you, so you can give it: Approve and start records your yes\./, "this goal asks for a separate yes: said in a line, given by the click");
   assert.match($(`[data-dds-confirm-row="${consent.item_id}"]`).textContent, /Also include: .*Left out unless you tick it/);
   assert.deepEqual(
     $$("[data-dds-speeds] .btn").map((b) => b.textContent.trim()),
-    ["Quick: about 8 minutes", "Balanced: about 20 minutes (recommended)", "Thorough: about 45 minutes"],
+    ["Quick: up to 8 minutes", "Balanced: up to 20 minutes (recommended)", "Thorough: up to 45 minutes"],
   );
   $('[data-dds-speed="quick"]').click();
   await settle(1);
@@ -575,7 +628,7 @@ test("approved already: the card is the start - the sentence, what was left out,
   assert.ok(el && !$("[data-dds-approve-start]"));
   assert.equal(el.querySelector("[data-dds-approved-sentence]").textContent, card(s, "ready").sentence);
   assert.match(el.querySelector("[data-dds-left-out]").textContent, /Left out, because nobody agreed:.*says who agreed to be contacted/);
-  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from .+ Balanced: about 20 minutes\./);
+  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from .+ Balanced: up to 20 minutes\./);
   $("[data-dds-continue]").click();
   await until(() => world.posted.some((p) => p.path === "/campaign-runs"), 3000, "the start");
 });
@@ -659,10 +712,10 @@ test("the learning times are the card's own, in one place and one set of numbers
     await show("approve_class", { patch });
     assert.deepEqual(
       $$("[data-dds-speeds] .btn").map((b) => b.textContent.trim()),
-      ["Quick: about 1 minute", "Balanced: about 7 minutes (recommended)", "Thorough: about 20 minutes"],
+      ["Quick: up to 1 minute", "Balanced: up to 7 minutes (recommended)", "Thorough: up to 20 minutes"],
     );
     assert.doesNotMatch($("[data-dds-approve-start-sentence]").textContent, /minutes?/, "the sentence does not say the minutes again: the buttons are the one place");
-    assert.match($('[data-dds-speed="balanced"]').textContent, /about 7 minutes/, "not the screen's built-in 15");
+    assert.match($('[data-dds-speed="balanced"]').textContent, /up to 7 minutes/, "not the screen's built-in 15");
   } finally {
     rules.applySpeedMinutes(null);
   }
@@ -754,7 +807,7 @@ test("when a separate yes is the rule the card says why in one line, and the one
   const s = await show("approve_class", { patch });
   const rows = card(s, "ready").confirmations.find((c) => c.required);
   const line = $(`[data-dds-agreed="${rows.item_id}"]`).textContent;
-  assert.match(line, /^Needs your yes: .*Someone other than whoever suggested it must agree \(.+\)\. Approve and start gives your yes\.$/);
+  assert.match(line, /^Needs a yes: .*It needs a yes from an analyst on your team, and not from whoever suggested it \(.+\)\. That is not you, so you can give it: Approve and start records your yes\.$/);
   assert.equal($(`[data-dds-agreed="${rows.item_id}"]`).querySelectorAll("br").length, 1, "one line of why");
   assert.equal($("[data-dds-approve-start]").disabled, false);
 });
@@ -807,7 +860,7 @@ test("a change the goal needs is part of the plan the one approval gives, not a 
       stops: [],
       speeds: [],
       confirmations: [
-        { item_id: "build", sentence: "Training table: one row per shopper.", why: "it makes a new table with a query", role: "analyst", required: true, can_agree: true, separate: true, shown: true, answered: false },
+        { item_id: "build", sentence: "Training table: one row per shopper.", why: "it builds a new table from your data", role: "analyst", required: true, can_agree: true, separate: true, shown: true, answered: false },
       ],
     },
     { stops: new Set(), confirms: new Set(), names: [] },
@@ -815,7 +868,7 @@ test("a change the goal needs is part of the plan the one approval gives, not a 
   assert.match(html, /data-dds-agreed="build"/);
   assert.doesNotMatch(html, /Left out unless you tick it/, "no 'left out unless you tick it' for what the goal needs");
   assert.doesNotMatch(html, /type="checkbox"/);
-  assert.match(html, /Approve and start gives your yes/);
+  assert.match(html, /Approve and start records your yes/);
 });
 
 test("the consent prompt says what the AI will and will not see, and a line confirms once it is given", () => {

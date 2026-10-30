@@ -234,6 +234,15 @@ test("I agree to this sentence is a deliberate step: off until I have read this 
   assert.equal(posts("confirmations")[0].body.sentence, consent.sentence);
 });
 
+test("the approval says who may give the yes and that this reader can, and what the two boxes are for", async () => {
+  const s = await show("approve_class");
+  const consent = s.view.approve_class.find((a) => a.role === "approver");
+  const card = $(`[data-dds-approval="${consent.item_id}"]`);
+  assert.match(card.textContent, /Who can give it: an approver on your team/);
+  assert.match(card.querySelector("[data-dds-you-can]").textContent, /^You can give this yes\.|^You did not suggest or answer it, so you can give this yes\.$/);
+  assert.match(card.textContent, /Two steps, so a click is never a yes by accident: tick that you have read the sentence, then agree to it\./);
+});
+
 test("someone the server would refuse is told whom to ask, with no I agree button", async () => {
   const s = await show("approve_class_own");
   for (const entry of s.view.approve_class) {
@@ -244,9 +253,9 @@ test("someone the server would refuse is told whom to ask, with no I agree butto
     const ask = card.querySelector("[data-dds-ask-other]");
     assert.equal(ask.dataset.ddsAskOther, entry.cannot_agree);
     if (entry.cannot_agree === "role") {
-      assert.equal(ask.textContent.trim(), "Ask an approver on your team to agree to this.");
+      assert.equal(ask.textContent.trim(), "You cannot give this yes: your role does not allow it. Ask an approver on your team to agree to this.");
     } else {
-      assert.equal(ask.textContent.trim(), "You suggested or answered this, so ask another analyst on your team to agree to this.");
+      assert.equal(ask.textContent.trim(), "You cannot give this yes: you suggested or answered it. Ask another analyst on your team to agree to this.");
     }
   }
   assert.deepEqual(new Set(s.view.approve_class.map((a) => a.cannot_agree)), new Set(["role", "separation"]));
@@ -302,7 +311,7 @@ test("in the wizard, approving a plan that leaves nothing out still starts nothi
   await settle(3);
   assert.deepEqual(started, [], "Approve did not start the run");
   assert.ok(!world.posted.some((p) => p.path === "/campaign-runs"), "Approve did not post a run");
-  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from .+ Balanced: about 20 minutes\./);
+  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from .+ Balanced: up to 20 minutes\./);
   assert.ok($("[data-dds-speed-open]"), "the Quick/Balanced choice sits behind Change");
   $("[data-dds-continue]").click();
   await until(() => world.posted.some((p) => p.path === "/campaign-runs"), 3000, "the one Start");
@@ -428,18 +437,18 @@ test("ready on the Data page: one sentence with the time, Change picks another, 
   const s = await show("ready");
   assert.equal($("[data-dds-verdict]").dataset.ddsVerdict, "ready");
   const sentence = $("[data-dds-start-sentence]").textContent;
-  assert.match(sentence, /^We will learn from .+, 1,200 customers, and build your contact list\. Balanced: about 20 minutes\./);
+  assert.match(sentence, /^We will learn from .+, 1,200 customers, and build your contact list\. Balanced: up to 20 minutes\./);
   assert.match($("[data-dds-start-leave]").textContent, /You can close this page\./);
   assert.ok(!$("[data-dds-speeds]"), "the choices wait behind Change");
   $("[data-dds-speed-open]").click();
   await settle(1);
   assert.deepEqual(
     $$("[data-dds-speed]").map((b) => b.textContent.trim()),
-    ["Quick: about 8 minutes", "Balanced: about 20 minutes (recommended)", "Thorough: about 45 minutes"],
+    ["Quick: up to 8 minutes", "Balanced: up to 20 minutes (recommended)", "Thorough: up to 45 minutes"],
   );
   $('[data-dds-speed="thorough"]').click();
   await settle(1);
-  assert.match($("[data-dds-start-sentence]").textContent, /Thorough: about 45 minutes\./);
+  assert.match($("[data-dds-start-sentence]").textContent, /Thorough: up to 45 minutes\./);
   const button = $("[data-dds-continue]");
   assert.equal(button.textContent.trim(), "Start the campaign");
   button.click();

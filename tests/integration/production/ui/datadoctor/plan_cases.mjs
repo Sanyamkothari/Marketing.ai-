@@ -102,6 +102,30 @@ test("the funnel: rows and customers in and out, the yes share before and after,
   assert.ok(document.activeElement.closest('[data-dds-item="sql.spend"]'), "Biggest losses takes you to the step");
 });
 
+test("a change the Doctor took back is not listed beside the one that took its place; one the person unticked still is", async () => {
+  const taken = sqlItem({ item_id: "sql.old", title: "5,268 rows are exact copies of another row", state: "rejected", decided_by: "agent:data-doctor", withdrawn_because: "a newer proposal about the same thing took its place", superseded_by: "sql.spend" });
+  const unticked = sqlItem({ item_id: "sql.mine", title: "A step you unticked", state: "rejected", decided_by: "u_1" });
+  await show("approve_class", {
+    patch: (s) => {
+      s.case.items.push(sqlItem(), taken, unticked);
+      return s;
+    },
+  });
+  assert.ok($('[data-dds-item="sql.spend"]'), "the current change is listed");
+  assert.ok(!$('[data-dds-item="sql.old"]'), "the one the Doctor took back is no part of the plan: it is not shown a second time");
+  assert.ok($('[data-dds-item="sql.mine"]'), "what the person unticked stays, so it can be ticked again");
+});
+
+test("counts from the first rows are said to be a first look that the whole file's count replaces", async () => {
+  await show("approve_class", { patch: withLedger({}, { ...LEDGER, rows_in: 1000, rows_out: 958, sampled_from: 541909 }) });
+  const note = $("[data-dds-sampled]").textContent;
+  assert.match(note, /A first look: these numbers are from the first 1,000 of 541,909 rows\. The whole file is being checked, and its numbers will replace these\./);
+  assert.match($('[data-dds-step-receipt="sql.spend"]').textContent, /A first look, on the first rows/);
+  await show("approve_class", { patch: withLedger({}, { ...LEDGER, rows_in: 541909, rows_out: 516384, sampled_from: null }) });
+  assert.ok(!$("[data-dds-sampled]"), "once the whole file's count is in, only that is shown");
+  assert.match($('[data-dds-step-receipt="sql.spend"]').textContent, /We counted/);
+});
+
 test("with no ledger the funnel draws only each step's own losses, never a total chained across steps", async () => {
   await show("approve");
   assert.ok(!$("[data-dds-funnel]") && !$("[data-dds-checks]"));

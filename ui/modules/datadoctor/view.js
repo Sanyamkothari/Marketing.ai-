@@ -104,6 +104,26 @@ export function activeSection(c) {
   };
 }
 
+/** A change the Doctor itself took back (a newer one took its place, or it no longer holds): it is no part of the plan, so no screen lists it. A change the person unticked is theirs and stays listed. */
+export const takenBack = (item) =>
+  item.state === "rejected" && !item.parked_for && Boolean(item.withdrawn_because || !item.decided_by || String(item.decided_by).startsWith("agent"));
+
+/**
+ * The goal as the screens name it: the server's own name (the goal's fit card, its goal card, the diagnosis), else the
+ * known display name, else the id in words. Never the raw id ("retail-win-back").
+ */
+export function goalLabel(screen) {
+  const id = screen.view.goal_id;
+  const conversation = screen.view.conversation || [];
+  const fit = conversation.find((c) => c.type === "fit");
+  const goals = conversation.find((c) => c.type === "goals");
+  const listed = ((screen.case && screen.case.diagnosis && screen.case.diagnosis.use_cases) || []).find((u) => u.use_case_id === id);
+  const named = (fit && fit.goal_id === id && fit.name) || ((goals && goals.cards) || []).find((c) => c.goal_id === id)?.name || (listed && listed.name);
+  if (named) return named;
+  const known = goalName(id);
+  return known && known !== id ? known : id.replace(/[-_]+/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
 /** The questions to show: open blocking first, then open, then answered; data requests are drawn on their own. */
 export function questionsOf(c) {
   const { questions } = activeSection(c);
@@ -185,7 +205,7 @@ export const namesOf = (c) => [
 export function headerHtml(screen, { level = 2, title = "" } = {}) {
   const { case: c, view } = screen;
   const v = VERDICTS[view.verdict.key] || VERDICTS.working;
-  const heading = title || (view.goal_id ? `Your data for "${goalName(view.goal_id)}"` : "Your data");
+  const heading = title || (view.goal_id ? `Your data for "${goalLabel(screen)}"` : "Your data");
   const files = (c.files || []).length
     ? `<p class="dds-files">${icon("data", { size: 16 })}<span>${plural(c.files.length, "file", "files")}: ${(c.files || [])
         .map((f) => userText(plain(f.file_name) + (f.sheet ? ` (${plain(f.sheet)})` : "")))
@@ -331,6 +351,11 @@ export function approvalHtml(entry, item, c, { busy = false, read = false, extra
   const names = namesOf(c);
   const who = ROLE_WORDS[entry.role] || ROLE_WORDS.analyst;
   const whoText = entry.separate ? `${who}, other than whoever suggested or answered it` : who;
+  // Whether this reader may give it, said plainly (the server decided: `can_agree`), then what the two controls are.
+  const youLine =
+    entry.confirmed || entry.can_agree === false
+      ? ""
+      : `<p class="dds-why" data-dds-you-can>${esc(entry.separate ? "You did not suggest or answer it, so you can give this yes." : "You can give this yes.")}</p>`;
   const done = entry.confirmed;
   const pending = item && item.state !== "accepted";
   const sentenceId = domId("dds-sentence", entry.item_id);
@@ -342,12 +367,12 @@ export function approvalHtml(entry, item, c, { busy = false, read = false, extra
     // The server would refuse this reader: no button that can only fail, but who to ask.
     const ask =
       entry.cannot_agree === "separation"
-        ? `You suggested or answered this, so ask ${who.replace(/^an? /, "another ")} to agree to this.`
-        : `Ask ${who} to agree to this.`;
+        ? `You cannot give this yes: you suggested or answered it. Ask ${who.replace(/^an? /, "another ")} to agree to this.`
+        : `You cannot give this yes: your role does not allow it. Ask ${who} to agree to this.`;
     action = `<p class="dds-state" data-dds-ask-other="${esc(entry.cannot_agree || "role")}">${icon("info", { size: 14 })}<span>${esc(ask)}</span></p>`;
   } else {
     // A deliberate step first: "I have read this sentence" turns "I agree to this sentence" on.
-    action = `<label class="dds-tick dds-read"><input type="checkbox" id="${esc(readId)}" data-dds-read="${esc(entry.item_id)}"${read ? " checked" : ""}${
+    action = `<p class="dds-why">Two steps, so a click is never a yes by accident: tick that you have read the sentence, then agree to it.</p><label class="dds-tick dds-read"><input type="checkbox" id="${esc(readId)}" data-dds-read="${esc(entry.item_id)}"${read ? " checked" : ""}${
       busy ? " disabled" : ""
     }><span class="dds-item-body"><span class="dds-item-t">${esc(READ_IT)}</span></span></label><div class="dds-actions">${button({
       label: AGREE,
@@ -356,12 +381,12 @@ export function approvalHtml(entry, item, c, { busy = false, read = false, extra
       disabled: busy || !read,
     })}</div>`;
   }
-  return `<article class="dds-card dds-approval" data-dds-approval="${esc(entry.item_id)}" data-dds-role="${esc(entry.role)}"><p class="dds-card-t has-icon">${icon("alert", { size: 16 })}<span>Needs your yes on its own</span></p><blockquote class="dds-sentence" id="${esc(sentenceId)}" data-dds-sentence>${userTextIn(
+  return `<article class="dds-card dds-approval" data-dds-approval="${esc(entry.item_id)}" data-dds-role="${esc(entry.role)}"><p class="dds-card-t has-icon">${icon("alert", { size: 16 })}<span>${esc(entry.can_agree === false && !done ? "Needs someone else's yes" : "Needs a yes of its own")}</span></p><blockquote class="dds-sentence" id="${esc(sentenceId)}" data-dds-sentence>${userTextIn(
     entry.sentence,
     names,
-  )}</blockquote><p class="dds-why"><span class="dds-label">Why:</span> ${esc(entry.why.charAt(0).toUpperCase() + entry.why.slice(1))}.</p><p class="dds-why"><span class="dds-label">Needs a yes from</span> ${esc(
+  )}</blockquote><p class="dds-why"><span class="dds-label">Why:</span> ${esc(entry.why.charAt(0).toUpperCase() + entry.why.slice(1))}.</p><p class="dds-why"><span class="dds-label">Who can give it:</span> ${esc(
     whoText,
-  )}.</p>${pending && !done ? `<p class="dds-why">Until someone agrees, this change is left out.</p>` : ""}${extra}${action}</article>`;
+  )}.</p>${youLine}${pending && !done ? `<p class="dds-why">Until someone agrees, this change is left out.</p>` : ""}${extra}${action}</article>`;
 }
 
 // --- doubts ---------------------------------------------------------------------------------------------------
