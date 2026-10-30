@@ -22,6 +22,7 @@ from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.doctor.case import CaseDoubt, CaseItem, CaseQuestion
 
 __all__ = [
+    "KEEP_KIND",
     "SETTING_KIND",
     "WITHDRAW_KIND",
     "doubt_subject",
@@ -34,6 +35,9 @@ WITHDRAW_KIND: Final[str] = "withdraw"
 """The item kind that asks the person to take another item out of the plan (`payload.item_id`, with its consequence)."""
 SETTING_KIND: Final[str] = "goal_setting"
 """The item kind that sets one of a goal's settings (`payload.goal_id`, `setting`, `value`)."""
+KEEP_KIND: Final[str] = "keep"
+"""The item kind of a person's "keep it as it is" (`payload.subject`: the matter, `item_id`: the change they turned
+down, `message`: their own message). While it is accepted, no author proposes that subject again."""
 
 _GOAL_KINDS: Final[Mapping[str, str]] = {
     "outcome_column": "outcome",

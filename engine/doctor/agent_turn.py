@@ -98,6 +98,7 @@ from engine.doctor.author import (
     Create,
     Doubt,
     ItemDraft,
+    Keep,
     Request,
     SetSetting,
     SettingsView,
@@ -241,6 +242,7 @@ _DOING: Final[dict[str, str]] = {
     "join_files": "join the files",
     "stack_files": "stack the files",
     "withdraw": "take a change out",
+    "keep_as_is": "record that",
     "propose_setting": "set that",
     "adopt_suggestion": "use that suggestion",
     "ask": "ask you a question",
@@ -585,6 +587,8 @@ def _what_of(action: AuthorAction) -> str:
             return action.draft.title
         case Withdraw():
             return f"Take out {action.item_id}: {action.consequence}"
+        case Keep():
+            return f"Keep {action.item_id} as it is: {action.reason}"
         case SetSetting():
             return f"Use {action.value} for {action.setting.replace('_', ' ')}."
         case AskPerson():
@@ -1252,6 +1256,8 @@ class DoctorTurn:
                 return _active_goal(self.case) is None
             case "propose_setting":
                 return self.goal_settings is not None
+            case "keep_as_is":  # only a message of the person can say it
+                return bool(self.case.chat) and self.case.chat[-1].role == "user"
             case "adopt_suggestion":
                 return bool(self.suggestions)
             case "join_files" | "stack_files":
@@ -1579,6 +1585,8 @@ class DoctorTurn:
             self._request(action, args)
         elif name == "withdraw":
             self._withdraw(args)
+        elif name == "keep_as_is":
+            self._keep(args)
         elif name == "propose_setting":
             self._setting(args)
         elif name == "adopt_suggestion":
@@ -2300,9 +2308,10 @@ class DoctorTurn:
         self.kept, self.work_case = rebuilt, applied.case
         return None
 
-    def _target(self, given: object) -> CaseItem:
+    def _target(self, given: object, *, even_if_out: bool = False) -> CaseItem:
         """The change a handle or id names, among the case's and this turn's: a refusal that lists the valid handles
-        when there is none, and when it is already left out."""
+        when there is none, and when it is already left out (unless `even_if_out`: a note kept as it is may be one).
+        """
         text = str(given or "").strip()
         item_id = self.handles.get(text, text)
         found = next((i for i in self.work_case.items if i.item_id == item_id), None)
@@ -2321,7 +2330,7 @@ class DoctorTurn:
                     + (f": {', '.join(live[:8])}." if live else "; the plan is empty."),
                 )
             )
-        if found.state is ProposalState.REJECTED:
+        if found.state is ProposalState.REJECTED and not even_if_out:
             raise _RefusedError(
                 Refusal(
                     code="ITEM_ALREADY_LEFT_OUT",
@@ -2385,6 +2394,34 @@ class DoctorTurn:
                     if waiting
                     else "It was waiting, so it is taken out now."
                 ),
+            }
+        )
+
+    def _keep(self, args: dict[str, Any]) -> None:
+        """`keep_as_is`: the person said in their own message to keep a note or fix as it is. The author records their
+        decision citing that message; the AI can name the change, never the message, and never change anything by it.
+        """
+        item = self._target(args.get("item"), even_if_out=True)
+        reason = str(args.get("reason") or "").strip()
+        if not reason:
+            raise AgentToolError(
+                "AGENT_REASON_MISSING", "Say what the person said, in a sentence (`reason`)."
+            )
+        asked = bool(self.case.chat) and self.case.chat[-1].role == "user"
+        if not asked:
+            raise AgentToolError(
+                "AGENT_KEEP_NEEDS_A_MESSAGE", "Only a message the person has just written can say to keep it."
+            )
+        refusal = self._apply(
+            Keep(item_id=item.item_id, message=f"msg:{len(self.case.chat) - 1}", reason=reason)
+        )
+        if refusal is not None:
+            raise _RefusedError(self._for_the_model(refusal))
+        self.turn.feedback.append(
+            {
+                "kept": self._name("c", item.item_id),
+                "result": "Recorded as the person's decision, in their own message. It is not proposed again unless "
+                "they undo it.",
             }
         )
 
@@ -2739,7 +2776,7 @@ class DoctorTurn:
                 withdrawn.extend([action.replaces] if action.replaces else [])
             elif isinstance(action, Withdraw):
                 withdrawn.append(action.item_id)
-            if not isinstance(action, (Create, Withdraw, SetSetting)):
+            if not isinstance(action, (Create, Withdraw, Keep, SetSetting)):
                 continue
             new = [present[i] for i in kept.made if i not in began and i in present]
             if not new and isinstance(action, Create):  # already in the case: the twin stands for it

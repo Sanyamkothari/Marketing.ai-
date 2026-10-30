@@ -21,6 +21,7 @@ writes. Names, counts, sentences and column names only; never a cell value.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import Field
@@ -32,6 +33,7 @@ from engine.doctor.conversation import _counts, _is_agent, approval_holds, total
 from engine.doctor.decisions import AS_OF_QUESTION, decisions
 from engine.doctor.ledger import findings_of
 from engine.doctor.protocol import AGENT, REQUEST_CODES
+from engine.doctor.subjects import KEEP_KIND
 from engine.doctor.visit import CARRIED_KINDS, active_section, plan_change_items
 
 if TYPE_CHECKING:
@@ -327,6 +329,25 @@ def _swaps(
     return tuple(out)
 
 
+def _kept_decisions(items: Sequence[CaseItem]) -> list[ReviewDecision]:
+    """What the person asked to keep as it is, in their own message: shown as their decision, and "Change" unticks it
+    (the note or fix is then proposed again)."""
+    return [
+        ReviewDecision(
+            kind="other",
+            title=i.title,
+            why=str(i.payload.get("reason") or ""),
+            current="Kept as it is, as you asked in your message.",
+            decided_by="person",
+            item_id=i.item_id,
+            needs_yes=False,
+            answered=True,
+        )
+        for i in items
+        if i.kind == KEEP_KIND and i.state is ProposalState.ACCEPTED
+    ]
+
+
 def build_review(case: Case, view: CaseScreenView) -> ApprovalReview:
     """The approval screen of a case; `view` is the screen's view built without the review."""
     items, questions = active_section(case)
@@ -357,6 +378,7 @@ def build_review(case: Case, view: CaseScreenView) -> ApprovalReview:
     shown = [_question_decision(q) for q in asked]
     covered = {d.kind for d in shown if d.kind != "other" and d.answered}
     shown.extend(d for d in _item_decisions(case) if d.kind not in covered)
+    shown.extend(_kept_decisions(items))
     order: dict[str, int] = {"customer_id": 0, "outcome": 1, "date": 2, "consent": 3, "other": 4}
     shown.sort(key=lambda d: (order[d.kind], d.answered))
     problems = _problems(case, titles)

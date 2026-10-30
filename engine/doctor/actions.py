@@ -246,6 +246,13 @@ class WithdrawArgs(_Args):
     consequence: str = Field(description="what changes in the training table without it")
 
 
+class KeepAsIsArgs(_Args):
+    item: str = Field(
+        description="a note or fix the person turned down, by its id in the state; not one in the plan"
+    )
+    reason: str = Field(description="what the person said, in a sentence")
+
+
 class ReplyArgs(_Args):
     text: str = Field(description="what you tell the person; at most {chat_reply_chars} characters")
 
@@ -318,6 +325,12 @@ ACTIONS: Final[tuple[ActionSpec, ...]] = (
         "take any change out of the plan, yours or not; one in the plan waits for the person's yes.",
     ),
     ActionSpec(
+        "keep_as_is",
+        KeepAsIsArgs,
+        "the person's own message says to keep or leave a note or fix as it is: recorded as theirs, so it is not "
+        "proposed again.",
+    ),
+    ActionSpec(
         "propose_goal",
         ProposeGoalArgs,
         "with no goal yet: one goal that fits the files (or can be built from them); the person confirms.",
@@ -350,6 +363,7 @@ ENDS_TURN: Final[tuple[str, ...]] = (
     "propose_setting",
     "suggest_answer",
     "withdraw",
+    "keep_as_is",
 )
 """Actions whose result the model need not read before it speaks: they may carry `reply`, the words for the person,
 and an accepted one ends the turn there (no call only to say what was done)."""

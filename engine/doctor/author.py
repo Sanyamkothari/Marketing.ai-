@@ -17,14 +17,18 @@ Who decides what:
   withdrawing it is a new proposal that waits for the person's yes (a swap); their yes then leaves the old one out
   (`engine.doctor.swaps`). Only a change that is still waiting (in no plan, nobody's decision) is the author's own to
   swap or take back at once, and the default author takes back at once what it put in the plan itself.
-* `decided_by` is never set here. A change in the plan that nobody decided is "in the plan, undecided"; the approval
-  stamps it.
+* `decided_by` is never set here for a change. A change in the plan that nobody decided is "in the plan, undecided";
+  the approval stamps it. The one exception is :class:`Keep`: the person's own words (a chat message it cites) turn a
+  change down, which changes nothing, and the record is theirs. While it stands no author proposes that matter again
+  (:func:`engine.doctor.agent_apply.decided_before`), and the same memory carries a decision about a column of a file
+  over to the table a combine made of it.
 
 Nothing here reads a cell.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -34,7 +38,7 @@ from pydantic import Field, JsonValue
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState, Refusal
 from engine.config import StrictBase
-from engine.doctor.agent_apply import Roles, person_owns, twin_of, waits_because
+from engine.doctor.agent_apply import Roles, decided_before, person_owns, twin_of, waits_because
 from engine.doctor.case import (
     Case,
     CaseDoubt,
@@ -57,7 +61,7 @@ from engine.doctor.protocol import (
 )
 from engine.doctor.reconcile import AUTHOR, Emission, Reconciled, left_out_event, reconcile, take_back
 from engine.doctor.standing import StandingAnswerStore, apply_standing, no_longer_fits
-from engine.doctor.subjects import SETTING_KIND, WITHDRAW_KIND
+from engine.doctor.subjects import KEEP_KIND, SETTING_KIND, WITHDRAW_KIND, item_subject
 from engine.doctor.visit_contracts import CaseVisit, OptionEffect
 
 if TYPE_CHECKING:
@@ -78,6 +82,7 @@ __all__ = [
     "Doubt",
     "Gathered",
     "ItemDraft",
+    "Keep",
     "Owed",
     "Refusal",
     "Request",
@@ -145,6 +150,18 @@ class Withdraw(StrictBase):
     consequence: str = Field(description="What changes in the training table without it.")
 
 
+class Keep(StrictBase):
+    """The person said, in a message of their own, to keep as it is something the Doctor would change. Recorded as
+    their decision, cited to that message; it only ever turns a change down, so the data and the meaning stay as they
+    are. A change already in the plan is not turned down this way: taking it out is a `Withdraw`, which waits for
+    their yes."""
+
+    op: Literal["keep"] = "keep"
+    item_id: str = Field(description="The change they turn down, in any state but in the plan.")
+    message: str = Field(description='The person\'s own message it rests on: "msg:<n>".')
+    reason: str
+
+
 class AskPerson(StrictBase):
     """An ambiguity, settled by the protocol: proven, assumed or asked within the file's question budget."""
 
@@ -177,7 +194,7 @@ class Request(StrictBase):
 
 
 AuthorAction = Annotated[
-    Create | Withdraw | AskPerson | SetSetting | Doubt | Request, Field(discriminator="op")
+    Create | Withdraw | Keep | AskPerson | SetSetting | Doubt | Request, Field(discriminator="op")
 ]
 
 
@@ -297,6 +314,32 @@ def _not_found(item_id: str, case: Case) -> Refusal:
     )
 
 
+def _unkeepable(old: CaseItem) -> Refusal | None:
+    """Why `old` cannot be kept as it is by a record of the person's words (None: it can). Only a change that is not
+    in the plan, a note or a fix, and never a stop, the goal's build or a meaning: keeping must change nothing.
+    """
+    if old.state is ProposalState.ACCEPTED:
+        return Refusal(
+            code="KEEP_IS_IN_THE_PLAN",
+            what_failed=f"“{old.title}” is in the plan, so keeping things as they were means taking it out.",
+            value=old.item_id,
+            how_to_fix="Use withdraw: taking a change out of the plan waits for the person's yes.",
+        )
+    payload = old.payload
+    if (
+        old.kind not in {"data_check", "recipe_step"}
+        or payload.get("level") == "stop"
+        or isinstance(payload.get("buildable"), dict)
+    ):
+        return Refusal(
+            code="KEEP_NOT_ALLOWED",
+            what_failed=f"“{old.title}” is a stop, a build or a meaning, which a message cannot turn down.",
+            value=old.item_id,
+            how_to_fix="Only a note or a fix to the data can be kept as it is. Ask the person to decide this one.",
+        )
+    return None
+
+
 class _Run:
     """The work of one :func:`apply_actions`: the case's records as they change, and what is emitted at the end."""
 
@@ -319,6 +362,8 @@ class _Run:
                 return self._create(action)
             case Withdraw():
                 return self._withdraw(action)
+            case Keep():
+                return self._keep(action)
             case SetSetting():
                 return self._setting(action)
             case AskPerson():
@@ -380,6 +425,9 @@ class _Run:
         item = self._item(
             self._build_of(action.draft, action.replaces), action.basis, state=ProposalState.PENDING
         )
+        decided = decided_before(self.case, self.work.items, item)
+        if decided is not None and decided.kind == KEEP_KIND:
+            return self._kept(decided)
         twin = twin_of([*self.work.items, *self.emit], item)
         if twin is not None and twin.state is ProposalState.REJECTED and twin.withdrawn_because is None:
             return Refusal(
@@ -390,6 +438,9 @@ class _Run:
             )
         if twin is not None:
             self.emit.append(item)  # already there: said again, so a complete emission keeps it
+            return None
+        if decided is not None and action.replaces is None:
+            self._carry(item, decided)
             return None
         # Whether it is in the plan or waits for the person's tick is code's call, never the author's.
         placed = waits_because(item, self.ctx.roles) is None
@@ -414,6 +465,38 @@ class _Run:
             item.model_copy(update={"state": ProposalState.ACCEPTED if placed else ProposalState.PENDING})
         )
         return None
+
+    def _kept(self, keep: CaseItem) -> Refusal | None:
+        """A matter the person asked to keep as it is: the default author drops it quietly, the AI is told."""
+        if self.ctx.author == "default":
+            return None
+        return Refusal(
+            code="KEPT_BY_PERSON",
+            what_failed="The person asked to keep this as it is, so it is not proposed again.",
+            value=keep.item_id,
+            how_to_fix="Leave it. They can undo their decision in the plan, or ask for it in a new message.",
+        )
+
+    def _carry(self, item: CaseItem, decided: CaseItem) -> None:
+        """The same change on the table a combine made of the file the person decided it on: their yes (or no) stands
+        here too, recorded as theirs and cited to the decision it comes from."""
+        carried = item.model_copy(
+            update={
+                "state": decided.state,
+                "decided_by": decided.decided_by,
+                "decided_at": decided.decided_at,
+                "evidence_ids": (*item.evidence_ids, f"carried:{decided.item_id}"),
+            }
+        )
+        self.emit.append(carried)
+        self.events.append(
+            EventDraft(
+                kind=TimelineKind.ITEM_DECIDED,
+                upload_id=carried.upload_id,
+                item_id=carried.item_id,
+                details={"state": carried.state.value, "carried_from": decided.item_id},
+            )
+        )
 
     def _take_out(self, old: CaseItem, because: str, *, by: str | None, why: str) -> None:
         slot = self.work.items.index(old)
@@ -464,6 +547,59 @@ class _Run:
             )
         self.emit.append(item)
         return None
+
+    def _keep(self, action: Keep) -> Refusal | None:
+        old = self._find(action.item_id)
+        if old is None:
+            return _not_found(action.item_id, self.case)
+        said = self._said(action.message)
+        if isinstance(said, Refusal):
+            return said
+        refusal = _unkeepable(old)
+        if refusal is not None:
+            return refusal
+        subject = item_subject(old)
+        if any(
+            i.kind == KEEP_KIND and i.state is ProposalState.ACCEPTED and i.payload.get("subject") == subject
+            for i in self.work.items
+        ):
+            return None  # already kept: said again
+        draft = ItemDraft(
+            kind=KEEP_KIND,
+            payload={
+                "subject": subject,
+                "item_id": old.item_id,
+                "message": action.message,
+                "reason": action.reason,
+            },
+            title=f"Keep as it is: {old.title}",
+            upload_id=old.upload_id,
+            goal_id=old.goal_id,
+            confidence=AgentConfidence.CHECK,
+        )
+        keep = self._item(draft, action.message, state=ProposalState.ACCEPTED).model_copy(
+            update={"decided_by": said, "decided_at": self.ctx.now}
+        )
+        self.emit.append(keep)
+        if old.state is ProposalState.PENDING:  # it is waiting: the person's no takes it out now
+            self._take_out(
+                old, f"the person asked to keep it as it is ({action.reason})", by=keep.item_id, why="kept"
+            )
+        return None
+
+    def _said(self, message: str) -> str | Refusal:
+        """The user id of the person who wrote the chat message `message` (`msg:<n>`): a decision is theirs, and rests
+        on their own words, so it must cite one of them."""
+        found = re.fullmatch(r"msg:(\d+)", message.strip())
+        entry = self.case.chat[int(found[1])] if found and int(found[1]) < len(self.case.chat) else None
+        if entry is None or entry.role != "user" or entry.by is None:
+            return Refusal(
+                code="KEEP_NEEDS_THE_PERSONS_MESSAGE",
+                what_failed="A decision to keep something rests on a message the person wrote.",
+                value=message[:40],
+                how_to_fix="Cite their message as msg:<n>, the number the state gives it.",
+            )
+        return entry.by
 
     def _setting(self, action: SetSetting) -> Refusal | None:
         allowed = [str(v) for v in self.ctx.goal.allowed(action.setting)] if self.ctx.goal is not None else []

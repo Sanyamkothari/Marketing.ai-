@@ -150,9 +150,17 @@
       "approvals": "unchanged"
     },
     "keep_dupes": {
-      "taken_back_or_swapped": [
+      "accepted_items": [
         {
-          "title_has": "exact copies"
+          "has": [
+            "keep as it is",
+            "exact copies"
+          ]
+        }
+      ],
+      "decided_by_person": [
+        {
+          "title_has": "Keep as it is"
         }
       ],
       "reply": {
@@ -391,7 +399,15 @@
         {
           "has": [
             "exact copies"
+          ],
+          "without": [
+            "keep as it is"
           ]
+        }
+      ],
+      "decided_by_person": [
+        {
+          "title_has": "Keep as it is"
         }
       ]
     }

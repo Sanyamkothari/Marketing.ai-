@@ -96,7 +96,7 @@ prose with no action). After: the recorded run.
 | 1 | What is this data good for? | Answer, no plan change | Pass: a grounded two-sentence reply, plan unchanged |
 | 2 | Use a 60-day window | **Fail** (`AGENT_ITEM_UNKNOWN`) | Pass: `propose_setting window_days 60` is a pending item ("The outcome looks 60 days after the snapshot"); after the yes the default author makes the table again at the 60-day snapshot (2023-11-30) with no AI call |
 | 3 | Leave out customers outside the United Kingdom | **Fail** | Pass: `propose_sql` with `replaces` is a pending swap of the training table (1,649 shoppers, 186 of 1,835 left out, a stop that needs the person's yes); after the yes it is the goal's build and keeps the outcome |
-| 4 | Keep the duplicates | **Fail** | Pass: the reply says it will not remove them and that nothing in the plan does; at the end no accepted change is about exact copies. The note about the copies had already gone with the date fix |
+| 4 | Keep the duplicates | **Fail** | Pass: `keep_as_is` records the person's decision (memory package, section 9): an accepted `Keep as it is: ... exact copies` item decided by the person and cited to their message; at the end no accepted change removes the copies, and if they come back the note is not proposed again while the decision stands |
 | 5 | What did you change, and why? | Prose that names nothing | Pass: a list of the key, the as-of date, the 60-day window and the UK table, each with its reason |
 | 6 | Undo the date fix | **Fail** | Pass: `withdraw` of the person's change is a pending "Leave out" with the consequence (294 rows come back, the partly filled newest month); it stands until the yes, then it is gone |
 | 7 | Include CustomerID as a feature | Refused | Pass: refused with the reason; plan unchanged |
@@ -178,9 +178,9 @@ unpivot steps") and, in the fix round, its spend outcome and `ready`, and `08` a
   scenarios now ask more of the AI than the baseline did (a spend table; a setting change after the AI's table); the
   eleven instructions alone cost 13 calls against 11. Calls that could still go: a `reply` on `propose_sql` and on the
   look tools would save the call after a receipt, at the price of a reply written before the AI reads it.
-- **A removal the person decided is suggested again after a combine.** In `07` the person says yes to taking out
-  `signup_date` of `customers.csv`; after the combine the joined table has the column again and the same removal
-  waits for a second yes. The person's decision does not carry over to the table the combine makes.
+- **A removal the person decided is suggested again after a combine.** Fixed in the memory package (section 9). In
+  `07` the person's yes to taking out `signup_date` of `customers.csv` now stands for the same column of the joined
+  table; `07` still fails for the reasons above.
 - **`06` asks for a date the AI may not choose.** The scenario's person types 2023-09-01, a cut-off before the end of the
   sheet, because for a spend outcome no rule gives a training snapshot (event outcomes get one from `snapshot_for`);
   with the latest date in the file the 90 days after it would be empty.
@@ -188,8 +188,8 @@ unpivot steps") and, in the fix round, its spend outcome and `ready`, and `08` a
   (`_item`), and a monthly recheck, a standing answer and the person's own answer still construct items; the author
   places the detectors' drafts, but "exactly one code path writes items" is true of the visit's proposals only.
 - **The browser check** (Stage 5, item 3) was not run.
-- **The person's "keep the duplicates"** is a reply, not a recorded decision: if the copies come back after the date fix
-  is undone, the note returns as a pending proposal.
+- **The person's "keep the duplicates"** was a reply, not a recorded decision. Fixed in the memory package (section 9):
+  it is recorded, shown with a way to undo it, and the note does not come back while it stands.
 - **Answered questions keep the counts they were answered with**: the audience answer still reads "1,693 shoppers"
   after a 60-day window, because the person chose it then.
 - The full test suite and `make lint` run on CI, not here.
@@ -213,3 +213,50 @@ unpivot steps") and, in the fix round, its spend outcome and `ready`, and `08` a
   takes a second call because the reply quotes its receipt.
 - A recording is sealed on the hash of the instructions, not of the state: the state changes with every benign fix,
   the instructions change when the AI would read something else.
+
+## 9. Remembering the person's decisions (the memory package)
+
+Two gaps with one root: a decision the person made did not persist as a decision. Both are now answered by one
+function, `agent_apply.decided_before`, which the author asks before it writes any change: is there a decision of the
+person's that already answers this?
+
+- **Keep the duplicates.** A new author action, `Keep` (`author.py`; the AI's `keep_as_is`, which may carry `reply`).
+  When the person says in chat to keep or leave as it is a note or fix the Doctor would propose, the AI names that item
+  and code records an accepted `keep` item (`subjects.KEEP_KIND`): `decided_by` is the user who wrote the message, the
+  message is cited as `msg:<n>` (the AI cannot name the message, code takes the person's latest one, and the author
+  refuses a message that is not a person's), and the subject of the item turned down is in its payload. It only
+  records the safe direction: the author refuses an item that is in the plan (taking it out stays a `Withdraw` that
+  waits for the person's yes), a stop (`level: stop`), the goal's build, and any kind but a note or a fix to the data.
+  A waiting item is taken out at once; one the Doctor already took back stays out. While the keep is accepted the
+  default author drops any proposal of the same subject without a word, whatever its counts (the subject is
+  `data_check@DUPLICATE_ROWS:<file>`, not the id, which holds the day's count), and the AI is refused with
+  `KEPT_BY_PERSON`. It shows on the approval screen under the person's decisions with "Change", which unticks it
+  (the ordinary `decide`): the matter is then proposed again. It is not counted as a change of the plan
+  (`visit.plan_change_items`). The prompt template is unchanged: the action's one line in the generated action list is
+  the instruction, listed only when the person's message is the event, so only the message calls of scenario `08` were
+  sealed on other instructions.
+- **A decision about a column of an input file carries over to the table a combine made of it.** `decided_before` also
+  looks for the person's yes or no to the same change (same kind, column and parameters, `meaning_key`) on the file the
+  table was made from (`combine_run.source_upload`: the first file of the accepted join or stack, whose columns the
+  table keeps by name). If there is one, the new proposal is written as that decision: same state, same person, same
+  time, cited as `carried:<item id>`, with a timeline line `carried_from`. A decision of the Doctor's, an undecided
+  item, another column or another file carries nothing. A carried yes does not carry `agreed_rows`, so the plan's loss
+  stop asks again. A stack's other files carry nothing (only the first file's decisions do).
+- **Tests.** `tests/unit/doctor/test_decision_memory.py` (33): records with the message id, refuses change-direction
+  and non-person messages, the default author and the AI do not propose a kept matter again with other counts, undo
+  brings the note back, the AI action through a scripted turn, the screen, and the carry in both directions with what
+  does not carry. The scenario harness has three new expectation words (`decided_by_person`, `not_pending_items`,
+  `without`). Scenario `08` `keep_dupes` now ends with the keep item decided by the person (and still after the
+  approval); scenario `07` has `approved#carried`. `07` stays strict `xfail` for the reason in section 5; its reason now
+  says what remains.
+- **Recording.** I replaced the one recorded reply of `keep_dupes` (index 5 in `08/replies.jsonl`) by a `keep_as_is`
+  with a `reply`, written by playing the AI on that call's prompt, and changed one sentence of the later "what did you
+  change" reply. The other `08` replies are unchanged: the only change to their instructions is the new action line,
+  and I re-sealed `08` (`prompts.sha`) without playing those turns again. Scenarios `01` to `07` have no message turn
+  and their seals did not change. No live model was used.
+- **Calls.** `08` is still 16 calls (`keep_as_is` carries the reply); input tokens 105,301 -> 107,060 for the action
+  line and the keep row in the state.
+- **Not done.** The same memory is not asked for questions (a question the person answered is already remembered by
+  its answer), for a no to an AI step that the person unticked (it stays by `twin_of`, by exact meaning only), or for a
+  decision on a log file's column (a join does not keep those columns).
+

@@ -1123,14 +1123,17 @@ One prompt (`configs/prompts/data_doctor.v3.md`), one action set (`engine/doctor
 looks at); only the actions that can do something now are listed (no `propose_goal` once a goal is chosen); an
 answered question is its answer; a change that is out is one short row; the data rules R1 to R29, the guides and the
 tool details are read with `read_guide` only when needed; and `ask`, `express_doubt`, `propose_goal`,
-`propose_setting`, `suggest_answer` and `withdraw` may carry `"reply"`, the words for you, which ends the turn (no
+`propose_setting`, `suggest_answer`, `withdraw` and `keep_as_is` may carry `"reply"`, the words for you, which ends the turn (no
 call only to say what was done).
 
 ### For developers
 
 - `engine/doctor/author.py` - `apply_actions` (the only code that writes items and questions; `Create`, `Withdraw`,
-  `AskPerson`, `SetSetting`, `Doubt`, `Request`), `owed` and `served` (when the AI is asked), the default author's
-  `default_actions`. A `Create` that `replaces` the goal's build is the build (`_build_of`).
+  `Keep`, `AskPerson`, `SetSetting`, `Doubt`, `Request`), `owed` and `served` (when the AI is asked), the default
+  author's `default_actions`. A `Create` that `replaces` the goal's build is the build (`_build_of`). What the person
+  decided stays decided: `agent_apply.decided_before` answers a new proposal with their `keep` of that subject (no
+  author proposes it again until they undo it) or with their yes or no to the same change on the file a combine made
+  the table from (`combine_run.source_upload`).
 - `engine/doctor/agent_turn.py` - `DoctorTurn` (the one AI turn: state, handles, the actions, the reply checks),
   `doctor_author` (the port the visit calls); `engine/doctor/actions.py` - the action contract the prompt is generated
   from (`make generate`), `tool_line`, `ENDS_TURN`.

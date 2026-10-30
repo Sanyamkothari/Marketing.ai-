@@ -42,6 +42,20 @@
         "follow_up"
       ],
       "verdict": "ready"
+    },
+    "approved#carried": {
+      "decided_by_person": [
+        {
+          "title_has": "Remove 'signup_date'"
+        }
+      ],
+      "not_pending_items": [
+        {
+          "has": [
+            "signup_date"
+          ]
+        }
+      ]
     }
   },
   "final": {
@@ -51,7 +65,7 @@
     "verdict": "ready"
   },
   "xfail": {
-    "approved#ready": "AI-first Stage 3: Retail Win-back is built from one event table. The combine keeps one row per customer, so the orders' dates are gone from the joined table. A query over the orders themselves passes its trial (the AI wrote one in the P6c fix round) but cannot be applied: a query is a post-build step and the run gives it one working table, so approval stops with SQL_INPUT_MISSING. The Doctor asks for an outcome column.",
-    "final": "AI-first Stage 3: Retail Win-back is built from one event table. The combine keeps one row per customer, so the orders' dates are gone from the joined table. A query over the orders themselves passes its trial (the AI wrote one in the P6c fix round) but cannot be applied: a query is a post-build step and the run gives it one working table, so approval stops with SQL_INPUT_MISSING. The Doctor asks for an outcome column."
+    "approved#ready": "AI-first Stage 3: (The person's yes to removing signup_date from customers.csv now carries over to the combined table: the decision memory, `agent_apply.decided_before`, answers the same removal there as theirs, so it no longer waits for a second yes. What remains is this.) Retail Win-back is built from one event table. The combine keeps one row per customer, so the orders' dates are gone from the joined table. A query over the orders themselves passes its trial (the AI wrote one in the P6c fix round) but cannot be applied: a query is a post-build step and the run gives it one working table, so approval stops with SQL_INPUT_MISSING. The Doctor asks for an outcome column.",
+    "final": "AI-first Stage 3: (The person's yes to removing signup_date from customers.csv now carries over to the combined table: the decision memory, `agent_apply.decided_before`, answers the same removal there as theirs, so it no longer waits for a second yes. What remains is this.) Retail Win-back is built from one event table. The combine keeps one row per customer, so the orders' dates are gone from the joined table. A query over the orders themselves passes its trial (the AI wrote one in the P6c fix round) but cannot be applied: a query is a post-build step and the run gives it one working table, so approval stops with SQL_INPUT_MISSING. The Doctor asks for an outcome column."
   }
 }

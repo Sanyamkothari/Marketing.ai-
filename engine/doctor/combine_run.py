@@ -52,6 +52,7 @@ __all__ = [
     "plan_of",
     "rules_digest",
     "shape_digest",
+    "source_upload",
     "upload_ids_of",
 ]
 
@@ -172,6 +173,24 @@ def current_upload(case: Case, upload_id: str) -> str:
             break
         upload_id = made
     return upload_id
+
+
+def source_upload(case: Case, upload_id: str) -> str | None:
+    """The file whose columns the table `upload_id` keeps as they are: the first file of the accepted join or stack
+    that made it (a join keeps the customer list and adds columns; a stack keeps the shape of its files). None when
+    `upload_id` is no table a combine made."""
+    from engine.agent.contracts import ProposalState
+
+    file = next((f for f in case.files if f.upload_id == upload_id), None)
+    if file is None or file.original_upload_id is None or file.sheet is not None:
+        return None
+    made = any(
+        item.kind in {JOIN_KIND, STACK_KIND}
+        and item.state is ProposalState.ACCEPTED
+        and file.original_upload_id in upload_ids_of(item)
+        for item in case.items
+    )
+    return file.original_upload_id if made else None
 
 
 def combine_item(

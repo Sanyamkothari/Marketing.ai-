@@ -518,11 +518,13 @@ def check_invariants(
 
 
 def _has(item: Mapping[str, Any], rule: Mapping[str, Any]) -> bool:
-    """The item's title and payload hold every word of `rule["has"]` (and, if given, all the words of one list of
-    `rule["has_any"]`)."""
+    """The item's title and payload hold every word of `rule["has"]` and none of `rule["without"]` (and, if given,
+    all the words of one list of `rule["has_any"]`)."""
     text = _text([item.get("title"), item.get("payload")])
     words = rule.get("has", [])
-    if not all(w.casefold() in text for w in words):
+    if not all(w.casefold() in text for w in words) or any(
+        w.casefold() in text for w in rule.get("without", [])
+    ):
         return False
     options = rule.get("has_any", [])
     return not options or any(all(w.casefold() in text for w in option) for option in options)
@@ -738,8 +740,9 @@ def evaluate(
             found += [
                 f"no {' or '.join(state)} change like {r}" for r in rule if not _matching(case, r, state)
             ]
-        elif key == "not_accepted_items":
-            found += [f"a change like {r} is accepted" for r in rule if _matching(case, r, ["accepted"])]
+        elif key in ("not_accepted_items", "not_pending_items"):
+            held = "accepted" if key == "not_accepted_items" else "pending"
+            found += [f"a change like {r} is {held}" for r in rule if _matching(case, r, [held])]
         elif key == "item_state":
             for r in rule:
                 hit = _titled(case, r["title_has"])
@@ -771,6 +774,14 @@ def evaluate(
                 ]  # not the swaps themselves
                 if not hit or not all(i.get("state") == "rejected" or _swaps(case, i) for i in hit):
                     found.append(f"'{r['title_has']}' is neither taken back nor waiting to be swapped")
+        elif key == "decided_by_person":
+            # A change in the plan that a person (not the rules, the system or the AI) decided: their own yes.
+            for r in rule:
+                hit = [i for i in _titled(case, r["title_has"]) if i.get("state") == "accepted"]
+                if not hit or any(
+                    not i.get("decided_by") or str(i["decided_by"]).startswith(_NOT_A_PERSON) for i in hit
+                ):
+                    found.append(f"'{r['title_has']}' is not in the plan as a decision of the person's")
         elif key == "no_item_has":
             found += [
                 f"a change in the plan holds {words}"

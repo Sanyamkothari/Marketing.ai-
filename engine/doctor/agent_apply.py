@@ -38,7 +38,7 @@ from engine.agent.advisor import NEVER_TICKED_STEPS
 from engine.agent.contracts import AgentConfidence, ProposalState
 from engine.doctor.decisions import role_columns
 from engine.doctor.protocol import AGENT
-from engine.doctor.subjects import SETTING_KIND, WITHDRAW_KIND
+from engine.doctor.subjects import KEEP_KIND, SETTING_KIND, WITHDRAW_KIND, item_subject
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -49,6 +49,7 @@ __all__ = [
     "AGENT_APPLIED_STEPS",
     "NO_ROLES",
     "Roles",
+    "decided_before",
     "meaning_key",
     "person_owns",
     "required_by_goal",
@@ -200,6 +201,47 @@ def twin_of(items: Sequence[CaseItem], item: CaseItem) -> CaseItem | None:
     ]
     same.sort(key=lambda i: i.state is ProposalState.REJECTED)
     return same[0] if same else None
+
+
+def decided_before(case: Case, items: Sequence[CaseItem], item: CaseItem) -> CaseItem | None:
+    """The person's own decision that already answers `item`, whoever proposes it now: what they decided stays decided.
+
+    * A `keep` they asked for that names the matter `item` is about (its subject, so the same matter with other counts
+      is the same matter), for as long as it is accepted. Untick it and the matter is proposed again.
+    * Their yes or no to this very change on the file `item`'s table was made from. A join keeps the customer list
+      and a stack keeps the shape of its files, so a column with the same name in the same source file is the same
+      column: what they said of it carries over to the table the combine made.
+    """
+    from engine.doctor.combine_run import source_upload
+
+    subject = item_subject(item)
+    kept = next(
+        (
+            i
+            for i in items
+            if i.kind == KEEP_KIND
+            and i.state is ProposalState.ACCEPTED
+            and i.payload.get("subject") == subject
+        ),
+        None,
+    )
+    source = source_upload(case, item.upload_id) if item.upload_id else None
+    if kept is not None or source is None:
+        return kept
+    key = meaning_key(item.model_copy(update={"upload_id": source}))
+    return next(
+        (
+            i
+            for i in items
+            if i.upload_id == source
+            and i.kind == item.kind
+            and i.state is not ProposalState.PENDING
+            and i.decided_by not in (None, AGENT)
+            and i.withdrawn_because is None
+            and meaning_key(i) == key
+        ),
+        None,
+    )
 
 
 def waits_because(item: CaseItem, roles: Roles = NO_ROLES) -> str | None:

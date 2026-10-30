@@ -340,6 +340,24 @@ def test_a_change_of_the_persons_stands_until_they_say_yes_to_its_swap() -> None
     assert evaluate(taken, case(date_fix), None) != []
 
 
+def test_a_decision_is_the_persons_when_a_person_decided_it_and_a_word_can_leave_a_change_out_of_a_rule() -> (
+    None
+):
+    note = "10 rows are exact copies of another row"
+    kept = item("k1", "accepted", title=f"Keep as it is: {note}", by="local-operator")
+    rule = {"decided_by_person": [{"title_has": "Keep as it is"}]}
+    assert evaluate(rule, case(kept), None) == []
+    assert evaluate(rule, case({**kept, "decided_by": None}), None) != [], "nobody decided it"
+    assert evaluate(rule, case({**kept, "decided_by": "agent:data-doctor"}), None) != []
+    assert evaluate(rule, case({**kept, "state": "rejected"}), None) != [], "undone"
+    waiting = {"not_pending_items": [{"has": ["exact copies"]}]}
+    assert evaluate(waiting, case(kept), None) == []
+    assert evaluate(waiting, case(item("w1", "pending", title=note)), None) != []
+    removal = {"not_accepted_items": [{"has": ["exact copies"], "without": ["keep as it is"]}]}
+    assert evaluate(removal, case(kept), None) == [], "the person's keep is not a removal"
+    assert evaluate(removal, case(item("r1", "accepted", title=f"Remove: {note}")), None) != []
+
+
 def test_a_change_is_followed_by_the_title_it_had_at_an_earlier_step() -> None:
     before = case(item("d1", "accepted", title="Use 2024-01-31 as the as-of date"))
     now = case(

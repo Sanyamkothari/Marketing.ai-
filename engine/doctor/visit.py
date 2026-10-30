@@ -153,6 +153,7 @@ from engine.doctor.registry import (
     DataToolResult,
 )
 from engine.doctor.standing import StandingAnswerStore
+from engine.doctor.subjects import KEEP_KIND
 from engine.doctor.swaps import leave_out_for, leave_out_of_answer
 from engine.doctor.visit_contracts import (
     Acknowledgement,
@@ -487,7 +488,8 @@ COMBINE_KINDS: Final[frozenset[str]] = frozenset({"build_dataset", "stack_files"
 CARRIED_KINDS: Final[frozenset[str]] = frozenset({"outcome_column", "as_of_column", "consent_column"})
 """The decisions on what the data means; they stay with the case when a join or stack makes its files one table."""
 _CHECK_KIND: Final[str] = "data_check"
-"""A note or a flag for a person to read: nothing changes, so it is never counted as a change."""
+"""A note or a flag for a person to read: nothing changes, so it is never counted as a change. Nor is a decision to
+keep something as it is (`subjects.KEEP_KIND`)."""
 
 
 def plan_change_items(case: Case) -> tuple[CaseItem, ...]:
@@ -500,7 +502,7 @@ def plan_change_items(case: Case) -> tuple[CaseItem, ...]:
         item
         for item in items
         if item.state is ProposalState.ACCEPTED
-        and item.kind != _CHECK_KIND
+        and item.kind not in {_CHECK_KIND, KEEP_KIND}
         and (
             item.upload_id is None
             or item.upload_id in here
