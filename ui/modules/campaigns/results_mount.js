@@ -35,9 +35,20 @@ async function loadParts({ useCaseId, trainRunId, scoreRunId, caseId }) {
     : Promise.resolve(null);
   const [found, run] = await Promise.all([doctor, trainRunId ? getRun(trainRunId) : null]);
   const outcome = run && run.run && run.run.target ? { name: run.run.target, text: (uc.target && uc.target.definition) || "" } : null;
+  // A reader without the Analyst role gets no file preview in the screen: the training table's column names then come
+  // from the training run's own prepare.json (names only).
+  const noPreview = Boolean(found && found.screen && trainRunId && !(found.screen.view && found.screen.view.preview));
+  const prepare = noPreview ? (await getArtefacts(trainRunId, ["prepare.json"]).catch(() => ({})))["prepare.json"] : null;
   const doctorHtml = found
     ? doctorChangesHtml(
-        found.screen ? doctorChanges(found.screen, { entity: String(uc.entity || "customer").toLowerCase(), describe: (name) => columnDescriptions(uc).get(name), outcome }) : null,
+        found.screen
+          ? doctorChanges(found.screen, {
+              entity: String(uc.entity || "customer").toLowerCase(),
+              describe: (name) => columnDescriptions(uc).get(name),
+              outcome,
+              trainingColumns: (prepare && prepare.feature_columns) || [],
+            })
+          : null,
         caseId,
       )
     : "";

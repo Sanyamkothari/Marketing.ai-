@@ -9,7 +9,7 @@ import { button } from "../../components.js";
 import { esc, fmtStamp } from "../../dom.js";
 import { count } from "../../format.js";
 import { userText } from "../../labels.js";
-import { kindOf } from "../datadoctor/plan.js";
+import { SECTIONS, kindOf, sectionOf } from "../datadoctor/plan.js";
 import { columnWords, doctorHref } from "./summary_rules.js";
 
 const FIX = new Set([
@@ -47,10 +47,13 @@ function numbersOf(step, entity) {
 /**
  * What the approved plan changed, as groups of lines. `screen` is the case's screen answer (`{ case, view }`); `entity`
  * is the goal's word for a customer; `describe(name)` is the goal's own one-line description of a column (or null);
- * `outcome` is `{ name, text }`, the column the model predicts and what it means. Returns null when the screen holds no
- * case. A group with nothing in it is left out.
+ * `outcome` is `{ name, text }`, the column the model predicts and what it means. `trainingColumns` are the names of the
+ * columns the training table holds (from the training run, no cell values): they stand in for the screen's own column
+ * lists when the reader may not see the file preview. Returns null when the screen holds no case. A group with nothing
+ * in it is left out; no accepted change is left off the card: a kind with no group of its own goes under the plan
+ * section it belongs to ("Read the file", "Outcome", "Privacy").
  */
-export function doctorChanges(screen, { entity = "customer", describe = () => null, outcome = null } = {}) {
+export function doctorChanges(screen, { entity = "customer", describe = () => null, outcome = null, trainingColumns = [] } = {}) {
   const found = screen && screen.case;
   if (!found) return null;
   const view = screen.view || {};
@@ -70,6 +73,8 @@ export function doctorChanges(screen, { entity = "customer", describe = () => nu
   const dropped = [];
   const joined = [];
   const kept = [];
+  const others = new Map(SECTIONS.map((s) => [s.id, []]));
+  const answeredIds = (item) => decisions.some((d) => d.question_id && d.answered && d.current && item.item_id.startsWith(`${d.question_id}:`));
   const build = live.find((i) => kindOf(i) === "sql_query");
   for (const item of live) {
     const kind = kindOf(item);
@@ -84,7 +89,11 @@ export function doctorChanges(screen, { entity = "customer", describe = () => nu
         numbers: numbersOf(build && steps.get(build.item_id), entity),
       });
     } else if (item.kind === "data_check") kept.push({ text: `Checked and kept as it is: ${textOf(item)}`, numbers: "" });
+    else if (!answeredIds(item)) others.get(sectionOf(item)).push(line(item)); // the key, roles, dates, outcome, privacy: said under "Your own decisions" when a question was answered
   }
+  fixes.push(...others.get("fix"));
+  rowsOut.push(...others.get("exclusions"));
+  joined.push(...others.get("combine"));
   for (const item of items) {
     if (item.state === "rejected" && !item.superseded_by) kept.push({ text: `Left out of the plan at your request: ${item.title || textOf(item)}`, numbers: "" });
   }
@@ -92,7 +101,8 @@ export function doctorChanges(screen, { entity = "customer", describe = () => nu
   // Columns: what each file had, and what it has after the plan (the file's own columns, or the training table built from it).
   const columnsRemoved = [];
   const columnsAdded = [];
-  for (const file of list(view.preview && view.preview.files)) {
+  const files = list(view.preview && view.preview.files);
+  for (const file of files) {
     const before = names(file.before_columns);
     const after = names(file.columns);
     const label = file.after_table ? `${file.file_name} (becomes the table ${file.after_table})` : file.file_name;
@@ -111,6 +121,20 @@ export function doctorChanges(screen, { entity = "customer", describe = () => nu
       });
     }
   }
+  // No file preview (the reader is not an Analyst): the training table's own column names stand in, with no before list.
+  const trained = files.length ? [] : [...new Set([...names(trainingColumns), ...(outcome && outcome.name ? [outcome.name] : [])])];
+  if (trained.length) {
+    columnsAdded.push({
+      file: "",
+      columns: trained.map((name) => ({
+        name,
+        words: columnWords(name),
+        outcome: Boolean(outcome && outcome.name === name),
+        note: outcome && outcome.name === name ? outcome.text || "What the model predicts" : describe(name) || "",
+      })),
+    });
+  }
+  const needsAnalyst = !files.length;
   if (!columnsRemoved.length && dropped.filter(Boolean).length) columnsRemoved.push({ file: "", names: dropped.filter(Boolean) });
 
   const answered = decisions
@@ -134,8 +158,9 @@ export function doctorChanges(screen, { entity = "customer", describe = () => nu
     { id: "fixes", title: "Values fixed", lines: fixes },
     { id: "rows", title: "Rows left out", lines: rowsOut },
     { id: "joined", title: "Files joined, stacked or reshaped", lines: joined },
+    ...["read", "outcome", "privacy"].map((id) => ({ id, title: SECTIONS.find((s) => s.id === id).title, lines: others.get(id) })),
   ].filter((g) => g.lines.length);
-  return { funnel, groups, columnsRemoved, columnsAdded, decisions: answered, kept, approvals, entity };
+  return { funnel, groups, columnsRemoved, columnsAdded, needsAnalyst, decisions: answered, kept, approvals, entity };
 }
 
 const ul = (inner, attrs = "") => (inner ? `<ul class="pg-list"${attrs ? ` ${attrs}` : ""}>${inner}</ul>` : "");
@@ -190,7 +215,10 @@ export function doctorChangesHtml(changes, caseId) {
       .join(""),
     'data-dd-group="removed"',
   );
-  const added = sect("Columns added", columnsAddedHtml(changes.columnsAdded), 'data-dd-group="added"');
+  const addedNote = changes.needsAnalyst && changes.columnsAdded.length
+    ? `<p class="pg-p muted" data-dd-needs-analyst>These are the columns the model learns from. Which columns the file had before, and so which are new or removed, is shown to people with the Analyst role.</p>`
+    : "";
+  const added = sect("Columns added", `${addedNote}${columnsAddedHtml(changes.columnsAdded)}`, 'data-dd-group="added"');
   const decided = sect(
     "Your own decisions",
     ul(

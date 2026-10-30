@@ -94,6 +94,49 @@ test("many added columns: a dozen in view and the rest one click away", () => {
   assert.match(text($("[data-dd-more] summary")), /Show the other 8 columns/);
 });
 
+test("every accepted change is on the card, also those no question asked about: the key, consent, as-of date, outcome, privacy and a new column", () => {
+  const item = (item_id, kind, title, payload = {}) => ({ item_id, kind, state: "accepted", superseded_by: null, title, payload });
+  const bare = {
+    case: {
+      approvals: [],
+      items: [
+        item("key.1", "key", "CustomerID names the customers", { column: "CustomerID" }),
+        item("consent.1", "consent_column", "Marketing_OptIn says who agreed to be contacted", { column: "Marketing_OptIn" }),
+        item("asof.1", "as_of_column", "InvoiceDate is the as-of date", { column: "InvoiceDate" }),
+        item("outcome.1", "outcome_column", "Reactivated is what the model predicts", { column: "reactivated" }),
+        item("pii.1", "mask_pii", "Email is kept away from the AI", { column: "Email" }),
+        item("derive.1", "recipe_step", "Add orders_90d: the orders in the 90 days before the snapshot", { step: { kind: "derive", column: "orders_90d" } }),
+        { ...item("old.1", "key", "OldID names the customers"), superseded_by: "key.1" },
+      ],
+    },
+    view: { review: { plan: [], decisions: [] } },
+  };
+  draw(DC.doctorChanges(bare, { entity: "shopper" }));
+  const all = text($("[data-dd-changes]"));
+  for (const line of [/CustomerID names the customers/, /Marketing_OptIn says who agreed/, /InvoiceDate is the as-of date/, /Reactivated is what the model predicts/, /Email is kept away from the AI/, /Add orders_90d/]) {
+    assert.match(all, line);
+  }
+  assert.doesNotMatch(all, /OldID/, "a change a newer proposal replaced is not in force");
+  assert.deepEqual(
+    $$("[data-dd-group]").map((g) => g.getAttribute("data-dd-group")),
+    ["fixes", "rows", "read", "outcome", "privacy"],
+  );
+});
+
+test("a reader without the file preview still sees the columns the model learns from, and is told why the before list is missing", () => {
+  const noPreview = JSON.parse(JSON.stringify(screen));
+  noPreview.view.preview = null;
+  draw(DC.doctorChanges(noPreview, { entity: "shopper", describe, outcome: { name: "reactivated", text: "The shopper came back" }, trainingColumns: ["days_since_last_order", "orders_365d", { name: "spend_90d" }] }));
+  assert.match(text($("[data-dd-needs-analyst]")), /Analyst role/);
+  const added = $$("[data-dd-group=added] ~ ul li").map(text);
+  assert.ok(added.some((l) => /days_since_last_order/.test(l)));
+  assert.ok(added.some((l) => /spend_90d/.test(l)));
+  assert.ok(added.some((l) => /reactivated\s*What the model predicts\s*The shopper came back/.test(l)), "the outcome column");
+  assert.equal($("[data-dd-removed]"), null, "no before list, so no made-up removals");
+  draw(DC.doctorChanges(noPreview, { entity: "shopper" }));
+  assert.equal($("[data-dd-needs-analyst]"), null, "nothing to explain when no column is drawn");
+});
+
 // --- the tabs' wiring ---------------------------------------------------------------------------------------
 
 const useCase = { id: "retail-win-back", name: "Retail Win-back", marker: "p", entity: "Shopper", journey: "Win back", pages: { data: "Data", model: "Model", output: "Output" }, config: {} };
@@ -137,6 +180,7 @@ globalThis.fetch = async (input) => {
   if (run) return json({ run: runs[run[1]] });
   if (pathname === "/use-cases/retail-win-back") return json(useCase);
   if (pathname === "/cases/case_1/screen") return json(screen);
+  if (pathname === "/cases/case_2/screen") return json({ ...screen, view: { ...screen.view, preview: null } });
   return json({ detail: { code: "NOT_FOUND", message: "no" } }, 404);
 };
 
@@ -192,6 +236,18 @@ test("a redraw of the page keeps the open tab and asks the server for nothing ag
   await settle();
   assert.ok($("[data-cw-panel=data] [data-dd-changes]"), "the parts are drawn from the kept answer");
   assert.equal(requested.length, before, "nothing is asked again");
+});
+
+test("a reader who gets no file preview still sees the columns the model learns from, from the training run's own names", async () => {
+  artefacts["r_train/prepare.json"] = { feature_columns: ["days_since_last_order", "orders_90d"], dropped_columns: [], carried_columns: [] };
+  app.innerHTML = RT.resultsTabsHtml({});
+  RM.mountResultsTabs(app, { ...ctx, caseId: "case_2" });
+  await settle();
+  assert.match(text($("[data-cw-panel=data] [data-dd-needs-analyst]")), /Analyst role/);
+  const added = $$("[data-cw-panel=data] [data-dd-group=added] ~ ul li").map(text);
+  assert.ok(added.some((l) => /days_since_last_order/.test(l)));
+  assert.ok(added.some((l) => /reactivated\s*What the model predicts/.test(l)), "the outcome column");
+  delete artefacts["r_train/prepare.json"];
 });
 
 test("a run with no Data Doctor case has no card, and an effect model's Model and Output point to the effect pages", async () => {
