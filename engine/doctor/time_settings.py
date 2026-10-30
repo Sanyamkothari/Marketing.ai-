@@ -80,6 +80,7 @@ from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
+    import numpy as np
     import pandas as pd
 
     from engine.config import UseCaseConfig
@@ -1299,17 +1300,44 @@ def _date_values(series: pd.Series[Any]) -> pd.Series[Any] | None:
         return values.dt.tz_localize(None) if values.dt.tz is not None else values
     if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series):
         return None
-    cells = series.dropna().astype(str)
-    cells = cells[cells.str.strip() != ""]
+    spelled = _spellings(series)
+    if spelled is None:  # cells of mixed kinds: read cell by cell
+        cells = series.dropna().astype(str)
+        cells = cells[cells.str.strip() != ""]
+        counts = None
+    else:
+        cells, counts = spelled
     if cells.empty:
         return None
     order = date_order(cells)
     if order is None and cells.str.match(r"^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}").any():
         return None
+    if (
+        counts is not None
+    ):  # a column that is no date is known from its spellings: its rows are not read again
+        read = parse_dates(cells, dayfirst=bool(order)).values.notna().to_numpy()
+        if counts[read].sum() < READABLE_SHARE * counts.sum():
+            return None
     parsed = parse_dates(series, dayfirst=bool(order)).values
-    if parsed.notna().sum() < READABLE_SHARE * len(cells):
+    if parsed.notna().sum() < READABLE_SHARE * (len(cells) if counts is None else counts.sum()):
         return None
     return parsed
+
+
+def _spellings(series: pd.Series[Any]) -> tuple[pd.Series[Any], np.ndarray[Any, Any]] | None:
+    """The distinct filled spellings of a text column (in the order they first appear) and how many cells hold each;
+    None when the cells are not all text. A column of half a million rows has a few thousand spellings: asking
+    about them is asking about the column."""
+    import numpy as np
+    import pandas as pd
+
+    if pd.api.types.infer_dtype(series, skipna=True) not in {"string", "empty"}:
+        return None
+    codes, distinct = pd.factorize(series)
+    counts = np.bincount(codes[codes >= 0], minlength=len(distinct))
+    texts = pd.Series(np.asarray(distinct, dtype=object)).astype(str)
+    filled = (texts.str.strip() != "").to_numpy()
+    return texts[filled].reset_index(drop=True), counts[filled]
 
 
 def _norm(name: str) -> str:

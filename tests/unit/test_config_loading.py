@@ -89,6 +89,21 @@ def test_list_use_case_ids_accounts_for_every_shipped_file() -> None:
     assert list(ids) == sorted(ids)
 
 
+def test_the_list_of_use_cases_is_kept_until_a_file_in_the_folder_changes(tmp_path: Path) -> None:
+    folder = tmp_path / "use_cases"
+    folder.mkdir()
+    (folder / "first_one.yaml").write_text("id: first-one\n", encoding="utf-8")
+    assert list_use_case_ids(tmp_path) == ("first-one",)
+    (folder / "second_one.yaml").write_text("id: second-one\n", encoding="utf-8")
+    assert list_use_case_ids(tmp_path) == ("first-one", "second-one")
+    (folder / "second_one.yaml").write_text("id: wrong-name\n", encoding="utf-8")
+    with pytest.raises(ConfigError) as refused:
+        list_use_case_ids(tmp_path)
+    assert refused.value.code == "USE_CASE_ID_MISMATCH"
+    (folder / "second_one.yaml").unlink()
+    assert list_use_case_ids(tmp_path) == ("first-one",)
+
+
 @pytest.mark.parametrize("use_case_id", SHIPPED_IDS)
 def test_every_use_case_file_loads_and_its_stem_matches_its_id(use_case_id: str) -> None:
     config = load_use_case(use_case_id)

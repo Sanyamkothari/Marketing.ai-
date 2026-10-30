@@ -49,6 +49,7 @@ from engine.agent.sql_step import (
 )
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import StrictBase
+from engine.content_cache import cached_column, column_cache
 from engine.doctor.limits import limits
 
 __all__ = [
@@ -295,9 +296,17 @@ def frame_hash(frame: pd.DataFrame) -> str:
     return sha256_hex(head + values)
 
 
+_KEY_TEXT: Final = column_cache(6, megabytes=160)
+"""The IDs of a column as text, by what the column holds: every step's receipt counts the same ID column again."""
+
+
 def _key_values(series: pd.Series[Any]) -> pd.Series[Any]:
     """The IDs as text, empty ones left out, index kept. A whole-number float ID reads as the integer (a join
-    that turns 7 into 7.0 does not lose and re-add every customer)."""
+    that turns 7 into 7.0 does not lose and re-add every customer). Kept by what the column holds."""
+    return cached_column(_KEY_TEXT, series, "ids", lambda: _read_key_values(series))
+
+
+def _read_key_values(series: pd.Series[Any]) -> pd.Series[Any]:
     values = series.dropna()
     if pdt.is_float_dtype(values) and bool(((values == values.round()) & (values.abs() < 2**53)).all()):
         values = values.astype("int64")

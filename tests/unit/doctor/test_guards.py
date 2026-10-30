@@ -668,3 +668,16 @@ def test_a_changed_plan_counts_only_the_steps_whose_input_changed(monkeypatch: p
     assert counted == [1, 2, 2], "only the step that changed was counted"
     assert changed.receipts[0] == first.receipts[0] and changed.receipts[1] != first.receipts[1]
     assert run_guarded(frame, plan(1, 3), primary_key="id", target="y", **RUN).receipts == changed.receipts
+
+
+def test_the_ids_of_a_column_are_read_as_text_once_and_each_caller_gets_its_own() -> None:
+    ids = pd.Series([7.0, 8.0, None, 9.0], name="customer_id")
+    first = guards._key_values(ids)
+    assert first.tolist() == ["7", "8", "9"] and first.index.tolist() == [0, 1, 3]
+    first.iloc[0] = "changed"
+    assert guards._key_values(pd.Series([7.0, 8.0, None, 9.0], name="customer_id")).tolist() == [
+        "7",
+        "8",
+        "9",
+    ]
+    assert guards._key_values(pd.Series(["7", " 8 ", "", None], name="customer_id")).tolist() == ["7", "8"]

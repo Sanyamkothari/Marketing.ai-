@@ -43,7 +43,7 @@ import os
 import re
 import threading
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import PurePosixPath
 from time import perf_counter
@@ -483,20 +483,72 @@ def read_upload(
     if storage.size_bytes(key) == 0:
         raise IngestError("UPLOAD_EMPTY", "The file is empty.")
     keep = keep_all_rows and max_rows is None
-    if resolved == "parquet":
-        return _read_parquet(
-            storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows, keep_all_rows=keep
+
+    def read() -> ReadResult:
+        if resolved == "parquet":
+            return _read_parquet(
+                storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows, keep_all_rows=keep
+            )
+        return _read_csv(
+            storage,
+            key,
+            max_rows=max_rows,
+            row_cap=row_cap,
+            chunk_rows=chunk_rows,
+            keep_all_rows=keep,
+            keep_leading_zeros=keep_leading_zeros,
+            text_columns=tuple(text_columns),
         )
-    return _read_csv(
-        storage,
-        key,
-        max_rows=max_rows,
-        row_cap=row_cap,
-        chunk_rows=chunk_rows,
-        keep_all_rows=keep,
-        keep_leading_zeros=keep_leading_zeros,
-        text_columns=tuple(text_columns),
+
+    held = _read_key(
+        storage, key, resolved, max_rows, row_cap, chunk_rows, keep, keep_leading_zeros, text_columns
     )
+    return _own(_READS.get_or_compute(held, read))
+
+
+_READS: Final[ContentCache[ReadResult]] = ContentCache(
+    6, budget=640 * 2**20, cost=lambda read: _read_bytes(read)
+)
+"""The files read lately, by the stored file and how it was read: Data Doctor reads the same upload again at every
+step of a visit (the rows to look at, the whole file to count, to prepare and to check), 1.6 s each on half a million
+rows. A read is handed out as a copy, so a caller may change what it gets."""
+
+
+def _read_key(
+    storage: Storage,
+    key: str,
+    file_format: str,
+    max_rows: int | None,
+    row_cap: int,
+    chunk_rows: int,
+    keep_all_rows: bool,
+    keep_leading_zeros: bool,
+    text_columns: Sequence[str],
+) -> str | None:
+    """What names this read: the file (where it is, how big, when it was written, which file it is) and every
+    setting of the read. None for a store that has no file to look at."""
+    try:
+        path = storage.local_path(key)
+        info = path.stat()
+    except (AttributeError, NotImplementedError, OSError):
+        return None
+    return (
+        f"{path}|{info.st_size}|{info.st_mtime_ns}|{info.st_ino}|{file_format}|{max_rows}|{row_cap}|{chunk_rows}"
+        f"|{keep_all_rows}|{keep_leading_zeros}|{sorted(text_columns)}"
+    )
+
+
+def _read_bytes(read: ReadResult) -> int:
+    """About what a read weighs: a cell's slot and a share of its text (each distinct text is held once)."""
+    cells = read.frame.shape[0] * read.frame.shape[1]
+    return cells * 16 * (1 if read.all_rows is None or read.all_rows is read.frame else 2)
+
+
+def _own(read: ReadResult) -> ReadResult:
+    """`read` with frames of its own (a copy of pointers to the same cells: 0.1 s on half a million rows)."""
+    frame = read.frame.copy()
+    every = None if read.all_rows is None else frame if read.all_rows is read.frame else read.all_rows.copy()
+    return replace(read, frame=frame, all_rows=every)
 
 
 def _read_csv(

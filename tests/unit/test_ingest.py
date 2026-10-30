@@ -192,6 +192,26 @@ def test_sniffs_each_delimiter(tmp_path: Path, delimiter: str) -> None:
     assert result.row_count == 3
 
 
+def test_a_file_read_again_is_not_parsed_again_and_the_caller_may_change_what_it_gets(tmp_path: Path) -> None:
+    storage, key = store_bytes(tmp_path, "data.csv", b"a,b\n1,2\n3,4\n5,6\n")
+    first = read_upload(storage, key)
+    first.frame.loc[0, "a"] = 99  # a caller changing its own copy
+    again = read_upload(storage, key)
+    assert again.frame["a"].tolist() == [1, 3, 5]
+    assert again.frame is not first.frame
+    assert read_upload(storage, key, max_rows=2).frame.shape == (
+        2,
+        2,
+    )  # another way of reading is another read
+
+
+def test_a_file_written_again_is_read_again(tmp_path: Path) -> None:
+    storage, key = store_bytes(tmp_path, "data.csv", b"a,b\n1,2\n3,4\n")
+    assert read_upload(storage, key).row_count == 2
+    storage.local_path(key).write_bytes(b"a,b\n1,2\n3,4\n5,6\n7,8\n")
+    assert read_upload(storage, key).row_count == 4
+
+
 def test_single_column_file_falls_back_to_comma(tmp_path: Path) -> None:
     storage, key = store_bytes(tmp_path, "data.csv", b"only\n1\n2\n3\n")
     result = read_upload(storage, key)

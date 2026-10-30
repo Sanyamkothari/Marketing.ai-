@@ -1734,12 +1734,22 @@ def list_industries(root: Path | None = None) -> tuple[str, ...]:
     return tuple(sorted(path.stem for path in base.glob("*.yaml")))
 
 
+_USE_CASE_IDS: dict[Path, tuple[tuple[tuple[str, int, int, int], ...], tuple[str, ...]]] = {}
+"""The ids of a use-case folder by the files in it (name, time written, size, inode): a request that asks for
+a use case's settings lists the folder, and reading its thirty files each time costs seconds in a visit."""
+
+
 def list_use_case_ids(root: Path | None = None) -> tuple[str, ...]:
     base = config_root(root) / "use_cases"
     if not base.is_dir():
         return ()
+    paths = sorted(base.glob("*.yaml"))
+    stamp = tuple((p.name, info.st_mtime_ns, info.st_size, info.st_ino) for p in paths for info in [p.stat()])
+    kept = _USE_CASE_IDS.get(base)
+    if kept is not None and kept[0] == stamp:
+        return kept[1]
     ids: list[str] = []
-    for path in sorted(base.glob("*.yaml")):
+    for path in paths:
         document = load_yaml(path)
         declared = document.get("id")
         if declared != path.stem.replace("_", "-"):
@@ -1749,7 +1759,8 @@ def list_use_case_ids(root: Path | None = None) -> tuple[str, ...]:
                 path=str(path),
             )
         ids.append(str(declared))
-    return tuple(sorted(ids))
+    _USE_CASE_IDS[base] = (stamp, tuple(sorted(ids)))
+    return _USE_CASE_IDS[base][1]
 
 
 def use_case_path(use_case_id: str, root: Path | None = None) -> Path:

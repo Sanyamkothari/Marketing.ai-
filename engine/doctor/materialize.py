@@ -28,7 +28,7 @@ from __future__ import annotations
 import contextlib
 import functools
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -46,6 +46,7 @@ from engine.agent.dataset_recipe import consistent_types
 from engine.agent.recipe import STEP_PHASE, RecipeError, RecipeRun, run_recipe
 from engine.agent.sql_step import SqlStepError, sql_params
 from engine.agentic.canonical import canonical_bytes, sha256_hex
+from engine.content_cache import ContentCache, frame_digest
 from engine.doctor.guards import Finding, GuardedRun, Ledger, Receipt, ReceiptMemo, run_guarded
 from engine.doctor.visit_contracts import PlanFinding
 from engine.utils.time import utc_now
@@ -206,8 +207,6 @@ def aliased(files: Sequence[LoadedFile], items: Sequence[CaseItem]) -> list[Load
     """`files` with every accepted alias applied: a column the person said is the plan's column under a new name is
     read by the plan's name, so the plan runs on next month's file exactly as it was approved (in memory only).
     """
-    from dataclasses import replace
-
     out: list[LoadedFile] = []
     for loaded in files:
         names = {
@@ -358,14 +357,152 @@ def materialize_plan(
     receipts by what each step read (:class:`engine.doctor.guards.ReceiptMemo`): a step the plan did not change takes
     its kept receipt.
     """
-    from engine.doctor.plan_check import plan_digest, recipe_steps_of
+    from engine.doctor.plan_check import plan_digest
 
     digest = plan_digest(case_files, items)
-    files = aliased(files, items)
     if candidate is not None:
         digest = sha256_hex(canonical_bytes([digest, candidate[0], candidate[1].model_dump(mode="json")]))[
             :32
         ]
+    key = (
+        None
+        if memo is not None or (watch is not None and isinstance(scope, Full))
+        else _made_key(items, files, scope, as_of, training_as_of, candidate, twice)
+    )
+    if key is None:
+        return _materialize_plan(
+            digest, items, files, scope, as_of, training_as_of, candidate, twice, watch, memo
+        )
+    events: list[tuple[str, str, RecipeStep, pd.DataFrame, pd.DataFrame]] = []
+
+    def record(
+        upload_id: str, item_id: str, step: RecipeStep, was: pd.DataFrame, became: pd.DataFrame
+    ) -> None:
+        events.append((upload_id, item_id, step, was, became))
+        if watch is not None:
+            watch(upload_id, item_id, step, was, became)
+
+    made = _MADE.get_or_compute(
+        key,
+        lambda: _Made(
+            _materialize_plan(
+                digest,
+                items,
+                files,
+                scope,
+                as_of,
+                training_as_of,
+                candidate,
+                twice,
+                record if isinstance(scope, Sample) else None,
+                None,
+            ),
+            events,
+        ),
+    )
+    if made.events is not events and watch is not None:  # kept from another call: what each step did, again
+        for upload_id, item_id, step, was, became in made.events:
+            watch(upload_id, item_id, step, was.copy(), became.copy())
+    return replace(
+        made.prepared,
+        tables=dict(made.prepared.tables),
+        by_upload=dict(made.prepared.by_upload),
+        digest=digest,
+    )
+
+
+@dataclass(frozen=True)
+class _Made:
+    """A kept materialisation and, for a sample, what each step did (the frames a `watch` is shown)."""
+
+    prepared: Prepared
+    events: list[tuple[str, str, RecipeStep, pd.DataFrame, pd.DataFrame]]
+
+
+def _made_bytes(made: _Made) -> int:
+    """About what the tables weigh: the cells' own slots, three times over for the text a step made (the texts of
+    the file are held once, by the file)."""
+    frames = {id(f): f for f in made.prepared.tables.values()}
+    return sum(int(f.memory_usage(index=True, deep=False).sum()) for f in frames.values()) * 3
+
+
+_MADE: Final[ContentCache[_Made]] = ContentCache(16, budget=512 * 2**20, cost=_made_bytes)
+"""The plan's tables by what the files hold and what the plan and its settings are: a step of a visit that changed
+none of them (a tick, a setting's answer that moved nothing) does not run the plan over half a million rows again.
+A round of a visit asks for about six different ones (the whole file, a sample, a step being tried), so fewer
+entries than that would push out each one just before it is asked for again."""
+
+
+def _made_key(
+    items: Sequence[CaseItem],
+    files: Sequence[LoadedFile],
+    scope: Scope,
+    as_of: date | None,
+    training_as_of: date | None,
+    candidate: tuple[str, RecipeStep] | None,
+    twice: bool,
+) -> str | None:
+    """Everything a materialisation reads: the files' cells, the accepted items that make the plan (a step, an alias,
+    the ID, the outcome or a build that names one), the scope, the dates, the step being tried and whether it runs
+    twice. An answer about a setting (the learning time, what counts as gone) is none of these, so it does not run
+    the plan again.
+    """
+    cells = [frame_digest(f.frame) for f in files]
+    if any(c is None for c in cells):
+        return None
+    return sha256_hex(
+        canonical_bytes(
+            [
+                [
+                    [
+                        i.item_id,
+                        i.kind,
+                        i.upload_id,
+                        i.goal_id,
+                        i.payload_digest,
+                        i.decided_by,
+                        i.agreed_rows,
+                        i.standing_answer_id,
+                    ]
+                    for i in items
+                    if i.state is ProposalState.ACCEPTED and _makes_plan(i)
+                ],
+                [[f.upload_id, f.file_name, f.file_rows, c] for f, c in zip(files, cells, strict=True)],
+                repr(scope),
+                as_of,
+                training_as_of,
+                None if candidate is None else [candidate[0], candidate[1].model_dump(mode="json")],
+                twice,
+            ]
+        )
+    )
+
+
+def _makes_plan(item: CaseItem) -> bool:
+    """Whether a materialisation reads the item: the recipe steps, the column aliases, and what `roles_of` reads
+    (the ID and outcome items, and a build's outcome)."""
+    return (
+        item.kind in (ALIAS_KIND, "key", "outcome_column")
+        or isinstance(item.payload.get("step"), dict)
+        or isinstance(item.payload.get("buildable"), dict)
+    )
+
+
+def _materialize_plan(
+    digest: str,
+    items: Sequence[CaseItem],
+    files: Sequence[LoadedFile],
+    scope: Scope,
+    as_of: date | None,
+    training_as_of: date | None,
+    candidate: tuple[str, RecipeStep] | None,
+    twice: bool,
+    watch: Watch | None,
+    memo: ReceiptMemo | None,
+) -> Prepared:
+    from engine.doctor.plan_check import recipe_steps_of
+
+    files = aliased(files, items)
     names = table_names(files)
     tables: dict[str, pd.DataFrame] = {
         names[f.upload_id]: consistent_types(scoped(f.frame, scope)) for f in files
