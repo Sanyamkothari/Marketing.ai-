@@ -260,6 +260,7 @@ const PAGE_STYLE = `<style data-pages>
 .pg-next{display:flex;justify-content:flex-end}
 .pg-sect{margin:16px 0 0;font-size:13px;font-weight:600;color:var(--ink)}
 details.pg-more>.bars{padding-left:0;padding-right:0}
+.pg-fold-cards{display:flex;flex-direction:column;gap:12px;margin-top:12px}
 .pg-tech .card-body>details.tech,[data-pg-tech] .card-body>details.tech,.pg-tech .card-body>details.pg-fold{border-top:0;padding-top:0}
 .kpis.pg-one{grid-template-columns:1fr}
 .kpis.pg-one .pg-kn{font-size:14px;color:var(--ink2);margin-top:8px}
@@ -364,13 +365,13 @@ function shell(uc, kind, run, body, { primary = null, secondary = [], tech = [],
     ],
     "Technical details",
   ).replace(/^<details class="tech"[^>]*><summary>[^<]*<\/summary>/, "").replace(/<\/details>$/, "");
-  // Embedded, the Model page's fold is "More details", in view (the hyperparameters, the calibration, the cut-off);
-  // another embedded page has nothing to show a marketer there, so its technical fold is left out.
-  const visibleFold = embedded && kind === "model";
+  // Embedded, every page's fold is "More details", in view (the Model page's hyperparameters, the calibration, the
+  // cut-off; the Data page's file details, split and ids; the Output page's sample and settings), never dropped.
+  const visibleFold = embedded;
   const details = list || techHtml
     ? `<details class="${visibleFold ? "more pg-fold" : "tech"}" data-tech><summary>${visibleFold ? "More details" : "Technical details"}</summary>${visibleFold && list ? `<div data-technical>${list}</div>` : list}${techHtml}</details>`
     : "";
-  const techCard = details && (!embedded || visibleFold) ? `<section class="card pg-tech"><div class="card-body">${details}</div></section>` : "";
+  const techCard = details ? `<section class="card pg-tech"><div class="card-body">${details}</div></section>` : "";
   // The download is the Review page's own gate (Approve, then download): an embedded page offers no file of its own.
   if (embedded) return `${PAGE_STYLE}<div class="stack" data-pg-embedded="${esc(kind)}">${body}${techCard}</div>`;
   return `<main class="screen t-${esc(uc.marker)}">${PAGE_STYLE}
@@ -721,7 +722,8 @@ function dataPage(uc, run, art, byPath, extra) {
     ${set("Columns not used", dropped)}${set("Columns kept, not used to predict", carried, "The date each row describes")}${removalCard}${
       extra.panelsHtml || ""
     }`;
-  return shell(uc, "data", run, body, { techHtml: techRows });
+  // Embedded, the file details and the split's own text are in the "More details" fold, marked technical like its ids.
+  return shell(uc, "data", run, body, { techHtml: embedded ? `<div data-technical>${techRows}</div>` : techRows });
 }
 
 // --- Model -------------------------------------------------------------------------------------
@@ -1523,7 +1525,10 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref, extra = {}) {
 
   // Technical details: the scored list for analysts, what moved, and the modules' own sections (the contact
   // list's counts, the notes behind a change).
-  const techHtml = `${embedded ? "" : allScoresSlotHtml(run.run_id, download, scoresHref)}${driftTable(drift)}${extra.panelsHtml || ""}`;
+  // Embedded, the sample and the settings sit inside the "More details" fold; only the all-scores download stays out.
+  const techHtml = `${embedded ? "" : allScoresSlotHtml(run.run_id, download, scoresHref)}${driftTable(drift)}${extra.panelsHtml || ""}${
+    embedded ? `<div class="pg-fold-cards">${sampleCard(uc, run, summary, download)}${settingsCard(uc, run, config, byPath, summary, drift)}</div>` : ""
+  }`;
 
   const body = `${outputTiles}
     ${contactSlotHtml(run.run_id, sentence, download)}
@@ -1588,6 +1593,7 @@ function trainingOutputPage(uc, run, art, byPath) {
     ${embedded ? "" : settingsCard(uc, run, config, byPath, null, null)}`;
   return shell(uc, "output", run, body, {
     primary: { label: "Make a contact list with this model", href: `#/uc/${uc.id}`, kind: "primary" },
+    techHtml: embedded ? `<div class="pg-fold-cards">${settingsCard(uc, run, config, byPath, null, null)}</div>` : "",
   });
 }
 
@@ -1754,7 +1760,7 @@ function upliftDataPage(uc, run, art, byPath, extra) {
     </div>
     ${card("Experiment checks", checksBody)}
     ${driftCard(drift, scoring)}`;
-  return shell(uc, "data", run, body, { techHtml: fileDetails(profile) });
+  return shell(uc, "data", run, body, { techHtml: embedded ? `<div data-technical>${fileDetails(profile)}</div>` : fileDetails(profile) });
 }
 
 /**

@@ -123,7 +123,7 @@ export function liftRows(lift) {
       group: i === 0 ? "1 (best)" : String(i + 1),
       customers: count(b.rows),
       rate: fmtPct(b.actual_rate_pct / 100, 0),
-      times: `${fmtNum(b.lift, 1)} times`,
+      times: `${b.lift.toFixed(1)} times`, // one decimal always: "1.0 times", never "1 times"
     }));
 }
 

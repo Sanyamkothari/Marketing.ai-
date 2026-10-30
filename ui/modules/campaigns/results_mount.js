@@ -62,6 +62,42 @@ async function loadParts({ useCaseId, trainRunId, scoreRunId, caseId }) {
   return { data, model, outputTrain, outputScore, scoring: scoreArt.summary || null };
 }
 
+// The folds a person opened (Show the other 52 models, More details, Details, Test size, the numbers): a redraw of the
+// Review page (it polls while the model waits for an Approver) builds every <details> again, closed. A fold is
+// remembered by where it is (its tab) and its title, and opened again after each redraw and after each part fills in.
+const summaryOf = (d) => {
+  const s = d.querySelector(":scope > summary");
+  return s ? s.textContent.replace(/\s+/g, " ").trim() : "";
+};
+const scopeOf = (d, root) => d.closest("[data-cw-panel]") || root;
+function foldKey(d, root) {
+  const scope = scopeOf(d, root);
+  const title = summaryOf(d);
+  const same = [...scope.querySelectorAll("details")].filter((x) => summaryOf(x) === title);
+  return `${scope === root ? "page" : scope.getAttribute("data-cw-panel")}|${title}|${same.indexOf(d)}`;
+}
+const watched = new WeakSet();
+function watchFolds(root) {
+  if (watched.has(root)) return;
+  watched.add(root);
+  // `toggle` does not bubble, so it is heard on the way down.
+  root.addEventListener(
+    "toggle",
+    (event) => {
+      const d = event.target;
+      if (!d || d.tagName !== "DETAILS" || !visit.key) return;
+      const key = foldKey(d, root);
+      if (d.open) visit.open.add(key);
+      else visit.open.delete(key);
+    },
+    true,
+  );
+}
+function restoreFolds(root) {
+  if (!visit.open.size) return;
+  for (const d of root.querySelectorAll("details")) if (!d.open && visit.open.has(foldKey(d, root))) d.open = true;
+}
+
 /**
  * Wire the tabs: switching shows one panel; the parts that need requests are loaded once for this campaign. `ctx` is
  * `{ useCaseId, trainRunId, scoreRunId, caseId }`. Safe to call again after a redraw: the answer is kept.
@@ -70,7 +106,8 @@ export function mountResultsTabs(root, ctx) {
   const tabs = root && root.querySelector("[data-cw-tabs]");
   if (!tabs) return;
   const key = [ctx.useCaseId, ctx.trainRunId, ctx.scoreRunId, ctx.caseId].join("|");
-  if (visit.key !== key) Object.assign(visit, { key, loaded: null, tab: "data" });
+  if (visit.key !== key) Object.assign(visit, { key, loaded: null, tab: "data", open: new Set() });
+  watchFolds(root);
   const select = (id) => {
     visit.tab = id;
     for (const b of tabs.querySelectorAll("[data-cw-tab]")) {
@@ -82,6 +119,7 @@ export function mountResultsTabs(root, ctx) {
   };
   for (const b of tabs.querySelectorAll("[data-cw-tab]")) b.addEventListener("click", () => select(b.getAttribute("data-cw-tab")));
   select(visit.tab);
+  restoreFolds(root);
   if (!visit.loaded) visit.loaded = loadParts(ctx);
   const loading = visit.loaded;
   loading.then(
@@ -97,6 +135,7 @@ export function mountResultsTabs(root, ctx) {
       fill("model", parts.model, "model");
       fill("output-train", parts.outputTrain, "output");
       fill("output-score", parts.outputScore, "output");
+      restoreFolds(root);
       if (ctx.scoreRunId) {
         loadContactList(ctx.scoreRunId).then((facts) => repaintContactList(tabs, { runId: ctx.scoreRunId, facts, scoring: parts.scoring, scoresHref: scoresUrl(ctx.scoreRunId) }));
       }

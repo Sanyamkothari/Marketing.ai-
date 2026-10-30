@@ -64,7 +64,7 @@ export function decileTableHtml(lift, goal) {
   const rows = liftRows(lift);
   if (!rows.length) return "";
   const outcome = esc(goalOutcome(goal));
-  return `<p class="cw-p">Customers the model had not seen, sorted by how likely it thought they were, in ${rows.length} equal groups:</p><div class="cw-sum-scroll"><table class="tbl cw-tbl" data-cw-sum-groups><thead><tr><th>Group</th><th class="num">Customers</th><th class="num">Went on ${outcome}</th><th class="num">Versus average</th></tr></thead><tbody>${rows
+  return `<p class="cw-p">Customers the model had not seen, sorted by how likely it thought they were, in ${rows.length} equal groups:</p><div class="cw-sum-scroll"><table class="tbl cw-tbl" data-cw-sum-groups><thead><tr><th>Group</th><th class="num">Customers</th><th class="num"><span class="cw-th-long">Went on ${outcome}</span><span class="cw-th-short">Outcome rate</span></th><th class="num"><span class="cw-th-long">Versus average</span><span class="cw-th-short">vs average</span></th></tr></thead><tbody>${rows
     .map((r) => `<tr><td>${esc(r.group)}</td><td class="num">${esc(r.customers)}</td><td class="num">${esc(r.rate)}</td><td class="num">${esc(r.times)}</td></tr>`)
     .join("")}</tbody></table></div>`;
 }

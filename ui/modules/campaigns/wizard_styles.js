@@ -103,6 +103,7 @@ const CSS = `
 .cw .cw-sum-lead{font-size:20px;line-height:28px;font-weight:600;color:var(--ink);margin:var(--s2, 8px) 0}
 .cw .cw-sum-h{margin-top:var(--s5, 24px);font-size:16px}
 .cw .cw-sum-scroll{overflow-x:auto}
+.cw .cw-th-short{display:none}
 .cw .cw-sum-sub{font-weight:600;margin:var(--s3, 12px) 0 var(--s1, 4px)}
 .cw .cw-more{margin:var(--s2, 8px) 0}
 .cw .cw-more>summary{cursor:pointer;color:var(--brand-blue);font-weight:600;font-size:var(--fs-body, 14px)}
@@ -128,6 +129,9 @@ const CSS = `
 }
 @media (max-width:700px){
   .cw .cw-sum-scroll .cw-tbl th,.cw .cw-sum-scroll .cw-tbl td{padding:8px 6px;font-size:12px;line-height:16px}
+  .cw .cw-th-long{display:none}
+  .cw .cw-th-short{display:inline}
+  .cw .cw-sum-scroll .cw-tbl th.num,.cw .cw-sum-scroll .cw-tbl td.num{white-space:normal}
   .cw .stepper{margin-bottom:var(--s5, 24px)}
   .cw .cw-card-body{padding:var(--s4, 16px)}
   .cw .cw-goals{grid-template-columns:1fr;gap:var(--s3, 12px)}

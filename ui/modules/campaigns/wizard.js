@@ -95,7 +95,24 @@ const ui = {
   review: { busy: "", error: null, own: false },
   justDownloaded: null, // the Send address "Approve and download" went to after starting the download
   chosenGoal: null, // the goal card last chosen: drawn chosen when the person comes back to step 1 (M187)
+  // What the Review page asked for once in this visit (the first customers, the model's story): a redraw while the model
+  // waits for an Approver (WAIT_POLL_MS) reuses it instead of asking again. Forgotten when the person leaves.
+  asked: new Map(),
 };
+
+/** `ask()` once per visit under `key`; an answer that is an error (`top.error`) is not kept, so the next draw asks again. */
+function askOnce(key, ask, keep = () => true) {
+  if (ui.asked.has(key)) return ui.asked.get(key);
+  const pending = Promise.resolve(ask()).then((answer) => {
+    if (!keep(answer)) ui.asked.delete(key);
+    return answer;
+  }, (error) => {
+    ui.asked.delete(key);
+    throw error;
+  });
+  ui.asked.set(key, pending);
+  return pending;
+}
 
 /** Whether work started under `token` is still the page's: no newer draw, and the same route on screen. */
 const ours = (token) => token === ui.seq && onRoute();
@@ -150,6 +167,7 @@ window.addEventListener("hashchange", () => {
   ui.chosenGoal = null; // a fresh visit starts with no goal chosen (M187 review)
   // Coming back is a fresh visit: the screen's own state (a refusal, "downloading") is not carried over.
   ui.parts = null;
+  ui.asked.clear();
 });
 
 /**
@@ -332,7 +350,11 @@ async function campaignStepScreen(token, route) {
     getScoringSummary(runId),
     getTreatListSummary(runId),
     registryOf(campaign.use_case_id),
-    getResultsSummary(runId, { canSeeNames: canAccess("GET", "/campaign-runs/{campaign_run_id}/top-customers") }),
+    askOnce(
+      `summary|${runId}`,
+      () => getResultsSummary(runId, { canSeeNames: canAccess("GET", "/campaign-runs/{campaign_run_id}/top-customers") }),
+      (answer) => !(answer && answer.top && answer.top.error),
+    ),
   ]);
   const preview = await getPlanPreview(campaign.campaign_id, baseRateOf(detail.run, scoring)).catch(() => null);
   const [cost, compliance, policy] = await Promise.all([
@@ -353,7 +375,7 @@ async function campaignStepScreen(token, route) {
     version,
     error: registry.error,
   };
-  const story = version && version.run_id ? await getModelStory(version.run_id) : null;
+  const story = version && version.run_id ? await askOnce(`story|${version.run_id}`, () => getModelStory(version.run_id)) : null;
   const context = { campaign, detail, preview, model, runId };
   show(
     token,

@@ -20,8 +20,8 @@ export const TABS = Object.freeze([
 const LOADING = '<p class="cw-p cw-note" data-cw-loading>Loading…</p>';
 const slot = (id) => `<div data-cw-slot="${id}">${LOADING}</div>`;
 
-/** The tab that is open: kept for the visit, so a redraw of the page does not close it. */
-export const visit = { tab: "data", key: "", loaded: null };
+/** The tab and the folds that are open: kept for the visit, so a redraw of the page does not close them (`results_mount.js`). */
+export const visit = { tab: "data", key: "", loaded: null, open: new Set() };
 
 /**
  * The tabs with every part that needs no request drawn. `list` is the contact list's summary, `campaign` the campaign

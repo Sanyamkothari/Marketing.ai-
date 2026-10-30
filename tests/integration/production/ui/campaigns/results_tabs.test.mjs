@@ -145,7 +145,7 @@ const runs = {
   r_score: { run_id: "r_score", mode: "score", state: "done", use_case_id: "retail-win-back", finished_at: "2026-10-30T06:35:00Z" },
 };
 const artefacts = {
-  "r_score/scoring_summary.json": { rows_scored: 1402, kpi: { label: "Shoppers worth an offer", value: 148 }, bands: [{ name: "High", action: "Best offer", rows: 79, share_pct: 5.6 }] },
+  "r_score/scoring_summary.json": { rows_scored: 1402, score_field: "score", sample_rows: [{ primary_key: "12346", score: 0.27, band: "Low", reasons: [] }], kpi: { label: "Shoppers worth an offer", value: 148 }, bands: [{ name: "High", action: "Best offer", rows: 79, share_pct: 5.6 }] },
   "r_train/leaderboard.json": {
     metric_label: "PR-AUC",
     models_trained: 7,
@@ -153,6 +153,7 @@ const artefacts = {
     best_model_name: "WeightedEnsemble_L2",
     entries: Array.from({ length: 7 }, (_, i) => ({ rank: i + 1, model_name: i ? `LightGBM_${i}` : "WeightedEnsemble_L2", family_label: i ? "LightGBM" : null, validation_score: 0.5 - i / 100, test_score: 0.55, fit_time_seconds: 1.5 })),
   },
+  "r_train/profile.json": { file_name: "retail.csv", file_format: "csv", file_size_bytes: 2048, row_count: 1402, column_count: 9, encoding: "utf-8", fingerprint: { hash: "sha256:abc" } },
   "r_train/best_model.json": { model_name: "WeightedEnsemble_L2", display_name: "Ensemble (Logistic Regression + XGBoost)", hyperparameters: { n_bins: 5 }, hyperparameters_summary: "weighted ensemble" },
   "r_train/evaluation.json": { primary_metric: "pr_auc", primary_metric_label: "PR-AUC", headline_score: 0.53, metrics: [], threshold: 0.8, threshold_detail: "THRESHOLD_FALLBACK", calibration: { method: "isotonic" } },
   "r_train/split.json": {
@@ -236,6 +237,51 @@ test("a redraw of the page keeps the open tab and asks the server for nothing ag
   await settle();
   assert.ok($("[data-cw-panel=data] [data-dd-changes]"), "the parts are drawn from the kept answer");
   assert.equal(requested.length, before, "nothing is asked again");
+});
+
+test("a redraw keeps the folds the person opened and the tab they are on", async () => {
+  const open = (el) => {
+    el.open = true;
+    el.dispatchEvent(new dom.window.Event("toggle")); // jsdom fires it later; the page hears it on the way down
+  };
+  $("[data-cw-tab=model]").click();
+  open($("[data-cw-panel=model] [data-leaderboard-more]"));
+  open($("[data-cw-panel=model] details[data-tech]"));
+  open($("[data-cw-panel=output] [data-test-size]"));
+  await settle();
+  const before = requested.length;
+  // the Review page rebuilds its markup (the poll while the model waits for an Approver): every fold is closed again
+  app.innerHTML = RT.resultsTabsHtml({ numbers: "<p>n</p>" });
+  RM.mountResultsTabs(app, ctx);
+  await settle();
+  assert.equal($("[data-cw-panel=model]").hidden, false, "the tab stays");
+  assert.equal($("[data-cw-panel=model] [data-leaderboard-more]").open, true, "Show the other models stays open");
+  assert.equal($("[data-cw-panel=model] details[data-tech]").open, true, "More details stays open");
+  assert.equal($("[data-cw-panel=output] [data-test-size]").open, true, "Test size stays open");
+  assert.equal($("[data-cw-panel=data] details[data-tech]").open, false, "a fold nobody opened stays closed");
+  assert.equal(requested.length, before, "and nothing is asked again");
+  // closing one is remembered too
+  $("[data-cw-panel=model] [data-leaderboard-more]").open = false;
+  $("[data-cw-panel=model] [data-leaderboard-more]").dispatchEvent(new dom.window.Event("toggle"));
+  app.innerHTML = RT.resultsTabsHtml({});
+  RM.mountResultsTabs(app, ctx);
+  await settle();
+  assert.equal($("[data-cw-panel=model] [data-leaderboard-more]").open, false);
+  assert.equal($("[data-cw-panel=model] details[data-tech]").open, true);
+  $("[data-cw-tab=data]").click();
+});
+
+test("the Data and Output tabs keep the technical details as a More details fold; only the all-scores download stays out", () => {
+  const data = $("[data-cw-panel=data] details[data-tech]");
+  assert.equal(text(data.querySelector("summary")), "More details");
+  assert.match(text(data), /File details/);
+  assert.match(text(data), /Fingerprint/);
+  assert.match(text(data), /Runr_train/);
+  assert.match(text(data), /Split/);
+  const output = $("[data-cw-slot=output-score] details[data-tech]");
+  assert.equal(text(output.querySelector("summary")), "More details");
+  assert.match(text(output), /A sample of/);
+  assert.equal(output.querySelector("[data-all-scores]"), null);
 });
 
 test("a reader who gets no file preview still sees the columns the model learns from, from the training run's own names", async () => {

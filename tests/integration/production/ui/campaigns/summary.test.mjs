@@ -298,3 +298,9 @@ test("an effect model gets one honest sentence: the gap between contacted and no
   assert.match(text($("[data-cw-sum-model]")), /^Among the 10% of customers the model puts first, those who were contacted went on to buy 4\.2 percentage points more often/);
   assert.match(text($("[data-cw-sum-unproven]")), /^Not yet proven:/);
 });
+
+test("the ratio against the average is written with one decimal, always", () => {
+  const bin = (lift) => ({ rows: 20, actual_rate_pct: 40, lift });
+  const rows = SR.liftRows({ mode: "classification", bins: [bin(1.94), bin(1), bin(0.96), bin(3)] });
+  assert.deepEqual(rows.map((r) => r.times), ["1.9 times", "1.0 times", "1.0 times", "3.0 times"]);
+});
