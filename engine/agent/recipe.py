@@ -546,7 +546,8 @@ def _check_unpivot(
         spec = UnpivotSpec.from_params(step.column, _params(step))
     except UnpivotError as exc:
         raise RecipeError(exc.code, exc.message, column=exc.column, order=step.order) from exc
-    if target is not None and spec.outcome != target:
+    # An outcome a later query makes is not a column of the file yet: there is nothing to carry.
+    if target is not None and target in available and spec.outcome != target:
         raise RecipeError(
             "RECIPE_STEP_INVALID",
             f"The outcome column '{target}' is carried to every row as the outcome, never turned into rows "

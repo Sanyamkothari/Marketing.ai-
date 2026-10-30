@@ -1098,8 +1098,11 @@ through the same checks. You approve once, and a yes is bounded by the counts yo
 - **One loop.** A message, an answer, a tick, a new file and a goal just chosen are all the same kind of turn. The AI
   is asked only when something is owed to it: your message; a file you added (not a table the plan made itself); the
   goal just chosen; the answer to a question that held the plan back; a training table the goal needs and nobody has
-  proposed; one made for settings that have changed. A tick, an untick and a setting you changed re-run the facts
-  and the default author, which re-derives the table; they cost no call.
+  proposed; one made for settings that have changed (`build_stale`: every training table carries the settings it was
+  made for). A tick and an untick re-run the facts and the default author, which cost no call. A setting you changed
+  makes the table again the same way, unless the plan's table is the AI's (a query with your change in it, say the
+  United Kingdom only): the default author does not put a second table beside it, and the AI is asked to make its
+  table again for the new setting.
 - **A goal is data.** What a goal lets you set (the window, which shoppers), the allowed values and the recommended
   one with its reason are in `configs/outcomes.yaml`; the questions are made from it, and a changed setting makes the
   table again.

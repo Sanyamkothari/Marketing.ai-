@@ -264,6 +264,14 @@ def _outcome_names(case: Mapping[str, Any], screen: Mapping[str, Any] | None) ->
         for i in _items(case)
         if i.get("kind") == "outcome_column" and i.get("state") != "rejected"
     }
+    # the columns the person is asked to choose the outcome among: a query that makes one is read as making the outcome
+    named |= {
+        str(o.get("label") or "").split(" (")[0]
+        for q in case.get("questions", [])
+        if isinstance(q, dict) and q.get("code") == "OUTCOME_COLUMN" and q.get("answer") is None
+        for o in q.get("options", [])
+        if isinstance(o, dict) and o.get("option_id") != "none"
+    }
     return frozenset(n.lower() for n in named if n)
 
 
@@ -272,8 +280,14 @@ def _reads_after_snapshot(case: Mapping[str, Any], screen: Mapping[str, Any] | N
     in the part of the query that returns only the ID and the outcome: only the outcome may look past the snapshot,
     and only by the window, never a feature."""
     found = []
-    allowed = {*_outcome_names(case, screen), _KEY_ALIAS}
+    named = _outcome_names(case, screen)
+    allowed = {*named, _KEY_ALIAS}
     allowed.add(str(_start(screen).get("primary_key") or "").lower())
+    allowed |= {  # the ID the plan has (the screen names it only once the hand-off starts)
+        str((i.get("payload") or {}).get("column")).lower()
+        for i in _items(case)
+        if i.get("kind") == "key" and i.get("state") != "rejected"
+    }
     for item in _items(case):
         if item.get("state") == "rejected":
             continue

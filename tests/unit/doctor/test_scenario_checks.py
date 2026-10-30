@@ -116,6 +116,28 @@ def test_both_spellings_of_the_window_bound_and_a_look_back_are_accepted() -> No
     assert found("no_leak", case(sql_item(back))) == [], "a look back from the snapshot reads no future"
 
 
+def test_a_query_that_makes_a_column_the_person_is_asked_to_choose_as_the_outcome_may_read_its_window() -> (
+    None
+):
+    """Until the person answers, the outcome is a question: its options are the columns the Doctor found, the ID is
+    the one the plan has."""
+    amount = build_amount_sql(window_days=90)
+    key = item("k1", "accepted", payload={"upload_id": "u1", "column": "id"}) | {"kind": "key"}
+    asked = {
+        "code": "OUTCOME_COLUMN",
+        "answer": None,
+        "options": [
+            {"option_id": "c0", "label": "spend_next_90d"},
+            {"option_id": "none", "label": "None of these"},
+        ],
+    }
+    open_question = case(sql_item(amount), key) | {"questions": [asked]}
+    assert found("no_leak", open_question) == []
+    assert (
+        found("no_leak", case(sql_item(amount), key)) != []
+    ), "with nothing asked or decided it is not the outcome"
+
+
 def leaky_case(*extra: dict[str, Any]) -> tuple[dict[str, Any], dict[str, pd.DataFrame]]:
     rng = np.random.default_rng(0)
     y = rng.integers(0, 2, 600)

@@ -135,6 +135,30 @@
   },
   {
     "action": "chat",
+    "name": "window_90",
+    "instruction_id": "window_90",
+    "expects": "change",
+    "message": "Use a 90-day window again, instead of 60 days."
+  },
+  {
+    "action": "decide",
+    "match": [
+      "90 day",
+      "90-day",
+      "\"outcome_window_days\": 90",
+      "window_days\": 90"
+    ],
+    "name": "window_90_yes"
+  },
+  {
+    "action": "decide",
+    "match": [
+      "united kingdom"
+    ],
+    "name": "uk_90_yes"
+  },
+  {
+    "action": "chat",
     "name": "prepare_training",
     "instruction_id": "prepare_training",
     "expects": "answer",

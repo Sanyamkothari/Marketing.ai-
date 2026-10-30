@@ -300,15 +300,19 @@ def outcome_facts(run: FactRun, case: Case, brief: GoalBrief) -> Facts:
     )  # the tables as the plan leaves them: the files, and the tables its queries build
     files = current.files
     # The outcome: the configured column where it is; otherwise one question over the current tables' likely columns.
-    if any(
-        i.goal_id == goal
+    builds = [
+        i
+        for i in _section(case)
+        if i.goal_id == goal
         and i.kind == "recipe_step"
         and i.state is not ProposalState.REJECTED
         and isinstance(i.payload.get("buildable"), dict)
-        for i in _section(case)
-    ):
+    ]
+    if builds and not any(b.source is ProposalSource.AI for b in builds):
         # The build this plan carries makes the outcome column (it is among the tables the rules read below), so it is
-        # proposed again every time, else the store takes it back: "no longer proposed".
+        # proposed again every time, else the store takes it back: "no longer proposed". The AI's build (a query with
+        # the person's change in it) is not made again here: a table beside it would drop that change, and the AI is
+        # asked when the settings move (`build_stale`).
         offer_build(run, case, brief, files, found)
     outcome = decisions(case).pair("outcome", goal)
     if outcome is not None and outcome_is_gone(case, files, outcome, current):
@@ -544,6 +548,7 @@ def offer_build(
     made = SqlStepProposal.model_validate(result.output)
     payload = made.payload()
     payload["needs_yes"] = True
+    payload["settings_digest"] = settings.digest(decided)
     payload["buildable"] = built.model_dump(mode="json")
     if audience is not None:
         payload["audience"] = audience.model_dump(mode="json")

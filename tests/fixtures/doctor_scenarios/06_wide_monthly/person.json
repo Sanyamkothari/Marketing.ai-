@@ -30,6 +30,24 @@
     "name": "unpivot"
   },
   {
+    "action": "answer",
+    "match": "true as of",
+    "option": "type a date",
+    "value": "2023-09-01",
+    "name": "as_of"
+  },
+  {
+    "action": "decide",
+    "match": "spend in the 90 days after the snapshot",
+    "name": "spend_yes"
+  },
+  {
+    "action": "answer",
+    "match": "which column says whether",
+    "option": "spend_next_90d",
+    "name": "outcome"
+  },
+  {
     "action": "approve",
     "name": "approved"
   }

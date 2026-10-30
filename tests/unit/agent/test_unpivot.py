@@ -87,6 +87,15 @@ def test_columns_become_rows_one_per_row_and_period_with_the_outcome_carried() -
     assert (done.receipt.rows_in, done.receipt.rows_out) == (3, 9)
 
 
+def test_an_outcome_a_later_query_makes_does_not_stop_the_unpivot() -> None:
+    """The outcome is decided as the column of a table a query makes after the unpivot: the file has no such column
+    yet, so there is nothing to carry (the unpivot of a sheet of months, then the spend of the days after a date).
+    """
+    data = wide().drop(columns=[TARGET])
+    out = run([unpivot_step(outcome=None)], data, target="spend_next_90d").frame
+    assert "spend_next_90d" not in out.columns and len(out) == 9
+
+
 def test_it_is_stateless_each_row_on_its_own() -> None:
     """A row's output depends only on that row and the frozen parameters (DEC-1004)."""
     data = wide()

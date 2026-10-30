@@ -51,7 +51,7 @@
     "verdict": "ready"
   },
   "xfail": {
-    "approved#ready": "AI-first Stage 3: Retail Win-back is built from one event table; the orders joined to the customers have lost their dates, so no build is offered and the Doctor asks for an outcome column.",
-    "final": "AI-first Stage 3: Retail Win-back is built from one event table; the orders joined to the customers have lost their dates, so no build is offered and the Doctor asks for an outcome column."
+    "approved#ready": "AI-first Stage 3: Retail Win-back is built from one event table. The combine keeps one row per customer, so the orders' dates are gone from the joined table. A query over the orders themselves passes its trial (the AI wrote one in the P6c fix round) but cannot be applied: a query is a post-build step and the run gives it one working table, so approval stops with SQL_INPUT_MISSING. The Doctor asks for an outcome column.",
+    "final": "AI-first Stage 3: Retail Win-back is built from one event table. The combine keeps one row per customer, so the orders' dates are gone from the joined table. A query over the orders themselves passes its trial (the AI wrote one in the P6c fix round) but cannot be applied: a query is a post-build step and the run gives it one working table, so approval stops with SQL_INPUT_MISSING. The Doctor asks for an outcome column."
   }
 }

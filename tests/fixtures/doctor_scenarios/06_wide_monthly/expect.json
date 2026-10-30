@@ -16,7 +16,9 @@
     },
     "unpivot": {
       "has_unpivot_step": true,
-      "open_blocking": [],
+      "open_blocking": [
+        "Q08_AS_OF"
+      ],
       "approvals": "unchanged",
       "accepted_items": [
         {
@@ -27,8 +29,32 @@
         }
       ]
     },
-    "unpivot#plan_runs": {
-      "open_stops": 0
+    "as_of": {
+      "open_blocking": [
+        "OUTCOME_COLUMN"
+      ],
+      "pending_items": [
+        {
+          "has": [
+            "spend in the 90 days after the snapshot"
+          ]
+        }
+      ],
+      "approvals": "unchanged",
+      "none_accepted_by_ai": true
+    },
+    "spend_yes": {
+      "accepted_items": [
+        {
+          "has": [
+            "spend in the 90 days after the snapshot"
+          ]
+        }
+      ],
+      "approvals": "unchanged"
+    },
+    "outcome": {
+      "open_blocking": []
     },
     "approved": {
       "state": [
@@ -38,7 +64,7 @@
       "files": {
         "wide_monthly.csv": 1500
       },
-      "approvals": 1
+      "approvals": 2
     },
     "approved#safety": {
       "none_accepted_by_ai": true
@@ -51,9 +77,6 @@
     "verdict": "ready"
   },
   "xfail": {
-    "invariant:same_plan_without_ai": "AI-first Stage 2: the unpivot is the AI's proposal; the default author has no fact that suggests turning month columns into rows, so with no AI the plan has no unpivot.",
-    "unpivot#plan_runs": "AI-first Stage 3: after the unpivot there are twelve rows for each customer and Customer Spend has no recipe that makes its outcome from them, so the plan stops at JOIN_REPEATS_CUSTOMERS until the rows are combined (the AI does not propose that yet).",
-    "approved": "AI-first Stage 3: the sheet has no Customer Spend outcome and no recipe builds one from the months; the verdict stays 'not ready'.",
-    "final": "AI-first Stage 3: the sheet has no Customer Spend outcome and no recipe builds one from the months; the verdict stays 'not ready'."
+    "invariant:same_plan_without_ai": "AI-first Stage 2: the unpivot is the AI's proposal; the default author has no fact that suggests turning month columns into rows, so with no AI the plan has no unpivot."
   }
 }

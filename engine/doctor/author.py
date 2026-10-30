@@ -44,6 +44,7 @@ from engine.doctor.case import (
     TimelineKind,
     payload_digest,
 )
+from engine.doctor.decisions import decisions
 from engine.doctor.protocol import (
     REQUEST_CODES,
     Ask,
@@ -62,6 +63,7 @@ from engine.doctor.visit_contracts import CaseVisit, OptionEffect
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from engine.doctor.decisions import Decisions
     from engine.doctor.goal_brief import GoalBrief
     from engine.doctor.tools_facts import FactRun, Facts
 
@@ -190,6 +192,10 @@ class SettingsView(Protocol):
         """The change setting `setting` to `value` is, as the person reads it in the plan."""
         ...
 
+    def digest(self, decided: Decisions) -> str:
+        """What the settings are now, for a build to remember (`build_stale` compares it)."""
+        ...
+
 
 @dataclass(frozen=True)
 class ApplyContext:
@@ -255,8 +261,8 @@ def apply_actions(case: Case, actions: Sequence[AuthorAction], ctx: ApplyContext
 # ---------------------------------------------------------------------------
 def item_id_of(kind: str, payload: dict[str, JsonValue], goal_id: str | None) -> str:
     """A proposal's id is its content, so proposing it again finds it. What a trial on the first rows counted
-    (`tried`) is not part of what the change is."""
-    body = {k: v for k, v in payload.items() if k != "tried"}
+    (`tried`) and the settings a build was made for (`settings_digest`) are not part of what the change is."""
+    body = {k: v for k, v in payload.items() if k not in {"tried", "settings_digest"}}
     return f"{kind}.{goal_id or 'base'}.{payload_digest({'v': body})[:12]}"[:128]
 
 
@@ -361,7 +367,11 @@ class _Run:
         old = self._find(replaces) if replaces is not None else None
         if old is None or draft.kind != old.kind or not isinstance(old.payload.get("buildable"), dict):
             return draft
-        carried = {k: old.payload[k] for k in ("buildable", "audience") if k in old.payload}
+        carried: dict[str, JsonValue] = {
+            k: old.payload[k] for k in ("buildable", "audience") if k in old.payload
+        }
+        if self.ctx.goal is not None:  # made now, so for the settings that hold now
+            carried["settings_digest"] = self.ctx.goal.digest(decisions(self.case))
         return draft.model_copy(
             update={"payload": {**draft.payload, **carried, "needs_yes": True}, "goal_id": old.goal_id}
         )
@@ -828,7 +838,6 @@ def served(owing: Sequence[Owed]) -> dict[str, str]:
 def _settings_digest(case: Case, brief: GoalBrief | None, config_root: Path | None) -> str | None:
     """What the chosen goal's settings are now (None for no goal, or a goal with no settings)."""
     from engine.config import ConfigError
-    from engine.doctor.decisions import decisions
     from engine.doctor.goal_settings import load_goal_settings
 
     if brief is None:

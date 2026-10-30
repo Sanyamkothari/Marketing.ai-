@@ -21,5 +21,7 @@ recorded replies run out, the run stops and writes the next prompt to `next_prom
 line to `replies.jsonl` and runs it again. When the scenario is done, `--seal` keeps the hash of each call's instructions
 in `prompts.sha`. A reply names a change by its handle: upload ids are the same in every run, so the handles are too.
 
-Every `xfail` left is a scenario whose goal has no recipe that builds its outcome (Customer Spend, or Retail Win-back
-from two files): the AI says so and the plan keeps asking for the column, as the reason of each entry says.
+The `xfail` left are `05` (Customer Spend with no date column to count the days after a snapshot from) and `07`
+(Retail Win-back from two files: a query is a post-build step and the run gives it one working table, so a query over
+the orders cannot be applied beside the combine step), and `invariant:same_plan_without_ai` on `06` (the unpivot and the
+spend table are the AI's). The reason of each entry says why.

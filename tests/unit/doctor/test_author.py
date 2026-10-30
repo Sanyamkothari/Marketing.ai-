@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -39,6 +40,7 @@ from engine.doctor.case import (
     TimelineKind,
     payload_digest,
 )
+from engine.doctor.decisions import Decisions
 from engine.doctor.plan_check import recipe_steps_of
 from engine.doctor.protocol import DEFAULT_SETTINGS, Ask, AskOption, DataRequest
 from engine.doctor.reconcile import NO_LONGER_EMITTED
@@ -678,6 +680,9 @@ class Window:
     def title(self, setting: str, value: str | int) -> str:
         return f"The outcome looks {value} days after the snapshot"
 
+    def digest(self, decided: Decisions) -> str:
+        return "window-now"
+
 
 def setting(value: str, setting: str = "window_days") -> SetSetting:
     return SetSetting(goal_id="g", setting=setting, value=value, reason="the person asked")
@@ -744,9 +749,10 @@ def test_a_query_that_takes_the_place_of_the_goals_build_is_the_goals_build() ->
         replaces=old.item_id,
         basis="msg:1",
     )
-    out = apply_actions(make_case([old], goal="g"), [mine], ai())
+    out = apply_actions(make_case([old], goal="g"), [mine], ai(goal=Window()))
     [new] = made_by(out.case, old)
     assert new.goal_id == "g" and new.payload["buildable"] == built and new.payload["needs_yes"] is True
+    assert new.payload["settings_digest"] == "window-now", "made now, so for the settings that hold now"
     assert (
         new.state is ProposalState.PENDING and new.replaces == old.item_id
     ), "the person says yes to the swap"
@@ -902,3 +908,38 @@ def test_a_question_a_fact_function_asks_settles_with_exactly_one_i_dont_know() 
     [question] = out.case.questions
     assert [o.label for o in question.options].count("I don't know") == 1
     assert question.answer is None, "the person is asked"
+
+
+def test_a_build_made_for_other_settings_is_owed_to_the_ai_until_a_newer_one_waits_to_replace_it() -> None:
+    """The AI's own query is the goal's build, so when the window or the audience moves nothing but the AI can make
+    the table again (the default author does not put a table beside it that drops the person's change)."""
+    brief: Any = SimpleNamespace(goal_id="retail-win-back", brief_hash="h")
+    now = author._settings_digest(make_case(goal="retail-win-back"), brief, None)
+    assert now is not None
+
+    def build(digest: str, item_id: str = "b1", replaces: str | None = None) -> CaseItem:
+        item = stored("sql_query", "training", state=ProposalState.ACCEPTED, source=ProposalSource.AI)
+        return item.model_copy(
+            update={
+                "item_id": item_id,
+                "goal_id": "retail-win-back",
+                "replaces": replaces,
+                "payload": {**item.payload, "buildable": {"window_days": 60}, "settings_digest": digest},
+            }
+        )
+
+    def reasons(*items: CaseItem) -> list[str]:
+        case = make_case(items, goal="retail-win-back")
+        return [o.reason for o in author.owed(case, brief, None) if o.reason.startswith("build_")]
+
+    assert reasons(build(now)) == [], "made for the settings that hold"
+    assert reasons(build("other")) == ["build_stale"]
+    newer = build(now, "b2", replaces="b1")
+    assert reasons(build("other"), newer) == [], "a newer build waiting to replace it settles it"
+
+
+def test_the_settings_a_build_was_made_for_are_not_part_of_its_id() -> None:
+    body = step("sql_query", "training", sql="select 1")
+    assert author.item_id_of("recipe_step", {**body, "settings_digest": "a"}, "g") == author.item_id_of(
+        "recipe_step", {**body, "settings_digest": "b"}, "g"
+    )
