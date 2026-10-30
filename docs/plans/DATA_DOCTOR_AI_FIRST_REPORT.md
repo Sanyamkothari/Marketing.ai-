@@ -193,12 +193,22 @@ unpivot steps") and, in the fix round, its spend outcome and `ready`, and `08` a
 - **Answered questions keep the counts they were answered with**: the audience answer still reads "1,693 shoppers"
   after a 60-day window, because the person chose it then.
 - The full test suite and `make lint` run on CI, not here.
-- **The guard layer of design 4.2 is not built.** `author.check_action` is still the empty hook (no `guards_layer.py`),
-  so `FEATURE_IS_ID`, `OUTCOME_IS_PERSONS` and `APPROVAL_IS_PERSONS` are not code checks. In `08` the three refusals
-  ("CustomerID as a feature", "Country as the outcome", "ignore the safety checks") are the AI's own words. What holds in
-  code: the AI has no action that approves, sets `decided_by`, or settles the outcome (only an answer of the person
-  does); a feature is built per customer, so the ID is never one; the leak probe and the floors run on the whole
-  plan. A model that tried is not stopped by a guard with a reason, only by the missing action.
+- **The guard layer of design 4.2 is built for actions, not yet for the whole plan.** `author.check_action` calls
+  `engine/doctor/guards_layer.py` before `apply_actions` writes anything, so the safety does not rest on the AI's own
+  words. A refusal carries a code, a name or count (never a cell) and a `how_to_fix` that is never empty; the AI reads it
+  as turn feedback like any other refusal (`agent_turn` hands `Applied.refused` back). Enforced in code:
+  `ITEM_NOT_FOUND` (an item to replace or take out that is not in the active section; the fix lists the valid ids),
+  `APPROVAL_IS_PERSONS` (a proposal whose payload or step carries `decided_by`, an approval or a person's decision),
+  `OUTCOME_IS_PERSONS` (the AI creating an outcome other than by adopting a rule's suggestion, or a question of its own
+  that answers itself with one), `FEATURE_IS_ID` (a feature, or a setting value, that is the customer ID),
+  `STEP_ON_ROLE_COLUMN` (a step on a column that holds a meaning that `waits_because` would let into the plan without
+  the tick), `SETTING_VALUE_NOT_ALLOWED` and `LEFT_OUT_BY_PERSON` (the same change the person left out, found by the
+  existing `twin_of` matching). The checks for `ITEM_NOT_FOUND`, `SETTING_VALUE_NOT_ALLOWED` and `LEFT_OUT_BY_PERSON` moved out of `author.py`, which no
+  longer checks them itself.
+  What is still not a code check: that an outcome column is a yes/no is held where outcomes are offered
+  (`facts_goal`) and by the outcome map, not by the guard, which has no data; `check_plan` (design 4.2) and the
+  `Refusal` conversion of the other refusal sites (design 4.3) are not built. A made-up `s:<id>` basis still only
+  leaves a change unsure (a test pins that); the unknown suggestion is refused where the AI adopts it.
 
 ## 8. Decisions
 

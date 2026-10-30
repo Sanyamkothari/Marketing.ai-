@@ -94,6 +94,10 @@ class Roles:
     ids: frozenset[str] = frozenset()
     """The column that names each row. Leaving rows out by it changes no ID, so that one step is allowed."""
 
+    def names_id(self, name: str) -> bool:
+        """Whether `name` is the column that names each row (case and punctuation aside)."""
+        return bool(_norm(name)) and _norm(name) in self.ids
+
     def touches(self, step: dict[str, Any]) -> bool:
         """Whether a recipe step (as its payload dump) reads, rewrites or creates a column that holds a meaning."""
         kind = str(step.get("kind"))

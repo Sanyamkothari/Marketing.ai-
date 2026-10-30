@@ -89,10 +89,15 @@ __all__ = [
     "apply_round",
     "check_action",
     "default_actions",
+    "draft_item",
+    "find_item",
     "gather_facts",
     "owed",
     "owed_words",
+    "proposal_of",
     "served",
+    "setting_create",
+    "withdrawal_of",
 ]
 
 PRODUCER: Final[str] = AUTHOR
@@ -238,9 +243,10 @@ class Applied:
 
 
 def check_action(case: Case, action: AuthorAction, ctx: ApplyContext) -> Refusal | None:
-    """The guard layer's check of one action, before anything is written (filled in with `guards_layer`)."""
-    del case, action, ctx  # the hook's signature: P4's guards read all three
-    return None
+    """The guard layer's check of one action, before anything is written (`engine.doctor.guards_layer`)."""
+    from engine.doctor.guards_layer import check_action as guard
+
+    return guard(case, action, ctx)
 
 
 def apply_actions(case: Case, actions: Sequence[AuthorAction], ctx: ApplyContext) -> Applied:
@@ -266,7 +272,7 @@ def item_id_of(kind: str, payload: dict[str, JsonValue], goal_id: str | None) ->
     return f"{kind}.{goal_id or 'base'}.{payload_digest({'v': body})[:12]}"[:128]
 
 
-def _in_section(goal_id: str | None, case: Case) -> bool:
+def in_section(goal_id: str | None, case: Case) -> bool:
     active = next((g for g in case.goals if g.active), None)
     return goal_id is None or (active is not None and goal_id == active.goal_id)
 
@@ -282,18 +288,98 @@ def _asked_kind(question: CaseQuestion) -> TimelineKind:
     return TimelineKind.QUESTION_ASKED
 
 
-def _not_found(item_id: str, case: Case) -> Refusal:
-    live = [
-        i.item_id
-        for i in case.items
-        if i.state is not ProposalState.REJECTED and _in_section(i.goal_id, case)
+def find_item(case: Case, item_id: str) -> CaseItem | None:
+    """The case's item of that id, if it is in the active section."""
+    return next((i for i in case.items if i.item_id == item_id and in_section(i.goal_id, case)), None)
+
+
+def draft_item(
+    ctx: ApplyContext, draft: ItemDraft, basis: str, *, state: ProposalState, replaces: str | None = None
+) -> CaseItem:
+    """The change a draft stands for, as the author would write it."""
+    # Only what the values prove is sure; the AI says so by adopting a suggestion a fact tool really made.
+    proven = ctx.author == "default" or (basis.startswith("s:") and basis[2:] in ctx.suggested)
+    return CaseItem(
+        item_id=item_id_of(draft.kind, draft.payload, draft.goal_id),
+        kind=draft.kind,
+        title=draft.title,
+        source=ProposalSource.AI if ctx.author == "ai" else ProposalSource.RULES,
+        confidence=draft.confidence if proven else AgentConfidence.CHECK,
+        state=state,
+        upload_id=draft.upload_id,
+        evidence_ids=tuple(dict.fromkeys((*draft.evidence_ids, basis))),
+        payload=dict(draft.payload),
+        payload_digest=payload_digest(draft.payload),
+        proposed_at=ctx.now,
+        goal_id=draft.goal_id,
+        assumption=draft.assumption,
+        requested_by=ctx.requested_by,
+        producer=ctx.producer,
+        replaces=replaces,
+    )
+
+
+def proposal_of(case: Case, ctx: ApplyContext, action: Create) -> CaseItem:
+    """The change a `Create` proposes, as a pending item. A query that takes the place of the goal's build is the
+    goal's build (the training table with the person's change in it, a filter say): it keeps what the build declared
+    (the outcome it makes, the counts of its audience) and still needs the person's own yes, so the plan has one build
+    and the goal's outcome stays decided."""
+    draft = action.draft
+    old = find_item(case, action.replaces) if action.replaces is not None else None
+    if old is not None and draft.kind == old.kind and isinstance(old.payload.get("buildable"), dict):
+        carried: dict[str, JsonValue] = {
+            k: old.payload[k] for k in ("buildable", "audience") if k in old.payload
+        }
+        if ctx.goal is not None:  # made now, so for the settings that hold now
+            carried["settings_digest"] = ctx.goal.digest(decisions(case))
+        draft = draft.model_copy(
+            update={"payload": {**draft.payload, **carried, "needs_yes": True}, "goal_id": old.goal_id}
+        )
+    return draft_item(ctx, draft, action.basis, state=ProposalState.PENDING)
+
+
+def withdrawal_of(ctx: ApplyContext, old: CaseItem, action: Withdraw) -> CaseItem:
+    """Taking `old` out of the plan, as a change for the person to say yes to."""
+    payload: dict[str, JsonValue] = {
+        "item_id": old.item_id,
+        "consequence": action.consequence,
+        "reason": action.reason,
+    }
+    draft = ItemDraft(
+        kind=WITHDRAW_KIND,
+        payload=payload,
+        title=f"Leave out: {old.title}",
+        upload_id=old.upload_id,
+        goal_id=old.goal_id,
+        confidence=AgentConfidence.CHECK,
+    )
+    return draft_item(
+        ctx, draft, f"withdraw:{old.item_id}", state=ProposalState.PENDING, replaces=old.item_id
+    )
+
+
+def setting_create(ctx: ApplyContext, items: Sequence[CaseItem], action: SetSetting) -> Create:
+    """A goal's setting as the proposal it is: it replaces the setting before it, unless that was rejected."""
+    current = [
+        i
+        for i in items
+        if i.kind == SETTING_KIND
+        and i.payload.get("goal_id") == action.goal_id
+        and i.payload.get("setting") == action.setting
+        and i.state is not ProposalState.REJECTED
     ]
-    return Refusal(
-        code="ITEM_NOT_FOUND",
-        what_failed=f"There is no item “{item_id}” in the plan.",
-        value=item_id,
-        how_to_fix="Use the id of an item in the plan"
-        + (f": {', '.join(live[:8])}." if live else "; the plan is empty."),
+    draft = ItemDraft(
+        kind=SETTING_KIND,
+        payload={"goal_id": action.goal_id, "setting": action.setting, "value": action.value},
+        title=ctx.goal.title(action.setting, action.value) if ctx.goal is not None else "",
+        goal_id=action.goal_id,
+        confidence=AgentConfidence.CHECK,
+    )
+    return Create(
+        draft=draft,
+        reason=action.reason,
+        replaces=current[-1].item_id if current else None,
+        basis=f"setting:{action.setting}",
     )
 
 
@@ -329,65 +415,14 @@ class _Run:
                 self.requests.append(request_data(action.request))
         return None
 
-    def _item(
-        self, draft: ItemDraft, basis: str, *, state: ProposalState, replaces: str | None = None
-    ) -> CaseItem:
-        ctx = self.ctx
-        # Only what the values prove is sure; the AI says so by adopting a suggestion a fact tool really made.
-        proven = ctx.author == "default" or (basis.startswith("s:") and basis[2:] in ctx.suggested)
-        return CaseItem(
-            item_id=item_id_of(draft.kind, draft.payload, draft.goal_id),
-            kind=draft.kind,
-            title=draft.title,
-            source=ProposalSource.AI if ctx.author == "ai" else ProposalSource.RULES,
-            confidence=draft.confidence if proven else AgentConfidence.CHECK,
-            state=state,
-            upload_id=draft.upload_id,
-            evidence_ids=tuple(dict.fromkeys((*draft.evidence_ids, basis))),
-            payload=dict(draft.payload),
-            payload_digest=payload_digest(draft.payload),
-            proposed_at=ctx.now,
-            goal_id=draft.goal_id,
-            assumption=draft.assumption,
-            requested_by=ctx.requested_by,
-            producer=ctx.producer,
-            replaces=replaces,
-        )
-
     def _find(self, item_id: str) -> CaseItem | None:
         return next(
-            (i for i in self.work.items if i.item_id == item_id and _in_section(i.goal_id, self.case)), None
-        )
-
-    def _build_of(self, draft: ItemDraft, replaces: str | None) -> ItemDraft:
-        """A query that takes the place of the goal's build is the goal's build (the training table with the person's
-        change in it, a filter say): it keeps what the build declared (the outcome it makes, the counts of its
-        audience) and still needs the person's own yes, so the plan has one build and the goal's outcome stays decided.
-        """
-        old = self._find(replaces) if replaces is not None else None
-        if old is None or draft.kind != old.kind or not isinstance(old.payload.get("buildable"), dict):
-            return draft
-        carried: dict[str, JsonValue] = {
-            k: old.payload[k] for k in ("buildable", "audience") if k in old.payload
-        }
-        if self.ctx.goal is not None:  # made now, so for the settings that hold now
-            carried["settings_digest"] = self.ctx.goal.digest(decisions(self.case))
-        return draft.model_copy(
-            update={"payload": {**draft.payload, **carried, "needs_yes": True}, "goal_id": old.goal_id}
+            (i for i in self.work.items if i.item_id == item_id and in_section(i.goal_id, self.case)), None
         )
 
     def _create(self, action: Create) -> Refusal | None:
-        item = self._item(
-            self._build_of(action.draft, action.replaces), action.basis, state=ProposalState.PENDING
-        )
+        item = proposal_of(self.case, self.ctx, action)
         twin = twin_of([*self.work.items, *self.emit], item)
-        if twin is not None and twin.state is ProposalState.REJECTED and twin.withdrawn_because is None:
-            return Refusal(
-                code="LEFT_OUT_BY_PERSON",
-                what_failed=f"“{twin.title}” was left out by the person, so it is not put back.",
-                value=twin.item_id,
-                how_to_fix="Ask the person to tick it again, or propose a different change.",
-            )
         if twin is not None:
             self.emit.append(item)  # already there: said again, so a complete emission keeps it
             return None
@@ -395,8 +430,7 @@ class _Run:
         placed = waits_because(item, self.ctx.roles) is None
         if action.replaces is not None:
             old = self._find(action.replaces)
-            if old is None:
-                return _not_found(action.replaces, self.case)
+            assert old is not None, "the guard layer refuses a target that is not in the plan"
             if old.state is ProposalState.REJECTED:
                 return Refusal(
                     code="ITEM_ALREADY_LEFT_OUT",
@@ -423,8 +457,7 @@ class _Run:
 
     def _withdraw(self, action: Withdraw) -> Refusal | None:
         old = self._find(action.item_id)
-        if old is None:
-            return _not_found(action.item_id, self.case)
+        assert old is not None, "the guard layer refuses a target that is not in the plan"
         if old.state is ProposalState.REJECTED:
             return Refusal(
                 code="ITEM_ALREADY_LEFT_OUT",
@@ -440,67 +473,11 @@ class _Run:
         ):
             self._take_out(old, action.reason, by=None, why="withdrawn")
             return None
-        payload: dict[str, JsonValue] = {
-            "item_id": old.item_id,
-            "consequence": action.consequence,
-            "reason": action.reason,
-        }
-        draft = ItemDraft(
-            kind=WITHDRAW_KIND,
-            payload=payload,
-            title=f"Leave out: {old.title}",
-            upload_id=old.upload_id,
-            goal_id=old.goal_id,
-            confidence=AgentConfidence.CHECK,
-        )
-        item = self._item(draft, f"withdraw:{old.item_id}", state=ProposalState.PENDING, replaces=old.item_id)
-        twin = twin_of([*self.work.items, *self.emit], item)
-        if twin is not None and twin.state is ProposalState.REJECTED and twin.withdrawn_because is None:
-            return Refusal(
-                code="LEFT_OUT_BY_PERSON",
-                what_failed=f"The person already said no to leaving out “{old.title}”.",
-                value=twin.item_id,
-                how_to_fix="Leave it in the plan, or ask the person what they want instead.",
-            )
-        self.emit.append(item)
+        self.emit.append(withdrawal_of(self.ctx, old, action))
         return None
 
     def _setting(self, action: SetSetting) -> Refusal | None:
-        allowed = [str(v) for v in self.ctx.goal.allowed(action.setting)] if self.ctx.goal is not None else []
-        if action.value not in allowed:
-            return Refusal(
-                code="SETTING_VALUE_NOT_ALLOWED",
-                what_failed=f"{action.value} is not an allowed value of {action.setting}.",
-                value=action.setting,
-                how_to_fix=(
-                    f"Use one of: {', '.join(allowed)}."
-                    if allowed
-                    else f"The chosen goal has no setting named {action.setting}."
-                ),
-            )
-        current = [
-            i
-            for i in self.work.items
-            if i.kind == SETTING_KIND
-            and i.payload.get("goal_id") == action.goal_id
-            and i.payload.get("setting") == action.setting
-            and i.state is not ProposalState.REJECTED
-        ]
-        draft = ItemDraft(
-            kind=SETTING_KIND,
-            payload={"goal_id": action.goal_id, "setting": action.setting, "value": action.value},
-            title=self.ctx.goal.title(action.setting, action.value) if self.ctx.goal is not None else "",
-            goal_id=action.goal_id,
-            confidence=AgentConfidence.CHECK,
-        )
-        return self._create(
-            Create(
-                draft=draft,
-                reason=action.reason,
-                replaces=current[-1].item_id if current else None,
-                basis=f"setting:{action.setting}",
-            )
-        )
+        return self._create(setting_create(self.ctx, self.work.items, action))
 
     # -- the end -------------------------------------------------------------------------------------------------
     def _settle(self) -> tuple[list[tuple[CaseQuestion, Effects]], list[CaseItem]]:
@@ -557,7 +534,7 @@ class _Run:
         after: list[Callable[[Case], None]] = []
         if ctx.standing is not None:
             standing = apply_standing(
-                ctx.standing, case, questions, now=ctx.now, in_scope=lambda g: _in_section(g, case)
+                ctx.standing, case, questions, now=ctx.now, in_scope=lambda g: in_section(g, case)
             )
             questions, items = standing.questions, [*items, *standing.items]
             events.extend(standing.events)
@@ -572,7 +549,7 @@ class _Run:
                 questions=questions,
                 doubts=self.doubts,
                 complete=ctx.complete,
-                in_scope=lambda g: _in_section(g, case),
+                in_scope=lambda g: in_section(g, case),
                 unevaluated=ctx.unevaluated,
             ),
             now=ctx.now,
@@ -794,7 +771,7 @@ def owed(case: Case, brief: GoalBrief | None, config_root: Path | None = None) -
     answered = sorted(
         q.question_id
         for q in case.questions
-        if q.blocking and q.answer is not None and _in_section(q.goal_id, case)
+        if q.blocking and q.answer is not None and in_section(q.goal_id, case)
     )
     if answered and done.get(f"{_SERVED}unblocked") != (key := payload_digest({"answered": answered})[:16]):
         found.append(
@@ -858,7 +835,7 @@ def _stale_build(case: Case, settings: str) -> str | None:
         if i.kind == "recipe_step"
         and isinstance(i.payload.get("buildable"), dict)
         and i.state is not ProposalState.REJECTED
-        and _in_section(i.goal_id, case)
+        and in_section(i.goal_id, case)
     ]
     for build in builds:
         made = build.payload.get("settings_digest")
