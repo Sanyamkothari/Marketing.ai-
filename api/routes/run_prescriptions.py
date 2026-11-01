@@ -143,7 +143,11 @@ def _upload_training(
         if not read:
             read.append(
                 ingest.read_upload(
-                    storage, upload.source_key, file_format=upload.file_format, row_cap=cap
+                    storage,
+                    upload.source_key,
+                    file_format=upload.file_format,
+                    row_cap=cap,
+                    keep_leading_zeros=True,
                 ).frame
             )
         return read[0]
@@ -233,7 +237,11 @@ def prescribed_scoring(
 
         def raw() -> Any:
             return ingest.read_upload(
-                storage, sent.source_key, file_format=sent.file_format, row_cap=profile_row_cap(config)
+                storage,
+                sent.source_key,
+                file_format=sent.file_format,
+                row_cap=profile_row_cap(config),
+                keep_leading_zeros=True,
             ).frame
 
     try:

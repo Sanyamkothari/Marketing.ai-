@@ -903,7 +903,9 @@ def read_frame(
     upload record and never will - reaches the same checks through the same call.
     """
     try:
-        return ingest.read_upload(storage, source_key, file_format=file_format, row_cap=row_cap).frame
+        return ingest.read_upload(
+            storage, source_key, file_format=file_format, row_cap=row_cap, keep_leading_zeros=True
+        ).frame
     except ingest.IngestError as exc:
         raise ingest_http(exc.code, exc.message) from exc
 
