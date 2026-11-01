@@ -1095,6 +1095,30 @@ def _split_classes(state: _State) -> None:
     if minority is not None:
         _put(state, code, "fail", message=minority, fix="Add rows with the rarer outcome.", details=details)
         return
+    if state.binary and simulated:
+        total_rows = sum(part.rows for part in simulated)
+        total_pos = sum(part.positives for part in simulated if part.positives is not None)
+        pos_rate = (total_pos / total_rows) if total_rows > 0 else 0.0
+        stage = (getattr(state.config, "lifecycle_stage", "") or "").lower()
+        use_case_id = (getattr(state.config, "id", "") or "").lower()
+        is_retention_or_winback = (
+            stage in ("win-back", "churn") or "win-back" in use_case_id or "churn" in use_case_id
+        )
+        if is_retention_or_winback and pos_rate > 0.40:
+            details["natural_positive_rate"] = round(pos_rate, 4)
+            details["subcode"] = "OUTCOME_BASE_RATE_HIGH"
+            _put(
+                state,
+                code,
+                "warn",
+                message=(
+                    f"{pos_rate:.0%} of customers in this audience already have the positive outcome naturally. "
+                    "For a win-back or churn campaign, this indicates the audience contains active repeat shoppers."
+                ),
+                fix="Filter the customer list to lapsed customers (e.g. no orders in 60+ days) before training.",
+                details=details,
+            )
+            return
     _put(
         state,
         code,

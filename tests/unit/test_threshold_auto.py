@@ -78,7 +78,7 @@ def test_an_optimum_within_the_ceiling_is_kept_exactly_as_before() -> None:
     assert choice.fallback is None
 
 
-def test_an_optimum_above_the_ceiling_falls_back_to_the_top_decile() -> None:
+def test_an_optimum_above_the_ceiling_falls_back_to_constrained_ceiling() -> None:
     rng = np.random.default_rng(7)
     scores = rng.random(200)
     actual = rng.random(200) < 0.45  # a model that knows nothing, over a base rate near a half
@@ -90,11 +90,11 @@ def test_an_optimum_above_the_ceiling_falls_back_to_the_top_decile() -> None:
     assert choice.fallback.code == THRESHOLD_FALLBACK
     assert choice.fallback.optimum_threshold == unbounded.threshold
     assert choice.fallback.max_flagged_rate == 0.30
-    assert flagged(scores, choice.threshold) == pytest.approx(FALLBACK_FLAGGED_RATE)
+    assert flagged(scores, choice.threshold) <= 0.30
     assert choice.fallback.fallback_flagged_rate == pytest.approx(flagged(scores, choice.threshold))
     assert THRESHOLD_FALLBACK in choice.detail
     assert "above the 30% ceiling" in choice.detail
-    assert choice.detail.startswith("Auto, fell back to the top 10% of validation scores")
+    assert choice.detail.startswith("Auto, fell back to the top 30% of validation scores")
 
 
 def test_a_ceiling_below_a_tenth_caps_the_fallback_too() -> None:
@@ -224,15 +224,15 @@ def test_online_retail_no_longer_calls_most_of_its_audience_positive(retail: Ret
     # the old rule flagged well over half of a 219-row validation split ...
     assert flagged(before.score(validation).to_numpy(), before.threshold) > 0.5
     assert before.threshold_fallback is None
-    # ... the new one refuses it, says why, and flags about a tenth. The isotonic calibrator's top
-    # step holds 24 of the 219 rows, so "the top decile" is that step: the smallest group the
-    # calibrated model can single out, and the record states the share the rule really flags.
+    # ... the new one refuses it, says why, and flags within the ceiling. Rather than an abrupt drop
+    # to the top decile, constrained optimization finds the metric-maximising threshold that respects
+    # the 30% ceiling (flagging about 26%), and the record states the share the rule really flags.
     fallback = after.threshold_fallback
     assert isinstance(fallback, ThresholdFallback)
     assert fallback.optimum_threshold == before.threshold
     assert fallback.optimum_flagged_rate > 0.30
     rate = flagged(after.score(validation).to_numpy(), after.threshold)
-    assert 0.0 < rate < 0.15
+    assert 0.0 < rate <= 0.30
     assert rate == pytest.approx(fallback.fallback_flagged_rate, abs=1e-4)
     assert THRESHOLD_FALLBACK in after.threshold_detail
     on_test = after.score(retail.parts["test"]).to_numpy() >= after.threshold

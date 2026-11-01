@@ -44,7 +44,7 @@ predictor. The mapping itself is stored beside `scorer.json` (`engine.column_nam
 `scorer.json` stays exactly what the train stage wrote.
 
 `auto`'s threshold is defined in :func:`choose_operating_point` (DEC-094): the configured metric's
-optimum on validation, refused for the top decile (or the ceiling itself, when that is lower) -
+optimum on validation, refused for the ceiling (or the top decile when no ceiling is set) -
 with a `THRESHOLD_FALLBACK` record in `scorer.json` and a sentence in `threshold_detail` - when it
 flags more rows than `evaluation.threshold.max_flagged_rate` allows, or every row.
 
@@ -434,7 +434,12 @@ def _sweep(scores: FloatArray, actual: BoolArray) -> tuple[FloatArray, IntArray,
     return sorted_scores, hits, above, np.flatnonzero(last_of_run)
 
 
-def _best_threshold(scores: FloatArray, actual: BoolArray, metric: Metric) -> tuple[float, int] | None:
+def _best_threshold(
+    scores: FloatArray,
+    actual: BoolArray,
+    metric: Metric,
+    max_flagged_rate: float | None = None,
+) -> tuple[float, int] | None:
     """`(threshold, rows flagged)` maximising `metric` for the rule `positive iff score >= threshold`.
 
     One descending sweep: with `TP + FP` the number of rows above the cut and `TP + FN` the number
@@ -443,6 +448,9 @@ def _best_threshold(scores: FloatArray, actual: BoolArray, metric: Metric) -> tu
     wins, which is the higher-recall end: one deterministic rule, and reach is the marketing default.
     Recall is the exception: equal recall at a lower cut only adds false positives, so its ties go
     to the highest threshold instead.
+
+    When `max_flagged_rate` is given, only candidates that flag at most that share of validation rows
+    (and fewer than all rows) are considered.
     """
     import numpy as np
 
@@ -451,6 +459,22 @@ def _best_threshold(scores: FloatArray, actual: BoolArray, metric: Metric) -> tu
         return None
     sorted_scores, hits, above, candidates = _sweep(scores, actual)
     values = _metric_values(metric, hits, above, positives)[candidates]
+
+    if max_flagged_rate is not None:
+        valid_indices: list[int] = []
+        for idx in range(len(candidates)):
+            i = int(candidates[idx])
+            if above[i] / scores.size > max_flagged_rate + 1e-9:
+                break
+            cut = _as_threshold(float(sorted_scores[i]))
+            cnt = _flagged_at(sorted_scores, cut)
+            if cnt < scores.size and cnt / scores.size <= max_flagged_rate + 1e-9:
+                valid_indices.append(idx)
+        if not valid_indices:
+            return None
+        candidates = candidates[valid_indices]
+        values = values[valid_indices]
+
     best = float(np.max(values))
     at_best = candidates[np.flatnonzero(values == best)]
     # The sweep descends, so the last candidate at the maximum is the lowest threshold.
@@ -544,9 +568,9 @@ def choose_operating_point(
     **`auto`, precisely (DEC-094).** Take the threshold that maximises the configured metric on
     validation (`threshold_metric`: F1, recall or precision; F1 for a ranking metric). If that
     optimum flags more than `threshold.max_flagged_rate` of the validation rows, or flags every row,
-    it is refused, the top decile of the validation scores is used instead - the top
-    `max_flagged_rate` when the ceiling is below a tenth, so the fallback never flags more than the
-    ceiling it enforces - and the choice carries a `THRESHOLD_FALLBACK` record saying why. On a weak model over a base rate near a half the F1
+    it is refused: the threshold maximising the metric under the `max_flagged_rate` ceiling is used
+    instead (or the top decile when no ceiling is set or no cut qualifies), and the choice carries a
+    `THRESHOLD_FALLBACK` record saying why. On a weak model over a base rate near a half the F1
     optimum really is "call everybody positive" - recall 1.0, specificity 0.0 on the library's
     online-retail file - which reads as a triumph on the Model page and is no decision at all. The
     ceiling is a policy, not a statistic: the share of an audience a campaign can act on.
@@ -572,16 +596,25 @@ def choose_operating_point(
         detail = f"Auto (maximises {label} on validation): {_format_threshold(chosen)}"
         return ThresholdChoice(chosen, ThresholdMode.AUTO, detail)
     reason = _fallback_reason(label, flagged, rows, ceiling)
-    share = fallback_flagged_rate(ceiling)
-    decile = _top_decile_threshold(scores, actual, share)
-    if decile is None:
-        reason += "; every validation row has the same score, so there is no top decile to use"
-        fallback_value = FIXED_THRESHOLD
-        fallback_flagged = int((scores >= FIXED_THRESHOLD).sum())
-        where = f"{FIXED_THRESHOLD:.2f}"
+    constrained = (
+        _best_threshold(scores, actual, maximised, max_flagged_rate=ceiling)
+        if ceiling is not None
+        else None
+    )
+    if constrained is not None:
+        fallback_value, fallback_flagged = constrained
+        where = f"the top {_percent(ceiling)} of validation scores"
     else:
-        fallback_value, fallback_flagged = decile
-        where = f"the top {_percent(share)} of validation scores"
+        share = fallback_flagged_rate(ceiling)
+        decile = _top_decile_threshold(scores, actual, share)
+        if decile is None:
+            reason += "; every validation row has the same score, so there is no top decile to use"
+            fallback_value = FIXED_THRESHOLD
+            fallback_flagged = int((scores >= FIXED_THRESHOLD).sum())
+            where = f"{FIXED_THRESHOLD:.2f}"
+        else:
+            fallback_value, fallback_flagged = decile
+            where = f"the top {_percent(share)} of validation scores"
     record = ThresholdFallback(
         reason=reason,
         metric=maximised,

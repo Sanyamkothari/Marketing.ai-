@@ -88,6 +88,7 @@ __all__ = [
 
 OUTCOME_CODES: Final[frozenset[str]] = frozenset(
     {
+        "OUTCOME_BASE_RATE_HIGH",
         "OUTCOME_UNDECIDED",
         "OUTCOME_TOO_MANY_VALUES",
         "OUTCOME_CANNOT_MEASURE",
