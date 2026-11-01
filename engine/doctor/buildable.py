@@ -477,6 +477,22 @@ _DESCRIPTION_ROOM = 300
 """The most characters a query step's description holds (`SqlStepProposal`, `SqlParams`)."""
 
 
+def feature_windows(quiet_days: int | None) -> tuple[int, int]:
+    """The (short, long) days of the build's windowed features (orders, spend, events).
+
+    Everyone in the `quiet` audience has no row in the `quiet_days` days up to the cut-off, so a count or spend over a
+    window of that many days or fewer is 0 for every row: it carries nothing. For that audience both windows are
+    longer than `quiet_days`: twice it, and a year or twice the first, whichever is longer (the longest the feature
+    library reads is 3650 days). Without it: 90 days and a year.
+    """
+    from engine.doctor.tools_features import _WINDOWS
+
+    if quiet_days is None:
+        return _WINDOWS
+    short = min(2 * quiet_days, 3649)
+    return short, min(max(365, 2 * short), 3650)
+
+
 def compile_build(
     built: BuildableOutcome, config: UseCaseConfig, table: str, audience: BuildAudience | None = None
 ) -> tuple[str, str]:
@@ -492,10 +508,12 @@ def compile_build(
     outcome = built.outcome_column or config.target.column
     assert outcome is not None  # buildable_outcome returns nothing for a goal without a target column
     key, when = built.entity_key, built.time_column
+    quiet = audience.quiet_days if audience is not None and audience.audience_id == "quiet" else None
+    short, long = feature_windows(quiet)
     counts = (
         FeatureArg(name="days_since_last_event", agg="days_since_last"),
-        FeatureArg(name="events_90d", agg="count", window_days=90),
-        FeatureArg(name="events_365d", agg="count", window_days=365),
+        FeatureArg(name=f"events_{short}d", agg="count", window_days=short),
+        FeatureArg(name=f"events_{long}d", agg="count", window_days=long),
         FeatureArg(name="events_total", agg="count"),
     )
     pricey = built.amount_column is not None and any(
@@ -539,11 +557,10 @@ def compile_build(
             output_name="training_table",
             features=counts,
         )
-    features = compile_features(given, table, outcome=outcome)
+    features = compile_features(given, table, outcome=outcome, windows=(short, long))
     days = built.window_days
     id_key, id_when, label = _col(key), _col(when), _col(outcome)
     yes, no = (1, 0) if built.label_type == "event_presence" else (0, 1)
-    quiet = audience.quiet_days if audience is not None and audience.audience_id == "quiet" else None
     recent, only_quiet = "", ""
     if quiet is not None:
         recent = (
@@ -573,7 +590,9 @@ def compile_build(
     )
     names = [f.name for f in features.features]
     ending = f", and {outcome}: 1 when the {noun} {word} in the {days} days after {cut}, else 0."
-    head = f"Training table: one row per {noun} {who}, with behaviour measured up to {cut}"
+    # The quiet sentence already names the cut-off ("up to {cut}"): it is not said twice, so that the room holds every name.
+    measured = "up to then" if quiet is not None else f"measured up to {cut}"
+    head = f"Training table: one row per {noun} {who}, with behaviour {measured}"
     # The description has a fixed room (`_DESCRIPTION_ROOM`): when the feature names do not fit, fewer of them are named
     # ("such as ...") so the sentence is always told to its end, never cut in the middle of the outcome.
     description = f"{head} ({', '.join(names)}){ending}"

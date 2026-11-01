@@ -8,6 +8,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -271,3 +272,42 @@ def test_the_build_description_is_told_to_its_end_even_with_many_features(config
     assert len(description) <= _DESCRIPTION_ROOM
     assert description.endswith(f"days after {found.snapshot:%d %b %Y}, else 0.")
     assert "reactivated: 1 when the" in description
+
+
+def _feature_names(found: Any, config: Any, audience: Any, config_root: Path) -> list[str]:
+    from engine.agent.sql_step import MAX_COMPILED_SQL_CHARS, run_sql
+
+    sql, _description = compile_build(found, config, "t_orders", audience)
+    built = run_sql(
+        sql, {"orders": log(1_500)}, output_name="t", as_of=found.snapshot, max_chars=MAX_COMPILED_SQL_CHARS
+    ).frame
+    return [c for c in built.columns if c not in ("customer_id", found.outcome_column)]
+
+
+def test_the_quiet_build_makes_no_feature_over_a_window_the_audience_empties(config_root: Path) -> None:
+    """Customers with no row in the last 90 days have 0 orders, spend and events in any window of 90 days or fewer:
+    the quiet build measures longer windows instead, and the other audiences keep the 90 and 365 day ones."""
+    import re
+
+    from engine.doctor.buildable import feature_windows
+
+    frame = log(1_500)
+    config = load_use_case(GOAL, config_root)
+    found = buildable_outcome([loaded(frame, config_root)], config, config_root)
+    assert found is not None
+    active, quiet = found.audiences
+    assert quiet.quiet_days == 90 and feature_windows(90) == (180, 365) and feature_windows(None) == (90, 365)
+
+    def windows(names: list[str]) -> set[int]:
+        return {int(m.group(1)) for n in names if (m := re.search(r"_(\d+)d$", n))}
+
+    for audience in (None, active):
+        assert windows(_feature_names(found, config, audience, config_root)) == {90, 365}
+    names = _feature_names(found, config, quiet, config_root)
+    assert windows(names) == {180, 365} and all(w > 90 for w in windows(names))
+    _sql, description = compile_build(found, config, "t_orders", quiet)
+    assert all(name in description for name in names if name != "customer_id")
+    # a different quiet period moves the windows with it (strictly longer, whatever it is)
+    for days in (14, 30, 90, 180, 365):
+        short, long = feature_windows(days)
+        assert days < short < long

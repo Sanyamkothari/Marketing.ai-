@@ -445,7 +445,7 @@ def _named(name: str, amount: str | None, order: str | None) -> _Col:
     )
 
 
-def _preset(given: ProposeFeaturesArgs) -> tuple[list[_Col], list[str]]:
+def _preset(given: ProposeFeaturesArgs, windows: tuple[int, int] = _WINDOWS) -> tuple[list[_Col], list[str]]:
     amount, order, product = given.amount_column, given.order_column, given.product_column
     if not amount:
         raise _refuse(
@@ -454,15 +454,16 @@ def _preset(given: ProposeFeaturesArgs) -> tuple[list[_Col], list[str]]:
             "quantity and a unit price instead, give `quantity_column` and `price_column`.",
         )
     notes: list[str] = []
-    short, long = _WINDOWS
+    short, long = windows
+    long_said = "in the last year" if long == 365 else f"in the last {long} days"
     orders = (AggFunction.NUNIQUE, order) if order else (AggFunction.COUNT, None)
     kind = "orders" if order else "rows"
     cols = [
         _library("days_since_last_order", AggFunction.DAYS_SINCE_LAST, phrase="days since the last order"),
         _library(f"orders_{short}d", orders[0], orders[1], short, phrase=f"{kind} in the last {short} days"),
-        _library(f"orders_{long}d", orders[0], orders[1], long, phrase=f"{kind} in the last year"),
+        _library(f"orders_{long}d", orders[0], orders[1], long, phrase=f"{kind} {long_said}"),
         _library(f"spend_{short}d", AggFunction.SUM, amount, short, phrase=f"spend in the last {short} days"),
-        _library(f"spend_{long}d", AggFunction.SUM, amount, long, phrase="spend in the last year"),
+        _library(f"spend_{long}d", AggFunction.SUM, amount, long, phrase=f"spend {long_said}"),
     ]
     if order:
         cols.append(
@@ -541,11 +542,18 @@ def _preset(given: ProposeFeaturesArgs) -> tuple[list[_Col], list[str]]:
     return cols, notes
 
 
-def compile_features(given: ProposeFeaturesArgs, table: str, *, outcome: str | None = None) -> Compiled:
+def compile_features(
+    given: ProposeFeaturesArgs,
+    table: str,
+    *,
+    outcome: str | None = None,
+    windows: tuple[int, int] = _WINDOWS,
+) -> Compiled:
     """The query for `given` over the table whose SQL name is `table` (`t_<name>`).
 
     Raises `DataToolError`: a request no feature library can answer, or a feature that reads the outcome. The query
-    carries `$as_of`; it is cut at that date before any feature is computed.
+    carries `$as_of`; it is cut at that date before any feature is computed. `windows` are the (short, long) days of
+    the `rfm` preset's order and spend counts (a caller that knows the short one carries no information passes longer).
     """
     cols: list[_Col] = []
     notes: list[str] = []
@@ -562,7 +570,7 @@ def compile_features(given: ProposeFeaturesArgs, table: str, *, outcome: str | N
         given = given.model_copy(update={"amount_column": LINE_AMOUNT})
         notes.append(f"The amount of a line is {line[0]} x {line[1]}.")
     if given.preset:
-        cols, more = _preset(given)
+        cols, more = _preset(given, windows)
         notes.extend(more)
     for arg in given.features:
         if not _NAME.match(arg.name):
