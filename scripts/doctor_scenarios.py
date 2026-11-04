@@ -113,6 +113,8 @@ class ReplayLLMClient(FakeLLMClient):
         model_id: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.0,
+        json_object: bool = False,  # noqa: ARG002 - a recording replies the same either way
+        reasoning_effort: str | None = None,  # noqa: ARG002
     ) -> LLMCompletion:
         input_chars = len(system) + len(prompt)
         in_tokens = -(-len(system) // APPROX_CHARS_PER_TOKEN) + -(-len(prompt) // APPROX_CHARS_PER_TOKEN)

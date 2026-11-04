@@ -383,20 +383,23 @@ class _Down(Script):
 
 
 @pytest.mark.parametrize(
-    ("error", "kind", "calls"),
+    ("error", "kind", "asked", "calls"),
     [
-        (LLMHttpError("out_of_room", input_tokens=40, output_tokens=4096), "out_of_room", 1),
-        (LLMHttpError("key_expired", status=401), "key_expired", 0),
+        # out of room is asked once more with twice the room (both billed); an expired key is not asked again
+        (LLMHttpError("out_of_room", input_tokens=40, output_tokens=4096), "out_of_room", 2, 2),
+        (LLMHttpError("key_expired", status=401), "key_expired", 1, 0),
     ],
     ids=["out-of-room-is-billed", "expired-key-is-not"],
 )
 def test_a_review_the_ai_service_did_not_answer_says_why_and_is_tried_again(
-    world: World, storage: LocalStorage, error: LLMHttpError, kind: str, calls: int
+    world: World, storage: LocalStorage, error: LLMHttpError, kind: str, asked: int, calls: int
 ) -> None:
     client = _Down([], error)
     port = _review(_guard(client))
     case = _answer_key(storage, world, _opened(storage, world, port), port)
-    assert client.asked == 1, "the review's first call was made and not answered"
+    assert (
+        client.asked == asked
+    ), "the review's call was made (and retried once when out of room) and not answered"
     assert case.counters.model_calls == calls, "a call the provider billed counts, one it did not does not"
     assert "author.new_file" not in (
         case.visit.done if case.visit else {}
@@ -419,7 +422,7 @@ def test_a_review_the_ai_service_did_not_answer_says_why_and_is_tried_again(
         CLIENT, case.case_id, q.question_id, option(q, "account_no"), _deps(storage, world, port),
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
-    assert client.asked == 2 and "author.new_file" in (again.visit.done if again.visit else {})
+    assert client.asked == asked + 1 and "author.new_file" in (again.visit.done if again.visit else {})
     assert [(c.text, c.blocked_by) for c in again.chat[-1:]] == [
         ("I am done.", None)
     ], "its own words this time"

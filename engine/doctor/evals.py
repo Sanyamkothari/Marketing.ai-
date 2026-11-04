@@ -1105,19 +1105,26 @@ class CassetteMeter:
     def cost_usd(self) -> float | None:
         return round(self._cost, 6) if self._priced else None
 
-    def complete(self, rendered: RenderedPrompt, purpose: GenerativePurpose) -> LLMCompletion:
-        return self._answer("complete", rendered, purpose)
+    def complete(
+        self, rendered: RenderedPrompt, purpose: GenerativePurpose, *, max_tokens: int | None = None
+    ) -> LLMCompletion:
+        """`max_tokens` (a retry with more room, `Meter.complete`) reaches the real meter when recording; a replay
+        answers from the cassette whatever the room."""
+        return self._answer("complete", rendered, purpose, max_tokens)
 
     def judge(self, rendered: RenderedPrompt, purpose: GenerativePurpose) -> LLMCompletion:
         return self._answer("judge", rendered, purpose)
 
-    def _answer(self, method: str, rendered: RenderedPrompt, purpose: GenerativePurpose) -> LLMCompletion:
+    def _answer(
+        self, method: str, rendered: RenderedPrompt, purpose: GenerativePurpose, max_tokens: int | None = None
+    ) -> LLMCompletion:
         from engine.llm import LLMCompletion
 
         key = f"{method}:{rendered.input_hash}"
         self.sent.append(f"{rendered.system}\n{rendered.user}")
         if self.inner is not None:
-            completion: LLMCompletion = getattr(self.inner, method)(rendered, purpose)
+            room = {"max_tokens": max_tokens} if max_tokens is not None else {}
+            completion: LLMCompletion = getattr(self.inner, method)(rendered, purpose, **room)
             self.cassette.entries[key] = CassetteEntry(
                 text=completion.text,
                 model_id=completion.model_id,

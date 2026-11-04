@@ -6,6 +6,7 @@ description: One step of a use case's Guided-setup helper - call a read tool, su
 variables:
   [agent_name, goal, entity, knowledge, tools, settings, state, column_choices, message, turn_results]
 output: json
+answer: json_object
 ---
 
 # System

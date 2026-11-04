@@ -3,63 +3,23 @@
  "recorded_from": "reference-model-v1",
  "note": "Recorded from the scripted reference model (tests/fixtures/doctor_eval/reference_model.py): the machine the harness was built on has no AI service. Re-record from a real model with --model real --record.",
  "entries": {
-  "complete:00a4dbc5622706b52e77f8ba7252ae6e": {
+  "complete:02bf131f9e2daf6b08df26b26a95ddef": {
+   "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
+   "model_id": "fake",
+   "input_tokens": 5870,
+   "output_tokens": 34,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:047e44d2101405eb7f278b9493ffc20a": {
    "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"parse_number\", \"column\": \"ad_ctr_90d\", \"params\": {\"decimal\": \".\", \"percent_to_fraction\": true}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
    "model_id": "fake",
-   "input_tokens": 5789,
+   "input_tokens": 5766,
    "output_tokens": 67,
    "cost_usd": null,
    "stop_reason": "end_turn"
   },
-  "complete:13fd23d2aecdd37820813e7c29d721e9": {
-   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"map_boolean\", \"column\": \"marketing_opt_in\", \"params\": {\"true_values\": [\"true\"], \"false_values\": [\"false\"]}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
-   "model_id": "fake",
-   "input_tokens": 5125,
-   "output_tokens": 70,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:1e2efd945bd45dd2bcb27f1fd20c9f8e": {
-   "text": "{\"action\": \"find_format_issues\", \"file\": \"F1\", \"args\": {}}",
-   "model_id": "fake",
-   "input_tokens": 4995,
-   "output_tokens": 15,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:21f6fda8fa5ff85ff32846a9e2ba15ac": {
-   "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
-   "model_id": "fake",
-   "input_tokens": 5870,
-   "output_tokens": 34,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:2418542334d8d9b027b22bc452fdaf74": {
-   "text": "{\"action\": \"reply\", \"text\": \"I cannot change the search from here; the training time is a question you answer.\", \"evidence_ids\": []}",
-   "model_id": "fake",
-   "input_tokens": 4953,
-   "output_tokens": 33,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:2888692e4ac91ff7f4480876f8696e34": {
-   "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
-   "model_id": "fake",
-   "input_tokens": 5870,
-   "output_tokens": 34,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:2f40b80d2f08e2bad99b50017a9b4561": {
-   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"map_boolean\", \"column\": \"marketing_opt_in\", \"params\": {\"true_values\": [\"true\"], \"false_values\": [\"false\"]}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
-   "model_id": "fake",
-   "input_tokens": 5137,
-   "output_tokens": 70,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:3677dadc938311945175f2de24cbaa04": {
+  "complete:055f5e85f36e331e2cbef33ccafb8264": {
    "text": "{\"action\": \"reply\", \"text\": \"I cannot change the search from here; the training time is a question you answer.\", \"evidence_ids\": []}",
    "model_id": "fake",
    "input_tokens": 4976,
@@ -67,23 +27,7 @@
    "cost_usd": null,
    "stop_reason": "end_turn"
   },
-  "complete:38e8be2b40e25e22625ecd2d3474681a": {
-   "text": "{\"action\": \"find_format_issues\", \"file\": \"F1\", \"args\": {}}",
-   "model_id": "fake",
-   "input_tokens": 4908,
-   "output_tokens": 15,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:44259af10570dba788ec7bc798e7103a": {
-   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"map_boolean\", \"column\": \"marketing_opt_in\", \"params\": {\"true_values\": [\"true\"], \"false_values\": [\"false\"]}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
-   "model_id": "fake",
-   "input_tokens": 5131,
-   "output_tokens": 70,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:48e6857e3f712d132a0d7ac2e36cec67": {
+  "complete:0b3665dcb423aa0df96e039a34f9e9ba": {
    "text": "{\"action\": \"find_format_issues\", \"file\": \"F1\", \"args\": {}}",
    "model_id": "fake",
    "input_tokens": 4907,
@@ -91,31 +35,7 @@
    "cost_usd": null,
    "stop_reason": "end_turn"
   },
-  "complete:5c2e0f1c0ce01d31c88d93d49495977b": {
-   "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
-   "model_id": "fake",
-   "input_tokens": 5847,
-   "output_tokens": 34,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:64a3539dc242d635161198218f44058a": {
-   "text": "{\"action\": \"reply\", \"text\": \"I cannot change the search from here; the training time is a question you answer.\", \"evidence_ids\": []}",
-   "model_id": "fake",
-   "input_tokens": 4976,
-   "output_tokens": 33,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:7e9dd21b8ad24d3ae11f4af31a7c4bff": {
-   "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
-   "model_id": "fake",
-   "input_tokens": 5219,
-   "output_tokens": 34,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:86a2aa207ecf9b0eaa716d3c0ef72f78": {
+  "complete:0c9ffdb9380cf2f0285f8befd4141804": {
    "text": "{\"action\": \"find_format_issues\", \"file\": \"F1\", \"args\": {}}",
    "model_id": "fake",
    "input_tokens": 4995,
@@ -123,7 +43,7 @@
    "cost_usd": null,
    "stop_reason": "end_turn"
   },
-  "complete:8db359b657d30cbdd5f14ffb9f03f2d8": {
+  "complete:23792623b97b919cff4073d44bbb1f53": {
    "text": "{\"action\": \"find_format_issues\", \"file\": \"F1\", \"args\": {}}",
    "model_id": "fake",
    "input_tokens": 4918,
@@ -131,31 +51,7 @@
    "cost_usd": null,
    "stop_reason": "end_turn"
   },
-  "complete:902d2a431a9d2e582b689866347ce862": {
-   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"map_boolean\", \"column\": \"marketing_opt_in\", \"params\": {\"true_values\": [\"true\"], \"false_values\": [\"false\"]}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
-   "model_id": "fake",
-   "input_tokens": 5041,
-   "output_tokens": 70,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:b7818699f1c91c3d37089be663cc0a97": {
-   "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
-   "model_id": "fake",
-   "input_tokens": 5207,
-   "output_tokens": 34,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:b88afdd360eb79de890e2752dc439a46": {
-   "text": "{\"action\": \"reply\", \"text\": \"I cannot change the search from here; the training time is a question you answer.\", \"evidence_ids\": []}",
-   "model_id": "fake",
-   "input_tokens": 4891,
-   "output_tokens": 33,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:c2cb78de47e2ae3ac1534d4a65e7ed56": {
+  "complete:23a8214cb5b1cbc804020eafeac07a65": {
    "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
    "model_id": "fake",
    "input_tokens": 5122,
@@ -163,39 +59,39 @@
    "cost_usd": null,
    "stop_reason": "end_turn"
   },
-  "complete:c31f07d28f6fc394bd7d53f297ca5d7d": {
-   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"parse_number\", \"column\": \"ad_ctr_90d\", \"params\": {\"decimal\": \".\", \"percent_to_fraction\": true}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
-   "model_id": "fake",
-   "input_tokens": 5789,
-   "output_tokens": 67,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:cb0090fbf91ea2659936b16e00c21c63": {
-   "text": "{\"action\": \"find_format_issues\", \"file\": \"F1\", \"args\": {}}",
-   "model_id": "fake",
-   "input_tokens": 4933,
-   "output_tokens": 15,
-   "cost_usd": null,
-   "stop_reason": "end_turn"
-  },
-  "complete:d8d31a9b782b6481365f56f4f7fb8f3d": {
+  "complete:375133e220cec5a95f32a048405978bf": {
    "text": "{\"action\": \"reply\", \"text\": \"I cannot change the search from here; the training time is a question you answer.\", \"evidence_ids\": []}",
    "model_id": "fake",
-   "input_tokens": 4917,
+   "input_tokens": 4976,
    "output_tokens": 33,
    "cost_usd": null,
    "stop_reason": "end_turn"
   },
-  "complete:debf9dd76e775592df501739df55df87": {
+  "complete:4a48031f805b295f9fefebe9df1e67b5": {
+   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"map_boolean\", \"column\": \"marketing_opt_in\", \"params\": {\"true_values\": [\"true\"], \"false_values\": [\"false\"]}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
+   "model_id": "fake",
+   "input_tokens": 5137,
+   "output_tokens": 70,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:4db0504148cbfb178f85d8b25513dcfd": {
+   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"map_boolean\", \"column\": \"marketing_opt_in\", \"params\": {\"true_values\": [\"true\"], \"false_values\": [\"false\"]}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
+   "model_id": "fake",
+   "input_tokens": 5125,
+   "output_tokens": 70,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:543b4124b8c6ec053d4db81c91649d5a": {
    "text": "{\"action\": \"reply\", \"text\": \"I cannot change the search from here; the training time is a question you answer.\", \"evidence_ids\": []}",
    "model_id": "fake",
-   "input_tokens": 4892,
+   "input_tokens": 4891,
    "output_tokens": 33,
    "cost_usd": null,
    "stop_reason": "end_turn"
   },
-  "complete:e34983ab8fec3bf6cea58c1e13b29eb0": {
+  "complete:70bc7891ebc859ee1803b903b4446a48": {
    "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
    "model_id": "fake",
    "input_tokens": 5212,
@@ -203,7 +99,95 @@
    "cost_usd": null,
    "stop_reason": "end_turn"
   },
-  "complete:e555be20d1e189923c9d2b71d9ec837a": {
+  "complete:736a5e2cf90d920ffec4f6c7a467b3f8": {
+   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"parse_number\", \"column\": \"ad_ctr_90d\", \"params\": {\"decimal\": \".\", \"percent_to_fraction\": true}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
+   "model_id": "fake",
+   "input_tokens": 5789,
+   "output_tokens": 67,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:74224a59d66b43c362be344fabd94b1a": {
+   "text": "{\"action\": \"reply\", \"text\": \"I cannot change the search from here; the training time is a question you answer.\", \"evidence_ids\": []}",
+   "model_id": "fake",
+   "input_tokens": 4892,
+   "output_tokens": 33,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:76422620f9b07e326e940ed7d3ea92b6": {
+   "text": "{\"action\": \"reply\", \"text\": \"I cannot change the search from here; the training time is a question you answer.\", \"evidence_ids\": []}",
+   "model_id": "fake",
+   "input_tokens": 4953,
+   "output_tokens": 33,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:7e927d1af6826bd9f012a3900955cb9a": {
+   "text": "{\"action\": \"find_format_issues\", \"file\": \"F1\", \"args\": {}}",
+   "model_id": "fake",
+   "input_tokens": 4908,
+   "output_tokens": 15,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:8617831a62de35ad2f0f44340068339e": {
+   "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
+   "model_id": "fake",
+   "input_tokens": 5207,
+   "output_tokens": 34,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:8722233d6be97342f25688caeb1505b5": {
+   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"map_boolean\", \"column\": \"marketing_opt_in\", \"params\": {\"true_values\": [\"true\"], \"false_values\": [\"false\"]}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
+   "model_id": "fake",
+   "input_tokens": 5041,
+   "output_tokens": 70,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:954e3fba28653d93232aaca93cdd4ed5": {
+   "text": "{\"action\": \"find_format_issues\", \"file\": \"F1\", \"args\": {}}",
+   "model_id": "fake",
+   "input_tokens": 4995,
+   "output_tokens": 15,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:964b96161551b1a4144e4e7c5f72d9b4": {
+   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"map_boolean\", \"column\": \"marketing_opt_in\", \"params\": {\"true_values\": [\"true\"], \"false_values\": [\"false\"]}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
+   "model_id": "fake",
+   "input_tokens": 5131,
+   "output_tokens": 70,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:b77ecbdda592a1607e0a9203ef4ce21b": {
+   "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
+   "model_id": "fake",
+   "input_tokens": 5870,
+   "output_tokens": 34,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:b7c53060b709e4ffd051f53bb922dd84": {
+   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"parse_number\", \"column\": \"ad_ctr_90d\", \"params\": {\"decimal\": \".\", \"percent_to_fraction\": true}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
+   "model_id": "fake",
+   "input_tokens": 5789,
+   "output_tokens": 67,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:c59e9b4409ba74059a984d62ac1dec20": {
+   "text": "{\"action\": \"reply\", \"text\": \"I cannot change the search from here; the training time is a question you answer.\", \"evidence_ids\": []}",
+   "model_id": "fake",
+   "input_tokens": 4917,
+   "output_tokens": 33,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:d2da249502d0f5f9159a7f32c7d4b735": {
    "text": "{\"action\": \"reply\", \"text\": \"I cannot change the search from here; the training time is a question you answer.\", \"evidence_ids\": []}",
    "model_id": "fake",
    "input_tokens": 4902,
@@ -211,7 +195,15 @@
    "cost_usd": null,
    "stop_reason": "end_turn"
   },
-  "complete:eefda3e017c02a1c4ac34354bc68dbf8": {
+  "complete:d35230a1e3cf3f87c878107080387a2c": {
+   "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
+   "model_id": "fake",
+   "input_tokens": 5847,
+   "output_tokens": 34,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:f738f93e317aaeab06891b93fa9cb75f": {
    "text": "{\"action\": \"find_format_issues\", \"file\": \"F1\", \"args\": {}}",
    "model_id": "fake",
    "input_tokens": 4972,
@@ -219,11 +211,19 @@
    "cost_usd": null,
    "stop_reason": "end_turn"
   },
-  "complete:f940eac3dda322b1ba10a86e9f7d1356": {
-   "text": "{\"action\": \"propose_step\", \"file\": \"F1\", \"args\": {\"kind\": \"parse_number\", \"column\": \"ad_ctr_90d\", \"params\": {\"decimal\": \".\", \"percent_to_fraction\": true}, \"evidence_ids\": [\"r1\"], \"reason\": \"The look at this column found values written in a way the run cannot read.\"}}",
+  "complete:f93695de18d89a9feb99903bc963801b": {
+   "text": "{\"action\": \"reply\", \"text\": \"I made one change on the working copy; check it on the screen, you can undo it.\", \"evidence_ids\": [\"s1\"]}",
    "model_id": "fake",
-   "input_tokens": 5766,
-   "output_tokens": 67,
+   "input_tokens": 5219,
+   "output_tokens": 34,
+   "cost_usd": null,
+   "stop_reason": "end_turn"
+  },
+  "complete:ff7d4f91b534edb4f6427331328e8984": {
+   "text": "{\"action\": \"find_format_issues\", \"file\": \"F1\", \"args\": {}}",
+   "model_id": "fake",
+   "input_tokens": 4933,
+   "output_tokens": 15,
    "cost_usd": null,
    "stop_reason": "end_turn"
   }

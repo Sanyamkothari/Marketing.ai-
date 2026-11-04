@@ -33,7 +33,9 @@ or write is survivable - a cache that raised would turn a working run into a fai
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -622,3 +624,52 @@ def test_pruning_drops_the_least_recently_read_until_it_fits(tmp_path: Path) -> 
     dropped = cache.prune(max_bytes=before // 3)
     assert dropped > 0
     assert cache.size_bytes() <= before
+
+
+class RecordingClient(FakeLLMClient):
+    """A client that keeps the keywords of each `complete` call."""
+
+    def __init__(self) -> None:
+        super().__init__(mode=FakeLLMMode.GROUNDED)
+        self.keywords: list[dict[str, object]] = []
+
+    def complete(self, prompt: str, **kwargs: Any) -> LLMCompletion:
+        self.keywords.append(kwargs)
+        return super().complete(prompt, **kwargs)
+
+
+def test_the_meter_asks_for_a_json_object_only_for_a_prompt_that_wants_one() -> None:
+    client = RecordingClient()
+    m = Meter(
+        client,
+        job_id="r_20260922_abcdef01",
+        llm=LlmConfig(),
+        budget=BudgetConfig(max_calls_per_run=500, max_cost_usd_per_run=2.0, cache=False),
+    )
+    plain = rendered()
+    m.complete(plain, PURPOSE)
+    m.complete(dataclasses.replace(plain, json_object=True), PURPOSE)
+    assert "json_object" not in client.keywords[0]
+    assert client.keywords[1]["json_object"] is True
+
+
+def test_the_meter_sends_the_configured_reasoning_effort_and_a_retrys_own_allowance() -> None:
+    client = RecordingClient()
+    m = Meter(
+        client,
+        job_id="r_20260922_abcdef01",
+        llm=LlmConfig(reasoning_effort="low"),
+        budget=BudgetConfig(max_calls_per_run=500, max_cost_usd_per_run=2.0, cache=False),
+    )
+    m.complete(rendered(), PURPOSE)
+    m.complete(rendered(), PURPOSE, max_tokens=123)
+    assert client.keywords[0]["reasoning_effort"] == "low"
+    assert client.keywords[1]["max_tokens"] == 123
+    unset = RecordingClient()
+    Meter(
+        unset,
+        job_id="r_20260922_abcdef01",
+        llm=LlmConfig(),
+        budget=BudgetConfig(max_calls_per_run=500, max_cost_usd_per_run=2.0, cache=False),
+    ).complete(rendered(), PURPOSE)
+    assert "reasoning_effort" not in unset.keywords[0]

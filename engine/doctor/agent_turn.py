@@ -148,6 +148,7 @@ from engine.generative.errors import BUDGET_EXCEEDED, GenerativeError
 from engine.generative.guardrails import Guardrails
 from engine.generative.prompts import Prompt, load_prompt, render
 from engine.llm import LLMError
+from engine.llm_http import LLMHttpError
 from engine.storage import StorageError
 from engine.utils.logging import get_logger
 
@@ -265,6 +266,10 @@ def handle_of(prefix: str, ident: str, width: int = HANDLE_CHARS) -> str:
     """The name the model reads for a change (`c`), a question (`q`) or a suggestion (`s`): `width` characters of the
     hash of its id. It depends on the id alone, so it is the same in every turn."""
     return prefix + hashlib.sha256(ident.encode("utf-8")).hexdigest()[:width]
+
+
+MAX_ANSWER_ALLOWANCE: Final[int] = 32768
+"""The most output tokens one call may be given: the ceiling of `generative.llm.data_agent_max_output_tokens`."""
 
 
 class _NoAnswerError(Exception):
@@ -1305,7 +1310,21 @@ class DoctorTurn:
         if len(rendered.system) + len(rendered.user) > self.limits.turn.prompt_chars:
             raise _NoAnswerError("prompt_too_large")
         try:
-            return self.meter.complete(rendered, self.purpose).text
+            try:
+                return self.meter.complete(rendered, self.purpose).text
+            except LLMHttpError as exc:
+                # The whole allowance went on thinking and nothing was written: ask once more with twice the room
+                # (never past the setting's maximum). The retry is a call like any other, so the case's spending
+                # limit still stands in front of it; a second empty answer fails as it always did.
+                room = self.meter.output_allowance(self.purpose)
+                if exc.kind != "out_of_room" or room >= MAX_ANSWER_ALLOWANCE:
+                    raise
+                try:
+                    return self.meter.complete(
+                        rendered, self.purpose, max_tokens=min(room * 2, MAX_ANSWER_ALLOWANCE)
+                    ).text
+                except GenerativeError:
+                    raise exc from None  # no room left in the limit for a retry: the cause is still the first call's
         except (LLMError, GenerativeError) as exc:
             failed = _NoAnswerError("unavailable", exc)
             _LOG.warning("%s: the AI call failed (%s)", self.purpose.value, ", ".join(failed.codes))

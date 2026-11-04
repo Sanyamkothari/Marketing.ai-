@@ -314,3 +314,30 @@ def test_every_prompt_file_in_the_directory_is_one_the_loader_can_find() -> None
         assert PROMPT_FILENAME.match(filename), filename
         meta = yaml.safe_load((prompts_dir() / filename).read_text(encoding="utf-8").split("---")[1])
         assert meta["name"] == PROMPT_FILENAME.match(filename).group("name")  # type: ignore[union-attr]
+
+
+def test_only_the_guided_one_action_prompts_ask_for_a_json_object_answer() -> None:
+    asking = sorted(name for name in list_prompts() if load_prompt(name).json_object)
+    assert asking == ["data_agent", "data_doctor"]
+    doctor = load_prompt("data_doctor")
+    assert doctor.json_object
+    assert not load_prompt("copy_email").json_object
+
+
+def test_a_prompt_answer_other_than_text_or_json_object_is_refused(tmp_path: Path) -> None:
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "odd.v1.md").write_text(
+        "---\nname: odd\nversion: 1\nvariables: []\nanswer: xml\n---\n\n# System\n\nS\n\n# User\n\nU\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="answer"):
+        load_prompt("odd", tmp_path)
+
+
+def test_a_render_carries_the_prompts_json_object_answer(tmp_path: Path) -> None:
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "one.v1.md").write_text(
+        "---\nname: one\nversion: 1\nvariables: []\nanswer: json_object\n---\n\n# System\n\nS\n\n# User\n\nU\n",
+        encoding="utf-8",
+    )
+    assert render(load_prompt("one", tmp_path), {}).json_object

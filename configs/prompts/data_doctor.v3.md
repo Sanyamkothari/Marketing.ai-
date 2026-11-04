@@ -5,6 +5,7 @@ purpose: data_doctor
 description: The Data Doctor's one turn - read the case, look with tools, propose every change to the plan with its reason, ask only what the data cannot say, and answer plainly.
 variables: [goal, tools, actions, inline_reply, step_kinds, doctor_limits, guide_index, questions, state, conversation, event, turn_results]
 output: json
+answer: json_object
 ---
 
 # System

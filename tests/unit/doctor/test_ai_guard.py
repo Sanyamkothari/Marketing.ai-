@@ -135,9 +135,9 @@ def test_an_ai_service_that_fails_says_why_in_the_result(storage: LocalStorage) 
     assert result.ai is True
     counted = (result.model_calls, result.tokens)
     assert counted == (
-        1,
+        2,
         0,
-    ), "billed whatever the provider reported: one call, and no tokens it did not report"
+    ), "billed whatever the provider reported: the call and its one retry, and no tokens it did not report"
     assert result.reply == f"{UNAVAILABLE} {sentence} {fix}"
     assert (result.blocked_by, result.error_codes) == ("unavailable", ("LLM_REFUSED", "LLM_OUT_OF_ROOM"))
     answered = _converse(_guard(ChatScript({})))(case, "Hello", _files())
@@ -259,13 +259,52 @@ def test_a_turn_that_ran_out_of_room_is_counted_on_the_case_so_trying_again_has_
     guard = _guard(client, tokens=6_000, llm=ALLOWANCES)
     first = _converse(guard)(case, "Hello", _files())
     assert (first.model_calls, first.tokens) == (
-        1,
-        3040,
-    ), "the turn's one call was billed for its whole allowance"
-    case = case.model_copy(update={"counters": CaseCounters(model_calls=1, tokens=3040)})
-    second = _converse(guard)(case, "Hello again", _files())
-    assert (second.model_calls, second.tokens) == (1, 3040)
+        2,
+        6080,
+    ), "the turn's call and its one retry were each billed for their whole allowance"
     case = case.model_copy(update={"counters": CaseCounters(model_calls=2, tokens=6080)})
-    third = _converse(guard)(case, "And again", _files())
-    assert third.reply == AI_LIMIT_REPLY and not third.ai, "the case's limit now stops the retries"
+    second = _converse(guard)(case, "Hello again", _files())
+    assert second.reply == AI_LIMIT_REPLY and not second.ai, "the case's limit now stops the retries"
     assert client.asked == 2
+
+
+class _EmptyThenAnswer(ChatScript):
+    """The model's first call is stopped by the token ceiling in its thinking; the next one writes."""
+
+    def complete(self, prompt: str, **kwargs: Any) -> LLMCompletion:
+        if len(self.calls) == 0:
+            super().complete(prompt, **kwargs)
+            raise LLMHttpError(
+                "out_of_room", model_id=kwargs.get("model_id"), input_tokens=40, output_tokens=3000
+            )
+        return super().complete(prompt, **kwargs)
+
+
+def test_a_call_that_ran_out_of_room_is_asked_once_more_with_twice_the_allowance(
+    storage: LocalStorage,
+) -> None:
+    client = _EmptyThenAnswer({})
+    result = _converse(_guard(client, llm=ALLOWANCES))(open_case(storage, vs.world()), "Hello", _files())
+    sent = [call.max_tokens for call in client.calls if call.kind == "complete"]
+    assert sent[:2] == [3000, 6000] and result.ai, "one retry with double the room, then the turn went on"
+
+
+def test_the_retry_never_goes_past_the_maximum_allowance(storage: LocalStorage) -> None:
+    client = _NoRoom({})
+    guard = _guard(client, llm=LlmConfig(data_agent_max_output_tokens=20_000))
+    _converse(guard)(open_case(storage, vs.world()), "Hello", _files())
+    assert [call.max_tokens for call in client.calls] == [
+        20_000,
+        32_768,
+    ], "doubled, capped, and asked once more"
+    at_cap = _NoRoom({})
+    _converse(_guard(at_cap, llm=LlmConfig(data_agent_max_output_tokens=32_768)))(
+        open_case(storage, vs.world()), "Hello", _files()
+    )
+    assert [call.max_tokens for call in at_cap.calls] == [32_768], "no room to give: no retry"
+
+
+def test_an_allowance_asked_again_is_not_retried_a_second_time(storage: LocalStorage) -> None:
+    client = _NoRoom({})
+    _converse(_guard(client, llm=ALLOWANCES))(open_case(storage, vs.world()), "Hello", _files())
+    assert client.asked == 2, "the first call and one retry, then it failed as before"
