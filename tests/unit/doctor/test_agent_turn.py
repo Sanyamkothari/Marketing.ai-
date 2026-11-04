@@ -617,3 +617,28 @@ def test_a_replaces_that_names_nothing_is_no_replaces(
     client = ChatScript({TEST_ACCOUNTS: [SCRIPT[TEST_ACCOUNTS][0], step]})
     done = _turn(_said(talk.case, TEST_ACCOUNTS), world, client).run(TEST_ACCOUNTS)
     assert [a for a in done.actions if isinstance(a, Create)] and not done.refused
+
+
+def test_a_reply_refused_after_a_refused_look_is_still_rewritten_once(
+    storage: LocalStorage, world: World
+) -> None:
+    done, client = _run(
+        world,
+        storage,
+        [look("describe_numbers", "no_such_column"), reply(_long(2100)), reply("Short version.")],
+    )
+    assert done.reply == "Short version." and done.blocked_by is None and client.asked == 3
+
+
+def test_strikes_are_failures_in_a_row_an_action_that_worked_clears_them(
+    storage: LocalStorage, world: World
+) -> None:
+    bad, good = look("describe_numbers", "no_such_column"), look("describe_numbers", "order_amount")
+    done, client = _run(world, storage, [bad, good, bad, good, reply("Looked twice.")])
+    assert done.reply == "Looked twice." and done.blocked_by is None and client.asked == 5
+
+
+def test_two_refused_replies_in_a_row_still_end_the_turn(storage: LocalStorage, world: World) -> None:
+    done, client = _run(world, storage, [reply(_long(2100)), reply(_long(2200)), reply(_long(2300))])
+    assert done.blocked_by == "AGENT_TEXT_REFUSED"
+    assert client.asked == 3  # two replies, then the last word

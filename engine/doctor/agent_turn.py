@@ -1365,6 +1365,7 @@ class DoctorTurn:
         """Ask the model until it replies, a limit is reached or it cannot be asked. `message` is what the person
         said, when the turn answers one."""
         turn, strikes, reply, blocked = self.turn, 0, "", None
+        reply_refused = False  # a reply of the AI's was refused already: its next refusal ends the turn
         calls, tokens = self.meter.calls_used(), self.meter.tokens_used()
         refusal: AgentToolError | None = (
             None  # the last thing the engine refused, for the person if no reply comes
@@ -1414,6 +1415,7 @@ class DoctorTurn:
                 break
             self.answered += 1
             wanted = ""  # a refusal of a reply, or of an unreadable one, did not come from an action
+            replying = False
             try:
                 action, more = _plain_or_action(answer)
                 name = ALIASES.get(str(action["action"]), str(action["action"]))
@@ -1422,12 +1424,15 @@ class DoctorTurn:
                         self.gates[0].prepare(_one_at_a_time(name, more), extra_text_keys=("value",))
                     )
                 if name == "reply":
+                    replying = True
                     reply = self._reply(action, required=answering)
                     self.finished = True
                     break
                 wanted = name
                 self._take(name, action)
+                strikes = 0  # strikes are failures in a row: an action that worked clears them
                 if name in ENDS_TURN and isinstance(action.get("reply"), str):
+                    replying = True
                     reply = self._reply({"text": action["reply"]}, required=answering)
                     self.finished = True
                     break
@@ -1441,9 +1446,11 @@ class DoctorTurn:
                 turn.feedback.append(
                     self.gates[0].prepare(exc.refusal.feedback(), extra_text_keys=("value",))
                 )
-                if strikes >= self.limits.turn.strikes:
+                # A reply refused for its length or its numbers is rewritten once before the turn ends.
+                if strikes >= self.limits.turn.strikes and not (replying and not reply_refused):
                     blocked = exc.code
                     break
+                reply_refused = reply_refused or replying
             except Exception as exc:  # a model's odd input must never cost a paid turn that nobody records
                 _LOG.warning("doctor turn step failed: %s", type(exc).__name__)
                 blocked = "failed"
