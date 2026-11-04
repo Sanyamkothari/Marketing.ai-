@@ -363,18 +363,36 @@ def _tools() -> list[dict[str, str]]:
     return tools
 
 
-def _parse(text: str) -> dict[str, Any]:
+_DECODER = json.JSONDecoder()
+
+
+def first_action(text: str) -> tuple[dict[str, Any], int]:
+    """The first action in the model's reply, and how many more it held. A model asked for a lot at once may wrap
+    the object in a code fence, write a sentence after it, or send several actions (a list, or one object after
+    another): the first is read and runs through every check like any other; the rest are counted, not run, so the
+    turn can ask for them one at a time."""
     body = text.strip()
-    if body.startswith("```"):
-        body = body.strip("`")
-        body = body[body.find("{") :]
+    starts = [i for i in (body.find("{"), body.find("[")) if i >= 0]
+    if not starts:
+        raise AgentToolError("AGENT_REPLY_MALFORMED", "Reply with one JSON object and nothing else.")
+    body = body[min(starts) :]
     try:
-        value = json.loads(body)
+        value, end = _DECODER.raw_decode(body)
     except (ValueError, RecursionError) as exc:  # a reply nested ~1,000 deep exhausts the decoder
         raise AgentToolError("AGENT_REPLY_MALFORMED", "Reply with one JSON object and nothing else.") from exc
+    more = 0
+    if isinstance(value, list):
+        actions = [v for v in value if isinstance(v, dict)]
+        value, more = (actions[0], len(value) - 1) if actions else (None, 0)
+    elif body[end:].lstrip().startswith("{"):
+        more = 1  # another object follows: at least one more action
     if not isinstance(value, dict) or not isinstance(value.get("action"), str):
         raise AgentToolError("AGENT_REPLY_MALFORMED", 'The object needs an "action".')
-    return value
+    return value, more
+
+
+def _parse(text: str) -> dict[str, Any]:
+    return first_action(text)[0]
 
 
 @dataclass

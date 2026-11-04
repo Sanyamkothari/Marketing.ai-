@@ -283,6 +283,36 @@ def test_a_refusal_goes_back_to_the_model_with_what_to_do_and_a_second_try_works
     assert done.withdrawn == (mine.item_id,), "and the second try was applied"
 
 
+def test_an_answer_with_several_actions_runs_the_first_and_asks_for_the_rest_one_at_a_time(
+    storage: LocalStorage, world: World
+) -> None:
+    """A broad request ("understand the data, pick the right things, build features") makes a model send several
+    actions in one answer; the first runs through every check, and the model is told to send the others next.
+    """
+    import json
+
+    talk = Talk(storage, world, None)
+    case, first = _applied_filter(talk, world)
+    (mine,) = [i for i in first.case.items if i.source is ProposalSource.AI]
+    case = _with(case, items=(*case.items, mine))
+    withdraw = {
+        "action": "withdraw",
+        "args": {
+            "item": handle_of("c", mine.item_id),
+            "reason": "Gone.",
+            "consequence": "The test accounts stay.",
+        },
+    }
+    client = ChatScript({"take it out": [json.dumps([withdraw, reply("Done.")]), reply("Done.")]})
+    done = _turn(case, world, client).run("take it out")
+    told = next(r for r in client.seen[1].results if r.get("error") == "AGENT_ONE_ACTION_PER_REPLY")
+    assert told["value"] == "1" and "withdraw" in told["what_failed"] and told["how_to_fix"]
+    assert done.withdrawn == (mine.item_id,), "the first action ran"
+    assert (
+        done.reply == "Done." and done.finished
+    ), "and the turn ended with the model's own reply, not a refusal"
+
+
 def test_a_suggestion_a_fact_tool_made_is_the_only_way_to_be_sure(
     storage: LocalStorage, world: World
 ) -> None:
