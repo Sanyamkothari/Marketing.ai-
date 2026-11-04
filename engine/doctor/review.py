@@ -29,7 +29,7 @@ from pydantic import Field
 from engine.agent.contracts import ProposalState
 from engine.config import StrictBase
 from engine.doctor.case import Case, CaseItem, CaseOption, CaseQuestion
-from engine.doctor.conversation import _counts, _is_agent, approval_holds, total_rows_of
+from engine.doctor.conversation import _counts, _is_agent, approval_holds, ledger_steps, total_rows_of
 from engine.doctor.decisions import AS_OF_QUESTION, decisions
 from engine.doctor.ledger import findings_of
 from engine.doctor.protocol import AGENT, REQUEST_CODES
@@ -352,11 +352,7 @@ def build_review(case: Case, view: CaseScreenView) -> ApprovalReview:
     """The approval screen of a case; `view` is the screen's view built without the review."""
     items, questions = active_section(case)
     titles = {i.item_id: i.title or i.kind for i in case.items}
-    steps = {
-        s["item_id"]: s
-        for s in (view.ledger or {}).get("steps", [])
-        if isinstance(s, dict) and "item_id" in s
-    }
+    steps = ledger_steps(view.ledger, case.items)
     sampled_raw = (view.ledger or {}).get("sampled_from")
     sampled = sampled_raw if isinstance(sampled_raw, int) and not isinstance(sampled_raw, bool) else None
     plan = tuple(

@@ -404,6 +404,27 @@ def _plural(n: int, one: str, many: str) -> str:
     return f"{n:,} {one if n == 1 else many}"
 
 
+def ledger_steps(ledger: dict[str, Any] | None, items: Sequence[CaseItem]) -> dict[str, dict[str, Any]]:
+    """The plan check's step rows by item id. A `remove_rows` step that a query step follows also carries
+    `table_after`: the rows of the table that query makes from what is left. The query reads the rows after the
+    step, so leaving rows out changes the table it builds by more than the share of rows left out (a customer's
+    later orders are among them), and the person is told that count beside the step. A sample's table is a
+    sample's, not the table (`sampled_from`), so it is left unsaid until the whole file is counted."""
+    rows = [s for s in (ledger or {}).get("steps", []) if isinstance(s, dict) and "item_id" in s]
+    steps: dict[str, dict[str, Any]] = {s["item_id"]: s for s in rows}
+    if (ledger or {}).get("sampled_from") is not None:
+        return steps
+    kinds = {i.item_id: step.get("kind") for i in items if isinstance(step := i.payload.get("step"), dict)}
+    for n, row in enumerate(rows):
+        if kinds.get(row["item_id"]) != "remove_rows":
+            continue
+        query = next((r for r in rows[n + 1 :] if kinds.get(r["item_id"]) == "sql_query"), None)
+        made = _n(query.get("rows_out")) if query is not None else None
+        if made is not None:
+            steps[row["item_id"]] = {**row, "table_after": made}
+    return steps
+
+
 def _is_agent(actor: str | None) -> bool:
     return actor is not None and actor.startswith("agent")
 
@@ -468,6 +489,9 @@ def _counts(
         parts.append(f"{_plural(lost, 'customer', 'customers')} left out")
     if twice:
         parts.append(f"{_plural(twice, 'customer appears', 'customers appear')} twice")
+    table = _n((step or {}).get("table_after"))
+    if table is not None and rows_in is not None and rows_out is not None and rows_out < rows_in:
+        parts.append(f"the table the plan builds from the rows left has {_plural(table, 'row', 'rows')}")
     return " · ".join(parts)
 
 
@@ -961,11 +985,7 @@ def build_conversation(
         if i.upload_id is None or i.upload_id in here or i.kind in COMBINE_KINDS or i.kind in CARRIED_KINDS
     )
     questions = tuple(q for q in questions if q.upload_id is None or q.upload_id in here)
-    steps = {
-        s["item_id"]: s
-        for s in (view.ledger or {}).get("steps", [])
-        if isinstance(s, dict) and "item_id" in s
-    }
+    steps = ledger_steps(view.ledger, case.items)
     sampled_raw = (view.ledger or {}).get("sampled_from")
     sampled = sampled_raw if isinstance(sampled_raw, int) and not isinstance(sampled_raw, bool) else None
     carried_gone = set(view.carried.gone) if view.carried is not None else set()
