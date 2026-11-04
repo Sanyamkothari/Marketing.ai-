@@ -108,7 +108,7 @@ def test_the_saved_models_become_the_llm_config_every_call_is_metered_with(stora
         "saved-m",
         KEYWORD_HASH_MODEL_ID,
     )
-    assert (llm.timeout_s, llm.max_retries, llm.temperature) == (60, 2, 0.20)  # the use case's own policy
+    assert (llm.timeout_s, llm.max_retries, llm.temperature) == (180, 2, 0.20)  # the use case's own policy
 
 
 def test_an_embedding_model_makes_a_real_client_and_none_makes_a_keyword_hash(storage: LocalStorage) -> None:

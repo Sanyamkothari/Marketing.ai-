@@ -200,6 +200,11 @@ class LLMClient(Protocol):
     system prompts as a separate argument - would be a provider's shape leaking into the engine,
     and the two implementations this protocol has to cover (a hash and Bedrock) agree on nothing
     beyond these three.
+
+    `complete` takes `json_object=True` when the caller needs the answer to be exactly one JSON object
+    (an OpenAI-compatible server is then sent `response_format: {"type": "json_object"}`). It is a request,
+    not a promise: a client or a server that cannot do it ignores it, so a caller still reads the answer
+    defensively. The default, False, is the plain free-text call every other flow makes.
     """
 
     def complete(
@@ -210,6 +215,8 @@ class LLMClient(Protocol):
         model_id: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.0,
+        json_object: bool = False,
+        reasoning_effort: str | None = None,
     ) -> LLMCompletion: ...
 
     def embed(
@@ -321,12 +328,16 @@ class FakeLLMClient:
         model_id: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.0,
+        json_object: bool = False,  # noqa: ARG002
+        reasoning_effort: str | None = None,  # noqa: ARG002
     ) -> LLMCompletion:
         """A completion that depends on the request and the mode alone; the same request returns it.
 
         In `DIGEST` mode the text names itself as fake and carries the digest, so a fake answer that
         escapes into a screen or a file is recognisable on sight rather than mistaken for a model's
         work. In every other mode it is built from the prompt, in whichever way the mode asks for.
+        `json_object` (the caller wants one JSON object back) and `reasoning_effort` change nothing here: the
+        fake's answers do not depend on them.
         """
         if max_tokens < 1:
             raise LLMError("LLM_INVALID_REQUEST", "max_tokens must be at least 1.", model_id=model_id)
@@ -715,9 +726,17 @@ class LocalEmbeddingClient:
         model_id: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.0,
+        json_object: bool = False,
+        reasoning_effort: str | None = None,
     ) -> LLMCompletion:
         return self._inner.complete(
-            prompt, system=system, model_id=model_id, max_tokens=max_tokens, temperature=temperature
+            prompt,
+            system=system,
+            model_id=model_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_object=json_object,
+            reasoning_effort=reasoning_effort,
         )
 
     def embed(
@@ -1114,11 +1133,16 @@ class BedrockLLMClient:
         model_id: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.0,
+        json_object: bool = False,  # noqa: ARG002
+        reasoning_effort: str | None = None,  # noqa: ARG002
     ) -> LLMCompletion:
         """One Converse call. The model's text comes back unparsed and unrepaired.
 
         A caller that has to cope with a malformed answer needs to see the malformed answer, so
         nothing is stripped or fixed up here.
+
+        `json_object` and `reasoning_effort` are ignored: Converse has no switch that makes a model answer in one JSON object, so a
+        caller that sets it gets the same free text as before (a no-op for now).
         """
         if max_tokens < 1:
             raise LLMError("LLM_INVALID_REQUEST", "max_tokens must be at least 1.", model_id=model_id)

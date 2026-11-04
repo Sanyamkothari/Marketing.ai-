@@ -174,7 +174,13 @@ _CODES: Final[dict[str, str]] = {
 }
 """Everything else is LLM_UNAVAILABLE ("try again or fix the connection")."""
 
-_REJECTABLE: Final[tuple[str, ...]] = ("temperature", "max_completion_tokens", "max_tokens")
+_REJECTABLE: Final[tuple[str, ...]] = (
+    "temperature",
+    "max_completion_tokens",
+    "max_tokens",
+    "response_format",
+    "reasoning_effort",
+)
 
 _BODY_WINDOW: Final[int] = 4096
 """How much of a response body is ever looked at for a keyword: the start, where an error says why."""
@@ -582,8 +588,9 @@ class OpenAICompatibleClient(_HttpClient):
 
     `base_url` includes the version path when the service has one (`https://api.openai.com/v1`).
     The token ceiling is sent as `max_completion_tokens` to OpenAI itself and as `max_tokens` to every
-    other server; a model that refuses one of them, or a non-default `temperature`, is asked once more
-    without it (the answer is remembered for the client's later calls).
+    other server; a model that refuses one of them, a non-default `temperature`, or `response_format` (sent only
+    when a caller asks for `json_object`) is asked once more without it (the answer is remembered for the
+    client's later calls).
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -591,6 +598,8 @@ class OpenAICompatibleClient(_HttpClient):
         host = httpx.URL(self._base_url).host if self._base_url else ""
         self._token_param = "max_completion_tokens" if host == "api.openai.com" else "max_tokens"
         self._send_temperature = True
+        self._send_response_format = True
+        self._send_reasoning_effort = True
 
     def _headers(self) -> dict[str, str]:
         headers = {"Accept": "application/json"}
@@ -606,6 +615,8 @@ class OpenAICompatibleClient(_HttpClient):
         model_id: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.0,
+        json_object: bool = False,
+        reasoning_effort: str | None = None,
     ) -> LLMCompletion:
         if max_tokens < 1:
             raise LLMError("LLM_INVALID_REQUEST", "max_tokens must be at least 1.", model_id=model_id)
@@ -621,6 +632,10 @@ class OpenAICompatibleClient(_HttpClient):
             document: dict[str, Any] = {"model": chosen, "messages": messages, self._token_param: max_tokens}
             if self._send_temperature:
                 document["temperature"] = temperature
+            if json_object and self._send_response_format:
+                document["response_format"] = {"type": "json_object"}
+            if reasoning_effort and self._send_reasoning_effort:
+                document["reasoning_effort"] = reasoning_effort
             return document
 
         try:
@@ -638,6 +653,12 @@ class OpenAICompatibleClient(_HttpClient):
         changed = False
         if "temperature" in exc.rejected and self._send_temperature:
             self._send_temperature = False
+            changed = True
+        if "reasoning_effort" in exc.rejected and self._send_reasoning_effort:
+            self._send_reasoning_effort = False
+            changed = True
+        if "response_format" in exc.rejected and self._send_response_format:
+            self._send_response_format = False
             changed = True
         for refused, other in (
             ("max_tokens", "max_completion_tokens"),
@@ -726,6 +747,8 @@ class AnthropicClient(_HttpClient):
         model_id: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.0,
+        json_object: bool = False,  # noqa: ARG002 - the Messages API has no such switch; a no-op for now
+        reasoning_effort: str | None = None,  # noqa: ARG002 - not sent to this API
     ) -> LLMCompletion:
         if max_tokens < 1:
             raise LLMError("LLM_INVALID_REQUEST", "max_tokens must be at least 1.", model_id=model_id)

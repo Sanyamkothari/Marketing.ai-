@@ -83,6 +83,10 @@ class Prompt:
     user: str
     content_hash: str
     path: Path
+    json_object: bool = False
+    """Whether the answer must be exactly one JSON object (front matter `answer: json_object`). The meter then
+    asks the client for it; a prompt without the field is a plain free-text call. Not `output: json`, which
+    only says what the answer looks like and asks nothing of the client."""
 
     @property
     def filename(self) -> str:
@@ -99,6 +103,8 @@ class RenderedPrompt:
     content_hash: str
     system: str
     user: str
+    json_object: bool = False
+    """Carried from the prompt: the meter passes it to the client as `json_object`."""
 
     @property
     def input_hash(self) -> str:
@@ -163,7 +169,17 @@ def _load_prompt_cached(name: str, directory: str, version: int | None) -> Promp
         user=user,
         content_hash=hashlib.blake2b(raw.encode("utf-8"), digest_size=16).hexdigest(),
         path=path,
+        json_object=_answer_is_json_object(meta, path),
     )
+
+
+def _answer_is_json_object(meta: Mapping[str, Any], path: Path) -> bool:
+    """Whether the front matter's `answer` asks for one JSON object (`json_object`) or leaves it free (`text`, the
+    default). Anything else is a mistake in the file and fails with its name."""
+    answer = meta.get("answer", "text")
+    if answer not in ("text", "json_object"):
+        raise ValueError(f"{path.name} front matter 'answer' must be 'text' or 'json_object', not {answer!r}")
+    return bool(answer == "json_object")
 
 
 def _resolve(name: str, directory: Path, version: int | None) -> Path:
@@ -228,6 +244,7 @@ def render(prompt: Prompt, values: Mapping[str, object]) -> RenderedPrompt:
         content_hash=prompt.content_hash,
         system=system.strip(),
         user=user.strip(),
+        json_object=prompt.json_object,
     )
 
 

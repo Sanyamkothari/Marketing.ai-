@@ -923,8 +923,10 @@ class LlmConfig(_Base):
     temperature: Annotated[float, Field(ge=0.0, le=1.0)] = 0.20
     max_output_tokens: Annotated[int, Field(ge=1, le=8192)] = 800
     # Guided setup, the Data Doctor and the campaign planner reason before they reply; 800 is all thinking for such a model.
-    data_agent_max_output_tokens: Annotated[int, Field(ge=1, le=32768)] = 4096
-    timeout_s: Annotated[int, Field(ge=1, le=600)] = 60
+    data_agent_max_output_tokens: Annotated[int, Field(ge=1, le=32768)] = 16384
+    # How hard a reasoning model thinks before it writes; unset = not sent (the server's own default).
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
+    timeout_s: Annotated[int, Field(ge=1, le=600)] = 180
     max_retries: Annotated[int, Field(ge=0, le=5)] = 2
 
     @model_validator(mode="after")

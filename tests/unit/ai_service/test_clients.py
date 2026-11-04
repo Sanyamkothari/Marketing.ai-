@@ -105,6 +105,55 @@ def test_a_400_naming_a_parameter_is_retried_once_without_it_and_remembered() ->
     assert "temperature" in bodies[0] and "temperature" not in bodies[1] and "temperature" not in bodies[2]
 
 
+def test_openai_sends_response_format_only_when_a_json_object_is_asked_for() -> None:
+    with serve(lambda _sent: chat_reply("{}")) as server:
+        client = _openai(server.url)
+        client.complete("plain")
+        client.complete("json", json_object=True)
+    assert "response_format" not in server.requests[0].body
+    assert server.requests[1].body["response_format"] == {"type": "json_object"}
+
+
+def test_a_400_naming_response_format_drops_it_once_and_remembers() -> None:
+    def handler(sent: Sent) -> Reply:
+        if "response_format" in (sent.body or {}):
+            return Reply(400, {"error": {"message": "Unsupported parameter: 'response_format'"}})
+        return chat_reply("{}")
+
+    with serve(handler) as server:
+        client = _openai(server.url)
+        assert client.complete("hi", json_object=True).text == "{}"
+        assert client.complete("again", json_object=True).text == "{}"
+    bodies = [r.body for r in server.requests]
+    assert len(bodies) == 3  # asked, asked again without it, then not asked at all
+    assert "response_format" in bodies[0]
+    assert "response_format" not in bodies[1] and "response_format" not in bodies[2]
+    assert "temperature" in bodies[1]  # nothing else was dropped
+
+
+def test_openai_sends_reasoning_effort_only_when_set_and_drops_it_once_refused() -> None:
+    def handler(sent: Sent) -> Reply:
+        if "reasoning_effort" in (sent.body or {}):
+            return Reply(400, {"error": {"message": "Unknown parameter: 'reasoning_effort'"}})
+        return chat_reply("ok")
+
+    with serve(handler) as server:
+        client = _openai(server.url)
+        client.complete("plain")
+        assert client.complete("hi", reasoning_effort="low").text == "ok"
+        client.complete("again", reasoning_effort="low")
+    bodies = [r.body for r in server.requests]
+    assert "reasoning_effort" not in bodies[0]
+    assert bodies[1]["reasoning_effort"] == "low"
+    assert len(bodies) == 4 and all("reasoning_effort" not in b for b in bodies[2:])
+
+
+def test_anthropic_accepts_json_object_and_sends_nothing_extra() -> None:
+    with serve(lambda _sent: message_reply("{}")) as server:
+        _anthropic(server.url).complete("hi", json_object=True)
+    assert "response_format" not in server.requests[0].body
+
+
 def test_a_400_about_the_token_parameter_swaps_it() -> None:
     def handler(sent: Sent) -> Reply:
         if "max_tokens" in (sent.body or {}):

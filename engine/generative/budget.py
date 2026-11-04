@@ -50,7 +50,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import yaml
 
@@ -283,14 +283,17 @@ class Meter:
             return self._llm.data_agent_max_output_tokens
         return self._llm.max_output_tokens
 
-    def complete(self, rendered: RenderedPrompt, purpose: GenerativePurpose) -> LLMCompletion:
-        """Answer `rendered` with the generating model, from the cache when it can.
+    def complete(
+        self, rendered: RenderedPrompt, purpose: GenerativePurpose, *, max_tokens: int | None = None
+    ) -> LLMCompletion:
+        """Answer `rendered` with the generating model, from the cache when it can. `max_tokens` replaces the
+        purpose's answer allowance for this call (a retry after the allowance went on thinking).
 
         Raises `BUDGET_EXCEEDED` before the call rather than after it, so a job that runs out of
         budget makes not one call more than it was allowed - which for the call ceiling is exact and
         for the cost ceiling is as tight as an unknown price per call permits (DEC-227).
         """
-        return self._call(rendered, purpose, self._llm.generation_model)
+        return self._call(rendered, purpose, self._llm.generation_model, max_tokens)
 
     def judge(self, rendered: RenderedPrompt, purpose: GenerativePurpose) -> LLMCompletion:
         """The same, against the judging model.
@@ -300,7 +303,13 @@ class Meter:
         """
         return self._call(rendered, purpose, self._llm.judge_model)
 
-    def _call(self, rendered: RenderedPrompt, purpose: GenerativePurpose, model_id: str) -> LLMCompletion:
+    def _call(
+        self,
+        rendered: RenderedPrompt,
+        purpose: GenerativePurpose,
+        model_id: str,
+        max_tokens: int | None = None,
+    ) -> LLMCompletion:
         """Cache, then budget, then the model, then the tally - in that order and only that order."""
         key = cache_key(
             content_hash=rendered.content_hash,
@@ -315,12 +324,17 @@ class Meter:
             return cached
         self._check_budget()
         try:
+            # Asked for only when the prompt wants it, so every other flow calls the client exactly as before.
+            extra: dict[str, Any] = {"json_object": True} if rendered.json_object else {}
+            if self._llm.reasoning_effort:
+                extra["reasoning_effort"] = self._llm.reasoning_effort
             completion = self._client.complete(
                 rendered.user,
                 system=rendered.system,
                 model_id=model_id,
-                max_tokens=self.output_allowance(purpose),
+                max_tokens=max_tokens or self.output_allowance(purpose),
                 temperature=self._llm.temperature,
+                **extra,
             )
         except LLMError as exc:
             # Only an `out_of_room` failure is a call: the provider billed it in whole. The kind decides,

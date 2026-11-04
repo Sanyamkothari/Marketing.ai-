@@ -210,7 +210,9 @@ def test_with_the_allowance_set_to_the_old_800_the_same_turn_fails_and_says_why_
     carries neither `blocked_by` nor `error_codes`; without counting the call, `model_calls` stays 0.
     """
     sentence, fix = PROBLEMS["out_of_room"]
-    small = _configs(tmp_path, config_root, allowance=THINKING_TOKENS)
+    small = _configs(
+        tmp_path, config_root, allowance=THINKING_TOKENS // 4
+    )  # even doubled once, it is too little
     with serve(_reasoning_model) as server, _app(small, data_dir) as client:
         _connect(client, server.url)
         case = _open_case(client)
@@ -220,10 +222,14 @@ def test_with_the_allowance_set_to_the_old_800_the_same_turn_fails_and_says_why_
         assert reply["blocked_by"] == "unavailable"
         assert {"LLM_REFUSED", "LLM_OUT_OF_ROOM"} <= set(reply["error_codes"])
         asked = len(server.requests)
-        assert asked >= 1 and {_allowance_sent(r) for r in server.requests} == {THINKING_TOKENS}
+        # The empty answer is asked once more with twice the room, which is still too little: then it fails.
+        assert asked == 2 and [_allowance_sent(r) for r in server.requests] == [
+            THINKING_TOKENS // 4,
+            THINKING_TOKENS // 2,
+        ]
         assert chatted["counters"]["model_calls"] == asked, "each was billed, so each counts against the case"
-        assert chatted["counters"]["tokens"] == asked * (
-            40 + THINKING_TOKENS
+        assert chatted["counters"]["tokens"] == sum(
+            40 + _allowance_sent(r) for r in server.requests
         ), "from what the provider reported"
         (event,) = _agent_events(client, case["case_id"])
         assert event["details"]["blocked_by"] == "unavailable"
