@@ -1694,6 +1694,10 @@ class DoctorTurn:
         self._flush(mark, action, replaced)
         self._own_settings(action)
         self.chosen.used.append(name)
+        # "I made 3 changes" counts this turn's own actions: a count no larger than their number is no invention.
+        self.checker.grounded = self.checker.grounded | frozenset(
+            float(n) for n in range(len(self.chosen.used) + 1)
+        )
 
     # -- the actions -------------------------------------------------------------------------------
     def _act(self, action: dict[str, Any]) -> None:

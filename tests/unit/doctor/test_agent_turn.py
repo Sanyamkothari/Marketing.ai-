@@ -774,3 +774,18 @@ def test_the_cases_spending_limit_ends_a_turn_with_the_limit_sentence(
     turn.meter = cs.guard_for(client, limits=AiLimitsConfig(max_calls_per_case=1))
     done = turn.run("explain the plan")
     assert done.blocked_by == "unavailable" and done.reply == AI_LIMIT_REPLY
+
+
+def test_a_count_no_larger_than_the_turns_own_actions_is_no_invention(
+    storage: LocalStorage, world: World
+) -> None:
+    talk = Talk(storage, world, None)
+    five_looks = [look("describe_missing")] * 5
+    client = ChatScript({"explain": [*five_looks, reply("I took 5 steps to check this."), reply("Fine.")]})
+    turn = _turn(_said(talk.case, "explain the plan"), world, client)
+    assert 5.0 not in turn.checker.grounded
+    done = turn.run("explain the plan")
+    assert done.reply == "I took 5 steps to check this."
+    client = ChatScript({"explain": [*five_looks, reply("I took 4711 steps to check this."), reply("Fine.")]})
+    done = _turn(_said(talk.case, "explain the plan"), world, client).run("explain the plan")
+    assert done.reply == "Fine."

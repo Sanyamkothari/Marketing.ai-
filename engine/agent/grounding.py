@@ -11,6 +11,8 @@ A number written with a unit or a multiplier is still a number: `40k` must be gr
 the digits). A number inside quotes is skipped only when the quoted text is exactly the name of a
 column of the file (`'ad_ctr_90d'`, `'Q3 2024 spend'`); any other quoted number is a claim like any
 other (M77: `'73%'` and a number between two apostrophes, as in "it's 73% ... don't", used to pass).
+A ratio, a percentage, a sum or a difference of two grounded numbers is grounded too (within the same rounding): a
+model that works one out is not inventing, and the prompt still tells it to quote the tools' numbers.
 A bare `0` or `1` is allowed anywhere: "turn yes into 1 and no into 0" is not a statistic; nor is a
 small ordinal ("the 2nd suggestion"). Their percent forms are claims: `0%`, `1%` and `100%` must be
 grounded like any other number, and so must a decimal without its leading zero (`.73`) and a
@@ -24,6 +26,7 @@ even when the result echoes it (`evidence_numbers`), so it cannot be laundered t
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from collections.abc import Iterable
 from typing import Any, Final
 
@@ -57,6 +60,8 @@ _MAX_ORDINAL: Final[int] = 20
 _ENUMERATOR: Final[re.Pattern[str]] = re.compile(
     # "(1)", "2)" after a space or a start, and "3." or "4:" opening a line: they number things on the screen
     r"\(\s*(\d{1,2})\s*\)|(?<![\w.,%/-])(\d{1,2})\)(?=\s)|(?m:^[ \t]*(\d{1,2})[.:](?=\s))"
+    # ... and "Step 3" (a step of a list, not a measurement)
+    r"|\b[Ss]tep\s+(\d{1,2})\b(?![.,]\d)"
 )
 
 
@@ -165,6 +170,7 @@ def ungrounded_numbers(text: str, grounded: frozenset[float], names: Iterable[st
     `names` are the file's column names: a quoted span that is exactly one of them is skipped.
     """
     missing: list[str] = []
+    ordered: list[float] = []
     for token in numbers_in(text, names):
         parsed = _parse(token)
         if parsed is None:
@@ -180,8 +186,33 @@ def ungrounded_numbers(text: str, grounded: frozenset[float], names: Iterable[st
             for known in grounded
         )
         if not explained:
+            ordered = ordered or sorted(grounded)
+            explained = any(_derived(value, tolerance, ordered) for value, tolerance in meanings)
+        if not explained:
             missing.append(token)
     return missing
+
+
+def _near(ordered: list[float], target: float, slack: float) -> float | None:
+    """The grounded number (from the sorted list) within `slack` of `target`, or None."""
+    at = bisect_left(ordered, target)
+    close = [ordered[i] for i in (at - 1, at) if 0 <= i < len(ordered)]
+    best = min(close, key=lambda known: abs(known - target), default=None)
+    return best if best is not None and abs(best - target) <= slack else None
+
+
+def _derived(value: float, tolerance: float, ordered: list[float]) -> bool:
+    """Whether `value` is the sum, the difference or the ratio of two grounded numbers (`ordered`, sorted), within
+    the rounding the text shows: `tolerance`, or half a percent of it."""
+    slack = max(tolerance, abs(value) * 0.005)
+    for a in ordered:
+        if _near(ordered, value - a, slack) is not None or _near(ordered, a - value, slack) is not None:
+            return True
+        if value != 0.0 and a != 0.0:
+            b = _near(ordered, a / value, abs(a / value) * 0.01 + 1e-9)  # a / b is within slack of value
+            if b is not None and b != 0.0 and abs(a / b - value) <= slack:
+                return True
+    return False
 
 
 def _is_small_ordinal(token: str) -> bool:
