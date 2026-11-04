@@ -79,10 +79,10 @@ from engine.agent.loop import (
     UNAVAILABLE,
     _Checker,
     _limit_searches,
-    _parse,
     _propose_step,
     _record,
     ai_failure_codes,
+    first_action,
     person_reason,
     refused_sentence,
     unavailable_reply,
@@ -526,13 +526,27 @@ def _hashed(turn: _Turn, cited: Sequence[str]) -> list[str]:
     return [evidence_id_of(by_id[e]) for e in cited if e in by_id]
 
 
-def _plain_or_action(answer: str) -> dict[str, Any]:
-    """The model's JSON action; an answer in plain sentences (a friendly model forgets the format) is a reply, and
-    goes through the same checks as one."""
+def _plain_or_action(answer: str) -> tuple[dict[str, Any], int]:
+    """The model's first JSON action and how many more its answer held (`first_action`); an answer in plain sentences
+    (a friendly model forgets the format) is a reply, and goes through the same checks as one, unless an action
+    follows the sentence."""
     text = answer.strip()
     if text and not text.startswith(("{", "`", "[")):
-        return {"action": "reply", "text": text}
-    return _parse(answer)
+        try:
+            return first_action(text)
+        except AgentToolError:
+            return {"action": "reply", "text": text}, 0
+    return first_action(answer)
+
+
+def _one_at_a_time(name: str, more: int) -> dict[str, str]:
+    """What the model reads after an answer that held several actions: the first ran, the rest did not."""
+    return Refusal(
+        code="AGENT_ONE_ACTION_PER_REPLY",
+        what_failed=f"Your answer held {more + 1} actions; only the first ({name}) was run.",
+        value=str(more),
+        how_to_fix="Send the next action in your next reply: one JSON object per reply.",
+    ).feedback()
 
 
 def _without_ids(value: Any) -> Any:
@@ -1360,8 +1374,12 @@ class DoctorTurn:
             self.answered += 1
             wanted = ""  # a refusal of a reply, or of an unreadable one, did not come from an action
             try:
-                action = _plain_or_action(answer)
+                action, more = _plain_or_action(answer)
                 name = ALIASES.get(str(action["action"]), str(action["action"]))
+                if more:  # read on the next step: only the first action ran
+                    turn.feedback.append(
+                        self.gates[0].prepare(_one_at_a_time(name, more), extra_text_keys=("value",))
+                    )
                 if name == "reply":
                     reply = self._reply(action, required=answering)
                     self.finished = True
@@ -1473,7 +1491,7 @@ class DoctorTurn:
             ),
         ]
         try:
-            action = _plain_or_action(self._complete(prompt, variables_for(told)))
+            action, _ = _plain_or_action(self._complete(prompt, variables_for(told)))
             if ALIASES.get(str(action["action"]), str(action["action"])) != "reply":
                 return ""
             return self._reply(action, required=True)
