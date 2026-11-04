@@ -100,6 +100,8 @@ class ReplayLLMClient(FakeLLMClient):
         self.prompt_log_path = prompt_log_path
         self.usage_tracker = usage_tracker
         self.reply_index = 0
+        self.prompt_written = False
+        """The app goes on after a call that fails: only the first prompt that found no reply is the one to answer."""
         self.prompts: list[str] = []
         """Every prompt the AI was sent, for the invariant that reads the refusals it received."""
         self.system_hashes: list[str] = []
@@ -151,7 +153,9 @@ class ReplayLLMClient(FakeLLMClient):
 
         # Out of replies: log prompt to next_prompt.txt and stop run cleanly!
         prompt_content = f"=== SYSTEM ===\n{system}\n\n=== USER ===\n{prompt}\n"
-        self.prompt_log_path.write_text(prompt_content, encoding="utf-8")
+        if not self.prompt_written:
+            self.prompt_log_path.write_text(prompt_content, encoding="utf-8")
+            self.prompt_written = True
         print(f"\n[REPLAY] Out of replies! Next prompt written to {self.prompt_log_path}")
         print(self.usage_tracker.cost_line())
         raise OutOfRepliesError(f"Scenario out of recorded replies. Prompt written to {self.prompt_log_path}")
