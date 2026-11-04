@@ -559,6 +559,19 @@ def _int(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
+def _first_tool_call(calls: Any) -> str:
+    """The first of a message's `tool_calls` as a JSON object (`{"name": ..., "arguments": ...}`) for the action
+    reader, or "" when there is none. Names and arguments only; nothing else the provider wrote is kept."""
+    first = calls[0] if isinstance(calls, list) and calls else None
+    function = first.get("function") if isinstance(first, dict) else None
+    if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+        return ""
+    arguments = function.get("arguments")
+    return json.dumps(
+        {"name": function["name"], "arguments": arguments if isinstance(arguments, dict | str) else {}}
+    )
+
+
 def _empty_answer(out_of_room: bool, model_id: str, input_tokens: int, output_tokens: int) -> LLMError:
     """The failure of an answer with no text in it, in one of two kinds that look alike and are not.
 
@@ -680,6 +693,8 @@ class OpenAICompatibleClient(_HttpClient):
         if isinstance(content, list):  # some servers answer in typed parts
             content = "".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
         text = content if isinstance(content, str) else ""
+        if not text.strip():  # a model that answers by calling a tool: its first call is the action it takes
+            text = _first_tool_call(choice["message"].get("tool_calls")) or text
         usage = data.get("usage") if isinstance(data, dict) else None
         usage = usage if isinstance(usage, dict) else {}
         input_tokens, output_tokens = _int(usage.get("prompt_tokens")), _int(usage.get("completion_tokens"))

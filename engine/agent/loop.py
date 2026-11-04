@@ -224,7 +224,22 @@ def ai_failure_codes(exc: LLMError | GenerativeError) -> tuple[str, ...]:
     codes = [exc.code]
     if isinstance(exc, LLMHttpError | AwsSignInExpiredError):
         codes.append(f"LLM_{exc.kind.upper()}")
+    elif _answered_nothing(exc):
+        codes.append("LLM_EMPTY_ANSWER")
     return tuple(dict.fromkeys(codes))
+
+
+EMPTY_ANSWER: Final[str] = (
+    "The AI service answered, but with nothing in it. Ask me again; if it keeps happening, the AI service's model "
+    "may need changing in its settings. The suggestions on the screen still work without it."
+)
+
+
+def _answered_nothing(exc: LLMError | GenerativeError) -> bool:
+    """Whether the service was reached and wrote nothing (`LLM_REFUSED` from a client that does not say why)."""
+    return (
+        isinstance(exc, LLMError) and not isinstance(exc, LLMHttpError | AwsSignInExpiredError)
+    ) and exc.code == "LLM_REFUSED"
 
 
 def unavailable_reply(exc: LLMError | GenerativeError) -> str:
@@ -239,7 +254,7 @@ def unavailable_reply(exc: LLMError | GenerativeError) -> str:
     """
     if isinstance(exc, LLMHttpError | AwsSignInExpiredError):
         return f"{UNAVAILABLE} {exc.message} {exc.fix}"
-    return UNAVAILABLE
+    return EMPTY_ANSWER if _answered_nothing(exc) else UNAVAILABLE
 
 
 def billed_call(exc: LLMError | GenerativeError) -> int:

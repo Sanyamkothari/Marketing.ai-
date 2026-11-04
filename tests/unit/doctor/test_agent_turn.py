@@ -717,3 +717,60 @@ def test_the_stopped_sentence_depends_on_whether_earlier_actions_were_kept(
     turn.kept.append(object())  # type: ignore[arg-type]
     said = turn._unsaid("failed", None, "")
     assert "nothing was changed" not in said and "What I did before that is above." in said
+
+
+# ---------------------------------------------------------------------------
+# What the AI service really sends back
+# ---------------------------------------------------------------------------
+class _Cutting(ChatScript):
+    """An AI service whose first answers stop at the length limit with their text cut."""
+
+    def __init__(self, turns: Mapping[str, Any], cuts: int = 1) -> None:
+        super().__init__(turns)
+        self.cuts = cuts
+
+    def complete(self, *args: Any, **kwargs: Any) -> Any:
+        done = super().complete(*args, **kwargs)
+        if self.cuts:
+            self.cuts -= 1
+            return done.model_copy(update={"stop_reason": "length"})
+        return done
+
+
+def test_an_answer_cut_at_the_length_limit_is_told_so_not_called_a_format_error(
+    storage: LocalStorage, world: World
+) -> None:
+    talk = Talk(storage, world, None)
+    client = _Cutting({"explain": ['{"action": "reply", "text": "A long answer that', reply("Short.")]})
+    done = _turn(_said(talk.case, "explain the plan"), world, client).run("explain the plan")
+    assert done.reply == "Short." and "AGENT_REPLY_MALFORMED" not in [
+        r.get("error") for r in client.seen[1].results
+    ]
+    (told,) = client.seen[1].results
+    assert told["error"] == "AGENT_ANSWER_CUT" and "cut at the length limit" in told["what_failed"]
+    assert "shorter" in told["how_to_fix"] and "no reasoning" in told["how_to_fix"]
+
+
+def test_an_empty_answer_has_its_own_code_and_sentence(storage: LocalStorage, world: World) -> None:
+    from engine.llm import LLMError
+    from tests.unit.doctor.chat_support import Down
+
+    talk = Talk(storage, world, None)
+    client = Down(LLMError("LLM_REFUSED", "The model returned nothing to read."))
+    done = _turn(_said(talk.case, "explain the plan"), world, client).run("explain the plan")
+    assert done.blocked_by == "unavailable" and "LLM_EMPTY_ANSWER" in done.error_codes
+    assert "answered, but with nothing in it" in done.reply and "not answering" not in done.reply
+
+
+def test_the_cases_spending_limit_ends_a_turn_with_the_limit_sentence(
+    storage: LocalStorage, world: World
+) -> None:
+    from engine.doctor.ai_guard import AI_LIMIT_REPLY
+    from engine.doctor.config import AiLimitsConfig
+
+    talk = Talk(storage, world, None)
+    client = ChatScript({"explain": [look("describe_missing")]})
+    turn = _turn(_said(talk.case, "explain the plan"), world, client)
+    turn.meter = cs.guard_for(client, limits=AiLimitsConfig(max_calls_per_case=1))
+    done = turn.run("explain the plan")
+    assert done.blocked_by == "unavailable" and done.reply == AI_LIMIT_REPLY

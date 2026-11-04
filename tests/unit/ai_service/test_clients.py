@@ -961,3 +961,17 @@ def test_bad_arguments_are_refused_before_any_call() -> None:
         _openai("http://127.0.0.1:9").complete("hi", max_tokens=0)
     with pytest.raises(LLMError):
         OpenAICompatibleClient(base_url="http://127.0.0.1:9").complete("hi")  # no model at all
+
+
+@pytest.mark.parametrize("arguments", ['{"column": "visit"}', {"column": "visit"}])
+def test_an_answer_that_is_a_tool_call_is_read_as_the_action_it_names(arguments: object) -> None:
+    from engine.agent.loop import first_action
+
+    message = {
+        "content": None,
+        "tool_calls": [{"function": {"name": "look_at_column", "arguments": arguments}}],
+    }
+    reply = Reply(200, {"choices": [{"message": message, "finish_reason": "tool_calls"}]})
+    with serve(lambda _: reply) as server:
+        result = _openai(server.url).complete("hi")
+    assert first_action(result.text) == ({"action": "look_at_column", "args": {"column": "visit"}}, 0)

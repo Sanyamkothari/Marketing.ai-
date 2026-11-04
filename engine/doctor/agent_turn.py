@@ -238,6 +238,8 @@ TOO_BIG: Final[str] = (
 )
 WHAT_I_DID: Final[str] = "What I did before that is above. "
 """Said in place of 'nothing was changed' when the turn had already made changes the person can see."""
+CUT_AT_LIMIT: Final[frozenset[str]] = frozenset({"length", "max_tokens"})
+"""The stop reasons (OpenAI-compatible `length`, Anthropic and Bedrock `max_tokens`) of an answer that ran out of room."""
 ASK_AGAIN: Final[str] = "Ask me again and I will try once more."
 _DOING: Final[dict[str, str]] = {
     "propose_sql": "build a table with a query",
@@ -290,6 +292,10 @@ class _NoAnswerError(Exception):
         self.reason = reason
         self.codes: tuple[str, ...] = () if failure is None else ai_failure_codes(failure)
         self.reply: str = UNAVAILABLE if failure is None else unavailable_reply(failure)
+        if BUDGET_EXCEEDED in self.codes:  # the case's spending limit, in its own words
+            from engine.doctor.ai_guard import AI_LIMIT_REPLY
+
+            self.reply = AI_LIMIT_REPLY
 
 
 class _RefusedError(AgentToolError):
@@ -1348,7 +1354,7 @@ class DoctorTurn:
             raise _NoAnswerError("prompt_too_large")
         try:
             try:
-                return self.meter.complete(rendered, self.purpose).text
+                return self._written(self.meter.complete(rendered, self.purpose))
             except LLMHttpError as exc:
                 # The whole allowance went on thinking and nothing was written: ask once more with twice the room
                 # (never past the setting's maximum). The retry is a call like any other, so the case's spending
@@ -1357,15 +1363,30 @@ class DoctorTurn:
                 if exc.kind != "out_of_room" or room >= MAX_ANSWER_ALLOWANCE:
                     raise
                 try:
-                    return self.meter.complete(
-                        rendered, self.purpose, max_tokens=min(room * 2, MAX_ANSWER_ALLOWANCE)
-                    ).text
+                    return self._written(
+                        self.meter.complete(
+                            rendered, self.purpose, max_tokens=min(room * 2, MAX_ANSWER_ALLOWANCE)
+                        )
+                    )
                 except GenerativeError:
                     raise exc from None  # no room left in the limit for a retry: the cause is still the first call's
         except (LLMError, GenerativeError) as exc:
             failed = _NoAnswerError("unavailable", exc)
             _LOG.warning("%s: the AI call failed (%s)", self.purpose.value, ", ".join(failed.codes))
             raise failed from exc
+
+    def _written(self, completion: Any) -> str:
+        """The text of an answer that was finished. One that stopped at the length limit (`length`, `max_tokens`) is
+        cut mid-sentence: it is refused with what to do, not read as a reply in the wrong format."""
+        if completion.stop_reason in CUT_AT_LIMIT:
+            self.answered += 1
+            raise AgentToolError(
+                "AGENT_ANSWER_CUT",
+                person="my answer was cut off at the length limit",
+                what_failed="Your answer was cut at the length limit, so it could not be read.",
+                how_to_fix="Answer again: shorter, with no reasoning in the answer, one JSON object.",
+            )
+        return str(completion.text)
 
     def _complete_fitting(
         self,
@@ -1443,15 +1464,15 @@ class DoctorTurn:
 
         for step in range(self.max_steps + 1):
             left[0] = max(0, self.max_steps - step)
-            try:
-                answer = self._complete_fitting(prompt, variables_for, turn.feedback)
-            except _NoAnswerError as stop:
-                blocked, why, lead = stop.reason, stop.codes, stop.reply
-                break
-            self.answered += 1
             wanted = ""  # a refusal of a reply, or of an unreadable one, did not come from an action
             replying = False
             try:
+                try:
+                    answer = self._complete_fitting(prompt, variables_for, turn.feedback)
+                except _NoAnswerError as stop:
+                    blocked, why, lead = stop.reason, stop.codes, stop.reply
+                    break
+                self.answered += 1
                 action, more = _plain_or_action(answer)
                 name = ALIASES.get(str(action["action"]), str(action["action"]))
                 if more:  # read on the next step: only the first action ran
