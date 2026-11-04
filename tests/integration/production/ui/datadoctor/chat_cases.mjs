@@ -223,6 +223,49 @@ test("the agent's reply: what it did folded, what it took back, and an answer it
   assert.deepEqual({ q: posts("answers")[0].body.question_id, o: posts("answers")[0].body.option_id }, { q: q.question_id, o: "c0" });
 });
 
+test("under an AI reply a folded 'What happened' lists each step, why one was refused in plain words, and the AI service's own problems", async () => {
+  await show("question", {
+    ai: connected(),
+    patch: (a) => {
+      const ready = a.view.conversation.findIndex((c) => c.type === "ready");
+      a.view.conversation.splice(ready === -1 ? a.view.conversation.length : ready, 0, {
+        type: "message",
+        role: "agent",
+        text: "I checked the amounts.",
+        item_ids: [],
+        withdrawn: [],
+        tools: ["describe_numbers"],
+        suggestion: null,
+        sent: [],
+        happened: [
+          { action: "", result: "service", why: "The AI ran out of room before it wrote anything, so I asked again with more room." },
+          { action: "describe_numbers", result: "refused", why: "I named a column that is not in this file" },
+          { action: "describe_numbers", result: "done", why: "" },
+          { action: "", result: "service", why: "The AI service did not answer within 180 seconds." },
+        ],
+      });
+      return a;
+    },
+  });
+  const fold = $("[data-dds-happened]");
+  assert.ok(fold, "the fold is there");
+  assert.equal(fold.open, false, "folded until opened");
+  assert.match(fold.querySelector("summary").textContent, /What happened \(4\)/);
+  const rows = [...fold.querySelectorAll("li")].map((li) => li.textContent);
+  assert.deepEqual(rows, [
+    "The AI ran out of room before it wrote anything, so I asked again with more room.",
+    "Checked the numbers in a column: refused: I named a column that is not in this file",
+    "Checked the numbers in a column: done",
+    "The AI service did not answer within 180 seconds.",
+  ]);
+  assert.ok($('[data-dds-msg="agent"]').contains(fold), "next to what the AI looked at, inside the reply");
+});
+
+test("a reply that left no trail shows no 'What happened'", async () => {
+  await show("question", { ai: connected() });
+  assert.equal($$("[data-dds-happened]").length, 0);
+});
+
 test("a suggested answer is offered once, in its reply: the button, the other answers a tap away, no box that says it again", async () => {
   const s = await show("question", {
     ai: connected(),

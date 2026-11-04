@@ -407,6 +407,30 @@ function fitHtml(f, names) {
   );
 }
 
+/** The step of a turn the AI took or tried, in the person's words: the phrase of its action (its own name when it has none). */
+function stepPhrase(action) {
+  if (!action) return "My answer";
+  return DID[action] || String(action).replaceAll("_", " ");
+}
+
+/** "What happened": each step of the AI's turn, done or refused with the reason in plain words, and the AI service's
+ * own problems (ran out of room, timed out, a setting turned off, the spending limit) in the words the server wrote.
+ * Folded, next to "What the AI looked at"; nothing when the turn left no trail. */
+function happenedHtml(steps, index) {
+  const list = (Array.isArray(steps) ? steps : []).filter((st) => st && typeof st === "object");
+  if (!list.length) return "";
+  const rows = list
+    .map((st) => {
+      if (st.result === "service") return `<li data-dds-happened-step="service">${esc(plain(st.why))}</li>`;
+      const said = st.result === "refused" ? `refused: ${plain(st.why)}` : "done";
+      return `<li data-dds-happened-step="${esc(String(st.result))}">${esc(stepPhrase(st.action))}: ${esc(said)}</li>`;
+    })
+    .join("");
+  return `<details class="ag-sent ddc-happened" data-dds-happened data-dds-keep="happened-${index}"><summary>${esc(
+    `What happened (${list.length})`,
+  )}</summary><ul class="ag-sent-list">${rows}</ul></details>`;
+}
+
 function messageHtml(m, names, { busy, openSent, index, clicked = "" }) {
   if (m.role === "user") return `<div class="ddc-row ddc-user"><div class="ddc-bubble" data-dds-msg="user">${esc(plain(m.text))}</div></div>`;
   const did = [...new Set((m.tools || []).map((t) => DID[t]).filter(Boolean))];
@@ -444,7 +468,7 @@ function messageHtml(m, names, { busy, openSent, index, clicked = "" }) {
       }</div>`
     : "";
   return agentRow(
-    `<div class="ddc-bubble" data-dds-msg="agent">${esc(plain(m.text))}${sentHtml(m.sent, { id: index, open: openSent.has(String(index)) })}</div>${back}${refused}${trace}${suggestion}${goal}`,
+    `<div class="ddc-bubble" data-dds-msg="agent">${esc(plain(m.text))}${sentHtml(m.sent, { id: index, open: openSent.has(String(index)) })}${happenedHtml(m.happened, index)}</div>${back}${refused}${trace}${suggestion}${goal}`,
   );
 }
 
