@@ -86,6 +86,7 @@ from engine.agent.loop import (
     person_reason,
     refused_sentence,
     unavailable_reply,
+    without_thinking,
 )
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import clean_text, for_prompt
@@ -533,15 +534,25 @@ def _hashed(turn: _Turn, cited: Sequence[str]) -> list[str]:
 
 def _plain_or_action(answer: str) -> tuple[dict[str, Any], int]:
     """The model's first JSON action and how many more its answer held (`first_action`); an answer in plain sentences
-    (a friendly model forgets the format) is a reply, and goes through the same checks as one, unless an action
-    follows the sentence."""
-    text = answer.strip()
-    if text and not text.startswith(("{", "`", "[")):
-        try:
-            return first_action(text)
-        except AgentToolError:
-            return {"action": "reply", "text": text}, 0
-    return first_action(answer)
+    (a friendly model forgets the format) is a reply, and goes through the same checks as one. An answer that looks
+    like JSON but holds no action is refused, never shown to the person as a reply. An action with no `args` has its
+    arguments beside it (`{"action": "look_at_column", "column": "visit"}`)."""
+    text = without_thinking(answer)
+    try:
+        action, more = first_action(text)
+    except AgentToolError:
+        if not text or text.startswith(("{", "`", "[")) or '"action"' in text:
+            raise
+        return {"action": "reply", "text": text}, 0
+    if (
+        not isinstance(action.get("args"), dict)
+        and ALIASES.get(str(action["action"]), action["action"]) != "reply"
+    ):
+        action = {
+            **{k: v for k, v in action.items() if k in ("action", "file", "reply")},
+            "args": {k: v for k, v in action.items() if k not in ("action", "file", "reply", "args")},
+        }
+    return action, more
 
 
 def _one_at_a_time(name: str, more: int) -> dict[str, str]:
@@ -1525,7 +1536,22 @@ class DoctorTurn:
         long is refused with the limit, so the model says the same in fewer words. A turn no one is waiting on (an
         event, not a message) may end with nothing to say, and words that fail a check are left out, not refused.
         """
-        said = str(action.get("text") or "").strip()
+        args = action.get("args")
+        said = next(
+            (
+                v.strip()
+                for v in (action.get("text"), args.get("text") if isinstance(args, dict) else None)
+                if isinstance(v, str) and v.strip()
+            ),
+            "",
+        ) or next(
+            (
+                v.strip()
+                for v in (action.get("reply"), action.get("message"))
+                if isinstance(v, str) and v.strip()
+            ),
+            "",
+        )
         if not said:
             if required:
                 raise AgentToolError("AGENT_TEXT_REFUSED", "Say something to the person in `text`.")

@@ -60,8 +60,10 @@ passes who is asking (`principal`). Everything else - the ids, the prompts, the 
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
+import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -363,32 +365,75 @@ def _tools() -> list[dict[str, str]]:
     return tools
 
 
-_DECODER = json.JSONDecoder()
+_DECODER = json.JSONDecoder(strict=False)  # a real newline inside a string is read, not refused
+_THINKING: Final = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_FENCED: Final = re.compile(r"```[A-Za-z]*\s*(.*?)```", re.DOTALL)
+_ANOTHER: Final = re.compile(r'\{\s*"action"\s*:')
+_MALFORMED: Final[str] = "Reply with one JSON object and nothing else; write a new line inside a text as \\n."
+
+
+def without_thinking(text: str) -> str:
+    """`text` without the model's <think> blocks (an unclosed one is cut to its end)."""
+    kept = _THINKING.sub("", text)
+    return re.sub(r"<think>.*", "", kept, flags=re.DOTALL | re.IGNORECASE).strip()
+
+
+def _as_action(value: Any) -> dict[str, Any] | None:
+    """`value` as an action object: `name`, `tool` or `function` read as `action`, `arguments` or `parameters` as
+    `args` (the shapes tool-calling models write), or None when it names no action."""
+    if not isinstance(value, dict):
+        return None
+    shaped = dict(value)
+    if not isinstance(shaped.get("action"), str):
+        named = next(
+            (shaped.pop(k) for k in ("name", "tool", "function") if isinstance(shaped.get(k), str)), None
+        )
+        if named is None:
+            return None
+        shaped["action"] = named
+    if "args" not in shaped:
+        for key in ("arguments", "parameters"):
+            if key in shaped:
+                shaped["args"] = shaped.pop(key)
+                break
+    if isinstance(shaped.get("args"), str):  # arguments written as a JSON string
+        with contextlib.suppress(ValueError, RecursionError):
+            shaped["args"] = _DECODER.decode(shaped["args"])
+    return shaped
+
+
+def _scan(body: str) -> tuple[dict[str, Any], int] | None:
+    """The first action object in `body` (at any `{` or `[`), and how many more actions follow it."""
+    at = 0
+    while starts := [i for i in (body.find("{", at), body.find("[", at)) if i >= 0]:
+        at = min(starts)
+        try:
+            value, end = _DECODER.raw_decode(body, at)
+        except (ValueError, RecursionError):  # a reply nested ~1,000 deep exhausts the decoder
+            at += 1
+            continue
+        more = 0
+        if isinstance(value, list):
+            actions = [a for a in map(_as_action, value) if a is not None]
+            found, more = (actions[0], len(actions) - 1) if actions else (None, 0)
+        else:
+            found = _as_action(value)
+        if found is not None:
+            return found, more
+        at = end
+    return None
 
 
 def first_action(text: str) -> tuple[dict[str, Any], int]:
     """The first action in the model's reply, and how many more it held. A model asked for a lot at once may wrap
-    the object in a code fence, write a sentence after it, or send several actions (a list, or one object after
-    another): the first is read and runs through every check like any other; the rest are counted, not run, so the
-    turn can ask for them one at a time."""
-    body = text.strip()
-    starts = [i for i in (body.find("{"), body.find("[")) if i >= 0]
-    if not starts:
-        raise AgentToolError("AGENT_REPLY_MALFORMED", "Reply with one JSON object and nothing else.")
-    body = body[min(starts) :]
-    try:
-        value, end = _DECODER.raw_decode(body)
-    except (ValueError, RecursionError) as exc:  # a reply nested ~1,000 deep exhausts the decoder
-        raise AgentToolError("AGENT_REPLY_MALFORMED", "Reply with one JSON object and nothing else.") from exc
-    more = 0
-    if isinstance(value, list):
-        actions = [v for v in value if isinstance(v, dict)]
-        value, more = (actions[0], len(value) - 1) if actions else (None, 0)
-    elif body[end:].lstrip().startswith("{"):
-        more = 1  # another object follows: at least one more action
-    if not isinstance(value, dict) or not isinstance(value.get("action"), str):
-        raise AgentToolError("AGENT_REPLY_MALFORMED", 'The object needs an "action".')
-    return value, more
+    the object in a code fence or its thinking, write a sentence around it, or send several actions (a list, or one
+    object after another): the first object that names an action is read, wherever it is, and runs through every
+    check like any other; the rest are counted, not run, so the turn can ask for them one at a time."""
+    body = without_thinking(text)
+    for source in (*_FENCED.findall(body), body):
+        if (found := _scan(source)) is not None:
+            return found[0], max(found[1], len(_ANOTHER.findall(body)) - 1)  # any later {"action" is one more
+    raise AgentToolError("AGENT_REPLY_MALFORMED", _MALFORMED)
 
 
 def _parse(text: str) -> dict[str, Any]:

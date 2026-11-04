@@ -566,3 +566,39 @@ def test_a_query_description_that_is_too_long_is_refused_not_cut(storage: LocalS
     assert not [
         i for i in done.case.items if i.source is ProposalSource.AI
     ], "nothing was made from a cut text"
+
+
+# ---------------------------------------------------------------------------
+# A live model's answers: the reader takes what a model really writes
+# ---------------------------------------------------------------------------
+def _run(
+    world: World, storage: LocalStorage, steps: list[Any], message: str = "explain the plan"
+) -> tuple[TurnResult, ChatScript]:
+    talk = Talk(storage, world, None)
+    client = ChatScript({"explain": steps})
+    return _turn(_said(talk.case, message), world, client).run(message), client
+
+
+def test_a_reply_with_real_newlines_is_the_reply(storage: LocalStorage, world: World) -> None:
+    done, _ = _run(world, storage, ['{"action": "reply", "text": "First line.\nSecond line."}'])
+    assert done.reply == "First line.\nSecond line." and done.blocked_by is None
+
+
+def test_a_reply_is_read_from_args_text_or_message(storage: LocalStorage, world: World) -> None:
+    done, _ = _run(world, storage, ['{"action": "reply", "args": {"text": "From the args."}}'])
+    assert done.reply == "From the args."
+    done, _ = _run(world, storage, ['{"action": "reply", "message": "From the message."}'])
+    assert done.reply == "From the message."
+
+
+def test_an_action_with_its_arguments_beside_it_is_run(storage: LocalStorage, world: World) -> None:
+    flat = '<think>hmm</think>{"name": "describe_numbers", "file": "F1", "column": "order_amount"}'
+    done, client = _run(world, storage, [flat, reply("Looked.")])
+    assert done.tools == ("describe_numbers",) and done.reply == "Looked." and not done.refused
+    assert client.asked == 2
+
+
+def test_json_without_an_action_is_never_the_reply(storage: LocalStorage, world: World) -> None:
+    done, client = _run(world, storage, ['{"summary": "all fine"}', reply("Plain words.")])
+    assert done.reply == "Plain words." and "summary" not in done.reply
+    assert client.asked == 2
