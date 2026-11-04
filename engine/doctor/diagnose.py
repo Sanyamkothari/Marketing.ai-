@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from engine.onboarding.specs import KeyCandidate
     from engine.stages.ingest import ColumnStats
 
-__all__ = ["ADVISE_ROWS", "LoadedFile", "Offer", "diagnose_file", "outcome_columns", "readiness"]
+__all__ = ["ADVISE_ROWS", "LoadedFile", "Offer", "diagnose_file", "fit_level", "outcome_columns", "readiness"]
 
 _LOG = get_logger(__name__)
 
@@ -363,9 +363,17 @@ def _amount_gate(
 _RANK: Final[dict[str, int]] = {"ready": 0, "check": 1, "buildable": 2, "too_small": 3, "missing": 4}
 
 
+def fit_level(status: str, reason_code: str | None, questions: int = 0) -> int:
+    """How well the files fit a goal (0 is best): the one ranking of the goal list and of every comparison between
+    goals. Ready, check, then a build or a question about the outcome column (a guess), then too little, then
+    missing; a plain fit ranks above the same fit that still has to ask the person something."""
+    if reason_code in {"GUESSED_COLUMN", "TWO_COLUMNS"}:
+        return 2 * _RANK["buildable"]  # a question about the outcome column ranks with a build
+    return 2 * _RANK[status] + (1 if questions and status in {"ready", "check"} else 0)
+
+
 def _rank_of(verdict: UseCaseReadiness) -> int:
-    """A question about the outcome column ranks between a plain check and not enough data."""
-    return 2 if verdict.reason_code in {"GUESSED_COLUMN", "TWO_COLUMNS"} else _RANK[verdict.status]
+    return fit_level(verdict.status, verdict.reason_code, verdict.questions)
 
 
 def _one_use_case(files: Sequence[LoadedFile], offer: Offer, root: Path) -> UseCaseReadiness:

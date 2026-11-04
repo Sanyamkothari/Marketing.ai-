@@ -74,6 +74,23 @@ if (!process.env.DDS_FIXTURES) {
     assert.ok(!$(".ag-chat"), "no second helper is drawn beside it");
   });
 
+  test("an answer that chooses another goal opens that goal's step in the wizard, on the same case", async () => {
+    // "This file also fits other goals": the server switched the case's goal the way "Choose this goal" does.
+    const other = "hillstrom-email";
+    world.at = "question";
+    world.next = {};
+    await go(`#/campaigns/new/customers/${GOAL}`);
+    const answer = `[data-dds-place="wizard"] [data-dds-question="${keyQuestion.question_id}"] [data-dds-answer="c0"]`;
+    await until(() => $(answer), 6000, "the question in the wizard");
+    world.patch = (shown) => {
+      shown.view.goal_id = other;
+      return shown;
+    };
+    $(answer).click();
+    await until(() => window.location.hash === `#/campaigns/new/customers/${other}`, 4000, "the other goal's step");
+    world.patch = null;
+  });
+
   test("with NO AI service connected the goal's setup still loads, and the rules still run", async () => {
     // `makeWorld` serves the recorded `ai_service` answer of an app with no AI service connected.
     assert.equal(world.ai.slots.product.connected, false, "the recorded app has no AI service");

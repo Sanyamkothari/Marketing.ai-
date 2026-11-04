@@ -61,6 +61,8 @@ __all__ = [
     "DATA_PRESCRIPTION_APPROVED",
     "DONT_KNOW",
     "PROTOCOL_CODES",
+    "STAY_GOAL",
+    "SWITCH_GOAL",
     "ApproveClassRule",
     "Ask",
     "AskOption",
@@ -272,6 +274,12 @@ def _stated(option: AskOption) -> str:
     return f"Adds the step: {option.effect.title.rstrip(' .')}."  # a title's own full stop would double; its own quotes stay single
 
 
+SWITCH_GOAL: Final[str] = "switch_goal"
+"""The payload key of an option that switches the case to that goal when it is chosen (`engine.doctor.goal_compare`);
+it adds no step to the plan, and says what it does itself."""
+STAY_GOAL: Final[str] = "stay_goal"
+"""The payload key of the option that keeps the chosen goal: it changes nothing, and says so itself."""
+
 NO_STEP: Final[str] = "Your answer is recorded; it does not change the data."
 """What an answer that adds no step says: never a claim about an outcome that nothing performs."""
 
@@ -302,7 +310,12 @@ def _case_question(ask: Ask, question_id: str, options: tuple[AskOption, ...]) -
                     if option.effect.kind is not None
                     else (
                         option.says
-                        if (option.value_kind is not None or _declared(option) not in (None, "note"))
+                        if (
+                            option.value_kind is not None
+                            or SWITCH_GOAL in option.effect.payload
+                            or STAY_GOAL in option.effect.payload
+                            or _declared(option) not in (None, "note")
+                        )
                         and option.says
                         else NO_STEP
                     )

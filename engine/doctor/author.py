@@ -856,10 +856,11 @@ class Gathered:
 def gather_facts(run: FactRun, case: Case, brief: GoalBrief | None) -> Gathered:
     """Call the fact functions on `case` as it stands: which column names each row, what the data can power, the
     goal's outcome, date and consent (under a goal), and what the detectors found. Nothing is written."""
-    from engine.doctor.facts_goal import goal_facts, goal_fit_facts
+    from engine.doctor.facts_goal import goal_compare_facts, goal_facts, goal_fit_facts
     from engine.doctor.tools_facts import detector_facts, key_facts
 
     rules: tuple[Facts, ...]
+    fit: Facts | None = None
     if brief is None:
         fit = goal_fit_facts(run, case)
         diagnosis = (
@@ -872,12 +873,9 @@ def gather_facts(run: FactRun, case: Case, brief: GoalBrief | None) -> Gathered:
         )
         rules = (key_facts(run, case, diagnosis), fit)
     else:
-        rules = (key_facts(run, case), *goal_facts(run, case, brief))
-    return Gathered(
-        rules=rules,
-        detectors=detector_facts(run, case, brief),
-        fit=goal_fit_facts(run, case) if brief is not None else None,
-    )
+        fit = goal_fit_facts(run, case)
+        rules = (key_facts(run, case), *goal_facts(run, case, brief), goal_compare_facts(case, brief, fit))
+    return Gathered(rules=rules, detectors=detector_facts(run, case, brief), fit=fit)
 
 
 def default_actions(facts: Sequence[Facts]) -> list[AuthorAction]:
