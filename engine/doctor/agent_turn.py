@@ -1633,7 +1633,11 @@ class DoctorTurn:
             except Exception as exc:  # a model's odd input must never cost a paid turn that nobody records
                 _LOG.warning("doctor turn step failed: %s", type(exc).__name__)
                 self.happened.append(
-                    CaseStep(action=_known_action(wanted, self.registry.names()), result="refused", why="a step of mine broke, so I stopped")
+                    CaseStep(
+                        action=_known_action(wanted, self.registry.names()),
+                        result="refused",
+                        why="a step of mine broke, so I stopped",
+                    )
                 )
                 blocked = "failed"
                 break
