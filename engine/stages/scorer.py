@@ -599,9 +599,9 @@ def choose_operating_point(
     constrained = (
         _best_threshold(scores, actual, maximised, max_flagged_rate=ceiling) if ceiling is not None else None
     )
-    if constrained is not None:
+    if constrained is not None and ceiling is not None:
         fallback_value, fallback_flagged = constrained
-        where = f"the top {_percent(ceiling)} of validation scores"
+        where = f"the best cut that flags at most {_percent(ceiling)} of validation rows"
     else:
         share = fallback_flagged_rate(ceiling)
         decile = _top_decile_threshold(scores, actual, share)

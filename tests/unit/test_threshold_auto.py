@@ -94,7 +94,9 @@ def test_an_optimum_above_the_ceiling_falls_back_to_constrained_ceiling() -> Non
     assert choice.fallback.fallback_flagged_rate == pytest.approx(flagged(scores, choice.threshold))
     assert THRESHOLD_FALLBACK in choice.detail
     assert "above the 30% ceiling" in choice.detail
-    assert choice.detail.startswith("Auto, fell back to the top 30% of validation scores")
+    assert choice.detail.startswith(
+        "Auto, fell back to the best cut that flags at most 30% of validation rows"
+    )
 
 
 def test_a_ceiling_below_a_tenth_caps_the_fallback_too() -> None:
@@ -115,12 +117,14 @@ def test_a_ceiling_below_a_tenth_caps_the_fallback_too() -> None:
     assert flagged(scores, choice.threshold) <= 0.05
     assert choice.fallback.fallback_flagged_rate == pytest.approx(0.05)
     assert choice.fallback.fallback_flagged_rate < choice.fallback.optimum_flagged_rate
-    assert choice.detail.startswith("Auto, fell back to the top 5% of validation scores")
+    assert choice.detail.startswith(
+        "Auto, fell back to the best cut that flags at most 5% of validation rows"
+    )
     assert "above the 5% ceiling" in choice.detail
     assert fallback_flagged_rate(None) == fallback_flagged_rate(0.30) == FALLBACK_FLAGGED_RATE
     assert fallback_flagged_rate(0.025) == 0.025
     odd = choose_operating_point(scores, actual, ThresholdConfig(max_flagged_rate=0.025))
-    assert odd.detail.startswith("Auto, fell back to the top 2.5% of validation scores")
+    assert odd.detail.startswith("Auto, fell back to the best cut that flags at most 2.5% of validation rows")
 
 
 def test_flagging_every_row_falls_back_even_without_a_ceiling() -> None:
