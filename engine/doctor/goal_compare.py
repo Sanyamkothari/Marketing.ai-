@@ -167,7 +167,7 @@ def comparison_ask(comparison: GoalComparison, *, upload_ids: Sequence[str]) -> 
         )
     )
     subject: dict[str, JsonValue] = {
-        "uploads": sorted(upload_ids),
+        "uploads": list[JsonValue](sorted(upload_ids)),
         "chosen": comparison.chosen_id,
         "better": [str(v["use_case_id"]) for v in comparison.better],
     }
