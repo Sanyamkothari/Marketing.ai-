@@ -90,7 +90,14 @@ from engine.agent.loop import (
 )
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import clean_text, for_prompt
-from engine.doctor.actions import ALIASES, ENDS_TURN, ActionSpec, prompt_variables, tool_line
+from engine.doctor.actions import (
+    ALIASES,
+    ENDS_TURN,
+    ActionSpec,
+    action_names,
+    prompt_variables,
+    tool_line,
+)
 from engine.doctor.agent_apply import Roles, person_owns, roles_of, twin_of, waits_because
 from engine.doctor.author import (
     ApplyContext,
@@ -596,16 +603,28 @@ def _plain_or_action(answer: str) -> tuple[dict[str, Any], int]:
     return action, more
 
 
-def _stub_older_looks(results: list[dict[str, Any]]) -> bool:
-    """Cut every look result but the newest to `{evidence_id, tool, file}`, in place; whether any was cut."""
+def _stub_older_looks(results: list[dict[str, Any]], *, keep_newest: bool = True) -> bool:
+    """Cut every look result but the newest (all of them when `keep_newest` is False) to
+    `{evidence_id, tool, file}`, in place; whether any was cut."""
     looks = [
         i
         for i, r in enumerate(results)
         if {"evidence_id", "tool", "result"} <= r.keys() and re.fullmatch(r"r\d+", str(r["evidence_id"]))
     ]  # a look is `r1`, `r2` ..; a change the engine made (`s1`, `p1`) is not cut
-    for i in looks[:-1]:
+    cut = looks[:-1] if keep_newest else looks
+    for i in cut:
         results[i] = {k: results[i][k] for k in ("evidence_id", "tool", "file") if k in results[i]}
-    return len(looks) > 1
+    return len(cut) > 0
+
+
+UNKNOWN_ACTION = "unknown action"
+"""What a refused step records for an action name the model made up: its raw text is not shown to the person."""
+
+
+def _known_action(name: str, tools: tuple[str, ...]) -> str:
+    """`name` when it is an action or tool the engine knows (or an alias of one), else a fixed placeholder."""
+    known = {*action_names(), *ALIASES, *ALIASES.values(), *tools}
+    return name if name in known or name == "" else UNKNOWN_ACTION
 
 
 def _real_id(value: Any) -> bool:
@@ -1594,7 +1613,7 @@ class DoctorTurn:
                 self.refusal_codes.append(exc.code)
                 self.happened.append(
                     CaseStep(
-                        action="reply" if replying else wanted,
+                        action="reply" if replying else _known_action(wanted, self.registry.names()),
                         result="refused",
                         why=self.gates[0].person_text(person_reason(exc)),
                     )
@@ -1614,7 +1633,7 @@ class DoctorTurn:
             except Exception as exc:  # a model's odd input must never cost a paid turn that nobody records
                 _LOG.warning("doctor turn step failed: %s", type(exc).__name__)
                 self.happened.append(
-                    CaseStep(action=wanted, result="refused", why="a step of mine broke, so I stopped")
+                    CaseStep(action=_known_action(wanted, self.registry.names()), result="refused", why="a step of mine broke, so I stopped")
                 )
                 blocked = "failed"
                 break
@@ -1716,6 +1735,10 @@ class DoctorTurn:
                 }
             ),
         ]
+        if blocked == "prompt_too_large":
+            # What was too big is sent again, so it is cut: every look, the newest too, is only named.
+            told = [dict(t) for t in told]
+            _stub_older_looks(told, keep_newest=False)
         try:
             action, _ = _plain_or_action(self._complete_fitting(prompt, variables_for, told))
             if ALIASES.get(str(action["action"]), str(action["action"])) != "reply":

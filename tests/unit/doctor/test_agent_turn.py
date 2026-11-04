@@ -684,23 +684,25 @@ def test_a_prompt_too_big_to_cut_gets_its_last_word_and_says_what_was_done_befor
         rows_step("customer_id", "starts_with", "999"),
     ]
     sizes = _sizes(world, storage, [*steps, reply("Done.")])
-    client = ChatScript({"explain": list(steps)})
+    client = ChatScript({"explain": [*steps, reply("Done.")]})
     talk = Talk(storage, world, None)
     turn = _with_prompt_room(_turn(_said(talk.case, "explain the plan"), world, client), sizes[2] - 2)
     done = turn.run("explain the plan")
-    assert done.blocked_by == "prompt_too_large" and client.asked == 2
-    assert "What I did before that is above." in done.reply and "too much in this case" in done.reply
+    assert done.blocked_by is None and done.ended_by == "prompt_too_large" and client.asked == 3
+    assert done.reply == "Done."  # the last word was asked, and its text is the reply
+    last = client.seen[2].results  # what was too big is not sent again: every look is only named
+    assert set(last[0]) == {"evidence_id", "tool", "file"} and last[-1].get("turn_ending")
 
 
 def test_a_prompt_too_big_with_nothing_done_does_not_claim_work_above(
     storage: LocalStorage, world: World
 ) -> None:
     sizes = _sizes(world, storage, [LOOKS[0], reply("Done.")])
-    client = ChatScript({"explain": [LOOKS[0]]})
+    client = ChatScript({"explain": [LOOKS[0], reply("I could not look further.")]})
     talk = Talk(storage, world, None)
     turn = _with_prompt_room(_turn(_said(talk.case, "explain the plan"), world, client), sizes[1] - 2)
     done = turn.run("explain the plan")
-    assert done.blocked_by == "prompt_too_large" and "is above" not in done.reply
+    assert done.ended_by == "prompt_too_large" and "is above" not in done.reply
 
 
 def test_every_prompt_says_how_many_steps_are_left(storage: LocalStorage, world: World) -> None:
@@ -805,6 +807,17 @@ def test_every_refusal_of_the_turn_is_recorded_whether_or_not_the_ai_goes_on(
     assert (
         "column" in refused.why and "no_such_column" not in refused.why
     )  # plain words, not the AI-facing text
+
+
+def test_a_refused_step_records_only_a_known_action_name(storage: LocalStorage, world: World) -> None:
+    done, _ = _run(
+        world,
+        storage,
+        ['{"action": "<script>make_coffee</script>", "args": {}}', reply("Fine.")],
+    )
+    refused, *_ = done.happened
+    assert refused.result == "refused" and refused.action == "unknown action"
+    assert "make_coffee" not in refused.action
 
 
 def test_each_step_is_in_the_trail_done_or_refused(storage: LocalStorage, world: World) -> None:
