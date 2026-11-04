@@ -97,6 +97,8 @@ class ScriptedLLM:
         model_id: str | None = None,
         max_tokens: int = 512,  # noqa: ARG002
         temperature: float = 0.0,  # noqa: ARG002
+        json_object: bool = False,  # noqa: ARG002 - a script answers as it is told
+        reasoning_effort: str | None = None,  # noqa: ARG002
     ) -> LLMCompletion:
         self.calls.append((system, prompt))
         text = self._script(system, prompt)

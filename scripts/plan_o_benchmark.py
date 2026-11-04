@@ -313,8 +313,8 @@ def _doctor_guard(meter: Any) -> Any:
     from engine.doctor.config import AiLimitsConfig
 
     class CassetteGuard(AiGuard):
-        def complete(self, rendered: Any, purpose: Any) -> Any:
-            return self._through(meter.complete, rendered, purpose)
+        def complete(self, rendered: Any, purpose: Any, *, max_tokens: int | None = None) -> Any:
+            return self._through(lambda r, p: meter.complete(r, p, max_tokens=max_tokens), rendered, purpose)
 
         def judge(self, rendered: Any, purpose: Any) -> Any:
             return self._through(meter.judge, rendered, purpose)
