@@ -80,8 +80,9 @@ if (!process.env.DDS_FIXTURES) {
     world.at = "question";
     world.next = {};
     await go(`#/campaigns/new/customers/${GOAL}`);
-    const answer = `[data-dds-place="wizard"] [data-dds-question="${keyQuestion.question_id}"] [data-dds-answer="c0"]`;
-    await until(() => $(answer), 6000, "the question in the wizard");
+    // any change the person makes on the screen is an act; here, ticking or unticking a change
+    const answer = '[data-dds-place="wizard"] button:is([data-dds-use], [data-dds-undo]):not([disabled])';
+    await until(() => $(answer), 6000, "a change to tick in the wizard");
     world.patch = (shown) => {
       shown.view.goal_id = other;
       return shown;
