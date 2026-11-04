@@ -45,6 +45,7 @@ from engine.access.roles import Principal
 from engine.agent.contracts import ProposalSource, ProposalState
 from engine.config import ConfigError, StrictBase, load_engine_config
 from engine.doctor.case import Case, CaseItem, CaseQuestion, CaseRefusal, TimelineEvent, TimelineKind
+from engine.doctor.goal_compare import FITTING
 from engine.doctor.goal_names import goal_display_name
 from engine.doctor.ledger import blocking
 from engine.doctor.plan_check import plan_digest
@@ -92,7 +93,7 @@ _GOAL_STATUS_ORDER: Final[dict[str, int]] = {
     "too_small": 3,
     "missing": 4,
 }
-_FITTING: Final[frozenset[str]] = frozenset({"ready", "check", "buildable"})
+_FITTING: Final[frozenset[str]] = FITTING
 """Verdicts drawn as goal cards: `buildable` fits once Data Doctor builds the outcome (the person approves it)."""
 _REQUEST_CODES: Final[frozenset[str]] = frozenset(REQUEST_CODES.values())
 _FOLDED_CODES: Final[frozenset[str]] = frozenset({"TRAINING_BUDGET"})
