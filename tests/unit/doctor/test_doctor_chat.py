@@ -1370,3 +1370,19 @@ def test_an_invalid_expect_tells_the_ai_which_fields_and_why_without_a_link_or_a
     assert "`rows_out_min`" in said and "`rows_out`" in said and "`keys_unique`" in said
     assert "Allowed fields:" in said and "max_keys_repeated" in said
     assert "http" not in said and "lots-of-rows-7" not in said
+
+
+def test_the_chat_entry_and_the_timeline_carry_every_refusal_and_the_trail(
+    storage: LocalStorage, world: World
+) -> None:
+    talk = Talk(
+        storage,
+        world,
+        ChatScript({"look": [look("describe_numbers", "no_such_column"), reply("Nothing to report.")]}),
+    )
+    talk.say("look")
+    entry = talk.case.chat[-1]
+    assert entry.refusal_codes == ("AGENT_COLUMN_UNKNOWN",) and entry.blocked_by is None
+    assert [(s.action, s.result) for s in entry.happened] == [("describe_numbers", "refused")]
+    (chat,) = [e for e in talk.timeline() if e.kind is TimelineKind.CHAT and e.details["role"] == "agent"]
+    assert chat.details["refusal_codes"] == "AGENT_COLUMN_UNKNOWN" and "ended_by" not in chat.details

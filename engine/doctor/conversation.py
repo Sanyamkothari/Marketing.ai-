@@ -44,7 +44,15 @@ from pydantic import Field, JsonValue
 from engine.access.roles import Principal
 from engine.agent.contracts import ProposalSource, ProposalState
 from engine.config import ConfigError, StrictBase, load_engine_config
-from engine.doctor.case import Case, CaseItem, CaseQuestion, CaseRefusal, TimelineEvent, TimelineKind
+from engine.doctor.case import (
+    Case,
+    CaseItem,
+    CaseQuestion,
+    CaseRefusal,
+    CaseStep,
+    TimelineEvent,
+    TimelineKind,
+)
 from engine.doctor.goal_names import goal_display_name
 from engine.doctor.ledger import blocking
 from engine.doctor.plan_check import plan_digest
@@ -276,6 +284,18 @@ class MessageCard(StrictBase):
     )
     refused: tuple[CaseRefusal, ...] = Field(
         default=(), description="What the AI tried that the engine refused, each with what to change."
+    )
+    refusal_codes: tuple[str, ...] = Field(
+        default=(), description="Every refusal's code in this turn, in order (`CaseChatEntry.refusal_codes`)."
+    )
+    ended_by: str | None = Field(
+        default=None,
+        description="Why the turn ended early though the AI still wrote the reply (`CaseChatEntry.ended_by`).",
+    )
+    happened: tuple[CaseStep, ...] = Field(
+        default=(),
+        description="Each step of the turn: done, refused (why, in plain words) or a problem of the AI service "
+        "(`CaseChatEntry.happened`); shown folded under the reply as 'What happened'.",
     )
 
 
@@ -903,6 +923,9 @@ def _message(
         blocked_by=getattr(entry, "blocked_by", None),
         error_codes=tuple(getattr(entry, "error_codes", ()) or ()),
         refused=tuple(getattr(entry, "refused", ()) or ()),
+        refusal_codes=tuple(getattr(entry, "refusal_codes", ()) or ()),
+        ended_by=getattr(entry, "ended_by", None),
+        happened=tuple(getattr(entry, "happened", ()) or ()),
     )
 
 

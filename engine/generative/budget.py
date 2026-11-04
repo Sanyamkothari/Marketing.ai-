@@ -272,6 +272,16 @@ class Meter:
         """
         return str(self._llm.backend.value)
 
+    @property
+    def timeout_s(self) -> int:
+        """How long one call may take before the client gives up (`generative.llm.timeout_s`)."""
+        return int(self._llm.timeout_s)
+
+    def turned_off(self) -> tuple[str, ...]:
+        """The request settings the client learned its model does not take and no longer sends (`temperature`,
+        `response_format`, `reasoning_effort`); none for a client that does not adapt."""
+        return tuple(getattr(self._client, "turned_off", ()))
+
     def output_allowance(self, purpose: GenerativePurpose) -> int:
         """The most output tokens one call for `purpose` may write: the data agent's own allowance
         for the purposes in `DATA_AGENT_PURPOSES`, `max_output_tokens` for every other.

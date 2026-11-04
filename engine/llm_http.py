@@ -614,6 +614,19 @@ class OpenAICompatibleClient(_HttpClient):
         self._send_response_format = True
         self._send_reasoning_effort = True
 
+    @property
+    def turned_off(self) -> tuple[str, ...]:
+        """The request settings this model refused and are no longer sent, by name."""
+        return tuple(
+            name
+            for name, sent in (
+                ("temperature", self._send_temperature),
+                ("response_format", self._send_response_format),
+                ("reasoning_effort", self._send_reasoning_effort),
+            )
+            if not sent
+        )
+
     def _headers(self) -> dict[str, str]:
         headers = {"Accept": "application/json"}
         if self._api_key:

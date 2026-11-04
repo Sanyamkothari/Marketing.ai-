@@ -109,7 +109,7 @@ from engine.doctor.author import (
     owed_words,
 )
 from engine.doctor.build_facts import build_facts, decided_numbers, goal_line, to_do_now
-from engine.doctor.case import Case, CaseDoubt, CaseItem, VisitState, payload_digest
+from engine.doctor.case import Case, CaseDoubt, CaseItem, CaseStep, VisitState, payload_digest
 from engine.doctor.decisions import decisions
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL
 from engine.doctor.guards import ExpectationBook, Expectations, Finding
@@ -238,6 +238,24 @@ TOO_BIG: Final[str] = (
 )
 WHAT_I_DID: Final[str] = "What I did before that is above. "
 """Said in place of 'nothing was changed' when the turn had already made changes the person can see."""
+_SERVICE_SAID: Final[dict[str, str]] = {
+    "out_of_room": "The AI ran out of room before it wrote anything, and asking again did not help.",
+    "rate_limited": "The AI service said there were too many requests.",
+    "out_of_credit": "The AI service says its account has no credit left.",
+    "key_rejected": "The AI service did not accept its key.",
+    "key_expired": "The AI service says its key has expired.",
+    "key_disabled": "The AI service says its key was turned off.",
+    "no_model_access": "The AI service does not let its key use this model.",
+    "server_error": "The AI service had a problem on its side.",
+    "unreachable": "The AI service could not be reached.",
+    "too_long": "The request was too long for this model.",
+}
+"""What a problem of the AI service is called for the person, by the HTTP client's kind."""
+_SETTINGS_SAID: Final[dict[str, str]] = {
+    "temperature": "temperature",
+    "response_format": "JSON answer",
+    "reasoning_effort": "reasoning effort",
+}
 CUT_AT_LIMIT: Final[frozenset[str]] = frozenset({"length", "max_tokens"})
 """The stop reasons (OpenAI-compatible `length`, Anthropic and Bedrock `max_tokens`) of an answer that ran out of room."""
 ASK_AGAIN: Final[str] = "Ask me again and I will try once more."
@@ -429,6 +447,14 @@ class TurnResult:
     """Why the AI service did not answer, when it did not: the failure's own code (`LLM_UNAVAILABLE`; `LLM_REFUSED`
     for a model that ran out of room; `BUDGET_EXCEEDED`), then the kind the HTTP client found (`LLM_KEY_EXPIRED`,
     `LLM_OUT_OF_ROOM` ...): `engine.agent.loop.ai_failure_codes`."""
+    refusal_codes: tuple[str, ...] = ()
+    """The code of every refusal of the turn, in order: the engine's refusals of an action and the reader's refusals of
+    an answer, whether or not the model went on to reply."""
+    ended_by: str | None = None
+    """Why the turn ended early when the model still wrote the reply (its last word): `blocked_by` is then None."""
+    happened: tuple[CaseStep, ...] = ()
+    """Each step of the turn in order, for the person: done, refused (why, in plain words), or a problem of the AI
+    service in our own words."""
     model_calls: int = 0
     tokens: int = 0
     answered: int = 0
@@ -741,6 +767,13 @@ class DoctorTurn:
         self.work_case: Case = case
         """The case with the turn's kept actions applied (`apply_actions`)."""
         self.refusals: list[Refusal] = []
+        self.refusal_codes: list[str] = []
+        """The code of every refusal of the turn, in order (`TurnResult.refusal_codes`)."""
+        self.happened: list[CaseStep] = []
+        """Each step of the turn, and each problem of the AI service, for the person (`TurnResult.happened`)."""
+        self.service_line = ""
+        """A line about what the AI service just did that the model's next call opens with; said once."""
+        self._turned_off: set[str] = set()
         self.left_out: list[CaseItem] = []
         """Changes the person left out earlier that the model put forward again: not put back."""
         self.finished = False
@@ -1239,10 +1272,25 @@ class DoctorTurn:
                 "text": self._text(
                     None, clean_text(entry.text, max(self.limits.turn.chat_reply_chars, MAX_MESSAGE_CHARS))
                 ),
+                **self._ended(entry),
             }
             for entry in earlier
         ]
         return json.dumps(turns, ensure_ascii=False)
+
+    @staticmethod
+    def _ended(entry: Any) -> dict[str, Any]:
+        """How one of the AI's earlier turns ended, for the AI to read: `ended` is the cause when it was cut short
+        (`blocked_by`, or `ended_by` when its last word still got written), else `reply`; `refused` lists the codes of
+        what the engine refused in that turn. Codes written by us; nothing of the person's or the service's.
+        """
+        if entry.role == "user":
+            return {}
+        refused = list(dict.fromkeys(entry.refusal_codes))
+        return {
+            "ended": entry.blocked_by or entry.ended_by or "reply",
+            **({"refused": refused} if refused else {}),
+        }
 
     # -- the files ---------------------------------------------------------------------------------
     def _index(self, action: dict[str, Any], args: dict[str, Any]) -> int:
@@ -1340,10 +1388,12 @@ class DoctorTurn:
             return _active_goal(self.case) is not None
         return bool(tool.session_tool or tool.name in (*M_PREVIEW_TOOLS, *M_HISTORY_TOOLS, *M_FACT_TOOLS))
 
-    def _complete(self, prompt: Prompt, variables: dict[str, Any]) -> str:
-        """One call to the model on `prompt` rendered with `variables`, after the last egress check. Raises
-        `_NoAnswerError` when the prompt is too long for one call or the AI service cannot answer (unavailable, or out
-        of money): what was made so far stands."""
+    def _rendered(self, prompt: Prompt, variables: dict[str, Any]) -> Any:
+        """`prompt` for `variables`, after the last egress check. A line about what the AI service just did (said
+        once: `_service`) opens the event. Raises `_NoAnswerError` when it is too long for one call."""
+        if self.service_line:
+            variables = {**variables, "event": f"{self.service_line}\n{variables['event']}"}
+            self.service_line = ""
         rendered = render(prompt, variables)
         system, masked_system = assert_clean(rendered.system)
         user, masked_user = assert_clean(rendered.user)
@@ -1352,6 +1402,29 @@ class DoctorTurn:
             rendered = dataclasses.replace(rendered, system=system, user=user)
         if len(rendered.system) + len(rendered.user) > self.limits.turn.prompt_chars:
             raise _NoAnswerError("prompt_too_large")
+        return rendered
+
+    def _service(self, sentence: str, *, tell: str = "") -> None:
+        """Note a problem of the AI service for the person, in our own words (`happened`); with `tell`, the model's
+        next call opens with that line too."""
+        self.happened.append(CaseStep(action="", result="service", why=sentence))
+        self.service_line = tell
+
+    def _watch_settings(self) -> None:
+        """Note each request setting the AI service's model turned out not to take, once (the client stops sending
+        it)."""
+        for name in self.meter.turned_off():
+            if name not in self._turned_off:
+                self._turned_off.add(name)
+                self._service(
+                    f"The AI service does not take the {_SETTINGS_SAID.get(name, name)} setting, so it was turned off."
+                )
+
+    def _complete(self, prompt: Prompt, variables: dict[str, Any]) -> str:
+        """One call to the model on `prompt` rendered with `variables`, after the last egress check. Raises
+        `_NoAnswerError` when the prompt is too long for one call or the AI service cannot answer (unavailable, or out
+        of money): what was made so far stands."""
+        rendered = self._rendered(prompt, variables)
         try:
             try:
                 return self._written(self.meter.complete(rendered, self.purpose))
@@ -1362,6 +1435,12 @@ class DoctorTurn:
                 room = self.meter.output_allowance(self.purpose)
                 if exc.kind != "out_of_room" or room >= MAX_ANSWER_ALLOWANCE:
                     raise
+                self._service(
+                    "The AI ran out of room before it wrote anything, so I asked again with more room.",
+                    tell="NOTE: your last answer used all its room on thinking and wrote nothing. Think less; "
+                    "write the one JSON object.",
+                )
+                rendered = self._rendered(prompt, variables)
                 try:
                     return self._written(
                         self.meter.complete(
@@ -1373,7 +1452,22 @@ class DoctorTurn:
         except (LLMError, GenerativeError) as exc:
             failed = _NoAnswerError("unavailable", exc)
             _LOG.warning("%s: the AI call failed (%s)", self.purpose.value, ", ".join(failed.codes))
+            self._service(self._service_said(exc))
             raise failed from exc
+        finally:
+            self._watch_settings()
+
+    def _service_said(self, exc: LLMError | GenerativeError) -> str:
+        """Why the AI service did not answer, in our own words (never the service's)."""
+        if BUDGET_EXCEEDED in ai_failure_codes(exc):
+            return "The spending limit for this case was reached."
+        if isinstance(exc, LLMHttpError):
+            if exc.kind == "timeout":
+                return f"The AI service did not answer within {self.meter.timeout_s} seconds."
+            return _SERVICE_SAID.get(exc.kind, "The AI service did not answer.")
+        if "LLM_EMPTY_ANSWER" in ai_failure_codes(exc):
+            return "The AI service answered with nothing in it."
+        return "The AI service did not answer."
 
     def _written(self, completion: Any) -> str:
         """The text of an answer that was finished. One that stopped at the length limit (`length`, `max_tokens`) is
@@ -1418,6 +1512,7 @@ class DoctorTurn:
         said, when the turn answers one."""
         turn, strikes, reply, blocked = self.turn, 0, "", None
         reply_refused = False  # a reply of the AI's was refused already: its next refusal ends the turn
+        ended_by: str | None = None  # why the turn ended early when the AI's last word was still written
         calls, tokens = self.meter.calls_used(), self.meter.tokens_used()
         refusal: AgentToolError | None = (
             None  # the last thing the engine refused, for the person if no reply comes
@@ -1486,6 +1581,7 @@ class DoctorTurn:
                     break
                 wanted = name
                 self._take(name, action)
+                self.happened.append(CaseStep(action=name, result="done"))
                 strikes = 0  # strikes are failures in a row: an action that worked clears them
                 if name in ENDS_TURN and isinstance(action.get("reply"), str):
                     replying = True
@@ -1495,6 +1591,14 @@ class DoctorTurn:
             except AgentToolError as exc:
                 strikes += 1
                 refusal = exc
+                self.refusal_codes.append(exc.code)
+                self.happened.append(
+                    CaseStep(
+                        action="reply" if replying else wanted,
+                        result="refused",
+                        why=self.gates[0].person_text(person_reason(exc)),
+                    )
+                )
                 if isinstance(exc, _RefusedError):
                     self.refusals.append(exc.refusal)
                 # The message goes into the feedback even when this is the last strike: the last word reads it, so
@@ -1509,22 +1613,31 @@ class DoctorTurn:
                 reply_refused = reply_refused or replying
             except Exception as exc:  # a model's odd input must never cost a paid turn that nobody records
                 _LOG.warning("doctor turn step failed: %s", type(exc).__name__)
+                self.happened.append(
+                    CaseStep(action=wanted, result="refused", why="a step of mine broke, so I stopped")
+                )
                 blocked = "failed"
                 break
         if not reply and answering and blocked not in NO_LAST_WORD and not self._spent():
             left[0] = 0
             reply = self._last_word(prompt, variables_for, blocked)
             if reply:
-                blocked = None  # the AI wrote this reply itself: nothing blocked it
+                ended_by, blocked = blocked, None  # the AI wrote this reply itself: nothing blocked it
         if not reply:
             if blocked == "unavailable":
                 reply = lead
             elif answering:
                 reply = self._unsaid(blocked, refusal, wanted)
-        return self._result(reply, blocked, why, calls, tokens)
+        return self._result(reply, blocked, why, calls, tokens, ended_by)
 
     def _result(
-        self, reply: str, blocked: str | None, why: tuple[str, ...], calls: int, tokens: int
+        self,
+        reply: str,
+        blocked: str | None,
+        why: tuple[str, ...],
+        calls: int,
+        tokens: int,
+        ended_by: str | None,
     ) -> TurnResult:
         turn, chosen = self.turn, self.chosen
         items, withdrawn = self._proposed()
@@ -1541,7 +1654,10 @@ class DoctorTurn:
             tools=tuple(dict.fromkeys(chosen.used)),
             sent=tuple(s.model_dump(mode="json") for s in turn.sent[:MAX_SENT_ITEMS]),
             blocked_by=blocked,
+            ended_by=ended_by,
             error_codes=why,
+            refusal_codes=tuple(self.refusal_codes),
+            happened=tuple(self.happened),
             model_calls=self.meter.calls_used() - calls,
             tokens=self.meter.tokens_used() - tokens,
             answered=self.answered,

@@ -114,6 +114,7 @@ __all__ = [
     "CaseRecheck",
     "CaseRefusal",
     "CaseSource",
+    "CaseStep",
     "CaseStore",
     "ChatSuggestion",
     "EventDraft",
@@ -569,6 +570,18 @@ class ChatGoal(StrictBase):
     reason: str = Field(description="Why this goal, in the agent's words (checked like any reply).")
 
 
+class CaseStep(StrictBase):
+    """One thing that happened in an AI turn, for the person who asks what the AI did: a step it took (`done`), a step
+    the engine refused (`refused`, with the reason in plain words) or a problem of the AI service (`service`, in our own
+    words: never the service's)."""
+
+    action: str = Field(
+        description="The action it took or tried; empty for its answer as a whole or a service problem."
+    )
+    result: Literal["done", "refused", "service"]
+    why: str = Field(default="", description="Plain words: why it was refused, or what the AI service did.")
+
+
 class CaseChatEntry(StrictBase):
     """One chat message, masked as it was stored, with what was sent to the AI service."""
 
@@ -628,6 +641,24 @@ class CaseChatEntry(StrictBase):
         default=(),
         exclude_if=lambda value: not value,
         description="What the AI tried in this turn that the engine refused, each with what to change.",
+    )
+    refusal_codes: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="The code of every refusal in this turn, in order (the engine's refusals of an action and the "
+        "reader's refusals of an answer), whether or not the AI went on to reply.",
+    )
+    ended_by: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Why the turn ended early when the AI still wrote the reply (`blocked_by` is then empty): the "
+        "reply came from its last word.",
+    )
+    happened: tuple[CaseStep, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="Each step of the turn in order: done, refused (why, in plain words) or a problem of the AI "
+        "service in our own words.",
     )
 
 

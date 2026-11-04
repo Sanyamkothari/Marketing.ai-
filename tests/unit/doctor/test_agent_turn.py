@@ -789,3 +789,104 @@ def test_a_count_no_larger_than_the_turns_own_actions_is_no_invention(
     client = ChatScript({"explain": [*five_looks, reply("I took 4711 steps to check this."), reply("Fine.")]})
     done = _turn(_said(talk.case, "explain the plan"), world, client).run("explain the plan")
     assert done.reply == "Fine."
+
+
+# ---------------------------------------------------------------------------
+# Where and what error happened: the person sees it, and the AI knows
+# ---------------------------------------------------------------------------
+def test_every_refusal_of_the_turn_is_recorded_whether_or_not_the_ai_goes_on(
+    storage: LocalStorage, world: World
+) -> None:
+    done, _ = _run(world, storage, [look("describe_numbers", "no_such_column"), reply("Fine.")])
+    assert done.reply == "Fine." and done.blocked_by is None
+    assert done.refusal_codes == ("AGENT_COLUMN_UNKNOWN",) and done.refused == ()
+    refused, *_ = done.happened
+    assert (refused.action, refused.result) == ("describe_numbers", "refused")
+    assert (
+        "column" in refused.why and "no_such_column" not in refused.why
+    )  # plain words, not the AI-facing text
+
+
+def test_each_step_is_in_the_trail_done_or_refused(storage: LocalStorage, world: World) -> None:
+    done, _ = _run(
+        world, storage, ['{"summary": 1}', look("describe_numbers", "order_amount"), reply("Fine.")]
+    )
+    assert [(s.action, s.result) for s in done.happened] == [("", "refused"), ("describe_numbers", "done")]
+    assert done.refusal_codes == ("AGENT_REPLY_MALFORMED",)
+
+
+def test_the_cause_is_kept_in_ended_by_when_the_last_word_still_got_written(
+    storage: LocalStorage, world: World
+) -> None:
+    done, _ = _run(world, storage, [reply(_long(2100)), reply(_long(2200)), reply("Short version.")])
+    assert done.reply == "Short version." and done.blocked_by is None
+    assert done.ended_by == "AGENT_TEXT_REFUSED" and done.refusal_codes == ("AGENT_TEXT_REFUSED",) * 2
+
+
+def test_the_next_turns_history_tells_the_ai_how_each_of_its_turns_ended(
+    storage: LocalStorage, world: World
+) -> None:
+    from engine.doctor.case import CaseChatEntry
+
+    talk = Talk(storage, world, None)
+    earlier = [
+        CaseChatEntry(role="user", text="hello", at=talk.case.created_at, by=ANALYST),
+        CaseChatEntry(
+            role="agent",
+            text="I could not.",
+            at=talk.case.created_at,
+            blocked_by="AGENT_TEXT_REFUSED",
+            refusal_codes=("AGENT_COLUMN_UNKNOWN", "AGENT_TEXT_REFUSED", "AGENT_COLUMN_UNKNOWN"),
+        ),
+        CaseChatEntry(role="agent", text="Done.", at=talk.case.created_at),
+    ]
+    case = _with(talk.case, chat=tuple(earlier))
+    client = ChatScript({"explain": [reply("Ok.")]})
+    _turn(_said(case, "explain the plan"), world, client).run("explain the plan")
+    user, cut, fine = client.seen[0].history
+    assert "ended" not in user
+    assert (cut["ended"], cut["refused"]) == (
+        "AGENT_TEXT_REFUSED",
+        ["AGENT_COLUMN_UNKNOWN", "AGENT_TEXT_REFUSED"],
+    )
+    assert fine["ended"] == "reply" and "refused" not in fine
+
+
+class _OutOfRoomOnce(ChatScript):
+    def __init__(self, turns: Mapping[str, Any]) -> None:
+        super().__init__(turns)
+        self.failed = False
+
+    def complete(self, *args: Any, **kwargs: Any) -> Any:
+        if not self.failed:
+            self.failed = True
+            from engine.llm_http import LLMHttpError
+
+            raise LLMHttpError("out_of_room", input_tokens=10, output_tokens=100)
+        return super().complete(*args, **kwargs)
+
+
+def test_an_ai_service_problem_that_is_retried_is_shown_and_told_to_the_model_in_one_line(
+    storage: LocalStorage, world: World
+) -> None:
+    talk = Talk(storage, world, None)
+    client = _OutOfRoomOnce({"explain": [reply("Fine.")]})
+    done = _turn(_said(talk.case, "explain the plan"), world, client).run("explain the plan")
+    assert done.reply == "Fine."
+    (problem,) = done.happened
+    assert problem.result == "service" and "ran out of room" in problem.why and "asked again" in problem.why
+    (asked,) = client.sent_text
+    assert "used all its room on thinking" in asked  # the retried call said what happened, once
+    assert asked.count("used all its room on thinking") == 1
+
+
+def test_a_timeout_is_said_with_its_seconds_in_our_own_words(storage: LocalStorage, world: World) -> None:
+    from engine.llm_http import LLMHttpError
+    from tests.unit.doctor.chat_support import Down
+
+    talk = Talk(storage, world, None)
+    done = _turn(_said(talk.case, "explain the plan"), world, Down(LLMHttpError("timeout"))).run(
+        "explain the plan"
+    )
+    (problem,) = done.happened
+    assert problem.result == "service" and "did not answer within" in problem.why and "seconds" in problem.why

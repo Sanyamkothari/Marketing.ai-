@@ -1282,6 +1282,9 @@ def _ai_turn(
             blocked_by=result.blocked_by,
             error_codes=result.error_codes,
             refused=_refusals_shown(result.refused),
+            refusal_codes=result.refusal_codes,
+            ended_by=result.ended_by,
+            happened=result.happened,
         )
         step.updates["chat"] = (*case.chat, entry)
     event_draft = EventDraft(
@@ -1295,7 +1298,7 @@ def _ai_turn(
             **({} if message is not None else {"review": True}),
         },
     )
-    _say_why(event_draft, result.blocked_by, result.error_codes)
+    _say_why(event_draft, result.blocked_by, result.error_codes, result.refusal_codes, result.ended_by)
     step.events.append(event_draft)
     if result.model_calls and not didnt_happen:
         step.visit["done"] = {
@@ -1315,14 +1318,25 @@ def _ask(_run: _Run, case: Case) -> _Step | None:
     return _Step(to=VisitState.TREAT)
 
 
-def _say_why(event: EventDraft, blocked_by: str | None, error_codes: Sequence[str]) -> None:
+def _say_why(
+    event: EventDraft,
+    blocked_by: str | None,
+    error_codes: Sequence[str],
+    refusal_codes: Sequence[str] = (),
+    ended_by: str | None = None,
+) -> None:
     """Add to a `chat.message` event why the AI did not answer, when it did not, so the timeline tells an expired key
-    from a spent case. A detail is one value, so the codes are joined by commas; both are left out while empty, as in
-    the chat entry."""
+    from a spent case, and every refusal of the turn (whether or not the AI went on to reply) and why a turn ended
+    early when the AI still wrote its last word. A detail is one value, so the codes are joined by commas; all are left
+    out while empty, as in the chat entry."""
     if blocked_by:
         event.details["blocked_by"] = blocked_by
     if error_codes:
         event.details["error_codes"] = ",".join(error_codes)
+    if refusal_codes:
+        event.details["refusal_codes"] = ",".join(refusal_codes)
+    if ended_by:
+        event.details["ended_by"] = ended_by
 
 
 def fitting_goals(case: Case) -> list[dict[str, Any]]:

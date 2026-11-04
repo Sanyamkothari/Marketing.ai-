@@ -236,10 +236,13 @@ EMPTY_ANSWER: Final[str] = (
 
 
 def _answered_nothing(exc: LLMError | GenerativeError) -> bool:
-    """Whether the service was reached and wrote nothing (`LLM_REFUSED` from a client that does not say why)."""
+    """Whether the service was reached and wrote nothing: the clients' own fixed sentence for it (`LLM_REFUSED`)."""
     return (
-        isinstance(exc, LLMError) and not isinstance(exc, LLMHttpError | AwsSignInExpiredError)
-    ) and exc.code == "LLM_REFUSED"
+        isinstance(exc, LLMError)
+        and not isinstance(exc, LLMHttpError | AwsSignInExpiredError)
+        and exc.code == "LLM_REFUSED"
+        and exc.message == "The model returned nothing to read."
+    )
 
 
 def unavailable_reply(exc: LLMError | GenerativeError) -> str:
@@ -1258,6 +1261,8 @@ def _reply(
 
 _PERSON_REASONS: Final[dict[str, str]] = {
     "AGENT_REPLY_MALFORMED": "my answer was not in a form the engine could read",
+    "AGENT_ANSWER_CUT": "my answer was cut off at the length limit",
+    "AGENT_COLUMN_UNKNOWN": "I named a column that is not in this file",
     "AGENT_TOOL_UNKNOWN": "I asked for something that does not exist here",
     "AGENT_TOOL_ARGS_INVALID": "what I asked for was not filled in properly",
     "AGENT_TOOL_LIMIT": "I had used all the lookups I may make in one message",

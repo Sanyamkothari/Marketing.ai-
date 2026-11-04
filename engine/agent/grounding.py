@@ -203,8 +203,8 @@ def _near(ordered: list[float], target: float, slack: float) -> float | None:
 
 def _derived(value: float, tolerance: float, ordered: list[float]) -> bool:
     """Whether `value` is the sum, the difference or the ratio of two grounded numbers (`ordered`, sorted), within
-    the rounding the text shows: `tolerance`, or half a percent of it."""
-    slack = max(tolerance, abs(value) * 0.005)
+    the rounding the text shows (`tolerance`: half a unit of its last digit), and no more."""
+    slack = tolerance
     for a in ordered:
         if _near(ordered, value - a, slack) is not None or _near(ordered, a - value, slack) is not None:
             return True
