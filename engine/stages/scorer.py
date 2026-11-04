@@ -597,9 +597,7 @@ def choose_operating_point(
         return ThresholdChoice(chosen, ThresholdMode.AUTO, detail)
     reason = _fallback_reason(label, flagged, rows, ceiling)
     constrained = (
-        _best_threshold(scores, actual, maximised, max_flagged_rate=ceiling)
-        if ceiling is not None
-        else None
+        _best_threshold(scores, actual, maximised, max_flagged_rate=ceiling) if ceiling is not None else None
     )
     if constrained is not None:
         fallback_value, fallback_flagged = constrained

@@ -1190,9 +1190,9 @@ codes:
     fix: "Ask an Analyst to approve the conversion by sending back the exact sentence it shows."
   # --- Plan O M239: the outcome tools (DEC-1809) -------------------------------------------------------------------
   OUTCOME_BASE_RATE_HIGH:
-    title: "More than 40% of customers already buy again naturally"
-    meaning: "For a win-back or churn campaign, over 40% of this audience already achieves the outcome without contact. This list includes active repeat buyers rather than customers needing win-back."
-    fix: "Filter the customer list to lapsed customers (for example those with no orders in 60+ days) so the campaign focuses on customers at risk of leaving."
+    title: "More than 40% of customers come back without a campaign"
+    meaning: "For a win-back campaign, over 40% of this audience comes back without being contacted. The list holds active repeat buyers rather than the lapsed customers a win-back is for."
+    fix: "Choose the audience of customers who have gone quiet, or give a list of lapsed customers only, so the campaign reaches customers who need it."
   OUTCOME_UNDECIDED:
     title: "Something that decides the outcome is not answered yet"
     meaning: "The outcome is what the model learns, so Data Doctor never picks it on its own. Something that changes its meaning is still open: what a value means, which file or date to read (including the date of a file that leaves customers out), or the window. No definition is offered until it is answered."

@@ -1099,12 +1099,11 @@ def _split_classes(state: _State) -> None:
         total_rows = sum(part.rows for part in simulated)
         total_pos = sum(part.positives for part in simulated if part.positives is not None)
         pos_rate = (total_pos / total_rows) if total_rows > 0 else 0.0
-        stage = (getattr(state.config, "lifecycle_stage", "") or "").lower()
-        use_case_id = (getattr(state.config, "id", "") or "").lower()
-        is_retention_or_winback = (
-            stage in ("win-back", "churn") or "win-back" in use_case_id or "churn" in use_case_id
-        )
-        if is_retention_or_winback and pos_rate > 0.40:
+        # A win-back goal's yes is a customer who comes back: when most of the audience comes back anyway, the list
+        # holds active repeat buyers, not the lapsed customers the campaign is for. The goal's stage says so, never
+        # its id or name. (For churn a yes is a customer who leaves, so a high rate means something else.)
+        winback = (getattr(state.config, "lifecycle_stage", "") or "").strip().lower() == "win-back"
+        if winback and pos_rate > 0.40:
             details["natural_positive_rate"] = round(pos_rate, 4)
             details["subcode"] = "OUTCOME_BASE_RATE_HIGH"
             _put(
@@ -1112,10 +1111,10 @@ def _split_classes(state: _State) -> None:
                 code,
                 "warn",
                 message=(
-                    f"{pos_rate:.0%} of customers in this audience already have the positive outcome naturally. "
-                    "For a win-back or churn campaign, this indicates the audience contains active repeat shoppers."
+                    f"{pos_rate:.0%} of the customers in this audience come back without any campaign, so the list "
+                    "holds active repeat buyers rather than the lapsed customers a win-back is for."
                 ),
-                fix="Filter the customer list to lapsed customers (e.g. no orders in 60+ days) before training.",
+                fix="Choose the audience of customers who have gone quiet, or give a list of lapsed customers only.",
                 details=details,
             )
             return
