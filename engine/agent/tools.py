@@ -1985,7 +1985,13 @@ def call_tool(
         evidence_id=evidence_id,
         tool=name,
         args=_jsonable(parsed.model_dump(exclude_none=True)),
-        supplied=_jsonable(parsed.model_dump(exclude_none=True, exclude_unset=True)),
+        # a dropped key is the model's own typing too: a number in its name never becomes evidence (DEC-1027)
+        supplied=_jsonable(
+            {
+                **parsed.model_dump(exclude_none=True, exclude_unset=True),
+                **({"ignored_arguments": ignored} if ignored else {}),
+            }
+        ),
         result=result,
         created_at=ctx.clock(),
     )

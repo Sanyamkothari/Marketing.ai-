@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from engine.agent.grounding import evidence_numbers, ungrounded_numbers
 from engine.agent.tools import AgentToolError, call_tool
 from tests.unit.agent.helpers import context_for
 
@@ -37,6 +38,13 @@ def test_an_unknown_argument_is_dropped_and_said() -> None:
     assert "colour" in result.result["ignored_arguments"]
 
 
+def test_a_number_in_a_dropped_key_does_not_ground_it() -> None:
+    result = call_tool(_ctx(), "value_counts", {"column": "plan", "4300": 1}, evidence_id="e1")
+    grounded = evidence_numbers(result.result, result.typed_args)
+    assert 4300.0 not in grounded
+    assert ungrounded_numbers("4300 customers churned.", grounded) == ["4300"]
+
+
 def test_a_lone_string_is_a_list_of_one_where_a_list_is_wanted() -> None:
     result = call_tool(_ctx(), "find_format_issues", {"columns": "plan"}, evidence_id="e1")
     assert list(result.args["columns"]) == ["plan"]
@@ -58,3 +66,10 @@ def test_a_refused_argument_lists_the_tools_arguments() -> None:
     caught = _refusal("value_counts", {"top": 5})
     assert caught.code == "AGENT_TOOL_ARGS_INVALID"
     assert "column (required)" in caught.refusal.how_to_fix and "top" in caught.refusal.how_to_fix
+
+
+def test_action_counts_ground_only_plain_counts() -> None:
+    counts = frozenset(float(n) for n in range(6))
+    assert ungrounded_numbers("I made 5 changes.", frozenset(), (), counts) == []
+    assert ungrounded_numbers("5% of rows are duplicates, about 3k.", frozenset(), (), counts) == ["5%", "3k"]
+    assert ungrounded_numbers("2.5 changes", frozenset(), (), counts) == ["2.5"]

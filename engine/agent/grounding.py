@@ -165,7 +165,9 @@ def evidence_numbers(result: Any, args: Any) -> frozenset[float]:
     )
 
 
-def ungrounded_numbers(text: str, grounded: frozenset[float], names: Iterable[str] = ()) -> list[str]:
+def ungrounded_numbers(
+    text: str, grounded: frozenset[float], names: Iterable[str] = (), counts: frozenset[float] = frozenset()
+) -> list[str]:
     """The number tokens in `text` that no grounded value explains, in order.
 
     `names` are the file's column names: a quoted span that is exactly one of them is skipped. A number that is the
@@ -173,6 +175,9 @@ def ungrounded_numbers(text: str, grounded: frozenset[float], names: Iterable[st
     explained too: the work is shown, and every operand is checked. Without its operands in the text, a number
     that merely could be worked out from some pair of grounded numbers is not (with enough numbers around, any
     small number could).
+
+    `counts` are whole numbers the text may state as plain counts ("3 changes"): never as a percent, a decimal or
+    a multiplier form, and never an operand of a derivation.
     """
     claims: list[tuple[str, tuple[tuple[float, float], ...]]] = []
     stated: set[float] = set()  # the grounded numbers the text states
@@ -183,6 +188,14 @@ def ungrounded_numbers(text: str, grounded: frozenset[float], names: Iterable[st
         meanings, percent = parsed
         if not percent and meanings[0][0] in _ALWAYS and not _has_multiplier(token):
             continue  # a bare 0 or 1; `0%`, `1%` and `100%` are claims like any other
+        if (
+            counts
+            and not percent
+            and not _has_multiplier(token)
+            and "." not in token
+            and meanings[0][0] in counts
+        ):
+            continue  # a count of the turn's own actions
         if _is_small_ordinal(token):
             continue  # "the 2nd step" counts things on the screen; it states no measurement
         close = {

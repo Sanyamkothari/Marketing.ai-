@@ -465,9 +465,10 @@ class _Checker:
     grounded: frozenset[float]
     names: tuple[str, ...]
     guardrails: Guardrails
+    counts: frozenset[float] = frozenset()
 
     def failure(self, text: str, *, target: str, max_chars: int) -> str | None:
-        if ungrounded_numbers(text, self.grounded, self.names):
+        if ungrounded_numbers(text, self.grounded, self.names, self.counts):
             return "numbers_grounded"
         verdict = self.guardrails.check(text, CheckContext(target=target, max_chars=max_chars))
         return None if verdict.passed else (verdict.blocked_by or "guardrails")
@@ -480,7 +481,7 @@ class _Checker:
                 failure,
                 "Say it again in plain words, without what that check names.",
             )
-        loose = list(dict.fromkeys(ungrounded_numbers(text, self.grounded, self.names)))
+        loose = list(dict.fromkeys(ungrounded_numbers(text, self.grounded, self.names, self.counts)))
         shown = ", ".join(f"'{token}'" for token in loose[:5]) or "a number"
         return (
             f"The text states {shown}, which no tool result, earlier message or the case state shows.",
