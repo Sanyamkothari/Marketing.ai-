@@ -383,7 +383,7 @@ defaults:
     ai_limits:                          # the most the Doctor's AI may use on one case; when used up the Doctor carries on with its rules alone
       max_tokens_per_case: 2000000      # int >= 1; tokens read plus written
       max_calls_per_case: 200           # int >= 1; calls to the AI service
-      max_chat_steps: 8                 # int 1..30; actions (looks, changes, questions) the chat may take to answer one message
+      max_chat_steps: 12                # int 1..30; actions (looks, changes, questions) the chat may take to answer one message
     limits:                             # every number the Doctor's AI or a gate obeys that a prompt may state; hard floors (rows, positives, leakage, consent) are not here
       turn:
         review_steps: 12                # int 1..30; actions the review may take in one visit
@@ -401,7 +401,7 @@ defaults:
         made_columns: 20                # int 1..200; columns of a query's table the model is shown
         reloaded_looks: 6               # int 1..50; looks of earlier turns the model may cite again
         short_chars: 220                # int 40..2000; longest piece of text the case state shows
-        prompt_chars: 60000             # int 5000..400000; longest prompt that is sent
+        prompt_chars: 200000            # int 5000..400000; longest prompt that is sent
       asks:
         blocking: 3                     # int 0..20; blocking questions in one review
         quick: 2                        # int 0..10; quick questions in one message

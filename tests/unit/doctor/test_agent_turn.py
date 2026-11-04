@@ -642,3 +642,78 @@ def test_two_refused_replies_in_a_row_still_end_the_turn(storage: LocalStorage, 
     done, client = _run(world, storage, [reply(_long(2100)), reply(_long(2200)), reply(_long(2300))])
     assert done.blocked_by == "AGENT_TEXT_REFUSED"
     assert client.asked == 3  # two replies, then the last word
+
+
+# ---------------------------------------------------------------------------
+# A bounded prompt and bounded steps
+# ---------------------------------------------------------------------------
+def _with_prompt_room(turn: DoctorTurn, chars: int) -> DoctorTurn:
+    narrow = turn.limits.turn.model_copy(update={"prompt_chars": chars})
+    turn.limits = turn.limits.model_copy(update={"turn": narrow})
+    return turn
+
+
+def _sizes(world: World, storage: LocalStorage, steps: list[Any]) -> list[int]:
+    _, client = _run(world, storage, steps)
+    return [len(text) for text in client.sent_text]
+
+
+LOOKS = [look("value_counts", "customer_id"), look("describe_numbers", "order_amount")]
+
+
+def test_older_look_results_are_cut_to_stubs_before_a_prompt_is_refused_as_too_big(
+    storage: LocalStorage, world: World
+) -> None:
+    steps = [*LOOKS, look("describe_missing"), reply("Looked at three things.")]
+    sizes = _sizes(world, storage, steps)
+    client = ChatScript({"explain": list(steps)})
+    talk = Talk(storage, world, None)
+    turn = _with_prompt_room(_turn(_said(talk.case, "explain the plan"), world, client), sizes[3] - 2)
+    done = turn.run("explain the plan")
+    assert done.reply == "Looked at three things." and done.blocked_by is None
+    results = client.seen[3].results
+    assert [set(r) for r in results[:2]] == [{"evidence_id", "tool", "file"}] * 2
+    assert "result" in results[2]  # the newest look stays whole
+
+
+def test_a_prompt_too_big_to_cut_gets_its_last_word_and_says_what_was_done_before(
+    storage: LocalStorage, world: World
+) -> None:
+    steps = [
+        look("find_values", "customer_id", contains="999"),
+        rows_step("customer_id", "starts_with", "999"),
+    ]
+    sizes = _sizes(world, storage, [*steps, reply("Done.")])
+    client = ChatScript({"explain": list(steps)})
+    talk = Talk(storage, world, None)
+    turn = _with_prompt_room(_turn(_said(talk.case, "explain the plan"), world, client), sizes[2] - 2)
+    done = turn.run("explain the plan")
+    assert done.blocked_by == "prompt_too_large" and client.asked == 2
+    assert "What I did before that is above." in done.reply and "too much in this case" in done.reply
+
+
+def test_a_prompt_too_big_with_nothing_done_does_not_claim_work_above(
+    storage: LocalStorage, world: World
+) -> None:
+    sizes = _sizes(world, storage, [LOOKS[0], reply("Done.")])
+    client = ChatScript({"explain": [LOOKS[0]]})
+    talk = Talk(storage, world, None)
+    turn = _with_prompt_room(_turn(_said(talk.case, "explain the plan"), world, client), sizes[1] - 2)
+    done = turn.run("explain the plan")
+    assert done.blocked_by == "prompt_too_large" and "is above" not in done.reply
+
+
+def test_every_prompt_says_how_many_steps_are_left(storage: LocalStorage, world: World) -> None:
+    _, client = _run(world, storage, [LOOKS[0], reply("Done.")])
+    assert "Steps left: 8 of 8." in client.sent_text[0] and "Steps left: 7 of 8." in client.sent_text[1]
+
+
+def test_the_stopped_sentence_depends_on_whether_earlier_actions_were_kept(
+    storage: LocalStorage, world: World
+) -> None:
+    talk = Talk(storage, world, None)
+    turn = _turn(_said(talk.case, "explain the plan"), world, ChatScript({}))
+    assert "nothing was changed" in turn._unsaid("failed", None, "")
+    turn.kept.append(object())  # type: ignore[arg-type]
+    said = turn._unsaid("failed", None, "")
+    assert "nothing was changed" not in said and "What I did before that is above." in said

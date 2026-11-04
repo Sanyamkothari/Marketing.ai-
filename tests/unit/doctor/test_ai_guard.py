@@ -182,14 +182,14 @@ def test_many_wide_files_leave_room_for_the_chat() -> None:
 
 
 def test_a_case_may_spend_enough_for_a_conversation_and_a_message_takes_a_few_steps() -> None:
-    """The chat spends more than the one-shot review did: 2M tokens and 200 calls a case, 8 actions a message."""
+    """The chat spends more than the one-shot review did: 2M tokens and 200 calls a case, 12 actions a message."""
     limits = AiLimitsConfig()
     assert (limits.max_tokens_per_case, limits.max_calls_per_case, limits.max_chat_steps) == (
         2_000_000,
         200,
-        8,
+        12,
     )
-    assert _guard(ChatScript({})).chat_steps == 8
+    assert _guard(ChatScript({})).chat_steps == 12
 
 
 ALLOWANCES = LlmConfig(max_output_tokens=300, data_agent_max_output_tokens=3000)

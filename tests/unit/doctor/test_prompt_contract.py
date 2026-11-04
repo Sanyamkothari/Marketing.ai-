@@ -138,7 +138,7 @@ def test_the_defaults_are_the_values_the_code_used_to_hard_code() -> None:
     )
     assert (found.turn.strikes, found.turn.review_steps, found.turn.history_turns) == (2, 12, 12)
     assert (found.turn.chat_reply_chars, found.turn.guided_reply_chars) == (2000, 800)
-    assert (found.turn.summary_chars, found.turn.effect_chars, found.turn.prompt_chars) == (800, 160, 60_000)
+    assert (found.turn.summary_chars, found.turn.effect_chars, found.turn.prompt_chars) == (800, 160, 200_000)
     assert (found.trial.sample_rows, found.trial.dry_run_rows) == (1_000, 100_000)
     assert (found.gates.retries, found.gates.loss_stop_pct, found.gates.rate_stop_points) == (2, 5.0, 1.0)
     assert (found.gates.approve_drop_share, found.gates.change_warn_pct, found.gates.change_refuse_pct) == (
@@ -146,7 +146,7 @@ def test_the_defaults_are_the_values_the_code_used_to_hard_code() -> None:
         30.0,
         60.0,
     )
-    assert DataDoctorConfig().ai_limits.max_chat_steps == 8
+    assert DataDoctorConfig().ai_limits.max_chat_steps == 12
 
 
 def test_the_engine_config_carries_the_defaults() -> None:

@@ -225,9 +225,10 @@ MAKES_CHANGES_WITH_ARGS: Final[frozenset[str]] = frozenset(
 OUT_OF_STEPS: Final[str] = (
     "That took more steps than I may take in one message. What I did so far is above; ask me to go on if you want more."
 )
-NO_LAST_WORD: Final[frozenset[str]] = frozenset({"unavailable", "prompt_too_large", "failed"})
+NO_LAST_WORD: Final[frozenset[str]] = frozenset({"unavailable", "failed"})
 """Why a turn ended without a reply that is not worth one more call: the AI service did not answer (or the case's
-money ran out), the prompt cannot be sent, or a step broke in a way nobody can explain to the person."""
+money ran out), or a step broke in a way nobody can explain to the person. A prompt that is too big gets its last
+word: the older look results are cut first, so that call may fit."""
 NOTHING_SAID: Final[str] = "I could not answer that from what I have checked."
 STOPPED: Final[str] = (
     "I started on that, but a step failed before I could finish it, so nothing was changed. "
@@ -235,6 +236,8 @@ STOPPED: Final[str] = (
 TOO_BIG: Final[str] = (
     "There is too much in this case for me to read in one message, so I could not act on that. "
 )
+WHAT_I_DID: Final[str] = "What I did before that is above. "
+"""Said in place of 'nothing was changed' when the turn had already made changes the person can see."""
 ASK_AGAIN: Final[str] = "Ask me again and I will try once more."
 _DOING: Final[dict[str, str]] = {
     "propose_sql": "build a table with a query",
@@ -559,6 +562,18 @@ def _plain_or_action(answer: str) -> tuple[dict[str, Any], int]:
             "args": {k: v for k, v in args.items() if k != "replaces"},
         }  # '', null, 'none': no item
     return action, more
+
+
+def _stub_older_looks(results: list[dict[str, Any]]) -> bool:
+    """Cut every look result but the newest to `{evidence_id, tool, file}`, in place; whether any was cut."""
+    looks = [
+        i
+        for i, r in enumerate(results)
+        if {"evidence_id", "tool", "result"} <= r.keys() and re.fullmatch(r"r\d+", str(r["evidence_id"]))
+    ]  # a look is `r1`, `r2` ..; a change the engine made (`s1`, `p1`) is not cut
+    for i in looks[:-1]:
+        results[i] = {k: results[i][k] for k in ("evidence_id", "tool", "file") if k in results[i]}
+    return len(looks) > 1
 
 
 def _real_id(value: Any) -> bool:
@@ -1352,6 +1367,22 @@ class DoctorTurn:
             _LOG.warning("%s: the AI call failed (%s)", self.purpose.value, ", ".join(failed.codes))
             raise failed from exc
 
+    def _complete_fitting(
+        self,
+        prompt: Prompt,
+        variables_for: Callable[[list[dict[str, Any]]], dict[str, Any]],
+        results: list[dict[str, Any]],
+    ) -> str:
+        """`_complete` on the prompt for `results`. A prompt that is too long is tried once more with every look
+        result but the newest cut to its id, tool and file (`results` is changed in place): the model asks again
+        for one it needs."""
+        try:
+            return self._complete(prompt, variables_for(results))
+        except _NoAnswerError as stop:
+            if stop.reason != "prompt_too_large" or not _stub_older_looks(results):
+                raise
+        return self._complete(prompt, variables_for(results))
+
     def _event(self, said: str | None) -> str:
         """Why the model is asked now: what is owed, in words, and what the person said."""
         parts = []
@@ -1388,7 +1419,10 @@ class DoctorTurn:
         lessons = approved_lessons(self.storage)
         self.checker.grounded = self.checker.grounded | grounded_numbers([list(lessons)])
 
+        left = [self.max_steps]
+
         def variables_for(results: list[dict[str, Any]]) -> dict[str, Any]:
+            more = f"Steps left: {left[0]} of {self.max_steps}." + (" Reply now." if left[0] <= 0 else "")
             return {
                 "goal": goal,
                 "tools": tools,
@@ -1399,7 +1433,7 @@ class DoctorTurn:
                     lessons=lessons,
                 ),
                 "questions": catalogue_lines(chat=True),
-                "event": event,
+                "event": f"{more}\n{event}",
                 "conversation": history,
                 "state": json.dumps(self.state, ensure_ascii=False),
                 "turn_results": (
@@ -1407,9 +1441,10 @@ class DoctorTurn:
                 ),
             }
 
-        for _ in range(self.max_steps + 1):
+        for step in range(self.max_steps + 1):
+            left[0] = max(0, self.max_steps - step)
             try:
-                answer = self._complete(prompt, variables_for(turn.feedback))
+                answer = self._complete_fitting(prompt, variables_for, turn.feedback)
             except _NoAnswerError as stop:
                 blocked, why, lead = stop.reason, stop.codes, stop.reply
                 break
@@ -1456,6 +1491,7 @@ class DoctorTurn:
                 blocked = "failed"
                 break
         if not reply and answering and blocked not in NO_LAST_WORD and not self._spent():
+            left[0] = 0
             reply = self._last_word(prompt, variables_for, blocked)
             if reply:
                 blocked = None  # the AI wrote this reply itself: nothing blocked it
@@ -1499,10 +1535,15 @@ class DoctorTurn:
         person may ask again."""
         if blocked is None:
             return OUT_OF_STEPS
+        kept = bool(self.kept)
         if blocked == "failed":
-            return STOPPED + ASK_AGAIN
+            return (STOPPED.replace("so nothing was changed. ", WHAT_I_DID) if kept else STOPPED) + ASK_AGAIN
         if blocked == "prompt_too_large":
-            return TOO_BIG + "Ask about one file or one step at a time."
+            return (
+                TOO_BIG.replace("could not act on that. ", "could not go on. " + WHAT_I_DID)
+                if kept
+                else TOO_BIG
+            ) + "Ask about one file or one step at a time."
         if refusal is None:
             return f"{NOTHING_SAID} {ASK_AGAIN}"
         did = f"I tried to {_DOING.get(wanted, 'act on that')}. " if wanted else ""
@@ -1539,7 +1580,7 @@ class DoctorTurn:
             ),
         ]
         try:
-            action, _ = _plain_or_action(self._complete(prompt, variables_for(told)))
+            action, _ = _plain_or_action(self._complete_fitting(prompt, variables_for, told))
             if ALIASES.get(str(action["action"]), str(action["action"])) != "reply":
                 return ""
             return self._reply(action, required=True)

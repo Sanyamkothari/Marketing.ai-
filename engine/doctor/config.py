@@ -87,7 +87,7 @@ class AiLimitsConfig(BaseModel):
         default=200, ge=1, description="Calls to the AI service the Doctor may make on one case."
     )
     max_chat_steps: int = Field(
-        default=8,
+        default=12,
         ge=1,
         le=30,
         description="Actions (looks, changes, questions) the Doctor's chat may take to answer one message.",
@@ -150,7 +150,7 @@ class TurnLimits(BaseModel):
         default=220, ge=40, le=2000, description="The longest piece of text the case state shows."
     )
     prompt_chars: int = Field(
-        default=60_000, ge=5_000, le=400_000, description="The longest prompt that is sent."
+        default=200_000, ge=5_000, le=400_000, description="The longest prompt that is sent."
     )
 
 
