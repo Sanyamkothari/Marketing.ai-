@@ -295,9 +295,17 @@ class _RecordingLLM:
         model_id: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.0,
+        json_object: bool = False,
+        reasoning_effort: str | None = None,
     ) -> LLMCompletion:
         out = self._inner.complete(
-            prompt, system=system, model_id=model_id, max_tokens=max_tokens, temperature=temperature
+            prompt,
+            system=system,
+            model_id=model_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_object=json_object,
+            reasoning_effort=reasoning_effort,
         )
         self.texts.append(out.text)
         return out

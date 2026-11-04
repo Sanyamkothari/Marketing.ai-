@@ -6,6 +6,7 @@ Each function reads the case and the files and returns `Facts`: what it found (n
 writes the case: the author (the AI or the default author) applies the suggestions it takes.
 
 * `goal_fit_facts`: what the data can power, and what is missing for the other goals (no goal chosen).
+* `goal_compare_facts`: under a goal, the goals that fit the data clearly better, as one question.
 * `outcome_facts`: the goal's outcome column, or the build that makes it (`suggest_build`).
 * `time_facts`, `consent_facts`: the date each row describes, and who agreed to be contacted.
 * `goal_facts`: the three in the order the rules ran them.
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Final
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.doctor.case import Case, CaseDoubt, CaseItem
 from engine.doctor.decisions import decisions
+from engine.doctor.goal_compare import compare_goals, comparison_ask, comparison_facts
 from engine.doctor.goal_settings import load_goal_settings, open_setting_questions
 from engine.doctor.protocol import DataRequest
 from engine.doctor.registry import DataToolError
@@ -44,6 +46,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "consent_facts",
+    "goal_compare_facts",
     "goal_facts",
     "goal_fit_facts",
     "outcome_facts",
@@ -104,6 +107,17 @@ def goal_fit_facts(run: FactRun, case: Case) -> Facts:
         found.evidence.append(request)
         facts["data_request"] = request.evidence_id
     return found.facts(facts, left_out=int(power.output.get("left_out") or 0))
+
+
+def goal_compare_facts(case: Case, brief: GoalBrief, fit: Facts) -> Facts:
+    """Under a goal: does the file fit another goal clearly better (`engine.doctor.goal_compare`)? The goal list in
+    `fit` is read, never ranked again. One question when it does, for the person to answer; the answer is theirs, and
+    it is remembered (the question's id holds the files and the goals compared)."""
+    found = Found()
+    comparison = compare_goals(list(fit.facts.get("use_cases") or ()), brief.goal_id)
+    if comparison is not None:
+        found.put(comparison_ask(comparison, upload_ids=case.upload_ids()))
+    return found.facts({"goal_comparison": comparison_facts(comparison)})
 
 
 # ---------------------------------------------------------------------------

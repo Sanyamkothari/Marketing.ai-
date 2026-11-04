@@ -117,6 +117,8 @@ class RecordingLLM(_NoEmbeddings):
         model_id: str | None = None,  # noqa: ARG002
         max_tokens: int = 512,  # noqa: ARG002
         temperature: float = 0.0,  # noqa: ARG002
+        json_object: bool = False,  # noqa: ARG002 - recorded answers are given back as recorded
+        reasoning_effort: str | None = None,  # noqa: ARG002
     ) -> LLMCompletion:
         role = role_of(system)
         pid = prompt_id(role, system, prompt)
@@ -174,6 +176,8 @@ class ReplayLLM(_NoEmbeddings):
         model_id: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.0,
+        json_object: bool = False,  # noqa: ARG002 - recorded answers are given back as recorded
+        reasoning_effort: str | None = None,  # noqa: ARG002
     ) -> LLMCompletion:
         pid = prompt_id(role_of(system), system, prompt)
         if pid in self._answers:

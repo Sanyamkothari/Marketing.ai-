@@ -10,7 +10,7 @@
 ## Window and groups
 - Window from rhythm (R9): query gaps between purchases, take median and 90th percentile, offer windows near them (not from `describe_dates`); `rate_by` or receipt gives each yes rate.
 - `rate_by` each unit, brand, region, channel (R16); over 5 times apart, ask: one model, separate rules, or one model per group.
-- Warn when yes rate is above 70% or below 3%; minimum rows and positives stay. Rate by month (R8). "Within N days of first order" uses each customer's own start date.
+- Warn when yes rate is above 70% or below 3% (above 40% for win-back: active buyers, not lapsed ones); minimum rows and positives stay. Rate by month (R8). "Within N days of first order" uses each customer's own start date.
 
 ## Yes/no column
 - `describe_outcome`, `value_counts`, `draft_outcome_labels`, `inspect_column`. Blank = unknown, not "no" (R12). Quote only tool yes rates.

@@ -534,3 +534,17 @@ def test_a_scoring_report_from_storage_needs_the_model_version(tmp_path: Path) -
             schema=_schema(),
         )
     assert ingest.profile_row_cap(config("targeted-advertisement")) > 0
+
+
+@pytest.mark.parametrize(("stage", "warned"), [("Win-back", True), ("Churn", False), ("Awareness", False)])
+def test_a_win_back_audience_where_most_come_back_anyway_is_warned(stage: str, warned: bool) -> None:
+    """Over 40% coming back without a campaign means a win-back list of active buyers; the goal's stage decides,
+    never its id, and for churn a yes is a customer who leaves, so a high rate is not this warning."""
+    frame = customers()
+    target = config("targeted-advertisement").target.column
+    assert target is not None
+    frame[target] = (np.arange(len(frame)) % 2 == 0).astype(int)  # half of them say yes
+    cfg = config("targeted-advertisement").model_copy(update={"lifecycle_stage": stage})
+    probe = report(frame, cfg, now=NOW).probe("X_SPLIT_CLASSES")
+    assert (probe.status == "warn") is warned
+    assert (probe.details.get("subcode") == "OUTCOME_BASE_RATE_HIGH") is warned

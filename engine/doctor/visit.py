@@ -139,6 +139,7 @@ from engine.doctor.protocol import (
     DATA_PRESCRIPTION_APPROVED,
     DEFAULT_SETTINGS,
     DONT_KNOW,
+    SWITCH_GOAL,
     Ask,
     DataRequest,
     LedgerPort,
@@ -2350,37 +2351,42 @@ def set_goal(
     now = deps.clock()
 
     def build(case: Case) -> _Step:
-        previous = active_goal(case)
-        if goal_id is None:
-            goals = tuple(g.model_copy(update={"active": False}) for g in case.goals)
-        elif goal_id in {g.goal_id for g in case.goals}:
-            goals = tuple(g.model_copy(update={"active": g.goal_id == goal_id}) for g in case.goals)
-        else:
-            goals = (
-                *(g.model_copy(update={"active": False}) for g in case.goals),
-                CaseGoal(goal_id=goal_id, active=True, set_at=now, set_by=actor),
-            )
-        started = case.state in _AFTER_RECALL
-        if goal_id is None:
-            to = VisitState.TREAT if started else case.state
-        else:
-            to = VisitState.GOAL_BRIEF if started else case.state
-        return _Step(
-            to=to,
-            updates={"goals": goals},
-            events=[
-                EventDraft(
-                    kind=TimelineKind.GOAL_SET,
-                    item_id=goal_id,
-                    details={
-                        "previous": previous.goal_id if previous is not None else None,
-                        "set_aside": previous is not None and previous.goal_id != goal_id,
-                    },
-                )
-            ],
-        )
+        return _goal_step(case, goal_id, actor, now)
 
     return _person_step(run, client_id, case_id, expected_version, op_id, build)
+
+
+def _goal_step(case: Case, goal_id: str | None, actor: str, now: datetime) -> _Step:
+    """The one way a goal is chosen, switched or cleared (`set_goal`; an answer that switches the goal uses it too)."""
+    previous = active_goal(case)
+    if goal_id is None:
+        goals = tuple(g.model_copy(update={"active": False}) for g in case.goals)
+    elif goal_id in {g.goal_id for g in case.goals}:
+        goals = tuple(g.model_copy(update={"active": g.goal_id == goal_id}) for g in case.goals)
+    else:
+        goals = (
+            *(g.model_copy(update={"active": False}) for g in case.goals),
+            CaseGoal(goal_id=goal_id, active=True, set_at=now, set_by=actor),
+        )
+    started = case.state in _AFTER_RECALL
+    if goal_id is None:
+        to = VisitState.TREAT if started else case.state
+    else:
+        to = VisitState.GOAL_BRIEF if started else case.state
+    return _Step(
+        to=to,
+        updates={"goals": goals},
+        events=[
+            EventDraft(
+                kind=TimelineKind.GOAL_SET,
+                item_id=goal_id,
+                details={
+                    "previous": previous.goal_id if previous is not None else None,
+                    "set_aside": previous is not None and previous.goal_id != goal_id,
+                },
+            )
+        ],
+    )
 
 
 def answer(
@@ -2479,9 +2485,22 @@ def answer(
                     details={"code": question.code, "question": question_id},
                 )
             )
+        switch = _str(effect.payload.get(SWITCH_GOAL)) if effect is not None else None
+        goal_updates: dict[str, Any] = {}
+        to = VisitState.TREAT if case.state in _AFTER_RECALL else case.state
+        if (
+            switch is not None
+        ):  # the answer is a goal: the ordinary goal switch, in the same write as the answer
+            try:
+                load_goal_brief(switch, root=deps.config_root)
+            except ConfigError as exc:
+                raise _unknown("That goal is not one this check can be for.") from exc
+            changed = _goal_step(case, switch, actor, now)
+            goal_updates, to = changed.updates, changed.to
+            events.extend(changed.events)
         return _Step(
-            to=VisitState.TREAT if case.state in _AFTER_RECALL else case.state,
-            updates={"items": items, "questions": questions},
+            to=to,
+            updates={"items": items, "questions": questions, **goal_updates},
             events=events,
             # The client-wide memory is written once the answer is: a refused answer remembers nothing.
             after=[] if remember is None else [remember[1]],

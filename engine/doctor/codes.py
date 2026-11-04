@@ -105,6 +105,7 @@ PLAN_O_CODES: Final[frozenset[str]] = frozenset(
         "CURRENCY_UNSTATED",
         # M239 (DEC-1809): the outcome tools (`engine.doctor.outcome_definition.OUTCOME_CODES`; the exact-text refusal
         # is APPROVAL_SENTENCE_CHANGED above, the approval's role refusals are Plan K's).
+        "OUTCOME_BASE_RATE_HIGH",
         "OUTCOME_CANNOT_MEASURE",
         "OUTCOME_NOT_APPROVED",
         "OUTCOME_TOO_MANY_VALUES",

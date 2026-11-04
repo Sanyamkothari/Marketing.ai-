@@ -172,9 +172,15 @@ def test_a_raw_order_log_fits_the_goal_as_buildable_then_builds(client: TestClie
     )
     assert approved.status_code == 200, approved.text
     (readiness,) = approved.json()["readiness"]
-    assert readiness["goal_id"] == GOAL and readiness["verdict"] == "ready"
+    # every active shopper is the audience here (the quiet ones are too few in this log), and most of them come back
+    # anyway: the one warning is that a win-back list holds active buyers, nothing else
+    assert readiness["goal_id"] == GOAL and readiness["verdict"] == "ready_with_warnings"
     (stored,) = (tmp_path / "data" / "cases" / "default" / case_id / "readiness").glob(f"{GOAL}_*.json")
     report = json.loads(stored.read_text())
+    warned = [p for p in report["probes"] if p["status"] == "warn"]
+    assert [(c["code"], c["details"].get("subcode")) for c in warned] == [
+        ("X_SPLIT_CLASSES", "OUTCOME_BASE_RATE_HIGH")
+    ]
     # ready on the table the goal trains on: the built one-row-per-shopper table, not the 19,000-line log
     assert report["source"]["rows_parsed"] == counted["active_before"]
     assert report["source"]["original_rows_parsed"] == len(order_rows)

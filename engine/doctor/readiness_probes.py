@@ -1095,6 +1095,29 @@ def _split_classes(state: _State) -> None:
     if minority is not None:
         _put(state, code, "fail", message=minority, fix="Add rows with the rarer outcome.", details=details)
         return
+    if state.binary and simulated:
+        total_rows = sum(part.rows for part in simulated)
+        total_pos = sum(part.positives for part in simulated if part.positives is not None)
+        pos_rate = (total_pos / total_rows) if total_rows > 0 else 0.0
+        # A win-back goal's yes is a customer who comes back: when most of the audience comes back anyway, the list
+        # holds active repeat buyers, not the lapsed customers the campaign is for. The goal's stage says so, never
+        # its id or name. (For churn a yes is a customer who leaves, so a high rate means something else.)
+        winback = (getattr(state.config, "lifecycle_stage", "") or "").strip().lower() == "win-back"
+        if winback and pos_rate > 0.40:
+            details["natural_positive_rate"] = round(pos_rate, 4)
+            details["subcode"] = "OUTCOME_BASE_RATE_HIGH"
+            _put(
+                state,
+                code,
+                "warn",
+                message=(
+                    f"{pos_rate:.0%} of the customers in this audience come back without any campaign, so the list "
+                    "holds active repeat buyers rather than the lapsed customers a win-back is for."
+                ),
+                fix="Choose the audience of customers who have gone quiet, or give a list of lapsed customers only.",
+                details=details,
+            )
+            return
     _put(
         state,
         code,

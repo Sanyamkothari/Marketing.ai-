@@ -152,7 +152,8 @@ def test_an_order_log_with_blank_ids_asks_which_column_names_the_customer_and_go
     )
     assert done.status_code == 200, done.text
     (readiness,) = done.json()["readiness"]
-    assert readiness["goal_id"] == GOAL and readiness["verdict"] == "ready"
+    # every active shopper is the audience, and most come back anyway: a win-back list of active buyers is warned
+    assert readiness["goal_id"] == GOAL and readiness["verdict"] == "ready_with_warnings"
     # the person's decision and the count they agreed to are recorded by that yes, not before it
     recorded = next(
         i for i in client.get(f"/cases/{case_id}").json()["items"] if i["item_id"] == proposal["item_id"]

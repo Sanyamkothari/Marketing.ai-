@@ -664,6 +664,14 @@ later without starting again.
   the goal's **brief**; it comes from the goal's settings, never from the AI.
 - **Choosing a goal mid-way keeps everything.** What you already decided stays decided and nothing you answered is
   asked again. Only the goal's own questions are new.
+- **A file that fits another goal better.** If you start under one goal and the file fits another clearly better
+  (the same goal list's ranking: a goal that fits, and ranks strictly above yours; ties never ask), Data Doctor asks
+  one question, "This file also fits other goals": up to three better goals, best first, each with its reason (for
+  example the test's control group, or the outcome column that is there), and "Keep <your goal>" (the safe answer,
+  and the one "I don't know" takes). Choosing another goal switches the case exactly as "Choose this goal" does, and
+  the wizard opens that goal's step on the same check. It is your decision: it is remembered, and not asked again for
+  the same files and goals. When your goal does not fit at all, the question says so and "Keep" says what is missing;
+  it does not hold the Doctor's own work (Approve already waits on the fit).
 - **Two goals on one case.** Each goal keeps its own decisions. Switching to another goal puts the first goal's
   decisions aside, not away: switch back and they are exactly as you left them.
 - **Close the browser at any moment.** Every step is saved as it happens. When you come back, Data Doctor goes on

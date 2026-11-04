@@ -602,6 +602,7 @@ async function act(entry, busy, work, { announce = "", pending = "" } = {}) {
   try {
     await work();
     await refresh(entry);
+    followSwitchedGoal(entry);
     if (announce) announceStatus(announce);
   } catch (error) {
     if (error instanceof ApiError && (error.code === "CASE_VERSION_CONFLICT" || error.code === "APPROVAL_SENTENCE_CHANGED")) {
@@ -624,6 +625,16 @@ async function act(entry, busy, work, { announce = "", pending = "" } = {}) {
 }
 
 const theCase = (entry) => entry.state.screen.case;
+
+/** An answer can choose another goal ("This file also fits other goals"): the server has switched the case's goal
+ * the way "Choose this goal" does, so the wizard opens that goal's Customers step on the same check, as it does there. */
+function followSwitchedGoal(entry) {
+  const { host, state } = entry;
+  const goal = state.screen && state.screen.view && state.screen.view.goal_id;
+  if (host.place !== "wizard" || !host.goalId || !goal || goal === host.goalId) return;
+  rememberCase(goal, state.caseId);
+  window.location.hash = wizardHref(goal);
+}
 
 /** The person lets the Doctor's AI read masked summaries; the chat says so in a line of its own once it is recorded. */
 async function consent(entry) {
