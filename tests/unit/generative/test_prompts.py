@@ -94,6 +94,7 @@ VALUES: dict[str, object] = {
     # The Data Doctor's one turn (data_doctor)
     "questions": ["Q1 main customer ID (blocking): values choices, file"],
     "actions": ['`{"action": "reply", "text": "..."}` - what you tell the person.'],
+    "inline_reply": "An action may carry a `reply` of its own.",
     "step_kinds": ["parse_date (dayfirst)"],
     "guide_index": "- features: read before proposing features.",
     "doctor_limits": {

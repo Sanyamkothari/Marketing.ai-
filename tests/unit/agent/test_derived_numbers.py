@@ -14,9 +14,9 @@ GROUNDED = grounded_numbers([{"customers": 960, "positives": 412, "rows": 1500, 
     "text",
     [
         "About 43% of customers did (412 of 960).",  # a ratio shown as a percent
-        "0.43 of them did.",  # the same ratio as a fraction
-        "That is 1,372 together.",  # 960 + 412
-        "That leaves 548 who did not.",  # 960 - 412
+        "0.43 of them did (412 of 960).",  # the same ratio as a fraction
+        "That is 1,372 together (960 and 412).",  # 960 + 412
+        "That leaves 548 who did not (960 less 412).",  # 960 - 412
         "Step 3 is to check the dates, and step 12 is the rest.",
     ],
 )
@@ -26,6 +26,12 @@ def test_a_number_worked_out_from_two_grounded_ones_is_accepted(text: str) -> No
 
 @pytest.mark.parametrize("text", ["777 customers did.", "It is 61.7% of them.", "About 5,432 rows."])
 def test_an_invented_number_is_still_refused(text: str) -> None:
+    assert ungrounded_numbers(text, GROUNDED)
+
+
+@pytest.mark.parametrize("text", ["That is 1,372 together.", "About 43% did.", "That leaves 548."])
+def test_a_derived_number_without_its_operands_in_the_text_is_refused(text: str) -> None:
+    """With enough numbers around any small number could be worked out from some pair, so the work must be shown."""
     assert ungrounded_numbers(text, GROUNDED)
 
 

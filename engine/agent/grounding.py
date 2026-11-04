@@ -11,8 +11,9 @@ A number written with a unit or a multiplier is still a number: `40k` must be gr
 the digits). A number inside quotes is skipped only when the quoted text is exactly the name of a
 column of the file (`'ad_ctr_90d'`, `'Q3 2024 spend'`); any other quoted number is a claim like any
 other (M77: `'73%'` and a number between two apostrophes, as in "it's 73% ... don't", used to pass).
-A ratio, a percentage, a sum or a difference of two grounded numbers is grounded too (within the same rounding): a
-model that works one out is not inventing, and the prompt still tells it to quote the tools' numbers.
+A ratio, a percentage, a sum or a difference of two grounded numbers that the text states beside it is grounded too
+(within the same rounding): the work is shown and every operand is checked, and the prompt still tells the model to
+quote the tools' numbers.
 A bare `0` or `1` is allowed anywhere: "turn yes into 1 and no into 0" is not a statistic; nor is a
 small ordinal ("the 2nd suggestion"). Their percent forms are claims: `0%`, `1%` and `100%` must be
 grounded like any other number, and so must a decimal without its leading zero (`.73`) and a
@@ -167,10 +168,14 @@ def evidence_numbers(result: Any, args: Any) -> frozenset[float]:
 def ungrounded_numbers(text: str, grounded: frozenset[float], names: Iterable[str] = ()) -> list[str]:
     """The number tokens in `text` that no grounded value explains, in order.
 
-    `names` are the file's column names: a quoted span that is exactly one of them is skipped.
+    `names` are the file's column names: a quoted span that is exactly one of them is skipped. A number that is the
+    ratio, percentage, sum or difference of two grounded numbers the text itself states ("43% (412 of 960)") is
+    explained too: the work is shown, and every operand is checked. Without its operands in the text, a number
+    that merely could be worked out from some pair of grounded numbers is not (with enough numbers around, any
+    small number could).
     """
-    missing: list[str] = []
-    ordered: list[float] = []
+    claims: list[tuple[str, tuple[tuple[float, float], ...]]] = []
+    stated: set[float] = set()  # the grounded numbers the text states
     for token in numbers_in(text, names):
         parsed = _parse(token)
         if parsed is None:
@@ -180,17 +185,21 @@ def ungrounded_numbers(text: str, grounded: frozenset[float], names: Iterable[st
             continue  # a bare 0 or 1; `0%`, `1%` and `100%` are claims like any other
         if _is_small_ordinal(token):
             continue  # "the 2nd step" counts things on the screen; it states no measurement
-        explained = any(
-            abs(value - known) <= tolerance or abs(value - known) <= abs(known) * 0.005
+        close = {
+            known
             for value, tolerance in meanings
             for known in grounded
-        )
-        if not explained:
-            ordered = ordered or sorted(grounded)
-            explained = any(_derived(value, tolerance, ordered) for value, tolerance in meanings)
-        if not explained:
-            missing.append(token)
-    return missing
+            if abs(value - known) <= tolerance or abs(value - known) <= abs(known) * 0.005
+        }
+        stated |= close
+        if not close:
+            claims.append((token, meanings))
+    operands = sorted(stated)
+    return [
+        token
+        for token, meanings in claims
+        if not any(_derived(value, tolerance, operands) for value, tolerance in meanings)
+    ]
 
 
 def _near(ordered: list[float], target: float, slack: float) -> float | None:

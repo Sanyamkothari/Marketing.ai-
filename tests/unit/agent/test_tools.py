@@ -51,7 +51,7 @@ def test_an_unknown_tool_or_bad_arguments_are_refused_with_a_code() -> None:
         call_tool(ctx, "delete_everything", {}, evidence_id="e1")
     assert unknown.value.code == "AGENT_TOOL_UNKNOWN"
     with pytest.raises(AgentToolError) as bad:
-        call_tool(ctx, "inspect_column", {"column": "visits_last_7d", "rows": 5}, evidence_id="e1")
+        call_tool(ctx, "inspect_column", {"rows": 5}, evidence_id="e1")  # no column; `rows` is left out
     assert bad.value.code == "AGENT_TOOL_ARGS_INVALID"
     with pytest.raises(AgentToolError) as missing:
         call_tool(ctx, "inspect_column", {"column": "nope"}, evidence_id="e1")
