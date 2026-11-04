@@ -124,7 +124,8 @@ def test_sample_rows_bounds_and_errors() -> None:
     )
     assert _refused(ctx, "sample_rows", {"equals": "pro"}) == "AGENT_TOOL_ARGS_INVALID"
     assert _refused(ctx, "sample_rows", {"where_column": "plan"}) == "AGENT_TOOL_ARGS_INVALID"
-    assert _refused(ctx, "sample_rows", {"seed": 3}) == "AGENT_TOOL_ARGS_INVALID"  # deterministic, no seed
+    # deterministic, no seed: a seed is not an argument, so it is left out (and said), not obeyed
+    assert "seed" in _run(ctx, "sample_rows", {"seed": 3})["ignored_arguments"]
     assert _refused(ctx, "sample_rows", {"columns": ["nope"]}) == "AGENT_COLUMN_UNKNOWN"
     assert _refused(ctx, "sample_rows", {"where_column": "nope", "equals": "x"}) == "AGENT_COLUMN_UNKNOWN"
 

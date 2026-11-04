@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final, get_args, get_origin
 
 import numpy as np
 import pandas as pd
@@ -71,7 +71,7 @@ from engine.agent.placeholders import (
     number_text,
     placeholder_impact,
 )
-from engine.agent.untrusted import MAX_PROMPT_LIST, display_name, quoted, resolve_column
+from engine.agent.untrusted import MAX_PROMPT_LIST, closest_columns, display_name, quoted, resolve_column
 from engine.config import ConfigError, PrimaryKey, RunMode, UseCaseConfig, resolve_config
 from engine.contracts import DatasetProfile, FeatureSchema
 from engine.pii import marker_for
@@ -217,7 +217,10 @@ class AgentContext:
         found = resolve_column(name, self.frame.columns)
         if found is None:
             raise AgentToolError(
-                "AGENT_COLUMN_UNKNOWN", f"There is no column {quoted(name[:80])} in this file."
+                "AGENT_COLUMN_UNKNOWN",
+                what_failed=f"There is no column {quoted(name[:80])} in this file.",
+                value=name[:80],
+                how_to_fix=f"The closest columns are {', '.join(closest_columns(name, self.frame.columns))}.",
             )
         return found
 
@@ -1925,6 +1928,34 @@ TOOLS: Final[Mapping[str, Tool]] = {
 }
 
 
+def _wants_list(annotation: Any) -> bool:
+    """Whether a field's annotation is a list or tuple (or one of a union)."""
+    origin = get_origin(annotation)
+    if origin in (list, tuple, set, frozenset):
+        return True
+    return origin is not dict and any(_wants_list(a) for a in get_args(annotation))
+
+
+def _lenient(model: type[BaseModel], given: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """A look tool's arguments in the shape its model wants: a null is no argument, a lone string is a list of one
+    where a list is expected, and a key the tool does not take is dropped (and returned, so the model is told).
+    Only the shape is made lenient here: a value that means something wrong is still refused."""
+    known = {**model.model_fields, **{f.alias: f for f in model.model_fields.values() if f.alias}}
+    kept: dict[str, Any] = {}
+    ignored: list[str] = []
+    for key, value in given.items():
+        if value is None:
+            continue
+        field = known.get(str(key))
+        if field is None:
+            ignored.append(str(key)[:40])
+        elif isinstance(value, str) and _wants_list(field.annotation):
+            kept[str(key)] = [value]
+        else:
+            kept[str(key)] = value
+    return kept, ignored
+
+
 def call_tool(
     ctx: AgentContext, name: str, args: Mapping[str, Any] | None, *, evidence_id: str
 ) -> ToolResult:
@@ -1932,13 +1963,24 @@ def call_tool(
     tool = TOOLS.get(name)
     if tool is None:
         raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name!r}.")
+    given, ignored = _lenient(tool.args_model, dict(args or {}))
     try:
-        parsed = tool.args_model.model_validate(dict(args or {}))
+        parsed = tool.args_model.model_validate(given)
     except ValidationError as exc:
         first = exc.errors()[0]
         where = ".".join(str(part) for part in first["loc"]) or "arguments"
-        raise AgentToolError("AGENT_TOOL_ARGS_INVALID", f"{name}: {where}: {first['msg']}") from exc
+        takes = ", ".join(
+            f"{n} (required)" if f.is_required() else n for n, f in tool.args_model.model_fields.items()
+        )
+        raise AgentToolError(
+            "AGENT_TOOL_ARGS_INVALID",
+            what_failed=f"{name}: {where}: {first['msg']}",
+            value=where,
+            how_to_fix=f"{name} takes: {takes or 'no arguments'}.",
+        ) from exc
     result = _jsonable(tool.run(ctx, parsed))
+    if ignored and isinstance(result, dict):
+        result = {**result, "ignored_arguments": f"{name} does not take {', '.join(ignored)}: left out."}
     return ToolResult(
         evidence_id=evidence_id,
         tool=name,

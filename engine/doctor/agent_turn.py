@@ -552,7 +552,18 @@ def _plain_or_action(answer: str) -> tuple[dict[str, Any], int]:
             **{k: v for k, v in action.items() if k in ("action", "file", "reply")},
             "args": {k: v for k, v in action.items() if k not in ("action", "file", "reply", "args")},
         }
+    args = action.get("args")
+    if isinstance(args, dict) and "replaces" in args and not _real_id(args["replaces"]):
+        action = {
+            **action,
+            "args": {k: v for k, v in args.items() if k != "replaces"},
+        }  # '', null, 'none': no item
     return action, more
+
+
+def _real_id(value: Any) -> bool:
+    """Whether `value` names an item (a model writes '', 'none' or null for an id it has none for)."""
+    return value is not None and str(value).strip().lower() not in ("", "none", "null")
 
 
 def _one_at_a_time(name: str, more: int) -> dict[str, str]:

@@ -16,6 +16,8 @@ and `resolve_column` maps a cleaned name the model repeats back to the one colum
 
 from __future__ import annotations
 
+import difflib
+import re
 import unicodedata
 from collections.abc import Iterable, Mapping
 from typing import Any, Final
@@ -25,6 +27,7 @@ __all__ = [
     "MAX_PROMPT_LIST",
     "MAX_TEXT_CHARS",
     "clean_text",
+    "closest_columns",
     "display_name",
     "for_prompt",
     "plain_value",
@@ -92,13 +95,32 @@ def plain_value(value: Any) -> str:
     return quoted(value)
 
 
+def _loose(name: str) -> str:
+    """A name with its case, spaces and underscores ignored (`Order Amount` and `order_amount` are one)."""
+    return re.sub(r"[\s_]+", "", display_name(name)).casefold()
+
+
 def resolve_column(name: str, columns: Iterable[object]) -> str | None:
-    """The file's column `name` stands for: an exact match, else the one column shown as `name`."""
+    """The file's column `name` stands for: an exact match, else the one column shown as `name`, else the one column
+    that differs only in case, spaces or underscores."""
     names = [str(column) for column in columns]
     if name in names:
         return name
-    shown = [column for column in names if display_name(column) == name]
-    return shown[0] if len(shown) == 1 else None
+    for shown in (
+        [column for column in names if display_name(column) == name],
+        [column for column in names if _loose(column) == _loose(name)],
+    ):
+        if shown:
+            return shown[0] if len(shown) == 1 else None
+    return None
+
+
+def closest_columns(name: str, columns: Iterable[object], count: int = 3) -> list[str]:
+    """Up to `count` of the file's column names (as shown) nearest to `name`, for a refusal to offer."""
+    shown = list(dict.fromkeys(display_name(column) for column in columns))
+    near = difflib.get_close_matches(_loose(name), {_loose(c): c for c in shown}, n=count, cutoff=0.0)
+    by_loose = {_loose(c): c for c in shown}
+    return [f"'{by_loose[n]}'" for n in near] or ["(none)"]
 
 
 def for_prompt(value: Any, names: Mapping[str, str] | None = None) -> Any:

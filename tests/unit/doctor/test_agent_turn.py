@@ -602,3 +602,18 @@ def test_json_without_an_action_is_never_the_reply(storage: LocalStorage, world:
     done, client = _run(world, storage, ['{"summary": "all fine"}', reply("Plain words.")])
     assert done.reply == "Plain words." and "summary" not in done.reply
     assert client.asked == 2
+
+
+@pytest.mark.parametrize("none", ["none", "", None, "null"])
+def test_a_replaces_that_names_nothing_is_no_replaces(
+    storage: LocalStorage, world: World, none: str | None
+) -> None:
+    def step(seen: Any) -> dict[str, Any]:
+        made = dict(SCRIPT[TEST_ACCOUNTS][1](seen)) if callable(SCRIPT[TEST_ACCOUNTS][1]) else {}
+        made["args"] = {**made["args"], "replaces": none}
+        return made
+
+    talk = Talk(storage, world, None)
+    client = ChatScript({TEST_ACCOUNTS: [SCRIPT[TEST_ACCOUNTS][0], step]})
+    done = _turn(_said(talk.case, TEST_ACCOUNTS), world, client).run(TEST_ACCOUNTS)
+    assert [a for a in done.actions if isinstance(a, Create)] and not done.refused
